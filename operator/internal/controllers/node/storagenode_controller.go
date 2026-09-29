@@ -1195,7 +1195,11 @@ func (r *StorageNodeReconciler) releaseMaintenance(
 		return true, nil
 	}
 
-	if step(window.Status.Step.State) != stepHolding || window.Spec.Abort {
+	// A window with no step recorded has been raised and not yet admitted, and
+	// it is the one most worth calling off: nothing has happened to the node
+	// at all. Matching on Holding alone left it running, and it would go on to
+	// take the lock and shut a node down on a worker nobody is draining.
+	if !callableOff(step(window.Status.Step.State)) || window.Spec.Abort {
 		return false, nil
 	}
 	window.Spec.Abort = true

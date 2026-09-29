@@ -27,6 +27,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/simplyblock/atlas/ptr"
 	"github.com/simplyblock/atlas/statemachine"
@@ -537,5 +538,161 @@ func TestAFailedWindowLeavesTheWorkerDrainable(t *testing.T) {
 	key := client.ObjectKey{Namespace: opsNamespace, Name: selfBudgetName}
 	if err := apiClient.Get(context.Background(), key, &self); !apierrors.IsNotFound(err) {
 		t.Errorf("the manager's own budget outlived the window that failed (err = %v)", err)
+	}
+}
+
+// A multi-socket worker runs one window per socket, admitted together on
+// purpose, and the budget and the label are the worker's rather than the
+// node's. The first socket to take its node offline must not drop the guard
+// the second socket's SPDK pod is still standing behind.
+//
+// Regression: 2026-09-29-a-sibling-window-drops-the-shared-budget (PR #582
+// review). Releasing deleted the worker's budget unconditionally, so on a
+// two-socket worker the drain could evict a live SPDK process as soon as
+// either backend node went offline — the exact eviction the action exists to
+// prevent.
+func TestTheWorkersBudgetOutlivesTheFirstSocketToRelease(t *testing.T) {
+	sibling, itsNode := aRunningWindow("the-siblings-window", "the-sibling", opsWorker)
+	r, apiClient := anOpsWorld(t, aControlPlane(),
+		sibling, itsNode, aReadyStoragePod(opsWorker),
+		anSpdkPod(opsWorker, "4420"), anSpdkPod(opsWorker, "4422"))
+	ops := aWindow("a-window")
+
+	if _, err := r.perform(context.Background(), ops, stepShuttingDown); err != nil {
+		t.Fatalf("shutting down: %v", err)
+	}
+	if _, err := r.perform(context.Background(), ops, stepReleasing); err != nil {
+		t.Fatalf("releasing: %v", err)
+	}
+
+	budget := budgetFor(t, apiClient)
+	if budget == nil {
+		t.Fatal("the budget went while the sibling socket's SPDK pod was still running")
+	}
+	if budget.Spec.MaxUnavailable == nil || budget.Spec.MaxUnavailable.IntVal != 0 {
+		t.Errorf("maxUnavailable = %v, want the sibling still fully guarded",
+			budget.Spec.MaxUnavailable)
+	}
+
+	// The sibling reaches Releasing too, and the last one out takes it down.
+	sibling.Status.Step = kubeStep(stepReleasing)
+	if err := apiClient.Status().Update(context.Background(), sibling); err != nil {
+		t.Fatalf("advancing the sibling: %v", err)
+	}
+	if _, err := r.perform(context.Background(), ops, stepReleasing); err != nil {
+		t.Fatalf("releasing: %v", err)
+	}
+	if budget := budgetFor(t, apiClient); budget != nil {
+		t.Errorf("the budget %s outlived every window that needed it", budget.Name)
+	}
+}
+
+// The same holds for the terminal teardown: a window that fails does not take
+// a sibling's guard with it.
+//
+// Regression: 2026-09-29-a-sibling-window-drops-the-shared-budget (PR #582
+// review).
+func TestAFailedWindowLeavesASiblingsGuardStanding(t *testing.T) {
+	sibling, itsNode := aRunningWindow("the-siblings-window", "the-sibling", opsWorker)
+	spdk := anSpdkPod(opsWorker, "4420")
+	ops := anAdvancingOperation("a-window",
+		simplyblockv1alpha2.StorageNodeOpsActionHostMaintenance, stepShuttingDown)
+	expired := metav1.NewTime(time.Now().Add(-time.Minute))
+	ops.Status.Step.Deadline = &expired
+	r, apiClient := anOpsWorld(t, aControlPlane(), ops, sibling, itsNode,
+		aReadyStoragePod(opsWorker), spdk)
+	if err := r.Workload.BlockEviction(
+		context.Background(), opsNamespace, opsCluster, opsWorker); err != nil {
+		t.Fatalf("holding the eviction: %v", err)
+	}
+	lockedBy(t, apiClient, "a-window")
+
+	pass(t, r, "a-window")
+
+	if got := operationRead(t, apiClient, "a-window"); got.Status.Phase !=
+		simplyblockv1alpha2.StorageNodeOpsPhaseFailed {
+		t.Fatalf("phase = %q, want Failed past the deadline", got.Status.Phase)
+	}
+	if budgetFor(t, apiClient) == nil {
+		t.Error("the failed window took the sibling's budget with it")
+	}
+	if !guarded(t, apiClient, spdk.Name) {
+		t.Error("the failed window unlabeled a pod the sibling's budget selects")
+	}
+}
+
+// The teardown is best-effort, and best-effort means both halves are tried. A
+// manager budget that cannot be deleted is no reason to leave the worker's
+// budget standing, which is the one that makes it undrainable.
+//
+// Regression: 2026-09-29-terminal-teardown-stops-at-the-first-error (PR #582
+// review).
+func TestTheTerminalTeardownTakesDownWhatItCan(t *testing.T) {
+	refuseSelfBudget := interceptor.Funcs{
+		Delete: func(
+			ctx context.Context, c client.WithWatch, object client.Object, opts ...client.DeleteOption,
+		) error {
+			if object.GetName() == selfBudgetName {
+				return errors.New("the API server refused the manager's own budget")
+			}
+			return c.Delete(ctx, object, opts...)
+		},
+	}
+	ops := anAdvancingOperation("a-window",
+		simplyblockv1alpha2.StorageNodeOpsActionHostMaintenance, stepReleasing)
+	expired := metav1.NewTime(time.Now().Add(-time.Minute))
+	ops.Status.Step.Deadline = &expired
+	r, apiClient := anOpsWorldWith(t, aControlPlane(), refuseSelfBudget, ops,
+		aReadyStoragePod(opsWorker), anSpdkPod(opsWorker, "4420"))
+	r.Workload.ManagerNode = opsWorker
+	if err := r.Workload.BlockEviction(
+		context.Background(), opsNamespace, opsCluster, opsWorker); err != nil {
+		t.Fatalf("holding the eviction: %v", err)
+	}
+	if err := r.Workload.ProtectSelf(context.Background(), opsNamespace, opsWorker); err != nil {
+		t.Fatalf("holding the manager's own eviction: %v", err)
+	}
+	lockedBy(t, apiClient, "a-window")
+
+	pass(t, r, "a-window")
+
+	if budget := budgetFor(t, apiClient); budget != nil {
+		t.Errorf("the worker's budget %s was left standing by an unrelated failure",
+			budget.Name)
+	}
+	if !announcedReason(r, MaintenanceMarkersLeft) {
+		t.Error("nothing announced the marker the teardown could not remove")
+	}
+}
+
+// A node the teardown cannot read is the case where the markers are certain to
+// be left and nothing else will come back for them, so it is the case that most
+// needs announcing.
+//
+// Regression: 2026-09-29-terminal-teardown-is-silent-on-an-unreadable-node
+// (PR #582 review).
+// The teardown is driven directly here rather than through a reconcile. The
+// path that reaches it with an unreadable node is the node being deleted
+// between the lock being taken and the deadline being noticed, and a whole
+// reconcile cannot be made to stage that without an interceptor counting reads,
+// which pins the number of times the node happens to be fetched. The contract
+// is the event, and this asserts the event.
+func TestTheTerminalTeardownAnnouncesANodeItCannotRead(t *testing.T) {
+	ops := anAdvancingOperation("a-window",
+		simplyblockv1alpha2.StorageNodeOpsActionHostMaintenance, stepReleasing)
+	r, apiClient := anOpsWorld(t, aControlPlane(), ops)
+	node := &simplyblockv1alpha2.StorageNode{}
+	key := client.ObjectKey{Namespace: opsNamespace, Name: opsNodeName}
+	if err := apiClient.Get(context.Background(), key, node); err != nil {
+		t.Fatalf("reading the node: %v", err)
+	}
+	if err := apiClient.Delete(context.Background(), node); err != nil {
+		t.Fatalf("deleting the node: %v", err)
+	}
+
+	r.clearMaintenanceMarkers(context.Background(), ops)
+
+	if !announcedReason(r, MaintenanceMarkersLeft) {
+		t.Error("a teardown that could not read its node said nothing about the markers")
 	}
 }

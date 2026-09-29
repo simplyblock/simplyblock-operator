@@ -606,6 +606,11 @@ Files: `operator/internal/controllers/node/hostmaintenance_test.go`,
 | U-441 | The budget guards the SPDK pod and the control plane's, never the node agent's      | Regression | `TestTheBudgetGuardsThePodsADrainCanEvict`                  |
 | U-442 | A node already `in_shutdown` is waited for rather than shut down a second time      | Regression | `TestAShutdownIsNotReissuedAgainstANodeAlreadyShuttingDown` |
 | U-443 | A finished window is cleared on the uncordon, so the next cordon raises one         | Regression | `TestAFinishedWindowIsClearedWhenTheWorkerComesBack`        |
+| U-444 | The worker's budget outlives the first socket to reach `Releasing`                  | Regression | `TestTheWorkersBudgetOutlivesTheFirstSocketToRelease`       |
+| U-445 | A window that fails leaves a sibling socket's budget and labels standing            | Regression | `TestAFailedWindowLeavesASiblingsGuardStanding`             |
+| U-446 | A manager budget that cannot be deleted does not strand the worker's                | Regression | `TestTheTerminalTeardownTakesDownWhatItCan`                 |
+| U-447 | A teardown that cannot read its node announces the markers it left                  | Regression | `TestTheTerminalTeardownAnnouncesANodeItCannotRead`         |
+| U-448 | An uncordon calls off a window raised but not yet admitted                          | Regression | `TestAnUncordonCallsOffAWindowThatHasNotStarted`            |
 | U-360 | Releasing the manager's own budget is what lets the drain finish                    | Positive   | `TestReleasingTheManagerIsWhatLetsTheDrainFinish`           |
 | U-361 | The self-budget carries the labels its group is selected by                         | Positive   | `TestTheSelfBudgetCarriesTheGroupsLabels`                   |
 | U-362 | The window holds the manager before anything that can fail                          | Regression | `TestTheWindowHoldsTheManagerBeforeAnythingThatCanFail`     |

@@ -573,3 +573,38 @@ func setSchedulable(t *testing.T, apiClient client.Client, worker string, schedu
 		t.Fatalf("updating worker %s: %v", worker, err)
 	}
 }
+
+// A window raised and not yet admitted has no step recorded at all, and it is
+// the one most worth calling off: nothing has happened yet.
+//
+// Regression: 2026-09-29-an-unstarted-window-survives-the-uncordon (PR #582
+// review). The uncordon matched on the Holding step alone, so a window the ops
+// reconciler had not reached yet was left running. It would then take the lock
+// and shut a node down on a worker nobody was draining any more, and its fixed
+// name would block every window after it.
+func TestAnUncordonCallsOffAWindowThatHasNotStarted(t *testing.T) {
+	cordoned := aWorker(opsWorker, true)
+	cordoned.Spec.Unschedulable = true
+	r, apiClient := aSteadyNode(t, aControlPlane(), cordoned)
+	settle(t, r)
+
+	key := client.ObjectKey{Namespace: opsNamespace, Name: "a-node-maintenance"}
+	var window simplyblockv1alpha2.StorageNodeOps
+	if err := apiClient.Get(context.Background(), key, &window); err != nil {
+		t.Fatalf("reading the maintenance window: %v", err)
+	}
+	if window.Status.Step.State != "" || window.Status.Phase != "" {
+		t.Fatalf("the fixture's window has already started: phase %q, step %q",
+			window.Status.Phase, window.Status.Step.State)
+	}
+
+	uncordon(t, apiClient, opsWorker)
+	settle(t, r)
+
+	if err := apiClient.Get(context.Background(), key, &window); err != nil {
+		t.Fatalf("reading the maintenance window: %v", err)
+	}
+	if !window.Spec.Abort {
+		t.Error("a window that had not started yet was left to take the node down")
+	}
+}

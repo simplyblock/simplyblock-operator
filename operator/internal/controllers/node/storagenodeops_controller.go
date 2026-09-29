@@ -269,7 +269,12 @@ func (r *StorageNodeOpsReconciler) Reconcile(
 	//
 	// A node that does not exist is left to the lock, which fails the operation
 	// with the reason, rather than held here with a read error forever.
-	if !running(&ops) && !skipsClusterGate(&ops) {
+	// An abort is never held by the gate. The gate keeps work off a cluster that
+	// cannot take it, and an operation being called off is not going to do any:
+	// holding it would leave an aborted window alive for as long as the cluster
+	// stayed unready, which on a worker whose cordon has already been undone is
+	// a window nothing will ever clear.
+	if !running(&ops) && !skipsClusterGate(&ops) && !ops.Spec.Abort {
 		node, err := r.node(ctx, &ops)
 		switch {
 		case apierrors.IsNotFound(err):

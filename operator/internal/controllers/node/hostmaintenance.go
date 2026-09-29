@@ -32,6 +32,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -65,13 +66,13 @@ func (r *StorageNodeOpsReconciler) performMaintenanceStep(
 	case stepShuttingDown:
 		return r.maintenanceShutDown(ctx, ops, node, clusterID, nodeID)
 	case stepReleasing:
-		return r.maintenanceRelease(ctx, node)
+		return r.maintenanceRelease(ctx, ops, node)
 	case stepAwaitingHost:
 		return r.maintenanceAwaitHost(ctx, node)
 	case stepRestarting:
 		return r.maintenanceRestart(ctx, ops, clusterID, nodeID)
 	case stepCleanup:
-		return r.maintenanceCleanup(ctx, node)
+		return r.maintenanceCleanup(ctx, ops, node)
 	default:
 		return false, fatalf("step %s does not belong to the HostMaintenance action", current)
 	}
@@ -227,17 +228,104 @@ func (r *StorageNodeOpsReconciler) maintenanceShutDown(
 // restarting the node — survives the manager being rescheduled elsewhere,
 // because the step is persisted.
 func (r *StorageNodeOpsReconciler) maintenanceRelease(
-	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageNodeOps,
+	node *simplyblockv1alpha2.StorageNode,
 ) (bool, error) {
 	if err := r.Workload.ReleaseSelf(ctx, node.Namespace); err != nil {
 		return false, err
 	}
 
-	err := r.Workload.AllowEviction(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode)
+	// The budget is the worker's rather than this node's, so the socket that
+	// gets here first does not own it alone.
+	guarded, err := r.workerStillGuarded(ctx, ops, node)
 	if err != nil {
-		return false, fmt.Errorf("release the eviction of worker %s: %w", node.Spec.WorkerNode, err)
+		return false, err
 	}
+	if !guarded {
+		err := r.Workload.AllowEviction(ctx, node.Namespace,
+			node.Spec.ClusterRef, node.Spec.WorkerNode)
+		if err != nil {
+			return false, fmt.Errorf("release the eviction of worker %s: %w",
+				node.Spec.WorkerNode, err)
+		}
+	}
+
+	// The step still finishes on this node's own pod. Waiting for the sibling's
+	// as well would make each socket's progress the other's business, and the
+	// host they share is going down for both of them anyway.
 	return r.Workload.SpdkPodGone(ctx, node.Namespace, node.Spec.WorkerNode)
+}
+
+// workerStillGuarded reports whether another maintenance window on the same
+// worker has yet to reach the step that gives the worker's budget up.
+//
+// A multi-socket worker runs one window per socket, and the concurrency gate
+// admits them together on purpose: the pair is one worker's worth of
+// unavailability (§10). The budget and the label they hold the eviction with
+// are the worker's, so they share them, and the socket whose backend node goes
+// offline first must not drop a guard the other's SPDK process is still
+// standing behind — the drain would evict a live one, which is the eviction
+// this whole action exists to prevent.
+//
+// A sibling that has reached Releasing has already asked for the budget to go,
+// so only one before it counts. A sibling with no step recorded counts too: it
+// has not started, so its ShuttingDown is still ahead of it.
+func (r *StorageNodeOpsReconciler) workerStillGuarded(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageNodeOps,
+	node *simplyblockv1alpha2.StorageNode,
+) (bool, error) {
+	var operations simplyblockv1alpha2.StorageNodeOpsList
+	if err := r.List(ctx, &operations, client.InNamespace(ops.Namespace)); err != nil {
+		return false, fmt.Errorf("list the namespace's node operations: %w", err)
+	}
+
+	for i := range operations.Items {
+		other := &operations.Items[i]
+		if other.Name == ops.Name ||
+			other.Spec.Action != simplyblockv1alpha2.StorageNodeOpsActionHostMaintenance ||
+			terminalOps(other.Status.Phase) ||
+			!guardingStep(step(other.Status.Step.State)) {
+			continue
+		}
+		var target simplyblockv1alpha2.StorageNode
+		key := types.NamespacedName{Name: other.Spec.NodeRef, Namespace: other.Namespace}
+		if err := r.Get(ctx, key, &target); err != nil {
+			// A window whose node cannot be read is one whose worker cannot be
+			// established, and the safe reading of that is that it might be this
+			// one's. Leaving the guard up costs a drain that waits; taking it
+			// down on a guess costs a live SPDK process.
+			return true, nil
+		}
+		if target.Spec.ClusterRef != node.Spec.ClusterRef ||
+			target.Spec.WorkerNode != node.Spec.WorkerNode {
+			continue
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// guardingStep reports the steps a window still needs the worker's budget in.
+func guardingStep(current step) bool {
+	switch current {
+	case "", stepHolding, stepShuttingDown:
+		return true
+	default:
+		return false
+	}
+}
+
+// callableOff reports the steps a window can still be called off from when the
+// cordon that raised it is undone.
+//
+// An unstarted window and one holding for a slot have both done nothing to the
+// node. From ShuttingDown onward it is down and something has to bring it back,
+// so the window runs on and the uncordon it is waiting for is the one
+// AwaitingHost reads.
+func callableOff(current step) bool {
+	return current == "" || current == stepHolding
 }
 
 // maintenanceAwaitHost is the step whose length nobody controls. An OS upgrade and
@@ -287,9 +375,11 @@ func (r *StorageNodeOpsReconciler) maintenanceRestart(
 // which is not a repetition: Releasing is reached only on the way through, and
 // this step runs on the way out.
 func (r *StorageNodeOpsReconciler) maintenanceCleanup(
-	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageNodeOps,
+	node *simplyblockv1alpha2.StorageNode,
 ) (bool, error) {
-	if err := r.clearMaintenance(ctx, node); err != nil {
+	if err := r.clearMaintenance(ctx, ops, node); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -307,14 +397,28 @@ func (r *StorageNodeOpsReconciler) maintenanceCleanup(
 // names no step of this action.
 //
 // Regression: 2026-09-29-failed-maintenance-leaves-its-markers.
+// The two removals are independent, so both are attempted and their errors are
+// reported together. Stopping at the manager's budget would leave the worker's
+// standing, and the worker's is the one that makes a host undrainable.
 func (r *StorageNodeOpsReconciler) clearMaintenance(
-	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageNodeOps,
+	node *simplyblockv1alpha2.StorageNode,
 ) error {
-	if err := r.Workload.ReleaseSelf(ctx, node.Namespace); err != nil {
-		return err
+	failures := []error{r.Workload.ReleaseSelf(ctx, node.Namespace)}
+
+	// The worker's markers are shared with a sibling socket's window, and a
+	// window ending is not a reason to take a guard out from under one that is
+	// still running. The last of them to end is what clears them.
+	guarded, err := r.workerStillGuarded(ctx, ops, node)
+	switch {
+	case err != nil:
+		failures = append(failures, err)
+	case !guarded:
+		failures = append(failures, r.Workload.ClearEvictionBudget(ctx, node.Namespace,
+			node.Spec.ClusterRef, node.Spec.WorkerNode))
 	}
-	return r.Workload.ClearEvictionBudget(ctx, node.Namespace,
-		node.Spec.ClusterRef, node.Spec.WorkerNode)
+	return errors.Join(failures...)
 }
 
 // clearMaintenanceMarkers is the terminal teardown as the two outcomes that do
@@ -331,12 +435,23 @@ func (r *StorageNodeOpsReconciler) clearMaintenanceMarkers(
 		return
 	}
 	node, err := r.node(ctx, ops)
-	if err != nil || node == nil {
+	if err != nil {
+		// A node that cannot be read is the case where the markers are certain to
+		// be left and the worker they are on cannot even be named, so it is the
+		// case that most needs saying out loud. Staying silent here was the one
+		// path on which the event this teardown owes never arrived.
+		r.emit(ctx, ops, corev1.EventTypeWarning, MaintenanceMarkersLeft, fmt.Sprintf(
+			"This window's markers were left in place because node %s could not be "+
+				"read to find the worker they are on: %v", ops.Spec.NodeRef, err))
 		return
 	}
-	if err := r.clearMaintenance(ctx, node); err != nil {
+	if err := r.clearMaintenance(ctx, ops, node); err != nil {
+		// Which marker survived is not known here: the budget may be gone and the
+		// pod labels left, or the reverse. The event says what to look for rather
+		// than asserting which one it is.
 		r.emit(ctx, ops, corev1.EventTypeWarning, MaintenanceMarkersLeft, fmt.Sprintf(
-			"Worker %s keeps the window's eviction budget and cannot be drained "+
-				"until it is deleted by hand: %v", node.Spec.WorkerNode, err))
+			"This window's eviction budget or pod labels may remain on worker %s, "+
+				"which is not drainable by the ordinary rules until they are "+
+				"removed by hand: %v", node.Spec.WorkerNode, err))
 	}
 }

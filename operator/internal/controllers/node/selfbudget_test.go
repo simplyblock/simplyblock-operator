@@ -284,7 +284,7 @@ func TestTheWindowLetsTheManagerGoWhenItLetsTheStoragePodGo(t *testing.T) {
 		Workload: &Workload{Client: apiClient, ManagerNode: managerWorker},
 	}
 
-	if _, err := r.maintenanceRelease(context.Background(), node); err != nil {
+	if _, err := r.maintenanceRelease(context.Background(), aWindow("a-window"), node); err != nil {
 		t.Fatalf("releasing: %v", err)
 	}
 	if _, found := selfBudgetOf(t, apiClient); found {

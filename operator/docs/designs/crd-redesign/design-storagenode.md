@@ -1863,6 +1863,17 @@ is still setting the storage node's budget up on that host. A stale self-budget
 left by a crashed manager is cleaned up on the next pass, since it would otherwise
 make the node undrainable.
 
+**The markers are the worker's, and a multi-socket worker shares them.** The
+budget and the label are named per worker, and the concurrency gate admits one
+window per socket at the same time on purpose — the pair is one worker's worth of
+unavailability. They therefore hold the same budget and label the same pods, and
+the socket whose backend node goes offline first must not drop the guard the
+other's SPDK process is still standing behind, or the drain evicts a live one.
+A window releases or clears the worker's markers only once no sibling window on
+that worker is still before `Releasing`, and the last of them to end is what takes
+them down. A sibling whose node cannot be read counts as still guarding: a drain
+that waits is cheaper than an SPDK process that is evicted on a guess.
+
 **Every terminal outcome takes the markers down.** `Cleanup` is on the success
 path only — the graph is a chain with no edge from a failing step to it — so a
 window that fails on a deadline or is aborted runs the same teardown from its
@@ -1871,9 +1882,12 @@ raised it makes the worker undrainable by anything, forever, with nothing left
 saying why. The teardown is best-effort for the reason the suspend's unwind is,
 and a `MaintenanceMarkersLeft` event is what says a worker needs a hand.
 
-**An uncordon is answered.** A window still at `Holding` has done nothing to the
-node and is waiting for a slot, so the cordon being undone calls it off through
-`spec.abort`, which is what that step being abortable is for. From `ShuttingDown`
+**An uncordon is answered.** A window still at `Holding`, or raised and not yet
+admitted at all, has done nothing to the node, so the cordon being undone calls it
+off through `spec.abort`, which is what that step being abortable is for. An abort
+skips the cluster gate: the gate keeps work off a cluster that cannot take it, and
+an operation being called off is not going to do any, so holding it there would
+leave a window alive on a worker nobody is draining any more. From `ShuttingDown`
 onward the node is down and something has to bring it back, so the window runs
 on, and the uncordon it is waiting for is the one `AwaitingHost` reads. A window
 that has finished is **deleted** on the uncordon: the operation's name is derived
