@@ -9,27 +9,30 @@
 
 ## Phasing Overview
 
-| Phase       | Status  | Where the test runs                          | Recovery point                                   | New backend capability                                                  | Sections              |
-|-------------|---------|----------------------------------------------|--------------------------------------------------|-------------------------------------------------------------------------|-----------------------|
-| **Phase 1** | Planned | The source's own simplyblock cluster         | A snapshot of the source volume, on that cluster | None. Snapshot, clone, and delete all exist                             | §4, §5.1–§5.3, §6, §7 |
-| **Phase 2** | Planned | A separate simplyblock cluster (a DR target) | The latest replicated snapshot on that target    | On-demand shipping of a recovery point to a named target backend (P0-4) | §5.4                  |
+| Phase       | Status  | Where the bubble runs           | Recovery point                                | New capability                                                   | Sections              |
+|-------------|---------|---------------------------------|-----------------------------------------------|------------------------------------------------------------------|-----------------------|
+| **Phase 1** | Planned | The source's own cluster        | A fresh snapshot of the source volume         | Cross-cluster read and placement from the hub (OCM)              | §4, §5.1–§5.4, §6, §7 |
+| **Phase 2** | Planned | The DR target cluster           | The replicated snapshot already on the target | None beyond Phase 1                                              | §5.5                  |
+| **Phase 3** | Planned | A cluster that holds no replica | A point shipped there on demand               | On-demand shipping of a recovery point to a named backend (P0-6) | §5.6                  |
 
-Phase 1 is the whole of the near-term feature and it stands alone. A single simplyblock cluster is all it needs, because the recovery point is a snapshot of the source volume taken on that same cluster, and cloning a snapshot into an isolated namespace is built entirely out of primitives that already ship. Phase 2 is for the day there is a second simplyblock cluster to fail a test over to. It reuses the same `TestFailover` object and the same isolation contract, and differs only in that the recovery point is a cross-cluster replicated snapshot and, for a separate backend, has to be shipped there first.
+The phases differ on one axis: where the recovery point already lives relative to where the bubble runs. In Phase 1 the bubble runs where the source is, so the point is a fresh snapshot on the same backend. In Phase 2 the bubble runs on the DR target, where replication has already landed a snapshot, so no data moves. In Phase 3 the bubble runs somewhere with no copy, the only case that needs data shipped on demand and the design's long pole.
 
-The single-cluster framing is deliberate. simplyblock replication requires two distinct clusters, so a single-cluster deployment has no cross-cluster replicated snapshot to recover from. Its recoverable point is a snapshot of the source volume, and that is what Phase 1 clones.
+The hub coordinates every phase. It never has to run the source or the bubble itself, and both may be any managed cluster. What Phase 1 already needs, and every later phase inherits, is the ability to read the source object on its cluster and place the bubble object on the recovery cluster, both from the hub, which OCM provides.
 
 ---
 
 ## Phase 0 — External Prerequisites
 
-| #    | Prerequisite                                                                                                                         | Kind                    | Blocks  | Status                                                                                                                                                   |
-|------|--------------------------------------------------------------------------------------------------------------------------------------|-------------------------|---------|----------------------------------------------------------------------------------------------------------------------------------------------------------|
-| P0-1 | Take a snapshot of the source volume, and a group-consistent snapshot of a consistency group, without disturbing the running volume  | Control plane (`sbcli`) | Phase 1 | Shipped: `snapshot_controller.add` for a volume, and the group snapshot primitive (`bdev_lvol_snapshot_group`, design-consistency-groups.md) for a group |
-| P0-2 | Clone a snapshot into a writable volume in a chosen pool, and return the clone's volume handle                                       | Control plane (`sbcli`) | Phase 1 | Shipped: `snapshot_controller.clone`, and the CSI clone-from-snapshot path                                                                               |
-| P0-3 | Delete a snapshot and delete a volume, both idempotent                                                                               | Control plane (`sbcli`) | Phase 1 | Shipped                                                                                                                                                  |
-| P0-4 | On-demand shipping of a specific snapshot or group generation to a named target storage cluster's backend, followed by a clone there | Control plane (`sbcli`) | Phase 2 | Not shipped. The long pole of Phase 2. Today's cross-cluster reach is the continuous replication engine or the S3 backup path, neither an on-demand push |
+| #    | Prerequisite                                                                                                                                 | Kind                    | Blocks  | Status                                                                                                                                                   |
+|------|----------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|---------|----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| P0-1 | Take a snapshot of the source volume, and a group-consistent snapshot of a consistency group, without disturbing the running volume          | Control plane (`sbcli`) | Phase 1 | Shipped: `snapshot_controller.add` for a volume, and the group snapshot primitive (`bdev_lvol_snapshot_group`, design-consistency-groups.md) for a group |
+| P0-2 | Clone a snapshot into a writable volume in a chosen pool, and return the clone's volume handle                                               | Control plane (`sbcli`) | All     | Shipped: `snapshot_controller.clone`, and the CSI clone-from-snapshot path                                                                               |
+| P0-3 | Delete a snapshot and delete a volume, both idempotent                                                                                       | Control plane (`sbcli`) | All     | Shipped                                                                                                                                                  |
+| P0-4 | Resolve the latest replicated snapshot on a DR-target backend for a source relationship                                                      | Control plane (`sbcli`) | Phase 2 | Shipped: `lvol_controller.latest_replicated_snapshot` and `replication_policy_controller.latest_replicated_generation`, with v2 endpoints                |
+| P0-5 | From the hub, read an object on a managed cluster (`ManagedClusterView`) and place objects on it (`ManifestWork`), each with status feedback | Ecosystem (OCM)         | Phase 1 | Available: both are OCM primitives, once the cluster is a registered `ManagedCluster` with a working view controller (04-bootstrap-ocm.sh)               |
+| P0-6 | On-demand shipping of a specific snapshot or group generation to a named target backend that holds no copy, followed by a clone there        | Control plane (`sbcli`) | Phase 3 | Not shipped. The long pole of Phase 3. Today's cross-cluster reach is the continuous replication engine or the S3 backup path, neither an on-demand push |
 
-Phase 1 has no unmet backend prerequisite. Every primitive it stands on, taking a snapshot, cloning it, and deleting both, already ships, which is why the near-term feature is a new controller over existing calls rather than new storage work. Phase 2 is the exception: P0-4 is genuinely new, because moving one recovery point to an arbitrary cluster's backend on demand is a capability the engine does not have.
+Phase 1 has no unmet storage prerequisite: it takes, clones, and deletes snapshots with calls that ship. Its one non-storage need is OCM (P0-5), which the DR setup already establishes, and it is needed from Phase 1 because the hub, as coordinator, reaches the source and the bubble on their own clusters through it. Phase 2 adds nothing new, because the recovery point is already on the target backend (P0-4). Phase 3 is the exception: P0-6 is genuinely new, because moving one recovery point to a backend that holds no copy of it, on demand, is a capability the engine does not have.
 
 ---
 
@@ -54,21 +57,21 @@ Phase 1 has no unmet backend prerequisite. Every primitive it stands on, taking 
 
 ## Overview
 
-A test failover proves an application can be recovered from a point-in-time copy, in isolation, without disturbing the running production. On a single simplyblock cluster the recovery point is a snapshot of the source volume, taken on that same cluster. The drill takes it (or reuses one), clones it into a writable volume, and hands that clone to the operator as a bound PVC in an isolated namespace, `bubble` by default. The operator boots the application there, confirms the data is intact, and deletes the drill, which reclaims the clone and the snapshot it took. The source volume serves throughout, its data and its I/O never touched.
+A test failover proves an application can be recovered from a point-in-time copy, in isolation, without disturbing the running production. The recovery point is always a snapshot and the result is always a clone, so the source is never touched. What varies is where the bubble runs, which is what a real DR test cares about: recovering onto the site a real failover would move to.
 
-The feature is a new namespaced CRD, `TestFailover`, and its controller. Creating one runs the drill and leaves a bound PVC per source volume in the bubble namespace. Deleting one tears the drill down through a finalizer and reclaims what it created. Because the recovery point is a snapshot and the result is a clone, nothing the drill does mutates the source, which is what makes it non-disruptive.
+The feature is a new CRD, `TestFailover`, and its controller, both on the hub, which coordinates the drill. The object names the source, by the cluster it runs on and its PVC, and a place to recover it, the `bubbleCluster`. The controller reads the source PVC on its cluster to learn its volume, resolves the recovery point on the bubble's backend, clones it there, and places the clone on the bubble cluster as a bound PVC in an isolated namespace, `bubble` by default. The operator boots the application there, confirms the data, and deletes the drill, which reclaims the clone and any snapshot the drill took. The source serves throughout.
 
-`TestFailover` has one mode today and room for a second. In the same-cluster mode (Phase 1) the snapshot, the clone, and the bubble PVC all live on the source's own simplyblock cluster. In the cross-cluster mode (Phase 2, `spec.targetClusterID` set) the recovery point is a replicated snapshot on a separate DR-target cluster, and for a separate backend it is shipped there first. Both are driven by the same object and the same state machine, and differ only in where the recovery point comes from.
+`bubbleCluster` selects the topology. Naming the source's own cluster recovers there from a fresh snapshot (Phase 1). Naming the DR target recovers from the replicated snapshot already sitting on its backend (Phase 2), a genuine "fail over to the target site" test with no data moved. Naming a cluster that holds no copy is the case that needs the point shipped there first (Phase 3). All three are one object, one controller, and one state machine, differing only in where the point comes from and where the PVC is placed.
 
 ---
 
 ## 1. Background
 
-simplyblock has a real failover, driven either by Ramen (`DRPC.spec.action: Failover`) or imperatively by the simplyblock-native `ReplicationOps` CR, and both reach a backend that promotes a replicated copy on a second cluster. That copy is, mechanically, a clone of the last replicated snapshot on the target, so the real failover is a clone-and-promote of a recovery point that lives on another cluster.
+simplyblock has a real failover, driven either by Ramen (`DRPC.spec.action: Failover`) or imperatively by the simplyblock-native `ReplicationOps` CR. Both promote a replicated copy on the DR target and land the recovered workload there. That copy is, mechanically, a clone of the last replicated snapshot on the target, so a real failover is a clone-and-promote of a recovery point that already lives on the target's backend.
 
-Two facts shape a test failover. First, replication is between two clusters: `add_target` refuses `target_cluster_id == cluster_id` with "A cluster cannot replicate to itself" (`simplyblock_core/controllers/replication_policy_controller.py`). So a single simplyblock cluster has no cross-cluster replicated snapshot, and its only recoverable point is a snapshot of the source volume itself. Second, the primitives to recover from such a snapshot already exist: `snapshot_controller.add` takes one, `snapshot_controller.clone` clones it into a writable volume in a chosen pool, and both a snapshot and a volume can be deleted. A clone of a snapshot is a first-class volume with its own handle, which is exactly what CSI static provisioning adopts as a `PersistentVolume`.
+Three facts shape a test failover. First, replication is between two clusters: `add_target` refuses `target_cluster_id == cluster_id` with "A cluster cannot replicate to itself" (`simplyblock_core/controllers/replication_policy_controller.py`). So the source's own cluster has no replicated copy, and its recoverable point is a fresh snapshot of the source volume. The DR target does have one, which `lvol_controller.latest_replicated_snapshot` resolves without triggering anything. Second, the primitives to recover from either point already exist: `snapshot_controller.add` takes a snapshot, `snapshot_controller.clone` clones one into a writable volume, and both a snapshot and a volume can be deleted. A clone is a first-class volume with its own handle, which CSI static provisioning adopts as a `PersistentVolume`. Third, the hub already reaches its managed clusters both ways in this deployment: it reads an object on one through an OCM `ManagedClusterView`, the way Ramen reads a spoke's status, and writes one through a `ManifestWork`, the way Ramen places a workload.
 
-What is missing is the orchestration: an object that takes the recovery point, clones it into an isolated namespace, proves the copy is recoverable, and tears it down, all without touching the source. Ramen orchestrates none of it, because Ramen only fails over and relocates for real. This design is that object.
+What is missing is the orchestration: an object that finds the source on its cluster, resolves the right recovery point, clones it on the right backend, places the bubble PVC on the right cluster, proves the copy is recoverable, and tears it down, all without touching the source. Ramen orchestrates none of it, because Ramen only fails over and relocates for real. This design is that object.
 
 ---
 
@@ -76,142 +79,150 @@ What is missing is the orchestration: an object that takes the recovery point, c
 
 ### Goals
 
-- A `TestFailover` CRD and controller that, from one object, produce a bound PVC per source volume in an isolated namespace, backed by a clone of a snapshot of the source.
-- Non-disruptive by construction. The recovery point is a snapshot and the result is a clone, so the source volume's data and I/O are never touched, and the controller records a before-and-after fingerprint of the source so a regression is caught rather than assumed.
-- Volume-scoped and consistency-group-scoped drills. A group drill takes one group-consistent snapshot and produces one PVC per member from it.
-- Same-cluster today, cross-cluster later (§5.4), behind one object and one state machine.
-- A finalizer-driven teardown that reclaims the clone, deletes the snapshot the drill took, and proves nothing test-labeled remains.
+- A `TestFailover` CRD and controller that, from one object on the hub, produce a bound PVC per source volume in an isolated namespace, on the cluster the drill recovers onto.
+- Locate the source from the hub. The object names the source by its cluster and PVC, and the controller reads that PVC through OCM to learn its volume, so nobody has to hand-extract a backend handle.
+- Recover onto the DR target site, from the replicated snapshot already there, with the bubble PVC placed on that cluster. This is the case that makes a test failover a real rehearsal of the DR target.
+- Non-disruptive by construction. The recovery point is a snapshot and the result is a clone, so the source's data and I/O are never touched, and the controller records a before-and-after fingerprint of the source and its replication relationship so a regression is caught rather than assumed.
+- Volume-scoped and consistency-group-scoped drills. A group drill recovers one PVC per member from one group-consistent point.
+- Same-cluster today, DR target next, an arbitrary cluster later (§5), behind one object and one state machine.
+- A finalizer-driven teardown that reclaims the clone, deletes any snapshot the drill took, removes the placed PVC from the bubble cluster, and proves nothing test-labeled remains.
 - Restart safety. The controller records which side effect each step issued, so a restart mid-drill resumes rather than repeats.
 
 ### Non-Goals
 
 - **Bringing up the application.** The object produces bound PVCs and stops. The workload that consumes them is the operator's to deploy. An application lifecycle and its workload spec are a separate concern, out of scope here.
 - **A test failback.** The drill is one-way. Tearing it down reclaims the clone. There is no promote-back.
-- **Cross-cluster in Phase 1.** A separate DR-target cluster and its shipped recovery point are Phase 2 (§5.4), gated on a backend primitive that does not exist (P0-4).
+- **Recovering onto a cluster with no copy in Phase 1 or 2.** A bubble cluster whose backend holds no replica needs the point shipped there, which is Phase 3 (§5.6), gated on a backend primitive that does not exist (P0-6).
 - **Snapshot scheduling and evidence export.** A recurring schedule and a signed test report are a layer above this object and are out of scope here.
-- **Replacing Ramen's own test paths.** Ramen has no non-disruptive test. This design does not add one to Ramen. It is a simplyblock-native object.
+- **Replacing Ramen's own test paths.** Ramen has no non-disruptive test. This design does not add one to Ramen. It is a simplyblock-native object that reuses OCM only as the transport for reading the source and placing the bubble.
 
 ---
 
 ## 3. Architecture Overview
 
 ```
-                        ┌───────────────────────────────────────────────┐
-                        │ operator                                       │
-                        │                                                │
-   TestFailover CR ────▶│  ┌──────────────────────────────────────────┐ │
-   (spec: scope, ref,   │  │ TestFailoverReconciler                    │ │
-    recoveryPoint,      │  │  1. take or resolve recovery snapshot     │ │
-    bubbleNamespace)    │  │       (P0-1, or an existing snapshot)     │ │
-                        │  │  2. [Phase 2] ship point to target (P0-4) │ │
-                        │  │  3. clone the snapshot         (P0-2)     │ │
-                        │  │  4. adopt clone as static PV + bind PVC   │ │
-                        │  │  5. Ready; hold until deleted             │ │
-                        │  │  6. finalizer: reclaim clone + snapshot   │ │
-                        │  └──────────────────────────────────────────┘ │
-                        │        │ writes                    │ reads      │
-                        │        ▼                           ▼            │
-                        │  status.clones[]              source volume     │
-                        │  status.report               (read-only,       │
-                        │  bubble ns: PV + PVC          fingerprinted)    │
-                        └────────┼───────────────────────────────────────┘
-                                 │ REST (webapi.Client)
-                                 ▼
-                        ┌───────────────────────────────────────────────┐
-                        │ control plane (sbcli)                          │
-                        │  POST   .../volumes/{v}/snapshots       P0-1   │
-                        │  POST   .../consistency-groups/{g}/snapshots P0-1 (group) │
-                        │  POST   .../snapshots/{id}/clone        P0-2   │
-                        │  DELETE .../snapshots/{id}              P0-3   │
-                        │  DELETE .../volumes/{id}                P0-3   │
-                        │  POST   .../replication/ship-snapshot   P0-4 (Phase 2) │
-                        └───────────────────────────────────────────────┘
+   TestFailover CR ──▶┌──────────────────────────────────────────────────────┐
+   (on the hub)       │ hub operator: TestFailoverReconciler                 │
+   spec: scope,       │  1. read source PVC on sourceCluster (ManagedClusterView) → handle │
+     sourceCluster,   │  2. resolve recovery point on the bubble's backend    │
+     sourceNamespace, │       fresh snapshot (P0-1) | replicated (P0-4)       │
+     sourceRef,       │  3. [Phase 3] ship point to that backend (P0-6)      │
+     bubbleCluster,   │  4. clone the point on that backend        (P0-2)     │
+     bubbleNamespace  │  5. place PV + PVC on bubbleCluster (ManifestWork)   │
+                      │  6. Ready; hold until deleted                         │
+                      │  7. finalizer: remove PVC, reclaim clone + snapshot   │
+                      └──┬──────────────┬───────────────────────┬────────────┘
+        ManagedClusterView│              │ REST (webapi.Client)  │ ManifestWork
+        (read source)     ▼              ▼                       ▼ (place bubble)
+        ┌────────────────────────┐ ┌──────────────────┐ ┌────────────────────────┐
+        │ source cluster         │ │ control plane    │ │ bubble cluster         │
+        │  PVC + PV (volumeHandle)│ │  snapshot P0-1   │ │  work-agent applies:   │
+        │  projected to the hub  │ │  clone    P0-2   │ │   PersistentVolume     │
+        └────────────────────────┘ │  delete   P0-3   │ │   PersistentVolumeClaim│
+                                    │  latest-repl P0-4│ │  (bound to the clone   │
+                                    │  ship P0-6 (P3)  │ │   on its backend)      │
+                                    └──────────────────┘ └────────────────────────┘
 ```
 
-The controller runs on the cluster the test targets, which in Phase 1 is the source's own cluster. It reads the source only to fingerprint it, never to change it. The clone the backend returns is a first-class volume with its own handle, so the controller adopts it through ordinary CSI static provisioning: a `PersistentVolume` naming the clone's handle and a `PersistentVolumeClaim` bound to it in the bubble namespace. No Kubernetes `VolumeSnapshot` object is involved, because the snapshot and the clone are backend operations the controller drives directly.
+The controller runs on the hub, which coordinates the drill and runs neither the source nor the bubble. It learns the source's volume by reading the source PVC and its PV on `sourceCluster` through an OCM `ManagedClusterView`, which projects their current state back to the hub. It reads the source only to fingerprint it, never to change it. The clone is built on the bubble cluster's own backend, and the bubble cluster's CSI driver adopts it through a static `PersistentVolume` naming the clone's handle, with a `PersistentVolumeClaim` bound to it in the bubble namespace.
 
-The trust boundary is the control-plane REST API. The operator authenticates with its cluster secret, exactly as the `ReplicationOps` controller does. Phase 1 uses only endpoints that exist. Phase 2 adds one new server-side surface, P0-4.
+Placement is uniform: the controller delivers the bubble PV and PVC to `bubbleCluster` as an OCM `ManifestWork`, whose work-agent applies them and reports the bind result back through the `ManifestWork` status. The hub addresses both the source and the bubble this way, including its own cluster when it is self-managed. The trust boundary for storage is the control-plane REST API, reached with the admin bearer token the operator already uses. The trust boundary for cross-cluster read and write is OCM, which the DR setup already establishes (04-bootstrap-ocm.sh).
 
 ---
 
 ## 4. API Design — New CRD
 
-`TestFailover` is a namespaced object in the `storage.simplyblock.io` group. One object drives one drill. Its spec is immutable, because the object is a request and a drill whose target moved under the controller mid-flight has no coherent meaning. The full type is [Appendix A](#appendix-a-testfailover_typesgo), and the body shows only the fields an argument turns on.
+`TestFailover` is a namespaced object in the `storage.simplyblock.io` group, created on the hub. One object drives one drill. Its spec is immutable, because the object is a request and a drill whose target moved under the controller mid-flight has no coherent meaning. The full type is [Appendix A](#appendix-a-testfailover_typesgo), and the body shows only the fields an argument turns on.
 
 ### 4.1 `TestFailover` Spec
 
-The spec names what to recover and where to put the result. `scope` and `ref` resolve the source: `Volume` names one source `PersistentVolumeClaim` in the CR's own namespace, `Group` names one consistency group and produces a group-consistent set.
+The spec names the source by where it runs and what it is, and names where to recover it. `sourceCluster` and `sourceRef` are what let the hub find the source without anyone extracting a backend handle by hand.
 
 ```go
-// Scope selects what the drill recovers. Immutable.
-// +kubebuilder:validation:Enum=Volume;Group
-// +k8s:immutable
+// SourceCluster is the OCM ManagedCluster the source runs on. The hub reads the
+// source there through a ManagedClusterView. Immutable.
 // +kubebuilder:validation:Required
-Scope TestFailoverScope `json:"scope"`
-
-// RecoveryPoint optionally pins an existing snapshot (or group generation) to
-// clone. When empty, the drill takes a fresh snapshot of the source for a
-// well-defined point at drill time. Immutable.
 // +k8s:immutable
-// +optional
-RecoveryPoint string `json:"recoveryPoint,omitempty"`
+SourceCluster string `json:"sourceCluster"`
 
-// TargetClusterID selects the cross-cluster mode (Phase 2): the cluster the
-// drill runs on. Empty means the source's own cluster (Phase 1). Immutable.
+// SourceRef names the source on SourceCluster: a PersistentVolumeClaim in
+// SourceNamespace (scope=Volume), or a consistency group (scope=Group).
+// Immutable.
+// +kubebuilder:validation:Required
 // +k8s:immutable
-// +optional
-TargetClusterID string `json:"targetClusterID,omitempty"`
+SourceRef string `json:"sourceRef"`
+
+// BubbleCluster is the OCM ManagedCluster to recover onto: the source's own
+// cluster for an in-place test, the DR target, or another cluster. Immutable.
+// +kubebuilder:validation:Required
+// +k8s:immutable
+BubbleCluster string `json:"bubbleCluster"`
 ```
 
-`recoveryPoint` is the choice between recovering from a point the operator already has and recovering from a fresh one. Empty is the common case and takes a snapshot at drill time, which is the closest thing to "fail over to now." `bubbleNamespace` defaults to `bubble` and is where every recovered PVC lands. Isolating the result in its own namespace is what keeps a drill from colliding with the source workload's PVCs, which carry the same names.
+`sourceCluster` answers "where is the PVC to test," and the controller reads it there rather than requiring a handle. `bubbleCluster` selects the topology (§5) and carries the "recover onto the target site" intent. `bubbleNamespace` defaults to `bubble` and is the namespace on the bubble cluster where every recovered PVC lands, isolated so it cannot collide with the source workload's PVCs, which carry the same names.
 
 ### 4.2 `TestFailover` Status
 
-The status carries the state-machine position, the resolved recovery point, one entry per recovered volume, and a report. `phase` is the coarse lifecycle and `step` is the durable machine position with its deadline (§6). `clones` is the list the finalizer reclaims from, and `report` is the evidence a reader takes away.
+The status carries the state-machine position, the resolved source and recovery point, one entry per recovered volume, and a report. `phase` is the coarse lifecycle and `step` is the durable machine position with its deadline (§6). `clones` is the list the finalizer reclaims from, and `report` is the evidence a reader takes away.
 
 ```go
 // Clones is one entry per recovered volume: the source it came from, the
-// snapshot and clone the drill built, and the PVC bound to it in the bubble.
+// snapshot and clone the drill built, and the PVC placed on the bubble cluster.
 // +optional
 // +listType=map
 // +listMapKey=sourceRef
 Clones []TestFailoverClone `json:"clones,omitempty"`
 
-// Report is the drill's evidence: the point recovered, its age, and whether
-// the source was untouched. Populated as the drill reaches Ready.
+// Report is the drill's evidence: the source and point recovered, its age, the
+// cluster it ran on, and whether the source was untouched. Populated as the
+// drill reaches Ready.
 // +optional
 Report *TestFailoverReport `json:"report,omitempty"`
 ```
 
-An invariant the controller enforces and the status records: the drill is non-disruptive. `status.report.invariantsHeld` is set only when the fingerprint of the source taken before the drill matches the one taken after (§7.4). A drill that reached `Ready` with `invariantsHeld: false` is a defect, not a passing test.
+An invariant the controller enforces and the status records: the drill is non-disruptive. `status.report.invariantsHeld` is set only when the fingerprint of the source and its replication relationship taken before the drill matches the one taken after (§7.4). A drill that reached `Ready` with `invariantsHeld: false` is a defect, not a passing test.
 
-The object owns a finalizer, `storage.simplyblock.io/testfailover-teardown`. Deletion runs the teardown state (§6) before the finalizer is removed, so a clone or a drill-taken snapshot is never orphaned by a delete that races the controller.
+The object owns a finalizer, `storage.simplyblock.io/testfailover-teardown`. Deletion runs the teardown state (§6) before the finalizer is removed, so a clone, a drill-taken snapshot, or a placed PVC is never orphaned by a delete that races the controller.
 
 ---
 
 ## 5. Core Mechanism
 
-### 5.1 The recovery point (same-cluster)
+### 5.1 Locating the source
 
-The recovery point is a snapshot of the source volume on the source's own cluster. When `spec.recoveryPoint` is set, the controller uses that existing snapshot. When it is empty, the controller takes a fresh one (P0-1), which gives the drill a well-defined point at its start. Taking a snapshot does not disturb the running volume: it adds a point to the volume's chain and copies no data, and the drill deletes the snapshot it took on teardown. For a group drill (`scope: Group`) the controller takes a single group-consistent snapshot of the whole consistency group, so every member is captured at one point.
+The hub does not run the source, so it reads it. The controller creates an OCM `ManagedClusterView` on `sourceCluster` for the source PVC named by `sourceRef` in `sourceNamespace`, and for the PV it is bound to, which projects their current state back to the hub. From the PV's `spec.csi.volumeHandle` it learns the source volume's backend handle, the identity every later step keys on. For a group drill, `sourceRef` names a consistency group, whose member volumes the control plane resolves from the group id on `sourceCluster`'s backend, so the drill recovers the whole set.
 
-There is no promote and no commit here, because there is nothing to promote. A single cluster has no replicated copy to fail over to. The drill recovers from a snapshot, which is inherently a read of a past state and never a mutation of the present one.
+Reading the source is also where the non-disruptiveness fingerprint begins: the handle, the PVC's binding, and the replication relationship's state are captured here and compared again at the end (§7.4).
 
-### 5.2 Cloning and recovering the PVC into the bubble
+### 5.2 Resolving the recovery point
 
-The controller clones the recovery-point snapshot into a writable volume in a chosen pool (P0-2), and the backend returns the clone's volume handle. The clone is a first-class volume, so the controller adopts it the way any pre-existing backend volume is adopted: a static `PersistentVolume` whose `spec.csi.volumeHandle` is the clone's handle and whose `spec.claimRef` names a `PersistentVolumeClaim` in the bubble namespace, bound to it. No `VolumeSnapshot` is involved, because the snapshot and clone are backend operations the controller already drove. The PV carries `persistentVolumeReclaimPolicy: Retain`, so deleting the PVC does not delete the clone, which the controller reclaims at the backend on teardown (§5.3).
+The recovery point is always a snapshot, and where it comes from follows `bubbleCluster`. When `bubbleCluster` is the source's own cluster the point is a snapshot of the source volume there: an existing one when `spec.recoveryPoint` is set, or a fresh one the drill takes (P0-1) for a well-defined point at its start. When `bubbleCluster` names the DR target, the point is the latest replicated snapshot already on that cluster's backend, which `latest_replicated_snapshot` resolves from the source handle (P0-4) without triggering anything. For a group drill the point is one group-consistent snapshot, taken fresh on the source cluster or resolved as the latest replicated generation on the target.
 
-The result is one bound PVC per source volume in the bubble namespace, sized from the source PVC's request. For a group drill, one PVC per member from the one group snapshot, which is what makes the recovered set crash-consistent.
+Taking a snapshot does not disturb the running volume: it adds a point to the volume's chain and copies no data, and the drill deletes any snapshot it took on teardown. Resolving the replicated point touches nothing, because replication already produced it. Neither path promotes or commits anything, which is what keeps the source and the live replication relationship untouched.
 
-### 5.3 Teardown
+### 5.3 Cloning the point on the bubble's backend
 
-Deleting the `TestFailover` runs the teardown state before the finalizer clears. The controller deletes each PVC and its static PV, then reclaims each clone at the backend, then deletes the snapshot it took (a snapshot named by `spec.recoveryPoint` was not the drill's to create, so it is left alone), then enumerates by the drill's `test-id` label to prove nothing remains. Only then is the finalizer removed. A teardown that cannot confirm a reclaim holds the object in `TearingDown` with the reason on `status.message`, rather than removing the finalizer and orphaning backend storage.
+The controller clones the recovery-point snapshot into a writable volume on the bubble cluster's own backend (P0-2), and the backend returns the clone's volume handle. For an in-place drill that backend is the source's. For a DR-target drill it is the target's, where the replicated snapshot already sits, so the clone is local to the point and no data crosses a cluster boundary. The clone is a first-class volume, tagged with the drill's `test-id` for reclaim.
 
-### 5.4 The cross-cluster recovery point (Phase 2)
+### 5.4 Placing the bubble PVC
 
-The cross-cluster mode changes only where the recovery point comes from. When `spec.targetClusterID` names a separate simplyblock cluster, the drill runs there, and its recovery point is the latest replicated snapshot on that target rather than a fresh snapshot of the source. When the target's backend is not the source's backend, that point does not exist there yet and has to be shipped first (P0-4), after which the clone and recovery steps run on the target exactly as in §5.2.
+The clone is adopted as a static `PersistentVolume` whose `spec.csi.volumeHandle` is the clone's handle, with a `PersistentVolumeClaim` bound to it in the bubble namespace, sized from the source's request. The controller delivers the PV and PVC to `bubbleCluster` as an OCM `ManifestWork` (P0-5), and that cluster's work-agent applies them and reports the PVC bound through the `ManifestWork` status. The PV carries `persistentVolumeReclaimPolicy: Retain`, so deleting the PVC does not delete the clone, which the controller reclaims at the backend on teardown.
 
-This is the design's long pole, because the shipping primitive does not exist. The continuous replication engine is pair-scoped and continuous, aimed at the DR target, and the S3 backup path is not a cluster-to-cluster push. Neither is an on-demand "ship this one point to cluster X now." P0-4 is that new capability, and Phase 2 does not ship until it does.
+The result is one bound PVC per source volume in the bubble namespace on the bubble cluster. For a group drill, one PVC per member from the one point, which is what makes the recovered set crash-consistent.
+
+### 5.5 Recovering onto the DR target (Phase 2)
+
+The DR-target case is why the source is named by cluster and PVC rather than assumed local. The source runs on one cluster and the bubble on the DR target, so the controller, from the hub, reads the source PVC on its cluster (§5.1), resolves its handle to the replicated snapshot on the target's backend (P0-4), clones it there (§5.3), and places the bubble PVC on the target through `ManifestWork` (§5.4). Nothing is shipped, because replication already put the point on the target. This is a true rehearsal of the site that would take over in a real failover, and it leaves the running replication relationship exactly as it was.
+
+### 5.6 Shipping to a cluster with no copy (Phase 3)
+
+A bubble cluster whose backend holds no replica of the source needs the point moved there before it can be cloned. The controller calls the shipping verb (P0-6), which replicates the specific recovery point to that backend as a cloneable object, and then the clone and placement steps run there as in §5.3 and §5.4.
+
+This is the design's long pole, because the shipping primitive does not exist. The continuous replication engine is pair-scoped and aimed at the DR target, and the S3 backup path is not a cluster-to-cluster push. Neither is an on-demand "ship this one point to cluster X now." P0-6 is that new capability, and Phase 3 does not ship until it does.
+
+### 5.7 Teardown
+
+Deleting the `TestFailover` runs the teardown state before the finalizer clears. The controller removes the PVC and its static PV from the bubble cluster by deleting their `ManifestWork`, removes the `ManagedClusterView` it created on the source, reclaims each clone at the backend, then deletes any snapshot it took (a snapshot named by `spec.recoveryPoint`, or a replicated snapshot it only resolved, was not the drill's to create, so it is left alone), then enumerates by the drill's `test-id` label to prove nothing remains. Only then is the finalizer removed. A teardown that cannot confirm a reclaim holds the object in `TearingDown` with the reason on `status.message`, rather than removing the finalizer and orphaning backend storage.
 
 ---
 
@@ -221,37 +232,42 @@ This is the design's long pole, because the shipping primitive does not exist. T
 Pending
   │  spec admitted, finalizer added
   ▼
-Provisioning ──(step: Snapshotting)──▶ take or resolve the recovery snapshot (P0-1)
-  │                                      ← status.report.recoveryPoint set
-  │  (step: Shipping)   [cross-cluster only] ship point to target (P0-4)
-  │  (step: Cloning)    clone the snapshot (P0-2)
-  │                                      ← status.clones[].cloneID set
-  │  (step: Binding)    static PV + PVC per volume; wait Bound
+Provisioning ──(step: ResolvingSource)──▶ read source PVC/PV on sourceCluster
+  │                                         via ManagedClusterView → handle
+  │  (step: ResolvingPoint)  fresh snapshot (P0-1) or replicated (P0-4)
+  │                                         ← status.report.recoveryPoint set
+  │  (step: Shipping)   [Phase 3 only]  ship point to the bubble's backend (P0-6)
+  │  (step: Cloning)    clone on the bubble's backend (P0-2)
+  │                                         ← status.clones[].cloneID set
+  │  (step: Placing)    deliver PV + PVC to bubbleCluster via ManifestWork;
+  │                     wait Bound
   ▼
 Ready ────────────────────────────────── every PVC Bound; report populated
   │  (holds here until the object is deleted)
   │  .metadata.deletionTimestamp set
   ▼
-TearingDown ──(step: Releasing)──▶ delete PVCs + PVs, reclaim clones,
-  │                                  delete drill-taken snapshots, prove no leftovers
+TearingDown ──(step: Releasing)──▶ delete ManifestWork + ManagedClusterView,
+  │                                  reclaim clones, delete drill-taken snapshots
   ▼
 (finalizer removed, object gone)
 
-Failed ◀── any step's deadline expires, or a backend call fails terminally
-           (object stays; teardown still runs on delete)
+Failed ◀── any step's deadline expires, or a backend, read, or placement call
+           fails terminally (object stays; teardown still runs on delete)
 ```
 
-The machine position lives in `status.step` as a snapshot carrying the state and the deadline that state expires at, so a restored controller times a stalled step out rather than waiting forever. `status.phase` is the coarse view for `kubectl get`. Each step records `status.step.triggered` once its side effect is issued, so a restart between issuing a clone and recording its handle does not clone twice.
+The machine position lives in `status.step` as a snapshot carrying the state and the deadline that state expires at, so a restored controller times a stalled step out rather than waiting forever. `status.phase` is the coarse view for `kubectl get`. Each step records `status.step.triggered` once its side effect is issued, so a restart between cloning and recording the handle does not clone twice, and a restart between placing and confirming does not place twice.
 
-| Condition                       | Step         | Result                                                                                             |
-|---------------------------------|--------------|----------------------------------------------------------------------------------------------------|
-| User deletes mid-drill          | any          | `TearingDown`: reclaim whatever `status.clones` records, then clear the finalizer                  |
-| Operator restart                | any          | resume from `status.step`, and `triggered` prevents re-issuing the current step's side effect      |
-| Source volume not found         | Snapshotting | `Failed`: the source `ref` resolves to nothing to snapshot                                         |
-| Backend snapshot error          | Snapshotting | `Failed`. No clone exists, so teardown has nothing to reclaim                                      |
-| Backend clone error             | Cloning      | `Failed`. Teardown on delete deletes the drill-taken snapshot                                      |
-| PVC never binds                 | Binding      | `Failed` at the deadline. The clone and snapshot are recorded and reclaimed on delete              |
-| Clone or snapshot reclaim fails | Releasing    | hold in `TearingDown` with the reason. The finalizer is not removed until the reclaim is confirmed |
+| Condition                       | Step            | Result                                                                                             |
+|---------------------------------|-----------------|----------------------------------------------------------------------------------------------------|
+| User deletes mid-drill          | any             | `TearingDown`: reclaim whatever `status.clones` records, then clear the finalizer                  |
+| Operator restart                | any             | resume from `status.step`, and `triggered` prevents re-issuing the current step's side effect      |
+| Source PVC not found on cluster | ResolvingSource | `Failed`: the view returns nothing for `sourceRef` on `sourceCluster`                              |
+| Source cluster not managed      | ResolvingSource | `Failed`: `sourceCluster` is not a registered `ManagedCluster`                                     |
+| No replicated point on target   | ResolvingPoint  | `Failed` for a Phase 2 drill: replication has landed nothing on the bubble's backend yet           |
+| Backend clone error             | Cloning         | `Failed`. Teardown on delete deletes any drill-taken snapshot                                      |
+| Bubble cluster not managed      | Placing         | `Failed`: `bubbleCluster` is not a registered `ManagedCluster`                                     |
+| PVC never binds                 | Placing         | `Failed` at the deadline. The clone and snapshot are recorded and reclaimed on delete              |
+| Clone or snapshot reclaim fails | Releasing       | hold in `TearingDown` with the reason. The finalizer is not removed until the reclaim is confirmed |
 
 ---
 
@@ -259,49 +275,57 @@ The machine position lives in `status.step` as a snapshot carrying the state and
 
 ### 7.1 Location
 
-`internal/controller/testfailover_controller.go`, `TestFailoverReconciler`. It reuses the `webapi.Client` the replication controllers use for control-plane calls, and standard CSI static provisioning to bind a `PersistentVolume` to the clone the backend returns.
+`internal/controller/testfailover_controller.go`, `TestFailoverReconciler`, on the hub. It reuses the `webapi.Client` the replication controllers use for control-plane calls, an OCM `ManagedClusterView` to read the source, and an OCM `ManifestWork` to place the bubble.
 
 ### 7.2 Reconciliation Trigger
 
-Watches `TestFailover` and owns the `PersistentVolume` and `PersistentVolumeClaim` objects it creates, so their status changes requeue the owner. It requeues on its own step deadline so a stalled step is detected without an external event.
+Watches `TestFailover` and owns the `ManagedClusterView` and `ManifestWork` it creates for each drill, reconciling on their status feedback, which carries the source's projected state and the placed PVC's bind state back to the hub. It requeues on its own step deadline so a stalled step is detected without an external event.
 
 ### 7.3 Concurrency and Mutual Exclusion
 
-A drill does not mutate the source, so two drills against one source cannot corrupt it. What they can do is duplicate snapshots and clones, so the controller keys one active drill per resolved `(scope, ref, targetClusterID)` and refuses a second with an admission rule where CEL can express it and a `Failed` phase otherwise. This is a lighter lock than the `ReplicationOps` entity lock (`ActiveOpsRef`), because there is no production object whose single-writer invariant has to be defended.
+A drill does not mutate the source, so two drills against one source cannot corrupt it. What they can do is duplicate snapshots and clones, so the controller keys one active drill per resolved `(scope, sourceCluster, sourceRef, bubbleCluster)` and refuses a second with an admission rule where CEL can express it and a `Failed` phase otherwise. This is a lighter lock than the `ReplicationOps` entity lock (`ActiveOpsRef`), because there is no production object whose single-writer invariant has to be defended.
 
 ### 7.4 Interaction with Existing Controllers
 
-The drill is invisible to production by construction. It only reads the source, snapshots it, and clones the snapshot, none of which changes the source volume. To make "invisible" checkable rather than asserted, the controller fingerprints the source before the first side effect and again at `Ready`: the source PVC is still bound to the same PV and backend volume, and, where a replication relationship exists, its `ReplicationSlot` and any `VolumeReplication` or `VolumeGroupReplication` object are unchanged in state. A mismatch sets `status.report.invariantsHeld: false` and moves the object to `Failed`, because a drill that changed production has failed at its one core promise.
+The drill is invisible to production by construction. It only reads the source, resolves or takes a snapshot, and clones the snapshot, none of which changes the source volume or the live replication. To make "invisible" checkable rather than asserted, the controller fingerprints the source at `ResolvingSource` and again at `Ready`: the source PVC is still bound to the same volume, and the relationship's `ReplicationSlot`, and any `VolumeReplication` or `VolumeGroupReplication` object, are unchanged in state and lag. A mismatch sets `status.report.invariantsHeld: false` and moves the object to `Failed`, because a drill that changed production has failed at its one core promise.
 
 ### 7.5 RBAC
 
-New rules: `testfailovers` and `testfailovers/status` and `testfailovers/finalizers` (full), `create`/`delete`/`get`/`list`/`watch` on `persistentvolumes` (cluster-scoped) and on `persistentvolumeclaims` in the bubble namespace. No permission on the Kubernetes snapshot API is needed, because the design does not use it. No new permission on any production replication CR either: the controller reads them, and read is a permission the operator already holds.
+New rules: `testfailovers` and `testfailovers/status` and `testfailovers/finalizers` (full), and `create`/`delete`/`get`/`list`/`watch` on `managedclusterviews` and `manifestworks` in a cluster's namespace on the hub. The source's projection and the bubble's PV and PVC are handled by the managed clusters' own agents, so the hub operator needs no direct `persistentvolume`, `persistentvolumeclaim`, or snapshot-API permission. No new permission on any production replication CR either: the controller reads them, and read is a permission the operator already holds.
+
+### 7.6 Cross-Cluster Read and Placement
+
+The hub reaches its managed clusters through OCM, the transport already established for DR. To read the source, the controller creates a `ManagedClusterView` in `sourceCluster`'s namespace naming the PVC and PV, and the view controller on that cluster projects them back into the view's status. To place the bubble, the controller creates a `ManifestWork` in `bubbleCluster`'s namespace carrying the PV and PVC, and the work-agent on that cluster applies them and reports their status back, which is how the hub learns the bubble is bound without a direct connection to either cluster's API server. Both clusters must be registered `ManagedCluster`s (04-bootstrap-ocm.sh). Teardown deletes both objects, and OCM garbage-collects the applied PV and PVC on the bubble cluster.
 
 ---
 
 ## 8. Backend API Requirements
 
-| Method | Endpoint                                                   | Notes                                                                                                                                                                  |
-|--------|------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| POST   | `.../clusters/{c}/storage-pools/{p}/volumes/{v}/snapshots` | **Exists** (P0-1). Takes a snapshot of the source volume. Non-disruptive. Backed by `snapshot_controller.add`                                                          |
-| POST   | `.../clusters/{c}/consistency-groups/{g}/snapshots`        | **Exists** (P0-1, group). One group-consistent snapshot across the group's members                                                                                     |
-| POST   | `.../clusters/{c}/snapshots/{id}/clone`                    | **Exists** (P0-2). Clones the snapshot into a chosen pool and returns the clone's volume handle. Backed by `snapshot_controller.clone`                                 |
-| DELETE | `.../clusters/{c}/snapshots/{id}`                          | **Exists** (P0-3). Deletes a snapshot the drill took. Idempotent: deleting an already-gone snapshot returns success                                                    |
-| DELETE | `.../clusters/{c}/storage-pools/{p}/volumes/{id}`          | **Exists** (P0-3). Reclaims a clone. Idempotent                                                                                                                        |
-| POST   | `.../clusters/{c}/replication/ship-snapshot`               | **New** (P0-4, Phase 2). Ships a named recovery point to a target cluster's backend. Idempotent per `(recovery-point, target)`. Long-running: returns a handle to poll |
+| Method | Endpoint                                                            | Notes                                                                                                                                                                    |
+|--------|---------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| POST   | `.../clusters/{c}/storage-pools/{p}/volumes/{v}/snapshots`          | **Exists** (P0-1). Takes a snapshot of the source volume. Non-disruptive. Backed by `snapshot_controller.add`                                                            |
+| POST   | `.../clusters/{c}/consistency-groups/{g}/snapshots`                 | **Exists** (P0-1, group). One group-consistent snapshot across the group's members                                                                                       |
+| GET    | `.../clusters/{c}/replication/relationships/{lvol}/latest-snapshot` | **Exists** (P0-4). Resolves the latest replicated snapshot on the DR-target backend. Pure read. Group form: `latest-generation`                                          |
+| POST   | `.../clusters/{c}/snapshots/{id}/clone`                             | **Exists** (P0-2). Clones the snapshot into a chosen pool and returns the clone's volume handle. Backed by `snapshot_controller.clone`                                   |
+| DELETE | `.../clusters/{c}/snapshots/{id}`                                   | **Exists** (P0-3). Deletes a snapshot the drill took. Idempotent                                                                                                         |
+| DELETE | `.../clusters/{c}/storage-pools/{p}/volumes/{id}`                   | **Exists** (P0-3). Reclaims a clone. Idempotent                                                                                                                          |
+| POST   | `.../clusters/{c}/replication/ship-snapshot`                        | **New** (P0-6, Phase 3). Ships a named recovery point to a backend that holds no copy. Idempotent per `(recovery-point, target)`. Long-running: returns a handle to poll |
 
-Phase 1 uses only endpoints that exist. The two mutating calls the controller may retry after a restart, the snapshot take and the clone, are made idempotent by keying on the drill's `test-id`, so a retry that finds a matching snapshot or clone reuses it rather than making another. The exact v2 route spellings above mirror the existing snapshot and clone routes and are confirmed against the API at implementation time. P0-4's ship is a long-running call and returns a handle the controller polls, with a deadline that moves the step to `Failed` on expiry.
+Phases 1 and 2 use only endpoints that exist. The mutating calls the controller may retry after a restart, the snapshot take and the clone, are made idempotent by keying on the drill's `test-id`, so a retry that finds a matching snapshot or clone reuses it. The exact v2 route spellings mirror the existing snapshot and clone routes and are confirmed against the API at implementation time. P0-6's ship is a long-running call and returns a handle the controller polls, with a deadline that moves the step to `Failed` on expiry. The source read and bubble placement are OCM, not backend calls (§7.6).
 
 ---
 
 ## 9. Configuration
 
-| Field                  | Type   | Default  | Description                                                                                                                                            |
-|------------------------|--------|----------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `spec.bubbleNamespace` | string | `bubble` | Namespace the recovered PVCs are created in. Immutable after creation                                                                                  |
-| `spec.recoveryPoint`   | string | empty    | An existing snapshot to clone. Empty takes a fresh snapshot at drill time. Immutable                                                                   |
-| `spec.targetClusterID` | string | empty    | Empty is the same-cluster mode. A cluster id selects cross-cluster mode (Phase 2). Immutable                                                           |
-| `spec.ttlSeconds`      | int    | unset    | Optional maximum lifetime. When set, the drill is torn down after the deadline even without a delete, so a forgotten drill cannot hold a clone forever |
+| Field                  | Type   | Default               | Description                                                                                                                                            |
+|------------------------|--------|-----------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `spec.sourceCluster`   | string | (required)            | The OCM `ManagedCluster` the source runs on. Immutable                                                                                                 |
+| `spec.sourceNamespace` | string | (required for Volume) | The namespace of the source PVC. Immutable                                                                                                             |
+| `spec.sourceRef`       | string | (required)            | The source PVC (Volume) or consistency group (Group) on `sourceCluster`. Immutable                                                                     |
+| `spec.bubbleCluster`   | string | (required)            | The OCM `ManagedCluster` to recover onto. Immutable                                                                                                    |
+| `spec.bubbleNamespace` | string | `bubble`              | Namespace on the bubble cluster the recovered PVCs are created in. Immutable                                                                           |
+| `spec.recoveryPoint`   | string | empty                 | An existing snapshot to clone. Empty resolves the point per `bubbleCluster` (§5.2). Immutable                                                          |
+| `spec.ttlSeconds`      | int    | unset                 | Optional maximum lifetime. When set, the drill is torn down after the deadline even without a delete, so a forgotten drill cannot hold a clone forever |
 
 `ttlSeconds` is the only runtime-relevant knob and it is advisory: the controller reads it once at `Ready` and schedules a teardown. Changing the rest of the spec after creation is refused by immutability, because a drill whose target moved mid-flight has no coherent meaning.
 
@@ -309,14 +333,16 @@ Phase 1 uses only endpoints that exist. The two mutating calls the controller ma
 
 ## 10. Failure Modes and Fallback
 
-| Failure                               | Detection               | Behavior                                                                                                                                                          |
-|---------------------------------------|-------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Control plane unreachable             | REST call error         | Requeue with backoff, and the step deadline eventually moves the object to `Failed`. No partial state is committed                                                |
-| Source volume or group not found      | snapshot call 404       | `Failed` at `Snapshotting` with the ref in `status.message`                                                                                                       |
-| Pinned `recoveryPoint` snapshot gone  | clone call 404          | `Failed` at `Cloning`. A pinned point that vanished is the operator's to re-choose                                                                                |
-| Bubble namespace has a name collision | PVC create conflict     | `Failed` at `Binding` with the conflicting name in `status.message`. The namespace isolates production, so a collision is with another drill, not with production |
-| Fingerprint drift (source changed)    | Compare at `Ready`      | `Failed`, `invariantsHeld: false`. This is the guard, not an expected path                                                                                        |
-| Reclaim cannot be confirmed           | delete call non-success | Hold in `TearingDown`, finalizer retained, reason on `status.message`. Never orphan a clone or a drill-taken snapshot by clearing the finalizer early             |
+| Failure                            | Detection                    | Behavior                                                                                                             |
+|------------------------------------|------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| Control plane unreachable          | REST call error              | Requeue with backoff, and the step deadline eventually moves the object to `Failed`. No partial state is committed   |
+| Source cluster not managed         | ManagedClusterView error     | `Failed` at `ResolvingSource`: `sourceCluster` must be registered on the hub                                         |
+| Source PVC not found               | view projects nothing        | `Failed` at `ResolvingSource` with the `sourceRef` in `status.message`                                               |
+| No replicated point on the target  | latest-snapshot 404          | `Failed` at `ResolvingPoint` for a Phase 2 drill. Replication has landed nothing on the bubble's backend yet         |
+| Bubble cluster not managed         | ManifestWork placement error | `Failed` at `Placing`: the target must be registered on the hub                                                      |
+| PVC never binds on the bubble      | ManifestWork status timeout  | `Failed` at `Placing`. The clone is recorded and reclaimed on delete                                                 |
+| Fingerprint drift (source changed) | Compare at `Ready`           | `Failed`, `invariantsHeld: false`. This is the guard, not an expected path                                           |
+| Reclaim cannot be confirmed        | delete call non-success      | Hold in `TearingDown`, finalizer retained, reason on `status.message`. Never orphan a clone, snapshot, or placed PVC |
 
 Every path degrades to a named state. The one path that must never degrade silently is the fingerprint guard: a drill that cannot prove it left the source untouched fails, rather than passing on the assumption that it did.
 
@@ -328,26 +354,27 @@ The operator has no metrics or events for a non-disruptive test today, because t
 
 ### Kubernetes Events
 
-Events land on the `TestFailover` object, which the operator owns and which outlives each step it reports.
+Events land on the `TestFailover` object, which lives on the hub and outlives each step it reports.
 
-| Event                                                              | Type    | Reason             |
-|--------------------------------------------------------------------|---------|--------------------|
-| The recovery snapshot was taken at time T                          | Normal  | RecoveryPointTaken |
-| The clone was built and the source was not touched                 | Normal  | CloneBuilt         |
-| Every recovered PVC is bound and the drill is ready                | Normal  | BubbleReady        |
-| The drill failed because the source changed during the drill       | Warning | InvariantViolated  |
-| A clone or snapshot could not be reclaimed and teardown is holding | Warning | ReclaimPending     |
+| Event                                                         | Type    | Reason                |
+|---------------------------------------------------------------|---------|-----------------------|
+| The source resolved to volume X on cluster Y                  | Normal  | SourceResolved        |
+| The recovery point resolved to snapshot X at time T           | Normal  | RecoveryPointResolved |
+| The clone was built on the bubble's backend, source untouched | Normal  | CloneBuilt            |
+| The bubble PVC is bound on cluster X and the drill is ready   | Normal  | BubbleReady           |
+| The drill failed because the source changed during the drill  | Warning | InvariantViolated     |
+| A clone, snapshot, or placed PVC could not be reclaimed       | Warning | ReclaimPending        |
 
-`InvariantViolated` and `ReclaimPending` are the two that matter most. The first says the drill stopped being non-disruptive, and the second is a teardown correctly refusing to orphan backend storage, which is a hold that would otherwise look like a hang.
+`InvariantViolated` and `ReclaimPending` are the two that matter most. The first says the drill stopped being non-disruptive, and the second is a teardown correctly refusing to orphan storage or a peer object, which is a hold that would otherwise look like a hang.
 
 ### Prometheus Metrics
 
-| Metric                                                | Labels                    | Description                                                                      |
-|-------------------------------------------------------|---------------------------|----------------------------------------------------------------------------------|
-| `simplyblock_testfailover_drills_total`               | `scope`, `mode`, `result` | Counter of completed drills by outcome (`ready`, `failed`, `invariant_violated`) |
-| `simplyblock_testfailover_duration_seconds`           | `scope`, `mode`, `step`   | Histogram of time spent per step, for the recover-time estimate                  |
-| `simplyblock_testfailover_active`                     | `mode`                    | Gauge of drills currently holding a clone, for capacity watch                    |
-| `simplyblock_testfailover_recovery_point_age_seconds` | `scope`                   | Gauge of the recovery point's age at drill time (now minus the snapshot time)    |
+| Metric                                                | Labels                     | Description                                                                      |
+|-------------------------------------------------------|----------------------------|----------------------------------------------------------------------------------|
+| `simplyblock_testfailover_drills_total`               | `scope`, `phase`, `result` | Counter of completed drills by outcome (`ready`, `failed`, `invariant_violated`) |
+| `simplyblock_testfailover_duration_seconds`           | `scope`, `phase`, `step`   | Histogram of time spent per step, for the recover-time estimate                  |
+| `simplyblock_testfailover_active`                     | `phase`                    | Gauge of drills currently holding a clone, for capacity watch                    |
+| `simplyblock_testfailover_recovery_point_age_seconds` | `scope`                    | Gauge of the recovery point's age at drill time (now minus the snapshot time)    |
 
 The two load-bearing metrics are `simplyblock_testfailover_drills_total` with `result="invariant_violated"`, which is the alert that a test failover stopped being non-disruptive, and `simplyblock_testfailover_active`, which is the alert that clones are accumulating because teardowns are not completing.
 
@@ -358,22 +385,23 @@ The two load-bearing metrics are `simplyblock_testfailover_drills_total` with `r
 Full scenario matrix, coverage status, and hand-off test concepts:
 [`tests/test-plan-test-failover.md`](../tests/test-plan-test-failover.md)
 
-- **Unit:** the state-machine transitions and their deadlines, the fingerprint comparison (drift detected and no-drift accepted), the take-versus-pin recovery-point choice, the idempotency keying, and the scope-to-source resolution.
-- **Integration:** the reconcile loop against `envtest` with a mock control plane. The whole same-cluster drill (snapshot, clone, adopt, bind, ready) and the teardown that reclaims and proves no leftovers. The restart case per step, asserting no second snapshot or clone. The non-disruptiveness guard, asserting a source change fails the drill.
-- **E2E:** a live cluster where the source volume is snapshotted, cloned into `bubble`, a pod boots on the clone, and the recovered marker matches, with the source volume's I/O and data asserted untouched across the drill.
-- **Load / long-running:** none in Phase 1.
+- **Unit:** the state-machine transitions and their deadlines, the fingerprint comparison (drift detected and no-drift accepted), the source resolution from a `ManagedClusterView` projection, the recovery-point resolution per `bubbleCluster`, the idempotency keying, and the scope-to-source resolution.
+- **Integration:** the reconcile loop against `envtest`, a mock control plane, and a mock OCM (`ManagedClusterView` and `ManifestWork` with status feedback). The whole in-place drill and the DR-target drill, and the teardown that reclaims and proves no leftovers. The restart case per step. The non-disruptiveness guard, asserting a source change fails the drill.
+- **E2E:** a live two-cluster DR setup where the replicated point on the target is cloned there, the bubble PVC is placed on the target, a pod boots on it, and the recovered marker matches, with the source and its replication lag asserted untouched.
+- **Load / long-running:** none in Phase 1 or 2.
 
-The cross-cluster scenarios (§5.4) become testable only in Phase 2, when P0-4 exists. The risk concentrates in the non-disruptiveness guard (§7.4) and the teardown reclaim (§5.3): the first is the feature's core promise, and the second is where a bug leaks backend storage.
+The Phase 3 scenarios (§5.6) become testable only when P0-6 exists. The risk concentrates in the non-disruptiveness guard (§7.4), the cross-cluster read and placement and their status feedback (§7.6), and the teardown reclaim (§5.7): the first is the feature's core promise, and the last is where a bug leaks backend storage or a peer object.
 
 ---
 
 ## 13. Open Questions
 
-| #   | Question                                                                                                                                                                                                                                                                                                                                                             | Owner               |
-|-----|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|
-| 1   | **Group snapshot accounting.** A group drill takes a group-consistent snapshot and a clone per member, consuming the cluster's lvstore object budget for the drill's life. Does the backend expose a per-clone reservation the controller can pre-check, or does a group drill risk failing at `Cloning` on a full lvstore with no admission-time warning?           | SPDK / Backend team |
-| 2   | **Leftover proof under a disabled `LIST_VOLUMES`.** The CSI driver does not advertise `LIST_VOLUMES`, so the teardown's "prove no leftovers" step cannot cross-check backend volumes against Kubernetes objects through CSI. Is the label enumeration on Kubernetes objects sufficient, or is a backend enumeration needed to guarantee no leaked clone or snapshot? | SPDK / Backend team |
-| 3   | **P0-4 shape (Phase 2).** Is on-demand shipping a new engine mode (a one-shot pair-and-transfer) or a distinct primitive? Its API shape (§8) is provisional until this is decided.                                                                                                                                                                                   | SPDK / Backend team |
+| #   | Question                                                                                                                                                                                                                                                                                                       | Owner               |
+|-----|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|
+| 1   | **Group point on the replica.** `latest_replicated_generation` resolves a group generation on the DR target, but a group-consistent point on a replica was flagged as unconfirmed. Is the generation crash-consistent across members on the target, or only on the source?                                     | SPDK / Backend team |
+| 2   | **Clone accounting.** A drill's clone consumes the bubble backend's lvstore object budget for the drill's life. Does the backend expose a per-clone reservation the controller can pre-check, or does a drill risk failing at `Cloning` on a full lvstore with no admission-time warning?                      | SPDK / Backend team |
+| 3   | **Leftover proof under a disabled `LIST_VOLUMES`.** The CSI driver does not advertise `LIST_VOLUMES`, so teardown cannot cross-check backend volumes against Kubernetes objects through CSI. Is the label enumeration sufficient, or is a backend enumeration needed to guarantee no leaked clone or snapshot? | SPDK / Backend team |
+| 4   | **P0-6 shape (Phase 3).** Is on-demand shipping a new engine mode (a one-shot pair-and-transfer) or a distinct primitive? Its API shape (§8) is provisional until this is decided.                                                                                                                             | SPDK / Backend team |
 
 ---
 
@@ -391,9 +419,9 @@ import (
 type TestFailoverScope string
 
 const (
-	// TestFailoverScopeVolume recovers a single source volume named by a PVC.
+	// TestFailoverScopeVolume recovers a single source volume.
 	TestFailoverScopeVolume TestFailoverScope = "Volume"
-	// TestFailoverScopeGroup recovers a consistency group from one snapshot.
+	// TestFailoverScopeGroup recovers a consistency group from one point.
 	TestFailoverScopeGroup TestFailoverScope = "Group"
 )
 
@@ -410,17 +438,18 @@ const (
 )
 
 // TestFailoverStep is one step of a running drill. The enum is the union of every
-// mode's steps; which steps belong to which mode is declared by the graph rather
+// phase's steps; which steps belong to which phase is declared by the graph rather
 // than by this type.
-// +kubebuilder:validation:Enum=Snapshotting;Shipping;Cloning;Binding;Releasing
+// +kubebuilder:validation:Enum=ResolvingSource;ResolvingPoint;Shipping;Cloning;Placing;Releasing
 type TestFailoverStep string
 
 const (
-	TestFailoverStepSnapshotting TestFailoverStep = "Snapshotting"
-	TestFailoverStepShipping     TestFailoverStep = "Shipping"
-	TestFailoverStepCloning      TestFailoverStep = "Cloning"
-	TestFailoverStepBinding      TestFailoverStep = "Binding"
-	TestFailoverStepReleasing    TestFailoverStep = "Releasing"
+	TestFailoverStepResolvingSource TestFailoverStep = "ResolvingSource"
+	TestFailoverStepResolvingPoint  TestFailoverStep = "ResolvingPoint"
+	TestFailoverStepShipping        TestFailoverStep = "Shipping"
+	TestFailoverStepCloning         TestFailoverStep = "Cloning"
+	TestFailoverStepPlacing         TestFailoverStep = "Placing"
+	TestFailoverStepReleasing       TestFailoverStep = "Releasing"
 )
 
 // TestFailoverSpec is the request for one non-disruptive test-failover drill.
@@ -430,25 +459,40 @@ type TestFailoverSpec struct {
 	// +k8s:immutable
 	Scope TestFailoverScope `json:"scope"`
 
-	// Ref names the source Scope resolves: a PersistentVolumeClaim in this CR's
-	// namespace (scope=Volume) or a consistency group (scope=Group). Immutable.
+	// SourceCluster is the OCM ManagedCluster the source runs on. The hub reads
+	// the source there through a ManagedClusterView. Immutable.
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
-	Ref string `json:"ref"`
+	SourceCluster string `json:"sourceCluster"`
 
-	// RecoveryPoint optionally pins an existing snapshot or group generation to
-	// clone. Empty takes a fresh snapshot of the source at drill time. Immutable.
+	// SourceNamespace is the namespace of the source PVC on SourceCluster.
+	// Required for scope=Volume. Immutable.
+	// +optional
+	// +k8s:immutable
+	SourceNamespace string `json:"sourceNamespace,omitempty"`
+
+	// SourceRef names the source on SourceCluster: a PersistentVolumeClaim in
+	// SourceNamespace (scope=Volume), or a consistency group (scope=Group).
+	// Immutable.
+	// +kubebuilder:validation:Required
+	// +k8s:immutable
+	SourceRef string `json:"sourceRef"`
+
+	// BubbleCluster is the OCM ManagedCluster to recover onto: the source's own
+	// cluster for an in-place test, the DR target, or another cluster. Immutable.
+	// +kubebuilder:validation:Required
+	// +k8s:immutable
+	BubbleCluster string `json:"bubbleCluster"`
+
+	// RecoveryPoint optionally pins an existing snapshot to clone. Empty resolves
+	// the point per BubbleCluster: a fresh source snapshot when it is the source's
+	// own cluster, or the latest replicated point on a DR target. Immutable.
 	// +optional
 	// +k8s:immutable
 	RecoveryPoint string `json:"recoveryPoint,omitempty"`
 
-	// TargetClusterID selects the cross-cluster mode (Phase 2): the cluster the
-	// drill runs on. Empty means the source's own cluster. Immutable.
-	// +optional
-	// +k8s:immutable
-	TargetClusterID string `json:"targetClusterID,omitempty"`
-
-	// BubbleNamespace is where the recovered PVCs are created. Immutable.
+	// BubbleNamespace is the namespace on the bubble cluster where the recovered
+	// PVCs are created. Immutable.
 	// +kubebuilder:default=bubble
 	// +optional
 	// +k8s:immutable
@@ -462,22 +506,25 @@ type TestFailoverSpec struct {
 }
 
 // TestFailoverClone is one recovered volume: the source it came from, the
-// snapshot and clone the drill built, and the PVC bound to it in the bubble.
+// snapshot and clone the drill built, and the PVC placed on the bubble cluster.
 type TestFailoverClone struct {
-	// SourceRef is the source PVC (or group member) the recovered volume maps to.
+	// SourceRef is the source volume (or group member) the recovered volume maps to.
 	SourceRef string `json:"sourceRef"`
-	// SnapshotID is the recovery-point snapshot. Marked when the drill took it,
-	// so teardown deletes only what it created.
+	// SourceHandle is the source volume's backend handle, read from its PV.
+	// +optional
+	SourceHandle string `json:"sourceHandle,omitempty"`
+	// SnapshotID is the recovery-point snapshot.
 	// +optional
 	SnapshotID string `json:"snapshotID,omitempty"`
-	// SnapshotTaken is true when the drill created SnapshotID (rather than reusing
-	// a pinned one), so teardown knows whether to delete it.
+	// SnapshotTaken is true when the drill created SnapshotID (rather than
+	// resolving a replicated one or reusing a pinned one), so teardown knows
+	// whether to delete it.
 	// +optional
 	SnapshotTaken bool `json:"snapshotTaken,omitempty"`
 	// CloneID is the backend id of the writable clone.
 	// +optional
 	CloneID string `json:"cloneID,omitempty"`
-	// PVCName is the bound PVC in the bubble namespace.
+	// PVCName is the bound PVC in the bubble namespace on the bubble cluster.
 	// +optional
 	PVCName string `json:"pvcName,omitempty"`
 	// SizeBytes is the recovered volume's size.
@@ -487,6 +534,9 @@ type TestFailoverClone struct {
 
 // TestFailoverReport is the evidence a drill produces.
 type TestFailoverReport struct {
+	// BubbleCluster is the cluster the drill recovered onto.
+	// +optional
+	BubbleCluster string `json:"bubbleCluster,omitempty"`
 	// RecoveryPoint is the snapshot or group generation the drill recovered.
 	// +optional
 	RecoveryPoint string `json:"recoveryPoint,omitempty"`
@@ -543,17 +593,19 @@ type TestFailoverStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=tfo
 // +kubebuilder:printcolumn:name="Scope",type=string,JSONPath=`.spec.scope`
-// +kubebuilder:printcolumn:name="Ref",type=string,JSONPath=`.spec.ref`
+// +kubebuilder:printcolumn:name="Source",type=string,JSONPath=`.spec.sourceRef`
+// +kubebuilder:printcolumn:name="On",type=string,JSONPath=`.spec.sourceCluster`
+// +kubebuilder:printcolumn:name="Bubble",type=string,JSONPath=`.spec.bubbleCluster`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Step",type=string,JSONPath=`.status.step.state`
-// +kubebuilder:printcolumn:name="Message",type=string,JSONPath=`.status.message`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // TestFailover is a one-way, non-disruptive test-failover drill. It recovers a
 // source volume, or a consistency group, from a snapshot into an isolated
-// namespace as bound PVCs, without touching the source: the recovery point is a
-// snapshot and the result is a clone. Deleting the object reclaims the clones
-// and the snapshots the drill took.
+// namespace on a chosen cluster as bound PVCs, without touching the source: the
+// recovery point is a snapshot and the result is a clone. The hub reads the
+// source on its cluster and places the bubble on the recovery cluster through
+// OCM. Deleting the object reclaims the clones and any snapshots the drill took.
 type TestFailover struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
