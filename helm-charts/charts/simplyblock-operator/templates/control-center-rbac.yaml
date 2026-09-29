@@ -123,6 +123,32 @@ rules:
     resources: ["managedclusters"]
     verbs: ["get", "list"]
 
+  # ---- DR hub (dr-simplyblock): every DR screen is a CR ----
+  # In serviceaccount mode this is the console's authority for DR: reads on
+  # everything, the dr-operator writes, the dr-admin writes on plans/paths/
+  # restores, and the override verb the hub's webhook checks before admitting a
+  # readiness override. Absent CRDs cost nothing — the DR section then reports
+  # that the hub is not installed. Trim to your policy, or use passthrough.
+  - apiGroups: ["dr.simplyblock.io"]
+    resources: ["protectionplans", "drpaths", "protectedapplications", "recoveryplans", "recoveryactions", "testbubbles", "testschedules", "restoreactions", "drconfigs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["dr.simplyblock.io"]
+    resources: ["protectionplans", "drpaths", "protectedapplications", "recoveryplans", "recoveryactions", "testbubbles", "testschedules", "restoreactions"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["dr.simplyblock.io"]
+    resources: ["recoveryactions"]
+    verbs: ["override"]
+  - apiGroups: ["sitemap.simplyblock.io"]
+    resources: ["siteprofiles"]
+    verbs: ["get", "list", "watch"]
+  # the console asks the API server what its identity may do, to disable controls
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["selfsubjectaccessreviews", "selfsubjectrulesreviews"]
+    verbs: ["create"]
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["selfsubjectreviews"]
+    verbs: ["create"]
+
   # ---- Helm release view ----
   # Helm stores releases as Secrets. This is the only reason the console reads a
   # Secret, and a backup credentialsSecretRef is only ever shown by name.

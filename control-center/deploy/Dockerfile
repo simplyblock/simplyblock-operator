@@ -2,6 +2,9 @@
 #
 # simplyblock Control Center — static UI, served by nginx, with an in-pod
 # reverse proxy in front of the Kubernetes API, the operator API and Prometheus.
+# The same image serves the DR-only console (SB_MODE=dr) next to dr-hub on a
+# hub without a simplyblock control plane; there only the Kubernetes API is
+# proxied.
 #
 #   docker build -t quay.io/simplyblock-io/control-center:26.3.0 -f deploy/Dockerfile .
 #
@@ -110,7 +113,9 @@ RUN chmod +x /usr/local/bin/sb-entrypoint
 # Defaults. Every one is overridable from the Deployment's env.
 # Scope envsubst to our own variables, or it would eat nginx's $uri and $host.
 ENV NGINX_ENVSUBST_FILTER=SB_ \
+    SB_MODE=full \
     SB_NAMESPACE=simplyblock \
+    SB_DR_NAMESPACE=ramen-ops \
     SB_AUTH_MODE=serviceaccount \
     SB_K8S_API=https://kubernetes.default.svc \
     SB_K8S_HOST=kubernetes.default.svc \

@@ -25,7 +25,9 @@ const RB_ROLES = [
   {name: "sb:infra-admin", boundAt: "cluster scope", description: "Owns the envelope: node pool allocations, managed clusters, cluster classes. May bind every sb:* role anywhere.",
     parts: [
       {name: "sb:infra-admin-allocations", rules: [rbRule(["nodepoolallocations", "managedclusters", "storageclusterclasses"], RB_RW)]},
-      {name: "sb:infra-admin-grants", rules: [rbRule(["accessgrants"], RB_RW), rbRule(["clusterroles"], ["bind"], {apiGroups: [RB_RBAC], resourceNames: RB_ROLE_NAMES})]}]},
+      {name: "sb:infra-admin-grants", rules: [rbRule(["accessgrants"], RB_RW), rbRule(["clusterroles"], ["bind"], {apiGroups: [RB_RBAC], resourceNames: RB_ROLE_NAMES})]},
+      // the DR hub (dr-simplyblock): its chart's dr-admin role, held here at cluster scope
+      {name: "sb:infra-admin-drhub", rules: [rbRule(["*"], RB_RW.concat("override"), {apiGroups: ["dr.simplyblock.io"]}), rbRule(["siteprofiles"], RB_RO, {apiGroups: ["sitemap.simplyblock.io"]})]}]},
   {name: "sb:cluster-admin", boundAt: "sb-sc-<storage cluster>", description: "Runs one storage cluster: nodes, devices, operations. Binds cluster and pool roles inside its own namespace only.",
     parts: [
       {name: "sb:cluster-admin-storage", rules: [rbRule(RB_STORAGE, RB_RW)]},
@@ -39,7 +41,7 @@ const RB_ROLES = [
   {name: "sb:dr-admin", boundAt: RB_NS_DR, description: "Defines DR between cluster pairs: DR policies, DR clusters, replication policies and protection plans.",
     parts: [{name: "sb:dr-admin-policies", rules: [rbRule(RB_DR, RB_RW)]}]},
   {name: "sb:dr-reader", boundAt: RB_NS_DR, description: "Reads DR configuration and replication backlog.",
-    parts: [{name: "sb:dr-reader-policies", rules: [rbRule(RB_DR, RB_RO)]}]},
+    parts: [{name: "sb:dr-reader-policies", rules: [rbRule(RB_DR, RB_RO)]}, {name: "sb:dr-reader-hub", rules: [rbRule(["*"], RB_RO, {apiGroups: ["dr.simplyblock.io"]}), rbRule(["siteprofiles"], RB_RO, {apiGroups: ["sitemap.simplyblock.io"]})]}]},
   {name: "sb:app-admin", boundAt: "application namespace", description: "Protects an application and may fail it over — failover is create on applicationfailovers, so it is grantable without the right to rewrite the policy.",
     parts: [{name: "sb:app-admin-apps", rules: [rbRule(["protectedapplications", "recipes"], RB_RW), rbRule(["applicationfailovers"], ["create", "get", "list"])]}]}
 ];

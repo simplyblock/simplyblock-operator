@@ -726,6 +726,20 @@ controlCenter:
   # keep the console up through a node loss, which is when it matters most.
   replicas: 2
 
+  # full | dr
+  #
+  # full: the storage console — clusters, Kubernetes, control plane — with a
+  #   Disaster recovery section that reads the DR hub's dr.simplyblock.io CRDs
+  #   when dr-simplyblock is installed on the same cluster.
+  # dr:   the DR-only console. Nothing but the DR section; no storage CRDs, no
+  #   operator API, no Prometheus. This is what the dr-simplyblock-hub chart
+  #   deploys (console.enabled) on a hub without a simplyblock control plane;
+  #   set it here only to run the same stripped-down console from this chart.
+  mode: full
+  # Ramen's ops namespace on the DR hub: where discovered ProtectedApplications
+  # live and where the console asks the API server what it may do.
+  drNamespace: ramen-ops
+
   # serviceaccount | passthrough
   #
   # serviceaccount: this pod attaches its own token to proxied requests. The

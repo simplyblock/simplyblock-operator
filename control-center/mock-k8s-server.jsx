@@ -52,6 +52,11 @@ function readList(kind, params) {
     items = (DB2().deployment_configs || []).map(cdcToK8s);
   } else if (NS_KINDS_M[kind]) {
     items = nsResources(params.get("__ns")).filter(o => o.kind === kind);
+  } else if (window.DR_MOCK && window.DR_MOCK.has(kind)) {
+    // the DR hub's kinds (mock-drhub.jsx): namespaced ones scoped when a namespace is in the path
+    items = window.DR_MOCK.list(kind);
+    const ns = params.get("__ns");
+    if (ns) items = items.filter(o => o.metadata.namespace === ns);
   }
   const ls = params.get("labelSelector");
   if (ls) {
@@ -291,7 +296,7 @@ window.fetch = async function (input, init) {
       try {
         const r = mk(body);
         if (r.err) return status4(r.reason === "Conflict" ? 409 : r.reason === "NotFound" ? 404
-          : r.reason === "AlreadyExists" ? 409 : 422, r.reason, r.err);
+          : r.reason === "AlreadyExists" ? 409 : r.reason === "Forbidden" ? 403 : 422, r.reason, r.err);
         return jsonRes(r.obj, 201);
       } catch (e) { return status4(500, "InternalError", e.message); }
     }
@@ -305,6 +310,14 @@ window.fetch = async function (input, init) {
   }
 
   if (method === "PATCH") {
+    // kinds with their own patch rules (DR hub: spec.abort / spec.holdFor on a
+    // TestBubble, spec.suspend on a TestSchedule, annotations)
+    const pk = (window.CRD_PATCH || {})[kind];
+    if (pk) {
+      const r = pk(name, body, nsIdx >= 0 ? parts[nsIdx + 1] : undefined);
+      if (r.err) return status4(r.reason === "Conflict" ? 409 : r.reason === "NotFound" ? 404 : r.reason === "Forbidden" ? 403 : 422, r.reason, r.err);
+      return jsonRes(r.obj);
+    }
     // The only membership control replication has: the PVC annotation. Writing
     // it attaches, clearing it detaches; the operator owns the slot either way.
     if (kind === "PersistentVolumeClaim") {
@@ -333,8 +346,8 @@ window.fetch = async function (input, init) {
     // references it, a policy cannot go while a slot references it
     const rm = (window.CRD_DELETE || {})[kind];
     if (rm) {
-      const r = rm(name);
-      if (r.err) return status4(r.reason === "Conflict" ? 409 : r.reason === "NotFound" ? 404 : 422, r.reason, r.err);
+      const r = rm(name, nsIdx >= 0 ? parts[nsIdx + 1] : undefined);
+      if (r.err) return status4(r.reason === "Conflict" ? 409 : r.reason === "NotFound" ? 404 : r.reason === "Forbidden" ? 403 : 422, r.reason, r.err);
       return jsonRes(r.obj);
     }
     const rec = (DB2().ops || []).find(o => o.kind === kind && o.name === name);

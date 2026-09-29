@@ -1,4 +1,593 @@
-// generated from the *.jsx sources — do not edit; rebuild with build.md
+// generated — do not edit; see build.md
+// ---- k8s-client.jsx ----
+(function(){
+// ---------------------------------------------------------------------------
+// KUBERNETES / OPERATOR / HELM TRANSPORT
+//
+// The console talks to exactly three things and nothing else:
+//   · the Kubernetes API   — CRDs in storage.simplyblock.io/v1alpha1, the DR
+//                            hub's dr.simplyblock.io/v1alpha1 (plus the Ramen
+//                            and OCM objects it derives), and core objects
+//                            (Node, Pod, PVC, StorageClass, Secret, Event)
+//   · the operator API     — what the operator exposes beyond CRDs
+//   · Helm                 — release state for the chart
+//
+// It does NOT call the control plane REST API. Anything the control plane knows
+// reaches the UI through a CRD status written by a controller.
+// ---------------------------------------------------------------------------
+const SB = window.SB_CONFIG;
+const GROUP = "storage.simplyblock.io";
+const VERSION = "v1alpha1";
+const API_GROUP = `${GROUP}/${VERSION}`;
+const DR_GROUP = "dr.simplyblock.io";
+const DR_API_GROUP = `${DR_GROUP}/v1alpha1`;
+const SITEMAP_API_GROUP = "sitemap.simplyblock.io/v1alpha1";
+const RAMEN_API_GROUP = "ramendr.openshift.io/v1alpha1";
+const OCM_CLUSTER_API_GROUP = "cluster.open-cluster-management.io/v1";
+class ApiError extends Error {
+  constructor(status, message, path, reason) {
+    super(message);
+    this.status = status;
+    this.path = path;
+    this.reason = reason;
+  }
+}
+
+// ---- resource registry -----------------------------------------------------
+// Every kind the console reads, with the plural the API server routes on and the
+// short name from the design (§7.11). `core: true` means it is not our group.
+const RESOURCES = {
+  // entities
+  StorageCluster: {
+    plural: "storageclusters",
+    short: "sbc",
+    namespaced: true
+  },
+  StorageNode: {
+    plural: "storagenodes",
+    short: "sbn",
+    namespaced: true
+  },
+  StorageDevice: {
+    plural: "storagedevices",
+    short: "sbd",
+    namespaced: true
+  },
+  StoragePool: {
+    plural: "storagepools",
+    short: "sbp",
+    namespaced: true
+  },
+  StorageBackup: {
+    plural: "storagebackups",
+    short: "sbbk",
+    namespaced: true
+  },
+  ControlPlane: {
+    plural: "controlplanes",
+    short: "sbcp",
+    namespaced: true
+  },
+  SimplyblockDriver: {
+    plural: "simplyblockdrivers",
+    short: "sbdrv",
+    namespaced: true
+  },
+  ClusterDeploymentConfig: {
+    plural: "clusterdeploymentconfigs",
+    short: "sbcdc",
+    namespaced: true
+  },
+  // replication: real kinds in v1alpha1. A slot is created by the operator from
+  // a PVC annotation, so it is read-only here; the other three are creatable.
+  ReplicationPair: {
+    plural: "replicationpairs",
+    short: "relpair",
+    namespaced: true,
+    creatable: true
+  },
+  ReplicationPolicy: {
+    plural: "replicationpolicies",
+    short: "repl",
+    namespaced: true,
+    creatable: true
+  },
+  ReplicationSlot: {
+    plural: "replicationslots",
+    short: "relslot",
+    namespaced: true
+  },
+  ReplicationOps: {
+    plural: "replicationops",
+    short: "replops",
+    namespaced: true,
+    creatable: true
+  },
+  // one-shot operations
+  StorageClusterOps: {
+    plural: "storageclusterops",
+    short: "sbco",
+    namespaced: true,
+    ops: "StorageCluster"
+  },
+  StorageNodeOps: {
+    plural: "storagenodeops",
+    short: "sbno",
+    namespaced: true,
+    ops: "StorageNode"
+  },
+  StorageDeviceOps: {
+    plural: "storagedeviceops",
+    short: "sbdo",
+    namespaced: true,
+    ops: "StorageDevice"
+  },
+  StoragePoolOps: {
+    plural: "storagepoolops",
+    short: "sbpo",
+    namespaced: true,
+    ops: "StoragePool"
+  },
+  StorageBackupOps: {
+    plural: "storagebackupops",
+    short: "sbbo",
+    namespaced: true,
+    ops: "StorageBackup"
+  },
+  ControlPlaneOps: {
+    plural: "controlplaneops",
+    short: "sbcpo",
+    namespaced: true,
+    ops: "ControlPlane"
+  },
+  PersistentVolumeOps: {
+    plural: "persistentvolumeops",
+    short: "sbpvo",
+    namespaced: true,
+    ops: "PersistentVolume"
+  },
+  OperatorOps: {
+    plural: "operatorops",
+    short: "sbop",
+    namespaced: true,
+    ops: null
+  },
+  // ---- DR hub (dr-simplyblock) — dr.simplyblock.io/v1alpha1 ----------------
+  // The hub has no REST API: every screen is a CR. Cluster-scoped kinds have
+  // no namespace segment; namespaced ones are listed across all namespaces
+  // unless a namespace is given (a ProtectedApplication lives in Ramen's ops
+  // namespace or in the application's own namespace).
+  ProtectionPlan: {
+    plural: "protectionplans",
+    short: "pplan",
+    core: DR_API_GROUP,
+    namespaced: false,
+    dr: true
+  },
+  DRPath: {
+    plural: "drpaths",
+    short: "drpath",
+    core: DR_API_GROUP,
+    namespaced: false,
+    dr: true
+  },
+  DRConfig: {
+    plural: "drconfigs",
+    short: "drconfig",
+    core: DR_API_GROUP,
+    namespaced: false,
+    dr: true
+  },
+  ProtectedApplication: {
+    plural: "protectedapplications",
+    short: "papp",
+    core: DR_API_GROUP,
+    namespaced: true,
+    dr: true
+  },
+  RecoveryPlan: {
+    plural: "recoveryplans",
+    short: "rplan",
+    core: DR_API_GROUP,
+    namespaced: true,
+    dr: true
+  },
+  RecoveryAction: {
+    plural: "recoveryactions",
+    short: "ract",
+    core: DR_API_GROUP,
+    namespaced: true,
+    dr: true
+  },
+  TestBubble: {
+    plural: "testbubbles",
+    short: "tbub",
+    core: DR_API_GROUP,
+    namespaced: true,
+    dr: true
+  },
+  TestSchedule: {
+    plural: "testschedules",
+    short: "tsched",
+    core: DR_API_GROUP,
+    namespaced: true,
+    dr: true
+  },
+  RestoreAction: {
+    plural: "restoreactions",
+    short: "rsa",
+    core: DR_API_GROUP,
+    namespaced: true,
+    dr: true
+  },
+  SiteProfile: {
+    plural: "siteprofiles",
+    short: "sprof",
+    core: SITEMAP_API_GROUP,
+    namespaced: false,
+    dr: true
+  },
+  // Ramen and OCM objects the hub derives — instances only, read-only here
+  DRPolicy: {
+    plural: "drpolicies",
+    core: RAMEN_API_GROUP,
+    namespaced: false
+  },
+  DRCluster: {
+    plural: "drclusters",
+    core: RAMEN_API_GROUP,
+    namespaced: false
+  },
+  DRPlacementControl: {
+    plural: "drplacementcontrols",
+    core: RAMEN_API_GROUP,
+    namespaced: true
+  },
+  ManagedCluster: {
+    plural: "managedclusters",
+    core: OCM_CLUSTER_API_GROUP,
+    namespaced: false
+  },
+  // access reviews: the API server answers what the caller may do
+  SelfSubjectAccessReview: {
+    plural: "selfsubjectaccessreviews",
+    core: "authorization.k8s.io/v1",
+    namespaced: false
+  },
+  SelfSubjectRulesReview: {
+    plural: "selfsubjectrulesreviews",
+    core: "authorization.k8s.io/v1",
+    namespaced: false
+  },
+  SelfSubjectReview: {
+    plural: "selfsubjectreviews",
+    core: "authentication.k8s.io/v1",
+    namespaced: false
+  },
+  // core Kubernetes
+  Node: {
+    plural: "nodes",
+    core: "v1",
+    namespaced: false
+  },
+  Pod: {
+    plural: "pods",
+    core: "v1",
+    namespaced: true
+  },
+  PersistentVolume: {
+    plural: "persistentvolumes",
+    core: "v1",
+    namespaced: false
+  },
+  PersistentVolumeClaim: {
+    plural: "persistentvolumeclaims",
+    core: "v1",
+    namespaced: true
+  },
+  Secret: {
+    plural: "secrets",
+    core: "v1",
+    namespaced: true
+  },
+  Event: {
+    plural: "events",
+    core: "v1",
+    namespaced: true
+  },
+  StorageClass: {
+    plural: "storageclasses",
+    core: "storage.k8s.io/v1",
+    namespaced: false
+  },
+  // application resources read for Ramen recipes
+  Deployment: {
+    plural: "deployments",
+    core: "apps/v1",
+    namespaced: true
+  },
+  StatefulSet: {
+    plural: "statefulsets",
+    core: "apps/v1",
+    namespaced: true
+  },
+  Service: {
+    plural: "services",
+    core: "v1",
+    namespaced: true
+  },
+  ConfigMap: {
+    plural: "configmaps",
+    core: "v1",
+    namespaced: true
+  },
+  Ingress: {
+    plural: "ingresses",
+    core: "networking.k8s.io/v1",
+    namespaced: true
+  },
+  VirtualMachine: {
+    plural: "virtualmachines",
+    core: "kubevirt.io/v1",
+    namespaced: true
+  },
+  Recipe: {
+    plural: "recipes",
+    core: RAMEN_API_GROUP,
+    namespaced: true
+  }
+};
+const NS = () => SB.namespace || "simplyblock";
+// Ramen's ops namespace on the hub: where discovered ProtectedApplications live
+const DR_NS = () => SB.drNamespace || "ramen-ops";
+
+// Build the API server path for a kind. Core group is /api/v1, everything else
+// /apis/<group>/<version>. A namespaced kind is scoped to the console's
+// namespace unless `namespace` is given; `allNamespaces: true` lists it across
+// the cluster (the DR hub's namespaced kinds live in many namespaces).
+function pathFor(kind, opts) {
+  const o = opts || {};
+  const r = RESOURCES[kind];
+  if (!r) throw new Error("unknown kind " + kind);
+  const prefix = !r.core ? `/apis/${API_GROUP}` : r.core === "v1" ? "/api/v1" : `/apis/${r.core}`;
+  const ns = r.namespaced && !o.allNamespaces ? `/namespaces/${o.namespace || (r.dr ? DR_NS() : NS())}` : "";
+  const name = o.name ? `/${o.name}` : "";
+  const sub = o.subresource ? `/${o.subresource}` : "";
+  return `${prefix}${ns}/${r.plural}${name}${sub}`;
+}
+// apiVersion string for a kind, for the objects the console authors
+const apiVersionOf = kind => {
+  const r = RESOURCES[kind];
+  return !r.core ? API_GROUP : r.core;
+};
+
+// ---- transport -------------------------------------------------------------
+async function call(base, path, init) {
+  let res;
+  const headers = Object.assign({
+    Accept: "application/json",
+    Authorization: `Bearer ${SB.token}`
+  }, init && init.headers || {});
+  try {
+    res = await fetch(base + path, Object.assign({}, init, {
+      headers
+    }));
+  } catch (e) {
+    throw new ApiError(0, "Cannot reach the Kubernetes API", path, "Unreachable");
+  }
+  let body = null;
+  try {
+    body = await res.json();
+  } catch (e) {}
+  // A Kubernetes failure is a Status object. Trust the body, not just the code:
+  // a Failure Status served with a 2xx is still a failure, and treating it as an
+  // empty collection would show "no objects" during an outage.
+  const failed = body && body.kind === "Status" && body.status === "Failure";
+  if (!res.ok || failed) {
+    const msg = body && body.message || res.statusText || "Request failed";
+    throw new ApiError(body && body.code || res.status, msg, path, body && body.reason || null);
+  }
+  return body;
+}
+const k8s = {
+  // list: returns items[], never the List envelope
+  list: (kind, opts) => call(SB.k8sBase, pathFor(kind, opts) + qs(opts)).then(r => r && r.items || []),
+  get: (kind, name, opts) => call(SB.k8sBase, pathFor(kind, Object.assign({
+    name
+  }, opts))),
+  create: (kind, obj, opts) => call(SB.k8sBase, pathFor(kind, opts), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(obj)
+  }),
+  // spec edits go through a merge patch, which is what kubectl edit does
+  patch: (kind, name, patch, opts) => call(SB.k8sBase, pathFor(kind, Object.assign({
+    name
+  }, opts)), {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/merge-patch+json"
+    },
+    body: JSON.stringify(patch)
+  }),
+  remove: (kind, name, opts) => call(SB.k8sBase, pathFor(kind, Object.assign({
+    name
+  }, opts)), {
+    method: "DELETE"
+  }),
+  // pod logs are the Kubernetes API, not a side channel
+  logs: (pod, opts) => call(SB.k8sBase, pathFor("Pod", {
+    name: pod,
+    subresource: "log"
+  }) + qs(Object.assign({
+    tailLines: 200
+  }, opts)))
+};
+function qs(opts) {
+  const o = Object.assign({}, opts);
+  delete o.namespace;
+  delete o.name;
+  delete o.subresource;
+  delete o.allNamespaces;
+  const parts = Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => `${k}=${encodeURIComponent(v)}`);
+  return parts.length ? "?" + parts.join("&") : "";
+}
+
+// ---- access reviews ----------------------------------------------------------
+// The API server is the policy decision point. A SelfSubjectAccessReview asks
+// one (verb, group, resource[, namespace, name]) question; a
+// SelfSubjectRulesReview returns every rule that applies to the caller in a
+// namespace, including cluster-wide ones; a SelfSubjectReview says who the
+// caller is. All three are POSTs that create nothing.
+const review = {
+  can: (verb, group, resource, ns, name) => k8s.create("SelfSubjectAccessReview", {
+    apiVersion: "authorization.k8s.io/v1",
+    kind: "SelfSubjectAccessReview",
+    spec: {
+      resourceAttributes: Object.assign({
+        verb,
+        group: group || "",
+        resource
+      }, ns ? {
+        namespace: ns
+      } : {}, name ? {
+        name
+      } : {})
+    }
+  }).then(r => !!(r.status && r.status.allowed)),
+  rules: ns => k8s.create("SelfSubjectRulesReview", {
+    apiVersion: "authorization.k8s.io/v1",
+    kind: "SelfSubjectRulesReview",
+    spec: {
+      namespace: ns
+    }
+  }).then(r => r.status || {
+    resourceRules: [],
+    incomplete: true
+  }),
+  whoami: () => k8s.create("SelfSubjectReview", {
+    apiVersion: "authentication.k8s.io/v1",
+    kind: "SelfSubjectReview"
+  }).then(r => r.status && r.status.userInfo || {})
+};
+
+// label selector helpers — the ownership tree is expressed in labels
+const sel = o => Object.entries(o).map(([k, v]) => `${k}=${v}`).join(",");
+const ownedBy = (kind, name) => ({
+  labelSelector: sel({
+    [`${GROUP}/owner-kind`]: kind,
+    [`${GROUP}/owner-name`]: name
+  })
+});
+const inCluster = name => ({
+  labelSelector: sel({
+    [`${GROUP}/cluster`]: name
+  })
+});
+
+// ---- operator API ----------------------------------------------------------
+// What the operator serves that is not a CRD: the release/compat matrix it
+// mirrors from install.simplyblock.io, and the SSE stream.
+const operator = {
+  releases: () => call(SB.operatorBase, "/releases"),
+  health: () => call(SB.operatorBase, "/healthz"),
+  // ?watch=true rows in the design are SSE subscriptions
+  watch: (kind, onEvent) => {
+    const url = SB.operatorBase + "/watch" + pathFor(kind);
+    let es;
+    try {
+      es = new EventSource(url);
+    } catch (e) {
+      return () => {};
+    }
+    es.onmessage = e => {
+      try {
+        onEvent(JSON.parse(e.data));
+      } catch (x) {}
+    };
+    return () => es.close();
+  }
+};
+
+// ---- Helm ------------------------------------------------------------------
+const helm = {
+  releases: () => call(SB.helmBase, "/releases"),
+  release: name => call(SB.helmBase, `/releases/${name}`),
+  values: name => call(SB.helmBase, `/releases/${name}/values`)
+};
+
+// ---- Ops helpers -----------------------------------------------------------
+// An action is not a verb against an entity: it is an <Entity>Ops object whose
+// spec.action names it. Aborting is a patch of the one mutable field.
+function opsKindFor(entityKind) {
+  const hit = Object.entries(RESOURCES).find(([, r]) => r.ops === entityKind);
+  return hit ? hit[0] : null;
+}
+function submitOps(entityKind, targetName, action, payload) {
+  const kind = opsKindFor(entityKind);
+  if (!kind) throw new Error("no Ops kind for " + entityKind);
+  const stamp = Date.now().toString(36);
+  const body = {
+    apiVersion: API_GROUP,
+    kind,
+    metadata: {
+      name: `${targetName}-${action.toLowerCase()}-${stamp}`.slice(0, 63),
+      namespace: NS(),
+      labels: {
+        [`${GROUP}/target`]: targetName,
+        [`${GROUP}/action`]: action
+      }
+    },
+    spec: Object.assign({
+      action
+    }, targetName ? {
+      targetRef: {
+        name: targetName
+      }
+    } : {}, payload ? {
+      [lowerFirst(action)]: payload
+    } : {})
+  };
+  return k8s.create(kind, body);
+}
+const abortOps = (opsKind, name) => k8s.patch(opsKind, name, {
+  spec: {
+    abort: true
+  }
+});
+const lowerFirst = s => s.charAt(0).toLowerCase() + s.slice(1);
+
+// Terminal phases, per the design's phase vocabulary (PascalCase).
+const OPS_TERMINAL = ["Succeeded", "Failed", "Aborted"];
+const opsRunning = o => o && o.status && !OPS_TERMINAL.includes(o.status.phase);
+Object.assign(window, {
+  k8s,
+  operator,
+  helm,
+  review,
+  ApiError,
+  RESOURCES,
+  API_GROUP,
+  GROUP,
+  VERSION,
+  DR_GROUP,
+  DR_API_GROUP,
+  pathFor,
+  apiVersionOf,
+  ownedBy,
+  inCluster,
+  sel,
+  submitOps,
+  abortOps,
+  opsKindFor,
+  opsRunning,
+  OPS_TERMINAL,
+  NS,
+  DR_NS
+});
+})();
 // ---- api.jsx ----
 (function(){
 // ---------------------------------------------------------------------------
@@ -2722,6 +3311,998 @@ Object.assign(window, {
   normApp
 });
 })();
+// ---- drhub-api.jsx ----
+(function(){
+// ---------------------------------------------------------------------------
+// DR HUB DATA LAYER — dr-simplyblock (dr.simplyblock.io/v1alpha1)
+//
+// The DR hub has no REST API. Every screen is backed by a CR the hub's
+// controllers write status on, and every write is a CR write with the caller's
+// own RBAC. This file turns the raw objects into the view models the DR tiles
+// and details render, registers them in REG so breadcrumbs resolve, and holds
+// the handful of mutations the console performs: create a RecoveryAction,
+// TestBubble, RestoreAction, TestSchedule, ProtectionPlan, DRPath,
+// ProtectedApplication or RecoveryPlan; abort a test; suspend a schedule;
+// delete with the hub's confirm-delete annotation.
+//
+// Reads go through the Kubernetes API proxy (/k8s). Namespaced kinds are
+// listed across all namespaces: applications live in Ramen's ops namespace
+// or their own, runs live next to their application.
+// ---------------------------------------------------------------------------
+const DR_KINDS = {
+  pplan: "ProtectionPlan",
+  drpath: "DRPath",
+  papp: "ProtectedApplication",
+  rplan: "RecoveryPlan",
+  raction: "RecoveryAction",
+  tbubble: "TestBubble",
+  tsched: "TestSchedule",
+  restore: "RestoreAction",
+  siteprofile: "SiteProfile",
+  drconfig: "DRConfig"
+};
+const DR_ANN = {
+  createdBy: "dr.simplyblock.io/created-by",
+  confirmDelete: "dr.simplyblock.io/confirm-delete",
+  awaitingRestore: "dr.simplyblock.io/awaiting-restore",
+  autoRestart: "dr.simplyblock.io/auto-restart",
+  storageCluster: "dr.simplyblock.io/storage-cluster",
+  storageRecovery: "dr.simplyblock.io/storage-recovery",
+  schedule: "dr.simplyblock.io/schedule"
+};
+const VERDICT_RANK = {
+  NotReady: 3,
+  Degraded: 2,
+  Unknown: 1,
+  Ready: 0
+};
+const ACTION_TERMINAL = ["Completed", "Failed", "RolledBack"];
+const TEST_TERMINAL = ["Completed", "Failed"];
+const RESTORE_TERMINAL = ["Completed", "Failed"];
+
+// Vocabulary the hub writes, coloured for TrafficLight. Merged into the shared
+// table so every existing component (tiles, sorting by health) understands it.
+Object.assign(STATUS_META, {
+  Ready: {
+    c: "var(--ok)",
+    rank: 0,
+    label: "ready"
+  },
+  Degraded: {
+    c: "var(--warn)",
+    rank: 3,
+    label: "degraded"
+  },
+  NotReady: {
+    c: "var(--bad)",
+    rank: 4,
+    label: "not ready"
+  },
+  Unknown: {
+    c: "var(--idle)",
+    rank: 2,
+    label: "unknown"
+  },
+  Valid: {
+    c: "var(--ok)",
+    rank: 0,
+    label: "valid"
+  },
+  Invalid: {
+    c: "var(--bad)",
+    rank: 4,
+    label: "invalid"
+  },
+  Consistent: {
+    c: "var(--ok)",
+    rank: 0,
+    label: "consistent"
+  },
+  Inconsistent: {
+    c: "var(--warn)",
+    rank: 3,
+    label: "inconsistent"
+  },
+  Protected: {
+    c: "var(--ok)",
+    rank: 0,
+    label: "protected"
+  },
+  Unprotected: {
+    c: "var(--bad)",
+    rank: 4,
+    label: "not protected"
+  },
+  PreFlight: {
+    c: "var(--info)",
+    rank: 1,
+    label: "pre-flight",
+    blink: true
+  },
+  PreSource: {
+    c: "var(--info)",
+    rank: 1,
+    label: "pre-source hooks",
+    blink: true
+  },
+  RamenHandoff: {
+    c: "var(--info)",
+    rank: 1,
+    label: "Ramen hand-off",
+    blink: true
+  },
+  TargetStarting: {
+    c: "var(--info)",
+    rank: 1,
+    label: "target starting",
+    blink: true
+  },
+  Workflow: {
+    c: "var(--info)",
+    rank: 1,
+    label: "workflow",
+    blink: true
+  },
+  PostTargetReady: {
+    c: "var(--info)",
+    rank: 1,
+    label: "post-target hooks",
+    blink: true
+  },
+  Confirming: {
+    c: "var(--info)",
+    rank: 1,
+    label: "confirming",
+    blink: true
+  },
+  RolledBack: {
+    c: "var(--warn)",
+    rank: 3,
+    label: "rolled back"
+  },
+  Cloning: {
+    c: "var(--info)",
+    rank: 1,
+    label: "cloning",
+    blink: true
+  },
+  Provisioning: {
+    c: "var(--info)",
+    rank: 1,
+    label: "provisioning",
+    blink: true
+  },
+  Restoring: {
+    c: "var(--info)",
+    rank: 1,
+    label: "restoring",
+    blink: true
+  },
+  Restored: {
+    c: "var(--ok)",
+    rank: 0,
+    label: "restored"
+  },
+  Reprotecting: {
+    c: "var(--info)",
+    rank: 1,
+    label: "re-protecting",
+    blink: true
+  },
+  Holding: {
+    c: "var(--accent)",
+    rank: 1,
+    label: "holding"
+  },
+  TearingDown: {
+    c: "var(--info)",
+    rank: 1,
+    label: "tearing down",
+    blink: true
+  },
+  Passed: {
+    c: "var(--ok)",
+    rank: 0,
+    label: "passed"
+  },
+  FailedInvariant: {
+    c: "var(--bad)",
+    rank: 5,
+    label: "invariant violated"
+  },
+  Unsupported: {
+    c: "var(--dim2)",
+    rank: 3,
+    label: "unsupported"
+  },
+  Skipped: {
+    c: "var(--dim2)",
+    rank: 2,
+    label: "skipped"
+  },
+  Scheduled: {
+    c: "var(--ok)",
+    rank: 0,
+    label: "scheduled"
+  },
+  Suspended: {
+    c: "var(--warn)",
+    rank: 3,
+    label: "suspended"
+  },
+  Reported: {
+    c: "var(--ok)",
+    rank: 0,
+    label: "inventory reported"
+  },
+  NotReported: {
+    c: "var(--warn)",
+    rank: 3,
+    label: "no inventory yet"
+  },
+  Pass: {
+    c: "var(--ok)",
+    rank: 0,
+    label: "pass"
+  },
+  Fail: {
+    c: "var(--bad)",
+    rank: 4,
+    label: "fail"
+  },
+  Warn: {
+    c: "var(--warn)",
+    rank: 3,
+    label: "warn"
+  },
+  Info: {
+    c: "var(--info)",
+    rank: 1,
+    label: "info"
+  },
+  NotApplicable: {
+    c: "var(--dim2)",
+    rank: 2,
+    label: "n/a"
+  },
+  Aborted: {
+    c: "var(--warn)",
+    rank: 3,
+    label: "aborted"
+  }
+});
+
+// ---- helpers -------------------------------------------------------------------
+const drMeta = o => o.metadata || {};
+const drCond = (o, type) => ((o.status || {}).conditions || []).find(c => c.type === type) || null;
+const drCondOK = (o, type) => {
+  const c = drCond(o, type);
+  return c ? c.status === "True" ? true : c.status === "False" ? false : null : null;
+};
+const drConds = o => ((o.status || {}).conditions || []).map(c => ({
+  type: c.type,
+  status: c.status,
+  reason: c.reason,
+  message: c.message,
+  since: c.lastTransitionTime
+}));
+const nsName = (ns, name) => ns ? `${ns}/${name}` : name;
+const splitRef = s => {
+  const i = String(s || "").indexOf("/");
+  return i < 0 ? {
+    namespace: "",
+    name: s || ""
+  } : {
+    namespace: s.slice(0, i),
+    name: s.slice(i + 1)
+  };
+};
+const refName = r => r && r.name || "";
+const worstVerdict = vs => vs.reduce((w, v) => (VERDICT_RANK[v] || 0) > (VERDICT_RANK[w] || 0) ? v : w, vs[0] || "Unknown");
+const isSyncType = t => /^sync/.test(t || "");
+const durMs = (a, b) => a && b ? Math.max(0, Date.parse(b) - Date.parse(a)) : a ? Math.max(0, Date.now() - Date.parse(a)) : null;
+const fmtSecs = s => s == null ? "—" : s < 60 ? `${Math.round(s)}s` : s < 3600 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`;
+const base = (o, kind) => ({
+  kind,
+  id: drMeta(o).uid || `${kind}:${nsName(drMeta(o).namespace, drMeta(o).name)}`,
+  name: drMeta(o).name,
+  namespace: drMeta(o).namespace || "",
+  createdAt: drMeta(o).creationTimestamp,
+  generation: drMeta(o).generation,
+  observedGeneration: (o.status || {}).observedGeneration,
+  labels: drMeta(o).labels || {},
+  annotations: drMeta(o).annotations || {},
+  conditions: drConds(o),
+  raw: o
+});
+const reg = vm => {
+  REG[vm.id] = vm;
+  return vm;
+};
+
+// ---- normalizers --------------------------------------------------------------------
+function normPPlan(o) {
+  const sp = o.spec || {},
+    st = o.status || {};
+  const methods = (sp.methods || []).map(m => ({
+    name: m.name,
+    type: m.type,
+    interval: m.schedulingInterval || "",
+    s3Backup: m.s3Backup || null,
+    parameters: m.replicationParameters || {}
+  }));
+  const ready = drCondOK(o, "Ready");
+  const siteStatus = Object.fromEntries((st.sites || []).map(s => [s.name, s]));
+  const sites = (sp.sites || []).map(s => Object.assign({
+    name: s.name,
+    cluster: s.cluster,
+    zone: s.zone || "",
+    region: s.region || "",
+    veleroNamespace: s.veleroNamespace || ""
+  }, {
+    drCluster: (siteStatus[s.name] || {}).drCluster || "",
+    classesApplied: !!(siteStatus[s.name] || {}).classesApplied,
+    agentAvailable: (siteStatus[s.name] || {}).agentAvailable
+  }));
+  const pairs = (st.pairs || []).map(p => ({
+    sites: p.sites || [],
+    paths: p.paths || [],
+    drPolicies: p.drPolicies || [],
+    peerClassesResolved: !!p.peerClassesResolved
+  }));
+  return reg(Object.assign(base(o, "pplan"), {
+    status: ready === true ? "Ready" : ready === false ? "NotReady" : "Unknown",
+    sites,
+    siteNames: sites.map(s => s.name),
+    methods,
+    sync: methods.length > 0 && methods.every(m => isSyncType(m.type)),
+    storageProfile: sp.storageProfile || {},
+    s3Profile: refName(sp.s3Profile),
+    s3Profiles: sp.s3Profiles || [],
+    autoRestart: sp.autoRestart || null,
+    veleroNamespace: sp.veleroNamespace || "",
+    pairs,
+    pathNames: pairs.flatMap(p => p.paths),
+    drPolicies: pairs.flatMap(p => p.drPolicies),
+    counts: {
+      sites: sites.length,
+      methods: methods.length,
+      paths: pairs.reduce((n, p) => n + p.paths.length, 0),
+      agentsAvailable: sites.filter(s => s.agentAvailable).length
+    }
+  }));
+}
+function normDRPath(o) {
+  const sp = o.spec || {},
+    st = o.status || {};
+  const valid = drCondOK(o, "Valid");
+  const lastActions = Object.fromEntries((st.lastActions || []).map(a => [a.kind, a]));
+  return reg(Object.assign(base(o, "drpath"), {
+    status: valid === false ? "Invalid" : st.profileConsistency === "Inconsistent" ? "Inconsistent" : valid === true ? "Valid" : "Unknown",
+    from: sp.from,
+    to: sp.to,
+    planName: refName(sp.planRef),
+    actions: sp.actions || [],
+    announcementHandover: !!sp.announcementHandover,
+    test: sp.test || null,
+    drPolicies: st.drPolicies || [],
+    applications: (st.applications || []).map(splitRef),
+    lastActions,
+    profileConsistency: st.profileConsistency || "Unknown",
+    profileComparison: st.profileComparison || [],
+    counts: {
+      apps: (st.applications || []).length,
+      policies: (st.drPolicies || []).length
+    }
+  }));
+}
+function normPApp(o) {
+  const sp = o.spec || {},
+    st = o.status || {};
+  const paths = (st.paths || []).map(p => ({
+    name: p.name,
+    from: p.from,
+    to: p.to,
+    actions: p.actions || [],
+    verdict: (p.readiness || {}).verdict || "Unknown",
+    checks: (p.readiness || {}).checks || [],
+    since: (p.readiness || {}).lastTransitionTime
+  }));
+  const protectedOK = drCondOK(o, "Protected");
+  const verdict = paths.length ? worstVerdict(paths.map(p => p.verdict)) : protectedOK === false ? "NotReady" : "Unknown";
+  const anns = drMeta(o).annotations || {};
+  return reg(Object.assign(base(o, "papp"), {
+    status: verdict,
+    verdict,
+    protected: protectedOK,
+    bound: drCondOK(o, "Bound"),
+    planName: refName(sp.planRef),
+    source: sp.source || "",
+    target: sp.target || "",
+    method: sp.method || "",
+    appKind: sp.kind || "discovered",
+    managed: sp.managed || null,
+    discovered: sp.discovered || null,
+    drpcRef: refName(sp.drpcRef),
+    probes: (sp.health || {}).probes || [],
+    tiers: sp.tiers || [],
+    externalHooks: sp.externalHooks || {},
+    dependsOn: sp.dependsOn || [],
+    drpc: st.drpc || "",
+    placement: st.placement || "",
+    drPolicy: st.drPolicy || "",
+    zoneBinding: st.zoneBinding || "",
+    currentCluster: st.currentCluster || "",
+    paths,
+    siteMapping: st.siteMapping || "",
+    recipe: st.recipe || null,
+    suggestedTiers: st.suggestedTiers || [],
+    lastAction: st.lastAction ? splitRef(st.lastAction) : null,
+    awaitingRestore: anns[DR_ANN.awaitingRestore] !== undefined,
+    autoRestartOptOut: anns[DR_ANN.autoRestart] === "false",
+    counts: {
+      paths: paths.length,
+      tiers: (sp.tiers || []).length,
+      probes: ((sp.health || {}).probes || []).length
+    }
+  }));
+}
+function normRPlan(o) {
+  const sp = o.spec || {},
+    st = o.status || {};
+  const verdict = (st.readiness || {}).verdict || "Unknown";
+  return reg(Object.assign(base(o, "rplan"), {
+    status: drCondOK(o, "Valid") === false ? "Invalid" : verdict,
+    verdict,
+    checks: (st.readiness || {}).checks || [],
+    pathName: refName(sp.pathRef),
+    applications: (sp.applications || []).map(a => ({
+      name: a.name,
+      priority: a.priority || 1,
+      dependsOn: a.dependsOn || []
+    })),
+    gates: sp.gates || {},
+    continueOnFailure: !!sp.continueOnFailure,
+    hooks: sp.hooks || {},
+    counts: {
+      apps: (sp.applications || []).length,
+      priorities: new Set((sp.applications || []).map(a => a.priority || 1)).size
+    }
+  }));
+}
+function normRAction(o) {
+  const sp = o.spec || {},
+    st = o.status || {};
+  const phase = st.phase || "Pending";
+  const report = st.report || null;
+  return reg(Object.assign(base(o, "raction"), {
+    status: phase,
+    phase,
+    terminal: ACTION_TERMINAL.includes(phase),
+    action: sp.kind,
+    pathName: refName(sp.pathRef),
+    appName: refName(sp.applicationRef),
+    planName: refName(sp.planRef),
+    targetName: refName(sp.applicationRef) || refName(sp.planRef),
+    override: sp.override || null,
+    timeout: sp.timeout || "",
+    startTime: st.startTime,
+    completionTime: st.completionTime,
+    durationMs: durMs(st.startTime, st.completionTime),
+    sourceCluster: st.sourceCluster || "",
+    targetCluster: st.targetCluster || "",
+    steps: st.steps || [],
+    children: st.children || [],
+    report,
+    reportKey: st.reportKey || "",
+    rtoSeconds: report ? report.rtoSeconds : null,
+    rpoSeconds: report ? report.achievedRPOSeconds : null,
+    createdBy: (drMeta(o).annotations || {})[DR_ANN.createdBy] || report && report.operator || "",
+    counts: {
+      steps: (st.steps || []).length,
+      children: (st.children || []).length,
+      warnings: report ? (report.warnings || []).length : 0
+    }
+  }));
+}
+function normTBubble(o) {
+  const sp = o.spec || {},
+    st = o.status || {};
+  const phase = st.phase || "Pending";
+  const report = st.report || null;
+  const outcome = report ? report.outcome : "";
+  return reg(Object.assign(base(o, "tbubble"), {
+    status: phase === "Completed" && outcome ? outcome : phase,
+    phase,
+    outcome,
+    terminal: TEST_TERMINAL.includes(phase),
+    pathName: refName(sp.pathRef),
+    appName: refName(sp.applicationRef),
+    planName: refName(sp.planRef),
+    targetName: refName(sp.applicationRef) || refName(sp.planRef),
+    cloneSource: sp.cloneSource || "latest-replicated-snapshot",
+    holdFor: sp.holdFor || "",
+    maxLifetime: sp.maxLifetime || "",
+    abort: !!sp.abort,
+    testID: st.testID || "",
+    sourceCluster: st.sourceCluster || "",
+    targetCluster: st.targetCluster || "",
+    clonesReadyTime: st.clonesReadyTime,
+    applications: st.applications || [],
+    startTime: st.startTime,
+    completionTime: st.completionTime,
+    durationMs: durMs(st.startTime, st.completionTime),
+    bubbleNamespaces: st.bubbleNamespaces || [],
+    steps: st.steps || [],
+    invariants: st.invariants || [],
+    checks: st.checks || [],
+    report,
+    reportKey: st.reportKey || "",
+    scheduleName: (drMeta(o).labels || {})[DR_ANN.schedule] || "",
+    createdBy: (drMeta(o).annotations || {})[DR_ANN.createdBy] || report && report.operator || "",
+    counts: {
+      apps: (st.applications || []).length,
+      steps: (st.steps || []).length,
+      invariants: (st.invariants || []).length
+    }
+  }));
+}
+function normTSched(o) {
+  const sp = o.spec || {},
+    st = o.status || {};
+  const t = sp.template || {};
+  return reg(Object.assign(base(o, "tsched"), {
+    status: sp.suspend ? "Suspended" : drCondOK(o, "Valid") === false ? "Invalid" : "Scheduled",
+    schedule: sp.schedule || "",
+    suspend: !!sp.suspend,
+    template: t,
+    pathName: refName(t.pathRef),
+    appName: refName(t.applicationRef),
+    planName: refName(t.planRef),
+    targetName: refName(t.applicationRef) || refName(t.planRef),
+    retention: sp.retention || {},
+    lastScheduleTime: st.lastScheduleTime,
+    lastSuccessfulTime: st.lastSuccessfulTime,
+    active: refName(st.active),
+    counts: {}
+  }));
+}
+function normRestore(o) {
+  const sp = o.spec || {},
+    st = o.status || {};
+  const phase = st.phase || "Pending";
+  return reg(Object.assign(base(o, "restore"), {
+    status: phase,
+    phase,
+    terminal: RESTORE_TERMINAL.includes(phase),
+    appName: refName(sp.applicationRef),
+    timeout: sp.timeout || "",
+    cluster: st.cluster || "",
+    capture: st.capture || null,
+    volumes: st.volumes || [],
+    restorePoint: st.restorePoint,
+    steps: st.steps || [],
+    checks: st.checks || [],
+    dataLoss: st.dataLoss || "",
+    startTime: st.startTime,
+    completionTime: st.completionTime,
+    durationMs: durMs(st.startTime, st.completionTime),
+    message: st.message || "",
+    counts: {
+      volumes: (st.volumes || []).length,
+      steps: (st.steps || []).length
+    }
+  }));
+}
+function normSiteProfile(o) {
+  const sp = o.spec || {},
+    st = o.status || {};
+  const inv = st.inventory || {};
+  const reported = drCondOK(o, "InventoryReported");
+  return reg(Object.assign(base(o, "siteprofile"), {
+    status: reported === true || st.reportedAt ? "Reported" : "NotReported",
+    inventory: inv,
+    reportedAt: st.reportedAt,
+    spec: sp,
+    zones: inv.zones || [],
+    nodes: inv.nodes || [],
+    nads: inv.nads || [],
+    storageClasses: inv.storageClasses || [],
+    snapshotClasses: inv.volumeSnapshotClasses || [],
+    ingressClasses: inv.ingressClasses || [],
+    gatewayClasses: inv.gatewayClasses || [],
+    ipAddressPools: inv.ipAddressPools || [],
+    registryMirrors: inv.registryMirrors || [],
+    counts: {
+      zones: (inv.zones || []).length,
+      nodes: (inv.nodes || []).length,
+      nodesReady: (inv.nodes || []).filter(n => n.ready).length,
+      nads: (inv.nads || []).length,
+      storageClasses: (inv.storageClasses || []).length
+    }
+  }));
+}
+function normDRConfig(o) {
+  const sp = o.spec || {},
+    st = o.status || {};
+  const ramen = drCondOK(o, "RamenConfigured");
+  const agents = st.agents || [];
+  return reg(Object.assign(base(o, "drconfig"), {
+    status: sp.recoveryMode ? "Suspended" : ramen === false ? "NotReady" : ramen === true ? "Ready" : "Unknown",
+    executor: sp.executor || {},
+    agent: sp.agent || {},
+    ramen: sp.ramen || {},
+    archive: sp.archive || null,
+    bootstrap: sp.bootstrap || {},
+    retention: sp.retention || {},
+    recoveryMode: !!sp.recoveryMode,
+    featureGates: sp.featureGates || {},
+    agents,
+    stack: st.stack || [],
+    lastBundle: st.lastBundle || null,
+    ramenConfigured: ramen,
+    counts: {
+      agents: agents.length,
+      agentsAvailable: agents.filter(a => a.available).length
+    }
+  }));
+}
+const NORM = {
+  pplan: normPPlan,
+  drpath: normDRPath,
+  papp: normPApp,
+  rplan: normRPlan,
+  raction: normRAction,
+  tbubble: normTBubble,
+  tsched: normTSched,
+  restore: normRestore,
+  siteprofile: normSiteProfile,
+  drconfig: normDRConfig
+};
+
+// ---- reads ---------------------------------------------------------------------------
+const drList = kind => k8s.list(DR_KINDS[kind], RESOURCES[DR_KINDS[kind]].namespaced ? {
+  allNamespaces: true
+} : {}).then(items => items.map(NORM[kind]));
+// Kubernetes has no get-by-uid, and the console's paths carry uids: list and pick.
+const drById = kind => id => drList(kind).then(items => {
+  const hit = items.find(x => x.id === id);
+  if (!hit) throw new ApiError(404, `${DR_KINDS[kind]} not found`, kind, "NotFound");
+  return hit;
+});
+const drByName = (kind, name, namespace) => drList(kind).then(items => items.find(x => x.name === name && (!namespace || x.namespace === namespace)) || null);
+const stamp = () => Date.now().toString(36);
+const dns63 = s => String(s).toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 63).replace(/-+$/, "");
+const kvToObj = rows => Object.fromEntries((rows || []).filter(r => r.k).map(r => [r.k.trim(), (r.v || "").trim()]));
+const csv = s => String(s || "").split(/[,\s]+/).map(x => x.trim()).filter(Boolean);
+const drhub = {
+  plans: () => drList("pplan"),
+  plan: drById("pplan"),
+  paths: () => drList("drpath"),
+  path: drById("drpath"),
+  apps: () => drList("papp"),
+  app: drById("papp"),
+  rplans: () => drList("rplan"),
+  rplan: drById("rplan"),
+  actions: () => drList("raction"),
+  action: drById("raction"),
+  tests: () => drList("tbubble"),
+  test: drById("tbubble"),
+  schedules: () => drList("tsched"),
+  schedule: drById("tsched"),
+  restores: () => drList("restore"),
+  restoreAction: drById("restore"),
+  siteProfiles: () => drList("siteprofile"),
+  siteProfile: drById("siteprofile"),
+  configs: () => drList("drconfig"),
+  config: () => drList("drconfig").then(cs => cs.find(c => c.name === "default") || cs[0] || null),
+  // derived Ramen objects, read-only
+  drpcs: () => k8s.list("DRPlacementControl", {
+    allNamespaces: true
+  }).catch(() => []),
+  drPolicies: () => k8s.list("DRPolicy").catch(() => []),
+  drClusters: () => k8s.list("DRCluster").catch(() => []),
+  managedClusters: () => k8s.list("ManagedCluster").catch(() => []),
+  events: (ns, name) => k8s.list("Event", {
+    namespace: ns,
+    fieldSelector: `involvedObject.name=${name}`
+  }).catch(() => []),
+  // scoped reads used by the layers
+  planPaths: planId => Promise.all([drhub.plan(planId), drhub.paths()]).then(([p, ps]) => ps.filter(x => x.planName === p.name)),
+  planApps: planId => Promise.all([drhub.plan(planId), drhub.apps()]).then(([p, as]) => as.filter(x => x.planName === p.name)),
+  pathApps: pathId => Promise.all([drhub.path(pathId), drhub.apps()]).then(([p, as]) => as.filter(a => a.paths.some(x => x.name === p.name) || p.applications.some(r => r.name === a.name && (!r.namespace || r.namespace === a.namespace)))),
+  pathActions: pathId => Promise.all([drhub.path(pathId), drhub.actions()]).then(([p, xs]) => xs.filter(x => x.pathName === p.name)),
+  pathTests: pathId => Promise.all([drhub.path(pathId), drhub.tests()]).then(([p, xs]) => xs.filter(x => x.pathName === p.name)),
+  pathRPlans: pathId => Promise.all([drhub.path(pathId), drhub.rplans()]).then(([p, xs]) => xs.filter(x => x.pathName === p.name)),
+  appActions: appId => Promise.all([drhub.app(appId), drhub.actions()]).then(([a, xs]) => xs.filter(x => x.namespace === a.namespace && x.appName === a.name)),
+  appTests: appId => Promise.all([drhub.app(appId), drhub.tests()]).then(([a, xs]) => xs.filter(x => x.namespace === a.namespace && x.appName === a.name)),
+  appSchedules: appId => Promise.all([drhub.app(appId), drhub.schedules()]).then(([a, xs]) => xs.filter(x => x.namespace === a.namespace && x.appName === a.name)),
+  appRestores: appId => Promise.all([drhub.app(appId), drhub.restores()]).then(([a, xs]) => xs.filter(x => x.namespace === a.namespace && x.appName === a.name)),
+  rplanActions: id => Promise.all([drhub.rplan(id), drhub.actions()]).then(([p, xs]) => xs.filter(x => x.namespace === p.namespace && x.planName === p.name)),
+  rplanTests: id => Promise.all([drhub.rplan(id), drhub.tests()]).then(([p, xs]) => xs.filter(x => x.namespace === p.namespace && x.planName === p.name)),
+  scheduleTests: id => Promise.all([drhub.schedule(id), drhub.tests()]).then(([s, xs]) => xs.filter(x => x.namespace === s.namespace && x.scheduleName === s.name)),
+  siteProfilePaths: id => Promise.all([drhub.siteProfile(id), drhub.plans(), drhub.paths()]).then(([sp, plans, paths]) => {
+    const siteNames = new Set(plans.flatMap(p => p.sites.filter(s => s.cluster === sp.name).map(s => s.name)));
+    return paths.filter(p => siteNames.has(p.from) || siteNames.has(p.to));
+  }),
+  // ---- writes: every one is a CR the caller must be allowed to create ------
+  // A Failover / Relocate along a declared path, or a Restart in place. Plan
+  // actions fan out one child RecoveryAction per application on the hub.
+  runAction: ({
+    kind,
+    target,
+    path,
+    override,
+    timeout
+  }) => k8s.create("RecoveryAction", {
+    apiVersion: DR_API_GROUP,
+    kind: "RecoveryAction",
+    metadata: {
+      name: dns63(`${kind}-${target.name}-${stamp()}`),
+      namespace: target.namespace
+    },
+    spec: Object.assign({
+      kind
+    }, kind !== "Restart" && path ? {
+      pathRef: {
+        name: path
+      }
+    } : {}, target.kind === "rplan" ? {
+      planRef: {
+        name: target.name
+      }
+    } : {
+      applicationRef: {
+        name: target.name
+      }
+    }, override ? {
+      override: {
+        reason: override
+      }
+    } : {}, timeout ? {
+      timeout
+    } : {})
+  }, {
+    namespace: target.namespace
+  }),
+  runTest: ({
+    target,
+    path,
+    cloneSource,
+    holdFor,
+    maxLifetime
+  }) => k8s.create("TestBubble", {
+    apiVersion: DR_API_GROUP,
+    kind: "TestBubble",
+    metadata: {
+      name: dns63(`test-${target.name}-${stamp()}`),
+      namespace: target.namespace
+    },
+    spec: Object.assign({
+      pathRef: {
+        name: path
+      }
+    }, target.kind === "rplan" ? {
+      planRef: {
+        name: target.name
+      }
+    } : {
+      applicationRef: {
+        name: target.name
+      }
+    }, cloneSource ? {
+      cloneSource
+    } : {}, holdFor ? {
+      holdFor
+    } : {}, maxLifetime ? {
+      maxLifetime
+    } : {})
+  }, {
+    namespace: target.namespace
+  }),
+  abortTest: t => k8s.patch("TestBubble", t.name, {
+    spec: {
+      abort: true
+    }
+  }, {
+    namespace: t.namespace
+  }),
+  holdTest: (t, holdFor) => k8s.patch("TestBubble", t.name, {
+    spec: {
+      holdFor
+    }
+  }, {
+    namespace: t.namespace
+  }),
+  runRestore: ({
+    app,
+    timeout
+  }) => k8s.create("RestoreAction", {
+    apiVersion: DR_API_GROUP,
+    kind: "RestoreAction",
+    metadata: {
+      name: dns63(`restore-${app.name}-${stamp()}`),
+      namespace: app.namespace
+    },
+    spec: Object.assign({
+      applicationRef: {
+        name: app.name
+      }
+    }, timeout ? {
+      timeout
+    } : {})
+  }, {
+    namespace: app.namespace
+  }),
+  createSchedule: ({
+    name,
+    namespace,
+    schedule,
+    target,
+    path,
+    cloneSource,
+    keepLast,
+    keepFor,
+    suspend
+  }) => k8s.create("TestSchedule", {
+    apiVersion: DR_API_GROUP,
+    kind: "TestSchedule",
+    metadata: {
+      name: dns63(name),
+      namespace
+    },
+    spec: Object.assign({
+      schedule,
+      template: Object.assign({
+        pathRef: {
+          name: path
+        }
+      }, target.kind === "rplan" ? {
+        planRef: {
+          name: target.name
+        }
+      } : {
+        applicationRef: {
+          name: target.name
+        }
+      }, cloneSource ? {
+        cloneSource
+      } : {})
+    }, {
+      retention: Object.assign({}, keepLast ? {
+        keepLast: Number(keepLast)
+      } : {}, keepFor ? {
+        keepFor
+      } : {})
+    }, suspend ? {
+      suspend: true
+    } : {})
+  }, {
+    namespace
+  }),
+  suspendSchedule: (s, suspend) => k8s.patch("TestSchedule", s.name, {
+    spec: {
+      suspend: !!suspend
+    }
+  }, {
+    namespace: s.namespace
+  }),
+  createPlan: spec => k8s.create("ProtectionPlan", {
+    apiVersion: DR_API_GROUP,
+    kind: "ProtectionPlan",
+    metadata: {
+      name: dns63(spec.name)
+    },
+    spec: spec.spec
+  }),
+  createPath: spec => k8s.create("DRPath", {
+    apiVersion: DR_API_GROUP,
+    kind: "DRPath",
+    metadata: {
+      name: dns63(spec.name)
+    },
+    spec: spec.spec
+  }),
+  createApp: ({
+    name,
+    namespace,
+    spec
+  }) => k8s.create("ProtectedApplication", {
+    apiVersion: DR_API_GROUP,
+    kind: "ProtectedApplication",
+    metadata: {
+      name: dns63(name),
+      namespace
+    },
+    spec
+  }, {
+    namespace
+  }),
+  createRPlan: ({
+    name,
+    namespace,
+    spec
+  }) => k8s.create("RecoveryPlan", {
+    apiVersion: DR_API_GROUP,
+    kind: "RecoveryPlan",
+    metadata: {
+      name: dns63(name),
+      namespace
+    },
+    spec
+  }, {
+    namespace
+  }),
+  // Optional per-application knob: opt out of the automatic restart after a
+  // storage recovery (ADR 0017).
+  setAutoRestart: (a, on) => k8s.patch("ProtectedApplication", a.name, {
+    metadata: {
+      annotations: {
+        [DR_ANN.autoRestart]: on ? null : "false"
+      }
+    }
+  }, {
+    namespace: a.namespace
+  }),
+  // Deleting a plan or path still in use is refused by the hub unless the
+  // caller confirms with an annotation; the console sets it after the confirm
+  // dialog, then deletes.
+  remove: (o, confirm) => {
+    const kind = DR_KINDS[o.kind],
+      opts = o.namespace ? {
+        namespace: o.namespace
+      } : {};
+    const pre = confirm ? k8s.patch(kind, o.name, {
+      metadata: {
+        annotations: {
+          [DR_ANN.confirmDelete]: "true"
+        }
+      }
+    }, opts) : Promise.resolve();
+    return pre.then(() => k8s.remove(kind, o.name, opts));
+  }
+};
+
+// The generic detail loader keys on the breadcrumb's layer name.
+Object.assign(GETTER, {
+  pplan: drhub.plan,
+  drpath: drhub.path,
+  papp: drhub.app,
+  rplan: drhub.rplan,
+  raction: drhub.action,
+  tbubble: drhub.test,
+  tsched: drhub.schedule,
+  restore: drhub.restoreAction,
+  siteprofile: drhub.siteProfile,
+  drconfig: drhub.config
+});
+Object.assign(window, {
+  drhub,
+  DR_KINDS,
+  DR_ANN,
+  VERDICT_RANK,
+  ACTION_TERMINAL,
+  TEST_TERMINAL,
+  worstVerdict,
+  fmtSecs,
+  drCond,
+  drCondOK,
+  splitRef,
+  kvToObj,
+  csv,
+  dns63,
+  normPPlan,
+  normDRPath,
+  normPApp,
+  normRPlan,
+  normRAction,
+  normTBubble,
+  normTSched,
+  normRestore,
+  normSiteProfile,
+  normDRConfig
+});
+})();
 // ---- agent.jsx ----
 (function(){
 // ---------------------------------------------------------------------------
@@ -3159,8 +4740,9 @@ Object.assign(window, {
 // ACCESS CONTROL — the client side of §5 of the RBAC design.
 //
 // The API server is the only policy decision point. This file never enforces:
-// it asks one SelfSubjectRulesReview per namespace (aggregated in /access/self),
-// evaluates locally, and renders. Denied controls are DISABLED with the missing
+// it asks one SelfSubjectRulesReview per namespace (aggregated in /access/self
+// by the operator API, or asked of the Kubernetes API directly on a DR-only
+// hub, where there is no operator), evaluates locally, and renders. Denied controls are DISABLED with the missing
 // permission in the tooltip; only whole scopes the caller cannot see are hidden.
 // incomplete:true renders optimistically — the real call fails with a clear 403.
 // ---------------------------------------------------------------------------
@@ -3174,7 +4756,12 @@ const OPS_LABEL = {
   restore: "rst",
   failover: "f/o",
   failback: "f/b",
-  fence: "fence"
+  fence: "fence",
+  relocate: "reloc",
+  restart: "restart",
+  test: "test",
+  override: "ovr",
+  drrestore: "restore"
 };
 const ENTITY_LABEL = {
   k8scluster: "Managed cluster",
@@ -3186,7 +4773,8 @@ const ENTITY_LABEL = {
   drpolicy: "DR policy",
   application: "Application",
   role: "ClusterRole",
-  binding: "AccessGrant"
+  binding: "AccessGrant",
+  drhub: "Disaster recovery"
 };
 const ENTITY_COVERS = {
   k8scluster: "worker nodes, discovery, allocations",
@@ -3198,7 +4786,8 @@ const ENTITY_COVERS = {
   drpolicy: "protection plans, methods, migration paths",
   application: "protected applications, recipes, failovers",
   role: "aggregated sb:* ClusterRole",
-  binding: "RoleBinding or AccessGrant"
+  binding: "RoleBinding or AccessGrant",
+  drhub: "protection plans, DR paths, protected applications, recovery plans, actions, tests, restores"
 };
 const ENTITY_OPS = {
   k8scluster: ["create", "read", "update", "delete"],
@@ -3210,7 +4799,8 @@ const ENTITY_OPS = {
   drpolicy: ["create", "read", "update", "delete"],
   application: ["create", "read", "update", "delete", "failover", "failback", "fence"],
   role: ["read"],
-  binding: ["create", "read", "delete"]
+  binding: ["create", "read", "delete"],
+  drhub: ["create", "read", "update", "delete", "failover", "relocate", "restart", "test", "override", "drrestore"]
 };
 // UI kind -> the main entity whose namespace governs it
 const KIND_ENTITY = {
@@ -3246,7 +4836,19 @@ const KIND_ENTITY = {
   role: "role",
   binding: "binding",
   grant: "binding",
-  replops: "replicationpolicy"
+  replops: "replicationpolicy",
+  // the DR hub's kinds (dr.simplyblock.io) — one entity, authorised by the
+  // hub chart's dr-viewer / dr-operator / dr-admin roles
+  pplan: "drhub",
+  drpath: "drhub",
+  papp: "drhub",
+  rplan: "drhub",
+  raction: "drhub",
+  tbubble: "drhub",
+  tsched: "drhub",
+  restore: "drhub",
+  drconfig: "drhub",
+  siteprofile: "drhub"
 };
 // UI kind -> the CRD resource the API server checks (§3.5, the console's column)
 const KIND_RESOURCE = {
@@ -3282,7 +4884,33 @@ const KIND_RESOURCE = {
   protectedapp: "protectedapplications",
   role: "clusterroles",
   binding: "accessgrants",
-  grant: "accessgrants"
+  grant: "accessgrants",
+  pplan: "protectionplans",
+  drpath: "drpaths",
+  papp: "protectedapplications",
+  rplan: "recoveryplans",
+  raction: "recoveryactions",
+  tbubble: "testbubbles",
+  tsched: "testschedules",
+  restore: "restoreactions",
+  drconfig: "drconfigs",
+  siteprofile: "siteprofiles"
+};
+// UI kind -> API group, where it is not the default simplyblock group
+const KIND_GROUP = {
+  pplan: "dr.simplyblock.io",
+  drpath: "dr.simplyblock.io",
+  papp: "dr.simplyblock.io",
+  rplan: "dr.simplyblock.io",
+  raction: "dr.simplyblock.io",
+  tbubble: "dr.simplyblock.io",
+  tsched: "dr.simplyblock.io",
+  restore: "dr.simplyblock.io",
+  drconfig: "dr.simplyblock.io",
+  siteprofile: "sitemap.simplyblock.io"
+};
+const ENTITY_GROUP = {
+  drhub: "dr.simplyblock.io"
 };
 const ENTITY_RESOURCE = {
   k8scluster: "managedclusters",
@@ -3294,7 +4922,8 @@ const ENTITY_RESOURCE = {
   drpolicy: "drpolicies",
   application: "protectedapplications",
   role: "clusterroles",
-  binding: "accessgrants"
+  binding: "accessgrants",
+  drhub: "protectedapplications"
 };
 const VERB_OF = {
   read: "get",
@@ -3302,7 +4931,13 @@ const VERB_OF = {
   update: "update",
   delete: "delete",
   backup: "create",
-  restoresource: "get"
+  restoresource: "get",
+  failover: "create",
+  relocate: "create",
+  restart: "create",
+  test: "create",
+  drrestore: "create",
+  override: "override"
 };
 
 // ---- the store ---------------------------------------------------------------
@@ -3331,8 +4966,47 @@ const AC_STATE = {
 };
 const acListeners = new Set();
 const acNotify = () => acListeners.forEach(f => f());
+const DR_MODE = () => (window.SB_CONFIG || {}).mode === "dr";
+const initialsOf = u => String(u || "?").replace(/^system:serviceaccount:[^:]+:/, "").split(/[^a-z0-9]+/i).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join("") || "??";
+
+// Straight from the Kubernetes API: who am I, and which rules apply to me in
+// the DR ops namespace. Cluster-wide bindings are part of that answer, so the
+// result is kept as the cluster rule set; a RoleBinding in some other
+// namespace is not seen here — the API server still enforces it, this only
+// decides which controls are disabled.
+async function loadAccessK8s() {
+  const [who, rules] = await Promise.all([review.whoami().catch(() => ({})), review.rules(DR_NS())]);
+  const norm = (rules.resourceRules || []).map(r => ({
+    apiGroups: r.apiGroups || [""],
+    resources: r.resources || [],
+    verbs: r.verbs || [],
+    resourceNames: r.resourceNames
+  }));
+  const user = who.username || null;
+  Object.assign(AC_STATE, {
+    ready: true,
+    error: null,
+    user,
+    groups: who.groups || [],
+    initials: initialsOf(user),
+    label: user,
+    rules: {
+      cluster: norm,
+      ns: {}
+    },
+    incomplete: !!rules.incomplete,
+    grants: [],
+    scopes: null,
+    demoUsers: []
+  });
+}
 async function loadAccess() {
   try {
+    if (DR_MODE()) {
+      await loadAccessK8s();
+      acNotify();
+      return;
+    }
     const r = await api.accessSelf();
     Object.assign(AC_STATE, {
       ready: true,
@@ -3352,17 +5026,22 @@ async function loadAccess() {
       demoUsers: r.demo_users || []
     });
   } catch (e) {
-    Object.assign(AC_STATE, {
-      ready: true,
-      error: e,
-      user: null,
-      rules: {
-        cluster: [],
-        ns: {}
-      },
-      grants: [],
-      scopes: null
-    });
+    // no operator API (or it has no access view): the Kubernetes API is the truth
+    try {
+      await loadAccessK8s();
+    } catch (e2) {
+      Object.assign(AC_STATE, {
+        ready: true,
+        error: e,
+        user: null,
+        rules: {
+          cluster: [],
+          ns: {}
+        },
+        grants: [],
+        scopes: null
+      });
+    }
   }
   acNotify();
 }
@@ -3384,6 +5063,8 @@ function nsOf(entity, o, op) {
   }
   if (entity === "storagecluster" || entity === "backuppolicy") return clusterIdsOf(o).map(id => N.clusters[id]).filter(Boolean);
   if (entity === "replicationpolicy" || entity === "drpolicy") return [N.dr];
+  // DR hub kinds: namespaced ones are judged in their own namespace, cluster-scoped ones at cluster scope
+  if (entity === "drhub") return o.namespace ? [o.namespace] : ["*"];
   if (entity === "application") {
     const aid = o.kind === "protectedapp" ? o.id : o.appId;
     if (aid && N.apps[aid]) return [N.apps[aid]];
@@ -3398,7 +5079,7 @@ function scopeNamespaces(sc) {
 }
 
 // ---- rule evaluation (SSRR, local) --------------------------------------------
-const ruleAllows = (r, verb, resource, group, name) => (r.apiGroups.includes(group || "simplyblock.io") || r.apiGroups.includes("*")) && (r.resources.includes(resource) || r.resources.includes("*")) && (r.verbs.includes(verb) || r.verbs.includes("*")) && (!r.resourceNames || !name || r.resourceNames.includes(name));
+const ruleAllows = (r, verb, resource, group, name) => ((r.apiGroups || []).includes(group || "simplyblock.io") || (r.apiGroups || []).includes("*")) && (r.resources.includes(resource) || r.resources.includes("*")) && (r.verbs.includes(verb) || r.verbs.includes("*")) && (!r.resourceNames || !name || r.resourceNames.includes(name));
 function allowedIn(ns, verb, resource, group, name) {
   if (AC_STATE.rules.cluster.some(r => ruleAllows(r, verb, resource, group, name))) return true;
   if (!ns || ns === "*") return false;
@@ -3408,6 +5089,35 @@ const anyNs = (verb, resource, group, name) => allowedIn("*", verb, resource, gr
 
 // what (verb, resource) does (op, entity) become?
 function target(op, entity, obj) {
+  if (entity === "drhub") {
+    const group = "dr.simplyblock.io";
+    if (op === "failover" || op === "relocate" || op === "restart") return {
+      verb: "create",
+      resource: "recoveryactions",
+      group
+    };
+    if (op === "test") return {
+      verb: "create",
+      resource: "testbubbles",
+      group
+    };
+    if (op === "override") return {
+      verb: "override",
+      resource: "recoveryactions",
+      group
+    };
+    if (op === "drrestore") return {
+      verb: "create",
+      resource: "restoreactions",
+      group
+    };
+    const resource = obj && KIND_RESOURCE[obj.kind] && KIND_ENTITY[obj.kind] === "drhub" ? KIND_RESOURCE[obj.kind] : ENTITY_RESOURCE.drhub;
+    return {
+      verb: VERB_OF[op] || op,
+      resource,
+      group: obj && KIND_GROUP[obj.kind] || group
+    };
+  }
   if (entity === "application" && (op === "failover" || op === "failback")) return {
     verb: "create",
     resource: "applicationfailovers"
@@ -3424,7 +5134,8 @@ function target(op, entity, obj) {
   const resource = obj && KIND_RESOURCE[obj.kind] && KIND_ENTITY[obj.kind] === entity ? KIND_RESOURCE[obj.kind] : ENTITY_RESOURCE[entity] || entity;
   return {
     verb: VERB_OF[op] || op,
-    resource
+    resource,
+    group: obj && KIND_GROUP[obj.kind] || ENTITY_GROUP[entity]
   };
 }
 // Is `op` on `entity` permitted for `obj`? Cross-cluster policies must pass on
@@ -3434,17 +5145,20 @@ function acCan(op, entity, obj) {
   if (AC_STATE.incomplete) return true;
   const t = target(op, entity, obj);
   const nss = t.nsOverride || nsOf(entity, obj, op);
-  if (!nss.length) return allowedIn("*", t.verb, t.resource);
-  return nss.every(ns => allowedIn(ns, t.verb, t.resource));
+  if (!nss.length) return allowedIn("*", t.verb, t.resource, t.group);
+  return nss.every(ns => allowedIn(ns, t.verb, t.resource, t.group));
 }
 // why not? — the tooltip text for a disabled control (§5.5)
 function acWhy(op, entity, obj) {
   const t = target(op, entity, obj);
   const nss = t.nsOverride || nsOf(entity, obj, op);
-  const missing = nss.filter(ns => !allowedIn(ns, t.verb, t.resource));
-  return `Needs ${t.verb} on ${t.resource}${missing.length ? " in " + missing.map(n => n === "*" ? "cluster scope" : n).join(", ") : nss.length ? "" : " (cluster scope)"}`;
+  const missing = nss.filter(ns => !allowedIn(ns, t.verb, t.resource, t.group));
+  return `Needs ${t.verb} on ${t.resource}${t.group ? "." + t.group : ""}${missing.length ? " in " + missing.map(n => n === "*" ? "cluster scope" : n).join(", ") : nss.length ? "" : " (cluster scope)"}`;
 }
-const canAnywhere = (op, entity) => AC_STATE.ready && (AC_STATE.incomplete || anyNs(target(op, entity, null).verb, target(op, entity, null).resource));
+const canAnywhere = (op, entity) => {
+  const t = target(op, entity, null);
+  return AC_STATE.ready && (AC_STATE.incomplete || anyNs(t.verb, t.resource, t.group));
+};
 // scope discovery (§5.2): scopes the server says are visible; other kinds are the server's job
 const SCOPE_KINDS = {
   cluster: "clusters",
@@ -3613,6 +5327,7 @@ Object.assign(window, {
   IdentityMenu,
   KIND_ENTITY,
   KIND_RESOURCE,
+  KIND_GROUP,
   ENTITY_LABEL,
   ENTITY_COVERS,
   ENTITY_OPS,
@@ -21135,6 +22850,3414 @@ Object.assign(window, {
   ivMins
 });
 })();
+// ---- drhub.jsx ----
+(function(){
+// ---------------------------------------------------------------------------
+// DR HUB VIEWS — the console side of dr-simplyblock.
+//
+// Every screen here maps to a CR of dr.simplyblock.io (see drhub-api.jsx) and
+// follows the design's interaction rules: directions are declared DRPaths and
+// never inferred; readiness is the gate, and an override is a separate,
+// audited path that needs a reason and the "override" verb; inventory is
+// shown read-only; the console keeps no state of its own.
+// ---------------------------------------------------------------------------
+const ACTION_KIND_META = {
+  Failover: {
+    label: "Failover",
+    icon: "shield",
+    c: "var(--bad)",
+    desc: "Unplanned move: the target takes over from the last replicated state. The source is assumed lost or fenced."
+  },
+  Relocate: {
+    label: "Relocate",
+    icon: "move",
+    c: "var(--info)",
+    desc: "Planned move: the application is stopped at the source, replication drains, the target starts. Failback is a Relocate along the opposite path."
+  },
+  Restart: {
+    label: "Restart",
+    icon: "refresh",
+    c: "var(--warn)",
+    desc: "Restart in place after a storage recovery. No path: the application stays where it is."
+  },
+  Test: {
+    label: "Test",
+    icon: "camera",
+    c: "var(--accent)",
+    desc: "Rehearsal in an isolated bubble on the target, from the latest replicated snapshot. Production is untouched."
+  }
+};
+const VerdictBadge = ({
+  v,
+  sm
+}) => /*#__PURE__*/React.createElement(TrafficLight, {
+  status: v || "Unknown",
+  sm: sm
+});
+const KindBadge = ({
+  k
+}) => {
+  const m = ACTION_KIND_META[k] || {
+    c: "var(--dim)"
+  };
+  return /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      color: m.c,
+      borderColor: `color-mix(in srgb,${m.c} 45%,transparent)`
+    }
+  }, k);
+};
+const Mono = ({
+  children,
+  dim,
+  style
+}) => /*#__PURE__*/React.createElement("span", {
+  className: "mono",
+  style: Object.assign({}, dim ? {
+    color: "var(--dim)"
+  } : {}, style || {})
+}, children);
+const PathArrow = ({
+  from,
+  to
+}) => /*#__PURE__*/React.createElement("span", {
+  className: "mono"
+}, from, " ", /*#__PURE__*/React.createElement("span", {
+  style: {
+    color: "var(--dim2)"
+  }
+}, "\u2192"), " ", to);
+const NsName = ({
+  o
+}) => /*#__PURE__*/React.createElement("span", {
+  className: "mono",
+  style: {
+    color: "var(--dim)"
+  }
+}, o.namespace ? o.namespace + "/" : "", o.name);
+const Table = ({
+  cols,
+  rows,
+  empty
+}) => !rows.length ? /*#__PURE__*/React.createElement("div", {
+  className: "nolim"
+}, empty || "Nothing to show.") : /*#__PURE__*/React.createElement("table", {
+  className: "rules",
+  style: {
+    width: "100%",
+    borderCollapse: "collapse"
+  }
+}, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, cols.map((c, i) => /*#__PURE__*/React.createElement("th", {
+  key: i,
+  style: {
+    textAlign: "left",
+    fontSize: 10,
+    letterSpacing: ".07em",
+    textTransform: "uppercase",
+    color: "var(--dim2)",
+    padding: "4px 8px 6px 0",
+    fontWeight: 600
+  }
+}, c)))), /*#__PURE__*/React.createElement("tbody", null, rows.map((r, i) => /*#__PURE__*/React.createElement("tr", {
+  key: i
+}, r.map((c, j) => /*#__PURE__*/React.createElement("td", {
+  key: j,
+  style: {
+    padding: "6px 8px 6px 0",
+    borderTop: "1px solid var(--line)"
+  }
+}, c === null || c === undefined || c === "" ? /*#__PURE__*/React.createElement("span", {
+  style: {
+    color: "var(--dim2)"
+  }
+}, "\u2014") : c))))));
+const Conditions = ({
+  o
+}) => !o.conditions.length ? null : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  className: "sech"
+}, /*#__PURE__*/React.createElement("h2", null, "Conditions"), /*#__PURE__*/React.createElement("span", {
+  className: "ln"
+})), /*#__PURE__*/React.createElement(Table, {
+  cols: ["Type", "Status", "Reason", "Message", "Since"],
+  rows: o.conditions.map(c => [/*#__PURE__*/React.createElement("b", null, c.type), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: c.status === "True" ? "var(--ok)" : c.status === "False" ? "var(--bad)" : "var(--dim)"
+    }
+  }, c.status), /*#__PURE__*/React.createElement(Mono, null, c.reason), c.message, fmtAgo(c.since)])
+}));
+const CheckTable = ({
+  checks
+}) => /*#__PURE__*/React.createElement(Table, {
+  cols: ["Check", "Status", "Blocking", "Reason", "Message"],
+  empty: "No checks evaluated yet.",
+  rows: (checks || []).map(c => [/*#__PURE__*/React.createElement(Mono, null, c.name), /*#__PURE__*/React.createElement(TrafficLight, {
+    status: c.status,
+    sm: true
+  }), c.blocking ? /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: "var(--bad)"
+    }
+  }, "yes") : /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "var(--dim)"
+    }
+  }, "advisory"), /*#__PURE__*/React.createElement(Mono, {
+    dim: true
+  }, c.reason), c.message])
+});
+const StepJournal = ({
+  steps,
+  empty
+}) => !steps.length ? /*#__PURE__*/React.createElement("div", {
+  className: "nolim"
+}, empty || "No steps recorded yet.") : /*#__PURE__*/React.createElement("div", {
+  className: "steps"
+}, steps.map((s, i) => {
+  const res = s.result || s.phase || "";
+  const cls = res === "Succeeded" ? "done" : res === "Running" ? "on" : res === "Failed" ? "failed" : res === "Skipped" ? "aborted" : "";
+  return /*#__PURE__*/React.createElement("div", {
+    className: "stp" + (res === "Pending" ? " pending" : ""),
+    key: i
+  }, /*#__PURE__*/React.createElement("ul", {
+    className: "opsteps",
+    style: {
+      margin: 0
+    }
+  }, /*#__PURE__*/React.createElement("li", {
+    className: cls
+  }, /*#__PURE__*/React.createElement("i", null))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "center",
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("b", {
+    style: {
+      fontSize: 12
+    }
+  }, s.name), s.phase && /*#__PURE__*/React.createElement("span", {
+    className: "badge"
+  }, s.phase), /*#__PURE__*/React.createElement(TrafficLight, {
+    status: res || "Pending",
+    sm: true
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      fontSize: 10.5,
+      color: "var(--dim2)",
+      marginLeft: "auto"
+    }
+  }, s.startTime ? fmtDate(s.startTime) : "", s.endTime ? ` · ${fmtSecs(durMs2(s.startTime, s.endTime) / 1000)}` : "")), s.message && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: "var(--dim)",
+      marginTop: 3,
+      overflowWrap: "anywhere"
+    }
+  }, s.message), s.logRef && /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 10.5,
+      color: "var(--dim2)",
+      marginTop: 3
+    }
+  }, "log \xB7 ", s.logRef)));
+}));
+const durMs2 = (a, b) => a && b ? Math.max(0, Date.parse(b) - Date.parse(a)) : 0;
+const PhaseStripDR = ({
+  phases,
+  current,
+  terminal
+}) => {
+  const idx = phases.indexOf(current);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "phases"
+  }, phases.map((p, i) => /*#__PURE__*/React.createElement(React.Fragment, {
+    key: p
+  }, i > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "arr"
+  }, "\u203A"), /*#__PURE__*/React.createElement("span", {
+    className: "ph" + (p === current ? " cur" : idx > i || terminal && idx < 0 ? " done" : "")
+  }, (STATUS_META[p] || {}).label || p))), terminal && !phases.includes(current) && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+    className: "arr"
+  }, "\u203A"), /*#__PURE__*/React.createElement("span", {
+    className: "ph cur"
+  }, /*#__PURE__*/React.createElement(TrafficLight, {
+    status: current,
+    sm: true
+  }))));
+};
+const RunList = ({
+  actions,
+  tests,
+  nav,
+  limit
+}) => {
+  const rows = [...(actions || []).map(a => ({
+    o: a,
+    kind: a.action,
+    t: a.startTime || a.createdAt
+  })), ...(tests || []).map(t => ({
+    o: t,
+    kind: "Test",
+    t: t.startTime || t.createdAt
+  }))].sort((a, b) => (Date.parse(b.t) || 0) - (Date.parse(a.t) || 0)).slice(0, limit || 50);
+  return /*#__PURE__*/React.createElement(Table, {
+    cols: ["Kind", "Run", "Target", "Path", "Status", "Started", "Duration", "Operator"],
+    empty: "No runs yet.",
+    rows: rows.map(({
+      o,
+      kind,
+      t
+    }) => [/*#__PURE__*/React.createElement(KindBadge, {
+      k: kind
+    }), /*#__PURE__*/React.createElement(Ref, {
+      label: o.name,
+      onClick: () => nav.detail(o)
+    }), /*#__PURE__*/React.createElement(Mono, null, o.targetName), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, o.pathName || "in place"), /*#__PURE__*/React.createElement(TrafficLight, {
+      status: o.status,
+      sm: true
+    }), fmtDate(t), o.durationMs != null ? fmtSecs(o.durationMs / 1000) : "—", /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, o.createdBy)])
+  });
+};
+
+// ---- dialogs ----------------------------------------------------------------
+// Run action: the path picker offers only declared DRPaths whose `actions`
+// include the kind; readiness on the chosen path is the gate. NotReady needs
+// a reason, and the API server checks the override verb, not this form.
+const runActionDialog = (target, kind, ctx) => {
+  const m = ACTION_KIND_META[kind];
+  const paths = target.kind === "rplan" ? [target.pathName] : target.paths.filter(p => p.actions.includes(kind)).map(p => p.name);
+  const verdictOf = name => target.kind === "rplan" ? target.verdict : (target.paths.find(p => p.name === name) || {}).verdict || "Unknown";
+  const opposite = target.kind === "papp" && kind === "Relocate" && target.currentCluster;
+  return {
+    title: `${m.label} ${target.kind === "rplan" ? "plan" : "application"} ${target.name}`,
+    confirm: `Run ${m.label.toLowerCase()}`,
+    danger: kind === "Failover",
+    done: `${m.label} submitted — RecoveryAction created`,
+    desc: m.desc,
+    fields: v => {
+      const verdict = kind === "Restart" ? "Ready" : verdictOf(v.path);
+      return [kind !== "Restart" && {
+        k: "path",
+        label: "DR path",
+        type: "select",
+        required: true,
+        options: paths.map(p => {
+          const pp = target.kind === "papp" ? target.paths.find(x => x.name === p) : null;
+          return {
+            v: p,
+            l: pp ? `${p}  (${pp.from} → ${pp.to}, ${pp.verdict})` : p
+          };
+        }),
+        empty: `No declared DRPath offers ${m.label} for this ${target.kind === "rplan" ? "plan" : "application"}. Declaring a direction is a dr-admin decision, not an override.`
+      }, kind !== "Restart" && verdict === "NotReady" && {
+        k: "n1",
+        type: "note",
+        label: `Readiness on this path is NotReady: ${blockingChecks(target, v.path).join(", ") || "blocking checks failed"}. Running anyway needs a reason and the "override" verb on recoveryactions (dr-admin). The run is audited with the reason.`
+      }, kind !== "Restart" && verdict === "NotReady" && {
+        k: "override",
+        label: "Override reason (10–1024 characters)",
+        type: "text",
+        required: true,
+        placeholder: "why this action must run despite the verdict"
+      }, kind !== "Restart" && verdict === "Degraded" && {
+        k: "n2",
+        type: "note",
+        label: "Readiness is Degraded: only advisory checks failed. The action runs without an override."
+      }, {
+        k: "timeout",
+        label: "Timeout",
+        type: "text",
+        def: "30m",
+        placeholder: "30m"
+      }, opposite && {
+        k: "n3",
+        type: "note",
+        label: `The application currently runs on ${target.currentCluster}. A Relocate along a path whose target is the current cluster is refused by the hub.`
+      }].filter(Boolean);
+    },
+    run: v => drhub.runAction({
+      kind,
+      target,
+      path: v.path,
+      override: v.override && v.override.trim(),
+      timeout: v.timeout && v.timeout.trim()
+    })
+  };
+};
+const blockingChecks = (target, path) => {
+  const p = target.kind === "rplan" ? {
+    checks: target.checks
+  } : target.paths.find(x => x.name === path);
+  return (p && p.checks || []).filter(c => c.blocking && c.status === "Fail").map(c => c.name);
+};
+const runTestDialog = target => {
+  const paths = target.kind === "rplan" ? [target.pathName] : target.paths.filter(p => p.actions.includes("Test")).map(p => p.name);
+  return {
+    title: `Test ${target.kind === "rplan" ? "plan" : "application"} ${target.name}`,
+    confirm: "Start test",
+    done: "Test started — TestBubble created",
+    desc: ACTION_KIND_META.Test.desc,
+    fields: [{
+      k: "path",
+      label: "DR path",
+      type: "select",
+      required: true,
+      options: paths.map(p => ({
+        v: p,
+        l: p
+      })),
+      empty: "No declared DRPath offers Test here. A path's `actions` must include Test and carry a `test` block (isolated NAD, quotas)."
+    }, {
+      k: "cloneSource",
+      label: "Clone source",
+      type: "select",
+      options: [{
+        v: "latest-replicated-snapshot",
+        l: "latest replicated snapshot (default)"
+      }, {
+        v: "secondary-snapshot",
+        l: "secondary snapshot (feature gate)"
+      }]
+    }, {
+      k: "holdFor",
+      label: "Hold the bubble for",
+      type: "text",
+      placeholder: "e.g. 30m — empty tears down right after validation"
+    }, {
+      k: "maxLifetime",
+      label: "Maximum lifetime",
+      type: "text",
+      def: "24h"
+    }, {
+      k: "n1",
+      type: "note",
+      label: "A finished test files a report on the TestBubble and, with an archive configured, a PDF and JSON in the plan's bucket. `test-recent` on the path is satisfied by a passed test within recentWithin."
+    }],
+    run: v => drhub.runTest({
+      target,
+      path: v.path,
+      cloneSource: v.cloneSource,
+      holdFor: v.holdFor && v.holdFor.trim(),
+      maxLifetime: v.maxLifetime && v.maxLifetime.trim()
+    })
+  };
+};
+const restoreDialog = app => ({
+  title: `Restore ${app.name} from backup`,
+  confirm: "Restore",
+  danger: true,
+  done: "RestoreAction created",
+  desc: "For sites rebuilt after a disaster: the application's volumes are restored from the newest S3 backup capture onto the cluster where the application is placed, then re-protected. A dr-admin decision; the data loss is reported on the RestoreAction.",
+  fields: [!app.awaitingRestore && {
+    k: "n0",
+    type: "note",
+    label: "This application does not carry the awaiting-restore annotation, so the hub will refuse the RestoreAction. It is set by dr-restore when the DR state is restored onto a fresh hub."
+  }, {
+    k: "timeout",
+    label: "Timeout",
+    type: "text",
+    def: "30m"
+  }, {
+    k: "confirm",
+    label: `Type ${app.name} to confirm`,
+    type: "text",
+    required: true,
+    match: app.name
+  }].filter(Boolean),
+  run: v => drhub.runRestore({
+    app,
+    timeout: v.timeout && v.timeout.trim()
+  })
+});
+const holdDialog = t => ({
+  title: `Hold test bubble ${t.name}`,
+  confirm: "Update hold",
+  done: "Hold updated",
+  fields: [{
+    k: "holdFor",
+    label: "Hold for (from now)",
+    type: "text",
+    def: t.holdFor || "1h",
+    required: true
+  }],
+  run: v => drhub.holdTest(t, v.holdFor.trim())
+});
+const deleteDialog = (o, note, needsConfirm) => ({
+  title: `Delete ${KIND_LABEL_DR[o.kind] || o.kind} ${o.name}`,
+  confirm: "Delete",
+  danger: true,
+  done: `${o.name} deleted`,
+  desc: note,
+  fields: [needsConfirm && {
+    k: "n0",
+    type: "note",
+    label: "This object is still in use. The hub refuses the delete unless it is confirmed; confirming here sets dr.simplyblock.io/confirm-delete before deleting."
+  }, {
+    k: "confirm",
+    label: `Type ${o.name} to confirm`,
+    type: "text",
+    required: true,
+    match: o.name
+  }].filter(Boolean),
+  run: () => drhub.remove(o, needsConfirm)
+});
+const KIND_LABEL_DR = {
+  pplan: "protection plan",
+  drpath: "DR path",
+  papp: "protected application",
+  rplan: "recovery plan",
+  raction: "recovery action",
+  tbubble: "test",
+  tsched: "test schedule",
+  restore: "restore",
+  siteprofile: "site profile",
+  drconfig: "DR configuration"
+};
+const METHOD_TYPES = [{
+  v: "async",
+  l: "async — block replication per interval"
+}, {
+  v: "sync",
+  l: "sync — stretch cluster, RPO 0"
+}, {
+  v: "s3-backup",
+  l: "s3-backup — snapshot backups to S3 only"
+}, {
+  v: "async-s3-backup",
+  l: "async + s3-backup"
+}, {
+  v: "sync-s3-backup",
+  l: "sync + s3-backup"
+}];
+const parseSites = txt => String(txt || "").split(/[\n;]+/).map(l => l.trim()).filter(Boolean).map(l => {
+  // name=cluster[/zone][@region]
+  const [name, rest] = l.split("=").map(x => x.trim());
+  const [clusterZone, region] = (rest || "").split("@");
+  const [cluster, zone] = (clusterZone || "").split("/");
+  return Object.assign({
+    name,
+    cluster: cluster || name
+  }, zone ? {
+    zone
+  } : {}, region ? {
+    region
+  } : {});
+});
+const newPlanDialog = () => ({
+  title: "New protection plan",
+  confirm: "Create plan",
+  done: "ProtectionPlan created",
+  desc: "A plan names the sites that take part in DR, the storage it protects and how it replicates. Ramen's DRCluster and DRPolicy objects and the replication classes are derived from it; directions are declared afterwards as DR paths.",
+  fields: v => [{
+    k: "name",
+    label: "Name",
+    type: "text",
+    required: true,
+    placeholder: "fra"
+  }, {
+    k: "sites",
+    label: "Sites — one per entry: name=cluster[/zone][@region], separated by ;",
+    type: "text",
+    required: true,
+    placeholder: "fra-a=cluster-a@eu-central; fra-b=cluster-b@eu-central"
+  }, {
+    k: "type",
+    label: "Replication method",
+    type: "select",
+    required: true,
+    options: METHOD_TYPES
+  }, {
+    k: "method",
+    label: "Method name",
+    type: "text",
+    required: true,
+    def: "primary",
+    placeholder: "primary"
+  }, /^async/.test(v.type || "") && {
+    k: "interval",
+    label: "Scheduling interval",
+    type: "text",
+    required: true,
+    def: "5m",
+    placeholder: "5m"
+  }, /sync/.test(v.type || "") && {
+    k: "n1",
+    type: "note",
+    label: "A sync plan is a stretch cluster: every site names the same cluster and its own zone (name=cluster/zone). No Ramen policy is derived; dr-agent moves applications between zones."
+  }, /backup/.test(v.type || "") && {
+    k: "bInterval",
+    label: "Backup interval",
+    type: "text",
+    required: true,
+    def: "1h"
+  }, /backup/.test(v.type || "") && {
+    k: "bRetention",
+    label: "Backups retained",
+    type: "number",
+    min: 1,
+    def: 24
+  }, {
+    k: "sc",
+    label: "Storage class selector (matchLabels)",
+    type: "kv",
+    max: 8
+  }, {
+    k: "cg",
+    label: "Consistency groups",
+    type: "checkbox",
+    def: false
+  }, {
+    k: "s3Profile",
+    label: "Ramen S3 profile (single store)",
+    type: "text",
+    placeholder: "existing profile name; leave empty when using per-site stores"
+  }, {
+    k: "autoRestart",
+    label: "Restart applications in place after a storage recovery",
+    type: "checkbox",
+    def: false
+  }, {
+    k: "n2",
+    type: "note",
+    label: "Per-site S3 stores, snapshot class selectors and replication parameters are written with kubectl for now: the plan's spec is editable afterwards except for the immutable fields Ramen keys on."
+  }].filter(Boolean),
+  run: v => {
+    const type = v.type;
+    const method = Object.assign({
+      name: v.method.trim(),
+      type
+    }, /^async/.test(type) ? {
+      schedulingInterval: v.interval.trim()
+    } : {}, /backup/.test(type) ? {
+      s3Backup: {
+        interval: v.bInterval.trim(),
+        retention: Number(v.bRetention) || 24
+      }
+    } : {});
+    const sc = kvToObj(v.sc);
+    const spec = Object.assign({
+      sites: parseSites(v.sites),
+      methods: [method],
+      storageProfile: Object.assign({
+        storageClassSelector: Object.keys(sc).length ? {
+          matchLabels: sc
+        } : {}
+      }, {
+        consistencyGroups: v.cg ? "Enabled" : "Disabled"
+      })
+    }, v.s3Profile && v.s3Profile.trim() ? {
+      s3Profile: {
+        name: v.s3Profile.trim()
+      }
+    } : {}, v.autoRestart ? {
+      autoRestart: {
+        enabled: true
+      }
+    } : {});
+    return drhub.createPlan({
+      name: v.name.trim(),
+      spec
+    });
+  }
+});
+const newPathDialog = plans => ({
+  title: "Declare a DR path",
+  confirm: "Create path",
+  done: "DRPath created",
+  desc: "A DR path is a declared direction between two sites of a plan, and the set of actions allowed along it. Nothing in the console offers a target cluster: it offers a path.",
+  fields: v => {
+    const plan = plans.find(p => p.name === v.plan) || plans[0];
+    const sites = plan ? plan.sites.map(s => ({
+      v: s.name,
+      l: `${s.name} (${s.cluster}${s.zone ? "/" + s.zone : ""})`
+    })) : [];
+    return [{
+      k: "plan",
+      label: "Protection plan",
+      type: "select",
+      required: true,
+      options: plans.map(p => ({
+        v: p.name,
+        l: p.name
+      })),
+      empty: "Create a protection plan first."
+    }, {
+      k: "from",
+      label: "From site",
+      type: "select",
+      required: true,
+      options: sites
+    }, {
+      k: "to",
+      label: "To site",
+      type: "select",
+      required: true,
+      options: sites.filter(s => s.v !== v.from)
+    }, {
+      k: "name",
+      label: "Path name",
+      type: "text",
+      required: true,
+      def: v.from && v.to ? `${v.from}-to-${v.to}` : "",
+      placeholder: "fra-a-to-fra-b"
+    }, {
+      k: "actions",
+      label: "Allowed actions",
+      type: "multiselect",
+      required: true,
+      options: [{
+        v: "Failover",
+        l: "Failover"
+      }, {
+        v: "Relocate",
+        l: "Relocate"
+      }, {
+        v: "Test",
+        l: "Test"
+      }]
+    }, (v.actions || []).includes("Test") && {
+      k: "nad",
+      label: "Test: isolated NetworkAttachmentDefinition (ns/name)",
+      type: "text",
+      required: true,
+      placeholder: "dr-test/isolated"
+    }, (v.actions || []).includes("Test") && {
+      k: "cap",
+      label: "Test: max clone capacity",
+      type: "text",
+      placeholder: "500Gi"
+    }, (v.actions || []).includes("Test") && {
+      k: "recent",
+      label: "Test: test-recent window",
+      type: "text",
+      def: "720h"
+    }, {
+      k: "handover",
+      label: "Announcement hand-over on move",
+      type: "checkbox",
+      def: false
+    }].filter(Boolean);
+  },
+  run: v => drhub.createPath({
+    name: v.name.trim(),
+    spec: Object.assign({
+      from: v.from,
+      to: v.to,
+      planRef: {
+        name: v.plan
+      },
+      actions: v.actions,
+      announcementHandover: !!v.handover
+    }, v.actions.includes("Test") ? {
+      test: Object.assign({
+        mode: "bubble",
+        isolatedNad: v.nad.trim()
+      }, v.cap ? {
+        quotas: {
+          maxCloneCapacity: v.cap.trim()
+        }
+      } : {}, v.recent ? {
+        recentWithin: v.recent.trim()
+      } : {})
+    } : {})
+  })
+});
+const protectAppDialogDR = (plans, cfg) => ({
+  title: "Protect an application",
+  confirm: "Protect",
+  done: "ProtectedApplication created",
+  desc: "Binds a workload to a plan, a source site and one target site. A discovered application (no OCM Placement) must live in Ramen's ops namespace; a managed one names its Placement. The hub derives the DRPlacementControl and, from tiers, a Recipe.",
+  fields: v => {
+    const plan = plans.find(p => p.name === v.plan) || plans[0];
+    const sites = plan ? plan.sites.map(s => ({
+      v: s.name,
+      l: s.name
+    })) : [];
+    const methods = plan ? plan.methods.map(m => ({
+      v: m.name,
+      l: `${m.name} (${m.type}${m.interval ? " " + m.interval : ""})`
+    })) : [];
+    const opsNs = cfg && cfg.ramen && cfg.ramen.opsNamespace || DR_NS();
+    return [{
+      k: "plan",
+      label: "Protection plan",
+      type: "select",
+      required: true,
+      options: plans.map(p => ({
+        v: p.name,
+        l: p.name
+      })),
+      empty: "Create a protection plan first."
+    }, {
+      k: "appKind",
+      label: "Application kind",
+      type: "select",
+      required: true,
+      options: [{
+        v: "discovered",
+        l: "discovered — no OCM Placement, protected by namespace + PVC selector"
+      }, {
+        v: "managed",
+        l: "managed — deployed through an OCM Placement"
+      }]
+    }, {
+      k: "name",
+      label: "Name",
+      type: "text",
+      required: true,
+      placeholder: "shop"
+    }, {
+      k: "namespace",
+      label: "Namespace of the ProtectedApplication",
+      type: "text",
+      required: true,
+      def: v.appKind === "managed" ? "" : opsNs,
+      placeholder: v.appKind === "managed" ? "the Placement's namespace" : opsNs
+    }, {
+      k: "source",
+      label: "Source site",
+      type: "select",
+      required: true,
+      options: sites
+    }, {
+      k: "target",
+      label: "Target site",
+      type: "select",
+      required: true,
+      options: sites.filter(s => s.v !== v.source)
+    }, methods.length > 1 && {
+      k: "method",
+      label: "Method",
+      type: "select",
+      required: true,
+      options: methods
+    }, v.appKind === "managed" && {
+      k: "placement",
+      label: "Placement name",
+      type: "text",
+      required: true
+    }, v.appKind !== "managed" && {
+      k: "namespaces",
+      label: "Protected namespaces (comma-separated)",
+      type: "text",
+      required: true,
+      placeholder: "shop"
+    }, {
+      k: "pvc",
+      label: "PVC selector (matchLabels)",
+      type: "kv",
+      max: 8
+    }, v.appKind !== "managed" && {
+      k: "recipe",
+      label: "Hand-written Recipe (name, optional)",
+      type: "text",
+      placeholder: "leave empty to let the hub generate one from tiers"
+    }, {
+      k: "n1",
+      type: "note",
+      label: "Both directions between source and target must exist as DR paths for readiness to become Ready. Tiers, probes and hooks are edited on the object afterwards."
+    }].filter(Boolean);
+  },
+  run: v => {
+    const pvc = kvToObj(v.pvc);
+    const sel = Object.keys(pvc).length ? {
+      matchLabels: pvc
+    } : {};
+    const spec = Object.assign({
+      planRef: {
+        name: v.plan
+      },
+      source: v.source,
+      target: v.target,
+      kind: v.appKind
+    }, v.method ? {
+      method: v.method
+    } : {}, v.appKind === "managed" ? {
+      managed: {
+        placementRef: {
+          name: v.placement.trim()
+        },
+        pvcSelector: sel
+      }
+    } : {
+      discovered: Object.assign({
+        protectedNamespaces: csv(v.namespaces),
+        pvcSelector: sel
+      }, v.recipe && v.recipe.trim() ? {
+        recipeRef: {
+          name: v.recipe.trim()
+        }
+      } : {})
+    });
+    return drhub.createApp({
+      name: v.name.trim(),
+      namespace: v.namespace.trim(),
+      spec
+    });
+  }
+});
+const newRPlanDialog = (paths, apps) => ({
+  title: "New recovery plan",
+  confirm: "Create plan",
+  done: "RecoveryPlan created",
+  desc: "An ordered set of applications moved together along one DR path: priorities run in sequence, applications of one priority in parallel. A plan action fans out one RecoveryAction per application.",
+  fields: v => {
+    const path = paths.find(p => p.name === v.path);
+    const onPath = apps.filter(a => !path || a.paths.some(x => x.name === path.name));
+    const nss = [...new Set(onPath.map(a => a.namespace))];
+    return [{
+      k: "path",
+      label: "DR path",
+      type: "select",
+      required: true,
+      options: paths.map(p => ({
+        v: p.name,
+        l: `${p.name} (${p.from} → ${p.to})`
+      }))
+    }, {
+      k: "namespace",
+      label: "Namespace",
+      type: "select",
+      required: true,
+      options: nss.map(n => ({
+        v: n,
+        l: n
+      })),
+      empty: "No application is on this path yet."
+    }, {
+      k: "name",
+      label: "Name",
+      type: "text",
+      required: true,
+      placeholder: "tier-1"
+    }, {
+      k: "apps",
+      label: "Applications (in this namespace)",
+      type: "multiselect",
+      required: true,
+      options: onPath.filter(a => a.namespace === v.namespace).map(a => ({
+        v: a.name,
+        l: `${a.name} · ${a.verdict}`
+      }))
+    }, {
+      k: "priorities",
+      label: "Priorities — name=priority, comma-separated (default 1)",
+      type: "text",
+      placeholder: "db=1, api=2, web=3"
+    }, {
+      k: "gate",
+      label: "Between priorities",
+      type: "select",
+      options: [{
+        v: "allHealthy",
+        l: "wait until all applications of the previous priority are healthy"
+      }, {
+        v: "none",
+        l: "no gate"
+      }]
+    }, {
+      k: "cont",
+      label: "Continue on failure",
+      type: "checkbox",
+      def: false
+    }];
+  },
+  run: v => {
+    const prio = Object.fromEntries(csv(v.priorities).map(x => x.split("=")).filter(x => x.length === 2).map(([k, p]) => [k, Number(p) || 1]));
+    return drhub.createRPlan({
+      name: v.name.trim(),
+      namespace: v.namespace,
+      spec: {
+        pathRef: {
+          name: v.path
+        },
+        applications: v.apps.map(a => ({
+          name: a,
+          priority: prio[a] || 1
+        })),
+        gates: {
+          betweenPriorities: v.gate || "allHealthy"
+        },
+        continueOnFailure: !!v.cont
+      }
+    });
+  }
+});
+const newScheduleDialog = (target, nsHint) => ({
+  title: target ? `Schedule tests for ${target.name}` : "New test schedule",
+  confirm: "Create schedule",
+  done: "TestSchedule created",
+  desc: "Runs a test along a path on a cron schedule (UTC). Schedules never overlap; old bubbles are pruned by the retention.",
+  fields: v => [!target && {
+    k: "n0",
+    type: "note",
+    label: "Open an application or recovery plan and use its Actions menu to schedule tests against it."
+  }, {
+    k: "name",
+    label: "Name",
+    type: "text",
+    required: true,
+    def: target ? `${target.name}-weekly` : ""
+  }, {
+    k: "schedule",
+    label: "Cron (UTC)",
+    type: "text",
+    required: true,
+    def: "0 3 * * 0",
+    placeholder: "0 3 * * 0"
+  }, target && {
+    k: "path",
+    label: "DR path",
+    type: "select",
+    required: true,
+    options: (target.kind === "rplan" ? [target.pathName] : target.paths.filter(p => p.actions.includes("Test")).map(p => p.name)).map(p => ({
+      v: p,
+      l: p
+    }))
+  }, {
+    k: "keepLast",
+    label: "Keep last N test bubbles",
+    type: "number",
+    min: 1,
+    def: 10
+  }, {
+    k: "keepFor",
+    label: "Keep for",
+    type: "text",
+    placeholder: "720h"
+  }, {
+    k: "suspend",
+    label: "Create suspended",
+    type: "checkbox",
+    def: false
+  }].filter(Boolean),
+  run: v => drhub.createSchedule({
+    name: v.name,
+    namespace: target ? target.namespace : nsHint,
+    schedule: v.schedule.trim(),
+    target,
+    path: v.path,
+    keepLast: v.keepLast,
+    keepFor: v.keepFor && v.keepFor.trim(),
+    suspend: v.suspend
+  })
+});
+
+// ---- command registry (kebab menus) ----------------------------------------
+// `op` is what access.can() checks: failover/relocate/restart/test map to
+// create on the run kinds, override to the override verb, delete to delete.
+Object.assign(ACTIONS, {
+  pplan: p => [{
+    label: "Delete plan",
+    icon: "trash",
+    danger: true,
+    op: "delete",
+    removes: true,
+    dialog: deleteDialog(p, "Deleting a plan removes the derived DRClusters, DRPolicies and classes. Applications bound to it lose their protection.", true)
+  }],
+  drpath: p => [{
+    label: "Delete path",
+    icon: "trash",
+    danger: true,
+    op: "delete",
+    removes: true,
+    dialog: deleteDialog(p, "Applications on this path lose the direction; a run along it becomes impossible until it is declared again.", p.counts.apps > 0)
+  }],
+  papp: a => [{
+    label: "Failover",
+    icon: "shield",
+    op: "failover",
+    danger: true,
+    dialog: runActionDialog(a, "Failover"),
+    disabled: !a.paths.some(p => p.actions.includes("Failover")),
+    hint: "No declared path allows Failover"
+  }, {
+    label: "Relocate",
+    icon: "move",
+    op: "relocate",
+    dialog: runActionDialog(a, "Relocate"),
+    disabled: !a.paths.some(p => p.actions.includes("Relocate")),
+    hint: "No declared path allows Relocate"
+  }, {
+    label: "Restart in place",
+    icon: "refresh",
+    op: "restart",
+    dialog: runActionDialog(a, "Restart")
+  }, {
+    label: "Test",
+    icon: "camera",
+    op: "test",
+    dialog: runTestDialog(a),
+    disabled: !a.paths.some(p => p.actions.includes("Test")),
+    hint: "No declared path allows Test"
+  }, {
+    label: "Schedule tests",
+    icon: "clock",
+    op: "create",
+    dialog: newScheduleDialog(a),
+    disabled: !a.paths.some(p => p.actions.includes("Test")),
+    hint: "No declared path allows Test"
+  }, {
+    label: "Restore from backup",
+    icon: "cloud",
+    op: "drrestore",
+    dialog: restoreDialog(a)
+  }, {
+    label: a.autoRestartOptOut ? "Enable automatic restart" : "Disable automatic restart",
+    icon: "power",
+    op: "update",
+    run: () => drhub.setAutoRestart(a, a.autoRestartOptOut),
+    toast: "Auto-restart preference saved"
+  }, {
+    label: "Unprotect (delete)",
+    icon: "trash",
+    danger: true,
+    op: "delete",
+    removes: true,
+    dialog: deleteDialog(a, "Removes the ProtectedApplication and the derived DRPlacementControl. The workload keeps running where it is; its volumes stop being replicated.")
+  }],
+  rplan: p => [{
+    label: "Failover plan",
+    icon: "shield",
+    op: "failover",
+    danger: true,
+    dialog: runActionDialog(p, "Failover")
+  }, {
+    label: "Relocate plan",
+    icon: "move",
+    op: "relocate",
+    dialog: runActionDialog(p, "Relocate")
+  }, {
+    label: "Test plan",
+    icon: "camera",
+    op: "test",
+    dialog: runTestDialog(p)
+  }, {
+    label: "Schedule tests",
+    icon: "clock",
+    op: "create",
+    dialog: newScheduleDialog(p)
+  }, {
+    label: "Delete plan",
+    icon: "trash",
+    danger: true,
+    op: "delete",
+    removes: true,
+    dialog: deleteDialog(p, "The applications stay protected individually.")
+  }],
+  raction: a => [{
+    label: "Delete record",
+    icon: "trash",
+    danger: true,
+    op: "delete",
+    removes: true,
+    disabled: !a.terminal,
+    hint: "A running action cannot be deleted",
+    dialog: deleteDialog(a, "Finished runs are immutable and archived; deleting removes the hub's copy only.")
+  }],
+  tbubble: t => [{
+    label: "Abort — tear down",
+    icon: "x",
+    op: "update",
+    danger: true,
+    disabled: t.terminal || t.abort,
+    hint: t.abort ? "Abort already requested" : "Already finished",
+    run: () => drhub.abortTest(t),
+    toast: "Abort requested; the bubble is torn down"
+  }, {
+    label: "Change hold",
+    icon: "clock",
+    op: "update",
+    disabled: t.terminal,
+    hint: "Already finished",
+    dialog: holdDialog(t)
+  }, {
+    label: "Delete record",
+    icon: "trash",
+    danger: true,
+    op: "delete",
+    removes: true,
+    disabled: !t.terminal,
+    hint: "Abort the test first",
+    dialog: deleteDialog(t, "Finished tests are immutable and archived; deleting removes the hub's copy only.")
+  }],
+  tsched: s => [{
+    label: s.suspend ? "Resume" : "Suspend",
+    icon: s.suspend ? "power" : "pause",
+    op: "update",
+    run: () => drhub.suspendSchedule(s, !s.suspend),
+    toast: s.suspend ? "Schedule resumed" : "Schedule suspended"
+  }, {
+    label: "Delete schedule",
+    icon: "trash",
+    danger: true,
+    op: "delete",
+    removes: true,
+    dialog: deleteDialog(s, "Existing test bubbles stay; only the schedule goes.")
+  }],
+  restore: r => [{
+    label: "Delete record",
+    icon: "trash",
+    danger: true,
+    op: "delete",
+    removes: true,
+    disabled: !r.terminal,
+    hint: "A running restore cannot be deleted",
+    dialog: deleteDialog(r, "")
+  }],
+  siteprofile: () => [],
+  drconfig: () => []
+});
+
+// ---- tiles ------------------------------------------------------------------
+function PPlanTile({
+  o: p,
+  nav
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "tile",
+    style: {
+      "--sc": STATUS_META[p.status].c
+    },
+    onDoubleClick: () => nav.detail(p)
+  }, /*#__PURE__*/React.createElement(TileHead, {
+    obj: p,
+    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TrafficLight, {
+      status: p.status
+    }), /*#__PURE__*/React.createElement(Name, null, p.name)),
+    right: /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, p.sync ? "stretch · sync" : "cross-cluster")
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "tsub",
+    style: {
+      marginTop: 2
+    }
+  }, p.counts.sites, " sites \xB7 ", p.counts.methods, " method", p.counts.methods === 1 ? "" : "s", " \xB7 ", p.counts.paths, " path", p.counts.paths === 1 ? "" : "s"), /*#__PURE__*/React.createElement(Uuid, {
+    value: p.id
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, p.sites.map(s => /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    key: s.name,
+    title: `${s.cluster}${s.zone ? "/" + s.zone : ""}${s.region ? " · " + s.region : ""}`
+  }, /*#__PURE__*/React.createElement(Dot, {
+    c: s.agentAvailable === false ? "var(--bad)" : s.agentAvailable ? "var(--ok)" : "var(--idle)"
+  }), s.name, /*#__PURE__*/React.createElement("i", null, s.zone ? `${s.cluster}/${s.zone}` : s.cluster)))), /*#__PURE__*/React.createElement("div", {
+    className: "mlist"
+  }, p.methods.map(m => /*#__PURE__*/React.createElement("div", {
+    className: "mrow",
+    key: m.name
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "badge"
+  }, m.type), /*#__PURE__*/React.createElement("b", null, m.name), /*#__PURE__*/React.createElement("span", {
+    className: "spacer"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "mono rpo"
+  }, isSync(m.type) ? "RPO 0" : m.interval ? "RPO " + m.interval : "", m.s3Backup ? ` · backup ${m.s3Backup.interval}×${m.s3Backup.retention}` : ""))), !p.methods.length && /*#__PURE__*/React.createElement("div", {
+    className: "nolim"
+  }, "No method declared.")), /*#__PURE__*/React.createElement(Foot, {
+    items: [{
+      label: "Paths",
+      count: p.counts.paths,
+      icon: "swap",
+      onClick: () => nav.layer(p, "paths")
+    }, {
+      label: "Apps",
+      icon: "cluster",
+      onClick: () => nav.layer(p, "protectedapps")
+    }, {
+      label: "Details",
+      right: true,
+      onClick: () => nav.detail(p)
+    }]
+  }));
+}
+const isSync = t => /^sync/.test(t || "");
+function DRPathTile({
+  o: p,
+  nav
+}) {
+  const la = Object.values(p.lastActions || {});
+  return /*#__PURE__*/React.createElement("div", {
+    className: "tile",
+    style: {
+      "--sc": STATUS_META[p.status].c
+    },
+    onDoubleClick: () => nav.detail(p)
+  }, /*#__PURE__*/React.createElement(TileHead, {
+    obj: p,
+    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TrafficLight, {
+      status: p.status
+    }), /*#__PURE__*/React.createElement(Name, null, p.name)),
+    right: /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, p.planName)
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "tsub",
+    style: {
+      marginTop: 2
+    }
+  }, /*#__PURE__*/React.createElement(PathArrow, {
+    from: p.from,
+    to: p.to
+  })), /*#__PURE__*/React.createElement(Uuid, {
+    value: p.id
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, p.actions.map(a => /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    key: a
+  }, /*#__PURE__*/React.createElement(KindBadge, {
+    k: a
+  }))), p.announcementHandover && /*#__PURE__*/React.createElement("span", {
+    className: "lab"
+  }, "announcement hand-over"), /*#__PURE__*/React.createElement("span", {
+    className: "lab" + (p.profileConsistency === "Inconsistent" ? " warn" : "")
+  }, /*#__PURE__*/React.createElement("i", null, "profiles"), p.profileConsistency)), !!la.length && /*#__PURE__*/React.createElement("div", {
+    className: "kv"
+  }, la.map(a => /*#__PURE__*/React.createElement("div", {
+    key: a.kind
+  }, /*#__PURE__*/React.createElement("span", null, "last ", a.kind), /*#__PURE__*/React.createElement("b", null, /*#__PURE__*/React.createElement(TrafficLight, {
+    status: a.phase,
+    sm: true
+  }), " ", a.completionTime ? fmtAgo(a.completionTime) : "")))), /*#__PURE__*/React.createElement(Foot, {
+    items: [{
+      label: "Apps",
+      count: p.counts.apps,
+      icon: "cluster",
+      onClick: () => nav.layer(p, "protectedapps")
+    }, {
+      label: "Runs",
+      icon: "clock",
+      onClick: () => nav.layer(p, "ractions")
+    }, {
+      label: "Details",
+      right: true,
+      onClick: () => nav.detail(p)
+    }]
+  }));
+}
+function PAppTile({
+  o: a,
+  nav
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "tile",
+    style: {
+      "--sc": STATUS_META[a.status].c
+    },
+    onDoubleClick: () => nav.detail(a)
+  }, /*#__PURE__*/React.createElement(TileHead, {
+    obj: a,
+    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TrafficLight, {
+      status: a.status
+    }), /*#__PURE__*/React.createElement(Name, null, a.name)),
+    right: /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, a.appKind)
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "tsub",
+    style: {
+      marginTop: 2
+    }
+  }, a.namespace, " \xB7 plan ", a.planName, " \xB7 ", /*#__PURE__*/React.createElement(PathArrow, {
+    from: a.source,
+    to: a.target
+  })), /*#__PURE__*/React.createElement(Uuid, {
+    value: a.id
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "lab"
+  }, /*#__PURE__*/React.createElement("i", null, "now on"), a.currentCluster || "—"), a.method && /*#__PURE__*/React.createElement("span", {
+    className: "lab"
+  }, /*#__PURE__*/React.createElement("i", null, "method"), a.method), a.protected === false && /*#__PURE__*/React.createElement("span", {
+    className: "lab warn"
+  }, "not protected"), a.awaitingRestore && /*#__PURE__*/React.createElement("span", {
+    className: "lab warn"
+  }, "awaiting restore"), a.zoneBinding && /*#__PURE__*/React.createElement("span", {
+    className: "lab"
+  }, /*#__PURE__*/React.createElement("i", null, "zone"), a.zoneBinding)), /*#__PURE__*/React.createElement("div", {
+    className: "mlist"
+  }, a.paths.map(p => /*#__PURE__*/React.createElement("div", {
+    className: "mrow" + (p.verdict === "NotReady" ? " bad" : ""),
+    key: p.name
+  }, /*#__PURE__*/React.createElement(VerdictBadge, {
+    v: p.verdict,
+    sm: true
+  }), /*#__PURE__*/React.createElement("b", null, p.name), /*#__PURE__*/React.createElement("span", {
+    className: "spacer"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "mono"
+  }, p.actions.join(" · ")))), !a.paths.length && /*#__PURE__*/React.createElement("div", {
+    className: "nolim",
+    style: {
+      padding: "6px 9px"
+    }
+  }, "No declared path covers this application yet.")), /*#__PURE__*/React.createElement(Foot, {
+    items: [{
+      label: "Runs",
+      icon: "clock",
+      onClick: () => nav.layer(a, "ractions")
+    }, {
+      label: "Tests",
+      icon: "camera",
+      onClick: () => nav.layer(a, "tests")
+    }, {
+      label: "Details",
+      right: true,
+      onClick: () => nav.detail(a)
+    }]
+  }));
+}
+function RPlanTile({
+  o: p,
+  nav
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "tile",
+    style: {
+      "--sc": STATUS_META[p.status].c
+    },
+    onDoubleClick: () => nav.detail(p)
+  }, /*#__PURE__*/React.createElement(TileHead, {
+    obj: p,
+    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TrafficLight, {
+      status: p.status
+    }), /*#__PURE__*/React.createElement(Name, null, p.name)),
+    right: /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, "recovery plan")
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "tsub",
+    style: {
+      marginTop: 2
+    }
+  }, p.namespace, " \xB7 path ", p.pathName), /*#__PURE__*/React.createElement(Uuid, {
+    value: p.id
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "lab"
+  }, /*#__PURE__*/React.createElement("i", null, "apps"), p.counts.apps), /*#__PURE__*/React.createElement("span", {
+    className: "lab"
+  }, /*#__PURE__*/React.createElement("i", null, "priorities"), p.counts.priorities), /*#__PURE__*/React.createElement("span", {
+    className: "lab"
+  }, /*#__PURE__*/React.createElement("i", null, "gate"), (p.gates || {}).betweenPriorities || "allHealthy"), p.continueOnFailure && /*#__PURE__*/React.createElement("span", {
+    className: "lab warn"
+  }, "continue on failure")), /*#__PURE__*/React.createElement(Foot, {
+    items: [{
+      label: "Runs",
+      icon: "clock",
+      onClick: () => nav.layer(p, "ractions")
+    }, {
+      label: "Details",
+      right: true,
+      onClick: () => nav.detail(p)
+    }]
+  }));
+}
+function RActionTile({
+  o: a,
+  nav
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "tile",
+    style: {
+      "--sc": STATUS_META[a.status].c
+    },
+    onDoubleClick: () => nav.detail(a)
+  }, /*#__PURE__*/React.createElement(TileHead, {
+    obj: a,
+    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TrafficLight, {
+      status: a.status
+    }), /*#__PURE__*/React.createElement(Name, null, a.name)),
+    right: /*#__PURE__*/React.createElement(KindBadge, {
+      k: a.action
+    })
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "tsub",
+    style: {
+      marginTop: 2
+    }
+  }, a.planName ? `plan ${a.planName}` : `app ${a.appName}`, " \xB7 ", a.pathName || "in place", " \xB7 ", a.namespace), /*#__PURE__*/React.createElement(Uuid, {
+    value: a.id
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "kv"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "started"), /*#__PURE__*/React.createElement("b", null, a.startTime ? fmtAgo(a.startTime) : "—")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "duration"), /*#__PURE__*/React.createElement("b", null, a.durationMs != null ? fmtSecs(a.durationMs / 1000) : "—")), a.sourceCluster && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "move"), /*#__PURE__*/React.createElement("b", null, a.sourceCluster, " \u2192 ", a.targetCluster)), a.rtoSeconds != null && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "RTO"), /*#__PURE__*/React.createElement("b", null, fmtSecs(a.rtoSeconds))), a.override && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "override"), /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: "var(--warn)"
+    }
+  }, "yes"))), /*#__PURE__*/React.createElement(Foot, {
+    items: [{
+      label: "Details",
+      right: true,
+      onClick: () => nav.detail(a)
+    }]
+  }));
+}
+function TBubbleTile({
+  o: t,
+  nav
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "tile",
+    style: {
+      "--sc": STATUS_META[t.status].c
+    },
+    onDoubleClick: () => nav.detail(t)
+  }, /*#__PURE__*/React.createElement(TileHead, {
+    obj: t,
+    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TrafficLight, {
+      status: t.status
+    }), /*#__PURE__*/React.createElement(Name, null, t.name)),
+    right: /*#__PURE__*/React.createElement(KindBadge, {
+      k: "Test"
+    })
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "tsub",
+    style: {
+      marginTop: 2
+    }
+  }, t.planName ? `plan ${t.planName}` : `app ${t.appName}`, " \xB7 ", t.pathName, " \xB7 ", t.namespace), /*#__PURE__*/React.createElement(Uuid, {
+    value: t.id
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "kv"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "started"), /*#__PURE__*/React.createElement("b", null, t.startTime ? fmtAgo(t.startTime) : "—")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "duration"), /*#__PURE__*/React.createElement("b", null, t.durationMs != null ? fmtSecs(t.durationMs / 1000) : "—")), t.report && t.report.achievedRPOSeconds != null && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "RPO"), /*#__PURE__*/React.createElement("b", null, fmtSecs(t.report.achievedRPOSeconds))), t.report && t.report.estimatedRTOSeconds != null && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "est. RTO"), /*#__PURE__*/React.createElement("b", null, fmtSecs(t.report.estimatedRTOSeconds))), t.scheduleName && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "schedule"), /*#__PURE__*/React.createElement("b", null, t.scheduleName))), /*#__PURE__*/React.createElement(Foot, {
+    items: [{
+      label: "Details",
+      right: true,
+      onClick: () => nav.detail(t)
+    }]
+  }));
+}
+function TSchedTile({
+  o: s,
+  nav
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "tile",
+    style: {
+      "--sc": STATUS_META[s.status].c
+    },
+    onDoubleClick: () => nav.detail(s)
+  }, /*#__PURE__*/React.createElement(TileHead, {
+    obj: s,
+    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TrafficLight, {
+      status: s.status
+    }), /*#__PURE__*/React.createElement(Name, null, s.name)),
+    right: /*#__PURE__*/React.createElement("span", {
+      className: "badge mono"
+    }, s.schedule)
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "tsub",
+    style: {
+      marginTop: 2
+    }
+  }, s.planName ? `plan ${s.planName}` : `app ${s.appName}`, " \xB7 ", s.pathName, " \xB7 ", s.namespace), /*#__PURE__*/React.createElement(Uuid, {
+    value: s.id
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "kv"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "last run"), /*#__PURE__*/React.createElement("b", null, s.lastScheduleTime ? fmtAgo(s.lastScheduleTime) : "never")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "last success"), /*#__PURE__*/React.createElement("b", null, s.lastSuccessfulTime ? fmtAgo(s.lastSuccessfulTime) : "—")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "keep"), /*#__PURE__*/React.createElement("b", null, (s.retention || {}).keepLast || 10, (s.retention || {}).keepFor ? ` · ${s.retention.keepFor}` : "")), s.active && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "running"), /*#__PURE__*/React.createElement("b", null, s.active))), /*#__PURE__*/React.createElement(Foot, {
+    items: [{
+      label: "Tests",
+      icon: "camera",
+      onClick: () => nav.layer(s, "tests")
+    }, {
+      label: "Details",
+      right: true,
+      onClick: () => nav.detail(s)
+    }]
+  }));
+}
+function RestoreTile({
+  o: r,
+  nav
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "tile",
+    style: {
+      "--sc": STATUS_META[r.status].c
+    },
+    onDoubleClick: () => nav.detail(r)
+  }, /*#__PURE__*/React.createElement(TileHead, {
+    obj: r,
+    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TrafficLight, {
+      status: r.status
+    }), /*#__PURE__*/React.createElement(Name, null, r.name)),
+    right: /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, "restore")
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "tsub",
+    style: {
+      marginTop: 2
+    }
+  }, "app ", r.appName, " \xB7 ", r.cluster || "—", " \xB7 ", r.namespace), /*#__PURE__*/React.createElement(Uuid, {
+    value: r.id
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "kv"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "restore point"), /*#__PURE__*/React.createElement("b", null, r.restorePoint ? fmtDate(r.restorePoint) : "—")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "data loss"), /*#__PURE__*/React.createElement("b", {
+    style: r.dataLoss ? {
+      color: "var(--warn)"
+    } : null
+  }, r.dataLoss || "—")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "volumes"), /*#__PURE__*/React.createElement("b", null, r.counts.volumes))), /*#__PURE__*/React.createElement(Foot, {
+    items: [{
+      label: "Details",
+      right: true,
+      onClick: () => nav.detail(r)
+    }]
+  }));
+}
+function SiteProfileTile({
+  o: s,
+  nav
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "tile",
+    style: {
+      "--sc": STATUS_META[s.status].c
+    },
+    onDoubleClick: () => nav.detail(s)
+  }, /*#__PURE__*/React.createElement(TileHead, {
+    obj: s,
+    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TrafficLight, {
+      status: s.status
+    }), /*#__PURE__*/React.createElement(Name, null, s.name)),
+    right: /*#__PURE__*/React.createElement("span", {
+      className: "badge k8s"
+    }, "managed cluster")
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "tsub",
+    style: {
+      marginTop: 2
+    }
+  }, s.reportedAt ? `inventory ${fmtAgo(s.reportedAt)}` : "no inventory reported yet"), /*#__PURE__*/React.createElement(Uuid, {
+    value: s.id
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, s.zones.map(z => /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    key: z
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "zone",
+    s: 10
+  }), z))), /*#__PURE__*/React.createElement("div", {
+    className: "kv"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "nodes ready"), /*#__PURE__*/React.createElement("b", null, s.counts.nodesReady, "/", s.counts.nodes)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "storage classes"), /*#__PURE__*/React.createElement("b", null, s.counts.storageClasses)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "NADs"), /*#__PURE__*/React.createElement("b", null, s.counts.nads)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "address pools"), /*#__PURE__*/React.createElement("b", null, s.ipAddressPools.length))), /*#__PURE__*/React.createElement(Foot, {
+    items: [{
+      label: "Details",
+      right: true,
+      onClick: () => nav.detail(s)
+    }]
+  }));
+}
+
+// ---- details ------------------------------------------------------------------
+function PPlanDetail({
+  o: p,
+  nav
+}) {
+  const paths = useResource("pplan.paths|" + p.id, () => drhub.planPaths(p.id), 10000);
+  const apps = useResource("pplan.apps|" + p.id, () => drhub.planApps(p.id), 10000);
+  const ps = paths.data || [],
+    as = apps.data || [];
+  const sp = p.storageProfile || {};
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
+    obj: p,
+    title: p.name,
+    sub: /*#__PURE__*/React.createElement("span", {
+      className: "mono",
+      style: {
+        color: "var(--dim)"
+      }
+    }, "ProtectionPlan \xB7 ", p.sync ? "stretch cluster (sync)" : "cross-cluster"),
+    badge: /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, "plan")
+  }), p.status === "NotReady" && /*#__PURE__*/React.createElement("div", {
+    className: "banner"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "The plan is not ready."), " ", (p.conditions.find(c => c.type === "Ready") || {}).message || "See the conditions below.")), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "Sites",
+    v: p.counts.sites,
+    s: `${p.counts.agentsAvailable} with dr-agent available`,
+    c: p.counts.agentsAvailable < p.counts.sites ? "var(--warn)" : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Methods",
+    v: p.counts.methods,
+    s: p.methods.map(m => m.type).join(", ")
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "DR paths",
+    v: ps.length,
+    s: `${ps.filter(x => x.status === "Valid").length} valid`
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Applications",
+    v: as.length,
+    s: `${as.filter(a => a.verdict === "Ready").length} ready · ${as.filter(a => a.verdict === "NotReady").length} not ready`,
+    c: as.some(a => a.verdict === "NotReady") ? "var(--bad)" : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Derived DRPolicies",
+    v: p.drPolicies.length
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Drill down"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "navcards"
+  }, /*#__PURE__*/React.createElement(NavCard, {
+    icon: "swap",
+    title: "DR paths",
+    sub: "declared directions between the sites",
+    count: ps.length,
+    onClick: () => nav.layer(p, "paths")
+  }), /*#__PURE__*/React.createElement(NavCard, {
+    icon: "cluster",
+    title: "Applications",
+    sub: "protected by this plan",
+    count: as.length,
+    onClick: () => nav.layer(p, "protectedapps")
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Sites"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Site", "Cluster", "Zone", "Region", "DRCluster", "Classes applied", "dr-agent"],
+    rows: p.sites.map(s => [/*#__PURE__*/React.createElement("b", null, s.name), /*#__PURE__*/React.createElement(Mono, null, s.cluster), /*#__PURE__*/React.createElement(Mono, null, s.zone), /*#__PURE__*/React.createElement(Mono, null, s.region), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, s.drCluster), s.classesApplied ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--ok)"
+      }
+    }, "yes") : /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim)"
+      }
+    }, "pending"), s.agentAvailable === true ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--ok)"
+      }
+    }, "available") : s.agentAvailable === false ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--bad)"
+      }
+    }, "unavailable") : /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim)"
+      }
+    }, "unknown")])
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: "9px 0 0"
+    }
+  }, p.sync ? "A sync plan is a stretch cluster: all sites name the same Kubernetes cluster split by zone. No Ramen DRCluster or DRPolicy is derived; dr-agent moves applications between zones and the achieved RPO is 0." : "Each site is an OCM ManagedCluster. The hub derives one DRCluster per site and one DRPolicy per pair a DR path uses; Ramen's peerClasses resolve from the storage IDs the hub stamps on the classes."))), /*#__PURE__*/React.createElement("div", {
+    className: "dcols"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Methods"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Method", "Type", "Interval", "S3 backup", "Parameters"],
+    rows: p.methods.map(m => [/*#__PURE__*/React.createElement("b", null, m.name), /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, m.type), /*#__PURE__*/React.createElement(Mono, null, m.interval), m.s3Backup ? /*#__PURE__*/React.createElement(Mono, null, m.s3Backup.interval, " \xD7 ", m.s3Backup.retention) : "", Object.keys(m.parameters).length ? /*#__PURE__*/React.createElement("div", {
+      className: "labels",
+      style: {
+        marginTop: 0
+      }
+    }, Object.entries(m.parameters).map(([k, v]) => /*#__PURE__*/React.createElement("span", {
+      className: "lab",
+      key: k
+    }, k, "=", v))) : ""])
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Storage profile"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: [["Storage class selector", sp.storageClassSelector && sp.storageClassSelector.matchLabels ? Object.entries(sp.storageClassSelector.matchLabels).map(([k, v]) => `${k}=${v}`).join(", ") : sp.storageClassSelector ? JSON.stringify(sp.storageClassSelector) : ""], ["Snapshot class selector", sp.volumeSnapshotClassSelector ? JSON.stringify(sp.volumeSnapshotClassSelector.matchLabels || sp.volumeSnapshotClassSelector) : ""], ["Consistency groups", sp.consistencyGroups || "Disabled"], ["Group storage class selector", sp.groupStorageClassSelector ? JSON.stringify(sp.groupStorageClassSelector.matchLabels || sp.groupStorageClassSelector) : ""], ["Velero namespace", p.veleroNamespace], ["Auto-restart after storage recovery", p.autoRestart ? `${p.autoRestart.enabled ? "enabled" : "disabled"}${p.autoRestart.stableFor ? " · stable for " + p.autoRestart.stableFor : ""}` : "off"]]
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "dcols"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "S3 stores"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, p.s3Profile ? /*#__PURE__*/React.createElement(Props, {
+    rows: [["Ramen S3 profile", /*#__PURE__*/React.createElement(Mono, null, p.s3Profile)]]
+  }) : /*#__PURE__*/React.createElement(Table, {
+    cols: ["Site", "Bucket", "Endpoint", "Region", "Secret"],
+    empty: "No S3 store declared \u2014 backup methods need one per site.",
+    rows: p.s3Profiles.map(s => [/*#__PURE__*/React.createElement("b", null, s.site), /*#__PURE__*/React.createElement(Mono, null, s.bucket), /*#__PURE__*/React.createElement(Mono, null, s.endpoint), /*#__PURE__*/React.createElement(Mono, null, s.region), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, refName2(s.secretRef))])
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Derived pairs"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Sites", "Paths", "DRPolicies", "peerClasses"],
+    empty: "No pair derived yet \u2014 a pair exists once a DR path uses it.",
+    rows: p.pairs.map((x, i) => [/*#__PURE__*/React.createElement(Mono, null, x.sites.join(" ↔ ")), /*#__PURE__*/React.createElement(Mono, null, x.paths.join(", ")), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, x.drPolicies.join(", ")), x.peerClassesResolved ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--ok)"
+      }
+    }, "resolved") : /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--warn)"
+      }
+    }, "unresolved")])
+  })))), /*#__PURE__*/React.createElement(Conditions, {
+    o: p
+  }));
+}
+const refName2 = r => r && r.name || "";
+function DRPathDetail({
+  o: p,
+  nav
+}) {
+  const apps = useResource("drpath.apps|" + p.id, () => drhub.pathApps(p.id), 10000);
+  const runs = useResource("drpath.runs|" + p.id, () => Promise.all([drhub.pathActions(p.id), drhub.pathTests(p.id)]), 10000);
+  const as = apps.data || [];
+  const [actions, tests] = runs.data || [[], []];
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
+    obj: p,
+    title: p.name,
+    sub: /*#__PURE__*/React.createElement(PathArrow, {
+      from: p.from,
+      to: p.to
+    }),
+    badge: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, "DRPath"), /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, p.planName))
+  }), p.status === "Invalid" && /*#__PURE__*/React.createElement("div", {
+    className: "banner"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Invalid path."), " ", (p.conditions.find(c => c.type === "Valid") || {}).message)), p.profileConsistency === "Inconsistent" && /*#__PURE__*/React.createElement("div", {
+    className: "banner",
+    style: {
+      color: "var(--warn)",
+      borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)",
+      background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "The two site profiles differ."), " Readiness reports profile-consistent as advisory; the comparison below names the fields.")), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "Actions",
+    v: p.actions.join(" · ")
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Applications",
+    v: as.length,
+    s: `${as.filter(a => (a.paths.find(x => x.name === p.name) || {}).verdict === "Ready").length} ready on this path`
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Runs",
+    v: actions.length + tests.length,
+    s: `${actions.filter(a => !a.terminal).length + tests.filter(t => !t.terminal).length} running`
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Profiles",
+    v: p.profileConsistency,
+    c: p.profileConsistency === "Inconsistent" ? "var(--warn)" : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "DRPolicies",
+    v: p.drPolicies.length,
+    s: p.drPolicies.join(", ")
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Drill down"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "navcards"
+  }, /*#__PURE__*/React.createElement(NavCard, {
+    icon: "cluster",
+    title: "Applications",
+    sub: "on this path",
+    count: as.length,
+    onClick: () => nav.layer(p, "protectedapps")
+  }), /*#__PURE__*/React.createElement(NavCard, {
+    icon: "clock",
+    title: "Recovery actions",
+    sub: "Failover and Relocate along it",
+    count: actions.length,
+    onClick: () => nav.layer(p, "ractions")
+  }), /*#__PURE__*/React.createElement(NavCard, {
+    icon: "camera",
+    title: "Tests",
+    sub: "rehearsals along it",
+    count: tests.length,
+    onClick: () => nav.layer(p, "tests")
+  }), /*#__PURE__*/React.createElement(NavCard, {
+    icon: "list",
+    title: "Recovery plans",
+    sub: "ordered sets on this path",
+    count: "\u2192",
+    onClick: () => nav.layer(p, "rplans")
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "dcols"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Declaration"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: [["From", /*#__PURE__*/React.createElement(Mono, null, p.from)], ["To", /*#__PURE__*/React.createElement(Mono, null, p.to)], ["Plan", /*#__PURE__*/React.createElement(Ref, {
+      label: p.planName,
+      onClick: () => nav.openPlanByName(p.planName)
+    })], ["Actions", p.actions.join(", ")], ["Announcement hand-over", p.announcementHandover ? "yes" : "no"], p.test && ["Test mode", p.test.mode], p.test && ["Isolated NAD", /*#__PURE__*/React.createElement(Mono, null, p.test.isolatedNad)], p.test && ["Max clone capacity", /*#__PURE__*/React.createElement(Mono, null, (p.test.quotas || {}).maxCloneCapacity)], p.test && ["test-recent window", /*#__PURE__*/React.createElement(Mono, null, p.test.recentWithin || "720h")]]
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: "9px 0 0"
+    }
+  }, "Directions are declared, not inferred. From, to and the plan are immutable; the actions, hand-over and test block can change."))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Last actions"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Kind", "Run", "Phase", "Completed"],
+    empty: "Nothing has run along this path yet.",
+    rows: Object.values(p.lastActions).map(a => [/*#__PURE__*/React.createElement(KindBadge, {
+      k: a.kind
+    }), /*#__PURE__*/React.createElement(Mono, null, a.ref), /*#__PURE__*/React.createElement(TrafficLight, {
+      status: a.phase,
+      sm: true
+    }), a.completionTime ? fmtDate(a.completionTime) : "—"])
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Readiness of applications on this path"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Application", "Verdict", "Blocking failures", "Advisory"],
+    empty: "No application is on this path.",
+    rows: as.map(a => {
+      const x = a.paths.find(y => y.name === p.name) || {
+        checks: []
+      };
+      return [/*#__PURE__*/React.createElement(Ref, {
+        label: `${a.namespace}/${a.name}`,
+        onClick: () => nav.detail(a)
+      }), /*#__PURE__*/React.createElement(VerdictBadge, {
+        v: x.verdict,
+        sm: true
+      }), /*#__PURE__*/React.createElement(Mono, {
+        dim: true
+      }, x.checks.filter(c => c.blocking && c.status === "Fail").map(c => c.name).join(", ")), /*#__PURE__*/React.createElement(Mono, {
+        dim: true
+      }, x.checks.filter(c => !c.blocking && c.status !== "Pass" && c.status !== "NotApplicable").map(c => c.name).join(", "))];
+    })
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Site profile comparison"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Field", "Status", "Message"],
+    empty: "Not compared yet.",
+    rows: p.profileComparison.map(r => [/*#__PURE__*/React.createElement(Mono, null, r.field), /*#__PURE__*/React.createElement(TrafficLight, {
+      status: r.status,
+      sm: true
+    }), r.message])
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: "9px 0 0"
+    }
+  }, "Source profile left, target right in the design; here the hub's row verdicts. Inventory is rewritten on every scan and never edited \u2014 bindings on the site profile are what clears a mismatch."))), /*#__PURE__*/React.createElement(Conditions, {
+    o: p
+  }));
+}
+function PAppDetail({
+  o: a,
+  nav
+}) {
+  const runs = useResource("papp.runs|" + a.id, () => Promise.all([drhub.appActions(a.id), drhub.appTests(a.id), drhub.appRestores(a.id), drhub.appSchedules(a.id)]), 8000);
+  const [actions, tests, restores, scheds] = runs.data || [[], [], [], []];
+  const [tab, setTab] = useState("readiness");
+  const running = [...actions, ...tests].filter(r => !r.terminal);
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
+    obj: a,
+    title: a.name,
+    sub: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "mono",
+      style: {
+        color: "var(--dim)"
+      }
+    }, a.namespace), /*#__PURE__*/React.createElement(PathArrow, {
+      from: a.source,
+      to: a.target
+    })),
+    badge: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, a.appKind), a.method && /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, a.method), a.protected === false && /*#__PURE__*/React.createElement("span", {
+      className: "badge",
+      style: {
+        color: "var(--bad)"
+      }
+    }, "not protected"))
+  }), !!running.length && /*#__PURE__*/React.createElement("div", {
+    className: "banner",
+    style: {
+      color: "var(--info)",
+      borderColor: "color-mix(in srgb,var(--info) 35%,transparent)",
+      background: "color-mix(in srgb,var(--info) 8%,var(--panel))"
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "refresh",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, running.length, " run", running.length === 1 ? "" : "s", " in progress:"), " ", running.map(r => /*#__PURE__*/React.createElement(Ref, {
+    key: r.id,
+    label: `${r.action || "Test"} ${r.name}`,
+    onClick: () => nav.detail(r)
+  })))), a.verdict === "NotReady" && /*#__PURE__*/React.createElement("div", {
+    className: "banner"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Not ready on at least one path."), " The run-action controls need an override with a reason on that path; the failing checks are listed under Readiness.")), a.awaitingRestore && /*#__PURE__*/React.createElement("div", {
+    className: "banner",
+    style: {
+      color: "var(--warn)",
+      borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)",
+      background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "cloud",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Awaiting restore."), " The DR state was restored onto a rebuilt site; the volumes come back from the newest S3 capture when a dr-admin creates a RestoreAction.")), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "Readiness",
+    v: /*#__PURE__*/React.createElement(VerdictBadge, {
+      v: a.verdict
+    }),
+    s: `${a.paths.length} declared path${a.paths.length === 1 ? "" : "s"}`
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Currently on",
+    v: a.currentCluster || "—",
+    s: a.zoneBinding ? `zone binding ${a.zoneBinding}` : a.drpc ? `DRPC ${a.drpc}` : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Plan",
+    v: a.planName,
+    s: a.drPolicy ? `DRPolicy ${a.drPolicy}` : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Last action",
+    v: a.lastAction ? a.lastAction.name : "—"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Runs",
+    v: actions.length + tests.length,
+    s: `${actions.length} actions · ${tests.length} tests`
+  })), /*#__PURE__*/React.createElement(Tabs, {
+    items: [{
+      k: "readiness",
+      label: "Readiness",
+      icon: "shield",
+      n: a.paths.length
+    }, {
+      k: "runs",
+      label: "Runs",
+      icon: "clock",
+      n: actions.length + tests.length
+    }, {
+      k: "binding",
+      label: "Binding & recipe",
+      icon: "link"
+    }, {
+      k: "schedules",
+      label: "Schedules & restores",
+      icon: "camera",
+      n: scheds.length + restores.length
+    }],
+    active: tab,
+    onChange: setTab
+  }), tab === "readiness" && /*#__PURE__*/React.createElement(React.Fragment, null, a.paths.map(p => /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    key: p.name,
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("h3", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("span", null, p.name), /*#__PURE__*/React.createElement(PathArrow, {
+    from: p.from,
+    to: p.to
+  }), /*#__PURE__*/React.createElement(VerdictBadge, {
+    v: p.verdict,
+    sm: true
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "spacer",
+    style: {
+      flex: 1
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      textTransform: "none",
+      letterSpacing: 0
+    }
+  }, p.actions.join(" · "), p.since ? ` · since ${fmtAgo(p.since)}` : "")), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(CheckTable, {
+    checks: p.checks
+  })))), !a.paths.length && /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "swap",
+    s: 22
+  }), /*#__PURE__*/React.createElement("b", null, "No declared path"), /*#__PURE__*/React.createElement("span", null, "Declare a DRPath between ", a.source, " and ", a.target, " on plan ", a.planName, ". Readiness is computed per declared path."))), tab === "runs" && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(RunList, {
+    actions: actions,
+    tests: tests,
+    nav: nav
+  }))), tab === "binding" && /*#__PURE__*/React.createElement("div", {
+    className: "dcols"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Binding"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: [["Kind", a.appKind], ["Plan", /*#__PURE__*/React.createElement(Ref, {
+      label: a.planName,
+      onClick: () => nav.openPlanByName(a.planName)
+    })], ["Source", a.source], ["Target", a.target], ["Method", a.method], a.managed && ["Placement", /*#__PURE__*/React.createElement(Mono, null, refName2(a.managed.placementRef))], a.discovered && ["Protected namespaces", /*#__PURE__*/React.createElement(Mono, null, (a.discovered.protectedNamespaces || []).join(", "))], ["PVC selector", /*#__PURE__*/React.createElement(Mono, null, JSON.stringify(((a.managed || a.discovered || {}).pvcSelector || {}).matchLabels || {}))], a.drpcRef && ["Adopted DRPC", /*#__PURE__*/React.createElement(Mono, null, a.drpcRef)], ["DRPlacementControl", /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, a.drpc)], ["Placement (status)", /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, a.placement)], ["DRPolicy", /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, a.drPolicy)], a.zoneBinding && ["Zone binding", /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, a.zoneBinding)], a.siteMapping && ["Site mapping", /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, a.siteMapping)], ["Depends on", a.dependsOn.join(", ")], ["Automatic restart", a.autoRestartOptOut ? "opted out" : "per plan"]]
+  }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Recipe & tiers"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, a.recipe ? /*#__PURE__*/React.createElement(Props, {
+    rows: [["Recipe", /*#__PURE__*/React.createElement(Mono, null, a.recipe.namespace ? a.recipe.namespace + "/" : "", a.recipe.name)], ["Origin", a.recipe.generated ? "generated from tiers by the hub" : "hand-written — shown, validated, never modified"], a.recipe.hash && ["Hash", /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, a.recipe.hash)]]
+  }) : /*#__PURE__*/React.createElement("div", {
+    className: "nolim"
+  }, "No Recipe bound yet."), /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      margin: "12px 0 8px"
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Tiers (boot order)"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement(Table, {
+    cols: ["#", "Tier", "Selector", "Ready when"],
+    empty: "No tiers declared \u2014 the hub protects everything in one group.",
+    rows: a.tiers.map((t, i) => [i + 1, /*#__PURE__*/React.createElement("b", null, t.name), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, [(t.selector || {}).resourceTypes && t.selector.resourceTypes.join(","), (t.selector || {}).matchLabels && Object.entries(t.selector.matchLabels).map(([k, v]) => `${k}=${v}`).join(",")].filter(Boolean).join(" · ")), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, (t.ready || []).map(r => r.type).join(", "))])
+  }), !!a.suggestedTiers.length && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      margin: "12px 0 8px"
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Suggested tiers"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, a.suggestedTiers.map((t, i) => /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    key: i
+  }, t.name))), /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: "9px 0 0"
+    }
+  }, "Suggestions from kind defaults, well-known labels and owner references. Confirming them on the object applies the dr.simplyblock.io/tier label.")))), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Health probes & external hooks"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Probe", "Type", "Target"],
+    empty: "No probes.",
+    rows: a.probes.map(p => [/*#__PURE__*/React.createElement("b", null, p.name), /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, p.type), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, p.target || (p.selector ? JSON.stringify(p.selector) : ""))])
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, (a.externalHooks.preSource || []).map(h => /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    key: "pre" + h.name
+  }, /*#__PURE__*/React.createElement("i", null, "preSource"), h.name)), (a.externalHooks.postTargetReady || []).map(h => /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    key: "post" + h.name
+  }, /*#__PURE__*/React.createElement("i", null, "postTargetReady"), h.name))))))), tab === "schedules" && /*#__PURE__*/React.createElement("div", {
+    className: "dcols"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Test schedules"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Schedule", "Cron", "Path", "Status", "Last run"],
+    empty: "No schedule \u2014 use Actions \u203A Schedule tests.",
+    rows: scheds.map(s => [/*#__PURE__*/React.createElement(Ref, {
+      label: s.name,
+      onClick: () => nav.detail(s)
+    }), /*#__PURE__*/React.createElement(Mono, null, s.schedule), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, s.pathName), /*#__PURE__*/React.createElement(TrafficLight, {
+      status: s.status,
+      sm: true
+    }), s.lastScheduleTime ? fmtAgo(s.lastScheduleTime) : "never"])
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Restores"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Restore", "Phase", "Cluster", "Restore point", "Data loss"],
+    empty: "No restore has run.",
+    rows: restores.map(r => [/*#__PURE__*/React.createElement(Ref, {
+      label: r.name,
+      onClick: () => nav.detail(r)
+    }), /*#__PURE__*/React.createElement(TrafficLight, {
+      status: r.status,
+      sm: true
+    }), /*#__PURE__*/React.createElement(Mono, null, r.cluster), r.restorePoint ? fmtDate(r.restorePoint) : "—", r.dataLoss])
+  })))), /*#__PURE__*/React.createElement(Conditions, {
+    o: a
+  }));
+}
+function RPlanDetail({
+  o: p,
+  nav
+}) {
+  const runs = useResource("rplan.runs|" + p.id, () => Promise.all([drhub.rplanActions(p.id), drhub.rplanTests(p.id), drhub.apps()]), 8000);
+  const [actions, tests, apps] = runs.data || [[], [], []];
+  const byPrio = {};
+  p.applications.forEach(a => {
+    (byPrio[a.priority] = byPrio[a.priority] || []).push(a);
+  });
+  const appOf = n => apps.find(a => a.name === n && a.namespace === p.namespace);
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
+    obj: p,
+    title: p.name,
+    sub: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "mono",
+      style: {
+        color: "var(--dim)"
+      }
+    }, p.namespace), /*#__PURE__*/React.createElement("span", {
+      className: "mono"
+    }, "path ", p.pathName)),
+    badge: /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, "RecoveryPlan")
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "Readiness",
+    v: /*#__PURE__*/React.createElement(VerdictBadge, {
+      v: p.verdict
+    }),
+    s: "aggregated over the applications"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Applications",
+    v: p.counts.apps,
+    s: `${p.counts.priorities} priorit${p.counts.priorities === 1 ? "y" : "ies"}`
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Gate",
+    v: (p.gates || {}).betweenPriorities || "allHealthy",
+    s: p.continueOnFailure ? "continues on failure" : "stops on failure"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Runs",
+    v: actions.length + tests.length
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Order"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, Object.keys(byPrio).sort((a, b) => a - b).map(pr => /*#__PURE__*/React.createElement("div", {
+    key: pr,
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "tsub",
+    style: {
+      marginBottom: 6
+    }
+  }, "priority ", pr, " \xB7 ", byPrio[pr].length, " in parallel"), /*#__PURE__*/React.createElement("div", {
+    className: "labels",
+    style: {
+      marginTop: 0
+    }
+  }, byPrio[pr].map(a => {
+    const o = appOf(a.name);
+    const v = o ? (o.paths.find(x => x.name === p.pathName) || {}).verdict || o.verdict : "Unknown";
+    return /*#__PURE__*/React.createElement("span", {
+      className: "lab" + (v === "NotReady" ? " warn" : "") + (o ? " link" : ""),
+      key: a.name,
+      onClick: () => o && nav.detail(o)
+    }, /*#__PURE__*/React.createElement(Dot, {
+      c: (STATUS_META[v] || {}).c
+    }), a.name, a.dependsOn.length ? /*#__PURE__*/React.createElement("i", null, "after ", a.dependsOn.join(", ")) : null);
+  })))))), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Plan readiness checks"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(CheckTable, {
+    checks: p.checks
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Runs"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(RunList, {
+    actions: actions,
+    tests: tests,
+    nav: nav
+  }))), /*#__PURE__*/React.createElement(Conditions, {
+    o: p
+  }));
+}
+const ACTION_PHASES = ["Pending", "PreFlight", "PreSource", "RamenHandoff", "TargetStarting", "Workflow", "PostTargetReady", "Confirming", "Completed"];
+function RActionDetail({
+  o: a,
+  nav
+}) {
+  const r = a.report || {};
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
+    obj: a,
+    title: a.name,
+    sub: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "mono",
+      style: {
+        color: "var(--dim)"
+      }
+    }, a.namespace), /*#__PURE__*/React.createElement("span", {
+      className: "mono"
+    }, a.planName ? `plan ${a.planName}` : `application ${a.appName}`, a.pathName ? ` · ${a.pathName}` : " · in place")),
+    badge: /*#__PURE__*/React.createElement(KindBadge, {
+      k: a.action
+    })
+  }), a.override && /*#__PURE__*/React.createElement("div", {
+    className: "banner",
+    style: {
+      color: "var(--warn)",
+      borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)",
+      background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Readiness override."), " ", a.override.reason)), a.status === "Failed" && /*#__PURE__*/React.createElement("div", {
+    className: "banner"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "The action failed."), " ", (a.steps.filter(s => s.result === "Failed").slice(-1)[0] || {}).message || "See the journal.")), /*#__PURE__*/React.createElement(PhaseStripDR, {
+    phases: ACTION_PHASES,
+    current: a.phase,
+    terminal: a.terminal
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "Phase",
+    v: /*#__PURE__*/React.createElement(TrafficLight, {
+      status: a.status
+    })
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Started",
+    v: a.startTime ? fmtDate(a.startTime) : "—",
+    s: a.startTime ? fmtAgo(a.startTime) : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Duration",
+    v: a.durationMs != null ? fmtSecs(a.durationMs / 1000) : "—",
+    s: a.completionTime ? "completed " + fmtDate(a.completionTime) : a.terminal ? "" : "running"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Move",
+    v: a.sourceCluster ? `${a.sourceCluster} → ${a.targetCluster}` : "—"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "RTO",
+    v: a.rtoSeconds != null ? fmtSecs(a.rtoSeconds) : "—",
+    s: a.rpoSeconds != null ? `achieved RPO ${fmtSecs(a.rpoSeconds)}` : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Operator",
+    v: a.createdBy || "—"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "dcols"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Journal \xB7 ", a.steps.length, " steps"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(StepJournal, {
+    steps: a.steps
+  }))), /*#__PURE__*/React.createElement("div", null, !!a.children.length && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Applications in this plan run"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Application", "Priority", "Action", "Phase", "Message"],
+    rows: a.children.map(c => [/*#__PURE__*/React.createElement("b", null, c.application), c.priority, /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, c.action), /*#__PURE__*/React.createElement(TrafficLight, {
+      status: c.phase || "Pending",
+      sm: true
+    }), c.message])
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Report"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, a.report ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Props, {
+    rows: [["Operator", r.operator], ["RTO", r.rtoSeconds != null ? fmtSecs(r.rtoSeconds) : ""], ["Achieved RPO", r.achievedRPOSeconds != null ? fmtSecs(r.achievedRPOSeconds) : ""], r.overrideReason && ["Override reason", r.overrideReason], ["Archived as", /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, a.reportKey)]]
+  }), !!(r.warnings || []).length && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      margin: "12px 0 8px"
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Warnings"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("ul", {
+    style: {
+      margin: 0,
+      paddingLeft: 18,
+      fontSize: 12,
+      color: "var(--warn)"
+    }
+  }, r.warnings.map((w, i) => /*#__PURE__*/React.createElement("li", {
+    key: i
+  }, w)))), !!(r.probes || []).length && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      margin: "12px 0 8px"
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Probes"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement(Table, {
+    cols: ["Probe", "Result", "Message", "Time"],
+    rows: r.probes.map(p => [/*#__PURE__*/React.createElement("b", null, p.name), p.passed ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--ok)"
+      }
+    }, "passed") : /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--bad)"
+      }
+    }, "failed"), p.message, p.time ? fmtDate(p.time) : ""])
+  })), !!(r.hooks || []).length && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      margin: "12px 0 8px"
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Hooks"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement(Table, {
+    cols: ["Point", "Hook", "Result", "Duration", "Message"],
+    rows: r.hooks.map(h => [/*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, h.point), /*#__PURE__*/React.createElement("b", null, h.name), /*#__PURE__*/React.createElement(TrafficLight, {
+      status: h.result,
+      sm: true
+    }), h.durationSeconds != null ? fmtSecs(h.durationSeconds) : "", h.message])
+  })), r.preFlight && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      margin: "12px 0 8px"
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Pre-flight \xB7 ", r.preFlight.verdict), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement(CheckTable, {
+    checks: r.preFlight.checks
+  })), r.restart && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      margin: "12px 0 8px"
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Storage recovery"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement(Props, {
+    rows: [["Storage cluster", /*#__PURE__*/React.createElement(Mono, null, r.restart.storageCluster)], ["Recovery", r.restart.recovery], ["Recovered at", r.restart.recoveredAt ? fmtDate(r.restart.recoveredAt) : ""], ["Recovery → ready", r.restart.recoveryToReadySeconds != null ? fmtSecs(r.restart.recoveryToReadySeconds) : ""], ["Volumes reconnected", r.restart.volumesReconnected]]
+  }))) : /*#__PURE__*/React.createElement("div", {
+    className: "nolim"
+  }, "The report is written once the run finishes."))))), /*#__PURE__*/React.createElement(Conditions, {
+    o: a
+  }));
+}
+const TEST_PHASES = ["Pending", "Cloning", "Provisioning", "Restoring", "Validating", "Holding", "TearingDown", "Completed"];
+function TBubbleDetail({
+  o: t,
+  nav
+}) {
+  const r = t.report || {};
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
+    obj: t,
+    title: t.name,
+    sub: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "mono",
+      style: {
+        color: "var(--dim)"
+      }
+    }, t.namespace), /*#__PURE__*/React.createElement("span", {
+      className: "mono"
+    }, t.planName ? `plan ${t.planName}` : `application ${t.appName}`, " \xB7 ", t.pathName)),
+    badge: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(KindBadge, {
+      k: "Test"
+    }), t.scheduleName && /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, "schedule ", t.scheduleName))
+  }), t.abort && !t.terminal && /*#__PURE__*/React.createElement("div", {
+    className: "banner",
+    style: {
+      color: "var(--warn)",
+      borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)",
+      background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Abort requested."), " The bubble is being torn down.")), t.outcome === "FailedInvariant" && /*#__PURE__*/React.createElement("div", {
+    className: "banner"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "An invariant was violated:"), " the test touched production state. See the invariants below.")), /*#__PURE__*/React.createElement(PhaseStripDR, {
+    phases: TEST_PHASES,
+    current: t.phase,
+    terminal: t.terminal
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "Outcome",
+    v: /*#__PURE__*/React.createElement(TrafficLight, {
+      status: t.status
+    }),
+    s: t.testID ? `test ${t.testID}` : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Started",
+    v: t.startTime ? fmtDate(t.startTime) : "—"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Duration",
+    v: t.durationMs != null ? fmtSecs(t.durationMs / 1000) : "—",
+    s: t.clonesReadyTime ? `clones ready ${fmtAgo(t.clonesReadyTime)}` : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Target",
+    v: t.targetCluster || "—",
+    s: t.sourceCluster ? `from ${t.sourceCluster}` : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Test point",
+    v: r.testPoint ? fmtDate(r.testPoint) : "—",
+    s: r.achievedRPOSeconds != null ? `achieved RPO ${fmtSecs(r.achievedRPOSeconds)}` : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Estimated RTO",
+    v: r.estimatedRTOSeconds != null ? fmtSecs(r.estimatedRTOSeconds) : "—",
+    s: r.consistency || ""
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "dcols"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Applications"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Application", "Priority", "Phase", "Ready", "Message"],
+    empty: "Not started.",
+    rows: t.applications.map(a => [/*#__PURE__*/React.createElement("b", null, a.name), a.priority, /*#__PURE__*/React.createElement(TrafficLight, {
+      status: a.phase || "Pending",
+      sm: true
+    }), a.readyTime ? fmtDate(a.readyTime) : "", a.message])
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Journal"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(StepJournal, {
+    steps: t.steps
+  })))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Checks"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Check", "Status", "Message"],
+    empty: "No checks yet.",
+    rows: t.checks.map(c => [/*#__PURE__*/React.createElement(Mono, null, c.name), /*#__PURE__*/React.createElement(TrafficLight, {
+      status: c.status,
+      sm: true
+    }), c.message])
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Invariants \xB7 production untouched"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Object", "Field", "Before", "After"],
+    empty: "Nothing compared yet.",
+    rows: t.invariants.map(i => [/*#__PURE__*/React.createElement(Mono, null, i.object), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, i.field), /*#__PURE__*/React.createElement(Mono, null, i.before), /*#__PURE__*/React.createElement(Mono, {
+      style: i.before !== i.after ? {
+        color: "var(--bad)"
+      } : null
+    }, i.after)])
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Report"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, t.report ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Props, {
+    rows: [["Operator", r.operator], ["Outcome", r.outcome], ["Consistency", r.consistency], ["Bubble namespaces", t.bubbleNamespaces.join(", ")], ["Clone source", t.cloneSource], ["Archived as", /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, t.reportKey)]]
+  }), r.coverage && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      margin: "12px 0 8px"
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Coverage"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, (r.coverage.exercised || []).map(x => /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    key: "e" + x
+  }, /*#__PURE__*/React.createElement(Dot, {
+    c: "var(--ok)"
+  }), x)), (r.coverage.notExercised || []).map(x => /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    key: "n" + x
+  }, /*#__PURE__*/React.createElement(Dot, {
+    c: "var(--dim2)"
+  }), x)))), !!(r.warnings || []).length && /*#__PURE__*/React.createElement("ul", {
+    style: {
+      margin: "10px 0 0",
+      paddingLeft: 18,
+      fontSize: 12,
+      color: "var(--warn)"
+    }
+  }, r.warnings.map((w, i) => /*#__PURE__*/React.createElement("li", {
+    key: i
+  }, w)))) : /*#__PURE__*/React.createElement(Props, {
+    rows: [["Clone source", t.cloneSource], ["Hold for", t.holdFor || "no hold"], ["Max lifetime", t.maxLifetime || "24h"], ["Bubble namespaces", t.bubbleNamespaces.join(", ")]]
+  }))))), /*#__PURE__*/React.createElement(Conditions, {
+    o: t
+  }));
+}
+function TSchedDetail({
+  o: s,
+  nav
+}) {
+  const tests = useResource("tsched.tests|" + s.id, () => drhub.scheduleTests(s.id), 10000);
+  const ts = tests.data || [];
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
+    obj: s,
+    title: s.name,
+    sub: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "mono",
+      style: {
+        color: "var(--dim)"
+      }
+    }, s.namespace), /*#__PURE__*/React.createElement("span", {
+      className: "mono"
+    }, s.schedule, " UTC")),
+    badge: /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, "TestSchedule")
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "State",
+    v: /*#__PURE__*/React.createElement(TrafficLight, {
+      status: s.status
+    })
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Last run",
+    v: s.lastScheduleTime ? fmtDate(s.lastScheduleTime) : "never"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Last success",
+    v: s.lastSuccessfulTime ? fmtDate(s.lastSuccessfulTime) : "—"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Tests kept",
+    v: ts.length,
+    s: `keep last ${(s.retention || {}).keepLast || 10}${(s.retention || {}).keepFor ? " · " + s.retention.keepFor : ""}`
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Passed",
+    v: ts.filter(t => t.outcome === "Passed").length,
+    s: `${ts.filter(t => t.outcome && t.outcome !== "Passed").length} not passed`
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "dcols"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Template"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: [["Path", /*#__PURE__*/React.createElement(Mono, null, s.pathName)], [s.planName ? "Recovery plan" : "Application", /*#__PURE__*/React.createElement(Mono, null, s.targetName)], ["Clone source", s.template.cloneSource || "latest-replicated-snapshot"], ["Hold for", s.template.holdFor || "none"], ["Max lifetime", s.template.maxLifetime || "24h"], ["Active bubble", /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, s.active)]]
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Tests from this schedule"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Test", "Outcome", "Started", "Duration"],
+    empty: "No test has run from this schedule yet.",
+    rows: ts.map(t => [/*#__PURE__*/React.createElement(Ref, {
+      label: t.name,
+      onClick: () => nav.detail(t)
+    }), /*#__PURE__*/React.createElement(TrafficLight, {
+      status: t.status,
+      sm: true
+    }), t.startTime ? fmtDate(t.startTime) : "", t.durationMs != null ? fmtSecs(t.durationMs / 1000) : ""])
+  })))), /*#__PURE__*/React.createElement(Conditions, {
+    o: s
+  }));
+}
+const RESTORE_PHASES = ["Pending", "Restoring", "Reprotecting", "Verifying", "Completed"];
+function RestoreDetail({
+  o: r,
+  nav
+}) {
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
+    obj: r,
+    title: r.name,
+    sub: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "mono",
+      style: {
+        color: "var(--dim)"
+      }
+    }, r.namespace), /*#__PURE__*/React.createElement("span", {
+      className: "mono"
+    }, "application ", r.appName)),
+    badge: /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, "RestoreAction")
+  }), r.message && r.status === "Failed" && /*#__PURE__*/React.createElement("div", {
+    className: "banner"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, r.message)), /*#__PURE__*/React.createElement(PhaseStripDR, {
+    phases: RESTORE_PHASES,
+    current: r.phase,
+    terminal: r.terminal
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "Phase",
+    v: /*#__PURE__*/React.createElement(TrafficLight, {
+      status: r.status
+    })
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Cluster",
+    v: r.cluster || "—"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Restore point",
+    v: r.restorePoint ? fmtDate(r.restorePoint) : "—",
+    s: r.capture ? `capture #${r.capture.number} · ${r.capture.s3Profile}` : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Data loss",
+    v: r.dataLoss || "—",
+    c: r.dataLoss ? "var(--warn)" : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Duration",
+    v: r.durationMs != null ? fmtSecs(r.durationMs / 1000) : "—"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "dcols"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Volumes"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["PVC", "Point"],
+    empty: "No volume listed yet.",
+    rows: r.volumes.map(v => [/*#__PURE__*/React.createElement(Mono, null, v.pvc), v.point ? fmtDate(v.point) : ""])
+  }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Steps"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(StepJournal, {
+    steps: r.steps
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Checks"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Check", "Status", "Message"],
+    empty: "No checks yet.",
+    rows: r.checks.map(c => [/*#__PURE__*/React.createElement(Mono, null, c.name), /*#__PURE__*/React.createElement(TrafficLight, {
+      status: c.status,
+      sm: true
+    }), c.message])
+  }))))));
+}
+function SiteProfileDetail({
+  o: s,
+  nav
+}) {
+  const paths = useResource("sprof.paths|" + s.id, () => drhub.siteProfilePaths(s.id), 15000);
+  const inv = s.inventory,
+    sp = s.spec || {};
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
+    obj: s,
+    title: s.name,
+    sub: /*#__PURE__*/React.createElement("span", {
+      className: "mono",
+      style: {
+        color: "var(--dim)"
+      }
+    }, "SiteProfile \xB7 cluster ", inv.clusterID || s.name),
+    badge: /*#__PURE__*/React.createElement("span", {
+      className: "badge k8s"
+    }, "managed cluster")
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "banner",
+    style: {
+      color: "var(--dim)",
+      borderColor: "var(--line)",
+      background: "var(--panel2)"
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "refresh",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Inventory is rewritten on every scan", s.reportedAt ? `, last ${fmtAgo(s.reportedAt)}` : "", "."), " It is never edited; the bindings in the spec are what a dr-admin sets, and they are written with kubectl in this phase.")), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "Nodes ready",
+    v: `${s.counts.nodesReady}/${s.counts.nodes}`,
+    c: s.counts.nodesReady < s.counts.nodes ? "var(--warn)" : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Zones",
+    v: s.zones.length,
+    s: s.zones.join(", ")
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Storage classes",
+    v: s.storageClasses.length,
+    s: `${s.snapshotClasses.length} snapshot classes`
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Networks",
+    v: s.nads.length,
+    s: `${s.ipAddressPools.length} address pools`
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "On paths",
+    v: (paths.data || []).length
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "dcols"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Nodes"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Node", "Zone", "Ready", "Pod CIDRs"],
+    empty: "No nodes reported.",
+    rows: s.nodes.map(n => [/*#__PURE__*/React.createElement("b", null, n.name), /*#__PURE__*/React.createElement(Mono, null, n.zone), n.ready ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--ok)"
+      }
+    }, "ready") : /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--bad)"
+      }
+    }, "not ready"), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, (n.podCIDRs || []).join(", "))])
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Storage"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Storage class", "Driver"],
+    empty: "None reported.",
+    rows: s.storageClasses.map(c => [/*#__PURE__*/React.createElement(Mono, null, c.name), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, c.driver)])
+  }), !!s.snapshotClasses.length && /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, s.snapshotClasses.map(c => /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    key: c.name
+  }, /*#__PURE__*/React.createElement("i", null, "snapshot class"), c.name)))))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Networking"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["NAD", "Type", "Master / bridge", "VLAN", "IPAM"],
+    empty: "No NetworkAttachmentDefinitions reported.",
+    rows: s.nads.map(n => [/*#__PURE__*/React.createElement(Mono, null, n.namespace, "/", n.name), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, n.type), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, n.master || n.bridge), n.vlan, /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, n.ipamType, (n.ipamRanges || []).length ? " " + n.ipamRanges.join(",") : "")])
+  }), /*#__PURE__*/React.createElement(Props, {
+    rows: [["Pod CIDRs", /*#__PURE__*/React.createElement(Mono, null, (inv.podCIDRs || []).join(", "))], ["Service CIDRs", /*#__PURE__*/React.createElement(Mono, null, (inv.serviceCIDRs || []).join(", "))], ["Ingress domains", /*#__PURE__*/React.createElement(Mono, null, (inv.ingressDomains || []).join(", "))], ["Base domain", /*#__PURE__*/React.createElement(Mono, null, inv.baseDomain)], ["Ingress classes", /*#__PURE__*/React.createElement(Mono, null, (s.ingressClasses || []).map(c => c.name).join(", "))], ["Gateway classes", /*#__PURE__*/React.createElement(Mono, null, (s.gatewayClasses || []).map(c => c.name).join(", "))]]
+  }), !!s.ipAddressPools.length && /*#__PURE__*/React.createElement(Table, {
+    cols: ["Address pool", "Addresses", "Auto-assign"],
+    rows: s.ipAddressPools.map(p => [/*#__PURE__*/React.createElement(Mono, null, p.ns ? p.ns + "/" : "", p.name), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, (p.addresses || []).join(", ")), p.autoAssign ? "yes" : "no"])
+  }), !!s.registryMirrors.length && /*#__PURE__*/React.createElement(Table, {
+    cols: ["Registry", "Mirrors"],
+    rows: s.registryMirrors.map(m => [/*#__PURE__*/React.createElement(Mono, null, m.source), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, (m.mirrors || []).join(", "))])
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Bindings (spec)"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: [["Logical networks", (sp.logicalNetworks || []).map(l => `${l.role} → ${l.nad}`).join("; ")], ["Guest networks", (sp.guestNetworks || []).map(g => `${g.role}: ${g.cidr}`).join("; ")], ["Address pools", (sp.addressPools || []).map(a => `${a.role} → ${a.pool}`).join("; ")], ["Domains", sp.domains ? JSON.stringify(sp.domains) : ""], ["Registry mirror", sp.registryMirror], ["DHCP server", refName2(sp.dhcpServerRef)]]
+  }))))), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "DR paths touching this site"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "grid"
+  }, (paths.data || []).map(p => /*#__PURE__*/React.createElement(DRPathTile, {
+    key: p.id,
+    o: p,
+    nav: nav
+  }))), /*#__PURE__*/React.createElement(Conditions, {
+    o: s
+  }));
+}
+function DRConfigView({
+  nav
+}) {
+  const {
+    data: c,
+    loading,
+    error,
+    reload
+  } = useResource("drconfig", () => drhub.config(), 10000);
+  if (error) return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 22,
+    c: "var(--bad)"
+  }), /*#__PURE__*/React.createElement("b", null, "Cannot read the DR configuration"), /*#__PURE__*/React.createElement("span", null, error.message), /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: reload
+  }, "Retry")));
+  if (loading || !c) return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, Array.from({
+    length: 4
+  }).map((_, i) => /*#__PURE__*/React.createElement("div", {
+    className: "skel",
+    key: i,
+    style: {
+      height: 62
+    }
+  }))));
+  const ex = c.executor || {},
+    ag = c.agent || {},
+    rm = c.ramen || {},
+    ar = c.archive || {},
+    bs = c.bootstrap || {},
+    fg = c.featureGates || {};
+  return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement(DetailHead, {
+    obj: c,
+    title: "DR configuration",
+    sub: /*#__PURE__*/React.createElement("span", {
+      className: "mono",
+      style: {
+        color: "var(--dim)"
+      }
+    }, "DRConfig/", c.name),
+    badge: /*#__PURE__*/React.createElement(React.Fragment, null, c.recoveryMode && /*#__PURE__*/React.createElement("span", {
+      className: "badge",
+      style: {
+        color: "var(--warn)"
+      }
+    }, "recovery mode \u2014 controllers held"))
+  }), c.ramenConfigured === false && /*#__PURE__*/React.createElement("div", {
+    className: "banner"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Ramen is not configured by the hub."), " ", (c.conditions.find(x => x.type === "RamenConfigured") || {}).message)), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "Agents",
+    v: `${c.counts.agentsAvailable}/${c.counts.agents}`,
+    s: "dr-agent available per cluster",
+    c: c.counts.agentsAvailable < c.counts.agents ? "var(--warn)" : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Executor",
+    v: ex.default || "inCluster",
+    s: ex.aap ? ex.aap.url : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Ramen",
+    v: c.ramenConfigured === true ? "configured" : c.ramenConfigured === false ? "not configured" : "—",
+    s: rm.managed ? "managed by dr-hub" : "external configuration"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Archive",
+    v: c.archive ? "S3" : "none",
+    s: c.archive ? `${ar.bucket} · ${ar.prefix || "dr/"}` : "runs are never pruned without an archive"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Last state bundle",
+    v: c.lastBundle ? fmtAgo(c.lastBundle.time) : "—",
+    s: c.lastBundle ? `generation ${c.lastBundle.generation} · ${c.lastBundle.objects} objects` : ""
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "dcols"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Agents"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Cluster", "Available", "Version", "Velero namespace", "Last seen"],
+    empty: "No agent has reported yet.",
+    rows: c.agents.map(a => [/*#__PURE__*/React.createElement("b", null, a.cluster), a.available ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--ok)"
+      }
+    }, "yes") : /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--bad)"
+      }
+    }, "no"), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, a.version), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, a.veleroNamespace), a.lastSeen ? fmtAgo(a.lastSeen) : ""])
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      margin: "12px 0 8px"
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Site stack"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement(Table, {
+    cols: ["Cluster", "Version", "Applied", "Message"],
+    empty: "No stack delivered yet.",
+    rows: c.stack.map(s => [/*#__PURE__*/React.createElement("b", null, s.cluster), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, s.version), s.applied ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--ok)"
+      }
+    }, "yes") : /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--warn)"
+      }
+    }, "pending"), s.message])
+  }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Settings"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: [["Agent namespace", /*#__PURE__*/React.createElement(Mono, null, ag.namespace)], ["Agent status interval", ag.statusInterval], ["Hook image allow-list", (ag.hookImageAllowList || []).join(", ")], ["Ramen namespace", /*#__PURE__*/React.createElement(Mono, null, rm.namespace)], ["Ramen config", /*#__PURE__*/React.createElement(Mono, null, rm.configMapName)], ["Velero namespace", /*#__PURE__*/React.createElement(Mono, null, rm.veleroNamespace)], ["Ops namespace", /*#__PURE__*/React.createElement(Mono, null, rm.opsNamespace)], ["Retention", `${(c.retention || {}).days || 90} days · keep ${(c.retention || {}).keepPerApplication || 10} per application`], ["Bootstrap image registry", /*#__PURE__*/React.createElement(Mono, null, bs.imageRegistry)], ["Feature gates", Object.entries(fg).filter(([, v]) => v).map(([k]) => k).join(", ") || "none"]]
+  }))), c.archive && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Archive"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: [["Endpoint", /*#__PURE__*/React.createElement(Mono, null, ar.endpoint)], ["Bucket", /*#__PURE__*/React.createElement(Mono, null, ar.bucket)], ["Region", ar.region], ["Prefix", /*#__PURE__*/React.createElement(Mono, null, ar.prefix || "dr/")], ["Credentials", /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, refName2(ar.credentialsSecretRef))], ["Report object lock", ar.reportRetainDays ? `${ar.reportRetainDays} days` : "off"], ["State bundle", (ar.bundle || {}).disabled ? "disabled" : `every ${(ar.bundle || {}).interval || "5m"} · retain ${(ar.bundle || {}).retainDays || 30} days`], c.lastBundle && ["Last bundle key", /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, c.lastBundle.key)]]
+  }))))), /*#__PURE__*/React.createElement(Conditions, {
+    o: c
+  }));
+}
+
+// ---- home: the policy dashboard -----------------------------------------------
+function DrHubHome({
+  nav
+}) {
+  const plans = useResource("drhub.plans", () => drhub.plans(), 10000);
+  const paths = useResource("drhub.paths", () => drhub.paths(), 10000);
+  const apps = useResource("drhub.apps", () => drhub.apps(), 6000);
+  const runs = useResource("drhub.runs", () => Promise.all([drhub.actions(), drhub.tests()]), 6000);
+  const cfg = useResource("drhub.cfg", () => drhub.config().catch(() => null), 15000);
+  const acc = useAccess();
+  const ps = plans.data || [],
+    dp = paths.data || [],
+    as = apps.data || [];
+  const [actions, tests] = runs.data || [[], []];
+  const running = [...actions, ...tests].filter(r => !r.terminal);
+  const failed = actions.filter(a => a.status === "Failed" && a.completionTime && Date.now() - Date.parse(a.completionTime) < 7 * 86400e3);
+  const c = cfg.data;
+  const err = plans.error || paths.error || apps.error;
+  const byV = v => as.filter(a => a.verdict === v).length;
+  const mayPlan = acc.can("create", "drhub", {
+    kind: "pplan"
+  });
+  const mayPath = acc.can("create", "drhub", {
+    kind: "drpath"
+  });
+  const mayApp = acc.can("create", "drhub", {
+    kind: "papp",
+    namespace: DR_NS()
+  });
+  const gate = (ok, el, why) => ok ? el : React.cloneElement(el, {
+    disabled: true,
+    title: why,
+    onClick: undefined
+  });
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "dhead"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("h1", null, "Disaster recovery"), /*#__PURE__*/React.createElement("div", {
+    className: "dsub"
+  }, "Plans declare sites and replication; DR paths declare directions; applications are protected along them. Every screen is a CR on the hub, every write a CR write with your RBAC.")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap"
+    }
+  }, gate(mayApp, /*#__PURE__*/React.createElement("button", {
+    className: "btn",
+    onClick: () => window.__ui.dialog(protectAppDialogDR(ps, c), {
+      kind: "papp",
+      id: "new"
+    })
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "shield",
+    s: 12
+  }), "Protect application"), acc.why("create", "drhub", {
+    kind: "papp",
+    namespace: DR_NS()
+  })), gate(mayPath, /*#__PURE__*/React.createElement("button", {
+    className: "btn",
+    onClick: () => window.__ui.dialog(newPathDialog(ps), {
+      kind: "drpath",
+      id: "new"
+    })
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "swap",
+    s: 12
+  }), "Declare path"), acc.why("create", "drhub", {
+    kind: "drpath"
+  })), gate(mayPlan, /*#__PURE__*/React.createElement("button", {
+    className: "btn primary",
+    onClick: () => window.__ui.dialog(newPlanDialog(), {
+      kind: "pplan",
+      id: "new"
+    })
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "plus",
+    s: 12
+  }), "New plan"), acc.why("create", "drhub", {
+    kind: "pplan"
+  })))), err && /*#__PURE__*/React.createElement("div", {
+    className: "banner"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Cannot read the DR hub."), " ", err.message, err.status === 404 ? " — the dr.simplyblock.io CRDs are not installed on this cluster." : err.status === 403 ? " — the console's identity lacks list on dr.simplyblock.io; bind dr-viewer or a wider role." : "")), c && c.counts.agents > 0 && c.counts.agentsAvailable < c.counts.agents && /*#__PURE__*/React.createElement("div", {
+    className: "banner"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, c.counts.agents - c.counts.agentsAvailable, " site", c.counts.agents - c.counts.agentsAvailable === 1 ? "" : "s", " without dr-agent."), " ", c.agents.filter(a => !a.available).map(a => a.cluster).join(", "), " \u2014 hooks, probes, tests and zone moves cannot run there.")), c && c.recoveryMode && /*#__PURE__*/React.createElement("div", {
+    className: "banner",
+    style: {
+      color: "var(--warn)",
+      borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)",
+      background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Recovery mode."), " The hub's controllers are held while the DR state is restored.")), !!failed.length && /*#__PURE__*/React.createElement("div", {
+    className: "banner"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, failed.length, " action", failed.length === 1 ? "" : "s", " failed in the last 7 days:"), " ", failed.slice(0, 4).map(a => /*#__PURE__*/React.createElement(Ref, {
+    key: a.id,
+    label: a.name,
+    onClick: () => nav.detail(a)
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "Plans",
+    v: ps.length,
+    s: `${ps.filter(p => p.status === "Ready").length} ready`,
+    c: ps.some(p => p.status === "NotReady") ? "var(--bad)" : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "DR paths",
+    v: dp.length,
+    s: `${dp.filter(p => p.status === "Invalid").length} invalid · ${dp.filter(p => p.profileConsistency === "Inconsistent").length} inconsistent`
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Applications",
+    v: as.length,
+    s: `${byV("Ready")} ready · ${byV("Degraded")} degraded · ${byV("NotReady")} not ready`,
+    c: byV("NotReady") ? "var(--bad)" : byV("Degraded") ? "var(--warn)" : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Running now",
+    v: running.length,
+    s: `${actions.filter(a => !a.terminal).length} actions · ${tests.filter(t => !t.terminal).length} tests`,
+    c: running.length ? "var(--info)" : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Sites with agent",
+    v: c ? `${c.counts.agentsAvailable}/${c.counts.agents}` : "—",
+    c: c && c.counts.agentsAvailable < c.counts.agents ? "var(--warn)" : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Last failover RTO",
+    v: (() => {
+      const f = actions.filter(a => a.action === "Failover" && a.rtoSeconds != null).sort((x, y) => Date.parse(y.completionTime) - Date.parse(x.completionTime))[0];
+      return f ? fmtSecs(f.rtoSeconds) : "—";
+    })()
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Readiness matrix \xB7 application \xD7 declared path"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: () => nav.drLayer("protectedapps")
+  }, "Open applications")), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      overflowX: "auto"
+    }
+  }, !as.length ? /*#__PURE__*/React.createElement("div", {
+    className: "nolim"
+  }, "No protected application yet.") : /*#__PURE__*/React.createElement(Table, {
+    cols: ["Application", "Plan", "Now on", ...dp.map(p => `${p.from}→${p.to}`)],
+    rows: as.map(a => [/*#__PURE__*/React.createElement(Ref, {
+      label: `${a.namespace}/${a.name}`,
+      onClick: () => nav.detail(a)
+    }), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, a.planName), /*#__PURE__*/React.createElement(Mono, null, a.currentCluster), ...dp.map(p => {
+      const x = a.paths.find(y => y.name === p.name);
+      return x ? /*#__PURE__*/React.createElement("span", {
+        title: x.checks.filter(c => c.status === "Fail").map(c => c.name).join(", ")
+      }, /*#__PURE__*/React.createElement(VerdictBadge, {
+        v: x.verdict,
+        sm: true
+      })) : /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: "var(--dim2)"
+        }
+      }, "\xB7");
+    })])
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: "9px 0 0"
+    }
+  }, "Columns are exactly the declared paths. A dot means the path does not cover that application; a Relocate-only path is never red for a missing rehearsal."))), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Protection plans"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: () => nav.drLayer("plans")
+  }, "Open all")), ps.length ? /*#__PURE__*/React.createElement("div", {
+    className: "grid"
+  }, ps.slice(0, 6).map(p => /*#__PURE__*/React.createElement(PPlanTile, {
+    key: p.id,
+    o: p,
+    nav: nav
+  }))) : plans.loading ? /*#__PURE__*/React.createElement("div", {
+    className: "grid"
+  }, [0, 1, 2].map(i => /*#__PURE__*/React.createElement("div", {
+    className: "skel",
+    key: i
+  }))) : /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "shield",
+    s: 22
+  }), /*#__PURE__*/React.createElement("b", null, "No protection plan"), /*#__PURE__*/React.createElement("span", null, "Start by declaring the sites and the replication method.")), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "DR paths"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: () => nav.drLayer("paths")
+  }, "Open all")), !!dp.length && /*#__PURE__*/React.createElement("div", {
+    className: "grid"
+  }, dp.slice(0, 6).map(p => /*#__PURE__*/React.createElement(DRPathTile, {
+    key: p.id,
+    o: p,
+    nav: nav
+  }))), !dp.length && !paths.loading && /*#__PURE__*/React.createElement("div", {
+    className: "nolim"
+  }, "No DR path declared \u2014 applications cannot become Ready without one."), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Recent runs"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: () => nav.drLayer("ractions")
+  }, "Actions"), /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: () => nav.drLayer("tests")
+  }, "Tests"), /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: () => nav.drLayer("tschedules")
+  }, "Schedules")), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(RunList, {
+    actions: actions,
+    tests: tests,
+    nav: nav,
+    limit: 12
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "More"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "navcards"
+  }, /*#__PURE__*/React.createElement(NavCard, {
+    icon: "list",
+    title: "Recovery plans",
+    sub: "ordered sets of applications",
+    count: "\u2192",
+    onClick: () => nav.drLayer("rplans")
+  }), /*#__PURE__*/React.createElement(NavCard, {
+    icon: "cloud",
+    title: "Restores",
+    sub: "from S3 backups onto rebuilt sites",
+    count: "\u2192",
+    onClick: () => nav.drLayer("restores")
+  }), /*#__PURE__*/React.createElement(NavCard, {
+    icon: "k8s",
+    title: "Site profiles",
+    sub: "per-cluster inventory",
+    count: "\u2192",
+    onClick: () => nav.drLayer("siteprofiles")
+  }), /*#__PURE__*/React.createElement(NavCard, {
+    icon: "gauge",
+    title: "DR configuration",
+    sub: "agents, Ramen, archive, executor",
+    count: "\u2192",
+    onClick: () => nav.drLayer("drconfig")
+  })));
+}
+Object.assign(window, {
+  DrHubHome,
+  DRConfigView,
+  PPlanTile,
+  DRPathTile,
+  PAppTile,
+  RPlanTile,
+  RActionTile,
+  TBubbleTile,
+  TSchedTile,
+  RestoreTile,
+  SiteProfileTile,
+  PPlanDetail,
+  DRPathDetail,
+  PAppDetail,
+  RPlanDetail,
+  RActionDetail,
+  TBubbleDetail,
+  TSchedDetail,
+  RestoreDetail,
+  SiteProfileDetail,
+  runActionDialog,
+  runTestDialog,
+  restoreDialog,
+  newPPlanDialog: newPlanDialog,
+  newPathDialog,
+  protectAppDialogDR,
+  newRPlanDialog,
+  newScheduleDialog,
+  ACTION_KIND_META,
+  KIND_LABEL_DR
+});
+})();
 // ---- details-data.jsx ----
 (function(){
 function PoolDetail({
@@ -21913,8 +27036,6 @@ const DETAIL_KIND = {
   pair: "PairDetail",
   rpolicy: "RPolicyDetail",
   zone: "ZoneDetail",
-  plan: "PlanDetail",
-  site: "SiteDetail",
   slot: "SlotDetail",
   replops: "ReplOpsDetail",
   cgroup: "CgroupDetail",
@@ -21924,7 +27045,16 @@ const DETAIL_KIND = {
   storageclass: "StorageClassDetail",
   pvc: "PvcDetail",
   bucket: "BucketDetail",
-  protectedapp: "ProtectedAppDetail",
+  // DR hub kinds live in drhub.jsx
+  pplan: "PPlanDetail",
+  drpath: "DRPathDetail",
+  papp: "PAppDetail",
+  rplan: "RPlanDetail",
+  raction: "RActionDetail",
+  tbubble: "TBubbleDetail",
+  tsched: "TSchedDetail",
+  restore: "RestoreDetail",
+  siteprofile: "SiteProfileDetail",
   deployconfig: "DeployConfigDetail",
   mpath: "MPathDetail",
   appgroup: "AppGroupDetail"
@@ -21951,6 +27081,20 @@ Object.assign(window, {
 })();
 // ---- app.jsx ----
 (function(){
+// Console mode. "full" is the storage control plane console with a DR section;
+// "dr" is the stripped-down DR console deployed next to dr-hub on a hub that
+// has no simplyblock control plane: only the DR section exists, nothing reads
+// the storage CRDs or the operator API.
+const DR_ONLY = (window.SB_CONFIG || {}).mode === "dr"
+// design preview only: ?mode=dr on the fixture backend shows the DR-only console
+|| !!(window.SB_CONFIG || {}).mock && new URLSearchParams(location.search).get("mode") === "dr";
+const ROOT_PATH = DR_ONLY ? [{
+  t: "dr"
+}] : [{
+  t: "clusters"
+}];
+// Layers that need the storage operator: hidden in DR-only mode.
+const STORAGE_DR_LAYERS = ["pairs", "rpolicies", "slots", "replops", "zones", "mpaths", "appgroups"];
 const LAYER_META = {
   clusters: {
     label: "Clusters",
@@ -22023,19 +27167,73 @@ const LAYER_META = {
     label: "Disaster recovery",
     icon: "shield"
   },
+  // DR hub (dr.simplyblock.io) — the detail layer name is the view-model kind
   plans: {
     label: "Protection plans",
     icon: "shield"
   },
-  plan: {
+  pplan: {
     icon: "shield"
   },
-  sites: {
-    label: "Sites",
+  paths: {
+    label: "DR paths",
+    icon: "swap"
+  },
+  drpath: {
+    icon: "swap"
+  },
+  protectedapps: {
+    label: "Protected applications",
+    icon: "cluster"
+  },
+  papp: {
+    icon: "cluster"
+  },
+  rplans: {
+    label: "Recovery plans",
+    icon: "list"
+  },
+  rplan: {
+    icon: "list"
+  },
+  ractions: {
+    label: "Recovery actions",
+    icon: "clock"
+  },
+  raction: {
+    icon: "clock"
+  },
+  tests: {
+    label: "Tests",
+    icon: "camera"
+  },
+  tbubble: {
+    icon: "camera"
+  },
+  tschedules: {
+    label: "Test schedules",
+    icon: "clock"
+  },
+  tsched: {
+    icon: "clock"
+  },
+  restores: {
+    label: "Restores",
+    icon: "cloud"
+  },
+  restore: {
+    icon: "cloud"
+  },
+  siteprofiles: {
+    label: "Site profiles",
     icon: "k8s"
   },
-  site: {
+  siteprofile: {
     icon: "k8s"
+  },
+  drconfig: {
+    label: "DR configuration",
+    icon: "gauge"
   },
   slots: {
     label: "Replication slots",
@@ -22136,13 +27334,6 @@ const LAYER_META = {
   bucket: {
     icon: "cloud"
   },
-  protectedapps: {
-    label: "Protected applications",
-    icon: "cluster"
-  },
-  protectedapp: {
-    icon: "cluster"
-  },
   mpaths: {
     label: "Migration paths",
     icon: "move"
@@ -22194,20 +27385,76 @@ const pV = (cid, pid, vid) => [...pP(cid, pid), {
   t: "volume",
   id: vid
 }];
-const pPlan = id => [{
+const pPPlan = id => [{
   t: "dr"
 }, {
   t: "plans"
 }, {
-  t: "plan",
+  t: "pplan",
   id
 }];
-const pSite = id => [{
+const pDRPath = id => [{
   t: "dr"
 }, {
-  t: "sites"
+  t: "paths"
 }, {
-  t: "site",
+  t: "drpath",
+  id
+}];
+const pPApp = id => [{
+  t: "dr"
+}, {
+  t: "protectedapps"
+}, {
+  t: "papp",
+  id
+}];
+const pRPlan = id => [{
+  t: "dr"
+}, {
+  t: "rplans"
+}, {
+  t: "rplan",
+  id
+}];
+const pRAction = id => [{
+  t: "dr"
+}, {
+  t: "ractions"
+}, {
+  t: "raction",
+  id
+}];
+const pTBubble = id => [{
+  t: "dr"
+}, {
+  t: "tests"
+}, {
+  t: "tbubble",
+  id
+}];
+const pTSched = id => [{
+  t: "dr"
+}, {
+  t: "tschedules"
+}, {
+  t: "tsched",
+  id
+}];
+const pRestore = id => [{
+  t: "dr"
+}, {
+  t: "restores"
+}, {
+  t: "restore",
+  id
+}];
+const pSProf = id => [{
+  t: "dr"
+}, {
+  t: "siteprofiles"
+}, {
+  t: "siteprofile",
   id
 }];
 const pPair = id => [{
@@ -22292,14 +27539,6 @@ const pPvc = (kid, id) => [...pK(kid), {
   t: "pvc",
   id
 }];
-const pApp = id => [{
-  t: "dr"
-}, {
-  t: "protectedapps"
-}, {
-  t: "protectedapp",
-  id
-}];
 const pMp = id => [{
   t: "dr"
 }, {
@@ -22314,7 +27553,7 @@ const pAg = (pid, id) => [...pMp(pid), {
   t: "appgroup",
   id
 }];
-const detailPath = o => o.kind === "cluster" ? pC(o.id) : o.kind === "deployconfig" ? pDep(o.k8sClusterId, o.id) : o.kind === "host" ? pH(o.clusterId, o.id) : o.kind === "node" ? pN(o.clusterId, o.id) : o.kind === "device" ? pD(o.clusterId, o.nodeId, o.id) : o.kind === "pool" ? pP(o.clusterId, o.id) : o.kind === "volume" ? pV(o.clusterId, o.poolId, o.id) : o.kind === "plan" ? pPlan(o.id) : o.kind === "site" ? pSite(o.id) : o.kind === "pair" ? pPair(o.id) : o.kind === "slot" ? pSlot(o.id) : o.kind === "replops" ? pReplOp(o.id) : o.kind === "rpolicy" ? pRPol(o.id) : o.kind === "zone" ? pZone(o.id) : o.kind === "protectedapp" ? pApp(o.id) : o.kind === "mpath" ? pMp(o.id) : o.kind === "appgroup" ? pAg(o.pathId, o.id) : o.kind === "bucket" ? pBucket(o.clusterId, o.id) : o.kind === "k8sc" ? pK(o.id) : o.kind === "storageclass" ? pSc(o.k8sClusterId, o.id) : o.kind === "pvc" ? pPvc(o.k8sClusterId, o.id) : o.kind === "migration" ? pMig(o.sourceClusterId || o.clusterId, o.id) : o.kind === "cgroup" ? pCg(o.clusterId, o.id) : o.kind === "cgsnapshot" ? [...pCg(o.clusterId, o.cgId), {
+const detailPath = o => o.kind === "cluster" ? pC(o.id) : o.kind === "deployconfig" ? pDep(o.k8sClusterId, o.id) : o.kind === "host" ? pH(o.clusterId, o.id) : o.kind === "node" ? pN(o.clusterId, o.id) : o.kind === "device" ? pD(o.clusterId, o.nodeId, o.id) : o.kind === "pool" ? pP(o.clusterId, o.id) : o.kind === "volume" ? pV(o.clusterId, o.poolId, o.id) : o.kind === "pplan" ? pPPlan(o.id) : o.kind === "drpath" ? pDRPath(o.id) : o.kind === "papp" ? pPApp(o.id) : o.kind === "rplan" ? pRPlan(o.id) : o.kind === "raction" ? pRAction(o.id) : o.kind === "tbubble" ? pTBubble(o.id) : o.kind === "tsched" ? pTSched(o.id) : o.kind === "restore" ? pRestore(o.id) : o.kind === "siteprofile" ? pSProf(o.id) : o.kind === "pair" ? pPair(o.id) : o.kind === "slot" ? pSlot(o.id) : o.kind === "replops" ? pReplOp(o.id) : o.kind === "rpolicy" ? pRPol(o.id) : o.kind === "zone" ? pZone(o.id) : o.kind === "mpath" ? pMp(o.id) : o.kind === "appgroup" ? pAg(o.pathId, o.id) : o.kind === "bucket" ? pBucket(o.clusterId, o.id) : o.kind === "k8sc" ? pK(o.id) : o.kind === "storageclass" ? pSc(o.k8sClusterId, o.id) : o.kind === "pvc" ? pPvc(o.k8sClusterId, o.id) : o.kind === "migration" ? pMig(o.sourceClusterId || o.clusterId, o.id) : o.kind === "cgroup" ? pCg(o.clusterId, o.id) : o.kind === "cgsnapshot" ? [...pCg(o.clusterId, o.cgId), {
   t: "cgsnapshots"
 }, {
   t: "cgsnapshot",
@@ -22337,7 +27576,7 @@ const detailPath = o => o.kind === "cluster" ? pC(o.id) : o.kind === "deployconf
 }];
 const nameOf = o => o.hostname || o.name || (o.mode === "nvme" ? o.serial : o.blockdev) || o.serial || o.chainId || "";
 const segLabel = s => s.id ? REG[s.id] ? nameOf(REG[s.id]) : shortId(s.id) : LAYER_META[s.t].label;
-const searchable = o => [nameOf(o), o.id, o.ip, o.mgmtIp, o.serial, o.pcie, o.blockdev, o.failureDomain, o.owner, o.storageClass, ...Object.entries(o.tags || {}).map(([k, v]) => `${k}=${v}`), o.physicalLabel, o.poolName, o.volumeName, o.chainId, o.bucket, o.type, o.finest, o.rack, o.cabinet, o.hostClass, o.location, o.region, o.mode, o.replication && o.replication.policyName, o.sourceClusterId && regName(o.sourceClusterId), o.targetClusterId && regName(o.targetClusterId)].filter(Boolean).join(" ").toLowerCase();
+const searchable = o => [nameOf(o), o.id, o.ip, o.mgmtIp, o.serial, o.pcie, o.blockdev, o.failureDomain, o.owner, o.storageClass, ...Object.entries(o.tags || {}).map(([k, v]) => `${k}=${v}`), o.physicalLabel, o.poolName, o.volumeName, o.chainId, o.bucket, o.type, o.finest, o.rack, o.cabinet, o.hostClass, o.location, o.region, o.mode, o.namespace, o.planName, o.pathName, o.from, o.to, o.appName, o.targetName, o.currentCluster, o.action, o.phase, o.verdict, o.schedule, o.replication && o.replication.policyName, o.sourceClusterId && regName(o.sourceClusterId), o.targetClusterId && regName(o.targetClusterId)].filter(Boolean).join(" ").toLowerCase();
 const healthOf = o => (STATUS_META[o.status] || {
   rank: 9
 }).rank;
@@ -22416,8 +27655,15 @@ const SORT_KEYS = {
   snapshot: ["newest", "oldest", "size", "name"],
   backup: ["newest", "oldest", "size", "name", "health"],
   policy: ["name", "members"],
-  plan: ["health", "name", "members", "newest"],
-  site: ["health", "name", "members"],
+  pplan: ["health", "name", "newest"],
+  drpath: ["health", "name", "newest"],
+  papp: ["health", "name", "newest"],
+  rplan: ["health", "name", "newest"],
+  raction: ["newest", "health", "name", "oldest"],
+  tbubble: ["newest", "health", "name", "oldest"],
+  tsched: ["health", "name", "newest"],
+  restore: ["newest", "health", "name"],
+  siteprofile: ["health", "name"],
   pair: ["health", "name", "slots", "newest"],
   slot: ["health", "name", "newest"],
   replops: ["newest", "health", "name"],
@@ -22429,8 +27675,7 @@ const SORT_KEYS = {
   k8sc: ["health", "name", "members"],
   storageclass: ["name", "members", "cap"],
   pvc: ["health", "name", "cap", "newest"],
-  bucket: ["health", "name", "util", "cap", "newest"],
-  protectedapp: ["health", "name", "newest"]
+  bucket: ["health", "name", "util", "cap", "newest"]
 };
 const clusterOf = seg => seg.t === "cluster" ? seg.id : (REG[seg.id] || {}).clusterId;
 // Each view advertises the surface that actually backs it: a CRD, a core object,
@@ -22439,6 +27684,7 @@ const G_ = "/apis/storage.simplyblock.io/v1alpha1/namespaces/{ns}";
 const crd = (p, sel) => `GET ${G_}/${p}${sel ? "?labelSelector=" + sel.replace("storage.simplyblock.io/", "…/") : ""}`;
 const crd1 = p => `GET ${G_}/${p}/{name}`;
 const prop = p => `GET /operator/v1/proposed/${p}`;
+const drcrd = (p, ns) => `GET /apis/dr.simplyblock.io/v1alpha1${ns ? "/namespaces/{ns}" : ""}/${p}`;
 const OWNER = "storage.simplyblock.io/owner-name";
 const CLUS = "storage.simplyblock.io/cluster";
 const PV = "/api/v1/persistentvolumes";
@@ -22493,10 +27739,51 @@ const VIEWS = {
     load: p => api.mpathGroups(p.id),
     api: () => prop("migration-paths/{uuid}/app-groups")
   },
+  // ---- DR hub: every layer is a CR list, scoped client-side by the parent ----
+  plans: {
+    kind: "pplan",
+    load: () => drhub.plans(),
+    api: () => drcrd("protectionplans")
+  },
+  paths: {
+    kind: "drpath",
+    load: p => p.t === "pplan" ? drhub.planPaths(p.id) : p.t === "siteprofile" ? drhub.siteProfilePaths(p.id) : drhub.paths(),
+    api: () => drcrd("drpaths")
+  },
   protectedapps: {
-    kind: "protectedapp",
-    load: p => p.t === "plan" ? api.planApps(p.id) : p.t === "site" ? api.siteApps(p.id) : p.t === "rpolicy" ? api.rpolicyApps(p.id) : api.protectedApps(),
-    api: p => prop(p.t === "plan" ? "protection-plans/{uuid}/protected-apps" : p.t === "site" ? "dr-sites/{uuid}/protected-apps" : p.t === "rpolicy" ? "replication-policies/{uuid}/protected-apps" : "protected-apps")
+    kind: "papp",
+    load: p => p.t === "pplan" ? drhub.planApps(p.id) : p.t === "drpath" ? drhub.pathApps(p.id) : drhub.apps(),
+    api: () => drcrd("protectedapplications", true)
+  },
+  rplans: {
+    kind: "rplan",
+    load: p => p.t === "drpath" ? drhub.pathRPlans(p.id) : drhub.rplans(),
+    api: () => drcrd("recoveryplans", true)
+  },
+  ractions: {
+    kind: "raction",
+    load: p => p.t === "papp" ? drhub.appActions(p.id) : p.t === "rplan" ? drhub.rplanActions(p.id) : p.t === "drpath" ? drhub.pathActions(p.id) : drhub.actions(),
+    api: () => drcrd("recoveryactions", true)
+  },
+  tests: {
+    kind: "tbubble",
+    load: p => p.t === "papp" ? drhub.appTests(p.id) : p.t === "rplan" ? drhub.rplanTests(p.id) : p.t === "drpath" ? drhub.pathTests(p.id) : p.t === "tsched" ? drhub.scheduleTests(p.id) : drhub.tests(),
+    api: () => drcrd("testbubbles", true)
+  },
+  tschedules: {
+    kind: "tsched",
+    load: p => p.t === "papp" ? drhub.appSchedules(p.id) : drhub.schedules(),
+    api: () => drcrd("testschedules", true)
+  },
+  restores: {
+    kind: "restore",
+    load: p => p.t === "papp" ? drhub.appRestores(p.id) : drhub.restores(),
+    api: () => drcrd("restoreactions", true)
+  },
+  siteprofiles: {
+    kind: "siteprofile",
+    load: () => drhub.siteProfiles(),
+    api: () => "GET /apis/sitemap.simplyblock.io/v1alpha1/siteprofiles"
   },
   storageclasses: {
     kind: "storageclass",
@@ -22522,16 +27809,6 @@ const VIEWS = {
     kind: "cgsnapshot",
     load: p => api.cgSnapshots(p.id),
     api: () => prop("cg-snapshots?group={uuid}")
-  },
-  plans: {
-    kind: "plan",
-    load: p => p.t === "site" ? api.sitePlans(p.id) : api.plans(),
-    api: p => prop(p.t === "site" ? "dr-sites/{uuid}/protection-plans" : "protection-plans")
-  },
-  sites: {
-    kind: "site",
-    load: p => p.t === "plan" ? api.planSites(p.id) : api.sites(),
-    api: p => prop(p.t === "plan" ? "protection-plans/{uuid}/sites" : "dr-sites")
   },
   // replication reads three CRD lists and joins them: the resources reference
   // each other by name and carry no rollups
@@ -22593,8 +27870,15 @@ const DETAIL_API = {
   pvc: "GET /api/v1/namespaces/{ns}/persistentvolumeclaims/{name}",
   snapshot: prop("snapshots/{uuid}"),
   policy: prop("backup-policies/{uuid}"),
-  plan: prop("protection-plans/{uuid}"),
-  site: prop("dr-sites/{uuid}"),
+  pplan: drcrd("protectionplans/{name}"),
+  drpath: drcrd("drpaths/{name}"),
+  papp: drcrd("protectedapplications/{name}", true),
+  rplan: drcrd("recoveryplans/{name}", true),
+  raction: drcrd("recoveryactions/{name}", true),
+  tbubble: drcrd("testbubbles/{name}", true),
+  tsched: drcrd("testschedules/{name}", true),
+  restore: drcrd("restoreactions/{name}", true),
+  siteprofile: "GET /apis/sitemap.simplyblock.io/v1alpha1/siteprofiles/{name}",
   pair: crd1("replicationpairs"),
   rpolicy: crd1("replicationpolicies"),
   slot: crd1("replicationslots"),
@@ -22605,7 +27889,6 @@ const DETAIL_API = {
   migration: prop("migrations/{uuid}"),
   k8sc: prop("kubernetes-clusters/{uuid}"),
   bucket: prop("buckets/{uuid}"),
-  protectedapp: prop("protected-apps/{uuid}"),
   mpath: prop("migration-paths/{uuid}"),
   appgroup: prop("app-groups/{uuid}"),
   deployconfig: crd1("clusterdeploymentconfigs")
@@ -22620,8 +27903,15 @@ const KIND_LABEL = {
   snapshot: "snapshot",
   backup: "backup",
   policy: "backup policy",
-  plan: "protection plan",
-  site: "site",
+  pplan: "protection plan",
+  drpath: "DR path",
+  papp: "protected application",
+  rplan: "recovery plan",
+  raction: "recovery action",
+  tbubble: "test",
+  tsched: "test schedule",
+  restore: "restore",
+  siteprofile: "site profile",
   pair: "replication pair",
   rpolicy: "replication policy",
   slot: "replication slot",
@@ -22634,7 +27924,6 @@ const KIND_LABEL = {
   storageclass: "storage class",
   pvc: "persistent volume claim",
   bucket: "bucket",
-  protectedapp: "protected application",
   deployconfig: "deployment document",
   mpath: "migration path",
   appgroup: "application group"
@@ -22914,8 +28203,15 @@ const TILE = {
   snapshot: SnapshotTile,
   backup: BackupTile,
   policy: PolicyTile,
-  plan: PlanTile,
-  site: SiteTile,
+  pplan: PPlanTile,
+  drpath: DRPathTile,
+  papp: PAppTile,
+  rplan: RPlanTile,
+  raction: RActionTile,
+  tbubble: TBubbleTile,
+  tsched: TSchedTile,
+  restore: RestoreTile,
+  siteprofile: SiteProfileTile,
   pair: PairTile,
   rpolicy: RPolicyTile,
   slot: SlotTile,
@@ -22928,7 +28224,6 @@ const TILE = {
   storageclass: StorageClassTile,
   pvc: PvcTile,
   bucket: BucketTile,
-  protectedapp: ProtectedAppTile,
   deployconfig: DeployConfigTile,
   mpath: MPathTile,
   appgroup: AppGroupTile
@@ -22942,8 +28237,15 @@ const TKEY = {
   volume: "v",
   snapshot: "s",
   backup: "b",
-  plan: "p",
-  site: "s",
+  pplan: "o",
+  drpath: "o",
+  papp: "o",
+  rplan: "o",
+  raction: "o",
+  tbubble: "o",
+  tsched: "o",
+  restore: "o",
+  siteprofile: "o",
   policy: "p",
   pair: "p",
   rpolicy: "p",
@@ -22957,7 +28259,6 @@ const TKEY = {
   storageclass: "s",
   pvc: "p",
   bucket: "b",
-  protectedapp: "a",
   deployconfig: "d",
   mpath: "m",
   appgroup: "g"
@@ -23151,14 +28452,41 @@ function OverviewView({
       s: 12
     }), "New pool") : seg.t === "plans" ? /*#__PURE__*/React.createElement("button", {
       className: "btn primary",
-      onClick: () => api.sites().then(ss => window.__ui.dialog(newPlanDialog(ss), {
-        kind: "plan",
+      onClick: () => window.__ui.dialog(newPPlanDialog(), {
+        kind: "pplan",
+        id: "new"
+      })
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "plus",
+      s: 12
+    }), "New plan") : seg.t === "paths" ? /*#__PURE__*/React.createElement("button", {
+      className: "btn primary",
+      onClick: () => drhub.plans().then(ps => window.__ui.dialog(newPathDialog(ps), {
+        kind: "drpath",
         id: "new"
       }))
     }, /*#__PURE__*/React.createElement(Icon, {
       n: "plus",
       s: 12
-    }), "New plan") : seg.t === "pairs" ? /*#__PURE__*/React.createElement("button", {
+    }), "Declare path") : seg.t === "protectedapps" ? /*#__PURE__*/React.createElement("button", {
+      className: "btn primary",
+      onClick: () => Promise.all([drhub.plans(), drhub.config().catch(() => null)]).then(([ps, c]) => window.__ui.dialog(protectAppDialogDR(ps, c), {
+        kind: "papp",
+        id: "new"
+      }))
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "shield",
+      s: 12
+    }), "Protect application") : seg.t === "rplans" ? /*#__PURE__*/React.createElement("button", {
+      className: "btn primary",
+      onClick: () => Promise.all([drhub.paths(), drhub.apps()]).then(([ps, as]) => window.__ui.dialog(newRPlanDialog(ps, as), {
+        kind: "rplan",
+        id: "new"
+      }))
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "plus",
+      s: 12
+    }), "New recovery plan") : seg.t === "pairs" ? /*#__PURE__*/React.createElement("button", {
       className: "btn primary",
       onClick: () => window.__ui.dialog(newPairDialog(), {
         kind: "pair",
@@ -23225,16 +28553,7 @@ function OverviewView({
     }, /*#__PURE__*/React.createElement(Icon, {
       n: "plus",
       s: 12
-    }), "New policy") : seg.t === "protectedapps" && (!parent || !parent.id) ? /*#__PURE__*/React.createElement("button", {
-      className: "btn primary",
-      onClick: () => window.__ui.dialog(protectAppDialog(), {
-        kind: "protected application",
-        id: "new"
-      })
-    }, /*#__PURE__*/React.createElement(Icon, {
-      n: "shield",
-      s: 12
-    }), "Protect application") : isPvc ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("select", {
+    }), "New policy") : isPvc ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("select", {
       className: "sel",
       value: xf.sc,
       onChange: e => setXf(x => Object.assign({}, x, {
@@ -23644,17 +28963,14 @@ class ViewBoundary extends React.Component {
         marginTop: 8
       },
       onClick: this.props.onReset
-    }, "Back to clusters")));
+    }, "Back to ", DR_ONLY ? "disaster recovery" : "clusters")));
   }
 }
 function App() {
-  const [rawPath, setPath] = useLocal("sb.path", [{
-    t: "clusters"
-  }]);
-  // a stored path may name a layer that no longer exists (renamed kinds) — fall back to the root
-  const path = useMemo(() => Array.isArray(rawPath) && rawPath.length && rawPath.every(s => LAYER_META[s.t]) ? rawPath : [{
-    t: "clusters"
-  }], [rawPath]);
+  const [rawPath, setPath] = useLocal(DR_ONLY ? "sb.drpath" : "sb.path", ROOT_PATH);
+  // a stored path may name a layer that no longer exists (renamed kinds) — fall back to the root;
+  // in DR-only mode anything outside the DR section is unreachable
+  const path = useMemo(() => Array.isArray(rawPath) && rawPath.length && rawPath.every(s => LAYER_META[s.t]) && (!DR_ONLY || rawPath[0].t === "dr" && !rawPath.some(s => STORAGE_DR_LAYERS.includes(s.t))) ? rawPath : ROOT_PATH, [rawPath]);
   const [theme, setTheme] = useLocal("sb.theme", "light");
   const [density, setDensity] = useLocal("sb.density", "340px");
   const [sort, setSort] = useLocal("sb.sort", "health");
@@ -23687,19 +29003,20 @@ function App() {
     };
   }, []);
   useEffect(() => {
-    api.clusters().then(setClusters).catch(() => {});
+    document.title = DR_ONLY ? "simplyblock DR Console" : "simplyblock Control Center";
+  }, []);
+  // The storage warm-ups (clusters, zones, alerts) all need the operator API,
+  // which a DR-only hub does not have.
+  useEffect(() => {
+    if (!DR_ONLY) api.clusters().then(setClusters).catch(() => {});
   }, [rev]);
   // zones are a small, cluster-independent collection; warm the registry once so
   // every regName(zoneId) call zone can label them without its own fetch
   useEffect(() => {
-    api.zones().then(() => force(n => n + 1)).catch(() => {});
-  }, [rev]);
-  // DR clusters are named all over the application-DR views but never appear in a
-  // breadcrumb path, so warm them too
-  useEffect(() => {
-    api.drClusters().then(() => force(n => n + 1)).catch(() => {});
+    if (!DR_ONLY) api.zones().then(() => force(n => n + 1)).catch(() => {});
   }, [rev]);
   useEffect(() => {
+    if (DR_ONLY) return;
     const load = () => api.allAlerts().then(as => setAlertCount(as.filter(a => a.severity === "critical" && !a.silenced).length)).catch(() => {});
     load();
     const i = setInterval(load, 15000);
@@ -23756,8 +29073,8 @@ function App() {
     }]),
     openZone: id => go(pZone(id)),
     openK8s: id => go(pK(id)),
-    openPlan: id => go(pPlan(id)),
-    openSite: id => go(pSite(id)),
+    openPlan: id => go(pPPlan(id)),
+    openPath: id => go(pDRPath(id)),
     // the plan and the application both name sites and methods as strings, the
     // way the CRs do, so the console resolves the name to its object
     openPairByName: name => api.pairs().then(ps => {
@@ -23780,15 +29097,19 @@ function App() {
       const p = ps.find(x => x.name === name);
       if (p) go(detailPath(p));
     }).catch(() => {}),
-    openPlanByName: name => api.plans().then(ps => {
+    openPlanByName: name => drhub.plans().then(ps => {
       const p = ps.find(x => x.name === name);
-      if (p) go(pPlan(p.id));
+      if (p) go(pPPlan(p.id));
     }).catch(() => {}),
-    openSiteByName: name => api.sites().then(ss => {
-      const s = ss.find(x => x.name === name);
-      if (s) go(pSite(s.id));
+    openPathByName: name => drhub.paths().then(ps => {
+      const p = ps.find(x => x.name === name);
+      if (p) go(pDRPath(p.id));
     }).catch(() => {}),
-    openProtectedApp: id => go(pApp(id)),
+    openAppByName: (name, ns) => drhub.apps().then(as => {
+      const a = as.find(x => x.name === name && (!ns || x.namespace === ns));
+      if (a) go(pPApp(a.id));
+    }).catch(() => {}),
+    openProtectedApp: id => go(pPApp(id)),
     openBucket: id => (REG[id] ? Promise.resolve(REG[id]) : api.bucket(id)).then(x => go(pBucket(x.clusterId, x.id))).catch(() => {}),
     openPvc: id => (REG[id] ? Promise.resolve(REG[id]) : api.pvc(id)).then(x => go(pPvc(x.k8sClusterId, x.id))).catch(() => {}),
     openStorageClass: id => (REG[id] ? Promise.resolve(REG[id]) : api.storageClass(id)).then(x => go(pSc(x.k8sClusterId, x.id))).catch(() => {}),
@@ -23827,9 +29148,7 @@ function App() {
     }]),
     deployConfig: (kid, id) => go(pDep(kid, id)),
     k8sDetail: kid => go(pK(kid)),
-    root: () => go([{
-      t: "clusters"
-    }])
+    root: () => go(ROOT_PATH)
   }), [go]);
   useEffect(() => {
     const h = e => {
@@ -23859,6 +29178,7 @@ function App() {
   const apiHint = cur.id ? DETAIL_API[cur.t] : VIEWS[cur.t] ? VIEWS[cur.t].api(parentSeg || {}) : "—";
   const s0 = path[0] && path[0].t;
   const section = s0 === "dr" ? "dr" : s0 === "k8s" ? "k8s" : s0 === "cp" ? "cp" : "clusters";
+  const drVisible = DR_ONLY || acc.canAnywhere("read", "drhub") || acc.canAnywhere("read", "drpolicy") || acc.canAnywhere("read", "replicationpolicy") || acc.canAnywhere("read", "application");
   const upOne = path.length > 1 ? () => go(path.slice(0, -1)) : null;
   const upLabel = path.length > 1 ? segLabel(path[path.length - 2]) : "";
   return /*#__PURE__*/React.createElement("div", {
@@ -23889,7 +29209,7 @@ function App() {
     }
   }, "simplyblock")), /*#__PURE__*/React.createElement("span", {
     className: "prod"
-  }, "Control Center"), /*#__PURE__*/React.createElement("div", {
+  }, DR_ONLY ? "DR Console" : "Control Center"), !DR_ONLY && /*#__PURE__*/React.createElement("div", {
     className: "sectionsw"
   }, /*#__PURE__*/React.createElement("button", {
     className: section === "clusters" ? "on" : "",
@@ -23909,7 +29229,7 @@ function App() {
     s: 13
   }), /*#__PURE__*/React.createElement("span", {
     className: "swlabel"
-  }, "Kubernetes")), (acc.canAnywhere("read", "drpolicy") || acc.canAnywhere("read", "replicationpolicy") || acc.canAnywhere("read", "application")) && /*#__PURE__*/React.createElement("button", {
+  }, "Kubernetes")), drVisible && /*#__PURE__*/React.createElement("button", {
     className: section === "dr" ? "on" : "",
     onClick: () => nav.dr(),
     title: "Disaster recovery"
@@ -23927,7 +29247,27 @@ function App() {
     s: 13
   }), /*#__PURE__*/React.createElement("span", {
     className: "swlabel"
-  }, "Control plane"))), section === "clusters" && /*#__PURE__*/React.createElement("div", {
+  }, "Control plane"))), DR_ONLY && /*#__PURE__*/React.createElement("div", {
+    className: "sectionsw"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "on",
+    onClick: () => nav.dr(),
+    title: "Disaster recovery"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "shield",
+    s: 13
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "swlabel"
+  }, "Disaster recovery")), /*#__PURE__*/React.createElement("button", {
+    className: cur.t === "drconfig" ? "on" : "",
+    onClick: () => nav.drLayer("drconfig"),
+    title: "DR configuration"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "gauge",
+    s: 13
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "swlabel"
+  }, "Configuration"))), !DR_ONLY && section === "clusters" && /*#__PURE__*/React.createElement("div", {
     className: "switcher"
   }, /*#__PURE__*/React.createElement("button", {
     className: "swbtn",
@@ -23972,11 +29312,15 @@ function App() {
     className: "badge"
   }, c.siting === "edge" ? "edge" : "dc")))))), /*#__PURE__*/React.createElement("div", {
     className: "spacer"
-  }), window.SB_CONFIG.mock && /*#__PURE__*/React.createElement(MockPanel, null), /*#__PURE__*/React.createElement("span", {
+  }), window.SB_CONFIG.mock && /*#__PURE__*/React.createElement(MockPanel, null), !DR_ONLY && /*#__PURE__*/React.createElement("span", {
     className: "env"
   }, /*#__PURE__*/React.createElement("span", {
     className: "pulse"
-  }), "control plane healthy"), /*#__PURE__*/React.createElement("button", {
+  }), "control plane healthy"), DR_ONLY && /*#__PURE__*/React.createElement("span", {
+    className: "env"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "pulse"
+  }), "dr-hub"), !DR_ONLY && /*#__PURE__*/React.createElement("button", {
     className: "tbtn bellwrap",
     title: alertCount ? `${alertCount} critical alert(s)` : "No critical alerts",
     onClick: () => {
@@ -24037,7 +29381,10 @@ function App() {
     rev: rev,
     up: upOne,
     upLabel: upLabel
-  }) : cur.t === "dr" ? /*#__PURE__*/React.createElement(DrHome, {
+  }) : cur.t === "dr" ? /*#__PURE__*/React.createElement(DrHubHome, {
+    key: viewKey,
+    nav: nav
+  }) : cur.t === "drconfig" ? /*#__PURE__*/React.createElement(DRConfigView, {
     key: viewKey,
     nav: nav
   }) : cur.t === "cp" ? /*#__PURE__*/React.createElement(ControlPlaneView, {

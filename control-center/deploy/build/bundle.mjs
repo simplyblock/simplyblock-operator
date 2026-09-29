@@ -13,8 +13,11 @@ const preset = require("@babel/preset-react");
 const html = readFileSync("index.html", "utf8");
 // File order comes from the page itself when it still lists the sources, else
 // from build.md's canonical list.
-const MOCK = ["mock-backend.jsx", "mock-api.jsx", "k8s-client.jsx", "mock-k8s.jsx", "mock-k8s-server.jsx", "mock-extras.jsx", "mock-repl.jsx", "mock-dr.jsx", "mock-deploy.jsx", "mock-migrate.jsx", "mock-rbac.jsx"];
-const APP = ["api.jsx", "agent.jsx", "ui.jsx", "rbac.jsx", "actions.jsx", "panels.jsx", "rbac-admin.jsx", "tiles.jsx", "tiles-data.jsx", "details.jsx", "dr.jsx", "dr-plan.jsx", "repl.jsx", "cgroups.jsx", "migrations.jsx", "k8s.jsx", "deploy.jsx", "deploy-doc.jsx", "storage-types.jsx", "recipe.jsx", "migrate.jsx", "appdr.jsx", "details-data.jsx", "app.jsx"];
+const MOCK = ["mock-backend.jsx", "mock-api.jsx", "k8s-client.jsx", "mock-k8s.jsx", "mock-k8s-server.jsx", "mock-extras.jsx", "mock-repl.jsx", "mock-dr.jsx", "mock-drhub.jsx", "mock-deploy.jsx", "mock-migrate.jsx", "mock-rbac.jsx"];
+// k8s-client.jsx is the transport for every CRD read and write and belongs to
+// the application bundle (it used to ship only with the mocks, which are
+// stripped from production images — the console then failed to load).
+const APP = ["k8s-client.jsx", "api.jsx", "drhub-api.jsx", "agent.jsx", "ui.jsx", "rbac.jsx", "actions.jsx", "panels.jsx", "rbac-admin.jsx", "tiles.jsx", "tiles-data.jsx", "details.jsx", "dr.jsx", "dr-plan.jsx", "repl.jsx", "cgroups.jsx", "migrations.jsx", "k8s.jsx", "deploy.jsx", "deploy-doc.jsx", "storage-types.jsx", "recipe.jsx", "migrate.jsx", "appdr.jsx", "drhub.jsx", "details-data.jsx", "app.jsx"];
 
 const compile = files => files.map(f => {
   const {code} = babel.transformSync(readFileSync(f, "utf8"), {presets: [preset], sourceType: "script", filename: f, babelrc: false, configFile: false, compact: false});

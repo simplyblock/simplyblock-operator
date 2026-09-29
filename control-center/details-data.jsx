@@ -330,9 +330,11 @@ const DETAILS = {cluster: ClusterDetail, host: HostDetail, node: NodeDetail, dev
   pool: PoolDetail, volume: VolumeDetail, snapshot: SnapshotDetail, backup: BackupDetail, policy: PolicyDetail};
 // pair / rpolicy / zone live in dr.jsx — resolved at render time so load order cannot break the shell
 const DETAIL_KIND = {pair: "PairDetail", rpolicy: "RPolicyDetail", zone: "ZoneDetail",
-  plan: "PlanDetail", site: "SiteDetail", slot: "SlotDetail", replops: "ReplOpsDetail", cgroup: "CgroupDetail", cgsnapshot: "CgSnapshotDetail", migration: "MigrationDetail",
+  slot: "SlotDetail", replops: "ReplOpsDetail", cgroup: "CgroupDetail", cgsnapshot: "CgSnapshotDetail", migration: "MigrationDetail",
   k8sc: "K8sDetail", storageclass: "StorageClassDetail", pvc: "PvcDetail", bucket: "BucketDetail",
-  protectedapp: "ProtectedAppDetail",
+  // DR hub kinds live in drhub.jsx
+  pplan: "PPlanDetail", drpath: "DRPathDetail", papp: "PAppDetail", rplan: "RPlanDetail", raction: "RActionDetail",
+  tbubble: "TBubbleDetail", tsched: "TSchedDetail", restore: "RestoreDetail", siteprofile: "SiteProfileDetail",
   deployconfig: "DeployConfigDetail", mpath: "MPathDetail", appgroup: "AppGroupDetail"};
 const Detail = ({obj, nav}) => {
   const C = DETAILS[obj.kind] || (DETAIL_KIND[obj.kind] ? window[DETAIL_KIND[obj.kind]] : null);

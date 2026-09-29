@@ -2,9 +2,10 @@
 // KUBERNETES / OPERATOR / HELM TRANSPORT
 //
 // The console talks to exactly three things and nothing else:
-//   · the Kubernetes API   — CRDs in storage.simplyblock.io/v1alpha1, plus core
-//                            objects (Node, Pod, PVC, StorageClass, Secret,
-//                            Event) and pod logs
+//   · the Kubernetes API   — CRDs in storage.simplyblock.io/v1alpha1, the DR
+//                            hub's dr.simplyblock.io/v1alpha1 (plus the Ramen
+//                            and OCM objects it derives), and core objects
+//                            (Node, Pod, PVC, StorageClass, Secret, Event)
 //   · the operator API     — what the operator exposes beyond CRDs
 //   · Helm                 — release state for the chart
 //
@@ -15,6 +16,11 @@ const SB = window.SB_CONFIG;
 const GROUP = "storage.simplyblock.io";
 const VERSION = "v1alpha1";
 const API_GROUP = `${GROUP}/${VERSION}`;
+const DR_GROUP = "dr.simplyblock.io";
+const DR_API_GROUP = `${DR_GROUP}/v1alpha1`;
+const SITEMAP_API_GROUP = "sitemap.simplyblock.io/v1alpha1";
+const RAMEN_API_GROUP = "ramendr.openshift.io/v1alpha1";
+const OCM_CLUSTER_API_GROUP = "cluster.open-cluster-management.io/v1";
 
 class ApiError extends Error {
   constructor(status, message, path, reason) {
@@ -50,6 +56,30 @@ const RESOURCES = {
   ControlPlaneOps:    {plural: "controlplaneops",    short: "sbcpo", namespaced: true, ops: "ControlPlane"},
   PersistentVolumeOps: {plural: "persistentvolumeops", short: "sbpvo", namespaced: true, ops: "PersistentVolume"},
   OperatorOps:        {plural: "operatorops",        short: "sbop",  namespaced: true, ops: null},
+  // ---- DR hub (dr-simplyblock) — dr.simplyblock.io/v1alpha1 ----------------
+  // The hub has no REST API: every screen is a CR. Cluster-scoped kinds have
+  // no namespace segment; namespaced ones are listed across all namespaces
+  // unless a namespace is given (a ProtectedApplication lives in Ramen's ops
+  // namespace or in the application's own namespace).
+  ProtectionPlan:       {plural: "protectionplans",       short: "pplan",    core: DR_API_GROUP, namespaced: false, dr: true},
+  DRPath:               {plural: "drpaths",               short: "drpath",   core: DR_API_GROUP, namespaced: false, dr: true},
+  DRConfig:             {plural: "drconfigs",             short: "drconfig", core: DR_API_GROUP, namespaced: false, dr: true},
+  ProtectedApplication: {plural: "protectedapplications", short: "papp",     core: DR_API_GROUP, namespaced: true, dr: true},
+  RecoveryPlan:         {plural: "recoveryplans",         short: "rplan",    core: DR_API_GROUP, namespaced: true, dr: true},
+  RecoveryAction:       {plural: "recoveryactions",       short: "ract",     core: DR_API_GROUP, namespaced: true, dr: true},
+  TestBubble:           {plural: "testbubbles",           short: "tbub",     core: DR_API_GROUP, namespaced: true, dr: true},
+  TestSchedule:         {plural: "testschedules",         short: "tsched",   core: DR_API_GROUP, namespaced: true, dr: true},
+  RestoreAction:        {plural: "restoreactions",        short: "rsa",      core: DR_API_GROUP, namespaced: true, dr: true},
+  SiteProfile:          {plural: "siteprofiles",          short: "sprof",    core: SITEMAP_API_GROUP, namespaced: false, dr: true},
+  // Ramen and OCM objects the hub derives — instances only, read-only here
+  DRPolicy:              {plural: "drpolicies",             core: RAMEN_API_GROUP, namespaced: false},
+  DRCluster:             {plural: "drclusters",             core: RAMEN_API_GROUP, namespaced: false},
+  DRPlacementControl:    {plural: "drplacementcontrols",    core: RAMEN_API_GROUP, namespaced: true},
+  ManagedCluster:        {plural: "managedclusters",        core: OCM_CLUSTER_API_GROUP, namespaced: false},
+  // access reviews: the API server answers what the caller may do
+  SelfSubjectAccessReview: {plural: "selfsubjectaccessreviews", core: "authorization.k8s.io/v1", namespaced: false},
+  SelfSubjectRulesReview:  {plural: "selfsubjectrulesreviews",  core: "authorization.k8s.io/v1", namespaced: false},
+  SelfSubjectReview:       {plural: "selfsubjectreviews",       core: "authentication.k8s.io/v1", namespaced: false},
   // core Kubernetes
   Node:                  {plural: "nodes",                  core: "v1", namespaced: false},
   Pod:                   {plural: "pods",                   core: "v1", namespaced: true},
@@ -65,13 +95,17 @@ const RESOURCES = {
   ConfigMap:             {plural: "configmaps",             core: "v1", namespaced: true},
   Ingress:               {plural: "ingresses",              core: "networking.k8s.io/v1", namespaced: true},
   VirtualMachine:        {plural: "virtualmachines",        core: "kubevirt.io/v1", namespaced: true},
-  Recipe:                {plural: "recipes",                core: "ramendr.openshift.io/v1alpha1", namespaced: true}
+  Recipe:                {plural: "recipes",                core: RAMEN_API_GROUP, namespaced: true}
 };
 
 const NS = () => SB.namespace || "simplyblock";
+// Ramen's ops namespace on the hub: where discovered ProtectedApplications live
+const DR_NS = () => SB.drNamespace || "ramen-ops";
 
 // Build the API server path for a kind. Core group is /api/v1, everything else
-// /apis/<group>/<version>.
+// /apis/<group>/<version>. A namespaced kind is scoped to the console's
+// namespace unless `namespace` is given; `allNamespaces: true` lists it across
+// the cluster (the DR hub's namespaced kinds live in many namespaces).
 function pathFor(kind, opts) {
   const o = opts || {};
   const r = RESOURCES[kind];
@@ -79,11 +113,13 @@ function pathFor(kind, opts) {
   const prefix = !r.core ? `/apis/${API_GROUP}`
     : r.core === "v1" ? "/api/v1"
     : `/apis/${r.core}`;
-  const ns = r.namespaced ? `/namespaces/${o.namespace || NS()}` : "";
+  const ns = r.namespaced && !o.allNamespaces ? `/namespaces/${o.namespace || (r.dr ? DR_NS() : NS())}` : "";
   const name = o.name ? `/${o.name}` : "";
   const sub = o.subresource ? `/${o.subresource}` : "";
   return `${prefix}${ns}/${r.plural}${name}${sub}`;
 }
+// apiVersion string for a kind, for the objects the console authors
+const apiVersionOf = kind => { const r = RESOURCES[kind]; return !r.core ? API_GROUP : r.core; };
 
 // ---- transport -------------------------------------------------------------
 async function call(base, path, init) {
@@ -134,11 +170,30 @@ const k8s = {
 
 function qs(opts) {
   const o = Object.assign({}, opts);
-  delete o.namespace; delete o.name; delete o.subresource;
+  delete o.namespace; delete o.name; delete o.subresource; delete o.allNamespaces;
   const parts = Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== "")
     .map(([k, v]) => `${k}=${encodeURIComponent(v)}`);
   return parts.length ? "?" + parts.join("&") : "";
 }
+
+// ---- access reviews ----------------------------------------------------------
+// The API server is the policy decision point. A SelfSubjectAccessReview asks
+// one (verb, group, resource[, namespace, name]) question; a
+// SelfSubjectRulesReview returns every rule that applies to the caller in a
+// namespace, including cluster-wide ones; a SelfSubjectReview says who the
+// caller is. All three are POSTs that create nothing.
+const review = {
+  can: (verb, group, resource, ns, name) => k8s.create("SelfSubjectAccessReview", {
+    apiVersion: "authorization.k8s.io/v1", kind: "SelfSubjectAccessReview",
+    spec: {resourceAttributes: Object.assign({verb, group: group || "", resource},
+      ns ? {namespace: ns} : {}, name ? {name} : {})}
+  }).then(r => !!(r.status && r.status.allowed)),
+  rules: ns => k8s.create("SelfSubjectRulesReview", {
+    apiVersion: "authorization.k8s.io/v1", kind: "SelfSubjectRulesReview", spec: {namespace: ns}
+  }).then(r => r.status || {resourceRules: [], incomplete: true}),
+  whoami: () => k8s.create("SelfSubjectReview", {apiVersion: "authentication.k8s.io/v1", kind: "SelfSubjectReview"})
+    .then(r => (r.status && r.status.userInfo) || {})
+};
 
 // label selector helpers — the ownership tree is expressed in labels
 const sel = o => Object.entries(o).map(([k, v]) => `${k}=${v}`).join(",");
@@ -200,5 +255,5 @@ const lowerFirst = s => s.charAt(0).toLowerCase() + s.slice(1);
 const OPS_TERMINAL = ["Succeeded", "Failed", "Aborted"];
 const opsRunning = o => o && o.status && !OPS_TERMINAL.includes(o.status.phase);
 
-Object.assign(window, {k8s, operator, helm, ApiError, RESOURCES, API_GROUP, GROUP, VERSION,
-  pathFor, ownedBy, inCluster, sel, submitOps, abortOps, opsKindFor, opsRunning, OPS_TERMINAL, NS});
+Object.assign(window, {k8s, operator, helm, review, ApiError, RESOURCES, API_GROUP, GROUP, VERSION, DR_GROUP, DR_API_GROUP,
+  pathFor, apiVersionOf, ownedBy, inCluster, sel, submitOps, abortOps, opsKindFor, opsRunning, OPS_TERMINAL, NS, DR_NS});

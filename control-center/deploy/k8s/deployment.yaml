@@ -67,6 +67,14 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            # full: the storage console with a DR section. dr: the DR-only
+            # console for a hub without a simplyblock control plane — set
+            # SB_OPERATOR_URL/SB_HELM_URL/SB_PROMETHEUS_URL empty there.
+            - name: SB_MODE
+              value: full
+            # Ramen's ops namespace on the DR hub (discovered applications)
+            - name: SB_DR_NAMESPACE
+              value: ramen-ops
             # serviceaccount: this pod attaches its own token to proxied
             # requests and the browser never holds a credential. Authenticate
             # the Ingress — the pod's authority is the ClusterRole.

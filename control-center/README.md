@@ -17,6 +17,15 @@ sections are Clusters, Kubernetes, Disaster recovery and Control plane.
 
 ## Recent additions
 
+- **DR hub client** — the Disaster recovery section now reads and writes the
+  `dr.simplyblock.io` CRs of [simplyblock-dr](https://github.com/simplyblock/simplyblock-dr)
+  (plans, DR paths, protected applications, recovery plans, actions, tests,
+  schedules, restores, site profiles, DRConfig) through the Kubernetes API
+  (`drhub-api.jsx`, `drhub.jsx`); the `/operator/v1/proposed` DR endpoints
+  described further down are superseded for the top layer. `SB_MODE=dr` is the
+  stripped-down DR-only console for a hub without a simplyblock control plane
+  (preview: `?mode=dr`). See [INTEGRATION.md](INTEGRATION.md#disaster-recovery-and-the-dr-only-console).
+
 - **Cluster discovery and deployment** — `Kubernetes → cluster → Discovery & deployment`: filtered hardware discovery, then a deployment document (draft → approve) that runs node configuration, storage-node addition and activation asynchronously, with a per-step log.
 - **Migration paths** — online site migration by asynchronous replication plus KubeVirt live migration; application groups, convergence backlog, sequenced queue.
 - **Ransomware recovery** — group-consistent backup policies as a recovery basis for protected applications, with point-in-time failover by generation or timestamp.
@@ -37,7 +46,9 @@ sections are Clusters, Kubernetes, Disaster recovery and Control plane.
 | `actions.jsx` | Command registry per object kind + kebab menus + parameterised confirm dialogs |
 | `tiles.jsx` / `tiles-data.jsx` | Tiles: cluster, host, node, device / pool, volume, snapshot, backup, policy |
 | `details.jsx` / `details-data.jsx` | Detail pages, same split |
-| `app.jsx` | Breadcrumb router, overview + detail views, sorting/filtering/scoping, cluster switcher |
+| `app.jsx` | Breadcrumb router, overview + detail views, sorting/filtering/scoping, cluster switcher; `SB_MODE` (full / dr) |
+| `k8s-client.jsx` | Kubernetes API transport: resource registry per API group (storage, DR hub, Ramen, OCM), paths, access reviews |
+| `drhub-api.jsx` / `drhub.jsx` | **DR hub client.** View models over the `dr.simplyblock.io` CRs, the mutations the console performs (RecoveryAction, TestBubble, RestoreAction, TestSchedule, plan / path / application / recovery plan), dashboard, tiles, details, dialogs |
 
 ## Object model & navigation
 
@@ -369,6 +380,15 @@ are reachable without a real cluster. Mutations write to the fixture store, so
 shutting a node down really does turn its devices amber.
 
 ## Disaster recovery
+
+
+> **Superseded for the top layer (2026-09-29).** Protection plans, sites and
+> protected applications are no longer read from `/operator/v1/proposed/*`:
+> the console is a client of the DR hub's CRDs (`dr.simplyblock.io/v1alpha1`),
+> which model sites inside the ProtectionPlan, declare directions as `DRPath`
+> objects, and run Failover / Relocate / Restart as `RecoveryAction`s and
+> rehearsals as `TestBubble`s. The section below documents the earlier
+> proposal and stays for the storage-side replication kinds it also covers.
 
 Two objects are authored. Everything under them is derived, and shown read-only
 because its fields are immutable.

@@ -1,3 +1,14 @@
+// Console mode. "full" is the storage control plane console with a DR section;
+// "dr" is the stripped-down DR console deployed next to dr-hub on a hub that
+// has no simplyblock control plane: only the DR section exists, nothing reads
+// the storage CRDs or the operator API.
+const DR_ONLY = (window.SB_CONFIG || {}).mode === "dr"
+  // design preview only: ?mode=dr on the fixture backend shows the DR-only console
+  || (!!(window.SB_CONFIG || {}).mock && new URLSearchParams(location.search).get("mode") === "dr");
+const ROOT_PATH = DR_ONLY ? [{t: "dr"}] : [{t: "clusters"}];
+// Layers that need the storage operator: hidden in DR-only mode.
+const STORAGE_DR_LAYERS = ["pairs", "rpolicies", "slots", "replops", "zones", "mpaths", "appgroups"];
+
 const LAYER_META = {
   clusters: {label: "Clusters", icon: "cluster"}, cluster: {icon: "cluster"},
   cp: {label: "Control plane", icon: "host"},
@@ -10,8 +21,17 @@ const LAYER_META = {
   backups: {label: "Backups", icon: "cloud"}, backup: {icon: "cloud"},
   policies: {label: "Backup policies", icon: "clock"}, policy: {icon: "clock"},
   dr: {label: "Disaster recovery", icon: "shield"},
-  plans: {label: "Protection plans", icon: "shield"}, plan: {icon: "shield"},
-  sites: {label: "Sites", icon: "k8s"}, site: {icon: "k8s"},
+  // DR hub (dr.simplyblock.io) — the detail layer name is the view-model kind
+  plans: {label: "Protection plans", icon: "shield"}, pplan: {icon: "shield"},
+  paths: {label: "DR paths", icon: "swap"}, drpath: {icon: "swap"},
+  protectedapps: {label: "Protected applications", icon: "cluster"}, papp: {icon: "cluster"},
+  rplans: {label: "Recovery plans", icon: "list"}, rplan: {icon: "list"},
+  ractions: {label: "Recovery actions", icon: "clock"}, raction: {icon: "clock"},
+  tests: {label: "Tests", icon: "camera"}, tbubble: {icon: "camera"},
+  tschedules: {label: "Test schedules", icon: "clock"}, tsched: {icon: "clock"},
+  restores: {label: "Restores", icon: "cloud"}, restore: {icon: "cloud"},
+  siteprofiles: {label: "Site profiles", icon: "k8s"}, siteprofile: {icon: "k8s"},
+  drconfig: {label: "DR configuration", icon: "gauge"},
   slots: {label: "Replication slots", icon: "volume"}, slot: {icon: "volume"},
   replops: {label: "Operations", icon: "clock"}, replop: {icon: "clock"},
   pairs: {label: "Replication pairs", icon: "swap"}, pair: {icon: "swap"},
@@ -27,7 +47,6 @@ const LAYER_META = {
   storageclasses: {label: "Storage classes", icon: "pool"}, storageclass: {icon: "pool"},
   pvcs: {label: "PVCs", icon: "volume"}, pvc: {icon: "volume"},
   buckets: {label: "Buckets", icon: "cloud"}, bucket: {icon: "cloud"},
-  protectedapps: {label: "Protected applications", icon: "cluster"}, protectedapp: {icon: "cluster"},
   mpaths: {label: "Migration paths", icon: "move"}, mpath: {icon: "move"},
   appgroups: {label: "Application groups", icon: "cluster"}, appgroup: {icon: "cluster"}
 };
@@ -37,8 +56,15 @@ const pN = (cid, nid) => [...pC(cid), {t: "nodes"}, {t: "node", id: nid}];
 const pD = (cid, nid, did) => [...pN(cid, nid), {t: "devices"}, {t: "device", id: did}];
 const pP = (cid, pid) => [...pC(cid), {t: "pools"}, {t: "pool", id: pid}];
 const pV = (cid, pid, vid) => [...pP(cid, pid), {t: "volumes"}, {t: "volume", id: vid}];
-const pPlan = id => [{t: "dr"}, {t: "plans"}, {t: "plan", id}];
-const pSite = id => [{t: "dr"}, {t: "sites"}, {t: "site", id}];
+const pPPlan = id => [{t: "dr"}, {t: "plans"}, {t: "pplan", id}];
+const pDRPath = id => [{t: "dr"}, {t: "paths"}, {t: "drpath", id}];
+const pPApp = id => [{t: "dr"}, {t: "protectedapps"}, {t: "papp", id}];
+const pRPlan = id => [{t: "dr"}, {t: "rplans"}, {t: "rplan", id}];
+const pRAction = id => [{t: "dr"}, {t: "ractions"}, {t: "raction", id}];
+const pTBubble = id => [{t: "dr"}, {t: "tests"}, {t: "tbubble", id}];
+const pTSched = id => [{t: "dr"}, {t: "tschedules"}, {t: "tsched", id}];
+const pRestore = id => [{t: "dr"}, {t: "restores"}, {t: "restore", id}];
+const pSProf = id => [{t: "dr"}, {t: "siteprofiles"}, {t: "siteprofile", id}];
 const pPair = id => [{t: "dr"}, {t: "pairs"}, {t: "pair", id}];
 const pSlot = id => [{t: "dr"}, {t: "slots"}, {t: "slot", id}];
 const pReplOp = id => [{t: "dr"}, {t: "replops"}, {t: "replop", id}];
@@ -51,7 +77,6 @@ const pK = id => [{t: "k8s"}, {t: "k8sc", id}];
 const pSc = (kid, id) => [...pK(kid), {t: "storageclasses"}, {t: "storageclass", id}];
 const pDep = (kid, id) => [...pK(kid), {t: "deployconfigs"}, {t: "deployconfig", id}];
 const pPvc = (kid, id) => [...pK(kid), {t: "pvcs"}, {t: "pvc", id}];
-const pApp = id => [{t: "dr"}, {t: "protectedapps"}, {t: "protectedapp", id}];
 const pMp = id => [{t: "dr"}, {t: "mpaths"}, {t: "mpath", id}];
 const pAg = (pid, id) => [...pMp(pid), {t: "appgroups"}, {t: "appgroup", id}];
 const detailPath = o => o.kind === "cluster" ? pC(o.id)
@@ -61,14 +86,20 @@ const detailPath = o => o.kind === "cluster" ? pC(o.id)
   : o.kind === "device" ? pD(o.clusterId, o.nodeId, o.id)
   : o.kind === "pool" ? pP(o.clusterId, o.id)
   : o.kind === "volume" ? pV(o.clusterId, o.poolId, o.id)
-  : o.kind === "plan" ? pPlan(o.id)
-  : o.kind === "site" ? pSite(o.id)
+  : o.kind === "pplan" ? pPPlan(o.id)
+  : o.kind === "drpath" ? pDRPath(o.id)
+  : o.kind === "papp" ? pPApp(o.id)
+  : o.kind === "rplan" ? pRPlan(o.id)
+  : o.kind === "raction" ? pRAction(o.id)
+  : o.kind === "tbubble" ? pTBubble(o.id)
+  : o.kind === "tsched" ? pTSched(o.id)
+  : o.kind === "restore" ? pRestore(o.id)
+  : o.kind === "siteprofile" ? pSProf(o.id)
   : o.kind === "pair" ? pPair(o.id)
   : o.kind === "slot" ? pSlot(o.id)
   : o.kind === "replops" ? pReplOp(o.id)
   : o.kind === "rpolicy" ? pRPol(o.id)
   : o.kind === "zone" ? pZone(o.id)
-  : o.kind === "protectedapp" ? pApp(o.id)
   : o.kind === "mpath" ? pMp(o.id)
   : o.kind === "appgroup" ? pAg(o.pathId, o.id)
   : o.kind === "bucket" ? pBucket(o.clusterId, o.id)
@@ -88,6 +119,7 @@ const searchable = o => [nameOf(o), o.id, o.ip, o.mgmtIp, o.serial, o.pcie, o.bl
   o.owner, o.storageClass, ...Object.entries(o.tags || {}).map(([k, v]) => `${k}=${v}`),
   o.physicalLabel, o.poolName, o.volumeName, o.chainId, o.bucket, o.type, o.finest,
   o.rack, o.cabinet, o.hostClass, o.location, o.region, o.mode,
+  o.namespace, o.planName, o.pathName, o.from, o.to, o.appName, o.targetName, o.currentCluster, o.action, o.phase, o.verdict, o.schedule,
   o.replication && o.replication.policyName,
   o.sourceClusterId && regName(o.sourceClusterId), o.targetClusterId && regName(o.targetClusterId)
 ].filter(Boolean).join(" ").toLowerCase();
@@ -123,8 +155,9 @@ const SORT_KEYS = {
   snapshot: ["newest", "oldest", "size", "name"],
   backup: ["newest", "oldest", "size", "name", "health"],
   policy: ["name", "members"],
-  plan: ["health", "name", "members", "newest"],
-  site: ["health", "name", "members"],
+  pplan: ["health", "name", "newest"], drpath: ["health", "name", "newest"], papp: ["health", "name", "newest"],
+  rplan: ["health", "name", "newest"], raction: ["newest", "health", "name", "oldest"], tbubble: ["newest", "health", "name", "oldest"],
+  tsched: ["health", "name", "newest"], restore: ["newest", "health", "name"], siteprofile: ["health", "name"],
   pair: ["health", "name", "slots", "newest"],
   slot: ["health", "name", "newest"],
   replops: ["newest", "health", "name"],
@@ -136,8 +169,7 @@ const SORT_KEYS = {
   k8sc: ["health", "name", "members"],
   storageclass: ["name", "members", "cap"],
   pvc: ["health", "name", "cap", "newest"],
-  bucket: ["health", "name", "util", "cap", "newest"],
-  protectedapp: ["health", "name", "newest"]
+  bucket: ["health", "name", "util", "cap", "newest"]
 };
 
 const clusterOf = seg => seg.t === "cluster" ? seg.id : (REG[seg.id] || {}).clusterId;
@@ -147,6 +179,7 @@ const G_ = "/apis/storage.simplyblock.io/v1alpha1/namespaces/{ns}";
 const crd = (p, sel) => `GET ${G_}/${p}${sel ? "?labelSelector=" + sel.replace("storage.simplyblock.io/", "…/") : ""}`;
 const crd1 = p => `GET ${G_}/${p}/{name}`;
 const prop = p => `GET /operator/v1/proposed/${p}`;
+const drcrd = (p, ns) => `GET /apis/dr.simplyblock.io/v1alpha1${ns ? "/namespaces/{ns}" : ""}/${p}`;
 const OWNER = "storage.simplyblock.io/owner-name";
 const CLUS = "storage.simplyblock.io/cluster";
 const PV = "/api/v1/persistentvolumes";
@@ -172,12 +205,24 @@ const VIEWS = {
     api: () => crd("clusterdeploymentconfigs")},
   mpaths: {kind: "mpath", load: () => api.mpaths(), api: () => prop("migration-paths")},
   appgroups: {kind: "appgroup", load: p => api.mpathGroups(p.id), api: () => prop("migration-paths/{uuid}/app-groups")},
-  protectedapps: {kind: "protectedapp",
-    load: p => p.t === "plan" ? api.planApps(p.id) : p.t === "site" ? api.siteApps(p.id)
-      : p.t === "rpolicy" ? api.rpolicyApps(p.id) : api.protectedApps(),
-    api: p => prop(p.t === "plan" ? "protection-plans/{uuid}/protected-apps"
-      : p.t === "site" ? "dr-sites/{uuid}/protected-apps"
-      : p.t === "rpolicy" ? "replication-policies/{uuid}/protected-apps" : "protected-apps")},
+  // ---- DR hub: every layer is a CR list, scoped client-side by the parent ----
+  plans: {kind: "pplan", load: () => drhub.plans(), api: () => drcrd("protectionplans")},
+  paths: {kind: "drpath",
+    load: p => p.t === "pplan" ? drhub.planPaths(p.id) : p.t === "siteprofile" ? drhub.siteProfilePaths(p.id) : drhub.paths(),
+    api: () => drcrd("drpaths")},
+  protectedapps: {kind: "papp",
+    load: p => p.t === "pplan" ? drhub.planApps(p.id) : p.t === "drpath" ? drhub.pathApps(p.id) : drhub.apps(),
+    api: () => drcrd("protectedapplications", true)},
+  rplans: {kind: "rplan", load: p => p.t === "drpath" ? drhub.pathRPlans(p.id) : drhub.rplans(), api: () => drcrd("recoveryplans", true)},
+  ractions: {kind: "raction",
+    load: p => p.t === "papp" ? drhub.appActions(p.id) : p.t === "rplan" ? drhub.rplanActions(p.id) : p.t === "drpath" ? drhub.pathActions(p.id) : drhub.actions(),
+    api: () => drcrd("recoveryactions", true)},
+  tests: {kind: "tbubble",
+    load: p => p.t === "papp" ? drhub.appTests(p.id) : p.t === "rplan" ? drhub.rplanTests(p.id) : p.t === "drpath" ? drhub.pathTests(p.id) : p.t === "tsched" ? drhub.scheduleTests(p.id) : drhub.tests(),
+    api: () => drcrd("testbubbles", true)},
+  tschedules: {kind: "tsched", load: p => p.t === "papp" ? drhub.appSchedules(p.id) : drhub.schedules(), api: () => drcrd("testschedules", true)},
+  restores: {kind: "restore", load: p => p.t === "papp" ? drhub.appRestores(p.id) : drhub.restores(), api: () => drcrd("restoreactions", true)},
+  siteprofiles: {kind: "siteprofile", load: () => drhub.siteProfiles(), api: () => "GET /apis/sitemap.simplyblock.io/v1alpha1/siteprofiles"},
   storageclasses: {kind: "storageclass",
     load: p => p.t === "pool" ? api.poolStorageClasses(p.id) : api.k8sStorageClasses(p.id),
     api: () => "GET /apis/storage.k8s.io/v1/storageclasses"},
@@ -190,12 +235,6 @@ const VIEWS = {
     load: p => p.t === "cluster" ? api.migrations(p.id) : api.allMigrations(),
     api: p => prop(p.t === "cluster" ? "migrations?cluster={uuid}" : "migrations")},
   cgsnapshots: {kind: "cgsnapshot", load: p => api.cgSnapshots(p.id), api: () => prop("cg-snapshots?group={uuid}")},
-  plans: {kind: "plan",
-    load: p => p.t === "site" ? api.sitePlans(p.id) : api.plans(),
-    api: p => prop(p.t === "site" ? "dr-sites/{uuid}/protection-plans" : "protection-plans")},
-  sites: {kind: "site",
-    load: p => p.t === "plan" ? api.planSites(p.id) : api.sites(),
-    api: p => prop(p.t === "plan" ? "protection-plans/{uuid}/sites" : "dr-sites")},
   // replication reads three CRD lists and joins them: the resources reference
   // each other by name and carry no rollups
   pairs: {kind: "pair", load: () => api.pairs(), api: () => crd("replicationpairs")},
@@ -229,24 +268,25 @@ const DETAIL_API = {
   storageclass: "GET /apis/storage.k8s.io/v1/storageclasses/{name}",
   pvc: "GET /api/v1/namespaces/{ns}/persistentvolumeclaims/{name}",
   snapshot: prop("snapshots/{uuid}"), policy: prop("backup-policies/{uuid}"),
-  plan: prop("protection-plans/{uuid}"), site: prop("dr-sites/{uuid}"),
+  pplan: drcrd("protectionplans/{name}"), drpath: drcrd("drpaths/{name}"), papp: drcrd("protectedapplications/{name}", true),
+  rplan: drcrd("recoveryplans/{name}", true), raction: drcrd("recoveryactions/{name}", true), tbubble: drcrd("testbubbles/{name}", true),
+  tsched: drcrd("testschedules/{name}", true), restore: drcrd("restoreactions/{name}", true), siteprofile: "GET /apis/sitemap.simplyblock.io/v1alpha1/siteprofiles/{name}",
   pair: crd1("replicationpairs"), rpolicy: crd1("replicationpolicies"),
   slot: crd1("replicationslots"), replops: crd1("replicationops"),
   zone: prop("zones/{uuid}"), cgroup: prop("consistency-groups/{uuid}"),
   cgsnapshot: prop("cg-snapshots/{uuid}"), migration: prop("migrations/{uuid}"),
   k8sc: prop("kubernetes-clusters/{uuid}"), bucket: prop("buckets/{uuid}"),
-  protectedapp: prop("protected-apps/{uuid}"),
   mpath: prop("migration-paths/{uuid}"), appgroup: prop("app-groups/{uuid}"),
   deployconfig: crd1("clusterdeploymentconfigs")};
 
 const KIND_LABEL = {cluster: "cluster", host: "host", node: "storage node", device: "device", pool: "storage pool",
   volume: "logical volume", snapshot: "snapshot", backup: "backup", policy: "backup policy",
-  plan: "protection plan", site: "site",
+  pplan: "protection plan", drpath: "DR path", papp: "protected application", rplan: "recovery plan", raction: "recovery action",
+  tbubble: "test", tsched: "test schedule", restore: "restore", siteprofile: "site profile",
   pair: "replication pair", rpolicy: "replication policy",
   slot: "replication slot", replops: "replication operation", zone: "zone",
   cgroup: "consistency group", cgsnapshot: "group snapshot", migration: "migration",
   k8sc: "Kubernetes cluster", storageclass: "storage class", pvc: "persistent volume claim", bucket: "bucket",
-  protectedapp: "protected application",
   deployconfig: "deployment document", mpath: "migration path", appgroup: "application group"};
 
 function ErrorState({error, onRetry, kind, onUp, upLabel}) {
@@ -348,15 +388,15 @@ function DiscoveryView({kid, nav}) {
 
 const TILE = {cluster: ClusterTile, host: HostTile, node: NodeTile, device: DeviceTile, pool: PoolTile,
   volume: VolumeTile, snapshot: SnapshotTile, backup: BackupTile, policy: PolicyTile,
-  plan: PlanTile, site: SiteTile, pair: PairTile, rpolicy: RPolicyTile,
+  pplan: PPlanTile, drpath: DRPathTile, papp: PAppTile, rplan: RPlanTile, raction: RActionTile, tbubble: TBubbleTile,
+  tsched: TSchedTile, restore: RestoreTile, siteprofile: SiteProfileTile, pair: PairTile, rpolicy: RPolicyTile,
   slot: SlotTile, replops: ReplOpsTile, zone: ZoneTile, cgroup: CgroupTile, cgsnapshot: CgSnapshotTile,
   migration: MigrationTile, k8sc: K8sTile, storageclass: StorageClassTile, pvc: PvcTile, bucket: BucketTile,
-  protectedapp: ProtectedAppTile,
   deployconfig: DeployConfigTile, mpath: MPathTile, appgroup: AppGroupTile};
 const TKEY = {cluster: "c", host: "h", node: "n", device: "d", pool: "p", volume: "v", snapshot: "s",
-  backup: "b", plan: "p", site: "s", policy: "p", pair: "p", rpolicy: "p",
+  backup: "b", pplan: "o", drpath: "o", papp: "o", rplan: "o", raction: "o", tbubble: "o", tsched: "o", restore: "o", siteprofile: "o", policy: "p", pair: "p", rpolicy: "p",
   slot: "s", replops: "o", zone: "s", cgroup: "g", cgsnapshot: "s", migration: "m", k8sc: "k", storageclass: "s", pvc: "p", bucket: "b",
-  protectedapp: "a", deployconfig: "d", mpath: "m", appgroup: "g"};
+  deployconfig: "d", mpath: "m", appgroup: "g"};
 
 const kindPlural = kind => {
   const l = KIND_LABEL[kind] || kind;
@@ -441,7 +481,10 @@ function OverviewView({seg, parent, nav, prefs, rev, up, upLabel}) {
         extra={gateCreate(seg.t === "clusters" ? <button className="btn primary" onClick={() => window.__ui.dialog(deployFromDialog(nav), {kind: "cluster", id: "new"})}><Icon n="plus" s={12} />Deploy cluster</button>
           : seg.t === "deployconfigs" && parent && parent.t === "k8sc" ? <button className="btn primary" onClick={() => nav.deployWizard(parent.id)}><Icon n="plus" s={12} />Deploy a cluster</button>
           : seg.t === "pools" && parent && parent.t === "cluster" ? <button className="btn primary" onClick={() => window.__ui.dialog(newPoolDialog(REG[parent.id] || {id: parent.id, name: "this cluster"}), {kind: "pool", id: "new"})}><Icon n="plus" s={12} />New pool</button>
-          : seg.t === "plans" ? <button className="btn primary" onClick={() => api.sites().then(ss => window.__ui.dialog(newPlanDialog(ss), {kind: "plan", id: "new"}))}><Icon n="plus" s={12} />New plan</button>
+          : seg.t === "plans" ? <button className="btn primary" onClick={() => window.__ui.dialog(newPPlanDialog(), {kind: "pplan", id: "new"})}><Icon n="plus" s={12} />New plan</button>
+          : seg.t === "paths" ? <button className="btn primary" onClick={() => drhub.plans().then(ps => window.__ui.dialog(newPathDialog(ps), {kind: "drpath", id: "new"}))}><Icon n="plus" s={12} />Declare path</button>
+          : seg.t === "protectedapps" ? <button className="btn primary" onClick={() => Promise.all([drhub.plans(), drhub.config().catch(() => null)]).then(([ps, c]) => window.__ui.dialog(protectAppDialogDR(ps, c), {kind: "papp", id: "new"}))}><Icon n="shield" s={12} />Protect application</button>
+          : seg.t === "rplans" ? <button className="btn primary" onClick={() => Promise.all([drhub.paths(), drhub.apps()]).then(([ps, as]) => window.__ui.dialog(newRPlanDialog(ps, as), {kind: "rplan", id: "new"}))}><Icon n="plus" s={12} />New recovery plan</button>
           : seg.t === "pairs" ? <button className="btn primary" onClick={() => window.__ui.dialog(newPairDialog(), {kind: "pair", id: "new"})}><Icon n="plus" s={12} />New pair</button>
           : seg.t === "rpolicies" ? <button className="btn primary" onClick={() => window.__ui.dialog(newReplPolicyDialog(parent && parent.t === "pair" ? REG[parent.id] : null), {kind: "rpolicy", id: "new"})}><Icon n="plus" s={12} />New policy</button>
           : seg.t === "__pairs_old" ? <button className="btn primary" onClick={() => window.__ui.dialog(newPairDialog(), {kind: "cluster pair", id: "new"})}><Icon n="plus" s={12} />Pair clusters</button>
@@ -449,7 +492,6 @@ function OverviewView({seg, parent, nav, prefs, rev, up, upLabel}) {
           : seg.t === "appgroups" && parent ? <button className="btn primary" onClick={() => window.__ui.dialog(newAppGroupDialog(REG[parent.id] || {id: parent.id}), {kind: "application group", id: "new"})}><Icon n="plus" s={12} />Add application group</button>
           : seg.t === "rpolicies" ? <button className="btn primary" onClick={() => window.__ui.dialog(newRPolicyDialog(), {kind: "replication policy", id: "new"})}><Icon n="plus" s={12} />New policy</button>
           : seg.t === "policies" && parent ? <button className="btn primary" onClick={() => window.__ui.dialog(newBackupPolicyDialog({id: parent.id}), {kind: "backup policy", id: "new"})}><Icon n="plus" s={12} />New policy</button>
-          : seg.t === "protectedapps" && (!parent || !parent.id) ? <button className="btn primary" onClick={() => window.__ui.dialog(protectAppDialog(), {kind: "protected application", id: "new"})}><Icon n="shield" s={12} />Protect application</button>
           : isPvc ? <>
               <select className="sel" value={xf.sc} onChange={e => setXf(x => Object.assign({}, x, {sc: e.target.value}))} title="Filter by storage class">
                 <option value="">All storage classes</option>
@@ -554,16 +596,18 @@ class ViewBoundary extends React.Component {
         <Icon n="alert" s={24} c="var(--bad)" />
         <b style={{color: "var(--text)"}}>This view failed to render</b>
         <span style={{maxWidth: 460}}>{String(this.state.err.message || this.state.err)}</span>
-        <button className="chip" style={{marginTop: 8}} onClick={this.props.onReset}>Back to clusters</button>
+        <button className="chip" style={{marginTop: 8}} onClick={this.props.onReset}>Back to {DR_ONLY ? "disaster recovery" : "clusters"}</button>
       </div></div>
     );
   }
 }
 
 function App() {
-  const [rawPath, setPath] = useLocal("sb.path", [{t: "clusters"}]);
-  // a stored path may name a layer that no longer exists (renamed kinds) — fall back to the root
-  const path = useMemo(() => Array.isArray(rawPath) && rawPath.length && rawPath.every(s => LAYER_META[s.t]) ? rawPath : [{t: "clusters"}], [rawPath]);
+  const [rawPath, setPath] = useLocal(DR_ONLY ? "sb.drpath" : "sb.path", ROOT_PATH);
+  // a stored path may name a layer that no longer exists (renamed kinds) — fall back to the root;
+  // in DR-only mode anything outside the DR section is unreachable
+  const path = useMemo(() => Array.isArray(rawPath) && rawPath.length && rawPath.every(s => LAYER_META[s.t])
+    && (!DR_ONLY || (rawPath[0].t === "dr" && !rawPath.some(s => STORAGE_DR_LAYERS.includes(s.t)))) ? rawPath : ROOT_PATH, [rawPath]);
   const [theme, setTheme] = useLocal("sb.theme", "light");
   const [density, setDensity] = useLocal("sb.density", "340px");
   const [sort, setSort] = useLocal("sb.sort", "health");
@@ -588,14 +632,15 @@ function App() {
       setRev(r => r + 1);
     };
   }, []);
-  useEffect(() => { api.clusters().then(setClusters).catch(() => {}); }, [rev]);
+  useEffect(() => { document.title = DR_ONLY ? "simplyblock DR Console" : "simplyblock Control Center"; }, []);
+  // The storage warm-ups (clusters, zones, alerts) all need the operator API,
+  // which a DR-only hub does not have.
+  useEffect(() => { if (!DR_ONLY) api.clusters().then(setClusters).catch(() => {}); }, [rev]);
   // zones are a small, cluster-independent collection; warm the registry once so
   // every regName(zoneId) call zone can label them without its own fetch
-  useEffect(() => { api.zones().then(() => force(n => n + 1)).catch(() => {}); }, [rev]);
-  // DR clusters are named all over the application-DR views but never appear in a
-  // breadcrumb path, so warm them too
-  useEffect(() => { api.drClusters().then(() => force(n => n + 1)).catch(() => {}); }, [rev]);
+  useEffect(() => { if (!DR_ONLY) api.zones().then(() => force(n => n + 1)).catch(() => {}); }, [rev]);
   useEffect(() => {
+    if (DR_ONLY) return;
     const load = () => api.allAlerts().then(as => setAlertCount(as.filter(a => a.severity === "critical" && !a.silenced).length)).catch(() => {});
     load();
     const i = setInterval(load, 15000);
@@ -634,8 +679,8 @@ function App() {
     openPolicy: (cid, id) => go([...pC(cid), {t: "policies"}, {t: "policy", id}]),
     openZone: id => go(pZone(id)),
     openK8s: id => go(pK(id)),
-    openPlan: id => go(pPlan(id)),
-    openSite: id => go(pSite(id)),
+    openPlan: id => go(pPPlan(id)),
+    openPath: id => go(pDRPath(id)),
     // the plan and the application both name sites and methods as strings, the
     // way the CRs do, so the console resolves the name to its object
     openPairByName: name => api.pairs().then(ps => {
@@ -653,13 +698,16 @@ function App() {
     openPvcByName: name => api.pvcs().then(ps => {
       const p = ps.find(x => x.name === name); if (p) go(detailPath(p));
     }).catch(() => {}),
-    openPlanByName: name => api.plans().then(ps => {
-      const p = ps.find(x => x.name === name); if (p) go(pPlan(p.id));
+    openPlanByName: name => drhub.plans().then(ps => {
+      const p = ps.find(x => x.name === name); if (p) go(pPPlan(p.id));
     }).catch(() => {}),
-    openSiteByName: name => api.sites().then(ss => {
-      const s = ss.find(x => x.name === name); if (s) go(pSite(s.id));
+    openPathByName: name => drhub.paths().then(ps => {
+      const p = ps.find(x => x.name === name); if (p) go(pDRPath(p.id));
     }).catch(() => {}),
-    openProtectedApp: id => go(pApp(id)),
+    openAppByName: (name, ns) => drhub.apps().then(as => {
+      const a = as.find(x => x.name === name && (!ns || x.namespace === ns)); if (a) go(pPApp(a.id));
+    }).catch(() => {}),
+    openProtectedApp: id => go(pPApp(id)),
     openBucket: id => (REG[id] ? Promise.resolve(REG[id]) : api.bucket(id)).then(x => go(pBucket(x.clusterId, x.id))).catch(() => {}),
     openPvc: id => (REG[id] ? Promise.resolve(REG[id]) : api.pvc(id)).then(x => go(pPvc(x.k8sClusterId, x.id))).catch(() => {}),
     openStorageClass: id => (REG[id] ? Promise.resolve(REG[id]) : api.storageClass(id)).then(x => go(pSc(x.k8sClusterId, x.id))).catch(() => {}),
@@ -678,7 +726,7 @@ function App() {
     deployWizard: kid => go([...pK(kid), {t: "deploywizard"}]),
     deployConfig: (kid, id) => go(pDep(kid, id)),
     k8sDetail: kid => go(pK(kid)),
-    root: () => go([{t: "clusters"}])
+    root: () => go(ROOT_PATH)
   }), [go]);
 
   useEffect(() => {
@@ -699,6 +747,7 @@ function App() {
   const apiHint = cur.id ? DETAIL_API[cur.t] : VIEWS[cur.t] ? VIEWS[cur.t].api(parentSeg || {}) : "—";
   const s0 = path[0] && path[0].t;
   const section = s0 === "dr" ? "dr" : s0 === "k8s" ? "k8s" : s0 === "cp" ? "cp" : "clusters";
+  const drVisible = DR_ONLY || acc.canAnywhere("read", "drhub") || acc.canAnywhere("read", "drpolicy") || acc.canAnywhere("read", "replicationpolicy") || acc.canAnywhere("read", "application");
   const upOne = path.length > 1 ? () => go(path.slice(0, -1)) : null;
   const upLabel = path.length > 1 ? segLabel(path[path.length - 2]) : "";
 
@@ -710,14 +759,18 @@ function App() {
             onError={e => { e.target.style.display = "none"; e.target.nextSibling.style.display = "block"; }} />
           <span className="logofb" style={{display: "none"}}>simplyblock</span>
         </a>
-        <span className="prod">Control Center</span>
-        <div className="sectionsw">
+        <span className="prod">{DR_ONLY ? "DR Console" : "Control Center"}</span>
+        {!DR_ONLY && <div className="sectionsw">
           <button className={section === "clusters" ? "on" : ""} onClick={() => nav.root()} title="Clusters"><Icon n="cluster" s={13} /><span className="swlabel">Clusters</span></button>
           {acc.canAnywhere("read", "k8scluster") && <button className={section === "k8s" ? "on" : ""} onClick={() => nav.k8s()} title="Kubernetes"><Icon n="k8s" s={13} /><span className="swlabel">Kubernetes</span></button>}
-          {(acc.canAnywhere("read", "drpolicy") || acc.canAnywhere("read", "replicationpolicy") || acc.canAnywhere("read", "application")) && <button className={section === "dr" ? "on" : ""} onClick={() => nav.dr()} title="Disaster recovery"><Icon n="shield" s={13} /><span className="swlabel">Disaster recovery</span></button>}
+          {drVisible && <button className={section === "dr" ? "on" : ""} onClick={() => nav.dr()} title="Disaster recovery"><Icon n="shield" s={13} /><span className="swlabel">Disaster recovery</span></button>}
           <button className={section === "cp" ? "on" : ""} onClick={() => nav.cp()} title="Control plane"><Icon n="host" s={13} /><span className="swlabel">Control plane</span></button>
-        </div>
-        {section === "clusters" && <div className="switcher">
+        </div>}
+        {DR_ONLY && <div className="sectionsw">
+          <button className="on" onClick={() => nav.dr()} title="Disaster recovery"><Icon n="shield" s={13} /><span className="swlabel">Disaster recovery</span></button>
+          <button className={cur.t === "drconfig" ? "on" : ""} onClick={() => nav.drLayer("drconfig")} title="DR configuration"><Icon n="gauge" s={13} /><span className="swlabel">Configuration</span></button>
+        </div>}
+        {!DR_ONLY && section === "clusters" && <div className="switcher">
           <button className="swbtn" onClick={() => setMenu(!menu)}>
             {ctxCluster ? <><Dot c={STATUS_META[ctxCluster.status].c} />{ctxCluster.name}</> : <><Icon n="cluster" s={13} />All clusters</>}
             <Icon n="chevd" s={9} />
@@ -738,11 +791,12 @@ function App() {
         </div>}
         <div className="spacer"></div>
         {window.SB_CONFIG.mock && <MockPanel />}
-        <span className="env"><span className="pulse"></span>control plane healthy</span>
-        <button className="tbtn bellwrap" title={alertCount ? `${alertCount} critical alert(s)` : "No critical alerts"}
+        {!DR_ONLY && <span className="env"><span className="pulse"></span>control plane healthy</span>}
+        {DR_ONLY && <span className="env"><span className="pulse"></span>dr-hub</span>}
+        {!DR_ONLY && <button className="tbtn bellwrap" title={alertCount ? `${alertCount} critical alert(s)` : "No critical alerts"}
           onClick={() => { const s = path.find(x => x.t === "cluster"); if (s) nav.openCluster(s.id); else if (clusters.length) nav.openCluster(clusters.find(c => c.status === "degraded") ? clusters.find(c => c.status === "degraded").id : clusters[0].id); }}>
           <Icon n="bell" s={14} />{alertCount > 0 && <span className="bellbadge">{alertCount > 99 ? "99+" : alertCount}</span>}
-        </button>
+        </button>}
         <button className="tbtn" title="Toggle theme" onClick={() => setTheme(theme === "light" ? "dark" : "light")}><Icon n={theme === "light" ? "moon" : "sun"} s={14} /></button>
         <IdentityMenu here={cur.id ? REG[cur.id] : null} />
       </div>
@@ -769,7 +823,9 @@ function App() {
       {cur.id
         ? <DetailView key={viewKey} seg={cur} nav={nav} rev={rev} up={upOne} upLabel={upLabel} />
         : cur.t === "dr"
-        ? <DrHome key={viewKey} nav={nav} />
+        ? <DrHubHome key={viewKey} nav={nav} />
+        : cur.t === "drconfig"
+        ? <DRConfigView key={viewKey} nav={nav} />
         : cur.t === "cp"
         ? <ControlPlaneView key={viewKey} nav={nav} />
         : cur.t === "discovery"

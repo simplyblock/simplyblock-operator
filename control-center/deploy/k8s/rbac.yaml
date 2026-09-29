@@ -136,6 +136,31 @@ rules:
     resources: ["managedclusters"]
     verbs: ["get", "list"]
 
+  # ---- DR hub (dr-simplyblock) ----
+  # Every DR screen is a CR of dr.simplyblock.io. In serviceaccount mode this
+  # grant is the console's authority, so it is the dr-operator level plus the
+  # dr-admin writes; the override verb is what the hub's webhook checks before
+  # admitting a readiness override. Trim to your policy, or use passthrough.
+  - apiGroups: ["dr.simplyblock.io"]
+    resources: ["protectionplans", "drpaths", "protectedapplications", "recoveryplans", "recoveryactions", "testbubbles", "testschedules", "restoreactions", "drconfigs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["dr.simplyblock.io"]
+    resources: ["protectionplans", "drpaths", "protectedapplications", "recoveryplans", "recoveryactions", "testbubbles", "testschedules", "restoreactions"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["dr.simplyblock.io"]
+    resources: ["recoveryactions"]
+    verbs: ["override"]
+  - apiGroups: ["sitemap.simplyblock.io"]
+    resources: ["siteprofiles"]
+    verbs: ["get", "list", "watch"]
+  # the console asks the API server what its identity may do, to disable controls
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["selfsubjectaccessreviews", "selfsubjectrulesreviews"]
+    verbs: ["create"]
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["selfsubjectreviews"]
+    verbs: ["create"]
+
   # ---- Helm release view ----
   # Helm stores releases as Secrets of type helm.sh/release.v1. This is the one
   # place the console needs a Secret, and it is read-only; no other Secret is

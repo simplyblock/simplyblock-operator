@@ -2,28 +2,32 @@
 // ACCESS CONTROL — the client side of §5 of the RBAC design.
 //
 // The API server is the only policy decision point. This file never enforces:
-// it asks one SelfSubjectRulesReview per namespace (aggregated in /access/self),
-// evaluates locally, and renders. Denied controls are DISABLED with the missing
+// it asks one SelfSubjectRulesReview per namespace (aggregated in /access/self
+// by the operator API, or asked of the Kubernetes API directly on a DR-only
+// hub, where there is no operator), evaluates locally, and renders. Denied controls are DISABLED with the missing
 // permission in the tooltip; only whole scopes the caller cannot see are hidden.
 // incomplete:true renders optimistically — the real call fails with a clear 403.
 // ---------------------------------------------------------------------------
-const OPS_LABEL = {create: "C", read: "R", update: "U", delete: "D", restoresource: "src", backup: "bak", restore: "rst", failover: "f/o", failback: "f/b", fence: "fence"};
+const OPS_LABEL = {create: "C", read: "R", update: "U", delete: "D", restoresource: "src", backup: "bak", restore: "rst", failover: "f/o", failback: "f/b", fence: "fence", relocate: "reloc", restart: "restart", test: "test", override: "ovr", drrestore: "restore"};
 const ENTITY_LABEL = {
   k8scluster: "Managed cluster", storagecluster: "Storage cluster", storagepool: "Storage pool", backupop: "Backup / restore",
-  replicationpolicy: "Replication policy", backuppolicy: "Backup policy", drpolicy: "DR policy", application: "Application", role: "ClusterRole", binding: "AccessGrant"
+  replicationpolicy: "Replication policy", backuppolicy: "Backup policy", drpolicy: "DR policy", application: "Application", role: "ClusterRole", binding: "AccessGrant",
+  drhub: "Disaster recovery"
 };
 const ENTITY_COVERS = {
   k8scluster: "worker nodes, discovery, allocations", storagecluster: "hosts, nodes, devices, tasks, logs, migrations, S3 target, KMS endpoint",
   storagepool: "volumes, snapshots, clones, PVCs, backups, buckets, KEKs", backupop: "per-volume backup and restore",
   replicationpolicy: "pairs, policies, slots", backuppolicy: "schedules and retention", drpolicy: "protection plans, methods, migration paths",
-  application: "protected applications, recipes, failovers", role: "aggregated sb:* ClusterRole", binding: "RoleBinding or AccessGrant"
+  application: "protected applications, recipes, failovers", role: "aggregated sb:* ClusterRole", binding: "RoleBinding or AccessGrant",
+  drhub: "protection plans, DR paths, protected applications, recovery plans, actions, tests, restores"
 };
 const ENTITY_OPS = {
   k8scluster: ["create", "read", "update", "delete"], storagecluster: ["create", "read", "update", "delete"],
   storagepool: ["create", "read", "update", "delete", "restoresource"], backupop: ["backup", "restore"],
   replicationpolicy: ["create", "read", "update", "delete"], backuppolicy: ["create", "read", "update", "delete"],
   drpolicy: ["create", "read", "update", "delete"], application: ["create", "read", "update", "delete", "failover", "failback", "fence"],
-  role: ["read"], binding: ["create", "read", "delete"]
+  role: ["read"], binding: ["create", "read", "delete"],
+  drhub: ["create", "read", "update", "delete", "failover", "relocate", "restart", "test", "override", "drrestore"]
 };
 // UI kind -> the main entity whose namespace governs it
 const KIND_ENTITY = {
@@ -33,7 +37,11 @@ const KIND_ENTITY = {
   storageclass: "storagepool", bucket: "storagepool", cgroup: "storagepool", cgsnapshot: "storagepool",
   policy: "backuppolicy", pair: "replicationpolicy", rpolicy: "replicationpolicy", slot: "replicationpolicy", replop: "replicationpolicy",
   plan: "drpolicy", method: "drpolicy", site: "drpolicy", mpath: "drpolicy", appgroup: "drpolicy",
-  protectedapp: "application", role: "role", binding: "binding", grant: "binding", replops: "replicationpolicy"
+  protectedapp: "application", role: "role", binding: "binding", grant: "binding", replops: "replicationpolicy",
+  // the DR hub's kinds (dr.simplyblock.io) — one entity, authorised by the
+  // hub chart's dr-viewer / dr-operator / dr-admin roles
+  pplan: "drhub", drpath: "drhub", papp: "drhub", rplan: "drhub", raction: "drhub", tbubble: "drhub", tsched: "drhub",
+  restore: "drhub", drconfig: "drhub", siteprofile: "drhub"
 };
 // UI kind -> the CRD resource the API server checks (§3.5, the console's column)
 const KIND_RESOURCE = {
@@ -43,11 +51,20 @@ const KIND_RESOURCE = {
   cgsnapshot: "snapshots", snapshot: "snapshots", backup: "backups", policy: "backuppolicies",
   pair: "clusterpairs", rpolicy: "replicationpolicies", slot: "replicationpolicies", replop: "replicationpolicies", replops: "replicationpolicies",
   plan: "protectionplans", method: "protectionplans", site: "drclusters", mpath: "protectionplans", appgroup: "protectionplans",
-  protectedapp: "protectedapplications", role: "clusterroles", binding: "accessgrants", grant: "accessgrants"
+  protectedapp: "protectedapplications", role: "clusterroles", binding: "accessgrants", grant: "accessgrants",
+  pplan: "protectionplans", drpath: "drpaths", papp: "protectedapplications", rplan: "recoveryplans", raction: "recoveryactions",
+  tbubble: "testbubbles", tsched: "testschedules", restore: "restoreactions", drconfig: "drconfigs", siteprofile: "siteprofiles"
 };
+// UI kind -> API group, where it is not the default simplyblock group
+const KIND_GROUP = {pplan: "dr.simplyblock.io", drpath: "dr.simplyblock.io", papp: "dr.simplyblock.io", rplan: "dr.simplyblock.io",
+  raction: "dr.simplyblock.io", tbubble: "dr.simplyblock.io", tsched: "dr.simplyblock.io", restore: "dr.simplyblock.io",
+  drconfig: "dr.simplyblock.io", siteprofile: "sitemap.simplyblock.io"};
+const ENTITY_GROUP = {drhub: "dr.simplyblock.io"};
 const ENTITY_RESOURCE = {k8scluster: "managedclusters", storagecluster: "storageclusters", storagepool: "storagepools", backupop: "backups",
-  replicationpolicy: "replicationpolicies", backuppolicy: "backuppolicies", drpolicy: "drpolicies", application: "protectedapplications", role: "clusterroles", binding: "accessgrants"};
-const VERB_OF = {read: "get", create: "create", update: "update", delete: "delete", backup: "create", restoresource: "get"};
+  replicationpolicy: "replicationpolicies", backuppolicy: "backuppolicies", drpolicy: "drpolicies", application: "protectedapplications", role: "clusterroles", binding: "accessgrants",
+  drhub: "protectedapplications"};
+const VERB_OF = {read: "get", create: "create", update: "update", delete: "delete", backup: "create", restoresource: "get",
+  failover: "create", relocate: "create", restart: "create", test: "create", drrestore: "create", override: "override"};
 
 // ---- the store ---------------------------------------------------------------
 const AC_STATE = {ready: false, user: null, groups: [], initials: "??", label: "", rules: {cluster: [], ns: {}}, incomplete: false,
@@ -55,14 +72,33 @@ const AC_STATE = {ready: false, user: null, groups: [], initials: "??", label: "
 const acListeners = new Set();
 const acNotify = () => acListeners.forEach(f => f());
 
+const DR_MODE = () => (window.SB_CONFIG || {}).mode === "dr";
+const initialsOf = u => String(u || "?").replace(/^system:serviceaccount:[^:]+:/, "").split(/[^a-z0-9]+/i).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join("") || "??";
+
+// Straight from the Kubernetes API: who am I, and which rules apply to me in
+// the DR ops namespace. Cluster-wide bindings are part of that answer, so the
+// result is kept as the cluster rule set; a RoleBinding in some other
+// namespace is not seen here — the API server still enforces it, this only
+// decides which controls are disabled.
+async function loadAccessK8s() {
+  const [who, rules] = await Promise.all([review.whoami().catch(() => ({})), review.rules(DR_NS())]);
+  const norm = (rules.resourceRules || []).map(r => ({apiGroups: r.apiGroups || [""], resources: r.resources || [], verbs: r.verbs || [], resourceNames: r.resourceNames}));
+  const user = who.username || null;
+  Object.assign(AC_STATE, {ready: true, error: null, user, groups: who.groups || [], initials: initialsOf(user), label: user,
+    rules: {cluster: norm, ns: {}}, incomplete: !!rules.incomplete, grants: [], scopes: null, demoUsers: []});
+}
+
 async function loadAccess() {
   try {
+    if (DR_MODE()) { await loadAccessK8s(); acNotify(); return; }
     const r = await api.accessSelf();
     Object.assign(AC_STATE, {ready: true, error: null, user: r.user, groups: r.groups || [], initials: r.initials || "??", label: r.label || r.user,
       rules: r.rules || {cluster: [], ns: {}}, incomplete: !!r.incomplete, grants: r.grants || [], scopes: r.scopes || null,
       ns: (r.scopes && r.scopes.ns) || AC_STATE.ns, demoUsers: r.demo_users || []});
   } catch (e) {
-    Object.assign(AC_STATE, {ready: true, error: e, user: null, rules: {cluster: [], ns: {}}, grants: [], scopes: null});
+    // no operator API (or it has no access view): the Kubernetes API is the truth
+    try { await loadAccessK8s(); }
+    catch (e2) { Object.assign(AC_STATE, {ready: true, error: e, user: null, rules: {cluster: [], ns: {}}, grants: [], scopes: null}); }
   }
   acNotify();
 }
@@ -84,6 +120,8 @@ function nsOf(entity, o, op) {
   }
   if (entity === "storagecluster" || entity === "backuppolicy") return clusterIdsOf(o).map(id => N.clusters[id]).filter(Boolean);
   if (entity === "replicationpolicy" || entity === "drpolicy") return [N.dr];
+  // DR hub kinds: namespaced ones are judged in their own namespace, cluster-scoped ones at cluster scope
+  if (entity === "drhub") return o.namespace ? [o.namespace] : ["*"];
   if (entity === "application") {
     const aid = o.kind === "protectedapp" ? o.id : o.appId;
     if (aid && N.apps[aid]) return [N.apps[aid]];
@@ -99,7 +137,7 @@ function scopeNamespaces(sc) {
 }
 
 // ---- rule evaluation (SSRR, local) --------------------------------------------
-const ruleAllows = (r, verb, resource, group, name) => (r.apiGroups.includes(group || "simplyblock.io") || r.apiGroups.includes("*"))
+const ruleAllows = (r, verb, resource, group, name) => ((r.apiGroups || []).includes(group || "simplyblock.io") || (r.apiGroups || []).includes("*"))
   && (r.resources.includes(resource) || r.resources.includes("*")) && (r.verbs.includes(verb) || r.verbs.includes("*"))
   && (!r.resourceNames || !name || r.resourceNames.includes(name));
 function allowedIn(ns, verb, resource, group, name) {
@@ -111,11 +149,20 @@ const anyNs = (verb, resource, group, name) => allowedIn("*", verb, resource, gr
 
 // what (verb, resource) does (op, entity) become?
 function target(op, entity, obj) {
+  if (entity === "drhub") {
+    const group = "dr.simplyblock.io";
+    if (op === "failover" || op === "relocate" || op === "restart") return {verb: "create", resource: "recoveryactions", group};
+    if (op === "test") return {verb: "create", resource: "testbubbles", group};
+    if (op === "override") return {verb: "override", resource: "recoveryactions", group};
+    if (op === "drrestore") return {verb: "create", resource: "restoreactions", group};
+    const resource = obj && KIND_RESOURCE[obj.kind] && KIND_ENTITY[obj.kind] === "drhub" ? KIND_RESOURCE[obj.kind] : ENTITY_RESOURCE.drhub;
+    return {verb: VERB_OF[op] || op, resource, group: (obj && KIND_GROUP[obj.kind]) || group};
+  }
   if (entity === "application" && (op === "failover" || op === "failback")) return {verb: "create", resource: "applicationfailovers"};
   if (entity === "application" && op === "fence") return {verb: "update", resource: "drclusters", nsOverride: [AC_STATE.ns.dr]};
   if (entity === "k8scluster" && op === "create") return {verb: "create", resource: "nodepoolallocations"};
   const resource = obj && KIND_RESOURCE[obj.kind] && KIND_ENTITY[obj.kind] === entity ? KIND_RESOURCE[obj.kind] : ENTITY_RESOURCE[entity] || entity;
-  return {verb: VERB_OF[op] || op, resource};
+  return {verb: VERB_OF[op] || op, resource, group: (obj && KIND_GROUP[obj.kind]) || ENTITY_GROUP[entity]};
 }
 // Is `op` on `entity` permitted for `obj`? Cross-cluster policies must pass on
 // every namespace they touch. Returns true when the rules review is incomplete.
@@ -124,17 +171,17 @@ function acCan(op, entity, obj) {
   if (AC_STATE.incomplete) return true;
   const t = target(op, entity, obj);
   const nss = t.nsOverride || nsOf(entity, obj, op);
-  if (!nss.length) return allowedIn("*", t.verb, t.resource);
-  return nss.every(ns => allowedIn(ns, t.verb, t.resource));
+  if (!nss.length) return allowedIn("*", t.verb, t.resource, t.group);
+  return nss.every(ns => allowedIn(ns, t.verb, t.resource, t.group));
 }
 // why not? — the tooltip text for a disabled control (§5.5)
 function acWhy(op, entity, obj) {
   const t = target(op, entity, obj);
   const nss = t.nsOverride || nsOf(entity, obj, op);
-  const missing = nss.filter(ns => !allowedIn(ns, t.verb, t.resource));
-  return `Needs ${t.verb} on ${t.resource}${missing.length ? " in " + missing.map(n => n === "*" ? "cluster scope" : n).join(", ") : nss.length ? "" : " (cluster scope)"}`;
+  const missing = nss.filter(ns => !allowedIn(ns, t.verb, t.resource, t.group));
+  return `Needs ${t.verb} on ${t.resource}${t.group ? "." + t.group : ""}${missing.length ? " in " + missing.map(n => n === "*" ? "cluster scope" : n).join(", ") : nss.length ? "" : " (cluster scope)"}`;
 }
-const canAnywhere = (op, entity) => AC_STATE.ready && (AC_STATE.incomplete || anyNs(target(op, entity, null).verb, target(op, entity, null).resource));
+const canAnywhere = (op, entity) => { const t = target(op, entity, null); return AC_STATE.ready && (AC_STATE.incomplete || anyNs(t.verb, t.resource, t.group)); };
 // scope discovery (§5.2): scopes the server says are visible; other kinds are the server's job
 const SCOPE_KINDS = {cluster: "clusters", k8sc: "managed", pool: "pools", protectedapp: "apps"};
 function canRead(o) {
@@ -207,4 +254,4 @@ function IdentityMenu({here}) {
   );
 }
 
-Object.assign(window, {access, useAccess, Can, IdentityMenu, KIND_ENTITY, KIND_RESOURCE, ENTITY_LABEL, ENTITY_COVERS, ENTITY_OPS, OPS_LABEL, ACCESS_OPS_LABEL: OPS_LABEL});
+Object.assign(window, {access, useAccess, Can, IdentityMenu, KIND_ENTITY, KIND_RESOURCE, KIND_GROUP, ENTITY_LABEL, ENTITY_COVERS, ENTITY_OPS, OPS_LABEL, ACCESS_OPS_LABEL: OPS_LABEL});

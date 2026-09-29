@@ -8,7 +8,8 @@
 #      browser makes same-origin requests and never holds a cluster credential
 #
 # Everything else is refused. The console has exactly three upstreams by design:
-# the Kubernetes API, the operator API, and Prometheus.
+# the Kubernetes API, the operator API, and Prometheus — and on a DR-only hub
+# only the first one exists.
 
 server {
   listen ${SB_LISTEN_PORT};
@@ -87,35 +88,12 @@ server {
     limit_except GET POST PATCH PUT DELETE { deny all; }
   }
 
-  # ---- operator API --------------------------------------------------------
-  # The kinds v1alpha1 does not model yet (/proposed/*), the Helm release view,
-  # and the observability reads that are not in any API: SPDK logs, SPDK thread
-  # utilisation, control-plane container allocation, FoundationDB backups.
-  location /operator/v1/ {
-    proxy_pass ${SB_OPERATOR_URL}/v1/;
-    proxy_http_version 1.1;
-    proxy_set_header Host            $host;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_buffering off;
-    proxy_read_timeout 3600s;
-  }
-
-  location /helm/v1/ {
-    proxy_pass ${SB_HELM_URL}/v1/;
-    proxy_http_version 1.1;
-    proxy_set_header Host            $host;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-  }
-
-  # ---- Prometheus ----------------------------------------------------------
-  # Read-only: the console queries, it never writes or administers.
-  location /prometheus/api/v1/ {
-    proxy_pass ${SB_PROMETHEUS_URL}/api/v1/;
-    proxy_http_version 1.1;
-    proxy_set_header Host            $host;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    limit_except GET POST { deny all; }
-  }
+  # ---- optional upstreams --------------------------------------------------
+  # The operator API, the Helm release view and Prometheus are optional: the
+  # DR-only console on a hub without a simplyblock control plane has none of
+  # them. sb-entrypoint renders one location per configured upstream (and a
+  # 503 Status for each missing one) into this include at startup.
+  include /tmp/nginx/upstreams.conf;
 
   # Single-page document: any unknown path renders the shell, which restores its
   # own location from localStorage.

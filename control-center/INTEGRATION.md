@@ -113,13 +113,16 @@ the environment, into the writable scratch mount. Nothing is baked in.
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `SB_MODE` | `full` | `full`: the storage console with a Disaster recovery section. `dr`: the DR-only console — see below |
 | `SB_NAMESPACE` | `simplyblock` | namespace the console manages |
+| `SB_DR_NAMESPACE` | `ramen-ops` | Ramen's ops namespace on the DR hub: default namespace of discovered ProtectedApplications and of the access review |
 | `SB_AUTH_MODE` | `serviceaccount` | `serviceaccount` or `passthrough` — see below |
 | `SB_K8S_API` | `https://kubernetes.default.svc` | API server |
 | `SB_K8S_HOST` | `kubernetes.default.svc` | SNI and Host — must be on the API server's certificate |
 | `SB_K8S_CA_FILE` | the projected SA CA | CA bundle used to verify it |
-| `SB_OPERATOR_URL` | `http://simplyblock-operator:8080` | operator API |
-| `SB_PROMETHEUS_URL` | `http://simplyblock-prometheus:9090` | metrics |
+| `SB_OPERATOR_URL` | `http://simplyblock-operator:8080` | operator API; empty disables the proxy location (answers a 503 Status) |
+| `SB_HELM_URL` | `http://simplyblock-operator:8080` | Helm release view; empty disables it |
+| `SB_PROMETHEUS_URL` | `http://simplyblock-prometheus:9090` | metrics; empty disables it |
 | `SB_LOGO_URL` | `vendor/logo-white.svg` | brand mark, vendored into the image |
 | `SB_MOCK` | `false` | `true` runs on fixtures (needs a `KEEP_MOCKS=1` image) |
 | `SB_TOKEN_REFRESH_SECONDS` | `600` | how often the proxied token is re-read |
@@ -127,6 +130,37 @@ the environment, into the writable scratch mount. Nothing is baked in.
 Pointing `SB_K8S_API` at anything other than the in-cluster service means
 moving `SB_K8S_HOST` and `SB_K8S_CA_FILE` with it: TLS verification stays on,
 so the name has to match the certificate and the CA has to be one you mount.
+
+## Disaster recovery and the DR-only console
+
+The Disaster recovery section is a thin client of the DR hub
+([simplyblock-dr](https://github.com/simplyblock/simplyblock-dr)): every screen
+is a CR of `dr.simplyblock.io/v1alpha1` read through the Kubernetes API proxy
+(ProtectionPlan, DRPath, ProtectedApplication, RecoveryPlan, RecoveryAction,
+TestBubble, TestSchedule, RestoreAction, DRConfig, plus `SiteProfile` from
+`sitemap.simplyblock.io`), and every write is a CR write with the caller's RBAC.
+There is no DR REST API. When the CRDs are absent the section says so.
+
+`SB_MODE=dr` is the same image stripped down to that section, for a DR hub
+that has **no simplyblock control plane**: the Clusters, Kubernetes and Control
+plane sections do not exist, nothing reads the storage CRDs or the operator
+API, and the only upstream nginx proxies is the Kubernetes API (the operator,
+Helm and Prometheus locations answer a 503 `Status` unless their URL is set —
+point `SB_PROMETHEUS_URL` at a Prometheus that scrapes dr-hub if you want the
+metrics). The identity and its rules come from `SelfSubjectReview` and
+`SelfSubjectRulesReview` in `SB_DR_NAMESPACE` instead of the operator's
+`/access/self`. The `dr-simplyblock-hub` chart deploys this mode with
+`--set console.enabled=true` (values under `console:`; `console.role` picks
+which of its `dr-viewer` / `dr-operator` / `dr-admin` roles the console's
+ServiceAccount holds in `serviceaccount` mode). In the design preview,
+`?mode=dr` on the fixture backend shows the same thing.
+
+The interaction rules follow the DR design: directions are declared `DRPath`s
+and never inferred (the run-action dialog offers paths whose `actions` include
+the kind, never a target cluster); readiness is the gate — a `NotReady` path
+needs an override reason, and the hub's webhook checks the `override` verb on
+`recoveryactions`; inventory is read-only; finished runs are immutable and the
+console only ever shows the report the hub wrote.
 
 ## Who can do what
 
