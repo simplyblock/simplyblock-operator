@@ -34,6 +34,7 @@ import (
 	"context"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -196,10 +197,17 @@ func (r *StorageNodeOpsReconciler) maintenanceShutDown(
 	if reading.Status == nodeStatusOffline {
 		return true, nil
 	}
-	if reading.Status == nodeStatusInRestart {
-		// Mid-restart is not a state to shut down from: the call would be refused
-		// and the node is on its way somewhere anyway. Waiting is what lets the
-		// next pass see where it landed.
+	if reading.Status == nodeStatusInRestart || reading.Status == nodeStatusInShutdown {
+		// Neither is a state to shut down from: the call would be refused, and
+		// the node is on its way somewhere anyway. Waiting is what lets the next
+		// pass see where it landed.
+		//
+		// in_shutdown is the shutdown this step itself asked for, so re-posting
+		// it is not a harmless retry: the control plane answers 409, the step
+		// takes that for a failure, and the window spends its budget backing off
+		// against its own progress.
+		//
+		// Regression: 2026-09-29-maintenance-reissues-the-shutdown.
 		return false, nil
 	}
 	if err := r.API.ShutdownNode(ctx, clusterID, nodeID); err != nil {
@@ -208,8 +216,8 @@ func (r *StorageNodeOpsReconciler) maintenanceShutDown(
 	return false, nil
 }
 
-// maintenanceRelease relaxes the budget so the eviction the drain is waiting on
-// can proceed, and completes when the pod has actually gone.
+// maintenanceRelease takes the budget away so the eviction the drain is waiting
+// on can proceed, and completes when the SPDK pod has actually gone.
 //
 // The manager stops holding itself here too, and it has to be here rather than
 // at the end: on a converged worker the manager is on the node being drained,
@@ -229,7 +237,7 @@ func (r *StorageNodeOpsReconciler) maintenanceRelease(
 	if err != nil {
 		return false, fmt.Errorf("release the eviction of worker %s: %w", node.Spec.WorkerNode, err)
 	}
-	return r.Workload.PodGone(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode)
+	return r.Workload.SpdkPodGone(ctx, node.Namespace, node.Spec.WorkerNode)
 }
 
 // maintenanceAwaitHost is the step whose length nobody controls. An OS upgrade and
@@ -274,18 +282,61 @@ func (r *StorageNodeOpsReconciler) maintenanceRestart(
 
 // maintenanceCleanup removes what the window put in place, so the worker is
 // drainable by the ordinary rules again.
+//
+// The manager's own budget is released in Releasing and cleared again here,
+// which is not a repetition: Releasing is reached only on the way through, and
+// this step runs on the way out.
 func (r *StorageNodeOpsReconciler) maintenanceCleanup(
 	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
 ) (bool, error) {
-	// The manager's own budget is released in Releasing and cleared again here,
-	// which is not a repetition: a window that failed before reaching Releasing
-	// comes through this step on its way to a terminal phase, and that is the
-	// path on which the budget would otherwise be left holding a worker nothing
-	// is draining any more.
-	if err := r.Workload.ReleaseSelf(ctx, node.Namespace); err != nil {
+	if err := r.clearMaintenance(ctx, node); err != nil {
 		return false, err
 	}
-	err := r.Workload.ClearEvictionBudget(ctx, node.Namespace,
+	return true, nil
+}
+
+// clearMaintenance takes down both budgets and the label that selects one of
+// them.
+//
+// It is the whole of what a window leaves on a cluster, which is why the two
+// terminal outcomes that do not pass through Cleanup call it too. A budget at
+// maxUnavailable=0 outliving the window that raised it makes the worker
+// undrainable by anything, forever, with nothing left saying why — and that is
+// what a maintenance expiring on its deadline used to produce, because the
+// graph is a chain with no edge from a failing step to Cleanup and unwinds()
+// names no step of this action.
+//
+// Regression: 2026-09-29-failed-maintenance-leaves-its-markers.
+func (r *StorageNodeOpsReconciler) clearMaintenance(
+	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
+) error {
+	if err := r.Workload.ReleaseSelf(ctx, node.Namespace); err != nil {
+		return err
+	}
+	return r.Workload.ClearEvictionBudget(ctx, node.Namespace,
 		node.Spec.ClusterRef, node.Spec.WorkerNode)
-	return err == nil, err
+}
+
+// clearMaintenanceMarkers is the terminal teardown as the two outcomes that do
+// not reach Cleanup reach it: best-effort, and announced rather than retried.
+//
+// Best-effort for the reason resumeNode is. An operation that cannot reach a
+// terminal phase never releases the node's lock, and a budget nobody could
+// delete is a smaller problem than a node nothing can ever operate on again.
+// The event is what says the worker needs a hand.
+func (r *StorageNodeOpsReconciler) clearMaintenanceMarkers(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps,
+) {
+	if ops.Spec.Action != simplyblockv1alpha2.StorageNodeOpsActionHostMaintenance {
+		return
+	}
+	node, err := r.node(ctx, ops)
+	if err != nil || node == nil {
+		return
+	}
+	if err := r.clearMaintenance(ctx, node); err != nil {
+		r.emit(ctx, ops, corev1.EventTypeWarning, MaintenanceMarkersLeft, fmt.Sprintf(
+			"Worker %s keeps the window's eviction budget and cannot be drained "+
+				"until it is deleted by hand: %v", node.Spec.WorkerNode, err))
+	}
 }

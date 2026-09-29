@@ -157,7 +157,13 @@ type ClusterCache interface {
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;delete
+// patch on pods is the maintenance window's, and it is the narrowest verb that
+// does the job: the window writes one label onto the pods its budget selects and
+// takes it off again, because a PodDisruptionBudget can only select by label and
+// the pods it has to cover are created by the control plane rather than here. The
+// pre-rework drain coordinator carried the same grant, and the manifest lost it
+// while the code that needs it did not.
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
@@ -463,6 +469,7 @@ func (r *StorageNodeOpsReconciler) unwind(
 	// nobody noticed (§8.3).
 	r.resumeNode(ctx, ops, current)
 	r.abortMigrations(ctx, ops, current)
+	r.clearMaintenanceMarkers(ctx, ops)
 
 	r.emit(ctx, ops, corev1.EventTypeNormal, OperationAborted,
 		fmt.Sprintf("The operation was aborted at step %s", current))
@@ -471,7 +478,8 @@ func (r *StorageNodeOpsReconciler) unwind(
 }
 
 // fail ends the operation, resuming the node first where the step it failed on
-// left it suspended.
+// left it suspended and taking down what a maintenance window holds a worker
+// with.
 func (r *StorageNodeOpsReconciler) fail(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.StorageNodeOps,
@@ -479,6 +487,7 @@ func (r *StorageNodeOpsReconciler) fail(
 	message string,
 ) (ctrl.Result, error) {
 	r.resumeNode(ctx, ops, current)
+	r.clearMaintenanceMarkers(ctx, ops)
 	return r.finish(ctx, ops, simplyblockv1alpha2.StorageNodeOpsPhaseFailed, message)
 }
 

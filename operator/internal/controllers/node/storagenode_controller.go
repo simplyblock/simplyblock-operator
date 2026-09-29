@@ -1140,8 +1140,8 @@ func (r *StorageNodeReconciler) capacitySample(
 	return sample, ok
 }
 
-// raiseMaintenance raises a HostMaintenance operation when the node's worker has
-// been cordoned, and reports whether it did.
+// raiseMaintenance keeps the node's maintenance window in step with its worker's
+// cordon, and reports whether it changed anything.
 //
 // The operator raises this and a user does not, which is what §10 means by the
 // trigger being the cordon. A user creating one by hand is accepted and behaves
@@ -1154,10 +1154,55 @@ func (r *StorageNodeReconciler) raiseMaintenance(
 		return false, client.IgnoreNotFound(err)
 	}
 	if !worker.Spec.Unschedulable {
-		return false, nil
+		return r.releaseMaintenance(ctx, node)
 	}
 	return r.ensureOps(ctx, node, simplyblockv1alpha2.StorageNodeOpsActionHostMaintenance,
 		node.Name+"-maintenance")
+}
+
+// releaseMaintenance answers the cordon being undone, which is the signal that
+// the maintenance is over however it went.
+//
+// Two things happen to the window, depending on how far it got.
+//
+// One still in Holding has done nothing to the node yet and is waiting for a
+// slot, so an uncordon calls it off: the graph marks that step abortable for
+// exactly this, and a window left running would hold the node's lock for six
+// hours over a cordon that lasted a minute. From ShuttingDown onward the node
+// is down and something has to bring it back, so the window runs on and the
+// uncordon it is waiting for is the one AwaitingHost reads.
+//
+// A window that has finished is deleted, and that is not tidiness. The name is
+// derived from the node's, so ensureOps finds the terminal record of the last
+// maintenance on the next cordon and raises nothing — one window per node for
+// the lifetime of the object, with every drain after the first unheld. The
+// worker being schedulable again is the boundary the record belongs on.
+//
+// Regression: 2026-09-29-an-uncordon-does-not-reach-the-window.
+func (r *StorageNodeReconciler) releaseMaintenance(
+	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
+) (bool, error) {
+	var window simplyblockv1alpha2.StorageNodeOps
+	key := types.NamespacedName{Name: node.Name + "-maintenance", Namespace: node.Namespace}
+	if err := r.Get(ctx, key, &window); err != nil {
+		return false, client.IgnoreNotFound(err)
+	}
+
+	if terminalOps(window.Status.Phase) {
+		if err := r.Delete(ctx, &window); err != nil {
+			return false, client.IgnoreNotFound(err)
+		}
+		return true, nil
+	}
+
+	if step(window.Status.Step.State) != stepHolding || window.Spec.Abort {
+		return false, nil
+	}
+	window.Spec.Abort = true
+	if err := r.Update(ctx, &window); err != nil {
+		return false, fmt.Errorf("call off the maintenance window on node %s: %w", node.Name, err)
+	}
+	return true, nil
 }
 
 // teardown drains the node before the object goes.

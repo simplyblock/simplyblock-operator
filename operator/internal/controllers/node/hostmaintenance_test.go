@@ -20,16 +20,20 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/simplyblock/atlas/ptr"
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // aWindow is a maintenance window on the fixture's node.
@@ -171,7 +175,7 @@ func TestTheEvictionIsBlockedBeforeTheNodeIsTakenDown(t *testing.T) {
 		t.Errorf("ShutdownNode was issued %d time(s), want once", asked)
 	}
 
-	budget := budgetFor(t, apiClient, opsWorker)
+	budget := budgetFor(t, apiClient)
 	if budget == nil {
 		t.Fatal("no budget holds the eviction, so a drain would evict the pod under a live node")
 	}
@@ -213,41 +217,6 @@ func TestANodeMidRestartIsWaitedForRatherThanShutDown(t *testing.T) {
 	}
 	if asked := api.asked("ShutdownNode"); asked != 0 {
 		t.Errorf("ShutdownNode was issued %d time(s) into an in-flight restart", asked)
-	}
-}
-
-// Releasing relaxes the budget the window created and finishes only once the pod
-// has actually gone, which is what the drain was waiting to do.
-func TestReleasingRelaxesTheBudgetAndWaitsForThePodToGo(t *testing.T) {
-	r, apiClient := anOpsWorld(t, aControlPlane(), aReadyStoragePod(opsWorker))
-	ops := aWindow("a-window")
-
-	if _, err := r.perform(context.Background(), ops, stepShuttingDown); err != nil {
-		t.Fatalf("shutting down: %v", err)
-	}
-
-	done, err := r.perform(context.Background(), ops, stepReleasing)
-	if err != nil {
-		t.Fatalf("releasing: %v", err)
-	}
-	if done {
-		t.Error("the step finished while the storage pod was still on the worker")
-	}
-	budget := budgetFor(t, apiClient, opsWorker)
-	if budget == nil || budget.Spec.MaxUnavailable == nil ||
-		budget.Spec.MaxUnavailable.IntVal != 1 {
-		t.Errorf("the budget is %v, want the one eviction the drain is waiting on", budget)
-	}
-
-	if err := apiClient.Delete(context.Background(), aReadyStoragePod(opsWorker)); err != nil {
-		t.Fatalf("evicting the storage pod: %v", err)
-	}
-	done, err = r.perform(context.Background(), ops, stepReleasing)
-	if err != nil {
-		t.Fatalf("releasing: %v", err)
-	}
-	if !done {
-		t.Error("the step did not finish although the pod has left the worker")
 	}
 }
 
@@ -295,7 +264,8 @@ func TestTheNodeIsRestartedOnceTheHostIsBack(t *testing.T) {
 // Cleanup takes the budget away, so the worker is drainable by the ordinary
 // rules again. A budget left behind is what would make it undrainable forever.
 func TestCleanupLeavesTheWorkerDrainableAgain(t *testing.T) {
-	r, apiClient := anOpsWorld(t, aControlPlane(), aReadyStoragePod(opsWorker))
+	spdk := anSpdkPod(opsWorker, "4420")
+	r, apiClient := anOpsWorld(t, aControlPlane(), aReadyStoragePod(opsWorker), spdk)
 	ops := aWindow("a-window")
 
 	if _, err := r.perform(context.Background(), ops, stepShuttingDown); err != nil {
@@ -309,15 +279,10 @@ func TestCleanupLeavesTheWorkerDrainableAgain(t *testing.T) {
 		t.Error("the step did not finish")
 	}
 
-	if budget := budgetFor(t, apiClient, opsWorker); budget != nil {
+	if budget := budgetFor(t, apiClient); budget != nil {
 		t.Errorf("the budget %s outlived the window it belonged to", budget.Name)
 	}
-	var pod corev1.Pod
-	key := client.ObjectKey{Namespace: opsNamespace, Name: "storage-node-" + opsWorker}
-	if err := apiClient.Get(context.Background(), key, &pod); err != nil {
-		t.Fatalf("reading the storage pod: %v", err)
-	}
-	if _, labeled := pod.Labels[maintenanceLabel]; labeled {
+	if guarded(t, apiClient, spdk.Name) {
 		t.Error("the pod still carries the window's label, which a later budget would select")
 	}
 }
@@ -335,15 +300,14 @@ func TestAStepOfAnotherActionEndsTheWindow(t *testing.T) {
 	}
 }
 
-// budgetFor reads one window's budget, or reports that there is none.
-func budgetFor(
-	t *testing.T, apiClient client.Client, worker string,
-) *policyv1.PodDisruptionBudget {
+// budgetFor reads the window's budget on the fixture's worker, or reports that
+// there is none.
+func budgetFor(t *testing.T, apiClient client.Client) *policyv1.PodDisruptionBudget {
 	t.Helper()
 	var budget policyv1.PodDisruptionBudget
 	key := client.ObjectKey{
 		Namespace: opsNamespace,
-		Name:      maintenanceBudgetName(opsCluster, worker),
+		Name:      maintenanceBudgetName(opsCluster, opsWorker),
 	}
 	err := apiClient.Get(context.Background(), key, &budget)
 	if apierrors.IsNotFound(err) {
@@ -359,4 +323,219 @@ func budgetFor(
 // running carries in its status.
 func kubeStep(s step) statemachine.KubeSnapshot {
 	return statemachine.KubeSnapshot{State: string(s)}
+}
+
+// anSpdkPod is the pod the SPDK process itself runs in.
+//
+// It is what the window is about, and it is not the pod the node agent runs in:
+// the control plane creates it directly, one per backend node, owned by nothing,
+// so an ordinary drain evicts it and a budget can hold that eviction.
+func anSpdkPod(worker, rpcPort string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "snode-spdk-pod-" + rpcPort + "-" + worker,
+			Namespace: opsNamespace,
+			Labels: map[string]string{
+				"app":  "spdk-app-" + rpcPort,
+				"role": utils.LabelSpdkProxyRole,
+			},
+		},
+		Spec:   corev1.PodSpec{NodeName: worker},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+// aWebAPIPod is one replica of the management API, and anFDBPod one FoundationDB
+// process. Both are on the worker, and losing either mid-shutdown is what takes
+// the control plane out from under the window that is driving it.
+func aWebAPIPod(worker string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-webappapi-" + worker,
+			Namespace: opsNamespace,
+			Labels:    map[string]string{"app": controlplane.ComponentWebAPI},
+		},
+		Spec:   corev1.PodSpec{NodeName: worker},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+func anFDBPod(worker string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-fdb-cluster-log-" + worker,
+			Namespace: opsNamespace,
+			Labels: map[string]string{
+				utils.LabelFDBClusterName: controlplane.ComponentFDBCluster,
+			},
+		},
+		Spec:   corev1.PodSpec{NodeName: worker},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+// guarded reports whether one pod carries the window's budget label.
+func guarded(t *testing.T, apiClient client.Client, name string) bool {
+	t.Helper()
+	var pod corev1.Pod
+	key := client.ObjectKey{Namespace: opsNamespace, Name: name}
+	if err := apiClient.Get(context.Background(), key, &pod); err != nil {
+		t.Fatalf("reading pod %s: %v", name, err)
+	}
+	return pod.Labels[maintenanceLabel] != ""
+}
+
+// Regression: 2026-09-29-maintenance-waits-on-the-node-agent — Releasing waited
+// for the node agent's DaemonSet pod to leave the worker. `kubectl drain
+// --ignore-daemonsets` never evicts that pod and the DaemonSet puts it straight
+// back, so the step could only expire: every cordon cost a storage node fifteen
+// minutes and left it offline, and HostMaintenance had never once got past
+// Releasing on a real cluster.
+func TestReleasingWaitsForTheSpdkPodRatherThanTheNodeAgent(t *testing.T) {
+	spdk := anSpdkPod(opsWorker, "4420")
+	r, apiClient := anOpsWorld(t, aControlPlane(), aReadyStoragePod(opsWorker), spdk)
+	ops := aWindow("a-window")
+
+	done, err := r.perform(context.Background(), ops, stepReleasing)
+	if err != nil {
+		t.Fatalf("releasing: %v", err)
+	}
+	if done {
+		t.Error("the step finished while the SPDK pod was still on the worker")
+	}
+
+	if err := apiClient.Delete(context.Background(), spdk); err != nil {
+		t.Fatalf("deleting the SPDK pod: %v", err)
+	}
+
+	// The node agent's pod is still there, because a drain never takes it and
+	// the step whose turn is next needs it to answer.
+	done, err = r.perform(context.Background(), ops, stepReleasing)
+	if err != nil {
+		t.Fatalf("releasing: %v", err)
+	}
+	if !done {
+		t.Error("the step waits for a pod no drain evicts and no window can remove")
+	}
+}
+
+// Regression: 2026-09-29-maintenance-guards-the-wrong-pod — the budget selected
+// the node agent's DaemonSet pod, which a drain skips, while the pods a drain
+// does evict carried nothing. The drain the window is built to hold finished in
+// thirty-six seconds, taking the SPDK process with it mid-shutdown and the
+// management API with it at the same time.
+func TestTheBudgetGuardsThePodsADrainCanEvict(t *testing.T) {
+	spdk := anSpdkPod(opsWorker, "4420")
+	agent := aReadyStoragePod(opsWorker)
+	r, apiClient := anOpsWorld(t, aControlPlane(),
+		agent, spdk, aWebAPIPod(opsWorker), anFDBPod(opsWorker),
+		anSpdkPod(opsTarget, "4422"))
+
+	if _, err := r.perform(context.Background(), aWindow("a-window"), stepShuttingDown); err != nil {
+		t.Fatalf("shutting down: %v", err)
+	}
+
+	for _, name := range []string{
+		spdk.Name,
+		"simplyblock-webappapi-" + opsWorker,
+		"simplyblock-fdb-cluster-log-" + opsWorker,
+	} {
+		if !guarded(t, apiClient, name) {
+			t.Errorf("%s is not guarded, so the drain evicts it while the node is going down", name)
+		}
+	}
+	if guarded(t, apiClient, agent.Name) {
+		t.Error("the node agent's pod is guarded, and a drain skips it whatever the budget says")
+	}
+	if guarded(t, apiClient, "snode-spdk-pod-4422-"+opsTarget) {
+		t.Error("a pod on another worker is guarded by this worker's window")
+	}
+	if budget := budgetFor(t, apiClient); budget == nil ||
+		budget.Spec.MaxUnavailable == nil || budget.Spec.MaxUnavailable.IntVal != 0 {
+		t.Errorf("the budget is %v, want one that allows no disruption at all", budget)
+	}
+}
+
+// Regression: 2026-09-29-maintenance-relaxes-rather-than-releases — the budget
+// was relaxed to one disruption rather than removed. With several pods under it
+// the first eviction drops the healthy count and the allowance returns to zero,
+// and the SPDK pod has no replacement to restore it, so the drain the step just
+// released would block on the budget forever.
+func TestReleasingTakesTheBudgetAwayRatherThanRelaxingIt(t *testing.T) {
+	r, apiClient := anOpsWorld(t, aControlPlane(),
+		aReadyStoragePod(opsWorker), anSpdkPod(opsWorker, "4420"), aWebAPIPod(opsWorker))
+	ops := aWindow("a-window")
+
+	if _, err := r.perform(context.Background(), ops, stepShuttingDown); err != nil {
+		t.Fatalf("shutting down: %v", err)
+	}
+	if _, err := r.perform(context.Background(), ops, stepReleasing); err != nil {
+		t.Fatalf("releasing: %v", err)
+	}
+
+	if budget := budgetFor(t, apiClient); budget != nil {
+		t.Errorf("the budget %s outlived the step that lets the drain proceed, with %v",
+			budget.Name, budget.Spec.MaxUnavailable)
+	}
+}
+
+// Regression: 2026-09-29-maintenance-reissues-the-shutdown — a node already
+// shutting down was neither waited for nor recognized, so every pass re-posted
+// the shutdown and took the control plane's 409 as a step error. Eleven of them
+// in two minutes on 2026-09-29, each one a backoff against a step with a budget
+// to spend.
+func TestAShutdownIsNotReissuedAgainstANodeAlreadyShuttingDown(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusInShutdown)
+	r, _ := anOpsWorld(t, api, aReadyStoragePod(opsWorker), anSpdkPod(opsWorker, "4420"))
+
+	done, err := r.perform(context.Background(), aWindow("a-window"), stepShuttingDown)
+	if err != nil {
+		t.Fatalf("shutting down: %v", err)
+	}
+	if done {
+		t.Error("the step finished against a node whose shutdown is still running")
+	}
+	if asked := api.asked("ShutdownNode"); asked != 0 {
+		t.Errorf("ShutdownNode was issued %d time(s) into an in-flight shutdown", asked)
+	}
+}
+
+// Regression: 2026-09-29-failed-maintenance-leaves-its-markers — nothing unwound
+// a window that failed. The graph is a linear chain with no edge to Cleanup and
+// unwinds() names no maintenance step, so the budget and the label stayed on the
+// worker: thirteen hours after the run, worker-2 still carried both.
+func TestAFailedWindowLeavesTheWorkerDrainable(t *testing.T) {
+	spdk := anSpdkPod(opsWorker, "4420")
+	ops := anAdvancingOperation("a-window",
+		simplyblockv1alpha2.StorageNodeOpsActionHostMaintenance, stepReleasing)
+	expired := metav1.NewTime(time.Now().Add(-time.Minute))
+	ops.Status.Step.Deadline = &expired
+	r, apiClient := anOpsWorld(t, aControlPlane(), ops, aReadyStoragePod(opsWorker), spdk)
+	r.Workload.ManagerNode = opsWorker
+	if err := r.Workload.BlockEviction(
+		context.Background(), opsNamespace, opsCluster, opsWorker); err != nil {
+		t.Fatalf("holding the eviction: %v", err)
+	}
+	if err := r.Workload.ProtectSelf(context.Background(), opsNamespace, opsWorker); err != nil {
+		t.Fatalf("holding the manager's own eviction: %v", err)
+	}
+	lockedBy(t, apiClient, "a-window")
+
+	pass(t, r, "a-window")
+
+	if got := operationRead(t, apiClient, "a-window"); got.Status.Phase !=
+		simplyblockv1alpha2.StorageNodeOpsPhaseFailed {
+		t.Fatalf("phase = %q, want Failed past the deadline", got.Status.Phase)
+	}
+	if budget := budgetFor(t, apiClient); budget != nil {
+		t.Errorf("the budget %s outlived the window that failed", budget.Name)
+	}
+	if guarded(t, apiClient, spdk.Name) {
+		t.Error("the pod still carries the window's label, which a later budget would select")
+	}
+	var self policyv1.PodDisruptionBudget
+	key := client.ObjectKey{Namespace: opsNamespace, Name: selfBudgetName}
+	if err := apiClient.Get(context.Background(), key, &self); !apierrors.IsNotFound(err) {
+		t.Errorf("the manager's own budget outlived the window that failed (err = %v)", err)
+	}
 }

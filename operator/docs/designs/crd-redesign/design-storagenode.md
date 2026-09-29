@@ -1805,11 +1805,16 @@ of a maintenance window afterward.
 | Step           | Side effect on entry                                                                          | Complete when                                     |
 |----------------|-----------------------------------------------------------------------------------------------|---------------------------------------------------|
 | `Holding`      | None                                                                                          | Fewer than the cluster's limit are in maintenance |
-| `ShuttingDown` | Label the storage pod, create a blocking PDB, `POST /storage-nodes/{node}/shutdown`           | The node is `offline`                             |
-| `Releasing`    | Relax the PDB to allow one eviction                                                           | The storage pod is gone                           |
+| `ShuttingDown` | Label the evictable pods, create a blocking PDB, `POST /storage-nodes/{node}/shutdown`        | The node is `offline`                             |
+| `Releasing`    | Delete the PDB                                                                                | The SPDK pod is gone                              |
 | `AwaitingHost` | None                                                                                          | The worker's storage-node API answers again       |
 | `Restarting`   | `POST /storage-nodes/{node}/restart`, skipped if the node is already `in_restart` or `online` | The node is `online`                              |
 | `Cleanup`      | Delete the PDB, remove the drain label                                                        | Terminal                                          |
+
+The shutdown call is skipped when the node is already `in_shutdown` as well as
+`in_restart`, for the same reason: re-posting it is refused with a 409, and a
+refusal the step reads as an error spends the window's budget backing off against
+its own progress.
 
 **`Holding` is the concurrency gate, and it is a cluster-wide count.** How many
 workers may be in maintenance at once is
@@ -1823,15 +1828,59 @@ worker's worth of unavailability.
 **The PodDisruptionBudget is the throttle, and it runs backward from the usual
 one.** A per-node PDB with no disruption allowed is created *before* the shutdown,
 so `kubectl drain` blocks on it while the backend node is being taken down
-gracefully. Relaxing it in `Releasing` is what lets the drain proceed. The
+gracefully. Removing it in `Releasing` is what lets the drain proceed. The
 budget's job is therefore to hold the eviction until the storage node is safely
 offline, rather than to keep a replica count up.
+
+**What the budget selects is the set of pods a drain can actually evict**, and
+the node agent's is not one of them. The agent runs in a DaemonSet, and
+`kubectl drain --ignore-daemonsets` skips DaemonSet pods entirely, so a budget
+over one holds nothing: the drain never asks about it. The three the budget does
+cover are the SPDK pod (`role=simplyblock-storage-node`), the management API, and
+the FoundationDB processes. The first is the point of the window. The other two
+are there because the shutdown needs the control plane it is talking to, and
+losing a webAPI replica or an FDB process mid-shutdown leaves the window with
+nothing to ask.
+
+**`Releasing` removes the budget rather than relaxing it to one disruption**, and
+that follows from covering several pods. A budget at `maxUnavailable: 1` permits
+the first eviction and then reports zero allowed disruptions until the evicted
+pod is healthy again — and the SPDK pod is owned by nothing, so nothing
+reschedules it. The drain the step just released would block on the budget for
+the rest of the window.
+
+**`Releasing` waits for the SPDK pod rather than the agent's**, for the same
+reason the budget does not cover the agent's, and one more: a DaemonSet pod on a
+rebooting host stays `Running` in the API, because DaemonSet pods tolerate
+`unreachable` with no `tolerationSeconds`. Its absence is a state no drain, no
+reboot, and no window can bring about. The SPDK pod's absence is exactly what "the
+SPDK process is off this host" means, and the graceful shutdown ends in the
+control plane deleting it.
 
 The operator protects itself the same way when the worker being drained is its
 own: a temporary self-budget prevents the manager pod from being evicted while it
 is still setting the storage node's budget up on that host. A stale self-budget
 left by a crashed manager is cleaned up on the next pass, since it would otherwise
 make the node undrainable.
+
+**Every terminal outcome takes the markers down.** `Cleanup` is on the success
+path only — the graph is a chain with no edge from a failing step to it — so a
+window that fails on a deadline or is aborted runs the same teardown from its
+terminal transition. A budget at `maxUnavailable: 0` outliving the window that
+raised it makes the worker undrainable by anything, forever, with nothing left
+saying why. The teardown is best-effort for the reason the suspend's unwind is,
+and a `MaintenanceMarkersLeft` event is what says a worker needs a hand.
+
+**An uncordon is answered.** A window still at `Holding` has done nothing to the
+node and is waiting for a slot, so the cordon being undone calls it off through
+`spec.abort`, which is what that step being abortable is for. From `ShuttingDown`
+onward the node is down and something has to bring it back, so the window runs
+on, and the uncordon it is waiting for is the one `AwaitingHost` reads. A window
+that has finished is **deleted** on the uncordon: the operation's name is derived
+from the node's, so a terminal record left in place is what `ensureOps` finds on
+the next cordon, and the worker would get one window for the lifetime of the
+object with every drain after the first unheld. The worker being schedulable
+again is the boundary that record belongs on.
 
 **`AwaitingHost` is the step whose length nobody controls.** An OS upgrade and a
 reboot take as long as they take, and the node's lock is held throughout. That is

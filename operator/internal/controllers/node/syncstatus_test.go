@@ -479,3 +479,97 @@ func finishDrain(
 		t.Fatalf("moving the drain to %s: %v", phase, err)
 	}
 }
+
+// Regression: 2026-09-29-an-uncordon-does-not-reach-the-window — nothing
+// reacted to the cordon being undone. A window still in Holding has taken the
+// node down for nothing and holds its lock for six hours, and on 2026-09-29 the
+// worker was uncordoned four minutes into a window that then ran to its
+// deadline anyway.
+func TestAnUncordonCallsOffAWindowStillHolding(t *testing.T) {
+	cordoned := aWorker(opsWorker, true)
+	cordoned.Spec.Unschedulable = true
+	r, apiClient := aSteadyNode(t, aControlPlane(), cordoned)
+	settle(t, r)
+
+	key := client.ObjectKey{Namespace: opsNamespace, Name: "a-node-maintenance"}
+	var window simplyblockv1alpha2.StorageNodeOps
+	if err := apiClient.Get(context.Background(), key, &window); err != nil {
+		t.Fatalf("reading the maintenance window: %v", err)
+	}
+	window.Status.Phase = simplyblockv1alpha2.StorageNodeOpsPhaseRunning
+	window.Status.Step = kubeStep(stepHolding)
+	if err := apiClient.Status().Update(context.Background(), &window); err != nil {
+		t.Fatalf("holding the window: %v", err)
+	}
+
+	uncordon(t, apiClient, opsWorker)
+	settle(t, r)
+
+	if err := apiClient.Get(context.Background(), key, &window); err != nil {
+		t.Fatalf("reading the maintenance window: %v", err)
+	}
+	if !window.Spec.Abort {
+		t.Error("the window runs on although the cordon it answers has been undone")
+	}
+}
+
+// Regression: 2026-09-29-a-finished-window-blocks-the-next-one — the window's
+// name is derived from the node's, so the terminal record of one maintenance is
+// what ensureOps finds on the next cordon. A worker whose window failed once is
+// never given another, and the drain after that is unheld.
+func TestAFinishedWindowIsClearedWhenTheWorkerComesBack(t *testing.T) {
+	cordoned := aWorker(opsWorker, true)
+	cordoned.Spec.Unschedulable = true
+	r, apiClient := aSteadyNode(t, aControlPlane(), cordoned)
+	settle(t, r)
+
+	key := client.ObjectKey{Namespace: opsNamespace, Name: "a-node-maintenance"}
+	var window simplyblockv1alpha2.StorageNodeOps
+	if err := apiClient.Get(context.Background(), key, &window); err != nil {
+		t.Fatalf("reading the maintenance window: %v", err)
+	}
+	window.Status.Phase = simplyblockv1alpha2.StorageNodeOpsPhaseFailed
+	window.Status.Step = kubeStep(stepReleasing)
+	if err := apiClient.Status().Update(context.Background(), &window); err != nil {
+		t.Fatalf("failing the window: %v", err)
+	}
+
+	uncordon(t, apiClient, opsWorker)
+	settle(t, r)
+
+	err := apiClient.Get(context.Background(), key, &window)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("the failed window is still there (err = %v), so the next cordon raises none", err)
+	}
+
+	// Cordoning the worker again is a new maintenance, and it gets a window.
+	cordon(t, apiClient, opsWorker)
+	settle(t, r)
+	if err := apiClient.Get(context.Background(), key, &window); err != nil {
+		t.Errorf("the second cordon raised no window: %v", err)
+	}
+}
+
+// cordon and uncordon flip the worker's schedulability, which is the one signal
+// that raises a maintenance window and the one that calls it off.
+func cordon(t *testing.T, apiClient client.Client, worker string) {
+	t.Helper()
+	setSchedulable(t, apiClient, worker, false)
+}
+
+func uncordon(t *testing.T, apiClient client.Client, worker string) {
+	t.Helper()
+	setSchedulable(t, apiClient, worker, true)
+}
+
+func setSchedulable(t *testing.T, apiClient client.Client, worker string, schedulable bool) {
+	t.Helper()
+	var node corev1.Node
+	if err := apiClient.Get(context.Background(), client.ObjectKey{Name: worker}, &node); err != nil {
+		t.Fatalf("reading worker %s: %v", worker, err)
+	}
+	node.Spec.Unschedulable = !schedulable
+	if err := apiClient.Update(context.Background(), &node); err != nil {
+		t.Fatalf("updating worker %s: %v", worker, err)
+	}
+}
