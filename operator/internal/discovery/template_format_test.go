@@ -18,7 +18,7 @@ import (
 )
 
 func TestTheDraftStatesThatDevicesAreFormatted(t *testing.T) {
-	template := ClusterTemplateFor("a-cluster", Plan{})
+	template := ClusterTemplateFor("a-cluster", Plan{}, nil)
 
 	if template.Template.EnableDriveFormat == nil {
 		t.Fatal("the draft leaves the format flag unstated")
