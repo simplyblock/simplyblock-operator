@@ -157,8 +157,8 @@ spec:
                 description: |-
                   DevicesTriggered is the once-only latch for the device rebuild, which
                   starts with a POST and is then polled, matching what Triggered does for
-                  Suspending. Its own field rather than a shared one so a later step cannot
-                  inherit an earlier step's "already sent".
+                  ShuttingDown. Its own field rather than a shared one so a later step
+                  cannot inherit an earlier step's "already sent".
                 type: boolean
               drainTargetsTried:
                 description: |-
@@ -273,8 +273,10 @@ spec:
                 type: string
               triggered:
                 description: |-
-                  Triggered indicates the backend action POST has been sent (used during
-                  Suspending to avoid duplicate POSTs across reconcile iterations).
+                  Triggered indicates the backend action POST has been sent (the once-only
+                  latch of the step that starts with a POST and then polls -- ShuttingDown
+                  for a removal, and the suspend/restart actions -- so a reconcile that
+                  runs again does not POST again).
                 type: boolean
               volumesMigrated:
                 description: VolumesMigrated is the count of volumes successfully
