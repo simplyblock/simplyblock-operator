@@ -1,29 +1,3 @@
-{{/* vim: set filetype=mustache: */}}
-
-{{/* labels for helm resources */}}
-{{- define "spdk.labels" -}}
-labels:
-  heritage: "{{ .Release.Service }}"
-  release: "{{ .Release.Name }}"
-  revision: "{{ .Release.Revision }}"
-  chart: "{{ .Chart.Name }}"
-  chartVersion: "{{ .Chart.Version }}"
-{{- end -}}
-
-{{/*
-Whether this cluster hosts its own control plane.
-
-It gates the observability workloads, which store what they collect in the
-object store and the document store a hosted control plane brings with it. A
-cluster managed from elsewhere has neither, and the control plane that manages it
-collects for it.
-*/}}
-{{- define "simplyblock.hostsControlPlane" -}}
-{{- if eq .Values.deployment.profile "standalone" -}}
-true
-{{- end -}}
-{{- end -}}
-
 {{/*
 Whether this profile runs a CSI driver.
 
@@ -50,37 +24,6 @@ true
 {{ .Values.csiConfig.simplybk.ip }}
 {{- else -}}
 http://simplyblock-webappapi.{{ .Release.Namespace }}.svc.cluster.local:5000
-{{- end -}}
-{{- end -}}
-
-{{/*
-Volume named "tls" holding the serving cert bundle for pods that terminate TLS.
-Args: dict "ctx" $root "secret" <serving-cert-secret-name>
-- openshift: project the serving Secret with the cabundle ConfigMap (renaming
-  service-ca.crt -> ca.crt) since the Secret carries only tls.crt/tls.key.
-- cert-manager: mount the Secret directly; it already contains ca.crt.
-Caller pipes through `nindent N`.
-*/}}
-{{- define "simplyblock.tlsVolume" -}}
-{{- $ctx := .ctx -}}
-{{- $secret := .secret -}}
-{{- if $ctx.Values.tls.enabled -}}
-{{- if eq $ctx.Values.tls.provider "openshift" }}
-- name: tls
-  projected:
-    sources:
-    - secret:
-        name: {{ $secret }}
-    - configMap:
-        name: simplyblock-certificate-authority
-        items:
-        - key: service-ca.crt
-          path: ca.crt
-{{- else if eq $ctx.Values.tls.provider "cert-manager" }}
-- name: tls
-  secret:
-    secretName: {{ $secret }}
-{{- end -}}
 {{- end -}}
 {{- end -}}
 
@@ -189,61 +132,3 @@ to land them at the right column inside an `env:` list.
   value: "anonymous"
 {{- end }}
 {{- end -}}
-
-{{/*
-Volume entry for the FDB peer cert. Pipes into a podTemplate's `volumes:` list.
-The FDB operator fully replaces general.podTemplate with the per-class one when
-a class override exists, so the volume must be repeated in each podTemplate that
-sets one (general, storage, log).
-*/}}
-{{- define "simplyblock.foundationdbCertVolume" -}}
-{{- if .Values.tls.mutual_enabled }}
-- name: tls-fdb
-  secret:
-    secretName: simplyblock-foundationdb-tls
-{{- end }}
-{{- end -}}
-
-{{/*
-TLS env vars + volumeMount for the unified-image `foundationdb` container.
-Pipes into a container entry at the same indent as `name`/`resources`.
-*/}}
-{{- define "simplyblock.foundationdbContainerTls" -}}
-{{- if .Values.tls.mutual_enabled }}
-env:
-- name: FDB_TLS_CERTIFICATE_FILE
-  value: /var/fdb/tls/tls.crt
-- name: FDB_TLS_KEY_FILE
-  value: /var/fdb/tls/tls.key
-- name: FDB_TLS_CA_FILE
-  value: /var/fdb/tls/ca.crt
-volumeMounts:
-- name: tls-fdb
-  mountPath: /var/fdb/tls
-  readOnly: true
-{{- end }}
-{{- end -}}
-
-{{- define "simplyblock.commonContainer" }}
-env:
-  - name: SIMPLYBLOCK_LOG_LEVEL
-    valueFrom:
-      configMapKeyRef:
-        name: simplyblock-config
-        key: LOG_LEVEL
-  {{- include "simplyblock.tlsEnv" . | nindent 2 }}
-
-volumeMounts:
-  - name: fdb-cluster-file
-    mountPath: /etc/foundationdb/fdb.cluster
-    subPath: fdb.cluster
-  {{- include "simplyblock.tlsVolumeMount" . | nindent 2 }}
-
-resources:
-  requests:
-    cpu: "50m"
-    memory: "100Mi"
-  limits:
-    cpu: "300m"
-    memory: "1Gi"
-{{- end }}
