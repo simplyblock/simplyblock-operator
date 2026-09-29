@@ -6988,6 +6988,18 @@
             ],
             "title": "Secondary Node Id"
           },
+          "tertiary_node_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tertiary Node Id"
+          },
           "status": {
             "type": "string",
             "enum": [

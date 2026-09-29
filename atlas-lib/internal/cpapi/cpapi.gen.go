@@ -696,6 +696,7 @@ type StorageNodeDTO struct {
 	SnapshotsMax      int                     `json:"snapshots_max"`
 	SpdkMem           int                     `json:"spdk_mem"`
 	Status            StorageNodeDTOStatus    `json:"status"`
+	TertiaryNodeId    *openapi_types.UUID     `json:"tertiary_node_id,omitempty"`
 	Uptime            *openapi_types.Duration `json:"uptime"`
 }
 

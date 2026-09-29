@@ -22,11 +22,12 @@ type StorageNodeInfo struct {
 	// node, used to filter out at-capacity nodes during primary node placement.
 	Lvols    int `json:"lvols"`
 	LvolsMax int `json:"lvols_max"`
-	// SecondaryNodeID is the node's HA partner. A drain has to know it: a
-	// migration creates the volume on the target's whole HA pair, so a target
-	// paired with the node being removed cannot be used. See
-	// roundRobinTargetNodes.
+	// SecondaryNodeID and TertiaryNodeID are the node's HA replicas. A
+	// migration creates the volume on the target's whole replica set, so a
+	// drain prefers targets whose replicas do not include the node being
+	// removed. See roundRobinTargetNodes.
 	SecondaryNodeID string `json:"secondary_node_id"`
+	TertiaryNodeID  string `json:"tertiary_node_id"`
 }
 
 // CapacityStat holds the capacity sub-object present on VolumeDTO.

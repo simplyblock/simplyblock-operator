@@ -537,3 +537,85 @@ func TestAnAttributableFailureStillBurnsImmediately(t *testing.T) {
 			"attempt: %v", got)
 	}
 }
+
+// ── targets that replicate onto the drainee go last ───────────────────────────
+
+func replicaTopologyNodes(t *testing.T, body string) *webapimock.SpecServer {
+	t.Helper()
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
+	mock.Register(http.MethodGet,
+		"/api/v2/clusters/"+drainTestClusterUUID+"/storage-nodes/",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: body},
+	)
+	return mock
+}
+
+// A target whose secondary or tertiary is the node being removed involves
+// that node on both sides of the migration; its registration and convert on
+// the drainee fail and the migration succeeds only on a retry. Every volume
+// goes to a target that does not replicate onto the drainee when one exists.
+func TestRoundRobinPrefersTargetsThatDoNotReplicateOntoTheDrainee(t *testing.T) {
+	mock := replicaTopologyNodes(t, `[
+		{"id":"node-1","status":"online"},
+		{"id":"node-2","status":"online","secondary_node_id":"node-1"},
+		{"id":"node-3","status":"online","tertiary_node_id":"node-1"},
+		{"id":"node-4","status":"online","secondary_node_id":"node-5","tertiary_node_id":"node-3"},
+		{"id":"node-5","status":"online"}
+	]`)
+	defer mock.Close()
+
+	pvs := []string{"pv-a", "pv-b", "pv-c", "pv-d"}
+	assignment, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()),
+		drainTestClusterUUID, drainTestNode1, pvs, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, pv := range pvs {
+		if got := assignment[pv]; got != "node-4" && got != "node-5" {
+			t.Errorf("%s went to %s, which replicates onto the drainee; node-4/node-5 do not", pv, got)
+		}
+	}
+	if assignment["pv-a"] == assignment["pv-b"] {
+		t.Errorf("round-robin must still spread volumes over the preferred targets: %v", assignment)
+	}
+}
+
+// When every peer replicates onto the drainee the drain still proceeds on them.
+func TestRoundRobinFallsBackToReplicaSharingTargets(t *testing.T) {
+	mock := replicaTopologyNodes(t, `[
+		{"id":"node-1","status":"online"},
+		{"id":"node-2","status":"online","secondary_node_id":"node-1"},
+		{"id":"node-3","status":"online","tertiary_node_id":"node-1"}
+	]`)
+	defer mock.Close()
+
+	assignment, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()),
+		drainTestClusterUUID, drainTestNode1, []string{drainTestPVA}, nil)
+	if err != nil {
+		t.Fatalf("no preferred target must not block the drain: %v", err)
+	}
+	if got := assignment[drainTestPVA]; got != drainTestNode2 && got != drainTestNode3 {
+		t.Errorf("pv-a went to %q; the fallback targets are node-2 and node-3", got)
+	}
+}
+
+// A preferred target that already failed for the volume moves it to the
+// fallback set rather than failing the drain.
+func TestRoundRobinEscalatesFromPreferredIntoFallback(t *testing.T) {
+	mock := replicaTopologyNodes(t, `[
+		{"id":"node-1","status":"online"},
+		{"id":"node-2","status":"online","secondary_node_id":"node-1"},
+		{"id":"node-3","status":"online"}
+	]`)
+	defer mock.Close()
+
+	tried := func(pv string) []string { return []string{drainTestNode3} }
+	assignment, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()),
+		drainTestClusterUUID, drainTestNode1, []string{drainTestPVA}, tried)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if assignment[drainTestPVA] != drainTestNode2 {
+		t.Errorf("pv-a went to %q; node-3 failed, node-2 is the remaining (fallback) target", assignment[drainTestPVA])
+	}
+}

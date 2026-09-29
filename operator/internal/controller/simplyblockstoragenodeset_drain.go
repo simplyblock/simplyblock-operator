@@ -273,13 +273,26 @@ func roundRobinTargetNodes(
 		return nil, fmt.Errorf("roundRobinTargetNodes: %w", err)
 	}
 
-	var online []string
+	// A migration builds the volume on the target's whole replica set, so a
+	// target that replicates onto the node being removed involves that node
+	// on both sides of the copy: its registration there fails or times out,
+	// the convert on it fails ("No such device"), and the migration only
+	// succeeds on a retry -- while removal phase 3b is about to move that
+	// replica anyway. Such targets go last. They stay candidates: on a small
+	// cluster every peer may replicate onto the drainee, and draining beats
+	// refusing.
+	var preferred, fallback []string
 	for _, n := range nodes {
-		if n.UUID != excludeNodeUUID && n.Status == utils.NodeStatusOnline {
-			online = append(online, n.UUID)
+		if n.UUID == excludeNodeUUID || n.Status != utils.NodeStatusOnline {
+			continue
+		}
+		if n.SecondaryNodeID == excludeNodeUUID || n.TertiaryNodeID == excludeNodeUUID {
+			fallback = append(fallback, n.UUID)
+		} else {
+			preferred = append(preferred, n.UUID)
 		}
 	}
-	if len(online) == 0 {
+	if len(preferred)+len(fallback) == 0 {
 		return nil, fmt.Errorf("roundRobinTargetNodes: no online node available other than %s", excludeNodeUUID)
 	}
 
@@ -293,13 +306,9 @@ func roundRobinTargetNodes(
 		if tried != nil {
 			exhausted = tried(pv)
 		}
-		picked := ""
-		for off := 0; off < len(online); off++ {
-			cand := online[(i+off)%len(online)]
-			if !slices.Contains(exhausted, cand) {
-				picked = cand
-				break
-			}
+		picked := pickRoundRobin(preferred, i, exhausted)
+		if picked == "" {
+			picked = pickRoundRobin(fallback, i, exhausted)
 		}
 		if picked == "" {
 			// Every peer has already failed for this volume. Saying so is the
@@ -384,6 +393,18 @@ func drainMigrationVolumes(vm *simplyblockv1alpha1.VolumeMigration) int {
 		return vm.Status.MemberCount
 	}
 	return 1
+}
+
+// pickRoundRobin returns the first candidate, scanning from offset i, that is
+// not in exhausted, or "" when every candidate is.
+func pickRoundRobin(candidates []string, i int, exhausted []string) string {
+	for off := 0; off < len(candidates); off++ {
+		cand := candidates[(i+off)%len(candidates)]
+		if !slices.Contains(exhausted, cand) {
+			return cand
+		}
+	}
+	return ""
 }
 
 // drainMigrationName builds a DNS-label-safe name for a VolumeMigration CR.
