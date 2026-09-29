@@ -232,11 +232,14 @@ func (r *TestFailoverReconciler) resolveSource(ctx context.Context, tf *simplybl
 	if handle == "" {
 		return r.fail(ctx, tf, "source PV "+pvName+" has no CSI volume handle")
 	}
+	srcAttrs, _, _ := unstructured.NestedStringMap(pv, "spec", "csi", "volumeAttributes")
+	bubbleVC := bubbleVolumeContext(srcAttrs)
 
 	if err := r.transitionTo(ctx, tf, simplyblockv1alpha2.TestFailoverStepResolvingPoint, func(s *simplyblockv1alpha2.TestFailoverStatus) {
 		s.Clones = []simplyblockv1alpha2.TestFailoverClone{{
-			SourceRef:    tf.Spec.SourceRef,
-			SourceHandle: handle,
+			SourceRef:           tf.Spec.SourceRef,
+			SourceHandle:        handle,
+			SourceVolumeContext: bubbleVC,
 		}}
 		s.Message = "resolved the source volume; resolving the recovery point"
 	}); err != nil {
@@ -846,6 +849,42 @@ func (r *TestFailoverReconciler) placeBubble(ctx context.Context, tf *simplybloc
 	return ctrl.Result{}, nil
 }
 
+// bubbleVolumeContextStripKeys are the source PV volumeAttributes that must NOT
+// be carried onto the bubble PV: they identify the SOURCE volume and its NVMe-oF
+// target. The node plugin re-resolves the clone's own identity from the clone
+// handle at stage time, so these are redundant on success; on a failed clone
+// lookup, a stale source NQN/connections here would silently point the mount back
+// at the source (reachable across clusters on a flat network), so they are
+// dropped and staging fails safe instead.
+var bubbleVolumeContextStripKeys = map[string]struct{}{
+	"cluster_id": {}, "pool_name": {}, "nqn": {}, "connections": {},
+	"model": {}, "name": {}, "uuid": {}, "nsId": {}, "targetLvolID": {},
+}
+
+// bubbleVolumeContext copies the source PV's volumeAttributes minus the identity
+// keys above and the provisioner-injected keys (csi.storage.k8s.io/*,
+// storage.kubernetes.io/*), leaving the class-level parameters the node plugin
+// needs. It returns nil when nothing survives, which the driver tolerates.
+func bubbleVolumeContext(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(src))
+	for k, v := range src {
+		if _, strip := bubbleVolumeContextStripKeys[k]; strip {
+			continue
+		}
+		if strings.HasPrefix(k, "csi.storage.k8s.io/") || strings.HasPrefix(k, "storage.kubernetes.io/") {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // bubbleManifestWork wraps the bubble namespace, a static PersistentVolume bound
 // to the clone, and its PersistentVolumeClaim, in a ManifestWork addressed to the
 // recovery cluster, with a feedback rule that reports the PVC's bind phase back to
@@ -875,7 +914,11 @@ func (r *TestFailoverReconciler) bubbleManifestWork(tf *simplyblockv1alpha2.Test
 				Kind: "PersistentVolumeClaim", APIVersion: "v1", Namespace: ns, Name: pvcName,
 			},
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
-				CSI: &corev1.CSIPersistentVolumeSource{Driver: csiDriverName, VolumeHandle: clone.CloneID},
+				CSI: &corev1.CSIPersistentVolumeSource{
+					Driver:           csiDriverName,
+					VolumeHandle:     clone.CloneID,
+					VolumeAttributes: clone.SourceVolumeContext,
+				},
 			},
 		},
 	}

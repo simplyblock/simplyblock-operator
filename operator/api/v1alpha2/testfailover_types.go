@@ -168,6 +168,16 @@ type TestFailoverClone struct {
 	// SizeBytes is the recovered volume's size.
 	// +optional
 	SizeBytes int64 `json:"sizeBytes,omitempty"`
+
+	// SourceVolumeContext is the source PV's CSI volumeAttributes, minus the
+	// identity and provisioner keys, carried onto the bubble PV so the node plugin
+	// receives a non-nil VolumeContext when it stages the clone. The clone's own
+	// identity (NQN, connections, nsId, and so on) is re-resolved from the clone
+	// handle at stage time, so only the class-level parameters are carried; the
+	// identity keys are dropped so a failed clone lookup can never point the mount
+	// back at the source.
+	// +optional
+	SourceVolumeContext map[string]string `json:"sourceVolumeContext,omitempty"`
 }
 
 // TestFailoverReport is the evidence a drill produces.

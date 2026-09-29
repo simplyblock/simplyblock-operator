@@ -228,6 +228,74 @@ func TestFailoverResolvingSourceResolvesHandleThenAdvances(t *testing.T) {
 	}
 }
 
+// Regression: 2026-09-29-testfailover-nil-volumecontext — the bubble PV must
+// carry a VolumeContext or the node plugin panics staging it. The source PV's
+// volumeAttributes are captured here, minus the identity and provisioner keys:
+// the class params are needed to stage, but the identity keys would point a
+// failed clone lookup back at the source, so they are dropped.
+func TestFailoverResolvingSourceCapturesStrippedVolumeContext(t *testing.T) {
+	tf := atResolvingSource()
+	r, cl := newTestFailoverReconciler(t, tf)
+	ctx := context.Background()
+	key := testFailoverRequest(tf).NamespacedName
+
+	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
+		t.Fatalf("pass 1: %v", err)
+	}
+	setViewResult(t, cl, getView(t, cl, tf.Spec.SourceCluster, testFailoverViewName(tf, "src-pvc")),
+		map[string]interface{}{"spec": map[string]interface{}{"volumeName": "pv-1"}})
+
+	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
+		t.Fatalf("pass 2: %v", err)
+	}
+	setViewResult(t, cl, getView(t, cl, tf.Spec.SourceCluster, testFailoverViewName(tf, "src-pv")),
+		map[string]interface{}{"spec": map[string]interface{}{"csi": map[string]interface{}{
+			"volumeHandle": "clusterA:pool:lvolX",
+			"volumeAttributes": map[string]interface{}{
+				// class params — kept
+				"tune2fs_reserved_blocks": "",
+				"fabric":                  "tcp",
+				"qos_rw_iops":             "0",
+				// identity — stripped (would mis-point a failed clone lookup)
+				"cluster_id":  "clusterA",
+				"pool_name":   "poolA",
+				"nqn":         "nqn.source",
+				"connections": "[{\"ip\":\"10.0.0.1\",\"port\":4420}]",
+				"uuid":        "lvolX",
+				"nsId":        "1",
+				"model":       "lvolX",
+				// provisioner-injected — stripped (stale source metadata)
+				"csi.storage.k8s.io/pv/name":                   "pv-1",
+				"storage.kubernetes.io/csiProvisionerIdentity": "x",
+			},
+		}}})
+
+	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
+		t.Fatalf("pass 3: %v", err)
+	}
+	var got simplyblockv1alpha2.TestFailover
+	if err := cl.Get(ctx, key, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Status.Clones) != 1 {
+		t.Fatalf("clones = %+v, want one", got.Status.Clones)
+	}
+	vc := got.Status.Clones[0].SourceVolumeContext
+	for _, k := range []string{"tune2fs_reserved_blocks", "fabric", "qos_rw_iops"} {
+		if _, ok := vc[k]; !ok {
+			t.Errorf("class param %q was dropped from the bubble VolumeContext: %+v", k, vc)
+		}
+	}
+	for _, k := range []string{
+		"cluster_id", "pool_name", "nqn", "connections", "uuid", "nsId", "model",
+		"csi.storage.k8s.io/pv/name", "storage.kubernetes.io/csiProvisionerIdentity",
+	} {
+		if _, ok := vc[k]; ok {
+			t.Errorf("identity/provisioner key %q leaked into the bubble VolumeContext: %+v", k, vc)
+		}
+	}
+}
+
 // TestFailoverResolvingSourceHoldsWithoutAProjection covers that a pending view
 // holds the drill on its step rather than advancing or failing.
 func TestFailoverResolvingSourceHoldsWithoutAProjection(t *testing.T) {
@@ -670,6 +738,41 @@ func TestFailoverPlacingDeliversManifestWorkThenReady(t *testing.T) {
 	}
 	if got.Status.ReadyAt == nil {
 		t.Errorf("readyAt was not set")
+	}
+}
+
+// Regression: 2026-09-29-testfailover-nil-volumecontext — the bubble PV must
+// carry the source's class-level VolumeContext (so the node plugin has a non-nil
+// context to stage) while still pointing at the clone by handle.
+func TestFailoverPlacingPVCarriesSourceVolumeContext(t *testing.T) {
+	tf := atPlacing()
+	tf.Status.Clones[0].SourceVolumeContext = map[string]string{
+		"tune2fs_reserved_blocks": "",
+		"fabric":                  "tcp",
+	}
+	r, cl := newTestFailoverReconciler(t, tf)
+	ctx := context.Background()
+
+	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	mw := getManifestWork(t, cl, tf.Spec.BubbleCluster, testFailoverManifestWorkName(tf))
+	// manifests are [namespace, PV, PVC]; decode the PV.
+	if len(mw.Spec.Workload.Manifests) != 3 {
+		t.Fatalf("ManifestWork carries %d manifests, want 3", len(mw.Spec.Workload.Manifests))
+	}
+	var pv corev1.PersistentVolume
+	if err := json.Unmarshal(mw.Spec.Workload.Manifests[1].Raw, &pv); err != nil {
+		t.Fatalf("decode bubble PV manifest: %v", err)
+	}
+	if pv.Spec.CSI == nil {
+		t.Fatal("bubble PV has no CSI source")
+	}
+	if pv.Spec.CSI.VolumeHandle != tf.Status.Clones[0].CloneID {
+		t.Errorf("bubble PV points at %q, want the clone handle %q", pv.Spec.CSI.VolumeHandle, tf.Status.Clones[0].CloneID)
+	}
+	if pv.Spec.CSI.VolumeAttributes["fabric"] != "tcp" {
+		t.Errorf("bubble PV VolumeAttributes did not carry the source class params: %+v", pv.Spec.CSI.VolumeAttributes)
 	}
 }
 
