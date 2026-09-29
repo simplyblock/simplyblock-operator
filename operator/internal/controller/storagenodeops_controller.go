@@ -2014,7 +2014,7 @@ func (r *StorageNodeOpsReconciler) resumeAndFail(
 func (r *StorageNodeOpsReconciler) clusterPauseCheck(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.StorageNodeOps,
-	_ *webapi.Client,
+	apiClient *webapi.Client,
 ) (ctrl.Result, bool) {
 	log := logf.FromContext(ctx)
 
@@ -2037,7 +2037,7 @@ func (r *StorageNodeOpsReconciler) clusterPauseCheck(
 	var reason string
 	if clusterCR.Status.Status != "" && clusterCR.Status.Status != utils.ClusterStatusActive {
 		reason = fmt.Sprintf("cluster status is %q (not active)", clusterCR.Status.Status)
-	} else if clusterCR.Status.Rebalancing != nil && *clusterCR.Status.Rebalancing {
+	} else if r.clusterIsDataRebalancing(ctx, apiClient, clusterCR) {
 		reason = "cluster is rebalancing"
 	}
 
@@ -2053,6 +2053,34 @@ func (r *StorageNodeOpsReconciler) clusterPauseCheck(
 	r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainPaused", fmt.Sprintf("drain paused: %s — will resume when cluster is active", reason))
 	log.Info("drain: pausing — cluster not ready", "reason", reason)
 	return ctrl.Result{RequeueAfter: 60 * time.Second}, true
+}
+
+// clusterIsDataRebalancing reports whether the cluster is moving data by
+// itself. A drain migrates the node's volumes, and the control plane's
+// is_re_balancing -- mirrored into status.rebalancing -- counts those
+// migrations too, so the drain paused on its own work for the whole of
+// every removal (2026-09-29). The control plane's is_data_rebalancing leaves
+// them out; it is read from the API, and status.rebalancing is the fallback
+// when the API cannot be asked or does not report it.
+func (r *StorageNodeOpsReconciler) clusterIsDataRebalancing(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
+) bool {
+	fallback := clusterCR.Status.Rebalancing != nil && *clusterCR.Status.Rebalancing
+	if apiClient == nil || clusterCR.Status.UUID == "" {
+		return fallback
+	}
+	body, status, err := apiClient.Do(ctx, http.MethodGet,
+		fmt.Sprintf("/api/v2/clusters/%s", clusterCR.Status.UUID), nil)
+	if err != nil || status >= 300 {
+		return fallback
+	}
+	resp, err := webapi.ParseClusterResponse(body)
+	if err != nil || resp.DataRebalancing == nil {
+		return fallback
+	}
+	return *resp.DataRebalancing
 }
 
 // advanceSubPhase patches ops.status.subPhase and requeues immediately.

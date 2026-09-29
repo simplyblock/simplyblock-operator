@@ -8,11 +8,14 @@ package controller
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/types"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 func refusedVM(uid, target, msg string) simplyblockv1alpha1.VolumeMigration {
@@ -81,5 +84,45 @@ func TestHandleFailedVolumeMigrations_CountsOnThePausePathToo(t *testing.T) {
 	}
 	if updated.Status.Message == "" {
 		t.Error("the pause itself must still be reported")
+	}
+}
+
+// The drain does not pause on its own volume migrations: with the API saying
+// is_data_rebalancing=false it proceeds although status.rebalancing (the
+// mirror of the wider is_re_balancing) is true. Without an answer from the
+// API it keeps the old, conservative behaviour.
+func TestClusterPauseCheck_IgnoresTheDrainsOwnMigrations(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		apiBody    string
+		wantPaused bool
+	}{
+		{"own migrations only", `{"id":"cl-uuid","is_re_balancing":true,"is_data_rebalancing":false}`, false},
+		{"data rebalancing", `{"id":"cl-uuid","is_re_balancing":true,"is_data_rebalancing":true}`, true},
+		{"older control plane", `{"id":"cl-uuid","is_re_balancing":true}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tc.apiBody))
+			}))
+			defer srv.Close()
+			sn := newTestStorageNode("sn-1", opsTestNS, "sns", opsTestWorker, opsTestNodeUUID)
+			ops := newTestStorageNodeOps(opsTestOpsName, opsTestNS, "sn-1", "remove")
+			sns := &simplyblockv1alpha1.StorageNodeSet{}
+			sns.Name, sns.Namespace = "sns", opsTestNS
+			sns.Spec.ClusterName = "cl"
+			cluster := &simplyblockv1alpha1.StorageCluster{}
+			cluster.Name, cluster.Namespace = "cl", opsTestNS
+			r := newOpsReconciler(t, sn, ops, sns, cluster)
+			rebalancing := true
+			cluster.Status.Rebalancing = &rebalancing
+			cluster.Status.UUID = "cl-uuid"
+			if err := r.Status().Update(context.Background(), cluster); err != nil {
+				t.Fatalf("seed cluster status: %v", err)
+			}
+			if _, paused := r.clusterPauseCheck(context.Background(), ops, webapi.NewClient(srv.URL)); paused != tc.wantPaused {
+				t.Errorf("paused = %v, want %v", paused, tc.wantPaused)
+			}
+		})
 	}
 }

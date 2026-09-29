@@ -690,7 +690,7 @@ func (r *StorageClusterReconciler) nodeRecycleRebalancing(
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
-	if resp.Rebalancing {
+	if resp.IsDataRebalancing() {
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 

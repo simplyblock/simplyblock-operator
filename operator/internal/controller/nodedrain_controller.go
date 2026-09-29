@@ -1521,12 +1521,16 @@ func isClusterRebalancing(
 	}
 
 	var info struct {
-		Rebalancing bool `json:"is_re_balancing"`
+		Rebalancing     bool  `json:"is_re_balancing"`
+		DataRebalancing *bool `json:"is_data_rebalancing"`
 	}
 	if err := json.Unmarshal(body, &info); err != nil {
 		return false, fmt.Errorf("unmarshal cluster info: %w", err)
 	}
-	return info.Rebalancing, nil
+	// Data rebalancing only: the volume migrations a drain issues itself are
+	// not a reason to hold the drain slot. Older control planes do not report
+	// it; the wider flag stands in for them.
+	return webapi.ClusterResponse{Rebalancing: info.Rebalancing, DataRebalancing: info.DataRebalancing}.IsDataRebalancing(), nil
 }
 
 // sanitizeLabelValue truncates to 63 chars (Kubernetes label value limit).
