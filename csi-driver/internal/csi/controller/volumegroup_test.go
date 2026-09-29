@@ -118,8 +118,9 @@ func TestVolumeGroupVerbsRejectANonGroupHandle(t *testing.T) {
 	cs := newTestControllerServer(t, mock)
 	perVolume := vgHandle(vgMember1) // a per-volume handle, not a group handle
 
-	if _, err := cs.ModifyVolumeGroupMembership(context.Background(),
-		&volumegroup.ModifyVolumeGroupMembershipRequest{VolumeGroupId: perVolume}); status.Code(err) != codes.InvalidArgument {
+	_, err := cs.ModifyVolumeGroupMembership(context.Background(),
+		&volumegroup.ModifyVolumeGroupMembershipRequest{VolumeGroupId: perVolume})
+	if status.Code(err) != codes.InvalidArgument {
 		t.Errorf("Modify: err = %v, want InvalidArgument", err)
 	}
 	if _, err := cs.DeleteVolumeGroup(context.Background(),

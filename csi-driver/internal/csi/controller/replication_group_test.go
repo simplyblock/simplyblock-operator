@@ -24,10 +24,10 @@ const (
 // once did) exercised the same wrong field the code read, so every group-routing
 // test passed while live VGR promote failed with `invalid volume handle ""`
 // (2026-09-26). Regression: 2026-09-26-vgr-source-oneof.
-func groupSource(handle string) *replication.ReplicationSource {
+func groupSource() *replication.ReplicationSource {
 	return &replication.ReplicationSource{
 		Type: &replication.ReplicationSource_Volumegroup{
-			Volumegroup: &replication.ReplicationSource_VolumeGroupSource{VolumeGroupId: handle},
+			Volumegroup: &replication.ReplicationSource_VolumeGroupSource{VolumeGroupId: vgGroupHandle},
 		},
 	}
 }
@@ -44,7 +44,7 @@ func TestEnableVolumeReplicationRoutesAGroupHandle(t *testing.T) {
 	cs := newGroupReplTestServer(t, mock)
 
 	_, err := cs.EnableVolumeReplication(context.Background(), &replication.EnableVolumeReplicationRequest{
-		ReplicationSource: groupSource(vgGroupHandle),
+		ReplicationSource: groupSource(),
 		Parameters:        map[string]string{replicationPolicyParam: vgPolicyID},
 	})
 	if err != nil {
@@ -64,7 +64,7 @@ func TestEnableVolumeReplicationEmptyPolicyIsNoOpForGroup(t *testing.T) {
 	cs := newGroupReplTestServer(t, mock)
 
 	_, err := cs.EnableVolumeReplication(context.Background(), &replication.EnableVolumeReplicationRequest{
-		ReplicationSource: groupSource(vgGroupHandle),
+		ReplicationSource: groupSource(),
 		Parameters:        map[string]string{},
 	})
 	if err != nil {
@@ -82,7 +82,7 @@ func TestDisableVolumeReplicationRoutesAGroupHandle(t *testing.T) {
 	mock.groups[vgGroupID].PolicyID = vgPolicyID
 
 	_, err := cs.DisableVolumeReplication(context.Background(), &replication.DisableVolumeReplicationRequest{
-		ReplicationSource: groupSource(vgGroupHandle),
+		ReplicationSource: groupSource(),
 	})
 	if err != nil {
 		t.Fatalf("DisableVolumeReplication: %v", err)
@@ -98,7 +98,7 @@ func TestPromoteVolumeRoutesAGroupHandle(t *testing.T) {
 	cs := newGroupReplTestServer(t, mock)
 
 	if _, err := cs.PromoteVolume(context.Background(), &replication.PromoteVolumeRequest{
-		ReplicationSource: groupSource(vgGroupHandle), Force: true,
+		ReplicationSource: groupSource(), Force: true,
 	}); err != nil {
 		t.Fatalf("PromoteVolume: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestDemoteVolumeRoutesAGroupHandle(t *testing.T) {
 	cs := newGroupReplTestServer(t, mock)
 
 	if _, err := cs.DemoteVolume(context.Background(), &replication.DemoteVolumeRequest{
-		ReplicationSource: groupSource(vgGroupHandle),
+		ReplicationSource: groupSource(),
 	}); err != nil {
 		t.Fatalf("DemoteVolume: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestDemoteVolumeGroupStillConvergingIsAborted(t *testing.T) {
 	mock.groups[vgGroupID].DemoteConverging = true
 
 	_, err := cs.DemoteVolume(context.Background(), &replication.DemoteVolumeRequest{
-		ReplicationSource: groupSource(vgGroupHandle),
+		ReplicationSource: groupSource(),
 	})
 	if status.Code(err) != codes.Aborted {
 		t.Fatalf("err = %v, want Aborted", err)
@@ -142,7 +142,7 @@ func TestResyncVolumeRoutesAGroupHandle(t *testing.T) {
 	cs := newGroupReplTestServer(t, mock)
 
 	resp, err := cs.ResyncVolume(context.Background(), &replication.ResyncVolumeRequest{
-		ReplicationSource: groupSource(vgGroupHandle),
+		ReplicationSource: groupSource(),
 		Parameters:        map[string]string{sourceClusterIDParam: sanityClusterID},
 	})
 	if err != nil {
@@ -163,7 +163,7 @@ func TestGetVolumeReplicationInfoRoutesAGroupHandle(t *testing.T) {
 	mock.groups[vgGroupID].LastReplicatedAt = 1_700_000_000
 
 	resp, err := cs.GetVolumeReplicationInfo(context.Background(), &replication.GetVolumeReplicationInfoRequest{
-		ReplicationSource: groupSource(vgGroupHandle),
+		ReplicationSource: groupSource(),
 	})
 	if err != nil {
 		t.Fatalf("GetVolumeReplicationInfo: %v", err)
