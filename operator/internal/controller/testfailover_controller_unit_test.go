@@ -514,9 +514,6 @@ func TestFailoverResolvingPointDRTargetUsesReplicatedSnapshot(t *testing.T) {
 	if got.Status.Clones[0].SnapshotID != "clusterB:poolB:snapY" {
 		t.Errorf("snapshot handle = %q, want clusterB:poolB:snapY", got.Status.Clones[0].SnapshotID)
 	}
-	if got.Status.Clones[0].SnapshotTaken {
-		t.Errorf("snapshotTaken = true, want false for a replicated point")
-	}
 	if got.Status.Report == nil || got.Status.Report.RecoveryPoint != "snapY" {
 		t.Errorf("report.recoveryPoint not set to snapY: %+v", got.Status.Report)
 	}
@@ -591,145 +588,6 @@ func TestFailoverResolvingPointGroupResolvesGeneration(t *testing.T) {
 	}
 }
 
-// TestFailoverResolvingPointGroupInPlaceTakesFreshGeneration covers the in-place
-// group recovery point: when the bubble is the source's own cluster the drill
-// must recover from a fresh crash-consistent generation cut on the SOURCE (like
-// the volume in-place path takes a fresh snapshot), NOT from a replicated
-// generation on a DR target. It records each member's fresh source snapshot,
-// keyed to the member's own pool, and advances to Cloning.
-func TestFailoverResolvingPointGroupInPlaceTakesFreshGeneration(t *testing.T) {
-	tf := sampleTestFailover()
-	tf.Finalizers = []string{finalizerTestFailover}
-	tf.Spec.Scope = simplyblockv1alpha2.TestFailoverScopeGroup
-	tf.Spec.SourceRef = "cg"
-	tf.Spec.SourceCluster = testSourceCluster
-	tf.Spec.BubbleCluster = testSourceCluster // in-place: bubble IS the source cluster
-	tf.Status.Phase = simplyblockv1alpha2.TestFailoverPhaseProvisioning
-	tf.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.TestFailoverStepResolvingPoint)}
-	started := metav1.Unix(1000, 0)
-	tf.Status.StartedAt = &started
-	tf.Status.Clones = []simplyblockv1alpha2.TestFailoverClone{
-		{SourceRef: "data-1", SourceHandle: "C:pool-1:lvol-a", SourceFSType: testFSTypeXFS, SizeBytes: 1073741824},
-		{SourceRef: "data-2", SourceHandle: "C:pool-2:lvol-b", SourceFSType: testFSTypeXFS, SizeBytes: 1073741824},
-	}
-
-	sc := &simplyblockv1alpha2.StorageCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: "local-sc", Namespace: tf.Namespace},
-		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: "C"},
-	}
-	r, cl := newTestFailoverReconciler(t, tf, sc)
-	ctx := context.Background()
-
-	tookGeneration := false
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		p := req.URL.Path
-		switch {
-		case strings.HasSuffix(p, "/consistency-groups/") && req.URL.Query().Get("name") == "cg":
-			_, _ = w.Write([]byte(`[{"id":"g1","name":"cg","lvs_name":"lvs-a","node_id":"node-a","policy_id":"p1"}]`))
-		case strings.HasSuffix(p, "/consistency-groups/g1/snapshots") && req.Method == http.MethodGet:
-			// No generation cut since the drill began, so the in-place path takes one.
-			_, _ = w.Write([]byte(`[]`))
-		case strings.HasSuffix(p, "/consistency-groups/g1/snapshots") && req.Method == http.MethodPost:
-			tookGeneration = true
-			_, _ = w.Write([]byte(`{"group_seq":5,"created_at":2000,"complete":true,"members":[` +
-				`{"lvol_id":"lvol-a","snapshot_id":"s1","ready":true},` +
-				`{"lvol_id":"lvol-b","snapshot_id":"s2","ready":true}]}`))
-		default:
-			t.Errorf("unexpected request %s %s", req.Method, p)
-			w.WriteHeader(http.StatusInternalServerError)
-		}
-	})
-	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
-
-	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	var got simplyblockv1alpha2.TestFailover
-	if err := cl.Get(ctx, testFailoverRequest(tf).NamespacedName, &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Status.Step.State != string(simplyblockv1alpha2.TestFailoverStepCloning) {
-		t.Fatalf("step = %q, want Cloning; message=%q", got.Status.Step.State, got.Status.Message)
-	}
-	if !tookGeneration {
-		t.Error("in-place group drill must cut a fresh generation on the source")
-	}
-	// Each member's clone points at its FRESH source snapshot, on the source cluster
-	// (C), in the member's own pool (pool-1 / pool-2 from the source handles).
-	if got.Status.Clones[0].SnapshotID != "C:pool-1:s1" || got.Status.Clones[1].SnapshotID != "C:pool-2:s2" {
-		t.Errorf("clone snapshot handles = %+v, want C:pool-1:s1 and C:pool-2:s2", got.Status.Clones)
-	}
-	// The drill took the snapshots, so teardown must reclaim them.
-	if !got.Status.Clones[0].SnapshotTaken || !got.Status.Clones[1].SnapshotTaken {
-		t.Error("in-place group snapshots must be marked taken so teardown deletes them")
-	}
-}
-
-// TestFailoverResolvingPointGroupInPlaceReusesGenerationCutAfterStart covers the
-// ask-then-act guard: a re-entered in-place drill reuses a complete generation
-// created at or after it began rather than cutting a second one, so a mid-step
-// failure never stacks duplicate generations on the source.
-func TestFailoverResolvingPointGroupInPlaceReusesGenerationCutAfterStart(t *testing.T) {
-	tf := sampleTestFailover()
-	tf.Finalizers = []string{finalizerTestFailover}
-	tf.Spec.Scope = simplyblockv1alpha2.TestFailoverScopeGroup
-	tf.Spec.SourceRef = "cg"
-	tf.Spec.SourceCluster = testSourceCluster
-	tf.Spec.BubbleCluster = testSourceCluster
-	tf.Status.Phase = simplyblockv1alpha2.TestFailoverPhaseProvisioning
-	tf.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.TestFailoverStepResolvingPoint)}
-	started := metav1.Unix(1000, 0)
-	tf.Status.StartedAt = &started
-	tf.Status.Clones = []simplyblockv1alpha2.TestFailoverClone{
-		{SourceRef: "data-1", SourceHandle: "C:pool-1:lvol-a", SourceFSType: testFSTypeXFS, SizeBytes: 1073741824},
-		{SourceRef: "data-2", SourceHandle: "C:pool-2:lvol-b", SourceFSType: testFSTypeXFS, SizeBytes: 1073741824},
-	}
-
-	sc := &simplyblockv1alpha2.StorageCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: "local-sc", Namespace: tf.Namespace},
-		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: "C"},
-	}
-	r, cl := newTestFailoverReconciler(t, tf, sc)
-	ctx := context.Background()
-
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		p := req.URL.Path
-		switch {
-		case strings.HasSuffix(p, "/consistency-groups/") && req.URL.Query().Get("name") == "cg":
-			_, _ = w.Write([]byte(`[{"id":"g1","name":"cg","lvs_name":"lvs-a","node_id":"node-a","policy_id":"p1"}]`))
-		case strings.HasSuffix(p, "/consistency-groups/g1/snapshots") && req.Method == http.MethodGet:
-			// A complete generation created after the drill began (created_at 1500 >=
-			// started 1000): this drill's own earlier cut, so it is reused.
-			_, _ = w.Write([]byte(`[{"group_seq":4,"created_at":1500,"complete":true,"members":[` +
-				`{"lvol_id":"lvol-a","snapshot_id":"s1","ready":true},` +
-				`{"lvol_id":"lvol-b","snapshot_id":"s2","ready":true}]}]`))
-		case strings.HasSuffix(p, "/consistency-groups/g1/snapshots") && req.Method == http.MethodPost:
-			t.Error("a second generation was cut instead of reusing the one created after start")
-			w.WriteHeader(http.StatusInternalServerError)
-		default:
-			t.Errorf("unexpected request %s %s", req.Method, p)
-			w.WriteHeader(http.StatusInternalServerError)
-		}
-	})
-	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
-
-	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	var got simplyblockv1alpha2.TestFailover
-	if err := cl.Get(ctx, testFailoverRequest(tf).NamespacedName, &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Status.Step.State != string(simplyblockv1alpha2.TestFailoverStepCloning) {
-		t.Fatalf("step = %q, want Cloning; message=%q", got.Status.Step.State, got.Status.Message)
-	}
-	if got.Status.Clones[0].SnapshotID != "C:pool-1:s1" || got.Status.Clones[1].SnapshotID != "C:pool-2:s2" {
-		t.Errorf("clone snapshot handles = %+v, want the reused generation's snapshots", got.Status.Clones)
-	}
-}
-
 // TestFailoverResolvingPointDRTargetNoReplicaFails covers that a target with no
 // replicated point yet is a terminal failure, not an endless hold.
 func TestFailoverResolvingPointDRTargetNoReplicaFails(t *testing.T) {
@@ -754,71 +612,17 @@ func TestFailoverResolvingPointDRTargetNoReplicaFails(t *testing.T) {
 	}
 }
 
-// TestFailoverResolvingPointInPlaceTakesFreshSnapshot covers the in-place path:
-// the drill takes a fresh snapshot of the source and advances to Cloning.
-func TestFailoverResolvingPointInPlaceTakesFreshSnapshot(t *testing.T) {
-	tf := atResolvingPoint()
-	tf.Spec.BubbleCluster = tf.Spec.SourceCluster // in-place
-	r, cl := newTestFailoverReconciler(t, tf)
-	ctx := context.Background()
-
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
-		switch {
-		case req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/storage-pools/poolA/snapshots"):
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte("[]"))
-		case req.Method == http.MethodPost && strings.Contains(req.URL.Path, "/volumes/lvolX/snapshots"):
-			w.Header().Set("Location", "/api/v2/clusters/clusterA/storage-pools/poolA/snapshots/snapNew")
-			w.WriteHeader(http.StatusCreated)
-		default:
-			t.Errorf("unexpected request %s %s", req.Method, req.URL.Path)
-			w.WriteHeader(http.StatusInternalServerError)
-		}
-	})
-	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
-
-	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	var got simplyblockv1alpha2.TestFailover
-	if err := cl.Get(ctx, testFailoverRequest(tf).NamespacedName, &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Status.Step.State != string(simplyblockv1alpha2.TestFailoverStepCloning) {
-		t.Errorf("step = %q, want Cloning", got.Status.Step.State)
-	}
-	if got.Status.Clones[0].SnapshotID != "clusterA:poolA:snapNew" {
-		t.Errorf("snapshot handle = %q, want clusterA:poolA:snapNew", got.Status.Clones[0].SnapshotID)
-	}
-	if !got.Status.Clones[0].SnapshotTaken {
-		t.Errorf("snapshotTaken = false, want true for a freshly taken snapshot")
-	}
-}
-
-// TestFailoverResolvingPointInPlaceReusesExistingSnapshot covers ask-then-act
-// idempotency: an already-present snapshot with the drill's name is reused, and
-// no second snapshot is taken.
-func TestFailoverResolvingPointInPlaceReusesExistingSnapshot(t *testing.T) {
-	tf := atResolvingPoint()
+// TestFailoverSameClusterIsRejected covers that a drill whose bubble is the
+// source's own cluster fails immediately: test-failover recovers onto a DIFFERENT
+// cluster, never in place.
+func TestFailoverSameClusterIsRejected(t *testing.T) {
+	tf := sampleTestFailover()
+	tf.Finalizers = []string{finalizerTestFailover}
 	tf.Spec.BubbleCluster = tf.Spec.SourceCluster
+	tf.Status.Phase = simplyblockv1alpha2.TestFailoverPhaseProvisioning
+	tf.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.TestFailoverStepResolvingSource)}
 	r, cl := newTestFailoverReconciler(t, tf)
 	ctx := context.Background()
-	wantName := testFailoverSnapshotName(tf)
-
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
-		if req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/storage-pools/poolA/snapshots") {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
-				{"id": "snapExisting", "name": wantName},
-			})
-			return
-		}
-		if req.Method == http.MethodPost {
-			t.Errorf("a second snapshot was taken though one already existed: %s", req.URL.Path)
-		}
-		w.WriteHeader(http.StatusInternalServerError)
-	})
-	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
 	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -827,37 +631,11 @@ func TestFailoverResolvingPointInPlaceReusesExistingSnapshot(t *testing.T) {
 	if err := cl.Get(ctx, testFailoverRequest(tf).NamespacedName, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Status.Clones[0].SnapshotID != "clusterA:poolA:snapExisting" {
-		t.Errorf("snapshot handle = %q, want clusterA:poolA:snapExisting", got.Status.Clones[0].SnapshotID)
+	if got.Status.Phase != simplyblockv1alpha2.TestFailoverPhaseFailed {
+		t.Fatalf("phase = %q, want Failed for a same-cluster drill; message=%q", got.Status.Phase, got.Status.Message)
 	}
-}
-
-// TestFailoverResolvingPointInPlacePinnedSnapshot covers a pinned recovery point:
-// it is used directly, nothing is taken, and it is not marked for deletion.
-func TestFailoverResolvingPointInPlacePinnedSnapshot(t *testing.T) {
-	tf := atResolvingPoint()
-	tf.Spec.BubbleCluster = tf.Spec.SourceCluster
-	tf.Spec.RecoveryPoint = "pinnedSnap"
-	r, cl := newTestFailoverReconciler(t, tf)
-	ctx := context.Background()
-	// The control plane must not be called at all for a pinned point.
-	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
-
-	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	var got simplyblockv1alpha2.TestFailover
-	if err := cl.Get(ctx, testFailoverRequest(tf).NamespacedName, &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Status.Clones[0].SnapshotID != "clusterA:poolA:pinnedSnap" {
-		t.Errorf("snapshot handle = %q, want clusterA:poolA:pinnedSnap", got.Status.Clones[0].SnapshotID)
-	}
-	if got.Status.Clones[0].SnapshotTaken {
-		t.Errorf("snapshotTaken = true, want false for a pinned snapshot")
-	}
-	if got.Status.Step.State != string(simplyblockv1alpha2.TestFailoverStepCloning) {
-		t.Errorf("step = %q, want Cloning", got.Status.Step.State)
+	if !strings.Contains(got.Status.Message, "same cluster") {
+		t.Errorf("message = %q, want it to explain same-cluster is unsupported", got.Status.Message)
 	}
 }
 
@@ -1192,13 +970,11 @@ func TestFailoverPlacingReuseManifestWorkOnRestart(t *testing.T) {
 	}
 }
 
-// deletingReadyDrill returns a Ready drill with a clone and a drill-taken
-// snapshot recorded, being deleted.
+// deletingReadyDrill returns a Ready drill with a clone recorded, being deleted.
 func deletingReadyDrill() *simplyblockv1alpha2.TestFailover {
 	tf := atPlacing()
 	tf.Status.Phase = simplyblockv1alpha2.TestFailoverPhaseReady
 	tf.Status.Clones[0].SnapshotID = "clusterA:poolA:snapS"
-	tf.Status.Clones[0].SnapshotTaken = true
 	now := metav1.Now()
 	tf.DeletionTimestamp = &now
 	return tf
@@ -1216,8 +992,9 @@ func srcPVView(tf *simplyblockv1alpha2.TestFailover, handle string) *unstructure
 }
 
 // TestFailoverTeardownReclaimsThenClearsFinalizer covers that deleting a drill
-// reclaims the clone and the drill-taken snapshot, removes the ManifestWork, and
-// only then clears the finalizer.
+// reclaims the clone, removes the ManifestWork, and only then clears the
+// finalizer. The recovery point is a replicated snapshot the drill only resolved,
+// so it is left alone.
 func TestFailoverTeardownReclaimsThenClearsFinalizer(t *testing.T) {
 	tf := deletingReadyDrill()
 	mw := &workv1.ManifestWork{ObjectMeta: metav1.ObjectMeta{
@@ -1226,15 +1003,15 @@ func TestFailoverTeardownReclaimsThenClearsFinalizer(t *testing.T) {
 	r, cl := newTestFailoverReconciler(t, tf, mw)
 	ctx := context.Background()
 
-	var reclaimedClone, deletedSnapshot bool
+	var reclaimedClone bool
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		switch {
 		case req.Method == http.MethodDelete && strings.Contains(req.URL.Path, "/volumes/cloneVol"):
 			reclaimedClone = true
 			w.WriteHeader(http.StatusNoContent)
-		case req.Method == http.MethodDelete && strings.Contains(req.URL.Path, "/snapshots/snapS"):
-			deletedSnapshot = true
-			w.WriteHeader(http.StatusNoContent)
+		case req.Method == http.MethodDelete && strings.Contains(req.URL.Path, "/snapshots/"):
+			t.Errorf("teardown deleted a snapshot it only resolved: %s", req.URL.Path)
+			w.WriteHeader(http.StatusInternalServerError)
 		default:
 			t.Errorf("unexpected request %s %s", req.Method, req.URL.Path)
 			w.WriteHeader(http.StatusInternalServerError)
@@ -1247,9 +1024,6 @@ func TestFailoverTeardownReclaimsThenClearsFinalizer(t *testing.T) {
 	}
 	if !reclaimedClone {
 		t.Errorf("the clone was not reclaimed")
-	}
-	if !deletedSnapshot {
-		t.Errorf("the drill-taken snapshot was not deleted")
 	}
 	err := cl.Get(ctx, testFailoverRequest(tf).NamespacedName, &simplyblockv1alpha2.TestFailover{})
 	if err == nil || !apierrors.IsNotFound(err) {

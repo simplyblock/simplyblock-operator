@@ -109,18 +109,12 @@ type TestFailoverSpec struct {
 	// +k8s:immutable
 	SourceRef string `json:"sourceRef"`
 
-	// BubbleCluster is the OCM ManagedCluster to recover onto: the source's own
-	// cluster for an in-place test, the DR target, or another cluster. Immutable.
+	// BubbleCluster is the OCM ManagedCluster to recover onto: a DR target holding
+	// the replicated point, or another cluster. It must differ from SourceCluster;
+	// test-failover recovers onto a different cluster, never in place. Immutable.
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
 	BubbleCluster string `json:"bubbleCluster"`
-
-	// RecoveryPoint optionally pins an existing snapshot to clone. Empty resolves
-	// the point per BubbleCluster: a fresh source snapshot when it is the source's
-	// own cluster, or the latest replicated point on a DR target. Immutable.
-	// +optional
-	// +k8s:immutable
-	RecoveryPoint string `json:"recoveryPoint,omitempty"`
 
 	// BubbleNamespace is the namespace on the bubble cluster where the recovered
 	// PVCs are created. Immutable.
@@ -147,15 +141,10 @@ type TestFailoverClone struct {
 	// +optional
 	SourceHandle string `json:"sourceHandle,omitempty"`
 
-	// SnapshotID is the recovery-point snapshot.
+	// SnapshotID is the recovery-point snapshot: the replicated snapshot already on
+	// the bubble cluster's backend that the clone is built from.
 	// +optional
 	SnapshotID string `json:"snapshotID,omitempty"`
-
-	// SnapshotTaken is true when the drill created SnapshotID, rather than
-	// resolving a replicated one or reusing a pinned one, so teardown knows
-	// whether to delete it.
-	// +optional
-	SnapshotTaken bool `json:"snapshotTaken,omitempty"`
 
 	// CloneID is the backend id of the writable clone.
 	// +optional

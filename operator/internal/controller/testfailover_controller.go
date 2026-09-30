@@ -204,6 +204,13 @@ func (r *TestFailoverReconciler) advanceDrill(ctx context.Context, tf *simplyblo
 // is non-blocking: each view is created once and its result awaited across
 // reconciles, so a restart re-enters rather than re-creates.
 func (r *TestFailoverReconciler) resolveSource(ctx context.Context, tf *simplyblockv1alpha2.TestFailover) (ctrl.Result, error) {
+	// Test-failover recovers onto a DIFFERENT cluster (a DR target or another
+	// cluster), never in place: recovering a bubble into the source's own
+	// subsystem cannot be mounted alongside the live source, and the point is to
+	// rehearse the site that would take over. Reject a same-cluster drill up front.
+	if tf.Spec.BubbleCluster == tf.Spec.SourceCluster {
+		return r.fail(ctx, tf, "test-failover within the same cluster is not supported: bubbleCluster must differ from sourceCluster")
+	}
 	if tf.Spec.Scope == simplyblockv1alpha2.TestFailoverScopeGroup {
 		return r.resolveSourceGroup(ctx, tf)
 	}
@@ -557,13 +564,8 @@ func (r *TestFailoverReconciler) reconcileDeletion(ctx context.Context, tf *simp
 				return r.reclaimPending(ctx, tf, "reclaim the clone for "+clone.SourceRef, err)
 			}
 		}
-		// Only a snapshot the drill took is the drill's to delete; a replicated or
-		// pinned one is left alone.
-		if clone.SnapshotTaken && clone.SnapshotID != "" {
-			if err := r.deleteDrillSnapshot(ctx, tf, clone.SnapshotID); err != nil {
-				return r.reclaimPending(ctx, tf, "delete the drill snapshot for "+clone.SourceRef, err)
-			}
-		}
+		// The recovery point is the replicated snapshot already on the target,
+		// resolved rather than created by the drill, so it is left alone.
 	}
 
 	// The read-side views cost nothing to leave, but teardown proves no test-id
@@ -634,21 +636,6 @@ func (r *TestFailoverReconciler) reclaimClone(ctx context.Context, tf *simplyblo
 		fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s", cluster, pool, vol))
 }
 
-// deleteDrillSnapshot deletes a snapshot the drill took, from the source
-// cluster's backend.
-func (r *TestFailoverReconciler) deleteDrillSnapshot(ctx context.Context, tf *simplyblockv1alpha2.TestFailover, handle string) error {
-	cluster, pool, snap, ok := splitHandle(handle)
-	if !ok {
-		return nil
-	}
-	apiClient := webapi.NewClient()
-	if secret, err := r.clusterSecret(ctx, tf.Namespace, tf.Spec.SourceCluster); err == nil && secret != "" {
-		ctx = webapi.WithBearerToken(ctx, secret)
-	}
-	return backendDelete(ctx, apiClient, "delete snapshot",
-		fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/snapshots/%s", cluster, pool, snap))
-}
-
 // backendDelete issues an idempotent DELETE, treating a not-found as success.
 func backendDelete(ctx context.Context, api *webapi.Client, what, endpoint string) error {
 	body, status, err := api.Do(ctx, http.MethodDelete, endpoint, nil)
@@ -712,11 +699,10 @@ type replicatedSnapshotResult struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-// resolvePoint resolves the recovery point on the recovery cluster's backend and
-// advances to Cloning. In-place (the bubble is the source's own cluster) it takes
-// a fresh snapshot of the source, or reuses a pinned one; onto a DR target it
-// uses the latest replicated snapshot already there. It records the point as a
-// CSI snapshot handle so Cloning is self-contained.
+// resolvePoint resolves the recovery point on the bubble cluster's backend and
+// advances to Cloning. The bubble is a DR target holding the latest replicated
+// snapshot already there, so no data moves and nothing is triggered. It records
+// the point as a CSI snapshot handle so Cloning is self-contained.
 func (r *TestFailoverReconciler) resolvePoint(ctx context.Context, tf *simplyblockv1alpha2.TestFailover) (ctrl.Result, error) {
 	if tf.Spec.Scope == simplyblockv1alpha2.TestFailoverScopeGroup {
 		return r.resolvePointGroup(ctx, tf)
@@ -734,36 +720,19 @@ func (r *TestFailoverReconciler) resolvePoint(ctx context.Context, tf *simplyblo
 		ctx = webapi.WithBearerToken(ctx, secret)
 	}
 
-	var snapCluster, snapPool, snapUUID string
-	var taken bool
+	// The replicated snapshot is already on the DR target's backend.
+	dto, found, err := r.latestReplicatedSnapshot(ctx, apiClient, srcCluster, srcLvol)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !found {
+		return r.fail(ctx, tf, "no replicated snapshot on the target for volume "+srcLvol+" yet")
+	}
+	snapCluster, snapPool, snapUUID := dto.ClusterID, dto.PoolID, dto.SnapshotID
 	var pointTime *metav1.Time
-
-	switch {
-	case tf.Spec.BubbleCluster == tf.Spec.SourceCluster && tf.Spec.RecoveryPoint != "":
-		// In-place, pinned: reuse the operator's chosen snapshot, do not delete it.
-		snapCluster, snapPool, snapUUID, taken = srcCluster, srcPool, tf.Spec.RecoveryPoint, false
-	case tf.Spec.BubbleCluster == tf.Spec.SourceCluster:
-		// In-place: take a fresh snapshot of the source, idempotently.
-		id, err := r.ensureSnapshot(ctx, apiClient, srcCluster, srcPool, srcLvol, testFailoverSnapshotName(tf))
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		now := metav1.Now()
-		snapCluster, snapPool, snapUUID, taken, pointTime = srcCluster, srcPool, id, true, &now
-	default:
-		// Onto a DR target: the replicated snapshot is already on that backend.
-		dto, found, err := r.latestReplicatedSnapshot(ctx, apiClient, srcCluster, srcLvol)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if !found {
-			return r.fail(ctx, tf, "no replicated snapshot on the target for volume "+srcLvol+" yet")
-		}
-		snapCluster, snapPool, snapUUID, taken = dto.ClusterID, dto.PoolID, dto.SnapshotID, false
-		if !dto.CreatedAt.IsZero() {
-			pt := metav1.NewTime(dto.CreatedAt)
-			pointTime = &pt
-		}
+	if !dto.CreatedAt.IsZero() {
+		pt := metav1.NewTime(dto.CreatedAt)
+		pointTime = &pt
 	}
 	if snapPool == "" {
 		snapPool = srcPool
@@ -772,7 +741,6 @@ func (r *TestFailoverReconciler) resolvePoint(ctx context.Context, tf *simplyblo
 
 	if err := r.transitionTo(ctx, tf, simplyblockv1alpha2.TestFailoverStepCloning, func(s *simplyblockv1alpha2.TestFailoverStatus) {
 		s.Clones[0].SnapshotID = pointHandle
-		s.Clones[0].SnapshotTaken = taken
 		if s.Report == nil {
 			s.Report = &simplyblockv1alpha2.TestFailoverReport{}
 		}
@@ -815,152 +783,43 @@ func (r *TestFailoverReconciler) resolvePointGroup(ctx context.Context, tf *simp
 		return r.fail(ctx, tf, "consistency group "+tf.Spec.SourceRef+" not found on cluster "+tf.Spec.SourceCluster)
 	}
 
-	// handles[i] is the recovery snapshot for clone slot i; taken records whether
-	// the drill created these snapshots (in-place) and so must delete them on
-	// teardown. In-place recovers from a fresh generation cut on the source; onto a
-	// DR target it uses the replicated generation already there.
-	handles := make([]string, len(tf.Status.Clones))
-	var taken bool
-	var rpLabel string
+	// The policy is read off the group: attach_group_policy stores it on the group
+	// record, and a group-first attach leaves the policy's own placement empty, so
+	// the recovery point is keyed on group.policy_id, not the policy list.
+	if group.PolicyID == "" {
+		return r.fail(ctx, tf, "no replication policy attached to group "+tf.Spec.SourceRef)
+	}
 
-	if tf.Spec.BubbleCluster == tf.Spec.SourceCluster {
-		seq, members, err := r.ensureGroupGeneration(ctx, api, srcUUID, group.UUID, tf)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if len(members) != len(tf.Status.Clones) {
-			return r.fail(ctx, tf, fmt.Sprintf("the group generation has %d members but %d were resolved; group membership changed mid-drill", len(members), len(tf.Status.Clones)))
-		}
-		// Each fresh snapshot lives on the source, in its member's own pool. Pair it
-		// to a clone slot by lvol id; the slot's source handle carries that pool.
-		slot := make(map[string]int, len(tf.Status.Clones))
-		pool := make(map[string]string, len(tf.Status.Clones))
-		for i := range tf.Status.Clones {
-			_, p, lvol, ok := splitHandle(tf.Status.Clones[i].SourceHandle)
-			if !ok {
-				return r.fail(ctx, tf, "group member source handle is malformed: "+tf.Status.Clones[i].SourceHandle)
-			}
-			slot[lvol] = i
-			pool[lvol] = p
-		}
-		for _, m := range members {
-			i, ok := slot[m.LvolID]
-			if !ok {
-				return r.fail(ctx, tf, "group generation member "+m.LvolID+" is not among the resolved source members")
-			}
-			handles[i] = srcUUID + ":" + pool[m.LvolID] + ":" + m.SnapshotID
-		}
-		taken = true
-		rpLabel = fmt.Sprintf("generation %d (in-place)", seq)
-	} else {
-		// The policy is read off the group: attach_group_policy stores it on the
-		// group record, and a group-first attach leaves the policy's own placement
-		// empty, so the recovery point is keyed on group.policy_id, not the policy list.
-		if group.PolicyID == "" {
-			return r.fail(ctx, tf, "no replication policy attached to group "+tf.Spec.SourceRef)
-		}
-		seq, members, found, err := api.LatestReplicatedGeneration(ctx, srcUUID, group.PolicyID)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if !found {
-			return r.fail(ctx, tf, "no replicated generation on the target for group "+tf.Spec.SourceRef+" yet")
-		}
-		if len(members) != len(tf.Status.Clones) {
-			return r.fail(ctx, tf, fmt.Sprintf("the group generation has %d members but %d were resolved; group membership changed mid-drill", len(members), len(tf.Status.Clones)))
-		}
+	groupSeq, members, found, err := api.LatestReplicatedGeneration(ctx, srcUUID, group.PolicyID)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !found {
+		return r.fail(ctx, tf, "no replicated generation on the target for group "+tf.Spec.SourceRef+" yet")
+	}
+	if len(members) != len(tf.Status.Clones) {
+		return r.fail(ctx, tf, fmt.Sprintf("the group generation has %d members but %d were resolved; group membership changed mid-drill", len(members), len(tf.Status.Clones)))
+	}
+
+	if err := r.transitionTo(ctx, tf, simplyblockv1alpha2.TestFailoverStepCloning, func(s *simplyblockv1alpha2.TestFailoverStatus) {
 		// Every member is at one generation, so any one-to-one assignment of the
 		// generation's snapshots to the clone slots yields a crash-consistent set;
 		// a precise source-to-target mapping is a later refinement.
 		for i := range members {
-			handles[i] = members[i].ClusterID + ":" + members[i].PoolID + ":" + members[i].SnapshotID
-		}
-		taken = false
-		rpLabel = fmt.Sprintf("generation %d", seq)
-	}
-
-	for i := range handles {
-		if handles[i] == "" {
-			return r.fail(ctx, tf, "internal: no recovery snapshot resolved for "+tf.Status.Clones[i].SourceRef)
-		}
-	}
-
-	if err := r.transitionTo(ctx, tf, simplyblockv1alpha2.TestFailoverStepCloning, func(s *simplyblockv1alpha2.TestFailoverStatus) {
-		for i := range handles {
-			s.Clones[i].SnapshotID = handles[i]
-			s.Clones[i].SnapshotTaken = taken
+			s.Clones[i].SnapshotID = members[i].ClusterID + ":" + members[i].PoolID + ":" + members[i].SnapshotID
 		}
 		if s.Report == nil {
 			s.Report = &simplyblockv1alpha2.TestFailoverReport{}
 		}
 		s.Report.BubbleCluster = tf.Spec.BubbleCluster
-		s.Report.RecoveryPoint = rpLabel
-		s.Message = fmt.Sprintf("resolved the group-consistent point (%s); cloning %d members", rpLabel, len(handles))
+		s.Report.RecoveryPoint = fmt.Sprintf("generation %d", groupSeq)
+		s.Message = fmt.Sprintf("resolved the group-consistent point (generation %d); cloning %d members", groupSeq, len(members))
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
 	r.Recorder.Eventf(tf, nil, corev1.EventTypeNormal, "RecoveryPointResolved", "RecoveryPointResolved",
-		"group-consistent %s on cluster %s (%d members)", rpLabel, tf.Spec.BubbleCluster, len(handles))
+		"group-consistent generation %d on cluster %s (%d members)", groupSeq, tf.Spec.BubbleCluster, len(members))
 	return ctrl.Result{Requeue: true}, nil
-}
-
-// ensureGroupGeneration returns the recovery generation for an in-place group
-// drill: a fresh crash-consistent generation cut on the source. It reuses one this
-// drill already cut on a retry (ask-then-act): a complete generation created at or
-// after the drill began is this drill's own, so re-entry after a mid-step failure
-// does not stack duplicate generations on the source.
-func (r *TestFailoverReconciler) ensureGroupGeneration(
-	ctx context.Context, api *webapi.Client, srcUUID, groupUUID string,
-	tf *simplyblockv1alpha2.TestFailover,
-) (int, []webapi.GroupGenerationMember, error) {
-	if tf.Status.StartedAt != nil {
-		seq, createdAt, members, found, err := api.LatestGroupGeneration(ctx, srcUUID, groupUUID)
-		if err != nil {
-			return 0, nil, err
-		}
-		if found && createdAt >= tf.Status.StartedAt.Unix() {
-			return seq, members, nil
-		}
-	}
-	seq, _, members, err := api.TakeGroupGeneration(ctx, srcUUID, groupUUID)
-	if err != nil {
-		return 0, nil, err
-	}
-	return seq, members, nil
-}
-
-// ensureSnapshot returns the id of the source volume's snapshot named name,
-// taking it if it does not exist yet. Ask-then-act: it lists the pool's snapshots
-// first, so a retry after a crash between create and status-write reuses the
-// snapshot rather than taking a second (reconciler-patterns §4).
-func (r *TestFailoverReconciler) ensureSnapshot(ctx context.Context, api *webapi.Client, clusterUUID, poolID, lvolUUID, name string) (string, error) {
-	listEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/snapshots", clusterUUID, poolID)
-	body, status, err := api.Do(ctx, http.MethodGet, listEndpoint, nil)
-	if err != nil || status >= 300 {
-		return "", requestError("list snapshots", body, status, err)
-	}
-	var existing []struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-	}
-	_ = json.Unmarshal(body, &existing)
-	for _, s := range existing {
-		if s.Name == name {
-			return s.ID, nil
-		}
-	}
-
-	createEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/snapshots", clusterUUID, poolID, lvolUUID)
-	_, header, status, err := api.DoWithHeaders(ctx, http.MethodPost, createEndpoint,
-		map[string]interface{}{"name": name, "backup": false})
-	if err != nil || status >= 300 {
-		return "", requestError("take snapshot", nil, status, err)
-	}
-	id := lastPathSegment(header.Get("Location"))
-	if id == "" {
-		return "", fmt.Errorf("take snapshot: no snapshot id in the Location header")
-	}
-	return id, nil
 }
 
 // latestReplicatedSnapshot reads the latest replicated snapshot for a source
@@ -1315,13 +1174,6 @@ func (r *TestFailoverReconciler) clusterSecret(ctx context.Context, namespace, c
 	return string(secret.Data["secret"]), nil
 }
 
-// testFailoverSnapshotName is the deterministic name of the snapshot an in-place
-// drill takes, so ask-then-act can find it on a retry.
-func testFailoverSnapshotName(tf *simplyblockv1alpha2.TestFailover) string {
-	h := sha256.Sum256([]byte(tf.Namespace + "/" + tf.Name))
-	return fmt.Sprintf("tfo-%x-snap", h[:6])
-}
-
 // testFailoverCloneName is the deterministic name of the clone a drill builds, so
 // ask-then-act can find it on a retry.
 func testFailoverCloneName(tf *simplyblockv1alpha2.TestFailover) string {
@@ -1345,15 +1197,6 @@ func splitHandle(handle string) (cluster, pool, uuid string, ok bool) {
 		return "", "", "", false
 	}
 	return parts[0], parts[1], parts[2], true
-}
-
-// lastPathSegment returns the final segment of a URL path.
-func lastPathSegment(p string) string {
-	p = strings.TrimRight(p, "/")
-	if i := strings.LastIndex(p, "/"); i >= 0 {
-		return p[i+1:]
-	}
-	return p
 }
 
 // requestError builds an error for a failed control-plane call.
