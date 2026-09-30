@@ -152,6 +152,9 @@ ClusterRef string `json:"clusterRef"`
 `spec.allowedNodes` restricts which hosts may carry the pool's volumes, and it
 names Kubernetes `Node` objects rather than `StorageNode`s, for the reason §4.3
 gives. Empty means every node in the cluster, which is the usual case.
+It requires `spec.volumeDefaults.enableDHCHAP`, which a CEL rule on the spec enforces at
+admission: the nodes are registered as the pool's allowed hosts, and the control plane accepts
+that only for a DHCHAP pool.
 
 **The pool's own ceilings, under `spec.limits`.** These are what the pool as a
 whole may consume, enforced by the control plane against the pool.
