@@ -1998,6 +1998,23 @@ const (
 	nodeStatusRemovedFailed    = "removed_failed"
 )
 
+// isNodeInRemoval reports whether a node is in the part of a removal that has
+// already shut it down: migrating_devices through removed_failed. Such a node
+// belongs to the removal until it is removed; a bulk restart or a worker drain
+// must leave it alone. A shutdown of it would write in_shutdown over the
+// removal status, and a restart would bring it back into service mid-removal
+// (the control plane now refuses both, but the operator should not ask).
+// pending_removal is not in the set: the node is still up then, and the
+// removal's own shutdown has not run yet.
+func isNodeInRemoval(status string) bool {
+	switch status {
+	case nodeStatusMigratingDevices, nodeStatusMigratingLvols, nodeStatusInRemoval,
+		utils.NodeStatusRemoved, nodeStatusRemovedFailed:
+		return true
+	}
+	return false
+}
+
 func (r *StorageNodeOpsReconciler) resumeAndFail(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.StorageNodeOps,

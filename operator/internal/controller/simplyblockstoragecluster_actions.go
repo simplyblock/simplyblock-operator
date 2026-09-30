@@ -366,9 +366,9 @@ func (r *StorageClusterReconciler) reconcileNodeRecycle(
 			return ctrl.Result{}, nil
 		}
 
-		uuids := make([]string, 0, len(nodes))
-		for _, n := range nodes {
-			uuids = append(uuids, n.UUID)
+		uuids := recycleNodeUUIDs(nodes)
+		if skipped := len(nodes) - len(uuids); skipped > 0 {
+			log.Info("Node recycle: skipping nodes in removal", "count", skipped)
 		}
 		clusterCR.Status.NodeRecycleStatus = &simplyblockv1alpha1.NodeRecycleStatus{
 			PendingNodes:   uuids,
@@ -851,4 +851,19 @@ func (r *StorageClusterReconciler) findStorageNodeSetPod(
 		}
 	}
 	return nil, nil
+}
+
+// recycleNodeUUIDs returns the nodes a node recycle will shut down and
+// restart, in order. A node in the middle of its removal is already down and
+// belongs to the removal: recycling it would shut it down and force-restart it
+// back into service, so it is left out.
+func recycleNodeUUIDs(nodes []utils.NodeStatusResponse) []string {
+	uuids := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		if isNodeInRemoval(n.Status) {
+			continue
+		}
+		uuids = append(uuids, n.UUID)
+	}
+	return uuids
 }

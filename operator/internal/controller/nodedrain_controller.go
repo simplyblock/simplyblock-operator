@@ -1433,7 +1433,9 @@ func findNodeUUID(snCR *simplyblockv1alpha1.StorageNodeSet, hostname string) str
 func findAllNodeUUIDs(snCR *simplyblockv1alpha1.StorageNodeSet, hostname string) []string {
 	var uuids []string
 	for _, n := range snCR.Status.Nodes {
-		if n.Hostname == hostname && n.UUID != "" {
+		// A node in the middle of its removal is already down: a worker drain
+		// has nothing to stop there, and must not shut it down or restart it.
+		if n.Hostname == hostname && n.UUID != "" && !isNodeInRemoval(n.Status) {
 			uuids = append(uuids, n.UUID)
 		}
 	}
