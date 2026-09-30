@@ -85,6 +85,14 @@ func (r regions) u16(off int64) (uint16, bool) {
 	return binary.LittleEndian.Uint16(b), true
 }
 
+func (r regions) u64(off int64) (uint64, bool) {
+	b, ok := r.at(off, 8)
+	if !ok {
+		return 0, false
+	}
+	return binary.LittleEndian.Uint64(b), true
+}
+
 func (r regions) u32(off int64) (uint32, bool) {
 	b, ok := r.at(off, 4)
 	if !ok {
@@ -111,7 +119,7 @@ func detect(r regions) []find {
 var detectors = []func(regions) (find, bool){
 	detectExt, detectXFS, detectLVM2, detectLUKS, detectGPT, detectMBR,
 	detectExFAT, detectFAT, detectBtrfs, detectSwap, detectMDRaid, detectZFS,
-	detectAlceml, detectAlcemlPages,
+	detectAlceml, detectAlcemlPages, detectBcache,
 }
 
 // The storage superblock a storage node writes, at the very start of a device
@@ -119,6 +127,13 @@ var detectors = []func(regions) (find, bool){
 // not read here: what this answers is whose the device is, and the layout
 // behind the magic is the storage node's to change.
 var alcemlMagic = []byte("ALCEML_STORAGE\x00\x00")
+
+// The magic in a bcache superblock, which make-bcache writes at 4096 and which
+// begins twenty-four bytes into it. It is a UUID rather than a word.
+var bcacheMagic = []byte{
+	0xc6, 0x85, 0x73, 0xf6, 0x4e, 0x1a, 0x45, 0xca,
+	0x82, 0x65, 0xf5, 0x7f, 0x48, 0xba, 0x6d, 0x81,
+}
 
 // The header a storage node writes at the start of every page of its grid, and
 // the one it writes for a page it has not written yet. They repeat with the
@@ -229,10 +244,44 @@ func isZero(b []byte) bool {
 	return true
 }
 
+// detectBcache names a device holding a block-layer cache.
+//
+// It is the one format in the catalog whose signature sits behind a zero first
+// block: make-bcache starts its superblock at 4096, so the block the blank rule
+// reads is zero on every bcache device there is. Without this the device is
+// refused only if something else happens to look further, which is not a rule
+// anybody can rely on, and the refusal cannot say what it found.
+//
+// The magic is twenty-four bytes into the superblock, after the checksum, the
+// offset, and the version, so it is at 4120 and not at 4096.
+func detectBcache(r regions) (find, bool) {
+	const off = 4096 + 24
+	if !r.eq(off, bcacheMagic) {
+		return find{}, false
+	}
+	return find{ContentForeign, "bcache", off, fmt.Sprintf("a bcache superblock at %d", off-24)}, true
+}
+
 // detectExt names the exact member of the ext family. The distinction is worth
 // making because a reading that rounded every ext filesystem up to ext4 would
 // disagree with the claim annotation for a volume this driver did not create,
 // and all three mount through the kernel's ext4 driver anyway.
+// extMember names which of the family a superblock belongs to, from the three
+// feature words. They are read apart from detectExt because they outlive the
+// magic: a wiped ext4 is still legibly ext4, and the excision check names it.
+func extMember(r regions) string {
+	compat, _ := r.u32(extSuperblock + 92)
+	incompat, _ := r.u32(extSuperblock + 96)
+	roCompat, _ := r.u32(extSuperblock + 100)
+	switch {
+	case incompat&ext4Incompat != 0 || roCompat&(ext4RoCompat|ext4RoCompat2) != 0:
+		return "ext4"
+	case compat&extCompatHasJournal != 0:
+		return "ext3"
+	}
+	return "ext2"
+}
+
 func detectExt(r regions) (find, bool) {
 	if m, ok := r.u16(extMagicOffset); !ok || m != extMagic {
 		return find{}, false
@@ -241,13 +290,8 @@ func detectExt(r regions) (find, bool) {
 	incompat, _ := r.u32(extSuperblock + 96)
 	roCompat, _ := r.u32(extSuperblock + 100)
 
-	typ := "ext2"
-	switch {
-	case incompat&ext4Incompat != 0 || roCompat&(ext4RoCompat|ext4RoCompat2) != 0:
-		typ = "ext4"
-	case compat&extCompatHasJournal != 0:
-		typ = "ext3"
-	}
+	typ := extMember(r)
+	_, _, _ = compat, incompat, roCompat
 	return find{ContentFilesystem, typ, extMagicOffset,
 		fmt.Sprintf("%s superblock at %d", typ, extSuperblock)}, true
 }

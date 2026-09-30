@@ -20,13 +20,29 @@
 # afterward; the checksums cover the captured bytes and not the manifest, so
 # editing it is safe and leaving it is not.
 #
-# Usage: capture-image.sh [--region <bytes>] <output-dir> [name ...]
+# The third mode runs wipefs -a over each device after the tool wrote it, and
+# captures what a released disk looks like. wipefs erases the signatures libblkid
+# knows and nothing else, which is a few bytes: the point of these images is the
+# residue, the structure the format left behind once the word naming it is gone.
+# They are what the excision checks are read against, and they are named
+# wiped-<format>.
+#
+# --fill puts data on the device before any of that, because an empty filesystem
+# is not what a disk being released looks like. A mountable format is mounted and
+# written to, so the data lands where that filesystem puts it rather than where a
+# script guessed; the others are written past their metadata. Without it a
+# capture says only what mkfs writes, and a head that is mostly zero is then an
+# artifact of the fixture rather than a fact about the device.
+#
+# Usage: capture-image.sh [--region <bytes>] [--wipe] [--fill] <output-dir> [name ...]
 #        capture-image.sh [--region <bytes>] --device <path> <output-dir> <name> [note]
 
 set -euo pipefail
 
 REGION=$((1024 * 1024)) # one mebibyte, the prober's default region size
 DEVICE=
+WIPE=
+FILL=
 
 while [ $# -gt 0 ]; do
     case $1 in
@@ -37,6 +53,14 @@ while [ $# -gt 0 ]; do
     --device)
         DEVICE=${2:?--device needs a path}
         shift 2
+        ;;
+    --wipe)
+        WIPE=1
+        shift
+        ;;
+    --fill)
+        FILL=1
+        shift
         ;;
     *) break ;;
     esac
@@ -84,14 +108,60 @@ attach() {
     echo "$dev"
 }
 
+# fill puts real data on a device that has just been formatted, when --fill is
+# set. A mountable filesystem is mounted and filled to about a third of its size
+# in files of random bytes, which is what puts data where that filesystem
+# actually allocates it. Anything else takes the data at an offset the caller
+# names, past whatever metadata that format keeps at the front.
+#
+# It is deliberately quiet about failing. A format this cannot fill is still
+# worth capturing, and the manifest says whether it was filled.
+fill() {
+    local dev=$1 kind=$2 at=${3:-}
+    [ -n "$FILL" ] || return 0
+
+    if [ "$kind" = offset ]; then
+        # at is a byte offset, so a format whose data area begins inside the
+        # head region is filled there rather than past where anything is read.
+        dd if=/dev/urandom of="$dev" bs=4096 seek=$((at / 4096)) count=64 \
+            conv=notrunc status=none 2>/dev/null
+        return 0
+    fi
+
+    local mnt="$WORK/mnt"
+    mkdir -p "$mnt"
+    mount "$dev" "$mnt" 2>/dev/null || return 0
+    local free_kb count i
+    free_kb=$(df -k --output=avail "$mnt" | tail -1)
+    count=$((free_kb / 3 / 256)) # 256 KiB files, a third of what is free
+    [ "$count" -lt 1 ] && count=1
+    [ "$count" -gt 64 ] && count=64
+    for i in $(seq 1 "$count"); do
+        dd if=/dev/urandom of="$mnt/fill-$i" bs=256K count=1 status=none 2>/dev/null || break
+    done
+    sync
+    umount "$mnt" 2>/dev/null
+}
+
 # capture reads the two regions off dev and writes the fixture directory.
 # tool_version and command are recorded because the ext feature words, and so the
 # family a reading names, depend on which generation of the tool wrote the image.
 capture() {
     local name=$1 dev=$2 tool=$3 tool_version=$4 command=$5 note=${6:-}
-    local dir="$OUT/$name" size block probe
+    local dir size block probe
+    if [ -n "$WIPE" ]; then
+        # What wipefs erased goes into the note, because the whole value of one
+        # of these images is which bytes went and which stayed.
+        local erased
+        erased=$(wipefs -a "$dev" 2>&1 | sed 's#^[^:]*: ##' | tr '\n' ';' | sed 's/;$//')
+        note="wipefs -a reported: ${erased:-nothing to erase}. ${note}"
+        command="${command}, then wipefs -a"
+        name="wiped-${name}"
+    fi
 
+    dir="$OUT/$name"
     mkdir -p "$dir"
+
     blockdev --flushbufs "$dev" 2>/dev/null || true
     size=$(blockdev --getsize64 "$dev")
     block=$(blockdev --getss "$dev")
@@ -122,6 +192,7 @@ capture() {
   "blkid": "$probe",
   "head_sha256": "$(sha256sum <"$dir/head.bin" | cut -d' ' -f1)",
   "tail_sha256": "$(sha256sum <"$dir/tail.bin" | cut -d' ' -f1)",
+  "filled": $([ -n "$FILL" ] && echo true || echo false),
   "note": "$note"
 }
 EOF
@@ -158,6 +229,7 @@ for fs in ext2 ext3 ext4; do
     if want "$fs"; then
         dev=$(attach "$fs" 64)
         "mkfs.$fs" -q -F "$dev" >/dev/null
+        fill "$dev" fs
         capture "$fs" "$dev" "mkfs.$fs" "$(ver mke2fs -V)" "mkfs.$fs -q -F"
     fi
 done
@@ -165,12 +237,14 @@ done
 if want xfs; then
     dev=$(attach xfs 512)
     mkfs.xfs -q -f "$dev" >/dev/null
+    fill "$dev" fs
     capture xfs "$dev" "mkfs.xfs" "$(ver mkfs.xfs -V)" "mkfs.xfs -q -f"
 fi
 
 if want lvm2; then
     dev=$(attach lvm2 64)
     pvcreate -q -f -y "$dev" >/dev/null
+    fill "$dev" offset 2097152
     capture lvm2 "$dev" "pvcreate" "$(ver pvcreate --version)" "pvcreate -q -f -y" \
         "a physical-volume label, the one reading that is a stack layer rather than a filesystem"
 fi
@@ -195,6 +269,7 @@ done
 if want gpt; then
     dev=$(attach gpt 64)
     sgdisk -o -n 1:0:0 -t 1:8300 "$dev" >/dev/null 2>&1
+    fill "$dev" offset 1048576
     capture gpt "$dev" "sgdisk" "$(ver sgdisk --version)" "sgdisk -o -n 1:0:0 -t 1:8300" \
         "carries a protective MBR at LBA 0 as well, which is why GPT is evaluated first"
 fi
@@ -202,6 +277,7 @@ fi
 if want gpt-4kn; then
     dev=$(attach gpt-4kn 64 4096)
     sgdisk -o -n 1:0:0 -t 1:8300 "$dev" >/dev/null 2>&1
+    fill "$dev" offset 1048576
     capture gpt-4kn "$dev" "sgdisk" "$(ver sgdisk --version)" "sgdisk -o -n 1:0:0 -t 1:8300" \
         "4Kn: the GPT header is at offset 4096, not 512"
 fi
@@ -209,6 +285,7 @@ fi
 if want mbr; then
     dev=$(attach mbr 64)
     printf 'o\nn\np\n1\n\n\nw\n' | fdisk "$dev" >/dev/null 2>&1 || true
+    fill "$dev" offset 1048576
     capture mbr "$dev" "fdisk" "$(ver fdisk --version)" "fdisk: o, n, p, 1, defaults, w"
 fi
 
@@ -217,6 +294,7 @@ for spec in "fat12 16 12" "fat16 64 16" "fat32 512 32"; do
     if want "$name"; then
         dev=$(attach "$name" "$size")
         mkfs.vfat -F "$bits" "$dev" >/dev/null
+        fill "$dev" fs
         capture "$name" "$dev" "mkfs.vfat" "$(ver mkfs.vfat --help)" "mkfs.vfat -F $bits"
     fi
 done
@@ -224,18 +302,21 @@ done
 if want exfat; then
     dev=$(attach exfat 64)
     mkfs.exfat "$dev" >/dev/null 2>&1
+    fill "$dev" fs
     capture exfat "$dev" "mkfs.exfat" "$(ver mkfs.exfat --version)" "mkfs.exfat"
 fi
 
 if want btrfs; then
     dev=$(attach btrfs 256)
     mkfs.btrfs -q -f "$dev" >/dev/null
+    fill "$dev" fs
     capture btrfs "$dev" "mkfs.btrfs" "$(ver mkfs.btrfs --version)" "mkfs.btrfs -q -f"
 fi
 
 if want swap; then
     dev=$(attach swap 64)
     mkswap "$dev" >/dev/null
+    fill "$dev" offset 2097152
     capture swap "$dev" "mkswap" "$(ver mkswap --version)" "mkswap" \
         "the signature sits at page size minus ten, so it moves with the page size"
 fi
@@ -247,6 +328,7 @@ for meta in 0.90 1.0 1.1 1.2; do
         mdadm --create --run --quiet "/dev/md/capture-$name" --level=1 \
             --raid-devices=2 --metadata="$meta" "$dev" missing >/dev/null 2>&1 || true
         mdadm --stop "/dev/md/capture-$name" >/dev/null 2>&1 || true
+        fill "$dev" offset 2097152
         capture "$name" "$dev" "mdadm" "$(ver mdadm --version)" \
             "mdadm --create --level=1 --metadata=$meta <dev> missing" \
             "metadata $meta: 0.90 and 1.0 put the superblock in the tail region, at different offsets, and 1.1 and 1.2 put it in the head"
@@ -259,6 +341,59 @@ if want zfs; then
         zpool export "capture-$$" >/dev/null 2>&1 || true
     capture zfs "$dev" "zpool" "$(ver zpool version)" "zpool create -f <pool> <dev>" \
         "vdev labels L0 and L1 in the head region, L2 and L3 in the tail"
+fi
+
+# The block-layer caches. Only one of the three writes a signature a whole disk
+# carries, and the other two are captured to show that rather than to assert it:
+# lvmcache is LVM, and dm-cache lives on devices the candidate rules refuse
+# before anything reads them.
+if want bcache; then
+    dev=$(attach bcache 64)
+    make-bcache -B "$dev" >/dev/null 2>&1
+    fill "$dev" offset 8192
+    capture bcache "$dev" "make-bcache" "$(ver make-bcache --version)" "make-bcache -B" \
+        "a backing device: the superblock is at 4096 and the first block is zero, which is what makes a rule that reads only the first block unsafe"
+fi
+
+if want lvmcache; then
+    dev=$(attach lvmcache 128)
+    pvcreate -q -f -y "$dev" >/dev/null
+    vgcreate -q -f -y "capture$$" "$dev" >/dev/null
+    lvcreate -q -y -L 32M -n origin "capture$$" >/dev/null
+    lvcreate -q -y -L 16M -n fast "capture$$" >/dev/null
+    lvconvert -q -y --type cache --cachevol fast "capture$$/origin" >/dev/null 2>&1 || true
+    capture lvmcache "$dev" "lvconvert --type cache" "$(ver lvconvert --version)" \
+        "pvcreate, vgcreate, lvcreate origin and fast, lvconvert --type cache --cachevol" \
+        "a whole disk holding an lvmcache: the disk is an LVM physical volume and reads as one, because the cache is metadata inside the group rather than anything on the disk"
+    vgchange -q -an "capture$$" >/dev/null 2>&1 || true
+    vgremove -q -f "capture$$" >/dev/null 2>&1 || true
+fi
+
+if want dm-cache-metadata; then
+    dev=$(attach dm-cache-metadata 16)
+    origin=$(attach dm-cache-origin 64)
+    fast=$(attach dm-cache-fast 32)
+    dd if=/dev/zero of="$dev" bs=4096 count=1 status=none
+    blocks=$(blockdev --getsz "$origin")
+    dmsetup create "capture$$" --table \
+        "0 $blocks cache $dev $fast $origin 128 1 writeback default 0" >/dev/null 2>&1 || true
+    dmsetup remove "capture$$" >/dev/null 2>&1 || true
+    capture dm-cache-metadata "$dev" "dmsetup create ... cache" "$(ver dmsetup --version)" \
+        "dmsetup create <name> --table '0 <sz> cache <meta> <fast> <origin> 128 1 writeback default 0'" \
+        "the metadata device of a raw dm-cache, whose superblock is at offset 0: the origin and the fast device carry no dm-cache signature at all, and all three are logical volumes or mapper nodes in ordinary use"
+fi
+
+# A disk somebody wiped that wipefs had nothing to erase on. Every format the
+# catalog knows is captured wiped by --wipe; this is the other case, where the
+# tool reported success and removed no bytes at all, so nothing on the device
+# says it was given up.
+if want wiped-random; then
+    dev=$(attach wiped-random 8)
+    dd if=/dev/urandom of="$dev" bs=1M count=8 status=none
+    wipefs -a "$dev" >/dev/null 2>&1 || true
+    capture wiped-random "$dev" "dd and wipefs" "$(ver wipefs --version)" \
+        "dd if=/dev/urandom, then wipefs -a" \
+        "eight megabytes of random bytes that wipefs reported clean: it had no signature to remove and removed none, and every byte of the data is still there"
 fi
 
 echo "done"

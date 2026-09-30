@@ -1,0 +1,16 @@
+{
+  "name": "wiped-mdraid-12",
+  "tool": "mdadm",
+  "tool_version": "mdadm - v4.4 - 2024-11-07 - Debian 4.4-11",
+  "command": "mdadm --create --level=1 --metadata=1.2 <dev> missing, then wipefs -a",
+  "device_size": 67108864,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-30T16:15:50Z",
+  "captured_on": "Debian GNU/Linux 13 (trixie), kernel 6.12.0-142.el10.x86_64",
+  "blkid": "",
+  "head_sha256": "33777fbe99eb1296a7ec8758c83f1fe554ab1d74fccdbe7fe2df7cd2f3bbf2de",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "filled": true,
+  "note": "wipefs -a reported: 4 bytes were erased at offset 0x00001000 (linux_raid_member): fc 4e 2b a9. metadata 1.2: 0.90 and 1.0 put the superblock in the tail region, at different offsets, and 1.1 and 1.2 put it in the head"
+}

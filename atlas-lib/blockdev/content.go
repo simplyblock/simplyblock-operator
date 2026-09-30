@@ -53,6 +53,21 @@ const (
 	// format this driver does not create, or bytes that match nothing known.
 	ContentForeign
 
+	// ContentReleased means the device carries a format the catalog knows and
+	// the signature naming it has been erased where that format keeps it.
+	//
+	// It is a reading about intent rather than about bytes, and it is the only
+	// one here that is. Erasing the signature is what wipefs does and the whole
+	// of what it does: root, one device named on the command line, a few bytes
+	// gone and everything else left. A device in that state was given up on
+	// purpose, and refusing it afterward overrules a decision somebody made
+	// deliberately, with no way in this API to overrule back.
+	//
+	// It is separate from ContentBlank because the device is not blank. What is
+	// on it is still on it, and a caller that formats this is destroying data
+	// that the reading says was abandoned rather than data nobody claimed.
+	ContentReleased
+
 	// ContentSimplyblock means the device carries this product's own storage
 	// superblock, written by a storage node rather than by any formatting tool.
 	//
@@ -77,6 +92,8 @@ func (c Content) String() string {
 		return "StackLayer"
 	case ContentForeign:
 		return "Foreign"
+	case ContentReleased:
+		return "Released"
 	case ContentSimplyblock:
 		return "Simplyblock"
 	case ContentUnknown:
@@ -200,6 +217,14 @@ func (p *Prober) Read(ctx context.Context, dev Device) (Reading, error) {
 		return Reading{Content: best.content, Type: best.typ, Detail: detailOf(finds)}, nil
 	}
 
+	// Nothing the catalog knows is here under its own name. Before deciding
+	// anything from the bytes, ask whether one of those names was taken out:
+	// a format still legible from its structure, with the word naming it gone
+	// from the one offset it lives at, is a device somebody released.
+	if f, ok := detectExcised(regions); ok {
+		return Reading{Content: f.content, Type: f.typ, Detail: f.detail}, nil
+	}
+
 	// Nothing recognized. The zero test runs last and only here, after every
 	// detector has been given both regions: a format the catalog knows is named
 	// from its signature wherever that signature lives, and md metadata 1.0
@@ -219,12 +244,13 @@ func (p *Prober) Read(ctx context.Context, dev Device) (Reading, error) {
 		}, nil
 	}
 
-	// The count is what was read and not what was asked for: a device smaller
-	// than two regions is read whole into head, so a region-sized number would
-	// claim bytes past the end of the device. This sentence is the evidence an
-	// irreversible write rests on, so it states the bytes that were examined.
+	// The count is what was examined and not what was read: the whole head is
+	// read and every detector sees it, and the blank rule then decides on the
+	// first block. This sentence is the evidence an irreversible write rests on,
+	// so it states the bytes it rests on and not the bytes that went past.
 	return Reading{Content: ContentBlank, Detail: fmt.Sprintf(
-		"the first %d bytes were read and are zero, and no signature matched", len(regions.head))}, nil
+		"the first %d bytes are zero, and no signature matched anywhere in the %d bytes read",
+		blankSpan(regions), len(regions.head))}, nil
 }
 
 // read pulls the two regions off the device. A device smaller than two regions
@@ -305,16 +331,46 @@ func (p *Prober) readAt(ctx context.Context, r Reader, off, n int64) ([]byte, er
 	return buf, nil
 }
 
-// firstNonZero reports the absolute offset of the first byte of the head region
-// that is not zero.
+// BlankHeadSize is how much of the head has to be zero for a device nothing in
+// the catalog matched to count as released.
+//
+// It is one block, because one block is what a release costs. Zeroing a 1.5 TB
+// disk end to end is hours, so nobody does it; what an administrator does is
+// wipefs -a, which erases the signature and nothing else, or dd over the front
+// of the disk, and how far that dd reaches is whatever they typed. A rule that
+// asks for a megabyte is asking them to have guessed the same megabyte.
+//
+// Destroying the signature is the gesture. wipefs exists for exactly this and
+// says so, and a device it has been run on is a device somebody gave up on
+// purpose: root, explicit, one device named on the command line. Refusing it
+// afterward overrules that, and there is no way in this API to overrule back.
+//
+// What it costs is stated rather than hidden. The catalog is now the whole of
+// the protection for anything past the first block: a format nobody wrote a
+// detector for, whose first block happens to be zero, reads as released. Every
+// format captured under testdata/images is covered, and the fixtures are there
+// so that adding one is a test rather than an argument.
+const BlankHeadSize = 4096
+
+// firstNonZero reports the absolute offset of the first byte that is not zero,
+// within the span the blank rule reads.
 //
 // The tail is deliberately not scanned. It is still read, and every detector
 // still sees it, so a signature that lives only there is still found; what it no
-// longer does is decide whether an unrecognized device is blank. A device
-// smaller than two regions is read whole into head, so for one of those this
-// still covers every byte.
+// longer does is decide whether an unrecognized device is blank.
+//
+// A device smaller than two regions is read whole into head, and then every byte
+// of it is scanned rather than the first block. Not because such a device is
+// expected, since a partition, a mapper node, and a loop device are all refused
+// as NotAWholeDisk before anything reads them, but because the bytes are in hand
+// and calling a device released while holding the bytes that say otherwise is a
+// different mistake from not having looked.
 func firstNonZero(r regions) (int64, bool) {
-	if i := bytes.IndexFunc(r.head, nonZero); i >= 0 {
+	span := r.head
+	if int64(len(span)) < r.size && int64(len(span)) > BlankHeadSize {
+		span = span[:BlankHeadSize]
+	}
+	if i := bytes.IndexFunc(span, nonZero); i >= 0 {
 		return int64(i), true
 	}
 	return 0, false
@@ -353,4 +409,12 @@ func itoa(i int) string {
 		b[pos] = '-'
 	}
 	return string(b[pos:])
+}
+
+// blankSpan is how many bytes the blank rule examined, for the reading to say.
+func blankSpan(r regions) int64 {
+	if int64(len(r.head)) < r.size {
+		return min(BlankHeadSize, int64(len(r.head)))
+	}
+	return int64(len(r.head))
 }

@@ -306,6 +306,16 @@ func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage) Candidat
 		c.reject(ReasonNotBlank, reading.Detail)
 	case ContentFilesystem, ContentStackLayer:
 		c.reject(ReasonNotBlank, reading.Detail)
+	case ContentReleased:
+		// Not a rejection. The signature was erased where the format keeps it,
+		// which is what wipefs does and what an administrator runs it for, so
+		// the device was handed over on purpose. The reading carries which
+		// format it was and where the name went, so a caller taking it can say
+		// what it is taking.
+		//
+		// It is written out rather than left to fall through, for the reason
+		// below: a content this package adds later must not become available by
+		// default the way this one would have.
 	case ContentSimplyblock:
 		// Not a rejection, and the reading is what says so: a device a storage
 		// node is driving is bound to a userspace driver, which takes the block
