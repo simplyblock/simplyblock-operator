@@ -1210,14 +1210,19 @@ func (r *StorageNodeOpsReconciler) fdRemovalBalanceCheck(
 // isNodeStopped reports whether a node's SPDK is no longer serving, which is
 // what the drain waits for before it moves anything.
 //
-// Several statuses mean it: the shutdown's own in_shutdown/offline, and the
+// Several statuses mean it: the shutdown's landing status offline, and the
 // removal statuses a re-driven drain may already have reached. Waiting for one
 // exact status would hang whenever the node arrived at a different one -- and
 // the shutdown's landing status is not something this controller chooses.
+//
+// in_shutdown is deliberately not one of them: it means the shutdown is still
+// running, and that shutdown ends by writing offline. Advancing on it started
+// the device step under a live shutdown, whose offline write then undid the
+// step's migrating_devices stamp, and the rebuild of the node's own distribs
+// queued on the node itself for ever (2026-09-30, runs 19 and 24).
 func isNodeStopped(status string) bool {
 	switch status {
 	case utils.NodeStatusOffline,
-		utils.NodeStatusInShutdown,
 		nodeStatusMigratingDevices,
 		nodeStatusMigratingLvols,
 		nodeStatusInRemoval,
@@ -1243,6 +1248,16 @@ func (r *StorageNodeOpsReconciler) drainShutdown(
 		currentStatus, err := getNodeBackendStatus(ctx, apiClient, clusterUUID, nodeUUID)
 		if err != nil {
 			log.Error(err, "drain: could not read node status before suspend, retrying")
+			return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
+		}
+		if currentStatus == utils.NodeStatusInShutdown {
+			// A shutdown is already running; asking for another would only
+			// race it. Wait for it to land like one we started ourselves.
+			log.Info("drain: node already shutting down, waiting for it without POST")
+			patch := client.MergeFrom(ops.DeepCopy())
+			ops.Status.Triggered = true
+			ops.Status.Message = "node is already shutting down, waiting for it to stop"
+			_ = r.Status().Patch(ctx, ops, patch)
 			return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 		}
 		if isNodeStopped(currentStatus) {
