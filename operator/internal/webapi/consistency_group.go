@@ -9,11 +9,16 @@ import (
 	"net/http"
 )
 
-// ConsistencyGroupInfo is a group summary (design §10).
+// ConsistencyGroupInfo is a group summary (design §10). LvsName and NodeID carry
+// the group's pinned placement, which is how a group drill matches the group to
+// its replication policy (the policy DTO carries the group's placement, not its
+// id).
 type ConsistencyGroupInfo struct {
 	UUID        string `json:"id"`
 	Name        string `json:"name"`
 	MemberCount int    `json:"member_count"`
+	LvsName     string `json:"lvs_name"`
+	NodeID      string `json:"node_id"`
 }
 
 // ConsistencyGroupMember is one current member of a group (design §10 /members).

@@ -40,6 +40,7 @@ import (
 	workv1 "open-cluster-management.io/api/work/v1"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -203,10 +204,8 @@ func (r *TestFailoverReconciler) advanceDrill(ctx context.Context, tf *simplyblo
 // is non-blocking: each view is created once and its result awaited across
 // reconciles, so a restart re-enters rather than re-creates.
 func (r *TestFailoverReconciler) resolveSource(ctx context.Context, tf *simplyblockv1alpha2.TestFailover) (ctrl.Result, error) {
-	if tf.Spec.Scope != simplyblockv1alpha2.TestFailoverScopeVolume {
-		// Group source resolution (the member volumes of the consistency group)
-		// lands with the group path in a later slice.
-		return r.hold(ctx, tf, "group source resolution is not yet implemented")
+	if tf.Spec.Scope == simplyblockv1alpha2.TestFailoverScopeGroup {
+		return r.resolveSourceGroup(ctx, tf)
 	}
 
 	pvc, ready, err := r.projectedSource(ctx, tf, "src-pvc", "persistentvolumeclaims", tf.Spec.SourceRef, tf.Spec.SourceNamespace)
@@ -250,6 +249,120 @@ func (r *TestFailoverReconciler) resolveSource(ctx context.Context, tf *simplybl
 	r.Recorder.Eventf(tf, nil, corev1.EventTypeNormal, "SourceResolved", "SourceResolved",
 		"resolved source volume %s on cluster %s", handle, tf.Spec.SourceCluster)
 	return ctrl.Result{Requeue: true}, nil
+}
+
+// resolveSourceGroup resolves a consistency group's members into one clone slot
+// each, then advances to ResolvingPoint. The members and their K8s identity come
+// from the source cluster's backend (a group member carries only an lvol id);
+// the shared class metadata (fsType and volumeAttributes, identical across
+// members of one StorageClass) is read once from a representative member's PV
+// through a ManagedClusterView. It is non-blocking: the representative views are
+// created once and awaited across reconciles.
+func (r *TestFailoverReconciler) resolveSourceGroup(ctx context.Context, tf *simplyblockv1alpha2.TestFailover) (ctrl.Result, error) {
+	srcUUID, err := r.resolveGroupSourceUUID(ctx, tf)
+	if err != nil {
+		return r.hold(ctx, tf, "resolving the source cluster's backend UUID: "+err.Error())
+	}
+
+	api := webapi.NewClient()
+	if secret, secErr := r.clusterSecret(ctx, tf.Namespace, tf.Spec.SourceCluster); secErr == nil && secret != "" {
+		ctx = webapi.WithBearerToken(ctx, secret)
+	}
+
+	group, err := api.GetConsistencyGroupByName(ctx, srcUUID, tf.Spec.SourceRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if group == nil {
+		return r.fail(ctx, tf, "consistency group "+tf.Spec.SourceRef+" not found on cluster "+tf.Spec.SourceCluster)
+	}
+	memberIDs, err := api.GetConsistencyGroupMembers(ctx, srcUUID, group.UUID)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(memberIDs) == 0 {
+		return r.fail(ctx, tf, "consistency group "+tf.Spec.SourceRef+" has no members")
+	}
+	memberVols, err := api.ResolveMemberVolumes(ctx, srcUUID, memberIDs)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(memberVols) != len(memberIDs) {
+		return r.hold(ctx, tf, fmt.Sprintf("resolved %d of %d group members' source volumes; retrying", len(memberVols), len(memberIDs)))
+	}
+
+	// One member's PV carries the class metadata every member shares, so a single
+	// projection serves the whole group.
+	rep := memberVols[memberIDs[0]]
+	pvc, ready, err := r.projectedSource(ctx, tf, "src-pvc", "persistentvolumeclaims", rep.PVCName, rep.Namespace)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !ready {
+		return r.hold(ctx, tf, "waiting for the source PVC projection for group member "+rep.PVCName)
+	}
+	pvName, _, _ := unstructured.NestedString(pvc, "spec", "volumeName")
+	if pvName == "" {
+		return r.fail(ctx, tf, "group member PVC "+rep.PVCName+" is not bound to a volume")
+	}
+	pv, ready, err := r.projectedSource(ctx, tf, "src-pv", "persistentvolumes", pvName, "")
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !ready {
+		return r.hold(ctx, tf, "waiting for the source PV projection for group member "+rep.PVCName)
+	}
+	srcAttrs, _, _ := unstructured.NestedStringMap(pv, "spec", "csi", "volumeAttributes")
+	bubbleVC := bubbleVolumeContext(srcAttrs)
+	fsType, _, _ := unstructured.NestedString(pv, "spec", "csi", "fsType")
+
+	clones := make([]simplyblockv1alpha2.TestFailoverClone, 0, len(memberIDs))
+	for _, id := range memberIDs {
+		v := memberVols[id]
+		clones = append(clones, simplyblockv1alpha2.TestFailoverClone{
+			SourceRef:           v.PVCName,
+			SourceHandle:        srcUUID + ":" + v.PoolID + ":" + v.LvolID,
+			SourceFSType:        fsType,
+			SourceVolumeContext: bubbleVC,
+			SizeBytes:           v.Size,
+		})
+	}
+
+	if err := r.transitionTo(ctx, tf, simplyblockv1alpha2.TestFailoverStepResolvingPoint, func(s *simplyblockv1alpha2.TestFailoverStatus) {
+		s.Clones = clones
+		s.Message = fmt.Sprintf("resolved the consistency group's %d members; resolving the recovery point", len(clones))
+	}); err != nil {
+		return ctrl.Result{}, err
+	}
+	r.Recorder.Eventf(tf, nil, corev1.EventTypeNormal, "SourceResolved", "SourceResolved",
+		"resolved consistency group %s (%d members) on cluster %s", tf.Spec.SourceRef, len(clones), tf.Spec.SourceCluster)
+	return ctrl.Result{Requeue: true}, nil
+}
+
+// resolveGroupSourceUUID returns the backend UUID of the source cluster. It
+// prefers the canonical resolution (a raw UUID, or a local StorageCluster named
+// like the cluster), and falls back to the sole local StorageCluster when the
+// hub is colocated on the source cluster, where the OCM cluster name does not
+// match the StorageCluster name.
+func (r *TestFailoverReconciler) resolveGroupSourceUUID(ctx context.Context, tf *simplyblockv1alpha2.TestFailover) (string, error) {
+	if uuid, err := utils.ResolveClusterUUID(ctx, r.Client, tf.Namespace, tf.Spec.SourceCluster); err == nil && uuid != "" {
+		return uuid, nil
+	}
+	var clusters simplyblockv1alpha2.StorageClusterList
+	if err := r.List(ctx, &clusters, client.InNamespace(tf.Namespace)); err != nil {
+		return "", err
+	}
+	uuid, ready := "", 0
+	for i := range clusters.Items {
+		if clusters.Items[i].Status.UUID != "" {
+			uuid = clusters.Items[i].Status.UUID
+			ready++
+		}
+	}
+	if ready == 1 {
+		return uuid, nil
+	}
+	return "", fmt.Errorf("no unique backend UUID for source cluster %q (%d local Storage Clusters with a UUID)", tf.Spec.SourceCluster, ready)
 }
 
 // projectedSource ensures a ManagedClusterView for one source object exists on
@@ -424,18 +537,21 @@ func (r *TestFailoverReconciler) reconcileDeletion(ctx context.Context, tf *simp
 		return r.reclaimPending(ctx, tf, "remove the bubble placement", err)
 	}
 
-	if len(tf.Status.Clones) > 0 {
-		clone := tf.Status.Clones[0]
+	// Reclaim every clone slot (one for a volume drill, one per member for a
+	// group drill). Each reclaim tolerates a not-found, so a re-run after a
+	// partial teardown is safe.
+	for i := range tf.Status.Clones {
+		clone := tf.Status.Clones[i]
 		if clone.CloneID != "" {
 			if err := r.reclaimClone(ctx, tf, clone.CloneID); err != nil {
-				return r.reclaimPending(ctx, tf, "reclaim the clone", err)
+				return r.reclaimPending(ctx, tf, "reclaim the clone for "+clone.SourceRef, err)
 			}
 		}
 		// Only a snapshot the drill took is the drill's to delete; a replicated or
 		// pinned one is left alone.
 		if clone.SnapshotTaken && clone.SnapshotID != "" {
 			if err := r.deleteDrillSnapshot(ctx, tf, clone.SnapshotID); err != nil {
-				return r.reclaimPending(ctx, tf, "delete the drill snapshot", err)
+				return r.reclaimPending(ctx, tf, "delete the drill snapshot for "+clone.SourceRef, err)
 			}
 		}
 	}
@@ -592,6 +708,9 @@ type replicatedSnapshotResult struct {
 // uses the latest replicated snapshot already there. It records the point as a
 // CSI snapshot handle so Cloning is self-contained.
 func (r *TestFailoverReconciler) resolvePoint(ctx context.Context, tf *simplyblockv1alpha2.TestFailover) (ctrl.Result, error) {
+	if tf.Spec.Scope == simplyblockv1alpha2.TestFailoverScopeGroup {
+		return r.resolvePointGroup(ctx, tf)
+	}
 	if len(tf.Status.Clones) == 0 || tf.Status.Clones[0].SourceHandle == "" {
 		return r.fail(ctx, tf, "internal: the source was not resolved before ResolvingPoint")
 	}
@@ -659,6 +778,73 @@ func (r *TestFailoverReconciler) resolvePoint(ctx context.Context, tf *simplyblo
 	return ctrl.Result{Requeue: true}, nil
 }
 
+// resolvePointGroup resolves the group's one group-consistent recovery point on
+// the target and records one snapshot handle per clone slot, then advances to
+// Cloning. The point comes from the group's replication policy's latest
+// generation, which the control plane returns only when every member has a
+// snapshot at the same generation, so the recovered set is crash-consistent.
+func (r *TestFailoverReconciler) resolvePointGroup(ctx context.Context, tf *simplyblockv1alpha2.TestFailover) (ctrl.Result, error) {
+	if len(tf.Status.Clones) == 0 {
+		return r.fail(ctx, tf, "internal: the group source was not resolved before ResolvingPoint")
+	}
+	srcUUID, err := r.resolveGroupSourceUUID(ctx, tf)
+	if err != nil {
+		return r.hold(ctx, tf, "resolving the source cluster's backend UUID: "+err.Error())
+	}
+
+	api := webapi.NewClient()
+	if secret, secErr := r.clusterSecret(ctx, tf.Namespace, tf.Spec.SourceCluster); secErr == nil && secret != "" {
+		ctx = webapi.WithBearerToken(ctx, secret)
+	}
+
+	group, err := api.GetConsistencyGroupByName(ctx, srcUUID, tf.Spec.SourceRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if group == nil {
+		return r.fail(ctx, tf, "consistency group "+tf.Spec.SourceRef+" not found on cluster "+tf.Spec.SourceCluster)
+	}
+	policyID, err := api.ResolveGroupPolicyID(ctx, srcUUID, group.LvsName, group.NodeID)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if policyID == "" {
+		return r.fail(ctx, tf, "no consistency-group replication policy found for group "+tf.Spec.SourceRef)
+	}
+
+	groupSeq, members, found, err := api.LatestReplicatedGeneration(ctx, srcUUID, policyID)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !found {
+		return r.fail(ctx, tf, "no replicated generation on the target for group "+tf.Spec.SourceRef+" yet")
+	}
+	if len(members) != len(tf.Status.Clones) {
+		return r.fail(ctx, tf, fmt.Sprintf("the group generation has %d members but %d were resolved; group membership changed mid-drill", len(members), len(tf.Status.Clones)))
+	}
+
+	if err := r.transitionTo(ctx, tf, simplyblockv1alpha2.TestFailoverStepCloning, func(s *simplyblockv1alpha2.TestFailoverStatus) {
+		// Every member is at one generation, so any one-to-one assignment of the
+		// generation's snapshots to the clone slots yields a crash-consistent set;
+		// a precise source-to-target mapping is a later refinement.
+		for i := range members {
+			s.Clones[i].SnapshotID = members[i].ClusterID + ":" + members[i].PoolID + ":" + members[i].SnapshotID
+			s.Clones[i].SnapshotTaken = false
+		}
+		if s.Report == nil {
+			s.Report = &simplyblockv1alpha2.TestFailoverReport{}
+		}
+		s.Report.BubbleCluster = tf.Spec.BubbleCluster
+		s.Report.RecoveryPoint = fmt.Sprintf("generation %d", groupSeq)
+		s.Message = fmt.Sprintf("resolved the group-consistent point (generation %d); cloning %d members", groupSeq, len(members))
+	}); err != nil {
+		return ctrl.Result{}, err
+	}
+	r.Recorder.Eventf(tf, nil, corev1.EventTypeNormal, "RecoveryPointResolved", "RecoveryPointResolved",
+		"group-consistent generation %d on cluster %s (%d members)", groupSeq, tf.Spec.BubbleCluster, len(members))
+	return ctrl.Result{Requeue: true}, nil
+}
+
 // ensureSnapshot returns the id of the source volume's snapshot named name,
 // taking it if it does not exist yet. Ask-then-act: it lists the pool's snapshots
 // first, so a retry after a crash between create and status-write reuses the
@@ -715,12 +901,8 @@ func (r *TestFailoverReconciler) latestReplicatedSnapshot(ctx context.Context, a
 // the recovery cluster's backend and advances to Placing. The clone is built on
 // the same backend the point lives on, so no data crosses a cluster boundary.
 func (r *TestFailoverReconciler) cloneRecoveryPoint(ctx context.Context, tf *simplyblockv1alpha2.TestFailover) (ctrl.Result, error) {
-	if len(tf.Status.Clones) == 0 || tf.Status.Clones[0].SnapshotID == "" {
-		return r.fail(ctx, tf, "internal: the recovery point was not resolved before Cloning")
-	}
-	snapCluster, snapPool, snapUUID, ok := splitHandle(tf.Status.Clones[0].SnapshotID)
-	if !ok {
-		return r.fail(ctx, tf, "recovery point handle is malformed: "+tf.Status.Clones[0].SnapshotID)
+	if len(tf.Status.Clones) == 0 {
+		return r.fail(ctx, tf, "internal: no recovery point was resolved before Cloning")
 	}
 
 	apiClient := webapi.NewClient()
@@ -728,23 +910,45 @@ func (r *TestFailoverReconciler) cloneRecoveryPoint(ctx context.Context, tf *sim
 		ctx = webapi.WithBearerToken(ctx, secret)
 	}
 
-	cloneUUID, sizeBytes, err := r.ensureClone(ctx, apiClient, snapCluster, snapPool, snapUUID, testFailoverCloneName(tf))
-	if err != nil {
-		return ctrl.Result{}, err
+	// One clone per slot, on the backend the point lives on, so no data crosses a
+	// cluster boundary. ensureClone is idempotent, so re-entry reuses any clone
+	// already built. A volume drill has one slot; a group drill has one per member.
+	handles := make([]string, len(tf.Status.Clones))
+	sizes := make([]int64, len(tf.Status.Clones))
+	for i := range tf.Status.Clones {
+		c := tf.Status.Clones[i]
+		if c.SnapshotID == "" {
+			return r.fail(ctx, tf, "internal: the recovery point was not resolved for member "+c.SourceRef)
+		}
+		snapCluster, snapPool, snapUUID, ok := splitHandle(c.SnapshotID)
+		if !ok {
+			return r.fail(ctx, tf, "recovery point handle is malformed: "+c.SnapshotID)
+		}
+		name := testFailoverCloneName(tf)
+		if tf.Spec.Scope == simplyblockv1alpha2.TestFailoverScopeGroup {
+			name = testFailoverMemberName(tf, c.SourceRef, "clone")
+		}
+		cloneUUID, sizeBytes, err := r.ensureClone(ctx, apiClient, snapCluster, snapPool, snapUUID, name)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		handles[i] = snapCluster + ":" + snapPool + ":" + cloneUUID
+		sizes[i] = sizeBytes
 	}
-	cloneHandle := snapCluster + ":" + snapPool + ":" + cloneUUID
 
 	if err := r.transitionTo(ctx, tf, simplyblockv1alpha2.TestFailoverStepPlacing, func(s *simplyblockv1alpha2.TestFailoverStatus) {
-		s.Clones[0].CloneID = cloneHandle
-		if sizeBytes > 0 {
-			s.Clones[0].SizeBytes = sizeBytes
+		for i := range s.Clones {
+			s.Clones[i].CloneID = handles[i]
+			if sizes[i] > 0 {
+				s.Clones[i].SizeBytes = sizes[i]
+			}
 		}
-		s.Message = "cloned the recovery point; placing the bubble PVC on " + tf.Spec.BubbleCluster
+		s.Message = fmt.Sprintf("cloned %d recovery point(s); placing on %s", len(s.Clones), tf.Spec.BubbleCluster)
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
 	r.Recorder.Eventf(tf, nil, corev1.EventTypeNormal, "CloneBuilt", "CloneBuilt",
-		"clone %s on cluster %s, source untouched", cloneUUID, snapCluster)
+		"cloned %d recovery point(s) on cluster %s, source untouched", len(tf.Status.Clones), tf.Spec.BubbleCluster)
 	return ctrl.Result{Requeue: true}, nil
 }
 
@@ -811,8 +1015,8 @@ func (r *TestFailoverReconciler) placeBubble(ctx context.Context, tf *simplybloc
 		return ctrl.Result{}, err
 	}
 
-	if !bubblePVCBound(&mw) {
-		return r.hold(ctx, tf, "waiting for the bubble PVC to bind on cluster "+tf.Spec.BubbleCluster)
+	if bound := boundBubblePVCs(&mw); bound < len(tf.Status.Clones) {
+		return r.hold(ctx, tf, fmt.Sprintf("waiting for the bubble PVCs to bind on cluster %s (%d of %d bound)", tf.Spec.BubbleCluster, bound, len(tf.Status.Clones)))
 	}
 
 	// The non-disruptiveness guard: the drill only ever read the source, so it
@@ -892,57 +1096,83 @@ func bubbleVolumeContext(src map[string]string) map[string]string {
 // recovery cluster, with a feedback rule that reports the PVC's bind phase back to
 // the hub.
 func (r *TestFailoverReconciler) bubbleManifestWork(tf *simplyblockv1alpha2.TestFailover) (*workv1.ManifestWork, error) {
-	clone := tf.Status.Clones[0]
-	pvName := testFailoverPVName(tf)
-	pvcName := tf.Spec.SourceRef
 	ns := tf.Spec.BubbleNamespace
 	labels := map[string]string{testFailoverIDLabel: string(tf.UID)}
 	scName := ""
-	capacity := *resource.NewQuantity(clone.SizeBytes, resource.BinarySI)
+	group := tf.Spec.Scope == simplyblockv1alpha2.TestFailoverScopeGroup
 
 	namespace := &corev1.Namespace{
 		TypeMeta:   metav1.TypeMeta{Kind: "Namespace", APIVersion: "v1"},
 		ObjectMeta: metav1.ObjectMeta{Name: ns, Labels: labels},
 	}
-	pv := &corev1.PersistentVolume{
-		TypeMeta:   metav1.TypeMeta{Kind: "PersistentVolume", APIVersion: "v1"},
-		ObjectMeta: metav1.ObjectMeta{Name: pvName, Labels: labels},
-		Spec: corev1.PersistentVolumeSpec{
-			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: capacity},
-			AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
-			StorageClassName:              scName,
-			ClaimRef: &corev1.ObjectReference{
-				Kind: "PersistentVolumeClaim", APIVersion: "v1", Namespace: ns, Name: pvcName,
-			},
-			PersistentVolumeSource: corev1.PersistentVolumeSource{
-				CSI: &corev1.CSIPersistentVolumeSource{
-					Driver:           csiDriverName,
-					VolumeHandle:     clone.CloneID,
-					FSType:           clone.SourceFSType,
-					VolumeAttributes: clone.SourceVolumeContext,
+	manifests := []workv1.Manifest{}
+	raw, err := json.Marshal(namespace)
+	if err != nil {
+		return nil, fmt.Errorf("marshal bubble namespace: %w", err)
+	}
+	manifests = append(manifests, workv1.Manifest{RawExtension: runtime.RawExtension{Raw: raw}})
+
+	// One PV+PVC pair per clone slot, each reporting its own bind phase back to the
+	// hub. A volume drill has one; a group drill has one per member, all in the one
+	// bubble namespace so the recovered set is crash-consistent.
+	var configs []workv1.ManifestConfigOption
+	for i := range tf.Status.Clones {
+		clone := tf.Status.Clones[i]
+		pvName := testFailoverPVName(tf)
+		pvcName := tf.Spec.SourceRef
+		if group {
+			pvName = testFailoverMemberName(tf, clone.SourceRef, "pv")
+			pvcName = clone.SourceRef
+		}
+		capacity := *resource.NewQuantity(clone.SizeBytes, resource.BinarySI)
+
+		pv := &corev1.PersistentVolume{
+			TypeMeta:   metav1.TypeMeta{Kind: "PersistentVolume", APIVersion: "v1"},
+			ObjectMeta: metav1.ObjectMeta{Name: pvName, Labels: labels},
+			Spec: corev1.PersistentVolumeSpec{
+				Capacity:                      corev1.ResourceList{corev1.ResourceStorage: capacity},
+				AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+				PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+				StorageClassName:              scName,
+				ClaimRef: &corev1.ObjectReference{
+					Kind: "PersistentVolumeClaim", APIVersion: "v1", Namespace: ns, Name: pvcName,
+				},
+				PersistentVolumeSource: corev1.PersistentVolumeSource{
+					CSI: &corev1.CSIPersistentVolumeSource{
+						Driver:           csiDriverName,
+						VolumeHandle:     clone.CloneID,
+						FSType:           clone.SourceFSType,
+						VolumeAttributes: clone.SourceVolumeContext,
+					},
 				},
 			},
-		},
-	}
-	pvc := &corev1.PersistentVolumeClaim{
-		TypeMeta:   metav1.TypeMeta{Kind: "PersistentVolumeClaim", APIVersion: "v1"},
-		ObjectMeta: metav1.ObjectMeta{Name: pvcName, Namespace: ns, Labels: labels},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			Resources:        corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: capacity}},
-			StorageClassName: &scName,
-			VolumeName:       pvName,
-		},
-	}
-
-	var manifests []workv1.Manifest
-	for _, obj := range []client.Object{namespace, pv, pvc} {
-		raw, err := json.Marshal(obj)
-		if err != nil {
-			return nil, fmt.Errorf("marshal bubble manifest: %w", err)
 		}
-		manifests = append(manifests, workv1.Manifest{RawExtension: runtime.RawExtension{Raw: raw}})
+		pvc := &corev1.PersistentVolumeClaim{
+			TypeMeta:   metav1.TypeMeta{Kind: "PersistentVolumeClaim", APIVersion: "v1"},
+			ObjectMeta: metav1.ObjectMeta{Name: pvcName, Namespace: ns, Labels: labels},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+				Resources:        corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: capacity}},
+				StorageClassName: &scName,
+				VolumeName:       pvName,
+			},
+		}
+		for _, obj := range []client.Object{pv, pvc} {
+			raw, err := json.Marshal(obj)
+			if err != nil {
+				return nil, fmt.Errorf("marshal bubble manifest: %w", err)
+			}
+			manifests = append(manifests, workv1.Manifest{RawExtension: runtime.RawExtension{Raw: raw}})
+		}
+		configs = append(configs, workv1.ManifestConfigOption{
+			ResourceIdentifier: workv1.ResourceIdentifier{
+				Group: "", Resource: "persistentvolumeclaims", Namespace: ns, Name: pvcName,
+			},
+			FeedbackRules: []workv1.FeedbackRule{{
+				Type:      workv1.JSONPathsType,
+				JsonPaths: []workv1.JsonPath{{Name: "phase", Path: ".status.phase"}},
+			}},
+		})
 	}
 
 	return &workv1.ManifestWork{
@@ -952,34 +1182,28 @@ func (r *TestFailoverReconciler) bubbleManifestWork(tf *simplyblockv1alpha2.Test
 			Labels:    labels,
 		},
 		Spec: workv1.ManifestWorkSpec{
-			Workload: workv1.ManifestsTemplate{Manifests: manifests},
-			ManifestConfigs: []workv1.ManifestConfigOption{{
-				ResourceIdentifier: workv1.ResourceIdentifier{
-					Group: "", Resource: "persistentvolumeclaims", Namespace: ns, Name: pvcName,
-				},
-				FeedbackRules: []workv1.FeedbackRule{{
-					Type:      workv1.JSONPathsType,
-					JsonPaths: []workv1.JsonPath{{Name: "phase", Path: ".status.phase"}},
-				}},
-			}},
+			Workload:        workv1.ManifestsTemplate{Manifests: manifests},
+			ManifestConfigs: configs,
 		},
 	}, nil
 }
 
-// bubblePVCBound reads the ManifestWork's status feedback for the bubble PVC's
-// bind phase, reported back from the recovery cluster.
-func bubblePVCBound(mw *workv1.ManifestWork) bool {
+// boundBubblePVCs counts the bubble PVCs the ManifestWork's status feedback
+// reports Bound. Placing is complete only when every clone's PVC is bound.
+func boundBubblePVCs(mw *workv1.ManifestWork) int {
+	bound := 0
 	for _, m := range mw.Status.ResourceStatus.Manifests {
 		if m.ResourceMeta.Resource != "persistentvolumeclaims" {
 			continue
 		}
 		for _, v := range m.StatusFeedbacks.Values {
 			if v.Name == "phase" && v.Value.String != nil && *v.Value.String == string(corev1.ClaimBound) {
-				return true
+				bound++
+				break
 			}
 		}
 	}
-	return false
+	return bound
 }
 
 // testFailoverPVName is the deterministic name of the drill's static
@@ -1018,6 +1242,15 @@ func testFailoverSnapshotName(tf *simplyblockv1alpha2.TestFailover) string {
 func testFailoverCloneName(tf *simplyblockv1alpha2.TestFailover) string {
 	h := sha256.Sum256([]byte(tf.Namespace + "/" + tf.Name))
 	return fmt.Sprintf("tfo-%x-clone", h[:6])
+}
+
+// testFailoverMemberName is the deterministic name of one group member's drill
+// object (clone or PV), keyed by the drill and the member's source ref, so a
+// group drill's members do not collide and each is re-findable on a retry.
+func testFailoverMemberName(tf *simplyblockv1alpha2.TestFailover, memberRef, kind string) string {
+	h := sha256.Sum256([]byte(tf.Namespace + "/" + tf.Name))
+	m := sha256.Sum256([]byte(memberRef))
+	return fmt.Sprintf("tfo-%x-%x-%s", h[:6], m[:4], kind)
 }
 
 // splitHandle splits a CSI handle "cluster:pool:uuid" into its three parts.

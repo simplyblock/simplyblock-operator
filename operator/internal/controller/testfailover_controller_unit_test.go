@@ -29,6 +29,7 @@ const (
 	testSourceHandle   = "clusterA:poolA:lvolX"
 	testSnapshotHandle = "clusterB:poolB:snapY"
 	testCloneHandle    = "clusterB:poolB:cloneVol"
+	testFSTypeXFS      = "xfs"
 )
 
 // atResolvingPoint returns a drill seeded at ResolvingPoint with its source
@@ -251,7 +252,7 @@ func TestFailoverResolvingSourceCapturesStrippedVolumeContext(t *testing.T) {
 	setViewResult(t, cl, getView(t, cl, tf.Spec.SourceCluster, testFailoverViewName(tf, "src-pv")),
 		map[string]interface{}{"spec": map[string]interface{}{"csi": map[string]interface{}{
 			"volumeHandle": "clusterA:pool:lvolX",
-			"fsType":       "xfs",
+			"fsType":       testFSTypeXFS,
 			"volumeAttributes": map[string]interface{}{
 				// class params — kept
 				"tune2fs_reserved_blocks": "",
@@ -281,7 +282,7 @@ func TestFailoverResolvingSourceCapturesStrippedVolumeContext(t *testing.T) {
 	if len(got.Status.Clones) != 1 {
 		t.Fatalf("clones = %+v, want one", got.Status.Clones)
 	}
-	if got.Status.Clones[0].SourceFSType != "xfs" {
+	if got.Status.Clones[0].SourceFSType != testFSTypeXFS {
 		t.Errorf("sourceFSType = %q, want the source PV's xfs", got.Status.Clones[0].SourceFSType)
 	}
 	vc := got.Status.Clones[0].SourceVolumeContext
@@ -296,6 +297,103 @@ func TestFailoverResolvingSourceCapturesStrippedVolumeContext(t *testing.T) {
 	} {
 		if _, ok := vc[k]; ok {
 			t.Errorf("identity/provisioner key %q leaked into the bubble VolumeContext: %+v", k, vc)
+		}
+	}
+}
+
+// TestFailoverResolvingSourceGroupResolvesMembers covers the group source path:
+// the members come from the source cluster's backend (each carries only an lvol
+// id, resolved to its PVC), one representative PV supplies the shared class
+// metadata, and the drill advances to ResolvingPoint with one clone slot per
+// member.
+func TestFailoverResolvingSourceGroupResolvesMembers(t *testing.T) {
+	tf := sampleTestFailover()
+	tf.Finalizers = []string{finalizerTestFailover}
+	tf.Spec.Scope = simplyblockv1alpha2.TestFailoverScopeGroup
+	tf.Spec.SourceRef = "cg"
+	tf.Spec.SourceCluster = "ramen-cluster-a" // not a UUID: exercises the sole-StorageCluster fallback
+	tf.Status.Phase = simplyblockv1alpha2.TestFailoverPhaseProvisioning
+	tf.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.TestFailoverStepResolvingSource)}
+
+	sc := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "local-sc", Namespace: tf.Namespace},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: "C"},
+	}
+	r, cl := newTestFailoverReconciler(t, tf, sc)
+	ctx := context.Background()
+	key := testFailoverRequest(tf).NamespacedName
+
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		p := req.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/consistency-groups/") && req.URL.Query().Get("name") == "cg":
+			_, _ = w.Write([]byte(`[{"id":"g1","name":"cg","lvs_name":"lvs-a","node_id":"node-a"}]`))
+		case strings.HasSuffix(p, "/consistency-groups/g1/members"):
+			_, _ = w.Write([]byte(`[{"lvol_id":"lvol-a"},{"lvol_id":"lvol-b"}]`))
+		case strings.HasSuffix(p, "/storage-pools/"):
+			_, _ = w.Write([]byte(`[{"id":"pool-1"}]`))
+		case strings.HasSuffix(p, "/storage-pools/pool-1/volumes"):
+			_, _ = w.Write([]byte(`[{"id":"lvol-a","pvc_name":"data-1","namespace":"app","pool_id":"pool-1","size":1073741824},` +
+				`{"id":"lvol-b","pvc_name":"data-2","namespace":"app","pool_id":"pool-1","size":1073741824}]`))
+		default:
+			t.Errorf("unexpected request %s %s", req.Method, p)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	// Pass 1: backend resolution done, the representative PVC view is created.
+	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
+		t.Fatalf("pass 1: %v", err)
+	}
+	setViewResult(t, cl, getView(t, cl, tf.Spec.SourceCluster, testFailoverViewName(tf, "src-pvc")),
+		map[string]interface{}{"spec": map[string]interface{}{"volumeName": "pv-1"}})
+
+	// Pass 2: the representative PV view is created.
+	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
+		t.Fatalf("pass 2: %v", err)
+	}
+	setViewResult(t, cl, getView(t, cl, tf.Spec.SourceCluster, testFailoverViewName(tf, "src-pv")),
+		map[string]interface{}{"spec": map[string]interface{}{"csi": map[string]interface{}{
+			"volumeHandle": "C:pool-1:lvol-a",
+			"fsType":       testFSTypeXFS,
+			"volumeAttributes": map[string]interface{}{
+				"fabric": "tcp",
+				"nqn":    "nqn.source", // identity: must be stripped
+			},
+		}}})
+
+	// Pass 3: the clones are built and the drill advances.
+	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
+		t.Fatalf("pass 3: %v", err)
+	}
+	var got simplyblockv1alpha2.TestFailover
+	if err := cl.Get(ctx, key, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Step.State != string(simplyblockv1alpha2.TestFailoverStepResolvingPoint) {
+		t.Fatalf("step = %q, want ResolvingPoint", got.Status.Step.State)
+	}
+	if len(got.Status.Clones) != 2 {
+		t.Fatalf("clones = %+v, want one per member (2)", got.Status.Clones)
+	}
+	want := map[string]string{"data-1": "C:pool-1:lvol-a", "data-2": "C:pool-1:lvol-b"}
+	for _, c := range got.Status.Clones {
+		if want[c.SourceRef] != c.SourceHandle {
+			t.Errorf("clone %q handle = %q, want %q", c.SourceRef, c.SourceHandle, want[c.SourceRef])
+		}
+		if c.SourceFSType != testFSTypeXFS {
+			t.Errorf("clone %q fsType = %q, want xfs", c.SourceRef, c.SourceFSType)
+		}
+		if c.SourceVolumeContext["fabric"] != "tcp" {
+			t.Errorf("clone %q did not carry the shared class attrs: %+v", c.SourceRef, c.SourceVolumeContext)
+		}
+		if _, leaked := c.SourceVolumeContext["nqn"]; leaked {
+			t.Errorf("clone %q leaked the identity key nqn", c.SourceRef)
+		}
+		if c.SizeBytes != 1073741824 {
+			t.Errorf("clone %q size = %d, want 1Gi", c.SourceRef, c.SizeBytes)
 		}
 	}
 }
@@ -419,6 +517,67 @@ func TestFailoverResolvingPointDRTargetUsesReplicatedSnapshot(t *testing.T) {
 	}
 	if got.Status.Report == nil || got.Status.Report.RecoveryPoint != "snapY" {
 		t.Errorf("report.recoveryPoint not set to snapY: %+v", got.Status.Report)
+	}
+}
+
+// TestFailoverResolvingPointGroupResolvesGeneration covers the group recovery
+// point: the drill resolves the group's replication policy, reads its latest
+// group-consistent generation, and records one target snapshot handle per clone
+// slot before advancing to Cloning.
+func TestFailoverResolvingPointGroupResolvesGeneration(t *testing.T) {
+	tf := sampleTestFailover()
+	tf.Finalizers = []string{finalizerTestFailover}
+	tf.Spec.Scope = simplyblockv1alpha2.TestFailoverScopeGroup
+	tf.Spec.SourceRef = "cg"
+	tf.Spec.SourceCluster = "ramen-cluster-a"
+	tf.Status.Phase = simplyblockv1alpha2.TestFailoverPhaseProvisioning
+	tf.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.TestFailoverStepResolvingPoint)}
+	tf.Status.Clones = []simplyblockv1alpha2.TestFailoverClone{
+		{SourceRef: "data-1", SourceHandle: "C:pool-1:lvol-a", SourceFSType: testFSTypeXFS, SizeBytes: 1073741824},
+		{SourceRef: "data-2", SourceHandle: "C:pool-1:lvol-b", SourceFSType: testFSTypeXFS, SizeBytes: 1073741824},
+	}
+
+	sc := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "local-sc", Namespace: tf.Namespace},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: "C"},
+	}
+	r, cl := newTestFailoverReconciler(t, tf, sc)
+	ctx := context.Background()
+
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		p := req.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/consistency-groups/") && req.URL.Query().Get("name") == "cg":
+			_, _ = w.Write([]byte(`[{"id":"g1","name":"cg","lvs_name":"lvs-a","node_id":"node-a"}]`))
+		case strings.HasSuffix(p, "/replication/policies/p1/latest-generation"):
+			_, _ = w.Write([]byte(`{"group_seq":7,"members":[` +
+				`{"snapshot_id":"s1","cluster_id":"B","pool_id":"pb","lvol_id":"t1","size":1073741824,"group_seq":7},` +
+				`{"snapshot_id":"s2","cluster_id":"B","pool_id":"pb","lvol_id":"t2","size":1073741824,"group_seq":7}]}`))
+		case strings.HasSuffix(p, "/replication/policies/"):
+			_, _ = w.Write([]byte(`[{"id":"p1","consistency_group":true,"group_lvs_name":"lvs-a","group_node_id":"node-a"}]`))
+		default:
+			t.Errorf("unexpected request %s %s", req.Method, p)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got simplyblockv1alpha2.TestFailover
+	if err := cl.Get(ctx, testFailoverRequest(tf).NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Step.State != string(simplyblockv1alpha2.TestFailoverStepCloning) {
+		t.Fatalf("step = %q, want Cloning", got.Status.Step.State)
+	}
+	if len(got.Status.Clones) != 2 || got.Status.Clones[0].SnapshotID != "B:pb:s1" || got.Status.Clones[1].SnapshotID != "B:pb:s2" {
+		t.Errorf("clone snapshot handles = %+v, want B:pb:s1 and B:pb:s2", got.Status.Clones)
+	}
+	if got.Status.Report == nil || got.Status.Report.RecoveryPoint != "generation 7" {
+		t.Errorf("report.recoveryPoint = %+v, want 'generation 7'", got.Status.Report)
 	}
 }
 
@@ -754,7 +913,7 @@ func TestFailoverPlacingPVCarriesSourceVolumeContext(t *testing.T) {
 		"tune2fs_reserved_blocks": "",
 		"fabric":                  "tcp",
 	}
-	tf.Status.Clones[0].SourceFSType = "xfs"
+	tf.Status.Clones[0].SourceFSType = testFSTypeXFS
 	r, cl := newTestFailoverReconciler(t, tf)
 	ctx := context.Background()
 
@@ -781,8 +940,86 @@ func TestFailoverPlacingPVCarriesSourceVolumeContext(t *testing.T) {
 	}
 	// The clone carries the source's filesystem; without this the node plugin
 	// defaults to ext4 and refuses to mount the XFS volume.
-	if pv.Spec.CSI.FSType != "xfs" {
+	if pv.Spec.CSI.FSType != testFSTypeXFS {
 		t.Errorf("bubble PV fsType = %q, want the source's xfs", pv.Spec.CSI.FSType)
+	}
+}
+
+// TestFailoverPlacingGroupDeliversAllMembersThenReady covers the group placement:
+// one ManifestWork carries the namespace and a PV+PVC pair per member, and the
+// drill reaches Ready only once every member's PVC binds.
+func TestFailoverPlacingGroupDeliversAllMembersThenReady(t *testing.T) {
+	tf := sampleTestFailover()
+	tf.Finalizers = []string{finalizerTestFailover}
+	tf.Spec.Scope = simplyblockv1alpha2.TestFailoverScopeGroup
+	tf.Spec.SourceRef = "cg"
+	tf.Status.Phase = simplyblockv1alpha2.TestFailoverPhaseProvisioning
+	tf.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.TestFailoverStepPlacing)}
+	tf.Status.Clones = []simplyblockv1alpha2.TestFailoverClone{
+		{SourceRef: "data-1", SourceHandle: "C:pool-1:lvol-a", SnapshotID: "B:pb:s1", CloneID: "B:pb:c1", SourceFSType: testFSTypeXFS, SizeBytes: 1073741824},
+		{SourceRef: "data-2", SourceHandle: "C:pool-1:lvol-b", SnapshotID: "B:pb:s2", CloneID: "B:pb:c2", SourceFSType: testFSTypeXFS, SizeBytes: 1073741824},
+	}
+	r, cl := newTestFailoverReconciler(t, tf)
+	ctx := context.Background()
+	key := testFailoverRequest(tf).NamespacedName
+
+	// Pass 1: the ManifestWork is created carrying ns + 2*(PV,PVC) = 5 manifests
+	// and one feedback config per member PVC; the drill holds until both bind.
+	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
+		t.Fatalf("pass 1: %v", err)
+	}
+	mw := getManifestWork(t, cl, tf.Spec.BubbleCluster, testFailoverManifestWorkName(tf))
+	if len(mw.Spec.Workload.Manifests) != 5 {
+		t.Errorf("ManifestWork carries %d manifests, want 5 (namespace + 2*(PV,PVC))", len(mw.Spec.Workload.Manifests))
+	}
+	if len(mw.Spec.ManifestConfigs) != 2 {
+		t.Errorf("ManifestWork has %d feedback configs, want one per member (2)", len(mw.Spec.ManifestConfigs))
+	}
+	var got simplyblockv1alpha2.TestFailover
+	if err := cl.Get(ctx, key, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Phase == simplyblockv1alpha2.TestFailoverPhaseReady {
+		t.Errorf("drill reached Ready before any PVC bound")
+	}
+
+	// Only one member bound: still not Ready.
+	bound := string(corev1.ClaimBound)
+	oneBound := []workv1.ManifestCondition{{
+		ResourceMeta:    workv1.ManifestResourceMeta{Resource: "persistentvolumeclaims", Name: "data-1"},
+		StatusFeedbacks: workv1.StatusFeedbackResult{Values: []workv1.FeedbackValue{{Name: "phase", Value: workv1.FieldValue{Type: workv1.String, String: &bound}}}},
+	}}
+	mw.Status.ResourceStatus.Manifests = oneBound
+	if err := cl.Status().Update(ctx, mw); err != nil {
+		t.Fatalf("update MW status (one bound): %v", err)
+	}
+	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
+		t.Fatalf("pass 2: %v", err)
+	}
+	if err := cl.Get(ctx, key, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Phase == simplyblockv1alpha2.TestFailoverPhaseReady {
+		t.Errorf("drill reached Ready with only one of two member PVCs bound")
+	}
+
+	// Both bound: Ready.
+	bothBound := append(oneBound, workv1.ManifestCondition{
+		ResourceMeta:    workv1.ManifestResourceMeta{Resource: "persistentvolumeclaims", Name: "data-2"},
+		StatusFeedbacks: workv1.StatusFeedbackResult{Values: []workv1.FeedbackValue{{Name: "phase", Value: workv1.FieldValue{Type: workv1.String, String: &bound}}}},
+	})
+	mw.Status.ResourceStatus.Manifests = bothBound
+	if err := cl.Status().Update(ctx, mw); err != nil {
+		t.Fatalf("update MW status (both bound): %v", err)
+	}
+	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
+		t.Fatalf("pass 3: %v", err)
+	}
+	if err := cl.Get(ctx, key, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Phase != simplyblockv1alpha2.TestFailoverPhaseReady {
+		t.Errorf("phase = %q, want Ready once both member PVCs are bound", got.Status.Phase)
 	}
 }
 
