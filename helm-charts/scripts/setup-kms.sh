@@ -16,6 +16,13 @@ info() { echo "[INFO]  $*"; }
 warn() { echo "[WARN]  $*" >&2; }
 die()  { echo "[ERROR] $*" >&2; exit 1; }
 
+# Dumps the pod's log so a failure shows what the server said.
+die_with_logs() {
+  echo "[ERROR] $*" >&2
+  kubectl -n "$NAMESPACE" logs "$POD" --tail=200 >&2 || true
+  exit 1
+}
+
 bao() {
   kubectl -n "$NAMESPACE" exec -i "$POD" -- \
     env BAO_ADDR="$BAO_ADDR" BAO_TOKEN="$ROOT_TOKEN" bao "$@"
@@ -69,12 +76,12 @@ if [[ -z "$ROOT_TOKEN" ]]; then
     [[ $rc -ne 1 ]] && break
     sleep 2
   done
-  [[ $rc -ne 1 ]] || die "OpenBao did not answer on $BAO_ADDR within 120s"
+  [[ $rc -ne 1 ]] || die_with_logs "OpenBao did not answer on $BAO_ADDR within 120s"
 
   info "Initializing OpenBao..."
   INIT_OUTPUT="$(kubectl -n "$NAMESPACE" exec "$POD" -- \
     env BAO_ADDR="$BAO_ADDR" bao operator init 2>&1)" \
-    || die "bao operator init failed: $INIT_OUTPUT"
+    || die_with_logs "bao operator init failed: $INIT_OUTPUT"
 
   echo ""
   echo "=========================================="
