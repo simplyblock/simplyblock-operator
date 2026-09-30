@@ -280,9 +280,19 @@ func Start(ctx context.Context, cfg Config, manager *sbkube.Manager) (*Guardian,
 
 // RegisterPublish records that a volume (identified by its per-namespace lvol
 // UUID) is published to a pod via targetPath.
+//
+// A volume this cannot attribute to a pod is one the guardian can never
+// restart, and that is worth a line in the log rather than a silent return: the
+// only other trace such a volume leaves is MarkBrokenLvol reporting it as
+// unknown, minutes or hours later, in a message that reads like a publish
+// ordering problem and is not one.
 func (g *Guardian) RegisterPublish(clusterID, lvolID, targetPath string) {
 	podUID := podUIDFromTargetPath(targetPath)
 	if lvolID == "" || podUID == "" || clusterID == "" {
+		klog.Warningf(
+			"Guardian: not tracking lvol %q: cluster=%q pod=%q from target path %q"+
+				" — a path loss on this volume cannot be recovered by a restart",
+			lvolID, clusterID, podUID, targetPath)
 		return
 	}
 
@@ -932,20 +942,43 @@ func (g *Guardian) setLastRestart(podUID string) {
 	g.lastRestart[podUID] = time.Now()
 }
 
-// Extract pod UID from kubelet targetPath.
-// Example: /var/lib/kubelet/pods/<uid>/volumes/kubernetes.io~csi/.../mount
+// podUIDFromTargetPath reads the pod UID out of the path kubelet publishes a
+// volume at. There is one shape per volume mode and the guardian needs both,
+// because a volume it cannot attribute to a pod is a volume it can never
+// restart:
+//
+//	filesystem: /var/lib/kubelet/pods/<podUID>/volumes/kubernetes.io~csi/<pv>/mount
+//	block:      /var/lib/kubelet/plugins/kubernetes.io/csi/volumeDevices/publish/<pv>/<podUID>
+//
+// The block shape carries the pod UID in its last segment and no /pods/ segment
+// at all, which is how every raw device went untracked: its break was reported
+// and discarded, and the pod holding the dead device node was never restarted.
 func podUIDFromTargetPath(p string) string {
-	const marker = "/pods/"
-	i := strings.Index(p, marker)
-	if i < 0 {
-		return ""
+	const (
+		podsMarker    = "/pods/"
+		publishMarker = "/volumeDevices/publish/"
+	)
+
+	if i := strings.Index(p, podsMarker); i >= 0 {
+		rest := p[i+len(podsMarker):]
+		j := strings.Index(rest, "/")
+		if j < 0 {
+			return ""
+		}
+		return rest[:j]
 	}
-	rest := p[i+len(marker):]
-	j := strings.Index(rest, "/")
-	if j < 0 {
-		return ""
+
+	if i := strings.Index(p, publishMarker); i >= 0 {
+		// Everything after the marker is <pv>/<podUID>. A path that stops at the
+		// PersistentVolume name names no pod, and is no more usable than a path
+		// of another shape entirely.
+		rest := strings.TrimSuffix(p[i+len(publishMarker):], "/")
+		if j := strings.LastIndex(rest, "/"); j >= 0 {
+			return rest[j+1:]
+		}
 	}
-	return rest[:j]
+
+	return ""
 }
 
 func (g *Guardian) persistLocked() {
