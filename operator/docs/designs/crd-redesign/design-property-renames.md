@@ -115,7 +115,7 @@ and one is not registered at all.
 | `BackupSpec`                  | `withCompression`          | Removed                            | off     | Removal                 |
 | `BackupSpec`                  | `snapshotBackups`          | Removed                            | off     | Removal                 |
 | `BackupSpec`                  | `localTesting`             | Removed                            | off     | Removal                 |
-| `StorageClassParameters`      | `encryption`               | `enableEncryption`                 | off     | Silent                  |
+| `StorageClassParameters`      | `encryption`               | Removed                            | off     | Removal                 |
 | `StoragePoolSpec`             | `dhchap`                   | `spec.volumeDefaults.enableDHCHAP` | off     | Silent, and regroups    |
 
 **`replicate` is in the design's list and not in the API.**

@@ -139,11 +139,6 @@ type VolumeDefaults struct {
 	// +optional
 	EnableClientDeduplication *bool `json:"enableClientDeduplication,omitempty"`
 
-	// EnableEncryption encrypts logical volumes, using the key store the cluster
-	// names in its own spec.
-	// +optional
-	EnableEncryption *bool `json:"enableEncryption,omitempty"`
-
 	// EnableReplication replicates logical volumes.
 	// +optional
 	EnableReplication *bool `json:"enableReplication,omitempty"`
