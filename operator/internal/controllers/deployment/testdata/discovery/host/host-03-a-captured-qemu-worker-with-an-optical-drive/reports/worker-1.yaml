@@ -768,6 +768,7 @@ data:
         {
           "name": "nvme0n1",
           "path": "/dev/nvme0n1",
+          "stablePath": "/dev/disk/by-id/nvme-eui.34333930547014240025384300000001",
           "pciAddress": "0000:03:00.0",
           "sizeBytes": 1920383410176,
           "kind": "Disk",
@@ -784,6 +785,7 @@ data:
         {
           "name": "nvme1n1",
           "path": "/dev/nvme1n1",
+          "stablePath": "/dev/disk/by-id/nvme-eui.34333930547013130025384300000001",
           "pciAddress": "0000:02:00.0",
           "sizeBytes": 1920383410176,
           "kind": "Disk",
@@ -800,6 +802,7 @@ data:
         {
           "name": "sda",
           "path": "/dev/sda",
+          "stablePath": "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0",
           "pciAddress": "0000:09:01.0",
           "sizeBytes": 128849018880,
           "kind": "Disk",
@@ -822,6 +825,7 @@ data:
         {
           "name": "sda1",
           "path": "/dev/sda1",
+          "stablePath": "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0-part1",
           "pciAddress": "0000:09:01.0",
           "sizeBytes": 1048576,
           "kind": "Partition",
@@ -838,6 +842,7 @@ data:
         {
           "name": "sda2",
           "path": "/dev/sda2",
+          "stablePath": "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0-part2",
           "pciAddress": "0000:09:01.0",
           "sizeBytes": 133169152,
           "kind": "Partition",
@@ -854,6 +859,7 @@ data:
         {
           "name": "sda3",
           "path": "/dev/sda3",
+          "stablePath": "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0-part3",
           "pciAddress": "0000:09:01.0",
           "sizeBytes": 402653184,
           "kind": "Partition",
@@ -870,6 +876,7 @@ data:
         {
           "name": "sda4",
           "path": "/dev/sda4",
+          "stablePath": "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0-part4",
           "pciAddress": "0000:09:01.0",
           "sizeBytes": 128311082496,
           "kind": "Partition",
@@ -886,6 +893,7 @@ data:
         {
           "name": "sr0",
           "path": "/dev/sr0",
+          "stablePath": "/dev/disk/by-id/ata-QEMU_DVD-ROM_QM00003",
           "pciAddress": "0000:00:1f.2",
           "sizeBytes": 924243968,
           "kind": "Disk",

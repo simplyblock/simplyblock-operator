@@ -21,8 +21,8 @@ spec:
   - groups:
     - devices:
         block:
-        - /dev/nvme0n1
-        - /dev/nvme1n1
+        - /dev/disk/by-id/nvme-eui.34333930547013130025384300000001
+        - /dev/disk/by-id/nvme-eui.34333930547014240025384300000001
       name: group-1-block-2x1.74T
       workers:
       - worker-1

@@ -116,10 +116,28 @@ func ClassOf(filter *simplyblockv1alpha2.DeviceFilter) DeviceClass {
 }
 
 // Address is how the draft names a device of this class: its PCI address for
-// NVMe, its path for a logical block device. It is empty when the device cannot
-// be named in the class at all, which is what AdmitClass refuses on.
+// NVMe, and for a logical block device the persistent name udev published for
+// it. It is empty when the device cannot be named in the class at all, which is
+// what AdmitClass refuses on.
+//
+// The persistent name rather than the kernel path, because a draft is written
+// once and read back on every configure the deployment performs, the first of
+// them possibly after a reboot. The kernel path states a position in one boot's
+// enumeration order: on the lab worker this was developed against the disk the
+// kernel calls sdb is the one the hypervisor calls drive-scsi0, and sda is
+// drive-scsi2, so a machine that probes its controllers in another order hands
+// each name to another disk. Both names exist and both resolve, so a deployment
+// naming the first would be handed a different disk and nothing would say so.
+//
+// A device udev published nothing for falls back to its kernel path, which is
+// all there is. That is the weaker name and it carries the failure above, but
+// refusing the device would hold up a deployment on a host whose disks are
+// otherwise perfectly usable, over a udev that published no link.
 func (c DeviceClass) Address(device nodeprobe.Device) string {
 	if c == ClassBlock {
+		if device.StablePath != "" {
+			return device.StablePath
+		}
 		return device.Path
 	}
 	return device.PCIAddress

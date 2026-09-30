@@ -2,7 +2,7 @@
 
 **Mutation.** A QEMU worker with two NVMe disks and a DVD-ROM, on a block run
 
-**Expected.** One group, `devices.block` holding `/dev/nvme0n1` and `/dev/nvme1n1`. The optical drive refused as removable, the boot disk as partitioned
+**Expected.** One group, `devices.block` holding each namespace's own `nvme-eui.` link rather than `/dev/nvme0n1` and `/dev/nvme1n1`, which name this boot's enumeration order. The optical drive refused as removable, the boot disk as partitioned
 
 **Harness.** `CM`
 

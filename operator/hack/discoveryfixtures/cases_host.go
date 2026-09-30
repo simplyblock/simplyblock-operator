@@ -147,12 +147,22 @@ func capturedHost(path, name, address string, memory statedMemory) nodeprobe.Rep
 			return map[string][]string{"eth0": {address}}, nil
 		},
 	})
-	// The path a device is at on the machine, rather than inside the temporary
-	// tree this transcript was replayed in: the scan builds it from DevRoot, and
-	// a fixture carrying one reviewer's scratch directory would be rewritten by
+	// The paths a device is at on the machine, rather than inside the temporary
+	// tree this transcript was replayed in: both are built from DevRoot, and a
+	// fixture carrying one reviewer's scratch directory would be rewritten by
 	// the next reviewer to carry theirs.
+	//
+	// The kernel path is rebuilt from the device's name and the persistent one
+	// rewritten, because the second is a udev link whose own name this does not
+	// know — it is whatever the captured machine's udev called it.
+	devRoot := transcript.DevRootOf(root)
 	for i := range inventoryOf.Devices {
-		inventoryOf.Devices[i].Path = filepath.Join(blockdev.DefaultDevRoot, inventoryOf.Devices[i].Name)
+		device := &inventoryOf.Devices[i]
+		device.Path = filepath.Join(blockdev.DefaultDevRoot, device.Name)
+		if device.StablePath != "" {
+			device.StablePath = strings.Replace(
+				device.StablePath, devRoot, blockdev.DefaultDevRoot, 1)
+		}
 	}
 
 	report := nodeprobe.FromInventory(name, probedAt.Time, inventoryOf, unreadable)
