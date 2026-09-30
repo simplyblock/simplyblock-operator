@@ -1105,7 +1105,8 @@ func (r *TestFailoverReconciler) bubbleManifestWork(tf *simplyblockv1alpha2.Test
 		TypeMeta:   metav1.TypeMeta{Kind: "Namespace", APIVersion: "v1"},
 		ObjectMeta: metav1.ObjectMeta{Name: ns, Labels: labels},
 	}
-	manifests := []workv1.Manifest{}
+	// One namespace manifest plus a PV+PVC pair per clone slot.
+	manifests := make([]workv1.Manifest, 0, 1+2*len(tf.Status.Clones))
 	raw, err := json.Marshal(namespace)
 	if err != nil {
 		return nil, fmt.Errorf("marshal bubble namespace: %w", err)
@@ -1115,7 +1116,7 @@ func (r *TestFailoverReconciler) bubbleManifestWork(tf *simplyblockv1alpha2.Test
 	// One PV+PVC pair per clone slot, each reporting its own bind phase back to the
 	// hub. A volume drill has one; a group drill has one per member, all in the one
 	// bubble namespace so the recovered set is crash-consistent.
-	var configs []workv1.ManifestConfigOption
+	configs := make([]workv1.ManifestConfigOption, 0, len(tf.Status.Clones))
 	for i := range tf.Status.Clones {
 		clone := tf.Status.Clones[i]
 		pvName := testFailoverPVName(tf)

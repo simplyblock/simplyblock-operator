@@ -30,6 +30,7 @@ const (
 	testSnapshotHandle = "clusterB:poolB:snapY"
 	testCloneHandle    = "clusterB:poolB:cloneVol"
 	testFSTypeXFS      = "xfs"
+	testFabricTCP      = "tcp"
 )
 
 // atResolvingPoint returns a drill seeded at ResolvingPoint with its source
@@ -256,7 +257,7 @@ func TestFailoverResolvingSourceCapturesStrippedVolumeContext(t *testing.T) {
 			"volumeAttributes": map[string]interface{}{
 				// class params — kept
 				"tune2fs_reserved_blocks": "",
-				"fabric":                  "tcp",
+				"fabric":                  testFabricTCP,
 				"qos_rw_iops":             "0",
 				// identity — stripped (would mis-point a failed clone lookup)
 				"cluster_id":  "clusterA",
@@ -359,7 +360,7 @@ func TestFailoverResolvingSourceGroupResolvesMembers(t *testing.T) {
 			"volumeHandle": "C:pool-1:lvol-a",
 			"fsType":       testFSTypeXFS,
 			"volumeAttributes": map[string]interface{}{
-				"fabric": "tcp",
+				"fabric": testFabricTCP,
 				"nqn":    "nqn.source", // identity: must be stripped
 			},
 		}}})
@@ -386,7 +387,7 @@ func TestFailoverResolvingSourceGroupResolvesMembers(t *testing.T) {
 		if c.SourceFSType != testFSTypeXFS {
 			t.Errorf("clone %q fsType = %q, want xfs", c.SourceRef, c.SourceFSType)
 		}
-		if c.SourceVolumeContext["fabric"] != "tcp" {
+		if c.SourceVolumeContext["fabric"] != testFabricTCP {
 			t.Errorf("clone %q did not carry the shared class attrs: %+v", c.SourceRef, c.SourceVolumeContext)
 		}
 		if _, leaked := c.SourceVolumeContext["nqn"]; leaked {
@@ -911,7 +912,7 @@ func TestFailoverPlacingPVCarriesSourceVolumeContext(t *testing.T) {
 	tf := atPlacing()
 	tf.Status.Clones[0].SourceVolumeContext = map[string]string{
 		"tune2fs_reserved_blocks": "",
-		"fabric":                  "tcp",
+		"fabric":                  testFabricTCP,
 	}
 	tf.Status.Clones[0].SourceFSType = testFSTypeXFS
 	r, cl := newTestFailoverReconciler(t, tf)
@@ -935,7 +936,7 @@ func TestFailoverPlacingPVCarriesSourceVolumeContext(t *testing.T) {
 	if pv.Spec.CSI.VolumeHandle != tf.Status.Clones[0].CloneID {
 		t.Errorf("bubble PV points at %q, want the clone handle %q", pv.Spec.CSI.VolumeHandle, tf.Status.Clones[0].CloneID)
 	}
-	if pv.Spec.CSI.VolumeAttributes["fabric"] != "tcp" {
+	if pv.Spec.CSI.VolumeAttributes["fabric"] != testFabricTCP {
 		t.Errorf("bubble PV VolumeAttributes did not carry the source class params: %+v", pv.Spec.CSI.VolumeAttributes)
 	}
 	// The clone carries the source's filesystem; without this the node plugin
@@ -985,11 +986,13 @@ func TestFailoverPlacingGroupDeliversAllMembersThenReady(t *testing.T) {
 
 	// Only one member bound: still not Ready.
 	bound := string(corev1.ClaimBound)
-	oneBound := []workv1.ManifestCondition{{
-		ResourceMeta:    workv1.ManifestResourceMeta{Resource: "persistentvolumeclaims", Name: "data-1"},
-		StatusFeedbacks: workv1.StatusFeedbackResult{Values: []workv1.FeedbackValue{{Name: "phase", Value: workv1.FieldValue{Type: workv1.String, String: &bound}}}},
-	}}
-	mw.Status.ResourceStatus.Manifests = oneBound
+	pvcBound := func(name string) workv1.ManifestCondition {
+		return workv1.ManifestCondition{
+			ResourceMeta:    workv1.ManifestResourceMeta{Resource: "persistentvolumeclaims", Name: name},
+			StatusFeedbacks: workv1.StatusFeedbackResult{Values: []workv1.FeedbackValue{{Name: "phase", Value: workv1.FieldValue{Type: workv1.String, String: &bound}}}},
+		}
+	}
+	mw.Status.ResourceStatus.Manifests = []workv1.ManifestCondition{pvcBound("data-1")}
 	if err := cl.Status().Update(ctx, mw); err != nil {
 		t.Fatalf("update MW status (one bound): %v", err)
 	}
@@ -1004,11 +1007,7 @@ func TestFailoverPlacingGroupDeliversAllMembersThenReady(t *testing.T) {
 	}
 
 	// Both bound: Ready.
-	bothBound := append(oneBound, workv1.ManifestCondition{
-		ResourceMeta:    workv1.ManifestResourceMeta{Resource: "persistentvolumeclaims", Name: "data-2"},
-		StatusFeedbacks: workv1.StatusFeedbackResult{Values: []workv1.FeedbackValue{{Name: "phase", Value: workv1.FieldValue{Type: workv1.String, String: &bound}}}},
-	})
-	mw.Status.ResourceStatus.Manifests = bothBound
+	mw.Status.ResourceStatus.Manifests = []workv1.ManifestCondition{pvcBound("data-1"), pvcBound("data-2")}
 	if err := cl.Status().Update(ctx, mw); err != nil {
 		t.Fatalf("update MW status (both bound): %v", err)
 	}
