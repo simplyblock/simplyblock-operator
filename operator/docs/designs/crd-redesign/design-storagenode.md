@@ -338,6 +338,22 @@ cluster is not (§3.4). One field still carries both spellings, because a node's
 devices are one set however each of them was reached and the cluster is what says
 which spelling that set is written in.
 
+**A generated deployment writes the persistent path, not the kernel one.** Both
+are device paths and the field takes either, but they answer different questions.
+`/dev/sdb` names whichever disk the kernel found second this boot: on the QEMU
+workers this was developed against, the disk the kernel calls `sdb` is the one the
+hypervisor calls `drive-scsi0` and `sda` is `drive-scsi2`, so a host that comes
+back with its controllers probed in another order hands each kernel name to
+another disk. `/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0` and
+`/dev/disk/by-partuuid/28427de0-…` are built from what the device itself reports,
+and follow it. Both names exist and both resolve, so a list written in the first
+spelling selects a different disk after such a reboot and nothing says so — which
+is why discovery writes the second
+([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §8.1),
+and why the node configuration carries the name whole rather than shortening it
+to the kernel name the backend used to be given. A hand-written list may still
+use either spelling, and the node resolves whichever it is handed.
+
 **The PCI filters belong to an NVMe cluster and to no other.**
 `config.pcieAllowList`, `config.pcieDenyList`, and `config.pcieModel` match on
 something a logical block device does not have, so on a `LogicalBlock` cluster
