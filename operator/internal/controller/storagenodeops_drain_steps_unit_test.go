@@ -26,6 +26,11 @@ import (
 func drainStepServer(t *testing.T, progress string, postCount *int) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/verify-drained") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"drained":true,"lvols":[],"snapshots":[]}`))
+			return
+		}
 		if r.Method == http.MethodPost {
 			if postCount != nil {
 				*postCount++
