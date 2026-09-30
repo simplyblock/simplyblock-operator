@@ -48,6 +48,17 @@ func fabricMultipathHost() tree {
 	return t2
 }
 
+// Regression: 2026-09-30-hidden-multipath-path-fails-the-whole-scan — a worker
+// that had attached one of this product's own volumes reported no block devices
+// at all, because the hidden gendisk the kernel publishes per controller for a
+// multipath namespace carries no dev attribute and the scan treated its absence
+// as a failure of the host. Observed on every worker of the OCP lab fleet:
+//
+//	$ cat /sys/class/block/nvme8c3n1/hidden
+//	1
+//	$ cat /sys/class/block/nvme8c3n1/dev
+//	cat: /sys/class/block/nvme8c3n1/dev: No such file or directory
+//
 // The scan reports the host, and the hidden paths are not in it.
 //
 // Failing instead is what a missing dev attribute meant before: a worker with a
