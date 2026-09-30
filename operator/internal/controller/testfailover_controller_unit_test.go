@@ -31,6 +31,7 @@ const (
 	testCloneHandle    = "clusterB:poolB:cloneVol"
 	testFSTypeXFS      = "xfs"
 	testFabricTCP      = "tcp"
+	testSourceCluster  = "ramen-cluster-a"
 )
 
 // atResolvingPoint returns a drill seeded at ResolvingPoint with its source
@@ -101,7 +102,7 @@ func sampleTestFailover() *simplyblockv1alpha2.TestFailover {
 		ObjectMeta: metav1.ObjectMeta{Name: "drill-1", Namespace: "simplyblock"},
 		Spec: simplyblockv1alpha2.TestFailoverSpec{
 			Scope:           simplyblockv1alpha2.TestFailoverScopeVolume,
-			SourceCluster:   "ramen-cluster-a",
+			SourceCluster:   testSourceCluster,
 			SourceNamespace: "prod-app",
 			SourceRef:       "postgres-data",
 			BubbleCluster:   "ramen-cluster-b",
@@ -312,7 +313,7 @@ func TestFailoverResolvingSourceGroupResolvesMembers(t *testing.T) {
 	tf.Finalizers = []string{finalizerTestFailover}
 	tf.Spec.Scope = simplyblockv1alpha2.TestFailoverScopeGroup
 	tf.Spec.SourceRef = "cg"
-	tf.Spec.SourceCluster = "ramen-cluster-a" // not a UUID: exercises the sole-StorageCluster fallback
+	tf.Spec.SourceCluster = testSourceCluster // not a UUID: exercises the sole-StorageCluster fallback
 	tf.Status.Phase = simplyblockv1alpha2.TestFailoverPhaseProvisioning
 	tf.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.TestFailoverStepResolvingSource)}
 
@@ -537,7 +538,7 @@ func TestFailoverResolvingPointGroupResolvesGeneration(t *testing.T) {
 	tf.Finalizers = []string{finalizerTestFailover}
 	tf.Spec.Scope = simplyblockv1alpha2.TestFailoverScopeGroup
 	tf.Spec.SourceRef = "cg"
-	tf.Spec.SourceCluster = "ramen-cluster-a"
+	tf.Spec.SourceCluster = testSourceCluster
 	tf.Status.Phase = simplyblockv1alpha2.TestFailoverPhaseProvisioning
 	tf.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.TestFailoverStepResolvingPoint)}
 	tf.Status.Clones = []simplyblockv1alpha2.TestFailoverClone{
@@ -587,6 +588,145 @@ func TestFailoverResolvingPointGroupResolvesGeneration(t *testing.T) {
 	}
 	if got.Status.Report == nil || got.Status.Report.RecoveryPoint != "generation 7" {
 		t.Errorf("report.recoveryPoint = %+v, want 'generation 7'", got.Status.Report)
+	}
+}
+
+// TestFailoverResolvingPointGroupInPlaceTakesFreshGeneration covers the in-place
+// group recovery point: when the bubble is the source's own cluster the drill
+// must recover from a fresh crash-consistent generation cut on the SOURCE (like
+// the volume in-place path takes a fresh snapshot), NOT from a replicated
+// generation on a DR target. It records each member's fresh source snapshot,
+// keyed to the member's own pool, and advances to Cloning.
+func TestFailoverResolvingPointGroupInPlaceTakesFreshGeneration(t *testing.T) {
+	tf := sampleTestFailover()
+	tf.Finalizers = []string{finalizerTestFailover}
+	tf.Spec.Scope = simplyblockv1alpha2.TestFailoverScopeGroup
+	tf.Spec.SourceRef = "cg"
+	tf.Spec.SourceCluster = testSourceCluster
+	tf.Spec.BubbleCluster = testSourceCluster // in-place: bubble IS the source cluster
+	tf.Status.Phase = simplyblockv1alpha2.TestFailoverPhaseProvisioning
+	tf.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.TestFailoverStepResolvingPoint)}
+	started := metav1.Unix(1000, 0)
+	tf.Status.StartedAt = &started
+	tf.Status.Clones = []simplyblockv1alpha2.TestFailoverClone{
+		{SourceRef: "data-1", SourceHandle: "C:pool-1:lvol-a", SourceFSType: testFSTypeXFS, SizeBytes: 1073741824},
+		{SourceRef: "data-2", SourceHandle: "C:pool-2:lvol-b", SourceFSType: testFSTypeXFS, SizeBytes: 1073741824},
+	}
+
+	sc := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "local-sc", Namespace: tf.Namespace},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: "C"},
+	}
+	r, cl := newTestFailoverReconciler(t, tf, sc)
+	ctx := context.Background()
+
+	tookGeneration := false
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		p := req.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/consistency-groups/") && req.URL.Query().Get("name") == "cg":
+			_, _ = w.Write([]byte(`[{"id":"g1","name":"cg","lvs_name":"lvs-a","node_id":"node-a","policy_id":"p1"}]`))
+		case strings.HasSuffix(p, "/consistency-groups/g1/snapshots") && req.Method == http.MethodGet:
+			// No generation cut since the drill began, so the in-place path takes one.
+			_, _ = w.Write([]byte(`[]`))
+		case strings.HasSuffix(p, "/consistency-groups/g1/snapshots") && req.Method == http.MethodPost:
+			tookGeneration = true
+			_, _ = w.Write([]byte(`{"group_seq":5,"created_at":2000,"complete":true,"members":[` +
+				`{"lvol_id":"lvol-a","snapshot_id":"s1","ready":true},` +
+				`{"lvol_id":"lvol-b","snapshot_id":"s2","ready":true}]}`))
+		default:
+			t.Errorf("unexpected request %s %s", req.Method, p)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got simplyblockv1alpha2.TestFailover
+	if err := cl.Get(ctx, testFailoverRequest(tf).NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Step.State != string(simplyblockv1alpha2.TestFailoverStepCloning) {
+		t.Fatalf("step = %q, want Cloning; message=%q", got.Status.Step.State, got.Status.Message)
+	}
+	if !tookGeneration {
+		t.Error("in-place group drill must cut a fresh generation on the source")
+	}
+	// Each member's clone points at its FRESH source snapshot, on the source cluster
+	// (C), in the member's own pool (pool-1 / pool-2 from the source handles).
+	if got.Status.Clones[0].SnapshotID != "C:pool-1:s1" || got.Status.Clones[1].SnapshotID != "C:pool-2:s2" {
+		t.Errorf("clone snapshot handles = %+v, want C:pool-1:s1 and C:pool-2:s2", got.Status.Clones)
+	}
+	// The drill took the snapshots, so teardown must reclaim them.
+	if !got.Status.Clones[0].SnapshotTaken || !got.Status.Clones[1].SnapshotTaken {
+		t.Error("in-place group snapshots must be marked taken so teardown deletes them")
+	}
+}
+
+// TestFailoverResolvingPointGroupInPlaceReusesGenerationCutAfterStart covers the
+// ask-then-act guard: a re-entered in-place drill reuses a complete generation
+// created at or after it began rather than cutting a second one, so a mid-step
+// failure never stacks duplicate generations on the source.
+func TestFailoverResolvingPointGroupInPlaceReusesGenerationCutAfterStart(t *testing.T) {
+	tf := sampleTestFailover()
+	tf.Finalizers = []string{finalizerTestFailover}
+	tf.Spec.Scope = simplyblockv1alpha2.TestFailoverScopeGroup
+	tf.Spec.SourceRef = "cg"
+	tf.Spec.SourceCluster = testSourceCluster
+	tf.Spec.BubbleCluster = testSourceCluster
+	tf.Status.Phase = simplyblockv1alpha2.TestFailoverPhaseProvisioning
+	tf.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.TestFailoverStepResolvingPoint)}
+	started := metav1.Unix(1000, 0)
+	tf.Status.StartedAt = &started
+	tf.Status.Clones = []simplyblockv1alpha2.TestFailoverClone{
+		{SourceRef: "data-1", SourceHandle: "C:pool-1:lvol-a", SourceFSType: testFSTypeXFS, SizeBytes: 1073741824},
+		{SourceRef: "data-2", SourceHandle: "C:pool-2:lvol-b", SourceFSType: testFSTypeXFS, SizeBytes: 1073741824},
+	}
+
+	sc := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "local-sc", Namespace: tf.Namespace},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: "C"},
+	}
+	r, cl := newTestFailoverReconciler(t, tf, sc)
+	ctx := context.Background()
+
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		p := req.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/consistency-groups/") && req.URL.Query().Get("name") == "cg":
+			_, _ = w.Write([]byte(`[{"id":"g1","name":"cg","lvs_name":"lvs-a","node_id":"node-a","policy_id":"p1"}]`))
+		case strings.HasSuffix(p, "/consistency-groups/g1/snapshots") && req.Method == http.MethodGet:
+			// A complete generation created after the drill began (created_at 1500 >=
+			// started 1000): this drill's own earlier cut, so it is reused.
+			_, _ = w.Write([]byte(`[{"group_seq":4,"created_at":1500,"complete":true,"members":[` +
+				`{"lvol_id":"lvol-a","snapshot_id":"s1","ready":true},` +
+				`{"lvol_id":"lvol-b","snapshot_id":"s2","ready":true}]}]`))
+		case strings.HasSuffix(p, "/consistency-groups/g1/snapshots") && req.Method == http.MethodPost:
+			t.Error("a second generation was cut instead of reusing the one created after start")
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			t.Errorf("unexpected request %s %s", req.Method, p)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got simplyblockv1alpha2.TestFailover
+	if err := cl.Get(ctx, testFailoverRequest(tf).NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Step.State != string(simplyblockv1alpha2.TestFailoverStepCloning) {
+		t.Fatalf("step = %q, want Cloning; message=%q", got.Status.Step.State, got.Status.Message)
+	}
+	if got.Status.Clones[0].SnapshotID != "C:pool-1:s1" || got.Status.Clones[1].SnapshotID != "C:pool-2:s2" {
+		t.Errorf("clone snapshot handles = %+v, want the reused generation's snapshots", got.Status.Clones)
 	}
 }
 

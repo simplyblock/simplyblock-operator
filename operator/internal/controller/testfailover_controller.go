@@ -814,44 +814,119 @@ func (r *TestFailoverReconciler) resolvePointGroup(ctx context.Context, tf *simp
 	if group == nil {
 		return r.fail(ctx, tf, "consistency group "+tf.Spec.SourceRef+" not found on cluster "+tf.Spec.SourceCluster)
 	}
-	// The policy is read off the group: attach_group_policy stores it on the group
-	// record, and a group-first attach leaves the policy's own placement empty, so
-	// the recovery point is keyed on group.policy_id, not the policy list.
-	if group.PolicyID == "" {
-		return r.fail(ctx, tf, "no replication policy attached to group "+tf.Spec.SourceRef)
-	}
 
-	groupSeq, members, found, err := api.LatestReplicatedGeneration(ctx, srcUUID, group.PolicyID)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if !found {
-		return r.fail(ctx, tf, "no replicated generation on the target for group "+tf.Spec.SourceRef+" yet")
-	}
-	if len(members) != len(tf.Status.Clones) {
-		return r.fail(ctx, tf, fmt.Sprintf("the group generation has %d members but %d were resolved; group membership changed mid-drill", len(members), len(tf.Status.Clones)))
-	}
+	// handles[i] is the recovery snapshot for clone slot i; taken records whether
+	// the drill created these snapshots (in-place) and so must delete them on
+	// teardown. In-place recovers from a fresh generation cut on the source; onto a
+	// DR target it uses the replicated generation already there.
+	handles := make([]string, len(tf.Status.Clones))
+	var taken bool
+	var rpLabel string
 
-	if err := r.transitionTo(ctx, tf, simplyblockv1alpha2.TestFailoverStepCloning, func(s *simplyblockv1alpha2.TestFailoverStatus) {
+	if tf.Spec.BubbleCluster == tf.Spec.SourceCluster {
+		seq, members, err := r.ensureGroupGeneration(ctx, api, srcUUID, group.UUID, tf)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if len(members) != len(tf.Status.Clones) {
+			return r.fail(ctx, tf, fmt.Sprintf("the group generation has %d members but %d were resolved; group membership changed mid-drill", len(members), len(tf.Status.Clones)))
+		}
+		// Each fresh snapshot lives on the source, in its member's own pool. Pair it
+		// to a clone slot by lvol id; the slot's source handle carries that pool.
+		slot := make(map[string]int, len(tf.Status.Clones))
+		pool := make(map[string]string, len(tf.Status.Clones))
+		for i := range tf.Status.Clones {
+			_, p, lvol, ok := splitHandle(tf.Status.Clones[i].SourceHandle)
+			if !ok {
+				return r.fail(ctx, tf, "group member source handle is malformed: "+tf.Status.Clones[i].SourceHandle)
+			}
+			slot[lvol] = i
+			pool[lvol] = p
+		}
+		for _, m := range members {
+			i, ok := slot[m.LvolID]
+			if !ok {
+				return r.fail(ctx, tf, "group generation member "+m.LvolID+" is not among the resolved source members")
+			}
+			handles[i] = srcUUID + ":" + pool[m.LvolID] + ":" + m.SnapshotID
+		}
+		taken = true
+		rpLabel = fmt.Sprintf("generation %d (in-place)", seq)
+	} else {
+		// The policy is read off the group: attach_group_policy stores it on the
+		// group record, and a group-first attach leaves the policy's own placement
+		// empty, so the recovery point is keyed on group.policy_id, not the policy list.
+		if group.PolicyID == "" {
+			return r.fail(ctx, tf, "no replication policy attached to group "+tf.Spec.SourceRef)
+		}
+		seq, members, found, err := api.LatestReplicatedGeneration(ctx, srcUUID, group.PolicyID)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !found {
+			return r.fail(ctx, tf, "no replicated generation on the target for group "+tf.Spec.SourceRef+" yet")
+		}
+		if len(members) != len(tf.Status.Clones) {
+			return r.fail(ctx, tf, fmt.Sprintf("the group generation has %d members but %d were resolved; group membership changed mid-drill", len(members), len(tf.Status.Clones)))
+		}
 		// Every member is at one generation, so any one-to-one assignment of the
 		// generation's snapshots to the clone slots yields a crash-consistent set;
 		// a precise source-to-target mapping is a later refinement.
 		for i := range members {
-			s.Clones[i].SnapshotID = members[i].ClusterID + ":" + members[i].PoolID + ":" + members[i].SnapshotID
-			s.Clones[i].SnapshotTaken = false
+			handles[i] = members[i].ClusterID + ":" + members[i].PoolID + ":" + members[i].SnapshotID
+		}
+		taken = false
+		rpLabel = fmt.Sprintf("generation %d", seq)
+	}
+
+	for i := range handles {
+		if handles[i] == "" {
+			return r.fail(ctx, tf, "internal: no recovery snapshot resolved for "+tf.Status.Clones[i].SourceRef)
+		}
+	}
+
+	if err := r.transitionTo(ctx, tf, simplyblockv1alpha2.TestFailoverStepCloning, func(s *simplyblockv1alpha2.TestFailoverStatus) {
+		for i := range handles {
+			s.Clones[i].SnapshotID = handles[i]
+			s.Clones[i].SnapshotTaken = taken
 		}
 		if s.Report == nil {
 			s.Report = &simplyblockv1alpha2.TestFailoverReport{}
 		}
 		s.Report.BubbleCluster = tf.Spec.BubbleCluster
-		s.Report.RecoveryPoint = fmt.Sprintf("generation %d", groupSeq)
-		s.Message = fmt.Sprintf("resolved the group-consistent point (generation %d); cloning %d members", groupSeq, len(members))
+		s.Report.RecoveryPoint = rpLabel
+		s.Message = fmt.Sprintf("resolved the group-consistent point (%s); cloning %d members", rpLabel, len(handles))
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
 	r.Recorder.Eventf(tf, nil, corev1.EventTypeNormal, "RecoveryPointResolved", "RecoveryPointResolved",
-		"group-consistent generation %d on cluster %s (%d members)", groupSeq, tf.Spec.BubbleCluster, len(members))
+		"group-consistent %s on cluster %s (%d members)", rpLabel, tf.Spec.BubbleCluster, len(handles))
 	return ctrl.Result{Requeue: true}, nil
+}
+
+// ensureGroupGeneration returns the recovery generation for an in-place group
+// drill: a fresh crash-consistent generation cut on the source. It reuses one this
+// drill already cut on a retry (ask-then-act): a complete generation created at or
+// after the drill began is this drill's own, so re-entry after a mid-step failure
+// does not stack duplicate generations on the source.
+func (r *TestFailoverReconciler) ensureGroupGeneration(
+	ctx context.Context, api *webapi.Client, srcUUID, groupUUID string,
+	tf *simplyblockv1alpha2.TestFailover,
+) (int, []webapi.GroupGenerationMember, error) {
+	if tf.Status.StartedAt != nil {
+		seq, createdAt, members, found, err := api.LatestGroupGeneration(ctx, srcUUID, groupUUID)
+		if err != nil {
+			return 0, nil, err
+		}
+		if found && createdAt >= tf.Status.StartedAt.Unix() {
+			return seq, members, nil
+		}
+	}
+	seq, _, members, err := api.TakeGroupGeneration(ctx, srcUUID, groupUUID)
+	if err != nil {
+		return 0, nil, err
+	}
+	return seq, members, nil
 }
 
 // ensureSnapshot returns the id of the source volume's snapshot named name,
