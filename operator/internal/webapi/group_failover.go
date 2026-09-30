@@ -18,46 +18,6 @@ import (
 // storagePoolsListPathFmt is the cluster-scoped storage-pools list endpoint.
 const storagePoolsListPathFmt = "/api/v2/clusters/%s/storage-pools/"
 
-// GroupReplicationPolicy is the subset of a replication policy the group drill
-// needs. A consistency-group policy is matched to its group by placement
-// (group_lvs_name and group_node_id), because the policy DTO does not carry the
-// group id.
-type GroupReplicationPolicy struct {
-	ID               string `json:"id"`
-	ConsistencyGroup bool   `json:"consistency_group"`
-	GroupLvsName     string `json:"group_lvs_name"`
-	GroupNodeID      string `json:"group_node_id"`
-}
-
-// ResolveGroupPolicyID returns the id of the consistency-group replication
-// policy whose group placement matches (lvsName, nodeID), or "" when none does.
-// The group's own lvs_name/node_id come from the ConsistencyGroup record; a
-// policy is the group's when both agree and it declares a consistency group.
-func (c *Client) ResolveGroupPolicyID(
-	ctx context.Context,
-	clusterUUID, lvsName, nodeID string,
-) (string, error) {
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/policies/", clusterUUID)
-	body, statusCode, err := c.Do(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return "", fmt.Errorf("list replication policies: %w", err)
-	}
-	if statusCode >= 300 {
-		return "", fmt.Errorf("list replication policies: status %d: %s", statusCode, string(body))
-	}
-	var policies []GroupReplicationPolicy
-	if err := json.Unmarshal(body, &policies); err != nil {
-		return "", fmt.Errorf("unmarshal replication policies: %w", err)
-	}
-	for i := range policies {
-		p := policies[i]
-		if p.ConsistencyGroup && p.GroupLvsName == lvsName && p.GroupNodeID == nodeID {
-			return p.ID, nil
-		}
-	}
-	return "", nil
-}
-
 // ReplicatedGroupSnapshot is one member's replicated snapshot on the target
 // cluster, at one group-consistent generation. It is the cloneable point for
 // that member: cluster and pool address the target backend, snapshot is the

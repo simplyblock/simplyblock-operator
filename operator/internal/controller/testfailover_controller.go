@@ -814,15 +814,14 @@ func (r *TestFailoverReconciler) resolvePointGroup(ctx context.Context, tf *simp
 	if group == nil {
 		return r.fail(ctx, tf, "consistency group "+tf.Spec.SourceRef+" not found on cluster "+tf.Spec.SourceCluster)
 	}
-	policyID, err := api.ResolveGroupPolicyID(ctx, srcUUID, group.LvsName, group.NodeID)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if policyID == "" {
-		return r.fail(ctx, tf, "no consistency-group replication policy found for group "+tf.Spec.SourceRef)
+	// The policy is read off the group: attach_group_policy stores it on the group
+	// record, and a group-first attach leaves the policy's own placement empty, so
+	// the recovery point is keyed on group.policy_id, not the policy list.
+	if group.PolicyID == "" {
+		return r.fail(ctx, tf, "no replication policy attached to group "+tf.Spec.SourceRef)
 	}
 
-	groupSeq, members, found, err := api.LatestReplicatedGeneration(ctx, srcUUID, policyID)
+	groupSeq, members, found, err := api.LatestReplicatedGeneration(ctx, srcUUID, group.PolicyID)
 	if err != nil {
 		return ctrl.Result{}, err
 	}

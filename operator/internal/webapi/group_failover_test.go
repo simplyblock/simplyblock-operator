@@ -24,40 +24,6 @@ func routingServer(t *testing.T, routes map[string]string) *Client {
 	return NewClient(srv.URL)
 }
 
-func TestResolveGroupPolicyIDMatchesByPlacement(t *testing.T) {
-	// Two consistency-group policies plus a non-group one; only the policy whose
-	// placement matches the group's lvs/node is the group's.
-	c := routingServer(t, map[string]string{
-		"/api/v2/clusters/C/replication/policies/": `[
-			{"id":"p-other","consistency_group":true,"group_lvs_name":"lvs-x","group_node_id":"node-x"},
-			{"id":"p-plain","consistency_group":false,"group_lvs_name":"","group_node_id":""},
-			{"id":"p-ours","consistency_group":true,"group_lvs_name":"lvs-a","group_node_id":"node-a"}
-		]`,
-	})
-	id, err := c.ResolveGroupPolicyID(context.Background(), "C", "lvs-a", "node-a")
-	if err != nil {
-		t.Fatalf("ResolveGroupPolicyID: %v", err)
-	}
-	if id != "p-ours" {
-		t.Errorf("policy id = %q, want p-ours", id)
-	}
-}
-
-func TestResolveGroupPolicyIDNoMatchReturnsEmpty(t *testing.T) {
-	c := routingServer(t, map[string]string{
-		"/api/v2/clusters/C/replication/policies/": `[
-			{"id":"p-other","consistency_group":true,"group_lvs_name":"lvs-x","group_node_id":"node-x"}
-		]`,
-	})
-	id, err := c.ResolveGroupPolicyID(context.Background(), "C", "lvs-a", "node-a")
-	if err != nil {
-		t.Fatalf("ResolveGroupPolicyID: %v", err)
-	}
-	if id != "" {
-		t.Errorf("policy id = %q, want empty for no match", id)
-	}
-}
-
 func TestLatestReplicatedGenerationReturnsPerMemberSnapshots(t *testing.T) {
 	c := routingServer(t, map[string]string{
 		"/api/v2/clusters/C/replication/policies/P/latest-generation": `{

@@ -525,6 +525,13 @@ func TestFailoverResolvingPointDRTargetUsesReplicatedSnapshot(t *testing.T) {
 // point: the drill resolves the group's replication policy, reads its latest
 // group-consistent generation, and records one target snapshot handle per clone
 // slot before advancing to Cloning.
+//
+// Regression (2026-09-30): the drill inferred the policy from the policies list
+// by matching the group's placement (group_lvs_name/group_node_id) and a
+// consistency_group flag. A group attached with attach_group_policy sets
+// group.policy_id and leaves both empty, so the heuristic matched nothing and the
+// group drill failed at ResolvingPoint with "no consistency-group replication
+// policy found." The policy id is read off the group DTO, which now carries it.
 func TestFailoverResolvingPointGroupResolvesGeneration(t *testing.T) {
 	tf := sampleTestFailover()
 	tf.Finalizers = []string{finalizerTestFailover}
@@ -549,14 +556,15 @@ func TestFailoverResolvingPointGroupResolvesGeneration(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		p := req.URL.Path
 		switch {
+		// The live group-first shape: the group carries its policy_id, and the
+		// policy itself exposes no placement and no consistency_group flag, so the
+		// drill must read the policy off the group rather than the policies list.
 		case strings.HasSuffix(p, "/consistency-groups/") && req.URL.Query().Get("name") == "cg":
-			_, _ = w.Write([]byte(`[{"id":"g1","name":"cg","lvs_name":"lvs-a","node_id":"node-a"}]`))
+			_, _ = w.Write([]byte(`[{"id":"g1","name":"cg","lvs_name":"lvs-a","node_id":"node-a","policy_id":"p1"}]`))
 		case strings.HasSuffix(p, "/replication/policies/p1/latest-generation"):
 			_, _ = w.Write([]byte(`{"group_seq":7,"members":[` +
 				`{"snapshot_id":"s1","cluster_id":"B","pool_id":"pb","lvol_id":"t1","size":1073741824,"group_seq":7},` +
 				`{"snapshot_id":"s2","cluster_id":"B","pool_id":"pb","lvol_id":"t2","size":1073741824,"group_seq":7}]}`))
-		case strings.HasSuffix(p, "/replication/policies/"):
-			_, _ = w.Write([]byte(`[{"id":"p1","consistency_group":true,"group_lvs_name":"lvs-a","group_node_id":"node-a"}]`))
 		default:
 			t.Errorf("unexpected request %s %s", req.Method, p)
 			w.WriteHeader(http.StatusInternalServerError)
