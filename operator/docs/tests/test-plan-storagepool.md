@@ -276,6 +276,7 @@ so real garbage collection is the only way to exercise them.
 | I-05 | `spec.limits` changed after creation: accepted                                           | Positive | —    |
 | I-06 | `spec.volumeDefaults.filesystem` outside the enum: rejected                              | Negative | —    |
 | I-07 | `spec.limits.iops` negative: rejected by the minimum                                     | Boundary | —    |
+| I-21 | IOPS or throughput limit set: rejected (`TestPoolLimitsRejectIOPSAndThroughput`)         | Negative | —    |
 | I-08 | `spec.allowedNodes` with a duplicate: rejected by `listType=set`                         | Negative | —    |
 | I-09 | `StoragePoolOps.spec.action` outside the enum: rejected                                  | Negative | —    |
 | I-10 | `StoragePoolOps.spec.poolRef` changed after creation: rejected                           | Negative | —    |

@@ -373,6 +373,9 @@ spec:
                           type: integer
                       type: object
                   type: object
+                  x-kubernetes-validations:
+                    - message: limits.iops and limits.throughput are not yet supported in beta1
+                      rule: '!has(self.iops) && !has(self.throughput)'
                 volumeDefaults:
                   description: |-
                     VolumeDefaults are what every volume in the pool is created with.
