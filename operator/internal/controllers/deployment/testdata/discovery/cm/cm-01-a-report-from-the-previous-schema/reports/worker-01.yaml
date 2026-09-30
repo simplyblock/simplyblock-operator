@@ -170,7 +170,7 @@ data:
       },
       "node": "worker-01",
       "probedAt": "2026-09-18T09:00:00Z",
-      "version": 6
+      "version": 7
     }
 kind: ConfigMap
 metadata:

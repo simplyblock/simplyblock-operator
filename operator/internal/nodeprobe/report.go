@@ -38,7 +38,15 @@ import (
 // because a probe pod outlives the operator that created it across an upgrade:
 // the image is pinned in the Job, and a Job already running keeps the image it
 // started with.
-const ReportVersion = 7
+//
+// Version 8 added StablePath, and it is a bump rather than an additive field
+// because absence means something. A version-7 report decodes with StablePath
+// empty on every device, which a reader takes as "udev published no link" and
+// falls back to the kernel path for — so an old probe's report, read by a new
+// operator, drafts exactly the enumeration-order names this version exists to
+// replace, and says nothing about having done so. Refusing it re-runs the probe,
+// which is cheap and correct.
+const ReportVersion = 8
 
 // Report is one worker's inventory as the probe found it.
 type Report struct {

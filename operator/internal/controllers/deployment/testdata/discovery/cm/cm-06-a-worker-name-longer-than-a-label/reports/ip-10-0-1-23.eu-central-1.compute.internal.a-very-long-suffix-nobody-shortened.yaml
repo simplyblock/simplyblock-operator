@@ -2,7 +2,7 @@ apiVersion: v1
 data:
   report.json: |-
     {
-      "version": 7,
+      "version": 8,
       "node": "ip-10-0-1-23.eu-central-1.compute.internal.a-very-long-suffix-nobody-shortened",
       "probedAt": "2026-09-18T09:00:00Z",
       "cpu": {
