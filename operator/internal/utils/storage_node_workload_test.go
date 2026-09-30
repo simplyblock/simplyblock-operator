@@ -65,6 +65,42 @@ func TestBuildStorageNodeDaemonSetConfigGeneratorMountsDevAndSys(t *testing.T) {
 	}
 }
 
+// TestConfigGeneratorAndMainContainerRunAsRootWithoutSudo is a regression test:
+// 2026-09-29, k3s on Ubuntu 24.04. Both containers ran as the image's default
+// non-root user and started their command through sudo, which fails its PAM
+// account check in this image ("Authentication service cannot retrieve
+// authentication info"): s-node-api-config-generator exited at once and every
+// storage node's add failed. The fix mirrors sbcli's SPDK pod fix for the same
+// fault: run as root (runAsUser 0) and drop sudo rather than escalate to it.
+func TestConfigGeneratorAndMainContainerRunAsRootWithoutSudo(t *testing.T) {
+	sn := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
+	}
+	ds := BuildStorageNodeDaemonSet(sn, false, false, "", "", "")
+
+	init := ds.Spec.Template.Spec.InitContainers[1] // [0]=node-env-writer, [1]=s-node-api-config-generator
+	if init.Name != "s-node-api-config-generator" {
+		t.Fatalf("expected s-node-api-config-generator, got %q", init.Name)
+	}
+	if init.SecurityContext == nil || init.SecurityContext.RunAsUser == nil || *init.SecurityContext.RunAsUser != 0 {
+		t.Errorf("s-node-api-config-generator must run as root (runAsUser 0), got %#v", init.SecurityContext)
+	}
+	if strings.Contains(configureInvocation, "sudo") {
+		t.Errorf("configureInvocation must not call sudo: %s", configureInvocation)
+	}
+
+	main := ds.Spec.Template.Spec.Containers[0]
+	if main.Name != "s-node-api-container" {
+		t.Fatalf("expected s-node-api-container, got %q", main.Name)
+	}
+	if main.SecurityContext == nil || main.SecurityContext.RunAsUser == nil || *main.SecurityContext.RunAsUser != 0 {
+		t.Errorf("s-node-api-container must run as root (runAsUser 0), got %#v", main.SecurityContext)
+	}
+	if strings.Contains(strings.Join(main.Command, "\n"), "sudo") {
+		t.Errorf("s-node-api-container must not call sudo: %v", main.Command)
+	}
+}
+
 func TestBuildSpdkProxyEndpointSlice_DottedNodeNameTruncates(t *testing.T) {
 	sn := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
@@ -150,9 +186,9 @@ func TestBuildStorageNodeDaemonSetUserResourcesOverrideDefaults(t *testing.T) {
 
 // What the pod carries as an environment variable is the fleet's value, and
 // what the node's own entry states has to win over it. The entry is sourced
-// rather than injected, so a variable it sets is a shell variable: sudo passes
-// the environment, which a sourced assignment is not part of until it is
-// exported.
+// rather than injected, so a variable it sets is a shell variable: exec only
+// inherits the environment, which a sourced assignment is not part of until it
+// is exported.
 func TestTheMainContainerExportsTheNodesReservedCPUs(t *testing.T) {
 	ds := BuildStorageNodeDaemonSet(&simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "simplyblock"},
