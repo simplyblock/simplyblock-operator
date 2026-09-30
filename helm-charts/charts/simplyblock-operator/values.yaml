@@ -308,12 +308,26 @@ controlplane:
     # "double" = 3 coordinators (suitable for 3 workers, tolerates 1 failure)
     # "triple" = 5 coordinators (suitable for 5+ workers, tolerates 2 failures)
     redundancyMode: double
-    # nodeSelector pins FDB pods to dedicated nodes, leaving the remaining
-    # storage workers as non-FDB nodes that can be added in parallel.
-    # Label target nodes first: kubectl label node <node> simplyblock.io/fdb-node=true
-    # Example:
+    # Which workers the database's own processes run on. Empty leaves them with
+    # the rest of the control plane, wherever controlplane.nodeSelector put it.
+    #
+    # It is worth stating because of what it does to expansion. Adding a storage
+    # node reboots its worker, and a worker running a FoundationDB process is
+    # added on its own however many nodes storageNodes.nodeProvisioningBudget
+    # allows at once. Confining the database to a few workers is what leaves the
+    # remaining ones free to be added together.
+    #
+    # State at least as many workers as redundancyMode asks for coordinators:
+    # three for double, and five for triple. A narrower selector still places
+    # them, several to a worker, where one worker's loss takes more coordinators
+    # than the redundancy mode was configured to survive.
+    #
+    # The label is the fleet's own, and the workers carry it first:
+    #
+    #   kubectl label node <worker> storage.simplyblock.io/foundationdb=""
+    #
     #   nodeSelector:
-    #     simplyblock.io/fdb-node: "true"
+    #     storage.simplyblock.io/foundationdb: ""
     nodeSelector: {}
     image:
       operator:
