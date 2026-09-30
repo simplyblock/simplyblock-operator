@@ -82,7 +82,11 @@ func (r *StorageNodeOpsReconciler) drainMigrateDevices(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	nodeUUID := sn.Status.UUID
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/migrate-devices",
+	// The removal's first step: prepare-removal admits the node, marks it
+	// pending_removal, shuts it down and rebuilds its devices; it is
+	// idempotent, so re-POSTing it here restarts a rebuild that a control-plane
+	// restart lost. Its progress is done once the node is migrating_lvols.
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/prepare-removal",
 		clusterUUID, nodeUUID)
 
 	if !ops.Status.DevicesTriggered {
@@ -160,11 +164,9 @@ func (r *StorageNodeOpsReconciler) drainMigrateDevices(
 	r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "DeviceMigrationCompleted",
 		fmt.Sprintf("all %d device(s) rebuilt onto peers", progress.Completed))
 
-	// Move the node's own status on with the phase. The control plane stamps
-	// the device half itself (that is what /migrate-devices does), but the
-	// volume half is driven from here, so nothing else would ever move it --
-	// and a node left saying migrating_devices through the whole volume phase
-	// makes `sbctl sn list` disagree with this CR about where a removal is.
+	// The control plane moves the node to migrating_lvols itself when the
+	// rebuild completes. Re-asserted here, idempotently, for a control plane
+	// that predates that.
 	//
 	// Best-effort: it is a status label, not a precondition, and failing the
 	// drain because a cosmetic patch did not land would be worse than the

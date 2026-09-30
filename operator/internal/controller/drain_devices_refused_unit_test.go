@@ -20,7 +20,7 @@ func devicePostServer(t *testing.T, postStatus int, posts *int) *httptest.Server
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/migrate-devices"):
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/prepare-removal"):
 			w.WriteHeader(postStatus)
 		case r.Method == http.MethodPost:
 			*posts++

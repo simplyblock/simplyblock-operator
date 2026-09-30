@@ -51,6 +51,7 @@ const (
 	TaskStateDone = "done"
 
 	ClusterStatusActive    = "active"
+	ClusterStatusDegraded  = "degraded"
 	ClusterStatusSuspended = "suspended"
 	ClusterStatusUnready   = "unready"
 

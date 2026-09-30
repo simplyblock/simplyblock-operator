@@ -54,6 +54,9 @@ func TestDrainShutdown_WaitsWhileTheShutdownIsRunning(t *testing.T) {
 	}
 }
 
+// Somebody else's shutdown is running: the removal is not triggered under it
+// (that would stamp pending_removal over in_shutdown, and the shutdown then
+// ends by writing offline). The drain waits and triggers once it has landed.
 func TestDrainShutdown_AShutdownAlreadyRunningIsWaitedForNotRepeated(t *testing.T) {
 	posts := 0
 	srv := shutdownStatusServer(t, utils.NodeStatusInShutdown, &posts)
@@ -65,10 +68,10 @@ func TestDrainShutdown_AShutdownAlreadyRunningIsWaitedForNotRepeated(t *testing.
 	}
 	updated := reloadOps(t, r)
 	if posts != 0 {
-		t.Errorf("POSTed %d shutdown(s) on top of one already running", posts)
+		t.Errorf("POSTed %d time(s) while a shutdown was still running", posts)
 	}
-	if !updated.Status.Triggered {
-		t.Error("the running shutdown was not adopted as this drain's own")
+	if updated.Status.Triggered {
+		t.Error("the removal was marked triggered under a running shutdown")
 	}
 	if updated.Status.SubPhase == simplyblockv1alpha1.StorageNodeOpsSubPhaseMigratingDevices {
 		t.Error("advanced before the shutdown landed")
