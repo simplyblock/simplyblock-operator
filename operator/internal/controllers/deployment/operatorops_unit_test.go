@@ -824,7 +824,10 @@ func TestTheDraftStatesTheHostOSTheProbesRead(t *testing.T) {
 		}},
 	}}}
 
-	config, notes := r.draftFor(ops, &simplyblockv1alpha2.DiscoverSpec{}, plan, nil)
+	config, notes, err := r.draftFor(ops, &simplyblockv1alpha2.DiscoverSpec{}, plan, nil)
+	if err != nil {
+		t.Fatalf("the fleet was refused: %v", err)
+	}
 
 	if config.Spec.HostOS == nil {
 		t.Fatalf("the draft states no host OS; the notes are %v", notes)
@@ -858,7 +861,10 @@ func TestTheDraftStatesNoHostOSForAFleetThatDisagrees(t *testing.T) {
 		worker("worker-02", "rocky"),
 	}}
 
-	config, notes := r.draftFor(ops, &simplyblockv1alpha2.DiscoverSpec{}, plan, nil)
+	config, notes, err := r.draftFor(ops, &simplyblockv1alpha2.DiscoverSpec{}, plan, nil)
+	if err != nil {
+		t.Fatalf("the fleet was refused: %v", err)
+	}
 
 	if config.Spec.HostOS != nil {
 		t.Fatalf("the draft states %+v for a fleet running two distributions", config.Spec.HostOS)
@@ -907,7 +913,10 @@ func TestTheDraftCarriesTheTolerationsTheRunProbedWith(t *testing.T) {
 	ops := &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "discover-1"}}
 	spec := &simplyblockv1alpha2.DiscoverSpec{Tolerations: storagePlaneTaint}
 
-	config, notes := r.draftFor(ops, spec, discoverypkg.Plan{}, nil)
+	config, notes, err := r.draftFor(ops, spec, discoverypkg.Plan{}, nil)
+	if err != nil {
+		t.Fatalf("the fleet was refused: %v", err)
+	}
 
 	if config.Spec.Cluster == nil {
 		t.Fatalf("the draft describes no cluster; the notes are %v", notes)
@@ -930,7 +939,10 @@ func TestAGrowthDraftCarriesNoTolerations(t *testing.T) {
 		Tolerations: storagePlaneTaint,
 	}
 
-	config, _ := r.draftFor(ops, spec, discoverypkg.Plan{}, nil)
+	config, _, err := r.draftFor(ops, spec, discoverypkg.Plan{}, nil)
+	if err != nil {
+		t.Fatalf("the fleet was refused: %v", err)
+	}
 
 	if config.Spec.Cluster != nil {
 		t.Errorf("a growth draft describes a cluster: %+v", config.Spec.Cluster)

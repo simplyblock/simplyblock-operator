@@ -10,6 +10,7 @@ spec:
   approved: false
   cluster:
     enableDriveFormat: true
+    enableJournalDevice: true
     maxSubsystemCount: 30
     name: discovered-discover-host-02-cluster
     stripe:

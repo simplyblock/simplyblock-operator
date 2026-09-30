@@ -11,6 +11,7 @@ spec:
       - /dev/vdb
       - /dev/vdc
       enableLogicalBlockDevices: true
+    forceJournalDevice: true
 status:
   environment: K3s
   step: {}

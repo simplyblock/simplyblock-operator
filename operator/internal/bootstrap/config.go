@@ -81,6 +81,15 @@ type Config struct {
 	// deployment is.
 	EnableControlPlaneNodes *bool `json:"enableControlPlaneNodes,omitempty"`
 
+	// ForceJournalDevice dedicates a journal device on a fleet whose disks do
+	// not say which one, by taking one of the equal-smallest disks.
+	//
+	// It is here because an unattended install is exactly where the refusal it
+	// overrides is most expensive: a logical block-device run on a fleet of
+	// equal disks fails rather than drafting a document that cannot deploy, and
+	// nobody is watching to correct the draft by hand.
+	ForceJournalDevice *bool `json:"forceJournalDevice,omitempty"`
+
 	// DeviceFilter narrows which of an inspected worker's devices reach the
 	// draft. It is the API's own filter rather than a subset of it: the chart's
 	// schema is what states which members an installation may set, and a type
@@ -272,6 +281,7 @@ func (c *Config) DiscoverSpec() *simplyblockv1alpha2.DiscoverSpec {
 
 	spec.ConfigName = strings.TrimSpace(c.Draft.Name)
 	spec.EnableControlPlaneNodes = c.EnableControlPlaneNodes
+	spec.ForceJournalDevice = c.ForceJournalDevice
 	if len(c.NodeSelector) > 0 {
 		spec.NodeSelector = maps.Clone(c.NodeSelector)
 	}

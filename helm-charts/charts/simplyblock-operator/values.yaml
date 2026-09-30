@@ -150,6 +150,27 @@ discovery:
   # control-plane node.
   enableControlPlaneNodes: false
 
+  # Dedicate a journal device on a fleet whose disks do not say which one.
+  #
+  # The run proposes a dedicated journal device when every worker hands over one
+  # disk smaller than its others, because a fleet built that way was built that
+  # way on purpose. Where several disks share the smallest size nothing says
+  # which to take, and taking one spends a whole disk the fleet did not set
+  # aside: on a worker with ten 10 TB disks that is 10 TB, silently. So the run
+  # does not guess.
+  #
+  # What happens instead depends on the class. An NVMe cluster carves a journal
+  # partition out of every device when none is dedicated, so the run leaves the
+  # field unset, says so, and every disk stays storage. A cluster of logical
+  # block devices has no such layout, so the run fails rather than writing a
+  # document that creates the cluster, formats its drives, and then fails every
+  # node_add. Set this on such a fleet to have one of the equal disks taken
+  # anyway, and read the draft's note to see which disk it cost.
+  #
+  # It does not force a worker that hands over a single disk, with or without
+  # this: dedicating that disk leaves the worker nothing to store on.
+  forceJournalDevice: false
+
   # Which of an inspected worker's devices reach the draft. What is filtered out
   # here never appears in the document, so this is the place to keep a boot disk
   # out of a fifty-worker draft nobody reads line by line.
@@ -541,7 +562,7 @@ controlplane:
         repository: quay.io/simplyblock-io/fdb-kubernetes-monitor
         tag: "7.3.63"
       # Set baseImage to use a custom FDB image registry. With imageType: unified
-      # the same fdb-kubernetes-monitor image runs as the foundationdb container,
+      # the same fdb-kubernetes-monitor image runs as the `foundationdb` container,
       # so this points at the monitor repo. When empty, no imageConfigs block is
       # rendered and the operator uses its default.
       mainContainer:

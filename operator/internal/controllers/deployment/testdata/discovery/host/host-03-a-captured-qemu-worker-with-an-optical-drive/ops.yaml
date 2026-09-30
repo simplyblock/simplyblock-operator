@@ -8,6 +8,7 @@ spec:
   discover:
     deviceFilter:
       enableLogicalBlockDevices: true
+    forceJournalDevice: true
 status:
   environment: K3s
   step: {}

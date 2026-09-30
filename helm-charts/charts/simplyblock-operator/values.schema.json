@@ -496,6 +496,9 @@
         "enableControlPlaneNodes": {
           "type": "boolean"
         },
+        "forceJournalDevice": {
+          "type": "boolean"
+        },
         "deviceFilter": {
           "type": "object",
           "additionalProperties": false,

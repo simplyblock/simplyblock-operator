@@ -922,6 +922,11 @@ func (in *DiscoverSpec) DeepCopyInto(out *DiscoverSpec) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.ForceJournalDevice != nil {
+		in, out := &in.ForceJournalDevice, &out.ForceJournalDevice
+		*out = new(bool)
+		**out = **in
+	}
 	if in.DeviceFilter != nil {
 		in, out := &in.DeviceFilter, &out.DeviceFilter
 		*out = new(DeviceFilter)

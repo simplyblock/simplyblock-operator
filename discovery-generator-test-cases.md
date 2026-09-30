@@ -106,9 +106,10 @@ constructing one directly.
 | DEV-14 | The same volume on a block run                              | Refused the same way, since the rule is in both pipelines and reads no filter               | `CM`    |
 | DEV-15 | A worker whose every disk is an attached volume             | No draft, and the explanation counts them together rather than listing each                 | `CM`    |
 | DEV-16 | A fabric namespace another product exported                 | Refused for being on a fabric, not as a simplyblock volume: the NQN does not parse as one   | `CM`    |
-| DEV-17 | An iSCSI LUN beside a virtio disk, block run, no allow list | Only the virtio disk. A LUN is storage across a network and is never taken by default       | `CM`    |
+| DEV-17 | An iSCSI LUN beside virtio disks, block run, no allow list  | Only the virtio disks. A LUN is storage across a network and is never taken by default      | `CM`    |
 | DEV-18 | The same worker with the allow list naming the LUN          | Both disks. Naming it is the decision a run cannot make for a fleet                         | `CM`    |
 | DEV-19 | An iSCSI LUN on an NVMe run                                 | Refused for being the other class, before the iSCSI rule is reached                         | `CM`    |
+| DEV-20 | 4 equal virtio disks, block run, forceJournalDevice unset   | Refused: nothing says which disk carries the journal, and the class has no partitioned one  | `CM`    |
 
 ## 3. NUMA topology
 

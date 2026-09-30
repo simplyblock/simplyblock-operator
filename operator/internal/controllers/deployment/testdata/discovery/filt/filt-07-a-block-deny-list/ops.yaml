@@ -10,6 +10,7 @@ spec:
       blockDenyList:
       - /dev/sda
       enableLogicalBlockDevices: true
+    forceJournalDevice: true
 status:
   environment: K3s
   step: {}

@@ -140,6 +140,16 @@ data:
           "numaNode": 0,
           "available": true,
           "content": "Blank"
+        },
+        {
+          "name": "vdc",
+          "path": "/dev/vdc",
+          "sizeBytes": 4398046511104,
+          "kind": "Disk",
+          "transport": "Virtio",
+          "numaNode": 0,
+          "available": true,
+          "content": "Blank"
         }
       ],
       "hostOS": {

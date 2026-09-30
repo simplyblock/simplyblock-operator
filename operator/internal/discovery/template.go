@@ -14,6 +14,8 @@ package discovery
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/simplyblock/atlas/ptr"
@@ -53,6 +55,24 @@ type ClusterTemplate struct {
 	Notes []string
 }
 
+// TemplateOptions is what the run states about the cluster it proposes, beyond
+// what the fleet says.
+//
+// It is a struct rather than more parameters because both members answer one
+// question — what an installation decided that no probe could read — and a third
+// positional argument at a call site that already passes two would read as an
+// unlabeled list.
+type TemplateOptions struct {
+	// Seed is the cluster the installation stated, which the generator starts
+	// from and fills in. Nil is an installation that stated nothing.
+	Seed *simplyblockv1alpha2.ClusterTemplate
+
+	// ForceJournalDevice makes the run dedicate a journal device even where the
+	// fleet's disks do not say which one. journalDeviceFor is what it does, and
+	// what it does not.
+	ForceJournalDevice bool
+}
+
 // ClusterTemplateFor proposes the cluster for a plan.
 //
 // The vCPU count is the binding constraint and is taken from the smallest
@@ -61,9 +81,13 @@ type ClusterTemplate struct {
 // worker cannot meet the API's floor the floor is used anyway and the note says
 // so, because a draft that fails schema validation is one a reviewer cannot
 // even read.
-func ClusterTemplateFor(name string, plan Plan, seed *simplyblockv1alpha2.ClusterTemplate) ClusterTemplate {
+// It returns an error for a fleet it cannot draft at all. Only the journal
+// device produces one today, and only for the logical block-device class: see
+// journalDeviceFor.
+func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTemplate, error) {
 	out := ClusterTemplate{Template: &simplyblockv1alpha2.ClusterTemplate{Name: name}}
 
+	seed := opts.Seed
 	if seed == nil {
 		seed = &simplyblockv1alpha2.ClusterTemplate{}
 	}
@@ -111,11 +135,15 @@ func ClusterTemplateFor(name string, plan Plan, seed *simplyblockv1alpha2.Cluste
 	// Not seeded either: which disk becomes the journal follows from the sizes the
 	// probes read, and a fleet without a small disk to spare has no such layout to
 	// propose.
-	if propose, note := journalDeviceFor(plan); note != "" {
+	propose, journalNote, err := journalDeviceFor(plan, opts.ForceJournalDevice)
+	if err != nil {
+		return ClusterTemplate{}, err
+	}
+	if journalNote != "" {
 		if propose {
 			out.Template.EnableJournalDevice = ptr.To(true)
 		}
-		out.Notes = append(out.Notes, note)
+		out.Notes = append(out.Notes, journalNote)
 	}
 
 	if seed.Stripe != nil {
@@ -151,7 +179,7 @@ func ClusterTemplateFor(name string, plan Plan, seed *simplyblockv1alpha2.Cluste
 			"against.")
 	}
 
-	return out
+	return out, nil
 }
 
 // statedNote accounts for a value this installation decided, so that a reviewer
@@ -415,10 +443,28 @@ func chosenNodeHugePageBytes(worker Worker) uint64 {
 // both, and the draft leaves it to the reviewer rather than picking one.
 //
 // A tie is not the shape. Two disks of the same smallest size are two disks the
-// fleet can use, and giving one to the journal spends capacity nobody set aside.
-// Neither is a worker with one disk, which would be left no storage at all, nor
-// one reporting a disk of no size, because an unsized disk is smaller than
-// anything and the generator invents those for claimed userspace controllers.
+// fleet can use, and giving one to the journal spends capacity nobody set aside:
+// a worker with ten 10 TB disks would silently lose 10 TB of it. Neither is a
+// worker with one disk, which would be left no storage at all, nor one reporting
+// a disk of no size, because an unsized disk is smaller than anything and the
+// generator invents those for claimed userspace controllers.
+//
+// The two classes part company on what happens then. An NVMe cluster with no
+// dedicated journal device carves a journal partition out of every device, so
+// leaving the field unset is a layout the backend builds and the fleet keeps
+// every disk. A logical block-device cluster has no such fallback: the control
+// plane refuses partitioned-journal mode for the class outright, so an unset
+// field is a document that cannot deploy — every worker's node_add fails on it,
+// after the cluster has been created and the drives formatted. A block run
+// therefore refuses the fleet rather than drafting it, which is the same
+// judgment made where it costs nothing.
+//
+// TemplateOptions.ForceJournalDevice overrides the tie, and only the tie. It
+// breaks it by address, ascending, so two runs over one unchanged fleet name the
+// same disk. It does not override the worker with one disk or the worker whose
+// disks report no size: those are impossible rather than ambiguous, there is no
+// answer to force, and forcing one would produce a storage node with nothing to
+// store on.
 //
 // What counts as a disk here is what the draft names, which is a class address
 // and not a probed device. An NVMe controller with two namespaces is two
@@ -426,26 +472,76 @@ func chosenNodeHugePageBytes(worker Worker) uint64 {
 // over-counts a worker that has one controller and mistakes a namespace for the
 // disk it sits on. The capacity compared is the controller's, summed across its
 // namespaces, because that is the disk a reviewer is being asked to give up.
-func journalDeviceFor(plan Plan) (bool, string) {
+func journalDeviceFor(plan Plan, force bool) (bool, string, error) {
 	if len(plan.Workers) == 0 {
-		return false, ""
+		return false, "", nil
 	}
 
 	var smallest uint64
 	var onWorker, named string
+	forced := false
 
 	for _, worker := range plan.Workers {
-		size, address, ok := soleSmallestDisk(worker)
-		if !ok {
+		size, address, verdict := smallestDisk(worker)
+
+		switch {
+		case verdict == journalDiskImpossible:
+			// No answer to force. The worker hands over fewer than two disks, or
+			// its disks report no size, and dedicating one either leaves it
+			// nothing to store on or dedicates a disk nobody could measure.
+			if plan.Class == ClassBlock {
+				return false, "", fmt.Errorf(
+					"%s hands over no disk that could carry the journal, and a %s cluster has "+
+						"no other journal layout: the control plane refuses the partitioned "+
+						"journal for this class, so a document leaving enableJournalDevice "+
+						"unset creates the cluster, formats its drives, and then fails every "+
+						"node_add. Give the worker a second disk, or deploy it as %s",
+					worker.Name, ClassBlock, ClassNVMe)
+			}
 			return false, fmt.Sprintf(
 				"enableJournalDevice is left unset: %s hands over no single disk smaller than "+
 					"its others, so there is none to dedicate. Setting it would give up a disk "+
 					"the fleet did not set aside, and the field cannot be changed once the "+
-					"cluster exists", worker.Name)
+					"cluster exists", worker.Name), nil
+
+		case verdict == journalDiskTied && !force:
+			// The fleet declines to say which of several equal disks to take,
+			// and nothing here decides for it.
+			if plan.Class == ClassBlock {
+				return false, "", fmt.Errorf(
+					"%s hands over no disk smaller than its others, so nothing says which one "+
+						"carries the journal, and a %s cluster has no other journal layout: "+
+						"the control plane refuses the partitioned journal for this class, so "+
+						"a document leaving enableJournalDevice unset creates the cluster, "+
+						"formats its drives, and then fails every node_add. Set "+
+						"spec.discover.forceJournalDevice to dedicate one of the equal disks "+
+						"anyway, which spends %s of this worker's capacity on the journal",
+					worker.Name, ClassBlock, humanBytes(size))
+			}
+			return false, fmt.Sprintf(
+				"enableJournalDevice is left unset: %s hands over no single disk smaller than "+
+					"its others, so there is none to dedicate. Setting it would give up a disk "+
+					"the fleet did not set aside, and the field cannot be changed once the "+
+					"cluster exists", worker.Name), nil
+
+		case verdict == journalDiskTied:
+			forced = true
 		}
+
 		if onWorker == "" || size < smallest {
 			smallest, onWorker, named = size, worker.Name, address
 		}
+	}
+
+	if forced {
+		return true, fmt.Sprintf(
+			"enableJournalDevice is set because spec.discover.forceJournalDevice asked for "+
+				"it, not because the fleet said so: at least one worker hands over no disk "+
+				"smaller than its others, and the draft takes one of the equal ones anyway. "+
+				"The smallest named is %s (%s) on %s, and that whole disk carries the journal "+
+				"instead of data. This is the line to remove if that capacity was meant to be "+
+				"storage",
+			humanBytes(smallest), named, onWorker), nil
 	}
 
 	return true, fmt.Sprintf(
@@ -453,18 +549,44 @@ func journalDeviceFor(plan Plan) (bool, string) {
 			"others, the smallest being %s (%s) on %s, and the control plane dedicates that "+
 			"disk to the journal manager instead of carving a journal partition out of every "+
 			"disk. This is the line to remove if the disk was meant to carry data",
-		humanBytes(smallest), named, onWorker)
+		humanBytes(smallest), named, onWorker), nil
 }
 
-// soleSmallestDisk returns the capacity and the draft's name of the one disk
-// smaller than every other the worker hands over, and reports whether there is
-// one.
+// journalVerdict is what a worker's disks say about which one carries the
+// journal, and it has three answers rather than two.
+//
+// The distinction is what a forced run turns on. A tie is the fleet declining to
+// say which of several equal disks to take, and a run told to force it may pick
+// one. A worker with one disk, or with disks of no size, is not ambiguous: there
+// is no answer to force, because dedicating the only disk leaves the worker
+// nothing to store on and an unsized disk is smaller than everything.
+type journalVerdict int
+
+const (
+	// journalDiskFound: one disk is smaller than every other.
+	journalDiskFound journalVerdict = iota
+
+	// journalDiskTied: several disks share the smallest size, so the fleet does
+	// not say which. This is the one a force resolves.
+	journalDiskTied
+
+	// journalDiskImpossible: the worker hands over fewer than two disks, or its
+	// smallest disk reports no size. Neither is forceable.
+	journalDiskImpossible
+)
+
+// smallestDisk returns the capacity and the draft's name of the disk a journal
+// would go on, and which of the three answers the worker gave.
 //
 // It works in the addresses the draft names rather than the devices the probe
 // reported, so a controller with two namespaces is one disk of their combined
 // size. An address the class cannot name is skipped, which is the same device
 // the draft would leave out.
-func soleSmallestDisk(worker Worker) (uint64, string, bool) {
+//
+// A tie is broken by address, ascending, so that two runs over one unchanged
+// fleet name the same disk. Two drafts differing in which disk they give up is a
+// diff nobody can account for, and the ordering costs nothing.
+func smallestDisk(worker Worker) (uint64, string, journalVerdict) {
 	capacity := map[string]uint64{}
 	for _, device := range worker.Devices {
 		address := worker.Class.Address(device)
@@ -474,13 +596,14 @@ func soleSmallestDisk(worker Worker) (uint64, string, bool) {
 		capacity[address] += device.SizeBytes
 	}
 	if len(capacity) < 2 {
-		return 0, "", false
+		return 0, "", journalDiskImpossible
 	}
 
 	var smallest uint64
 	var found string
 	ties := 0
-	for address, size := range capacity {
+	for _, address := range slices.Sorted(maps.Keys(capacity)) {
+		size := capacity[address]
 		switch {
 		case found == "" || size < smallest:
 			smallest, found, ties = size, address, 1
@@ -489,8 +612,11 @@ func soleSmallestDisk(worker Worker) (uint64, string, bool) {
 		}
 	}
 
-	if smallest == 0 || ties != 1 {
-		return 0, "", false
+	if smallest == 0 {
+		return 0, "", journalDiskImpossible
 	}
-	return smallest, found, true
+	if ties != 1 {
+		return smallest, found, journalDiskTied
+	}
+	return smallest, found, journalDiskFound
 }
