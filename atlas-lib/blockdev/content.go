@@ -263,6 +263,23 @@ func (p *Prober) read(ctx context.Context, dev Device) (regions, error) {
 	if out.tail, err = p.readAt(ctx, r, out.tailAt, p.regionSize); err != nil {
 		return regions{}, err
 	}
+
+	// The window past the head, for the page grid of a device whose superblock
+	// is gone. It sits past the head on every such device seen so far, close
+	// enough that one more region reaches it.
+	//
+	// A failure here is not a failure of the probe. The window can only name a
+	// device as this product's, which is the reading that makes a device
+	// available, so a window that could not be read leaves the device refused by
+	// the rules that would have refused it anyway. Failing the whole probe on it
+	// would instead turn a device that reads fine today into an unreadable one.
+	gridAt := p.regionSize
+	gridEnd := min(gridAt+p.regionSize, out.tailAt)
+	if gridEnd-gridAt >= alcemlPageSize {
+		if grid, err := p.readAt(ctx, r, gridAt, gridEnd-gridAt); err == nil {
+			out.grid, out.gridAt = grid, gridAt
+		}
+	}
 	return out, nil
 }
 

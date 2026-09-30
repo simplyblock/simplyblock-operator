@@ -37,7 +37,6 @@ const (
 	// linkDirByPartUUID holds a link per partition, named by the identifier the
 	// partition table carries for it.
 	linkDirByPartUUID = "by-partuuid"
-
 )
 
 // selfReportedPrefixes open a by-id link built from an identifier the device
