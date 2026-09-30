@@ -60,7 +60,11 @@ func hostFixture(t *testing.T, name string) string {
 	if err != nil {
 		t.Fatalf("create the host root: %v", err)
 	}
-	if err := host.Materialize(root); err != nil {
+	// WithClassBlock, because the captures seed block/ and the disk reading
+	// walks class/block. Without it a fixture answers every question about a
+	// host except which disks it has, and answers that one with "none" rather
+	// than with an error.
+	if err := host.WithClassBlock().Materialize(root); err != nil {
 		t.Fatalf("materialize the host transcript: %v", err)
 	}
 	materialized.Store(name, root)
