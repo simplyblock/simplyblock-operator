@@ -21,7 +21,6 @@ package node
 import (
 	"context"
 	"fmt"
-	"path"
 	"sort"
 	"strings"
 
@@ -211,8 +210,18 @@ func renderNodeConfig(
 	// the spelling of the names. Both classes name a device by a string the
 	// backend has to resolve, and it resolves them by different means:
 	// --nvme-devices is matched against the namespace names `nvme list` reports,
-	// and --blk-names against block device paths. A path sent through the first
-	// matches nothing.
+	// and --blk-names against the host's block devices, each of which the
+	// backend matches by kernel name, by kernel path, or by any of the
+	// persistent /dev/disk names udev published for it. A path sent through the
+	// first matches nothing.
+	//
+	// The names go over whole. A block document names a device by its persistent
+	// name, whose whole point is to identify one physical device rather than a
+	// position in one boot's enumeration order, and every way of shortening it
+	// here gives that up: the last path element of a udev link is not a kernel
+	// name, and the device the link currently resolves to is the position again.
+	// Resolving it is the node's to do, because the link exists only where the
+	// device does.
 	//
 	// LBLK is what carries the class itself. The init container passes --lblk on
 	// that word alone, and without it the backend is asked for NVMe devices
@@ -221,8 +230,7 @@ func renderNodeConfig(
 	block := cluster.Spec.DeviceClass == simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock
 	if block {
 		entry.WriteString("LBLK=true\n")
-		fmt.Fprintf(&entry, "BLK_NAMES=%s\n",
-			utils.ShellQuote(strings.Join(kernelNames(names), ",")))
+		fmt.Fprintf(&entry, "BLK_NAMES=%s\n", utils.ShellQuote(strings.Join(names, ",")))
 		entry.WriteString("NVME_DEVICES=''\n")
 		// The wipe, which is local: node_configure.py performs it on the worker
 		// before the node is added, so it travels in this file rather than in
@@ -350,26 +358,4 @@ func equalConfigData(a, b map[string]string) bool {
 		}
 	}
 	return true
-}
-
-// kernelNames is how --blk-names is spelled, which is not how the document
-// spells it.
-//
-// A document names a block device by path, because that is what a reviewer
-// reads and what DeviceSelection's pattern requires. node_configure.py looks
-// the requested strings up in a map keyed by the kernel name -- sdb, and sdb1
-// for a partition -- so a path matches nothing and the node add fails with
-// "requested block devices are not eligible", naming the path as not present.
-//
-// The last element is the kernel name for every path discovery writes, which is
-// /dev/<name>. It is not the kernel name for a udev link: /dev/disk/by-id/foo
-// would yield foo, which names nothing. Nothing writes those today, and the
-// resolution they need is a readlink on the node rather than a rewrite here,
-// since the link exists only where the device does.
-func kernelNames(paths []string) []string {
-	out := make([]string, 0, len(paths))
-	for _, device := range paths {
-		out = append(out, path.Base(device))
-	}
-	return out
 }
