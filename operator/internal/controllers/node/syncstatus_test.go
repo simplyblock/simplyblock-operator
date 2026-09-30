@@ -20,6 +20,7 @@ package node
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -426,8 +427,8 @@ func TestANodeWithDataOnItIsDrainedBeforeItGoes(t *testing.T) {
 		t.Fatal("the finalizer came off while the drain was still running")
 	}
 
-	// A drain that is over releases it, whatever its outcome: the operation stays
-	// as the record, and an object nobody can delete would be worse.
+	// A removal that succeeded releases it. One that ended otherwise is held while
+	// the backend still has the node, which the tests below pin.
 	finishDrain(t, apiClient, simplyblockv1alpha2.StorageNodeOpsPhaseSucceeded)
 	settle(t, r)
 
@@ -436,6 +437,82 @@ func TestANodeWithDataOnItIsDrainedBeforeItGoes(t *testing.T) {
 		client.ObjectKey{Namespace: opsNamespace, Name: opsNodeName}, &gone)
 	if err == nil {
 		t.Errorf("the object is still held by %v after its drain finished", gone.Finalizers)
+	}
+}
+
+// The node object follows how its removal ended. One that did not succeed keeps
+// it, because it is the only handle on a backend node that may still be running.
+//
+// Regression: 2026-09-30-failed-removal-drops-the-node-finalizer. The finalizer
+// was released on any terminal phase, so a refused removal left the backend node
+// Online with nothing in Kubernetes tracking it.
+func TestTheNodeFollowsHowItsRemovalEnded(t *testing.T) {
+	const refusal = `the control plane answered 400: {"detail":"no host-disjoint node available"}`
+
+	cases := []struct {
+		name        string
+		phase       simplyblockv1alpha2.StorageNodeOpsPhase
+		wantDeleted bool
+		wantWarning bool
+	}{
+		{"failed", simplyblockv1alpha2.StorageNodeOpsPhaseFailed, false, true},
+		{"aborted", simplyblockv1alpha2.StorageNodeOpsPhaseAborted, false, true},
+		{"still running", simplyblockv1alpha2.StorageNodeOpsPhaseRunning, false, false},
+		{"succeeded", simplyblockv1alpha2.StorageNodeOpsPhaseSucceeded, true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r, apiClient := aSteadyNode(t, aControlPlane())
+			if err := apiClient.Delete(context.Background(), nodeRead(t, apiClient)); err != nil {
+				t.Fatalf("deleting the node: %v", err)
+			}
+			settle(t, r)
+			endDrain(t, apiClient, c.phase, refusal)
+
+			result := settle(t, r)
+
+			deleted := len(finalizersOn(t, apiClient)) == 0
+			if deleted != c.wantDeleted {
+				t.Errorf("the node is deleted = %v after a removal that is %s, want %v",
+					deleted, c.name, c.wantDeleted)
+			}
+			if !c.wantDeleted && result.RequeueAfter <= 0 {
+				t.Error("the kept node is not requeued, so nothing looks at it again")
+			}
+			warning := aWarningRecorded(r)
+			if got := strings.Contains(warning, refusal); got != c.wantWarning {
+				t.Errorf("the warning carries the control plane's message = %v, want %v (warning %q)",
+					got, c.wantWarning, warning)
+			}
+		})
+	}
+}
+
+// aWarningRecorded is the text of the first Warning the reconciler has recorded
+// since the last check, and empty when it has recorded none.
+func aWarningRecorded(r *StorageNodeReconciler) string {
+	recorder := r.Recorder.(*events.FakeRecorder)
+	for {
+		select {
+		case event := <-recorder.Events:
+			if strings.HasPrefix(event, corev1.EventTypeWarning) {
+				return event
+			}
+		default:
+			return ""
+		}
+	}
+}
+
+// endDrain moves the drain to a phase, with the message the control plane gave.
+func endDrain(
+	t *testing.T, apiClient client.Client, phase simplyblockv1alpha2.StorageNodeOpsPhase, message string,
+) {
+	t.Helper()
+	drain := drainRaisedFor(t, apiClient)
+	drain.Status.Phase, drain.Status.Message = phase, message
+	if err := apiClient.Status().Update(context.Background(), drain); err != nil {
+		t.Fatalf("moving the drain to %s: %v", phase, err)
 	}
 }
 
