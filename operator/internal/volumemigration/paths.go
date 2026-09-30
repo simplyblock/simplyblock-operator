@@ -12,6 +12,33 @@ import (
 	"github.com/simplyblock/atlas/nvmeof"
 )
 
+// NamespacesSettlingError reports new target paths that are live and already serve
+// some of the subsystem's namespaces but not yet all of them.
+//
+// That is the kernel still scanning: nvme connect returns once the controller is up,
+// and the namespaces are attached to it one by one afterwards. It is not a defect,
+// and reporting it as one made every batched (multi-namespace) migration log a
+// failed first verification attempt (2026-09-29, runs 13-17): the controller at
+// 10.50.0.236 served namespace 1 of 5 at the first look and all 5 two seconds later.
+//
+// The host cannot tell a scan in progress from a controller that will never serve a
+// namespace, so this carries the full diagnosis: a caller that has waited long
+// enough reports exactly what a plain failure would have.
+type NamespacesSettlingError struct {
+	// Paths lists "<address> (<served>/<total>)" for each partly scanned path.
+	Paths []string
+	// Problems is the diagnosis as it stands.
+	Problems []string
+}
+
+func (e *NamespacesSettlingError) Error() string {
+	return fmt.Sprintf("migration paths not ready (namespace scan may still be in progress on %s): %s",
+		strings.Join(e.Paths, ", "), strings.Join(e.Problems, "; "))
+}
+
+// controllerStateLive is the kernel state of a controller that can carry I/O.
+const controllerStateLive = "live"
+
 // PathState is what the host reports about one target path of a subsystem.
 type PathState struct {
 	Address string // "<ip>:<port>"
@@ -107,7 +134,7 @@ func inspectPaths(s nvme.Subsystem, conns []Connection, preExisting map[string]b
 		sort.Strings(ana)
 		// Several controllers can front one address (HA re-connects); keep the
 		// healthiest view rather than whichever came last.
-		if prev, ok := states[addr]; ok && prev.State == "live" {
+		if prev, ok := states[addr]; ok && prev.State == controllerStateLive {
 			prev.ANAStates = append(prev.ANAStates, ana...)
 			continue
 		}
@@ -250,7 +277,7 @@ func VerifyMigrationPaths(
 		case !p.Present:
 			problems = append(problems, fmt.Sprintf(
 				"%s: no controller for this address — the connect did not take effect", p.Address))
-		case p.State != "live":
+		case p.State != controllerStateLive:
 			problems = append(problems, fmt.Sprintf(
 				"%s: controller state %q, want live — the path cannot carry I/O", p.Address, p.State))
 		case p.Accessible():
@@ -259,10 +286,43 @@ func VerifyMigrationPaths(
 				p.Address, strings.Join(p.ANAStates, ",")))
 		}
 	}
+	hardProblems := len(problems)
 	problems = append(problems, diagnose(ctx, sysRoot, s)...)
+
+	// A path serving only part of the subsystem may still be being scanned, and then
+	// every namespace it has not reached yet reads as a controller serving no path
+	// to it. Report that case distinctly so the caller can wait for it.
+	if hardProblems == 0 && len(problems) > 0 && allNotContributing(problems) {
+		if settling := settlingPaths(paths, len(s.Namespaces)); len(settling) > 0 {
+			return paths, &NamespacesSettlingError{Paths: settling, Problems: problems}
+		}
+	}
 
 	if len(problems) > 0 {
 		return paths, fmt.Errorf("migration paths not ready: %s", strings.Join(problems, "; "))
 	}
 	return paths, nil
+}
+
+// allNotContributing reports whether every problem is a live controller that serves
+// no path to some namespace -- the only defect a namespace scan in progress produces.
+func allNotContributing(problems []string) bool {
+	for _, pr := range problems {
+		if !strings.HasPrefix(pr, string(nvmeof.DefectControllerNotContributing)+":") {
+			return false
+		}
+	}
+	return true
+}
+
+// settlingPaths returns the live paths that serve at least one of the subsystem's
+// total namespaces but not all of them.
+func settlingPaths(paths []PathState, total int) []string {
+	var out []string
+	for _, p := range paths {
+		if p.Present && p.State == controllerStateLive && len(p.ANAStates) > 0 && len(p.ANAStates) < total {
+			out = append(out, fmt.Sprintf("%s (%d/%d)", p.Address, len(p.ANAStates), total))
+		}
+	}
+	return out
 }

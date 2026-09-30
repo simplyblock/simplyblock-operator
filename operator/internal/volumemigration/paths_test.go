@@ -2,6 +2,7 @@ package volumemigration
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -299,5 +300,36 @@ func TestPresentAddresses(t *testing.T) {
 func TestVerifyMigrationPaths_EmptyNQN(t *testing.T) {
 	if _, err := VerifyMigrationPaths(context.Background(), t.TempDir(), "", targetConns, nil); err == nil {
 		t.Errorf("expected an error for an empty NQN")
+	}
+}
+
+// A live path serving some of a shared subsystem's namespaces but not all may still
+// be scanning, so it is reported as settling -- with the full diagnosis, for a caller
+// that has waited long enough -- rather than as a plain failure.
+func TestVerifyMigrationPaths_PartlyScannedPathIsSettling(t *testing.T) {
+	root := writeSysfsNS(t, 2,
+		ctrlSpec{"10.0.0.114:4428", "nvme0", stateLive, "inaccessible", []int{1}},
+		ctrlSpec{"10.0.0.112:4428", "nvme1", stateLive, "inaccessible", nil},
+	)
+	_, err := VerifyMigrationPaths(context.Background(), root, pathsNQN, targetConns, nil)
+	var settling *NamespacesSettlingError
+	if !errors.As(err, &settling) {
+		t.Fatalf("err = %v, want a NamespacesSettlingError", err)
+	}
+	if len(settling.Paths) != 1 || settling.Paths[0] != "10.0.0.114:4428 (1/2)" {
+		t.Errorf("settling paths = %v, want [10.0.0.114:4428 (1/2)]", settling.Paths)
+	}
+}
+
+// A hard problem is never softened into "settling", even beside a partly scanned path.
+func TestVerifyMigrationPaths_AHardProblemIsNotSettling(t *testing.T) {
+	root := writeSysfsNS(t, 2,
+		ctrlSpec{"10.0.0.114:4428", "nvme0", stateLive, "inaccessible", []int{1}},
+		ctrlSpec{"10.0.0.112:4428", "nvme1", "connecting", "inaccessible", nil},
+	)
+	_, err := VerifyMigrationPaths(context.Background(), root, pathsNQN, targetConns, nil)
+	var settling *NamespacesSettlingError
+	if err == nil || errors.As(err, &settling) {
+		t.Fatalf("err = %v, want a plain failure for a controller that is not live", err)
 	}
 }
