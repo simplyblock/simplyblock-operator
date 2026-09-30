@@ -298,6 +298,21 @@ type Device struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
 
+	// StablePath is the persistent /dev/disk name udev publishes for the
+	// device, and is what a logical block-device deployment names it by.
+	//
+	// Path is not. It is a position in this boot's enumeration order, so a
+	// machine that comes back with its controllers probed in another order
+	// hands /dev/sdb to a different disk, and a deployment that recorded it
+	// would select that other disk on the next configure. This is read off the
+	// device itself (its WWN, or the identifier in its own partition table),
+	// and outlives the reboot.
+	//
+	// Empty for a device udev published no link for, which is an answer rather
+	// than an omission: such a device has no persistent name, and a reader has
+	// to be able to tell that apart from one this probe did not look up.
+	StablePath string `json:"stablePath,omitempty"`
+
 	// PCIAddress is the slot, in the form an NVMe deployment names a device by.
 	PCIAddress string `json:"pciAddress,omitempty"`
 
