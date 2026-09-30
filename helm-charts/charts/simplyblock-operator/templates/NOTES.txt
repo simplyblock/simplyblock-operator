@@ -37,7 +37,7 @@ answers while something behind it is short, and status.components names which.
 Once it is Available, you can start creating simplyblock resources. Refer to the
 documentation to get started:
 
-  https://docs.simplyblock.io/dev/deployments/kubernetes/k8s-storage-plane/
+  https://docs.simplyblock.io/latest/kubernetes/installation/k8s-storage-plane/
 
 To follow the pods, please run:
 
