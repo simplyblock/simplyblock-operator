@@ -48,6 +48,7 @@ import (
 	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 
+	"github.com/simplyblock/simplyblock-operator/internal/bootstrap"
 	discoverypkg "github.com/simplyblock/simplyblock-operator/internal/discovery"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
@@ -121,6 +122,12 @@ type OperatorOpsReconciler struct {
 	// nothing else. Empty is DefaultNodeProbeServiceAccount, which is what the
 	// chart creates.
 	ProbeServiceAccount string
+
+	// Namespace is the operator's own, which is where the installation's
+	// bootstrap ConfigMap lives. A run may be anywhere -- a cluster managing this
+	// one raises runs in the namespace it chooses -- so the configuration is not
+	// looked for beside the run.
+	Namespace string
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=operatorops,verbs=get;list;watch;create;update;patch;delete
@@ -592,7 +599,28 @@ func (r *OperatorOpsReconciler) write(
 			plan.ExplainWithin(maxEventMessage-len(refusalPreamble)))
 	}
 
-	config, notes := r.draftFor(ops, spec, plan)
+	// Read here rather than at startup: the draft half of the configuration is
+	// spent minutes after the operator came up, and an installation that corrected
+	// a number between the install and this step meant the correction. A document
+	// that cannot be read is reported once and then treated as absent, which
+	// leaves every number to what this run found.
+	//
+	// A configuration that could not be read is not the same as one that is not
+	// there, and this step cannot proceed through it. The document it is about to
+	// write is the one the next reconcile finds already present and leaves alone,
+	// so a draft written without the installation's seed keeps the numbers this
+	// run found for good: the API recovering afterward restores nothing. The
+	// error requeues instead, which is what the read being transient asks for.
+	installation, err := bootstrap.Load(ctx, r.Client, r.Namespace)
+	switch {
+	case errors.Is(err, bootstrap.ErrUnreadable):
+		return false, err
+	case err != nil:
+		logf.FromContext(ctx).Error(err, "the installation's bootstrap configuration "+
+			"could not be parsed; the draft states what this run found")
+	}
+
+	config, notes := r.draftFor(ops, spec, plan, installation)
 	if err := r.Create(ctx, config); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
 			return false, err
@@ -654,10 +682,24 @@ func (r *OperatorOpsReconciler) draftFor(
 	ops *simplyblockv1alpha2.OperatorOps,
 	spec *simplyblockv1alpha2.DiscoverSpec,
 	plan discoverypkg.Plan,
+	installation *bootstrap.Config,
 ) (*simplyblockv1alpha2.ClusterDeploymentConfig, []string) {
 	name := spec.ConfigName
 	if name == "" {
 		name = configNamePrefix + ops.Name
+	}
+
+	// The installation's stated layout applies to the run the operator raised for
+	// it and to no other. A run somebody wrote months later describes whatever the
+	// fleet has become, and re-applying an install-time decision over it would be
+	// a correction nobody made and nothing records.
+	seed := (*simplyblockv1alpha2.ClusterTemplate)(nil)
+	var images *simplyblockv1alpha2.DeploymentImages
+	var edge *bool
+	if ops.Labels[InitialDiscoveryLabel] == "true" {
+		seed = installation.Seed()
+		images = installation.DraftImages()
+		edge = installation.Draft.EdgeCluster
 	}
 
 	config := &simplyblockv1alpha2.ClusterDeploymentConfig{
@@ -677,6 +719,8 @@ func (r *OperatorOpsReconciler) draftFor(
 			// worst behavior available.
 			Approved:    false,
 			Environment: ops.Status.Environment,
+			EdgeCluster: edge,
+			Images:      images,
 			NodeSets:    plan.NodeSets,
 		},
 	}
@@ -699,7 +743,15 @@ func (r *OperatorOpsReconciler) draftFor(
 		notes = append(notes, fmt.Sprintf(
 			"the draft grows the existing cluster %s, so it proposes no cluster layout", spec.ClusterRef))
 	} else {
-		template := discoverypkg.ClusterTemplateFor(name+clusterNameSuffix, plan)
+		// The cluster's name outlives every other thing this document produces
+		// and cannot be changed, so a stated one is taken over the one derived
+		// from the draft's own name.
+		clusterName := name + clusterNameSuffix
+		if seed != nil && seed.Name != "" {
+			clusterName = seed.Name
+		}
+
+		template := discoverypkg.ClusterTemplateFor(clusterName, plan, seed)
 		config.Spec.Cluster = template.Template
 		notes = append(notes, template.Notes...)
 

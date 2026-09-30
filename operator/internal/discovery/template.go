@@ -61,33 +61,56 @@ type ClusterTemplate struct {
 // worker cannot meet the API's floor the floor is used anyway and the note says
 // so, because a draft that fails schema validation is one a reviewer cannot
 // even read.
-func ClusterTemplateFor(name string, plan Plan) ClusterTemplate {
-	out := ClusterTemplate{Template: &simplyblockv1alpha2.ClusterTemplate{
-		Name:              name,
-		MaxSubsystemCount: ptr.To(DefaultMaxSubsystemCount),
-		EnableDriveFormat: ptr.To(true),
-	}}
+func ClusterTemplateFor(name string, plan Plan, seed *simplyblockv1alpha2.ClusterTemplate) ClusterTemplate {
+	out := ClusterTemplate{Template: &simplyblockv1alpha2.ClusterTemplate{Name: name}}
 
-	out.Notes = append(out.Notes,
-		"enableDriveFormat is set, so every drive listed here is formatted before "+
-			"a storage node takes it: a drive that carries anything is not usable "+
-			"otherwise. This is the line to remove if any of them should be left "+
-			"alone.")
+	if seed == nil {
+		seed = &simplyblockv1alpha2.ClusterTemplate{}
+	}
 
+	if seed.EnableDriveFormat != nil {
+		out.Template.EnableDriveFormat = seed.EnableDriveFormat
+		out.Notes = append(out.Notes, statedNote("enableDriveFormat",
+			formatting(*seed.EnableDriveFormat)))
+	} else {
+		out.Template.EnableDriveFormat = ptr.To(true)
+		out.Notes = append(out.Notes,
+			"enableDriveFormat is set, so every drive listed here is formatted before "+
+				"a storage node takes it: a drive that carries anything is not usable "+
+				"otherwise. This is the line to remove if any of them should be left "+
+				"alone.")
+	}
+
+	// Not seeded, and deliberately: the count is taken from the smallest worker
+	// the run found, because the control plane assumes it uniform across a
+	// cluster's nodes, and the probes know the fleet better than an installation
+	// decided before it had seen one.
 	vcpus, note := vcpuCountFor(plan)
 	out.Template.VCPUCount = ptr.To(vcpus)
 	out.Notes = append(out.Notes, note)
 
-	out.Notes = append(out.Notes, fmt.Sprintf(
-		"maxSubsystemCount is %d, which is the middle of the range this API accepts and "+
-			"not a reading: how many subsystems a node should serve follows from the "+
-			"workload rather than from the hardware", DefaultMaxSubsystemCount))
+	if seed.MaxSubsystemCount != nil {
+		out.Template.MaxSubsystemCount = seed.MaxSubsystemCount
+		out.Notes = append(out.Notes, statedNote("maxSubsystemCount",
+			fmt.Sprintf("%d", *seed.MaxSubsystemCount)))
+	} else {
+		out.Template.MaxSubsystemCount = ptr.To(DefaultMaxSubsystemCount)
+		out.Notes = append(out.Notes, fmt.Sprintf(
+			"maxSubsystemCount is %d, which is the middle of the range this API accepts and "+
+				"not a reading: how many subsystems a node should serve follows from the "+
+				"workload rather than from the hardware", DefaultMaxSubsystemCount))
+	}
 
+	// Not seeded, for the reason vCPU count is not: it follows from what the
+	// workers turned out to have.
 	if size, note := hugePagesFor(plan); size != "" {
 		out.Template.MinHugePagesSize = size
 		out.Notes = append(out.Notes, note)
 	}
 
+	// Not seeded either: which disk becomes the journal follows from the sizes the
+	// probes read, and a fleet without a small disk to spare has no such layout to
+	// propose.
 	if propose, note := journalDeviceFor(plan); note != "" {
 		if propose {
 			out.Template.EnableJournalDevice = ptr.To(true)
@@ -95,10 +118,80 @@ func ClusterTemplateFor(name string, plan Plan) ClusterTemplate {
 		out.Notes = append(out.Notes, note)
 	}
 
-	stripe, note := stripeFor(plan)
-	out.Template.Stripe = stripe
-	out.Notes = append(out.Notes, note)
+	if seed.Stripe != nil {
+		out.Template.Stripe = seed.Stripe.DeepCopy()
+		out.Notes = append(out.Notes, statedNote("stripe", describeStripe(seed.Stripe))+
+			" A cluster's stripe cannot be changed afterward, so this is the number to "+
+			"correct now or never.")
+	} else {
+		stripe, note := stripeFor(plan)
+		out.Template.Stripe = stripe
+		out.Notes = append(out.Notes, note)
+	}
+
+	// The two integrity settings are stated or absent. Discovery proposes neither:
+	// nothing a probe reports says whether a deployment wants its I/O checked, and
+	// an absent setting leaves the cluster's own default to decide rather than
+	// having the run invent one.
+	if seed.EnableChecksumValidation != nil {
+		out.Template.EnableChecksumValidation = seed.EnableChecksumValidation
+		out.Notes = append(out.Notes, statedNote("enableChecksumValidation",
+			enabled(*seed.EnableChecksumValidation))+
+			" The backend bakes the checksum method into each device when the cluster "+
+			"is created and never re-applies it, so a cluster created without this is "+
+			"one nobody can turn it on for.")
+	}
+	if seed.EnableAtomicity4K != nil {
+		out.Template.EnableAtomicity4K = seed.EnableAtomicity4K
+		out.Notes = append(out.Notes, statedNote("enableAtomicity4K",
+			enabled(*seed.EnableAtomicity4K))+
+			" It is an enforcement rather than a reading: where the hardware does not "+
+			"keep the guarantee, a torn write becomes a checksum that silently "+
+			"disagrees with it. The device reports in this run are what to check it "+
+			"against.")
+	}
+
 	return out
+}
+
+// statedNote accounts for a value this installation decided, so that a reviewer
+// reads which of the two kinds of number they are looking at. A derived number is
+// corrected against the fleet, and a stated one against whoever stated it.
+func statedNote(field, value string) string {
+	return fmt.Sprintf(
+		"%s is %s, stated by this installation's bootstrap configuration rather than "+
+			"derived from what this run found.", field, value)
+}
+
+// describeStripe reads a seeded layout back as a reviewer would write it, and
+// says which half is missing where one is: a stripe naming one of its two numbers
+// is a layout the cluster cannot be created with.
+func describeStripe(stripe *simplyblockv1alpha2.StripeSpec) string {
+	switch {
+	case stripe.DataChunks == nil && stripe.ParityChunks == nil:
+		return "empty"
+	case stripe.ParityChunks == nil:
+		return fmt.Sprintf("%d data chunks with no parity count stated", *stripe.DataChunks)
+	case stripe.DataChunks == nil:
+		return fmt.Sprintf("%d parity chunks with no data count stated", *stripe.ParityChunks)
+	default:
+		return fmt.Sprintf("%d+%d", *stripe.DataChunks, *stripe.ParityChunks)
+	}
+}
+
+func formatting(on bool) string {
+	if on {
+		return "set, so every drive listed here is formatted before a storage node takes it"
+	}
+	return "unset, so a drive carrying anything is handed over as it is and a storage " +
+		"node that cannot use it says so"
+}
+
+func enabled(on bool) string {
+	if on {
+		return "set"
+	}
+	return "unset"
 }
 
 // stripeFor proposes the erasure-coding scheme for the fleet the run found.

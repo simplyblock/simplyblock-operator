@@ -33,7 +33,7 @@ func aFleetOf(count int) Plan {
 
 func proposedScheme(t *testing.T, workers int) erasurecoding.Scheme {
 	t.Helper()
-	template := ClusterTemplateFor("a-cluster", aFleetOf(workers))
+	template := ClusterTemplateFor("a-cluster", aFleetOf(workers), nil)
 	if template.Template.Stripe == nil {
 		t.Fatalf("the draft for %d workers proposes no stripe at all", workers)
 	}
@@ -84,7 +84,7 @@ func TestTheProposedSchemeIsOneTheFleetAndTheControlPlaneBothAccept(t *testing.T
 // with confidence, so the note says what was proposed and what the fleet it was
 // derived from was.
 func TestTheDraftAccountsForTheSchemeItProposed(t *testing.T) {
-	template := ClusterTemplateFor("a-cluster", aFleetOf(4))
+	template := ClusterTemplateFor("a-cluster", aFleetOf(4), nil)
 
 	joined := strings.Join(template.Notes, "\n")
 	for _, want := range []string{"2+1", "4"} {
@@ -97,7 +97,7 @@ func TestTheDraftAccountsForTheSchemeItProposed(t *testing.T) {
 // A fleet of two carries nothing redundant, and the note says so rather than
 // leaving a reviewer to discover that the draft they approved protects nothing.
 func TestAFleetTooSmallForRedundancyIsSaidSo(t *testing.T) {
-	template := ClusterTemplateFor("a-cluster", aFleetOf(2))
+	template := ClusterTemplateFor("a-cluster", aFleetOf(2), nil)
 
 	joined := strings.ToLower(strings.Join(template.Notes, "\n"))
 	if !strings.Contains(joined, "1+0") {
