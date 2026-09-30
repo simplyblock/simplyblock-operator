@@ -9,11 +9,18 @@
 //
 // So the chart's own values are parsed here, strictly, and a key this package
 // does not know fails.
+//
+// Parsing the values alone is not enough, because it skips the template that
+// carries them. What the operator reads is one ConfigMap, under one key, holding
+// one values path, and all three are written in the template rather than in the
+// values: renaming any of them leaves the values unchanged and the operator with
+// nothing to read. TestTheTemplateWiresWhatThisPackageReads is that half.
 
 package bootstrap
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"sigs.k8s.io/yaml"
@@ -69,5 +76,43 @@ func TestTheChartWritesTheDocumentThisPackageReads(t *testing.T) {
 	if images := config.DraftImages(); images != nil {
 		t.Errorf("the chart's defaults pin %+v rather than leaving each image to the "+
 			"pairing this release was tested as", images)
+	}
+}
+
+// chartTemplate is the one that renders the ConfigMap this package reads.
+const chartTemplate = "../../../helm-charts/charts/simplyblock-operator/templates/" +
+	"bootstrap-configmap.yaml"
+
+// The three names the template and this package have to agree on, none of which
+// appears in the values.
+//
+// A rename on one side alone is silent in both directions. The operator reads
+// ConfigMapName and ConfigKey as constants and finds nothing, which it treats as
+// an installation that stated nothing; the chart renders a perfectly valid
+// object nobody looks at. Neither is an error anywhere.
+func TestTheTemplateWiresWhatThisPackageReads(t *testing.T) {
+	raw, err := os.ReadFile(chartTemplate)
+	if err != nil {
+		t.Fatalf("reading the chart's bootstrap template: %v", err)
+	}
+	rendered := string(raw)
+
+	for _, wanted := range []struct{ what, text string }{
+		{"the ConfigMap this package looks for", "name: " + ConfigMapName},
+		{"the key this package reads it under", ConfigKey + ":"},
+		{"the values path the operator parses", ".Values.discovery"},
+	} {
+		if !strings.Contains(rendered, wanted.text) {
+			t.Errorf("the template does not carry %s (%q), so the operator reads "+
+				"an installation that stated nothing", wanted.what, wanted.text)
+		}
+	}
+
+	// The managed profile has to say it raises no run rather than say nothing,
+	// because an absent ConfigMap already means an installation that predates
+	// this file and keeps the behavior it was installed with.
+	if !strings.Contains(rendered, "enabled: false") {
+		t.Error("the template renders no `enabled: false` branch, so a managed " +
+			"installation is indistinguishable from one that predates the chart")
 	}
 }

@@ -1,11 +1,16 @@
 // What an installation's stated cluster layout does to the document a discovery
 // run writes.
 //
-// The seed exists for the fields that are immutable on the StorageCluster a draft
-// expands into: a reviewer can correct anything else after the fact, and nobody
-// can correct these. It applies to the one run the operator raised for this
-// installation and to no other, which is the half of this the label carries and
-// the half every case below is about.
+// The seed exists for the fields a wrong guess is expensive to undo, which is
+// mostly the fields that are immutable on the StorageCluster a draft expands
+// into and is not only those. maxSubsystemCount can be changed afterward and is
+// seeded because the number discovery proposes is the middle of the API's range
+// rather than a reading; enableDriveFormat is spent during provisioning rather
+// than held as cluster state, and undoing it means restoring a backup.
+//
+// It applies to the one run the operator raised for this installation and to no
+// other, which is the half of this the label carries and the half every case
+// below is about.
 
 package deployment
 
