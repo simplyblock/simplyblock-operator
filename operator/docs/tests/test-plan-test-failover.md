@@ -42,12 +42,12 @@ File: `internal/controller/testfailover_unit_test.go`
 
 File: `internal/controller/testfailover_unit_test.go`
 
-| #    | Scenario                                                                                                          | Type     | Test |
-|------|-------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-05 | `bubbleCluster` is the source's own cluster, `recoveryPoint` empty → fresh source snapshot, `snapshotTaken: true` | Positive | —    |
-| U-06 | `bubbleCluster` is the source's own cluster, `recoveryPoint` set → pinned snapshot reused, `snapshotTaken: false` | Positive | —    |
-| U-07 | `bubbleCluster` is a DR target → latest replicated snapshot on that backend, `snapshotTaken: false`               | Positive | —    |
-| U-08 | `recoveryPoint` names a snapshot of a different source than `sourceRef` → `Failed`, mismatch reported             | Negative | —    |
+| #    | Scenario                                                                                                         | Type     | Test |
+|------|------------------------------------------------------------------------------------------------------------------|----------|------|
+| U-05 | `bubbleCluster` equals `sourceCluster` → `Failed`, rejected up front (recovery is onto a DIFFERENT cluster only) | Negative | —    |
+| U-06 | `bubbleCluster` is a DR target → latest replicated snapshot on that backend                                      | Positive | —    |
+| U-07 | Group drill on a DR target → latest replicated generation, one snapshot per member                               | Positive | —    |
+| U-08 | DR target with no replicated point yet → `Failed` at `ResolvingPoint`                                            | Negative | —    |
 
 ### Non-disruptiveness fingerprint (design §7.4)
 
@@ -90,17 +90,17 @@ Run the full controller reconcile loop against a real Kubernetes API via
 `envtest`, a mock control-plane HTTP server that records call counts, and a mock
 OCM (`ManagedClusterView` and `ManifestWork` with status feedback).
 
-### Source read and in-place drill (design §5.1–§5.4, §6)
+### Source read and DR-target drill (design §5.1–§5.5, §6)
 
-| #    | Scenario                                                                                                                                                                                                            | Type     | Test |
-|------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| I-01 | Create → `ResolvingSource` creates a `ManagedClusterView` on `sourceCluster`, reads the PVC handle, then takes the snapshot (P0-1), clones it (P0-2), places PV and PVC, reaches `Ready` with a `BubbleReady` event | Positive | —    |
-| I-02 | `recoveryPoint` set → no snapshot is taken, the pinned snapshot is cloned (mock shows zero snapshot calls)                                                                                                          | Positive | —    |
-| I-03 | `sourceCluster` is not a registered `ManagedCluster` → `Failed` at `ResolvingSource`                                                                                                                                | Negative | —    |
-| I-04 | The `ManagedClusterView` projects nothing for `sourceRef` → `Failed` at `ResolvingSource`, ref in `status.message`                                                                                                  | Negative | —    |
-| I-05 | Clone returns 5xx → retried, no state advance, mock shows repeated calls                                                                                                                                            | Negative | —    |
-| I-06 | Group drill: one group snapshot → one PVC per member, all from that point                                                                                                                                           | Positive | —    |
-| I-07 | Control plane unreachable (connection refused) → requeue with backoff, no partial state committed                                                                                                                   | Negative | —    |
+| #    | Scenario                                                                                                                                                                                                                              | Type     | Test |
+|------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| I-01 | Create → `ResolvingSource` creates a `ManagedClusterView` on `sourceCluster`, reads the PVC handle, resolves the target's replicated snapshot (P0-4), clones it (P0-2), places PV and PVC, reaches `Ready` with a `BubbleReady` event | Positive | —    |
+| I-02 | `bubbleCluster` equals `sourceCluster` → `Failed` at `ResolvingSource`, message explains a same-cluster drill is unsupported                                                                                                          | Negative | —    |
+| I-03 | `sourceCluster` is not a registered `ManagedCluster` → `Failed` at `ResolvingSource`                                                                                                                                                  | Negative | —    |
+| I-04 | The `ManagedClusterView` projects nothing for `sourceRef` → `Failed` at `ResolvingSource`, ref in `status.message`                                                                                                                    | Negative | —    |
+| I-05 | Clone returns 5xx → retried, no state advance, mock shows repeated calls                                                                                                                                                              | Negative | —    |
+| I-06 | Group drill: one group-consistent replicated generation → one PVC per member, all from that point                                                                                                                                     | Positive | —    |
+| I-07 | Control plane unreachable (connection refused) → requeue with backoff, no partial state committed                                                                                                                                     | Negative | —    |
 
 ### DR-target drill via OCM (design §5.5, §7.6)
 
@@ -109,7 +109,7 @@ OCM (`ManagedClusterView` and `ManifestWork` with status feedback).
 | I-08 | `bubbleCluster` set → the recovery point resolves to the target's latest replicated snapshot (P0-4), the clone is built on the target backend, and the PV and PVC are delivered as a `ManifestWork` to that cluster | Positive | —    |
 | I-09 | `ManifestWork` status feedback reports the PVC `Bound` → the drill reaches `Ready`                                                                                                                                  | Positive | —    |
 | I-10 | `bubbleCluster` is not a registered `ManagedCluster` → `Failed` at `Placing`                                                                                                                                        | Negative | —    |
-| I-11 | Phase 2 drill where replication has landed nothing on the target yet (P0-4 404) → `Failed` at `ResolvingPoint`                                                                                                      | Negative | —    |
+| I-11 | Phase 1 drill where replication has landed nothing on the target yet (P0-4 404) → `Failed` at `ResolvingPoint`                                                                                                      | Negative | —    |
 | I-12 | `ManifestWork` never reports Bound before its deadline → `Failed` at `Placing`, clone recorded for reclaim                                                                                                          | Negative | —    |
 
 ### Restart safety (design §6, §7.4)
@@ -131,23 +131,23 @@ OCM (`ManagedClusterView` and `ManifestWork` with status feedback).
 
 ### Teardown and finalizer (design §5.7, §6)
 
-| #    | Scenario                                                                                                                                                                       | Type     | Test |
-|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| I-20 | Delete a `Ready` drill → `TearingDown` deletes the `ManifestWork` and `ManagedClusterView`, reclaims the clone (P0-3), deletes the drill-taken snapshot, removes the finalizer | Positive | —    |
-| I-21 | A DR-target drill that only resolved a replicated snapshot → teardown reclaims the clone but does NOT delete that snapshot                                                     | Positive | —    |
-| I-22 | Delete a `Failed` drill → teardown still runs, finalizer removed on the failure path                                                                                           | Negative | —    |
-| I-23 | Reclaim returns non-success → holds `TearingDown`, finalizer retained, `ReclaimPending` event                                                                                  | Negative | —    |
-| I-24 | Reclaim of an already-gone clone or snapshot returns success (404-as-success), teardown completes                                                                              | Negative | —    |
-| I-25 | After teardown, no object carrying the drill's `test-id` label remains                                                                                                         | Positive | —    |
+| #    | Scenario                                                                                                                                                                                 | Type     | Test |
+|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| I-20 | Delete a `Ready` drill → `TearingDown` deletes the `ManifestWork` and `ManagedClusterView`, reclaims the clone (P0-3), leaves the replicated recovery point alone, removes the finalizer | Positive | —    |
+| I-21 | A DR-target drill that only resolved a replicated snapshot → teardown reclaims the clone but does NOT delete that snapshot                                                               | Positive | —    |
+| I-22 | Delete a `Failed` drill → teardown still runs, finalizer removed on the failure path                                                                                                     | Negative | —    |
+| I-23 | Reclaim returns non-success → holds `TearingDown`, finalizer retained, `ReclaimPending` event                                                                                            | Negative | —    |
+| I-24 | Reclaim of an already-gone clone or snapshot returns success (404-as-success), teardown completes                                                                                        | Negative | —    |
+| I-25 | After teardown, no object carrying the drill's `test-id` label remains                                                                                                                   | Positive | —    |
 
 ### Admission and concurrency (design §4.1, §7.3)
 
-| #    | Scenario                                                                                                                                                                          | Type     | Test |
-|------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| I-26 | Patch any immutable spec field (`scope`, `sourceCluster`, `sourceNamespace`, `sourceRef`, `bubbleCluster`, `recoveryPoint`, `bubbleNamespace`) after creation → admission rejects | Negative | —    |
-| I-27 | A second drill on the same `(scope, sourceCluster, sourceRef, bubbleCluster)` while the first is active → refused                                                                 | Negative | —    |
-| I-28 | Two drills on different sources run independently, neither blocks the other                                                                                                       | Positive | —    |
-| I-29 | RBAC sufficiency: the controller creates a `ManagedClusterView` and a `ManifestWork` without a forbidden verb, and needs no PV/PVC or snapshot-API permission                     | Positive | —    |
+| #    | Scenario                                                                                                                                                         | Type     | Test |
+|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| I-26 | Patch any immutable spec field (`scope`, `sourceCluster`, `sourceNamespace`, `sourceRef`, `bubbleCluster`, `bubbleNamespace`) after creation → admission rejects | Negative | —    |
+| I-27 | A second drill on the same `(scope, sourceCluster, sourceRef, bubbleCluster)` while the first is active → refused                                                | Negative | —    |
+| I-28 | Two drills on different sources run independently, neither blocks the other                                                                                      | Positive | —    |
+| I-29 | RBAC sufficiency: the controller creates a `ManagedClusterView` and a `ManifestWork` without a forbidden verb, and needs no PV/PVC or snapshot-API permission    | Positive | —    |
 
 ---
 
@@ -157,12 +157,11 @@ Run against a live two-cluster DR setup (a source cluster and a DR target).
 Data-path rows assert recovered-data correctness (a marker written to the
 source), not merely that a PVC bound.
 
-### In-place drill (design §5.1–§5.4)
+### Same-cluster rejection (design §2 Non-Goals, §5)
 
-| #    | Scenario                                                                                                                                                | Type     | Test |
-|------|---------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| E-01 | `bubbleCluster` = the source's cluster: a fresh source snapshot is cloned into `bubble` there, a pod boots on the PVC, and the recovered marker matches | Positive | —    |
-| E-02 | Across the drill, the source's data and I/O are untouched                                                                                               | Positive | —    |
+| #    | Scenario                                                                                                            | Type     | Test |
+|------|---------------------------------------------------------------------------------------------------------------------|----------|------|
+| E-01 | `bubbleCluster` = the source's own cluster → the drill fails fast at `ResolvingSource`, nothing is cloned or placed | Negative | —    |
 
 ### DR-target drill (design §5.5)
 
@@ -176,17 +175,17 @@ source), not merely that a PVC bound.
 
 ---
 
-## 4. Ship-to-Non-Target — Phase 3 (Planned)
+## 4. Ship-to-Non-Target — Phase 2 (Planned)
 
 Testable only once P0-6 (on-demand shipping to a backend with no copy) exists
 (design §5.6). Type and Test are decided when the phase is scoped.
 
 | #       | Scenario                                                                                                                              |
 |---------|---------------------------------------------------------------------------------------------------------------------------------------|
-| U-P3-01 | Recovery-point resolution routes through the `Shipping` step only when the bubble backend holds no copy                               |
-| I-P3-01 | `bubbleCluster` has no replica → `Shipping` calls P0-6, polls the returned handle, then clones on that backend and places the PVC     |
-| I-P3-02 | Ship handle poll exceeds its deadline → `Failed` at `Shipping`                                                                        |
-| E-P3-01 | Drill onto a third cluster with no replica: the point is shipped, cloned, and a pod boots on the recovered PVC with the marker intact |
+| U-P2-01 | Recovery-point resolution routes through the `Shipping` step only when the bubble backend holds no copy                               |
+| I-P2-01 | `bubbleCluster` has no replica → `Shipping` calls P0-6, polls the returned handle, then clones on that backend and places the PVC     |
+| I-P2-02 | Ship handle poll exceeds its deadline → `Failed` at `Shipping`                                                                        |
+| E-P2-01 | Drill onto a third cluster with no replica: the point is shipped, cloned, and a pod boots on the recovered PVC with the marker intact |
 
 ---
 
@@ -206,26 +205,25 @@ lost and the replication lag does not regress.
 3. Assert `status.report.invariantsHeld` is true, the source is bound to the same volume, and the replication lag is within normal variance.
 4. Tear the drill down and confirm fio still verifies with no errors.
 
-### M-02 — Pinned recovery point deleted before the clone
+### M-02 — Replicated recovery point pruned before the clone
 
 **Design reference:** design §5.2, §10 (Failure Modes)
 
-**What to verify:** a drill that pins an existing snapshot degrades cleanly if
-that snapshot is deleted before the clone runs.
+**What to verify:** a drill degrades cleanly if the replicated snapshot it
+resolved is pruned by retention before the clone runs.
 
 **Test concept:**
-1. Create a `TestFailover` with `recoveryPoint` naming an existing snapshot.
-2. Delete that snapshot before the clone call.
+1. Create a DR-target `TestFailover` and let it resolve the replicated recovery point.
+2. Prune that snapshot on the target before the clone call.
 3. Assert the drill reports `Failed` at `Cloning` with a not-found reason, and that no clone was created.
 
 ### M-03 — Leftover proof with `LIST_VOLUMES` disabled
 
 **Design reference:** design §5.7, Open Question 3
 
-**What to verify:** teardown leaves no leaked backend clone or drill-taken
-snapshot on the bubble backend, even though the CSI driver does not advertise
-`LIST_VOLUMES`, so the Kubernetes-side label enumeration cannot be cross-checked
-through CSI.
+**What to verify:** teardown leaves no leaked backend clone on the bubble
+backend, even though the CSI driver does not advertise `LIST_VOLUMES`, so the
+Kubernetes-side label enumeration cannot be cross-checked through CSI.
 
 **Open question:** whether the label enumeration on Kubernetes objects is
 sufficient, or a backend enumeration is required (design Open Question 3).
@@ -240,15 +238,15 @@ sufficient, or a backend enumeration is required (design Open Question 3).
 
 | Axis                         | Values covered                                                                       | IDs                                | Not covered                                            |
 |------------------------------|--------------------------------------------------------------------------------------|------------------------------------|--------------------------------------------------------|
-| Where the bubble runs        | source's own cluster, DR target                                                      | I-01, E-01, I-08, E-03             | non-target cluster (Phase 3: I-P3-01, E-P3-01)         |
+| Where the bubble runs        | DR target; same-cluster rejected                                                     | I-01, I-08, E-03; U-05, I-02, E-01 | non-target cluster (Phase 2: I-P2-01, E-P2-01)         |
 | Source location              | read on a managed cluster via ManagedClusterView                                     | U-01, I-01                         | source on the hub's own self-managed cluster           |
 | Scope                        | Volume, Group                                                                        | U-01, U-02, I-06, E-05             | —                                                      |
-| Recovery point               | fresh snapshot, pinned snapshot, replicated                                          | U-05, U-06, U-07                   | shipped (Phase 3)                                      |
+| Recovery point               | replicated (volume and group)                                                        | U-06, U-07                         | shipped (Phase 2)                                      |
 | Cross-cluster transport      | ManagedClusterView read, ManifestWork write                                          | I-01, I-08                         | —                                                      |
 | Lifecycle / restart          | mid-step restart (each step), delete mid-drill, TTL teardown                         | I-13, I-15, I-20, U-20             | control-plane restart mid-call                         |
 | Control-plane / OCM response | 404, 5xx, connection refused, ManifestWork timeout, idempotent retry, 404-as-success | I-04, I-05, I-07, I-12, I-14, I-24 | partial-write then crash                               |
 | Concurrency                  | same source, different sources                                                       | I-27, I-28                         | spec mutated mid-drill (blocked by immutability, I-26) |
-| Data correctness             | recovered marker, source untouched, crash-consistent group                           | E-01, E-04, E-05                   | recovered-data checksum under load (M-01)              |
+| Data correctness             | recovered marker, source untouched, crash-consistent group                           | E-03, E-04, E-05                   | recovered-data checksum under load (M-01)              |
 
 ---
 
@@ -258,13 +256,13 @@ sufficient, or a backend enumeration is required (design Open Question 3).
 |-------------------|-----------|---------|------------------------------------|
 | Unit              | 20        | 0       | U-01 … U-20                        |
 | Integration       | 29        | 0       | I-01 … I-29                        |
-| E2E               | 7         | 0       | E-01 … E-07                        |
+| E2E               | 6         | 0       | E-01, E-03 … E-07                  |
 | Manual            | 3         | 0       | M-01 … M-03                        |
-| Phase 3 (planned) | 4         | 0       | U-P3-01, I-P3-01, I-P3-02, E-P3-01 |
+| Phase 2 (planned) | 4         | 0       | U-P2-01, I-P2-01, I-P2-02, E-P2-01 |
 
 Nothing is covered: the design is `Draft` and the CRD and controller are unbuilt.
-Phases 1 and 2 have no unbuilt backend dependency, so their scenarios become
-implementable as soon as the controller exists.
+Phase 1 has no unbuilt backend dependency, so its scenarios become implementable
+as soon as the controller exists; Phase 2 waits on P0-6.
 
 ---
 
@@ -276,7 +274,7 @@ implementable as soon as the controller exists.
 | I-01 … I-29                        | All integration scenarios                    | The controller, its `envtest` suite, and the mock OCM are unwritten                                                                           |
 | E-01 … E-07                        | All E2E scenarios                            | Needs a live two-cluster DR setup and the shipped feature                                                                                     |
 | M-01 … M-03                        | All manual scenarios                         | Need the shipped feature plus failure injection (snapshot delete, backend enumeration)                                                        |
-| U-P3-01, I-P3-01, I-P3-02, E-P3-01 | Ship-to-non-target                           | Blocked on P0-6 (on-demand shipping to a backend with no copy), which does not exist                                                          |
+| U-P2-01, I-P2-01, I-P2-02, E-P2-01 | Ship-to-non-target                           | Blocked on P0-6 (on-demand shipping to a backend with no copy), which does not exist                                                          |
 | —                                  | Source on the hub's own self-managed cluster | An edge of the topology axis. The primary path reads the source on a managed cluster, and the self-managed case is not exercised separately   |
 | —                                  | Partial-write then crash on the backend      | The backend verbs are the idempotency boundary, and asserting a mid-write crash needs backend fault injection this repository's harness lacks |
 | —                                  | Recovered-data checksum under sustained load | Covered as a manual concept (M-01), and not automatable without a live-cluster fio harness                                                    |

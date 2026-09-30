@@ -11285,8 +11285,9 @@ spec:
             properties:
               bubbleCluster:
                 description: |-
-                  BubbleCluster is the OCM ManagedCluster to recover onto: the source's own
-                  cluster for an in-place test, the DR target, or another cluster. Immutable.
+                  BubbleCluster is the OCM ManagedCluster to recover onto: a DR target holding
+                  the replicated point, or another cluster. It must differ from SourceCluster;
+                  test-failover recovers onto a different cluster, never in place. Immutable.
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -11296,15 +11297,6 @@ spec:
                 description: |-
                   BubbleNamespace is the namespace on the bubble cluster where the recovered
                   PVCs are created. Immutable.
-                type: string
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
-              recoveryPoint:
-                description: |-
-                  RecoveryPoint optionally pins an existing snapshot to clone. Empty resolves
-                  the point per BubbleCluster: a fresh source snapshot when it is the source's
-                  own cluster, or the latest replicated point on a DR target. Immutable.
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -11359,8 +11351,6 @@ spec:
             x-kubernetes-validations:
             - message: field sourceNamespace is immutable once set
               rule: '!has(oldSelf.sourceNamespace) || has(self.sourceNamespace)'
-            - message: field recoveryPoint is immutable once set
-              rule: '!has(oldSelf.recoveryPoint) || has(self.recoveryPoint)'
             - message: field bubbleNamespace is immutable once set
               rule: '!has(oldSelf.bubbleNamespace) || has(self.bubbleNamespace)'
             - message: sourceNamespace is required for scope=Volume
@@ -11387,14 +11377,10 @@ spec:
                       format: int64
                       type: integer
                     snapshotID:
-                      description: SnapshotID is the recovery-point snapshot.
-                      type: string
-                    snapshotTaken:
                       description: |-
-                        SnapshotTaken is true when the drill created SnapshotID, rather than
-                        resolving a replicated one or reusing a pinned one, so teardown knows
-                        whether to delete it.
-                      type: boolean
+                        SnapshotID is the recovery-point snapshot: the replicated snapshot already on
+                        the bubble cluster's backend that the clone is built from.
+                      type: string
                     sourceFSType:
                       description: |-
                         SourceFSType is the source PV's CSI fsType, carried onto the bubble PV so the
