@@ -335,8 +335,8 @@ func TestFailoverResolvingSourceGroupResolvesMembers(t *testing.T) {
 		case strings.HasSuffix(p, "/storage-pools/"):
 			_, _ = w.Write([]byte(`[{"id":"pool-1"}]`))
 		case strings.HasSuffix(p, "/storage-pools/pool-1/volumes"):
-			_, _ = w.Write([]byte(`[{"id":"lvol-a","pvc_name":"data-1","namespace":"app","pool_id":"pool-1","size":1073741824},` +
-				`{"id":"lvol-b","pvc_name":"data-2","namespace":"app","pool_id":"pool-1","size":1073741824}]`))
+			_, _ = w.Write([]byte(`[{"id":"lvol-a","pvc_name":"app/data-1","namespace":"nvme-ns","pool_id":null,"size":1073741824},` +
+				`{"id":"lvol-b","pvc_name":"app/data-2","namespace":"nvme-ns","pool_id":null,"size":1073741824}]`))
 		default:
 			t.Errorf("unexpected request %s %s", req.Method, p)
 			w.WriteHeader(http.StatusInternalServerError)

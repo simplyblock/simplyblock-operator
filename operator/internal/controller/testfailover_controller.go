@@ -294,7 +294,7 @@ func (r *TestFailoverReconciler) resolveSourceGroup(ctx context.Context, tf *sim
 	// One member's PV carries the class metadata every member shares, so a single
 	// projection serves the whole group.
 	rep := memberVols[memberIDs[0]]
-	pvc, ready, err := r.projectedSource(ctx, tf, "src-pvc", "persistentvolumeclaims", rep.PVCName, rep.Namespace)
+	pvc, ready, err := r.projectedSource(ctx, tf, "src-pvc", "persistentvolumeclaims", rep.PVCName, rep.PVCNamespace)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -345,13 +345,23 @@ func (r *TestFailoverReconciler) resolveSourceGroup(ctx context.Context, tf *sim
 // hub is colocated on the source cluster, where the OCM cluster name does not
 // match the StorageCluster name.
 func (r *TestFailoverReconciler) resolveGroupSourceUUID(ctx context.Context, tf *simplyblockv1alpha2.TestFailover) (string, error) {
-	if uuid, err := utils.ResolveClusterUUID(ctx, r.Client, tf.Namespace, tf.Spec.SourceCluster); err == nil && uuid != "" {
-		return uuid, nil
+	if utils.IsUUID(tf.Spec.SourceCluster) {
+		return tf.Spec.SourceCluster, nil
 	}
+	// StorageClusters live in the operator's namespace, not the drill's, so list
+	// cluster-wide rather than in the CR's namespace.
 	var clusters simplyblockv1alpha2.StorageClusterList
-	if err := r.List(ctx, &clusters, client.InNamespace(tf.Namespace)); err != nil {
+	if err := r.List(ctx, &clusters); err != nil {
 		return "", err
 	}
+	// Prefer a StorageCluster named like the source cluster.
+	for i := range clusters.Items {
+		if clusters.Items[i].Name == tf.Spec.SourceCluster && clusters.Items[i].Status.UUID != "" {
+			return clusters.Items[i].Status.UUID, nil
+		}
+	}
+	// Fall back to the sole StorageCluster with a UUID: on a colocated hub the OCM
+	// cluster name does not match the StorageCluster name, but there is one.
 	uuid, ready := "", 0
 	for i := range clusters.Items {
 		if clusters.Items[i].Status.UUID != "" {
@@ -362,7 +372,7 @@ func (r *TestFailoverReconciler) resolveGroupSourceUUID(ctx context.Context, tf 
 	if ready == 1 {
 		return uuid, nil
 	}
-	return "", fmt.Errorf("no unique backend UUID for source cluster %q (%d local Storage Clusters with a UUID)", tf.Spec.SourceCluster, ready)
+	return "", fmt.Errorf("no unique backend UUID for source cluster %q (%d Storage Clusters with a UUID)", tf.Spec.SourceCluster, ready)
 }
 
 // projectedSource ensures a ManagedClusterView for one source object exists on

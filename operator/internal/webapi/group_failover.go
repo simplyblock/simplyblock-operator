@@ -12,7 +12,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 )
+
+// storagePoolsListPathFmt is the cluster-scoped storage-pools list endpoint.
+const storagePoolsListPathFmt = "/api/v2/clusters/%s/storage-pools/"
 
 // GroupReplicationPolicy is the subset of a replication policy the group drill
 // needs. A consistency-group policy is matched to its group by placement
@@ -105,12 +109,26 @@ func (c *Client) LatestReplicatedGeneration(
 // MemberVolume is a group member's source volume, resolved to the K8s identity
 // the drill needs: the PVC name and namespace it was provisioned for, so the
 // recovered PVC can be named and the source PV read for staging metadata.
+//
+// The control plane stores the PVC identity in one field as "namespace/name" and
+// uses the separate "namespace" field for the NVMe namespace, not the K8s one, so
+// the K8s namespace and name are split out of PVCRef rather than read from the
+// volume's namespace field.
 type MemberVolume struct {
-	LvolID    string `json:"id"`
-	PVCName   string `json:"pvc_name"`
-	Namespace string `json:"namespace"`
-	PoolID    string `json:"pool_id"`
-	Size      int64  `json:"size"`
+	LvolID       string
+	PVCName      string
+	PVCNamespace string
+	PoolID       string
+	Size         int64
+}
+
+// memberVolumeDTO is the wire shape ResolveMemberVolumes decodes before splitting
+// the namespaced PVC reference into a namespace and a name.
+type memberVolumeDTO struct {
+	LvolID string `json:"id"`
+	PVCRef string `json:"pvc_name"`
+	PoolID string `json:"pool_id"`
+	Size   int64  `json:"size"`
 }
 
 // ResolveMemberVolumes maps each of the given member lvol ids to its source
@@ -129,7 +147,7 @@ func (c *Client) ResolveMemberVolumes(
 		want[id] = struct{}{}
 	}
 
-	poolsEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
+	poolsEndpoint := fmt.Sprintf(storagePoolsListPathFmt, clusterUUID)
 	body, statusCode, err := c.Do(ctx, http.MethodGet, poolsEndpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("list storage pools: %w", err)
@@ -157,7 +175,7 @@ func (c *Client) ResolveMemberVolumes(
 		if vstatus >= 300 {
 			return nil, fmt.Errorf("list volumes in pool %s: status %d: %s", pool.ID, vstatus, string(vbody))
 		}
-		var vols []MemberVolume
+		var vols []memberVolumeDTO
 		if err := json.Unmarshal(vbody, &vols); err != nil {
 			return nil, fmt.Errorf("unmarshal volumes in pool %s: %w", pool.ID, err)
 		}
@@ -166,11 +184,28 @@ func (c *Client) ResolveMemberVolumes(
 			if _, ok := want[v.LvolID]; !ok {
 				continue
 			}
-			if v.PoolID == "" {
-				v.PoolID = pool.ID
+			ns, name := splitPVCRef(v.PVCRef)
+			poolID := v.PoolID
+			if poolID == "" {
+				poolID = pool.ID
 			}
-			found[v.LvolID] = v
+			found[v.LvolID] = MemberVolume{
+				LvolID:       v.LvolID,
+				PVCName:      name,
+				PVCNamespace: ns,
+				PoolID:       poolID,
+				Size:         v.Size,
+			}
 		}
 	}
 	return found, nil
+}
+
+// splitPVCRef splits a "namespace/name" PVC reference into its namespace and
+// name. A reference with no slash is taken as a bare name in no namespace.
+func splitPVCRef(ref string) (namespace, name string) {
+	if i := strings.IndexByte(ref, '/'); i >= 0 {
+		return ref[:i], ref[i+1:]
+	}
+	return "", ref
 }
