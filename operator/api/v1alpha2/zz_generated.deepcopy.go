@@ -823,6 +823,11 @@ func (in *DeviceFilter) DeepCopyInto(out *DeviceFilter) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.DisableReclaimUserspaceDevices != nil {
+		in, out := &in.DisableReclaimUserspaceDevices, &out.DisableReclaimUserspaceDevices
+		*out = new(bool)
+		**out = **in
+	}
 	if in.PcieAllowList != nil {
 		in, out := &in.PcieAllowList, &out.PcieAllowList
 		*out = make([]string, len(*in))

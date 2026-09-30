@@ -77,6 +77,7 @@ const (
 //
 // +kubebuilder:validation:XValidation:rule="!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !(has(self.pcieAllowList) || has(self.pcieDenyList) || has(self.pcieModel))",message="the PCI filters select NVMe devices and cannot be combined with enableLogicalBlockDevices; use blockAllowList and blockDenyList"
 // +kubebuilder:validation:XValidation:rule="(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !(has(self.blockAllowList) || has(self.blockDenyList))",message="blockAllowList and blockDenyList select logical block devices and require enableLogicalBlockDevices"
+// +kubebuilder:validation:XValidation:rule="(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !has(self.disableReclaimUserspaceDevices)",message="disableReclaimUserspaceDevices declines something only a logical block-device run does and requires enableLogicalBlockDevices"
 type DeviceFilter struct {
 	// EnableLogicalBlockDevices scans a worker's available logical block devices
 	// instead of its available NVMe devices. It selects the class rather than
@@ -94,6 +95,35 @@ type DeviceFilter struct {
 	// whatever is using it.
 	// +optional
 	EnablePartitionedDevices *bool `json:"enablePartitionedDevices,omitempty"`
+
+	// DisableReclaimUserspaceDevices stops this run from handing back to the
+	// kernel the NVMe controllers a userspace driver holds and nothing is
+	// driving.
+	//
+	// Every discovery run reclaims them by default, because a controller left
+	// bound by an earlier deployment is in the way of both device classes. SPDK
+	// takes a controller by rebinding it away from the kernel, and from that
+	// moment the kernel presents no block device for it: a logical block-device
+	// run cannot see such a controller at all and reports the fleet as having no
+	// storage, and an NVMe run sees the controller but no namespace to size, so
+	// it drafts groups named for a capacity nothing could read.
+	//
+	// What no run does is take a controller something is driving. The holders
+	// are read from the host's process table and read again at the write, so a
+	// worker running SPDK keeps its controllers and the run says which process
+	// holds each one. A controller whose holders could not be established is
+	// left alone too: not knowing is not permission.
+	//
+	// Declining is the logical block-device class's to do, and setting this on
+	// an NVMe run is rejected rather than ignored. An NVMe deployment binds
+	// these controllers back the moment it is deployed, so a run that left them
+	// alone would only be proposing disks it could not describe. Set it on a
+	// block run where the bindings are meant to stay: a fleet mid-migration, or
+	// a controller passed through to a guest whose holder sits outside the
+	// probe's view. Such a run reports the bound controllers instead of taking
+	// them, which is what a run did before this field existed.
+	// +optional
+	DisableReclaimUserspaceDevices *bool `json:"disableReclaimUserspaceDevices,omitempty"`
 
 	// PcieAllowList restricts candidates to these PCI addresses. This and the two
 	// PCI filters below narrow the NVMe class alone, because a logical block

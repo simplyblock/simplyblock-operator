@@ -479,6 +479,9 @@ func (r *OperatorOpsReconciler) probe(
 			// or evicts it, so a run against a dedicated storage plane that
 			// tolerates nothing inspects nothing.
 			Tolerations: spec.Tolerations,
+			// The one thing a probe does that changes its worker, and the only
+			// run that asks for it is one scanning block devices.
+			ReclaimUserspaceDevices: reclaimsUserspaceDevices(spec.DeviceFilter),
 		})
 		if err != nil {
 			return false, refusef(OperationFailed, "a probe Job could not be built: %v", err)
