@@ -286,7 +286,13 @@ discovery:
       # nobody can turn it on for. It needs a 4K logical block size, which
       # enableDriveFormat produces on an NVMe device that can be reformatted and
       # enableAtomicity4K is the alternative to on one that cannot.
-      # enableChecksumValidation: true
+      #
+      # It is stated as null rather than left out, unlike the values above it,
+      # because the chart itself reads this one: the check below refuses 4K
+      # atomicity without it, and a template may only read a value the chart
+      # defines. Null is what "left out" means everywhere else here, and the
+      # operator reads it the same way.
+      enableChecksumValidation: null
 
       # Enforce 4K write atomicity on every device the draft names, which is what
       # lets checksum validation run on a device whose logical block size is under
@@ -299,7 +305,10 @@ discovery:
       # this asserts a guarantee nothing verified. Where the hardware does not keep
       # it, a torn write becomes a checksum that silently disagrees with the data.
       # The device reports in the run's own draft are what to check it against.
-      # enableAtomicity4K: true
+      #
+      # Stated as null for the reason enableChecksumValidation is: the chart
+      # reads it, and the check below is what reads it.
+      enableAtomicity4K: null
 
 # The CSI driver, as the SimplyblockDriver the chart renders for every profile
 # that runs one.

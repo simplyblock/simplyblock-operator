@@ -599,10 +599,16 @@
                   "type": "boolean"
                 },
                 "enableChecksumValidation": {
-                  "type": "boolean"
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
                 },
                 "enableAtomicity4K": {
-                  "type": "boolean"
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
                 }
               }
             }
