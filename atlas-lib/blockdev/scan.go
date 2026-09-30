@@ -296,7 +296,11 @@ func Scan(cfg ScanConfig) ([]Disk, error) {
 
 	disks := make([]Disk, 0, len(entries))
 	for _, entry := range entries {
-		disk, err := scanOne(cfg, filepath.Join(base, entry.Name()), entry.Name())
+		dir := filepath.Join(base, entry.Name())
+		if hidden(dir) {
+			continue
+		}
+		disk, err := scanOne(cfg, dir, entry.Name())
 		if err != nil {
 			return nil, err
 		}
@@ -370,6 +374,25 @@ func scanOne(cfg ScanConfig, dir, name string) (Disk, error) {
 	disk.Model = strings.TrimSpace(sysfs.String(device, "model"))
 	disk.Serial = strings.TrimSpace(sysfs.String(device, "serial"))
 	return disk, nil
+}
+
+// hidden reports whether the kernel marked this gendisk as one it presents to
+// nobody, which is the one entry of class/block that is not a device.
+//
+// It is what a namespace reached over NVMe multipath publishes per controller,
+// beside the namespace itself: the namespace has a device node and is what
+// anything opens, and each path is a gendisk with no device node, no dev
+// attribute, and therefore no identity a mount could be matched against. On a
+// worker that has attached one of this product's volumes there are two of them
+// per namespace, so the alternative to skipping them is a scan that fails on
+// the whole machine over an entry naming bytes it already reported.
+//
+// Read before the entry is scanned rather than as a rejection afterward,
+// because scanOne cannot read one: its first act is to read the device numbers,
+// whose absence is a failure for every device that is not this.
+func hidden(dir string) bool {
+	raw, err := sysfs.ReadAttr(dir, "hidden")
+	return err == nil && raw == "1"
 }
 
 // readDevNumbers reads the dev attribute, which the kernel writes as the
