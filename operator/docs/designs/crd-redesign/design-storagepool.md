@@ -178,6 +178,10 @@ type PoolLimits struct {
 }
 ```
 
+`spec.limits.iops` and `spec.limits.throughput` are refused at admission for now, by a CEL
+rule on `PoolLimits`: the data plane's pool-wide QoS is not reliable. `capacity` and
+`maxVolumeSize` are plain admission checks in the control plane and are unaffected.
+
 **The defaults its volumes get, under `spec.volumeDefaults`.** These are the values
 a class assigned to this pool is expected to carry in its `parameters`, which is how
 they reach the CSI driver (§5). The pool states them so that a class can be checked

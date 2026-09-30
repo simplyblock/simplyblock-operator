@@ -184,8 +184,8 @@ File: `operator/internal/controllers/pool/review_test.go`, and
 
 Four of these share a root: a cluster-scoped name or an `AlreadyExists` result
 was treated as if it belonged to this pool. A `StorageClass` is cluster-scoped
-and the operator watches every namespace, so "the object with the name I would
-have used" and "my object" are separate claims.
+and the operator watches every namespace, so "the object with the name the operator
+would have used" and "the operator's own object" are separate claims.
 
 | #     | Scenario                                                                            | Type       | Test                                               |
 |-------|-------------------------------------------------------------------------------------|------------|----------------------------------------------------|
@@ -276,6 +276,7 @@ so real garbage collection is the only way to exercise them.
 | I-05 | `spec.limits` changed after creation: accepted                                           | Positive | —    |
 | I-06 | `spec.volumeDefaults.filesystem` outside the enum: rejected                              | Negative | —    |
 | I-07 | `spec.limits.iops` negative: rejected by the minimum                                     | Boundary | —    |
+| I-21 | IOPS or throughput limit set: rejected (`TestPoolLimitsRejectIOPSAndThroughput`)         | Negative | —    |
 | I-08 | `spec.allowedNodes` with a duplicate: rejected by `listType=set`                         | Negative | —    |
 | I-09 | `StoragePoolOps.spec.action` outside the enum: rejected                                  | Negative | —    |
 | I-10 | `StoragePoolOps.spec.poolRef` changed after creation: rejected                           | Negative | —    |

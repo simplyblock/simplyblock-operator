@@ -71,6 +71,7 @@ type ThroughputLimits struct {
 // pool's budget rather than a volume's: a volume's own defaults are in
 // StoragePoolSpec.VolumeDefaults, and the two use the same units so that a
 // reader can compare them.
+// +kubebuilder:validation:XValidation:rule="!has(self.iops) && !has(self.throughput)",message="limits.iops and limits.throughput are not yet supported in beta1"
 type PoolLimits struct {
 	// Capacity is the total capacity the pool may allocate, written the way an
 	// administrator writes one: `10T`, `500G`. Empty is unlimited.
