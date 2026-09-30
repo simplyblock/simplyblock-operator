@@ -169,6 +169,21 @@ func (c Config) procPath(elem ...string) string {
 	return filepath.Join(append([]string{c.proc()}, elem...)...)
 }
 
+// PCI is the bus reading this configuration describes, with the roots resolved
+// the way every other reading resolves them.
+//
+// It is exported because a caller that means to act on a controller — to hand
+// one back to the kernel, say — needs the same three roots this collection
+// reads them through, and rebuilding them at the call site is how the two come
+// to disagree about which machine they are talking about.
+func (c Config) PCI() pci.Config {
+	return pci.Config{
+		SysfsRoot: c.sysfs(),
+		ProcRoot:  c.proc(),
+		DevRoot:   c.dev(),
+	}
+}
+
 // inspector is the disk reading this configuration describes, with the roots
 // resolved once so that the block devices are read from the same trees as
 // everything else.
@@ -455,11 +470,7 @@ func Collect(ctx context.Context, cfg Config) (Inventory, error) {
 	}
 	inv.Devices = devices
 
-	pciCfg := pci.Config{
-		SysfsRoot: cfg.sysfs(),
-		ProcRoot:  cfg.proc(),
-		DevRoot:   cfg.dev(),
-	}
+	pciCfg := cfg.PCI()
 	controllers, err := pci.Scan(pciCfg)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("read the PCI controllers: %w", err))
