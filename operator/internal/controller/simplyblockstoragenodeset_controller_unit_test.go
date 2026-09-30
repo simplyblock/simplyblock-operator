@@ -2791,3 +2791,86 @@ func TestMaybeActivateClusterProceedsOnceFailureDomainsAreReady(t *testing.T) {
 		t.Fatalf("expected the gate to let activation proceed once failure domains are ready")
 	}
 }
+
+// --- expansionDispatchOrder -------------------------------------------------
+
+func expansionOrderNodeSet(expand bool, domains map[string]int32) *simplyblockv1alpha1.StorageNodeSet {
+	sns := &simplyblockv1alpha1.StorageNodeSet{}
+	sns.Spec.Expand = &expand
+	sns.Spec.NodeFailureDomains = domains
+	sns.Status.PendingNodeAdds = map[string]metav1.Time{}
+	return sns
+}
+
+// Two same-domain workers listed adjacently would have the second refused by
+// the backend's +/-1 rule on every reconcile until another domain landed. The
+// pending adds are dispatched round-robin over their domains instead.
+func TestExpansionDispatchOrder_InterleavesPendingWorkersByDomain(t *testing.T) {
+	sns := expansionOrderNodeSet(true, map[string]int32{"a1": 0, "a2": 0, "b1": 1, "c1": 2})
+	got := expansionDispatchOrder(sns, []string{"a1", "a2", "b1", "c1"})
+	want := []string{"a1", "b1", "c1", "a2"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("order: got %v, want %v", got, want)
+	}
+}
+
+// Order is only changed for an expansion. An initial build has no per-add
+// gate and activation checks the final split, so the spec order stands.
+func TestExpansionDispatchOrder_LeavesAnInitialBuildAlone(t *testing.T) {
+	sns := expansionOrderNodeSet(false, map[string]int32{"a1": 0, "a2": 0, "b1": 1})
+	in := []string{"a1", "a2", "b1"}
+	if got := expansionDispatchOrder(sns, in); strings.Join(got, ",") != strings.Join(in, ",") {
+		t.Errorf("a non-expansion set was reordered: %v", got)
+	}
+}
+
+// Workers the backend already knows, or that have a POST in flight, hold
+// their slots and stay first in spec order; only the pending ones move.
+func TestExpansionDispatchOrder_SettledWorkersKeepTheirPlace(t *testing.T) {
+	sns := expansionOrderNodeSet(true, map[string]int32{"a1": 0, "a2": 0, "a3": 0, "b1": 1, "b2": 1, "c1": 2})
+	sns.Status.Nodes = []simplyblockv1alpha1.NodeStatus{{Hostname: "a1", UUID: "uuid-a1"}}
+	sns.Status.PendingNodeAdds["b1"] = metav1.Now()
+	got := expansionDispatchOrder(sns, []string{"a2", "a1", "a3", "b1", "b2", "c1"})
+	// settled (a1 added, b1 in flight) in spec order, then pending round-robin: a2 b2 c1 a3
+	want := []string{"a1", "b1", "a2", "b2", "c1", "a3"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("order: got %v, want %v", got, want)
+	}
+}
+
+// nodeConfigs[worker].failureDomain wins over nodeFailureDomains, matching
+// how the add request itself resolves the domain.
+func TestExpansionDispatchOrder_NodeConfigsOverrideTheDomainMap(t *testing.T) {
+	sns := expansionOrderNodeSet(true, map[string]int32{"x": 0, "y": 0, "z": 1})
+	one := int32(1)
+	sns.Spec.NodeConfigs = map[string]simplyblockv1alpha1.StorageNodeOverrides{"y": {FailureDomain: &one}}
+	got := expansionDispatchOrder(sns, []string{"x", "y", "z"})
+	// x is domain 0; y and z are domain 1 -> x, y, z (round 0: x,y; round 1: z)
+	want := []string{"x", "y", "z"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("order: got %v, want %v", got, want)
+	}
+}
+
+// A pending worker whose domain cannot be resolved goes last: the backend
+// refuses it on a domain-enabled cluster regardless of position, and putting
+// it first would only add a refusal in front of the ones that can proceed.
+func TestExpansionDispatchOrder_UnknownDomainGoesLast(t *testing.T) {
+	sns := expansionOrderNodeSet(true, map[string]int32{"a1": 0, "b1": 1})
+	got := expansionDispatchOrder(sns, []string{"mystery", "a1", "b1"})
+	want := []string{"a1", "b1", "mystery"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("order: got %v, want %v", got, want)
+	}
+}
+
+// Applying the order to its own output changes nothing, so successive
+// reconciles dispatch the same sequence.
+func TestExpansionDispatchOrder_IsStable(t *testing.T) {
+	sns := expansionOrderNodeSet(true, map[string]int32{"a1": 0, "a2": 0, "b1": 1, "b2": 1, "c1": 2})
+	once := expansionDispatchOrder(sns, []string{"a1", "a2", "b1", "b2", "c1"})
+	twice := expansionDispatchOrder(sns, once)
+	if strings.Join(once, ",") != strings.Join(twice, ",") {
+		t.Errorf("not idempotent: %v then %v", once, twice)
+	}
+}

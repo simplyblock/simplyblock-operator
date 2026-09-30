@@ -6061,6 +6061,16 @@
             "type": "boolean",
             "title": "Is Re Balancing"
           },
+          "is_data_rebalancing": {
+            "type": "boolean",
+            "title": "Is Data Rebalancing",
+            "default": false
+          },
+          "active_lvol_migrations": {
+            "type": "integer",
+            "title": "Active Lvol Migrations",
+            "default": 0
+          },
           "block_size": {
             "type": "integer",
             "minimum": 0.0,
@@ -6987,6 +6997,18 @@
               }
             ],
             "title": "Secondary Node Id"
+          },
+          "tertiary_node_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tertiary Node Id"
           },
           "status": {
             "type": "string",

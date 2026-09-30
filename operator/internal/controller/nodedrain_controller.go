@@ -1433,7 +1433,9 @@ func findNodeUUID(snCR *simplyblockv1alpha1.StorageNodeSet, hostname string) str
 func findAllNodeUUIDs(snCR *simplyblockv1alpha1.StorageNodeSet, hostname string) []string {
 	var uuids []string
 	for _, n := range snCR.Status.Nodes {
-		if n.Hostname == hostname && n.UUID != "" {
+		// A node in the middle of its removal is already down: a worker drain
+		// has nothing to stop there, and must not shut it down or restart it.
+		if n.Hostname == hostname && n.UUID != "" && !isNodeInRemoval(n.Status) {
 			uuids = append(uuids, n.UUID)
 		}
 	}
@@ -1521,12 +1523,16 @@ func isClusterRebalancing(
 	}
 
 	var info struct {
-		Rebalancing bool `json:"is_re_balancing"`
+		Rebalancing     bool  `json:"is_re_balancing"`
+		DataRebalancing *bool `json:"is_data_rebalancing"`
 	}
 	if err := json.Unmarshal(body, &info); err != nil {
 		return false, fmt.Errorf("unmarshal cluster info: %w", err)
 	}
-	return info.Rebalancing, nil
+	// Data rebalancing only: the volume migrations a drain issues itself are
+	// not a reason to hold the drain slot. Older control planes do not report
+	// it; the wider flag stands in for them.
+	return webapi.ClusterResponse{Rebalancing: info.Rebalancing, DataRebalancing: info.DataRebalancing}.IsDataRebalancing(), nil
 }
 
 // sanitizeLabelValue truncates to 63 chars (Kubernetes label value limit).

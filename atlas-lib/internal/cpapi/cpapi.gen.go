@@ -452,6 +452,7 @@ type CapacityStatDTO struct {
 
 // ClusterDTO defines model for ClusterDTO.
 type ClusterDTO struct {
+	ActiveLvolMigrations        *int               `json:"active_lvol_migrations,omitempty"`
 	AntiAffinity                bool               `json:"anti_affinity"`
 	BackupEnabled               bool               `json:"backup_enabled"`
 	BlockSize                   int                `json:"block_size"`
@@ -461,6 +462,7 @@ type ClusterDTO struct {
 	EnableFailureDomain         bool               `json:"enable_failure_domain"`
 	Ha                          bool               `json:"ha"`
 	Id                          openapi_types.UUID `json:"id"`
+	IsDataRebalancing           *bool              `json:"is_data_rebalancing,omitempty"`
 	IsReBalancing               bool               `json:"is_re_balancing"`
 	MaxFaultTolerance           int                `json:"max_fault_tolerance"`
 	Name                        *string            `json:"name"`
@@ -696,6 +698,7 @@ type StorageNodeDTO struct {
 	SnapshotsMax      int                     `json:"snapshots_max"`
 	SpdkMem           int                     `json:"spdk_mem"`
 	Status            StorageNodeDTOStatus    `json:"status"`
+	TertiaryNodeId    *openapi_types.UUID     `json:"tertiary_node_id,omitempty"`
 	Uptime            *openapi_types.Duration `json:"uptime"`
 }
 
