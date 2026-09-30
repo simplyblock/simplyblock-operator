@@ -99,6 +99,17 @@ type Report struct {
 	// could not be read still has disks worth reviewing, and a probe that
 	// returned nothing would hide them.
 	Unreadable []string `json:"unreadable,omitempty"`
+
+	// Reclaim is what this probe handed back to the kernel before it read the
+	// machine, and what it left bound. It is absent for a run that was not
+	// asked to reclaim, which is the ordinary case.
+	//
+	// It is on the report because the reclaim happens before the reading, so
+	// the devices below may be devices this run made appear. A report without
+	// it would describe a worker whose disks arrived for reasons nothing in the
+	// report accounts for, and nobody reading it afterward could tell a fleet
+	// whose disks were always the kernel's from one this run rebound.
+	Reclaim *Reclaim `json:"reclaim,omitempty"`
 }
 
 // HostOS is the worker's operating system as the probe read it.

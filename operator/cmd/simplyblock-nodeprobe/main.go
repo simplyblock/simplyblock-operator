@@ -1,5 +1,4 @@
-// simplyblock-nodeprobe reports what one worker has to offer, and changes
-// nothing.
+// simplyblock-nodeprobe reports what one worker has to offer.
 //
 // It is the node-side half of the discovery run that produces a
 // ClusterDeploymentConfig: the operator creates one of these as a Job per
@@ -13,9 +12,15 @@
 // belongs to the operator that holds the fleet's reports and an administrator
 // has to be able to be told why the disk they expected is not a candidate.
 //
-// It is read-only against the machine. Devices are opened O_RDONLY, the host's
-// sysfs and procfs are mounted read-only, and the only thing this process
-// writes anywhere is its own report.
+// It reads the machine and changes nothing, with one exception it has to be
+// asked for. Devices are opened O_RDONLY, the host's procfs and root filesystem
+// are mounted read-only, and the only thing this process writes anywhere is its
+// own report — unless --reclaim-userspace-devices is given, which hands back to
+// the kernel every NVMe controller a userspace driver holds and nothing is
+// driving, and which is why the host's sysfs is mounted writable for exactly
+// those runs. What it took back travels in the report, because the reclaim
+// happens before the reading and the disks it recovers are disks the reading
+// then finds.
 //
 //	simplyblock-nodeprobe --node=worker-3 --namespace=simplyblock --run=oops-20260908
 //	    --sysfs-root=/host/sys --proc-root=/host/proc --dev-root=/dev
@@ -23,7 +28,8 @@
 //
 // With --output=stdout it writes the report to standard output and touches no
 // cluster at all, which is how it is run by hand on a machine to see what a
-// discovery run would make of it.
+// discovery run would make of it. That is still true with the reclaim: it
+// changes the machine and no cluster.
 
 package main
 
@@ -69,6 +75,9 @@ type options struct {
 
 	roots inventory.Config
 
+	// reclaimUserspaceDevices asks for the one step that changes the machine.
+	reclaimUserspaceDevices bool
+
 	kubeconfig string
 	owner      *metav1.OwnerReference
 }
@@ -103,8 +112,26 @@ func fail(err error) {
 // still contributes the disks it has, and the run records what was missing
 // rather than losing the machine.
 func run(ctx context.Context, opts options) error {
+	// Before the reading, because a controller handed back to the kernel is a
+	// controller whose namespaces the collection below will find as block
+	// devices. A reclaim after it would change the machine and describe the
+	// one it used to be.
+	//
+	// Its failure is the run's. Everything else here degrades into the report's
+	// Unreadable list, but a reclaim that half happened leaves the machine in a
+	// state nobody asked for, and a report written over it would describe the
+	// disks it did get back as though that were the whole answer.
+	var reclaimed *nodeprobe.Reclaim
+	if opts.reclaimUserspaceDevices {
+		var err error
+		if reclaimed, err = nodeprobe.ReclaimUserspace(opts.roots.PCI()); err != nil {
+			return err
+		}
+	}
+
 	inv, unreadable := inventory.Collect(ctx, opts.roots)
 	report := nodeprobe.FromInventory(opts.node, time.Now(), inv, unreadable)
+	report.Reclaim = reclaimed
 
 	if opts.output == outputStdout {
 		encoded, err := nodeprobe.Encode(report)
@@ -214,6 +241,11 @@ func parseOptions(args []string, env func(string) string) (options, error) {
 			"/host/proc/1/mountinfo, because its own lists none of the host's mounts")
 	fs.StringVar(&opts.kubeconfig, "kubeconfig", "",
 		"a kubeconfig to write the report with, for running the probe outside a cluster")
+	fs.BoolVar(&opts.reclaimUserspaceDevices, "reclaim-userspace-devices", false,
+		"hand back to the kernel every NVMe controller a userspace driver holds and "+
+			"nothing is driving, before reading the machine; this is the one thing "+
+			"the probe does that changes the worker, and it needs the host's sysfs "+
+			"mounted writable")
 
 	if err := fs.Parse(args); err != nil {
 		return options{}, err

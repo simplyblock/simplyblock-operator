@@ -14,6 +14,14 @@
 // read-only: the probe writes to no device, and the only thing it writes at all
 // is its own report.
 //
+// One kind of run writes more, and it is bounded to one tree. A run asked to
+// reclaim hands back to the kernel the NVMe controllers a userspace driver holds
+// and nothing is driving, which is three writes under /sys per controller, so
+// such a Job mounts the host's sysfs writable where every other Job mounts it
+// read-only. That is the whole difference: the pod was already privileged and
+// root for the readings above, and ReclaimUserspaceDevices is what a reviewer
+// reads off a Job to tell the two apart.
+//
 // What it mounts is chosen for the same reason each time. The host's /sys
 // carries the devices and the CPU topology, its /proc carries the huge pages
 // and the mount table, and its /dev carries the nodes to open. hostNetwork is
@@ -131,6 +139,23 @@ type JobOptions struct {
 	// simplyblock says so here.
 	Tolerations []corev1.Toleration
 
+	// ReclaimUserspaceDevices asks the probe to hand back to the kernel every
+	// NVMe controller a userspace driver holds and nothing is driving, before
+	// it reads the machine.
+	//
+	// It is the one thing a probe does that changes the worker, so it is a
+	// field rather than something the probe decides: a Job says on its face
+	// whether the pod it creates reads the machine or rebinds it. What decides
+	// it is the run's device filter, and every run sets it unless a logical
+	// block-device run declined.
+	//
+	// Setting it mounts the host's sysfs writable, which is the whole privilege
+	// difference between a reclaiming probe and a reading one. Every write a
+	// rebind makes — driver_override, unbind, drivers_probe — is under /sys,
+	// and the container is already privileged and root for the readings it
+	// does, so nothing else about it changes.
+	ReclaimUserspaceDevices bool
+
 	// TTLSecondsAfterFinished, BackoffLimit, and ActiveDeadlineSeconds override
 	// the defaults above. Nil takes the default.
 	TTLSecondsAfterFinished *int32
@@ -203,17 +228,7 @@ func Job(opts JobOptions) (*batchv1.Job, error) {
 						Name:            ContainerName,
 						Image:           opts.Image,
 						ImagePullPolicy: pullPolicyOr(opts.ImagePullPolicy),
-						Command: []string{
-							BinaryName,
-							"--node=$(NODE_NAME)",
-							"--namespace=$(POD_NAMESPACE)",
-							"--run=" + opts.Run,
-							"--sysfs-root=" + hostSysfsMount,
-							"--proc-root=" + hostProcMount,
-							"--dev-root=" + hostDevMount,
-							"--host-root=" + HostRootMount,
-							"--mountinfo=" + HostMountinfoPath,
-						},
+						Command:         probeCommand(opts),
 						Env: append([]corev1.EnvVar{
 							fieldRefEnv("NODE_NAME", "spec.nodeName"),
 							fieldRefEnv("POD_NAMESPACE", "metadata.namespace"),
@@ -229,7 +244,12 @@ func Job(opts JobOptions) (*batchv1.Job, error) {
 							ReadOnlyRootFilesystem: &readOnlyRoot,
 						},
 						VolumeMounts: []corev1.VolumeMount{
-							{Name: "host-sys", MountPath: hostSysfsMount, ReadOnly: true},
+							// Read-only unless the run reclaims: the rebind is
+							// the only thing the probe writes to the host, and
+							// a run that does not do it gets the mount it
+							// always had.
+							{Name: "host-sys", MountPath: hostSysfsMount,
+								ReadOnly: !opts.ReclaimUserspaceDevices},
 							{Name: "host-proc", MountPath: hostProcMount, ReadOnly: true},
 							// /dev is not read-only: opening a device node
 							// O_EXCL is the kernel's own answer to whether
@@ -278,6 +298,30 @@ func ownerEnv(owner *metav1.OwnerReference) []corev1.EnvVar {
 		{Name: "OWNER_NAME", Value: owner.Name},
 		{Name: "OWNER_UID", Value: string(owner.UID)},
 	}
+}
+
+// probeCommand is how the probe is invoked, which is the roots it is pointed at
+// and whether it may change the machine.
+//
+// The reclaim flag is last and conditional, so a run that did not ask for it
+// produces the command it always produced: what a reviewer reads off a Job is
+// the difference between a probe that reads and one that rebinds.
+func probeCommand(opts JobOptions) []string {
+	command := []string{
+		BinaryName,
+		"--node=$(NODE_NAME)",
+		"--namespace=$(POD_NAMESPACE)",
+		"--run=" + opts.Run,
+		"--sysfs-root=" + hostSysfsMount,
+		"--proc-root=" + hostProcMount,
+		"--dev-root=" + hostDevMount,
+		"--host-root=" + HostRootMount,
+		"--mountinfo=" + HostMountinfoPath,
+	}
+	if opts.ReclaimUserspaceDevices {
+		command = append(command, "--reclaim-userspace-devices")
+	}
+	return command
 }
 
 // hostPathVolume is one of the host's trees, mounted into the pod.
