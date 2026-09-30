@@ -302,7 +302,6 @@ func TestStoragePoolRoundTripsFromTheHub(t *testing.T) {
 				EnableCompression:         ptr.To(true),
 				EnableClientCompression:   ptr.To(true),
 				EnableClientDeduplication: ptr.To(false),
-				EnableEncryption:          ptr.To(true),
 				EnableReplication:         ptr.To(false),
 				EnableDHCHAP:              ptr.To(true),
 				PriorityClass:             "high",

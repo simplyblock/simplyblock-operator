@@ -118,7 +118,6 @@ spec:
   # volumeDefaults:
   #   filesystem: ext4
   #   fabric: tcp
-  #   enableEncryption: false
   #   enableDHCHAP: false
   #
   # allowedNodes:

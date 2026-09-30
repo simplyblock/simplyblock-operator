@@ -1439,7 +1439,6 @@ authentication rather than failing to apply.
 | `enabled`                  | on      | `disableDataRealignment`     | `DataRealignmentSettings`                    |
 | `enabled`                  | off     | `enableVolumeAutoPlacement`  | `VolumeAutoPlacementSettings`                |
 | `withCompression`          | off     | `enableCompression`          | `BackupSpec`                                 |
-| `encryption`               | off     | `enableEncryption`           | `StorageClassParameters`                     |
 | `replicate`                | off     | `enableReplication`          | `StorageClassParameters`                     |
 | `dhchap`                   | off     | `enableDHCHAP`               | `StoragePoolSpec`                            |
 

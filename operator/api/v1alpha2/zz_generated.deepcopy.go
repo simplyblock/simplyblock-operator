@@ -3782,11 +3782,6 @@ func (in *VolumeDefaults) DeepCopyInto(out *VolumeDefaults) {
 		*out = new(bool)
 		**out = **in
 	}
-	if in.EnableEncryption != nil {
-		in, out := &in.EnableEncryption, &out.EnableEncryption
-		*out = new(bool)
-		**out = **in
-	}
 	if in.EnableReplication != nil {
 		in, out := &in.EnableReplication, &out.EnableReplication
 		*out = new(bool)

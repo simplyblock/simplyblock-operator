@@ -406,11 +406,6 @@ spec:
                         the generated class gets its node selector from that list and a class's
                         parameters cannot be edited afterward.
                       type: boolean
-                    enableEncryption:
-                      description: |-
-                        EnableEncryption encrypts logical volumes, using the key store the cluster
-                        names in its own spec.
-                      type: boolean
                     enableReplication:
                       description: EnableReplication replicates logical volumes.
                       type: boolean
