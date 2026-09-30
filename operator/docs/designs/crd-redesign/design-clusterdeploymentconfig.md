@@ -868,6 +868,41 @@ free is a property of the worker, so the Kubernetes API and the node itself are
 where both halves of it are read. There is no control-plane client and no backend
 call, which is why this document has no backend API requirements.
 
+**It changes one thing about a worker, and it is the thing that makes the rest
+readable.** A probe hands back to the kernel every NVMe controller a userspace
+driver holds and that nothing is driving. SPDK takes a controller by rebinding
+it away from the kernel, so a controller an earlier deployment prepared and left
+is in the way of both classes: a logical block-device run cannot see it at all,
+because the kernel presents no block device for it and that class reaches a disk
+through the kernel, and an NVMe run sees the controller but no namespace to
+size, so it drafts groups named for a capacity nothing could read. Either way
+the fleet's storage is invisible for a reason that is a binding rather than an
+absence, and the run would report a machine with no disks.
+
+**What no run does is take a controller something is driving.** A machine
+prepared for SPDK and a machine running SPDK are identical in sysfs, and the only
+evidence separating them is whether a process holds the controller's character
+devices open — so the holders are read from the host's process table before
+anything is written, and read again at the write, because the window between
+asking and acting is exactly when an application starts. A controller whose
+holders could not be established is left alone as well: a probe without the
+host's PID namespace sees only its own processes, and reading that silence as
+idle would take a running application's disks out from under it. What a probe
+reclaimed and what it refused travel in its report, because the reclaim happens
+before the reading and the disks it recovers are disks the reading then finds.
+
+`deviceFilter.disableReclaimUserspaceDevices` declines it, and only a logical
+block-device run may. An NVMe deployment binds these controllers back the moment
+it is deployed, so a run that left them alone would only be proposing disks it
+could not describe; a block run has the case the field is for, where the
+bindings are meant to stay — a fleet mid-migration, or a controller passed
+through to a guest whose holder sits outside the probe's view.
+
+It is the one privilege the probe holds beyond reading. The pod is already
+privileged and root for the readings it does, so what a reclaiming run adds is a
+writable mount of the host's sysfs, which every write a rebind makes is under. A
+run that declines gets the read-only mount it has always had.
+
 **A discovery run reports only what is unclaimed, which is what makes re-running
 it useful.** A worker that already carries a `StorageNode`, and a device that node
 already names in its `spec.config`, are not candidates, so a run against a deployed
