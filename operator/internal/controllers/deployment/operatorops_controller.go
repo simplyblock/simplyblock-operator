@@ -604,10 +604,20 @@ func (r *OperatorOpsReconciler) write(
 	// a number between the install and this step meant the correction. A document
 	// that cannot be read is reported once and then treated as absent, which
 	// leaves every number to what this run found.
+	//
+	// A configuration that could not be read is not the same as one that is not
+	// there, and this step cannot proceed through it. The document it is about to
+	// write is the one the next reconcile finds already present and leaves alone,
+	// so a draft written without the installation's seed keeps the numbers this
+	// run found for good: the API recovering afterward restores nothing. The
+	// error requeues instead, which is what the read being transient asks for.
 	installation, err := bootstrap.Load(ctx, r.Client, r.Namespace)
-	if err != nil {
+	switch {
+	case errors.Is(err, bootstrap.ErrUnreadable):
+		return false, err
+	case err != nil:
 		logf.FromContext(ctx).Error(err, "the installation's bootstrap configuration "+
-			"could not be read; the draft states what this run found")
+			"could not be parsed; the draft states what this run found")
 	}
 
 	config, notes := r.draftFor(ops, spec, plan, installation)

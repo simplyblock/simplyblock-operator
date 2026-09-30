@@ -17,6 +17,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -68,7 +69,7 @@ type Config struct {
 	Namespace string `json:"namespace,omitempty"`
 
 	// NodeSelector restricts which workers the run inspects, and with it the
-	// question of whether there is a worth inspecting at all.
+	// question of whether there is a worker worth inspecting at all.
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
 	// Tolerations are what the run's probe pods tolerate, and what the draft
@@ -127,10 +128,20 @@ type ImagesConfig struct {
 // ClusterConfig is the part of a draft's cluster an installation states rather
 // than discovery deriving it.
 //
-// Every member is immutable on the StorageCluster the draft expands into, which
-// is what decides membership: a field a reviewer can correct afterward does not
-// need to be stated at install time, and a field nobody can correct afterward is
-// one a wrong guess makes permanent.
+// What decides membership is that a wrong guess is expensive to undo, and the
+// members are here for two different reasons.
+//
+// Most are immutable on the StorageCluster the draft expands into: the name, the
+// stripe, and the two checksum settings cannot be corrected once the cluster
+// exists, and the backend bakes the checksum method into each device at create
+// and never re-applies it. A wrong guess there is permanent.
+//
+// The other two are not immutable and are here anyway. MaxSubsystemCount can be
+// changed on the cluster afterward, and is stated because the number discovery
+// proposes is the middle of the API's range rather than a reading of anything.
+// EnableDriveFormat is spent during provisioning rather than held as cluster
+// state, and a wrong guess is undone by restoring a backup, which is worse than
+// permanent for the data it formatted.
 type ClusterConfig struct {
 	// Name is the StorageCluster's name, held to the 63 a cluster name may be
 	// and, in practice, to the shorter budget the control plane's derived names
@@ -167,12 +178,32 @@ type ClusterConfig struct {
 	EnableAtomicity4K *bool `json:"enableAtomicity4K,omitempty"`
 }
 
+// ErrUnreadable reports that the ConfigMap could not be read at all, as opposed
+// to being absent, carrying no key, or carrying a document that will not parse.
+//
+// The three are not one failure, and the difference decides whether a caller may
+// act. A configuration that is absent or unusable was read: what the
+// installation states is known, and it is nothing, so the operator's own
+// behavior is the right answer. A configuration that could not be read states
+// whatever it states, and the caller does not know what — including, on a
+// managed installation, that it wants no discovery run at all. Proceeding on the
+// defaults there raises the run the installation wrote `enabled: false` to
+// suppress, and the run creates objects on every worker in the fleet.
+//
+// So it is a sentinel and not a message. A caller has to branch on it, and prose
+// is not something a caller can branch on.
+var ErrUnreadable = errors.New("the installation's bootstrap configuration could not be read")
+
 // Load reads the installation's configuration from its ConfigMap.
 //
 // It never returns a nil Config. An absent ConfigMap, an absent key, and content
 // that cannot be parsed all yield the zero value, which is the behavior the
 // operator had before this file existed; the parse failure is returned alongside
 // it so a caller can say so once rather than deciding what to do about it.
+//
+// A failure to read the object at all is different, and is wrapped in
+// [ErrUnreadable]: the zero Config comes back with it, and a caller that acts on
+// that value is acting on an answer nobody gave.
 func Load(ctx context.Context, reader client.Reader, namespace string) (*Config, error) {
 	key := client.ObjectKey{Namespace: namespace, Name: ConfigMapName}
 
@@ -181,7 +212,7 @@ func Load(ctx context.Context, reader client.Reader, namespace string) (*Config,
 	case apierrors.IsNotFound(err):
 		return &Config{}, nil
 	case err != nil:
-		return &Config{}, fmt.Errorf("reading %s: %w", ConfigMapName, err)
+		return &Config{}, fmt.Errorf("%w: reading %s: %w", ErrUnreadable, ConfigMapName, err)
 	}
 
 	document := strings.TrimSpace(held.Data[ConfigKey])

@@ -44,6 +44,7 @@ package deployment
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -114,12 +115,24 @@ func (d *InitialDiscovery) Start(ctx context.Context) error {
 	log := logf.FromContext(ctx).WithName("initial-discovery")
 
 	// What the installation stated, or the operator's own behavior where it
-	// stated nothing. A document that cannot be read is reported once and then
-	// treated as absent: the alternative is an install that raises no run because
-	// of a typo, which is the outcome hardest to account for from the outside.
+	// stated nothing. A document that is present and unusable is reported once
+	// and then treated as absent: the alternative is an install that raises no
+	// run because of a typo, which is the outcome hardest to account for from
+	// the outside.
+	//
+	// A configuration that could not be read at all is the other failure, and it
+	// is not one to proceed through. What it says is unknown, and one of the
+	// things it may say is that this installation raises no run: a managed one
+	// states exactly that, and defaulting past it creates an OperatorOps and a
+	// probe Job on every worker in the fleet. Returning the error leaves the
+	// check unperformed, which is the recoverable half of the choice.
 	config, err := bootstrap.Load(ctx, d.Client, d.Namespace)
-	if err != nil {
-		log.Error(err, "the installation's bootstrap configuration could not be read; "+
+	switch {
+	case errors.Is(err, bootstrap.ErrUnreadable):
+		return fmt.Errorf("the initial discovery check could not read the "+
+			"installation's configuration, so it raised nothing: %w", err)
+	case err != nil:
+		log.Error(err, "the installation's bootstrap configuration could not be parsed; "+
 			"the operator's own defaults apply")
 	}
 
