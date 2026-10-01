@@ -180,11 +180,6 @@ type BackupStoreSpec struct {
 	// +kubebuilder:validation:Required
 	Bucket string `json:"bucket"`
 
-	// Prefix narrows the store to one key prefix, so that several clusters can
-	// share a bucket without each walking the others' backups.
-	// +optional
-	Prefix string `json:"prefix,omitempty"`
-
 	// Region is the bucket's region, for endpoints that do not imply one.
 	// +optional
 	Region string `json:"region,omitempty"`
