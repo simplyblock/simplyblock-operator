@@ -340,7 +340,7 @@ func (m *SubscriptionManager) streamOnce(ctx context.Context, sub Subscription, 
 func (m *SubscriptionManager) dispatch(ctx context.Context, sub Subscription, scope Scope, ev sseEvent) error {
 	switch ev.Name {
 	case EventSnapshot, EventCreated, EventUpdated, EventDeleted:
-		return sub.Ingest(ctx, Event{Kind: ev.Name, Scope: scope, Data: ev.Data})
+		return sub.Ingest(ctx, Event{Kind: ev.Name, Scope: scope, ID: ev.ID, Data: ev.Data})
 	case eventError:
 		return fmt.Errorf("control-plane reported stream error: %s", strings.TrimSpace(string(ev.Data)))
 	default:
