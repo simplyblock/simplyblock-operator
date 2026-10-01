@@ -66,6 +66,14 @@ const (
 	rebalancingDeadline   = 4 * time.Hour
 )
 
+// How long an Activate keeps asking again after the control plane gives up on
+// an attempt, counted from when the operation took the cluster's lock. The
+// control plane's own attempt waits up to five minutes for cross-node device
+// connections before giving up, so this budget allows several attempts. It
+// bounds when the last attempt may start, and the Awaiting deadline still
+// bounds how long that attempt may run.
+const activationRetryBudget = 30 * time.Minute
+
 // graphs declares one state graph per action over one step type.
 func graphs() statemachine.MultiConfig[step] {
 	deadline := func(d time.Duration) statemachine.TransitionFunc[step] {

@@ -167,6 +167,9 @@ func (r *StorageClusterOpsReconciler) await(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps, clusterID string,
 ) (bool, error) {
 	switch ops.Spec.Action {
+	case simplyblockv1alpha2.StorageClusterOpsActionActivate:
+		return r.awaitActivation(ctx, ops, clusterID)
+
 	case simplyblockv1alpha2.StorageClusterOpsActionShutdown:
 		active, err := r.clusterActive(ctx, clusterID)
 		return !active, err
