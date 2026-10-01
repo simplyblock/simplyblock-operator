@@ -11,10 +11,11 @@
 // the holders itself rather than taking a caller's word, because the caller
 // that is wrong about this is exactly the one that would pass the wrong answer.
 //
-// Nothing in a discovery run calls either of these. A run inspects what is
-// there and writes what it found; reclaiming a controller a previous deployment
-// left bound is a decision somebody makes about a specific machine, after
-// reading what the run reported.
+// A discovery run reclaims through [ReclaimIdle], which is the guarded loop
+// over these: it hands back what a dead deployment left behind so the disks can
+// be read, and leaves what a running one is driving alone. Nothing else in this
+// product rebinds, and taking a controller a holder check could not clear is a
+// decision somebody makes about a specific machine.
 
 package pci
 
@@ -146,7 +147,12 @@ func overrideFor(driver string) string {
 // is made.
 func writeAttr(cfg Config, relative, value string) error {
 	path := filepath.Join(cfg.sysfs(), relative)
-	file, err := os.OpenFile(path, os.O_WRONLY, 0)
+	// O_TRUNC is what the kernel does on its own: a sysfs attribute takes the
+	// value of the write rather than the bytes of the file, so a shorter value
+	// never leaves the tail of the old one behind. Saying so keeps a file-backed
+	// tree behaving the way the host does, whether it is a test's or a captured
+	// one.
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
 	if err != nil {
 		return fmt.Errorf("pci: open %s: %w", path, err)
 	}
@@ -156,4 +162,43 @@ func writeAttr(cfg Config, relative, value string) error {
 		return fmt.Errorf("pci: write %q to %s: %w", strings.TrimSpace(value), path, err)
 	}
 	return nil
+}
+
+// ReclaimIdle hands every controller a userspace driver holds, and nothing is
+// driving, back to the kernel.
+//
+// It is how a run sees the disks of a fleet that has run this product before. A
+// controller SPDK took presents no block device, so everything the disk would
+// say about itself is unreadable until the kernel has it again: its size, its
+// partition table, and the stable paths it is named by. Offering the
+// controller by its PCI address instead says a disk is there and nothing about
+// what is on it, which is a draft that approves a disk nobody read.
+//
+// What a running deployment is driving is not taken: [BindTo] refuses a device
+// something holds open, so only what a dead one left behind is reclaimed. A
+// controller whose holders could not be read is left alone for the same reason
+// [CheckHolders] records that failure rather than defaulting it. An unchecked
+// controller and an idle one are indistinguishable once the error is dropped,
+// and one of them is somebody's running storage node.
+//
+// The reclaimed controllers are returned as they were scanned. A caller records
+// them because the machine comes back with its controllers on the kernel
+// driver, and a run that changed a host owes its reader the list.
+func ReclaimIdle(cfg Config, devices []Device) ([]Device, error) {
+	var reclaimed []Device
+	var errs []error
+	for _, device := range devices {
+		if !device.BoundToUserspace() || !device.Free() {
+			continue
+		}
+		// The empty driver asks the bus to probe the device again rather than
+		// naming the NVMe driver, so a kernel that prefers another driver for
+		// this controller gets its way. See [BindTo].
+		if err := BindTo(cfg, device.Address, ""); err != nil {
+			errs = append(errs, fmt.Errorf("pci: hand %s back to the kernel: %w", device.Address, err))
+			continue
+		}
+		reclaimed = append(reclaimed, device)
+	}
+	return reclaimed, errors.Join(errs...)
 }

@@ -11,10 +11,18 @@
 // Nothing here blocks. A step that is not finished requeues, and the step it is
 // on is in the status, so a controller restart resumes rather than restarts.
 //
-// The run changes nothing it did not create. It reads nodes, creates probe Jobs
-// and reads the ConfigMaps they write, and creates one ClusterDeploymentConfig
-// in Draft. Whether that document becomes a cluster is the reviewer's decision
-// and a different controller's job.
+// The run creates nothing in the cluster it does not own: it reads nodes,
+// creates probe Jobs and reads the ConfigMaps they write, and creates one
+// ClusterDeploymentConfig in Draft. Whether that document becomes a cluster is
+// the reviewer's decision and a different controller's job.
+//
+// It does change the workers. A probe hands back every NVMe controller a dead
+// deployment left on a userspace driver, because a controller SPDK took
+// presents no block device and a run that only looked would report machine
+// after machine with no storage on it. The controller stays on the kernel
+// driver afterward, so that the disk the draft names still exists when the
+// node is added, and each probe reports what it took in its report's Reclaimed
+// list. What a running deployment is driving is never touched.
 //
 // It also deletes nothing, and holds no verb to. The Jobs and the reports both
 // carry an owner reference to the run, so deleting the run collects them and a
@@ -864,8 +872,13 @@ func (r *OperatorOpsReconciler) probeServiceAccount() string {
 	return nodeProbeServiceAccount()
 }
 
-// abort stops a run at its next step. Discovery changes nothing, so there is
-// nothing to unwind beyond the Jobs it started.
+// abort stops a run at its next step.
+//
+// Nothing in the cluster has to be unwound beyond the Jobs it started: a run
+// creates one document and creates it last. What an abort cannot take back is
+// on the workers, where a probe that already ran has handed idle controllers
+// back to the kernel, and the message says so rather than promising a machine
+// untouched.
 func (r *OperatorOpsReconciler) abort(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.OperatorOps,
@@ -874,7 +887,8 @@ func (r *OperatorOpsReconciler) abort(
 	ops.Status.Phase = simplyblockv1alpha2.OperatorOpsPhaseAborted
 	ops.Status.CompletedAt = &now
 	ops.Status.Step.Deadline = nil
-	ops.Status.Message = "aborted; discovery changes nothing, so nothing was undone"
+	ops.Status.Message = "aborted; nothing was created to undo, and a worker whose " +
+		"probe already ran keeps the NVMe controllers it handed back to the kernel"
 	r.event(ops, corev1.EventTypeNormal, OperationAborted, ops.Status.Message)
 	observeRun(ops, ops.Status.Phase)
 	return ctrl.Result{}, r.status(ctx, ops)

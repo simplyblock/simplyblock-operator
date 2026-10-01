@@ -99,6 +99,18 @@ type Report struct {
 	// them to conclude the machine has none.
 	NVMeControllers []Controller `json:"nvmeControllers,omitempty"`
 
+	// Reclaimed is the controllers this probe handed back to the kernel, as
+	// they were before it did.
+	//
+	// The probe takes a controller a dead deployment left on a userspace driver
+	// so that the disks behind it can be read at all, and leaves it on the
+	// kernel driver afterward, because the path a draft records has to still
+	// exist when the node is added. These are therefore the disks in Devices
+	// that are there only because the probe changed the machine, and a reader
+	// comparing a worker against what it looked like an hour ago is owed the
+	// list.
+	Reclaimed []Controller `json:"reclaimed,omitempty"`
+
 	// Unreadable is what the probe could not read, one sentence each. It is
 	// separate from a device's own rejections: this is the machine refusing to
 	// answer, where a rejection is an answer.

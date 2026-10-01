@@ -62,9 +62,12 @@ const (
 
 // operatorOpsGraphs declares the state graph of each action.
 //
-// Every step is abortable, because a discovery run changes nothing it would
+// Every step is abortable, because a discovery run creates nothing it would
 // have to take back: it reads nodes, creates Jobs that carry its own owner
-// reference, and creates one document at the very end. That is what lets the
+// reference, and creates one document at the very end. The one thing it does
+// not undo is on the workers rather than in the cluster: a probe leaves the
+// controllers it reclaimed on the kernel driver, which is the state the next run
+// wants the machine in rather than a change waiting to be reverted. That is what lets the
 // kind go without the DELETE admission guard of design-crd-model.md §3.1 — the
 // guard derives its refusal table from the graph, and this graph refuses
 // nothing.

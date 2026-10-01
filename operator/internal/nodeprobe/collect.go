@@ -37,6 +37,7 @@ func FromInventory(node string, at time.Time, inv inventory.Inventory, unreadabl
 		Interfaces:      interfacesOf(inv.Interfaces),
 		Devices:         devicesOf(inv.Devices),
 		NVMeControllers: controllersOf(inv.NVMeControllers),
+		Reclaimed:       controllersOf(inv.Reclaimed),
 		HostOS:          hostOSOf(inv.HostOS),
 		Unreadable:      sentences(unreadable),
 	}

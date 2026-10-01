@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/discovery"
@@ -106,6 +107,31 @@ type Config struct {
 	// LocalMachine, the uname of the kernel this process runs under, which is
 	// the host's kernel whether or not the process is in a container.
 	Machine MachineReader
+
+	// ReclaimControllers hands every NVMe controller a userspace driver holds,
+	// and nothing is driving, back to the kernel before the block devices are
+	// read.
+	//
+	// It is how a fleet that has run this product before reports its disks at
+	// all. A controller SPDK took presents no block device, so a collection
+	// that only looks finds a machine with no storage on it. Off by default,
+	// because a collection that changes the machine it came to read is
+	// something a caller asks for: the capture tool and anything else
+	// inspecting a host it does not own leaves it alone.
+	//
+	// What a running deployment is driving is never taken. See
+	// [pci.ReclaimIdle].
+	ReclaimControllers bool
+
+	// ReclaimSettle is how long to wait for the kernel to enumerate the disks
+	// behind the controllers it was handed. It is ignored unless
+	// ReclaimControllers is set, and a zero value waits DefaultReclaimSettle.
+	//
+	// A bind returns before the namespaces exist, and reading the disks in that
+	// window finds the absence the reclaim was for. A negative value waits not
+	// at all, which is what a test against a tree with no kernel behind it
+	// wants.
+	ReclaimSettle time.Duration
 
 	// Kubernetes is the cluster half of a collection's sources. The zero value
 	// collects no environment, which is what a caller inspecting a machine
@@ -225,6 +251,15 @@ type Inventory struct {
 	// at all. This is what says the disks are there and something else has
 	// them.
 	NVMeControllers []pci.Device
+
+	// Reclaimed is the controllers this collection handed back to the kernel,
+	// as they were before it did.
+	//
+	// It is empty unless Config.ReclaimControllers was set. It is reported
+	// because the machine keeps the new binding: a collection that changed a
+	// host owes its reader the list, and these are the disks that are in
+	// Devices only because it did.
+	Reclaimed []pci.Device
 
 	// HostOS is the distribution the worker runs and the architecture it runs
 	// on. It is the machine's own answer, read from its os-release and its
@@ -449,12 +484,10 @@ func Collect(ctx context.Context, cfg Config) (Inventory, error) {
 	}
 	inv.Interfaces = ifaces
 
-	devices, err := cfg.inspector().Candidates(ctx)
-	if err != nil {
-		errs = append(errs, fmt.Errorf("read the block devices: %w", err))
-	}
-	inv.Devices = devices
-
+	// The bus is read before the disks, and not only because the reclaim has to
+	// happen first. The controllers are what says a machine reporting no disks
+	// is full of them, and the reclaim is what turns that statement into a disk
+	// the reading can answer questions about.
 	pciCfg := pci.Config{
 		SysfsRoot: cfg.sysfs(),
 		ProcRoot:  cfg.proc(),
@@ -473,7 +506,35 @@ func Collect(ctx context.Context, cfg Config) (Inventory, error) {
 	if err != nil {
 		errs = append(errs, err)
 	}
+
+	if cfg.ReclaimControllers {
+		reclaimed, err := pci.ReclaimIdle(pciCfg, checked)
+		if err != nil {
+			// A controller that could not be handed back is reported and the
+			// rest are still taken: one machine's refusal is not a reason to
+			// read none of the disks the others just presented.
+			errs = append(errs, err)
+		}
+		inv.Reclaimed = reclaimed
+
+		if len(reclaimed) > 0 {
+			waitForReclaimed(cfg.sysfs(), reclaimed, cfg.reclaimSettle())
+			// The scan is stale the moment a controller changes hands, and the
+			// driver it is on now is the fact a reader checks the reclaim by.
+			if rescanned, err := pci.Scan(pciCfg); err == nil {
+				if rechecked, err := pci.CheckHolders(pciCfg, pci.NVMeControllers(rescanned)); err == nil {
+					checked = rechecked
+				}
+			}
+		}
+	}
 	inv.NVMeControllers = checked
+
+	devices, err := cfg.inspector().Candidates(ctx)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("read the block devices: %w", err))
+	}
+	inv.Devices = devices
 
 	if cfg.Kubernetes.Discovery != nil || len(cfg.Kubernetes.Nodes) > 0 {
 		env, err := CollectEnvironment(ctx, cfg.Kubernetes.Discovery, cfg.Kubernetes.Nodes)
