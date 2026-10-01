@@ -142,6 +142,21 @@ func (e ClusterParamsHaType) Valid() bool {
 	}
 }
 
+// Defines values for FDBKeyDescriptorType.
+const (
+	Fdb FDBKeyDescriptorType = "fdb"
+)
+
+// Valid indicates whether the value is a known member of the FDBKeyDescriptorType enum.
+func (e FDBKeyDescriptorType) Valid() bool {
+	switch e {
+	case Fdb:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FailoverResultDTOStatus.
 const (
 	FailoverResultDTOStatusFailed     FailoverResultDTOStatus = "failed"
@@ -157,6 +172,60 @@ func (e FailoverResultDTOStatus) Valid() bool {
 	case FailoverResultDTOStatusFailedOver:
 		return true
 	case FailoverResultDTOStatusSkipped:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HCPKeyDescriptorType.
+const (
+	Hcp HCPKeyDescriptorType = "hcp"
+)
+
+// Valid indicates whether the value is a known member of the HCPKeyDescriptorType enum.
+func (e HCPKeyDescriptorType) Valid() bool {
+	switch e {
+	case Hcp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ManifestVolumeFabric.
+const (
+	Rdma    ManifestVolumeFabric = "rdma"
+	Tcp     ManifestVolumeFabric = "tcp"
+	Tcprdma ManifestVolumeFabric = "tcp,rdma"
+)
+
+// Valid indicates whether the value is a known member of the ManifestVolumeFabric enum.
+func (e ManifestVolumeFabric) Valid() bool {
+	switch e {
+	case Rdma:
+		return true
+	case Tcp:
+		return true
+	case Tcprdma:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ManifestVolumeHaType.
+const (
+	ManifestVolumeHaTypeHa     ManifestVolumeHaType = "ha"
+	ManifestVolumeHaTypeSingle ManifestVolumeHaType = "single"
+)
+
+// Valid indicates whether the value is a known member of the ManifestVolumeHaType enum.
+func (e ManifestVolumeHaType) Valid() bool {
+	switch e {
+	case ManifestVolumeHaTypeHa:
+		return true
+	case ManifestVolumeHaTypeSingle:
 		return true
 	default:
 		return false
@@ -307,6 +376,24 @@ func (e ReplicationTargetDTOStatus) Valid() bool {
 	case ReplicationTargetDTOStatusActive:
 		return true
 	case ReplicationTargetDTOStatusInactive:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecondaryTarget.
+const (
+	SecondaryTargetN0 SecondaryTarget = 0
+	SecondaryTargetN1 SecondaryTarget = 1
+)
+
+// Valid indicates whether the value is a known member of the SecondaryTarget enum.
+func (e SecondaryTarget) Valid() bool {
+	switch e {
+	case SecondaryTargetN0:
+		return true
+	case SecondaryTargetN1:
 		return true
 	default:
 		return false
@@ -486,16 +573,16 @@ func (e CreateParamsHaType) Valid() bool {
 
 // Defines values for CreateParamsPriorityClass.
 const (
-	N0 CreateParamsPriorityClass = 0
-	N1 CreateParamsPriorityClass = 1
+	CreateParamsPriorityClassN0 CreateParamsPriorityClass = 0
+	CreateParamsPriorityClassN1 CreateParamsPriorityClass = 1
 )
 
 // Valid indicates whether the value is a known member of the CreateParamsPriorityClass enum.
 func (e CreateParamsPriorityClass) Valid() bool {
 	switch e {
-	case N0:
+	case CreateParamsPriorityClassN0:
 		return true
-	case N1:
+	case CreateParamsPriorityClassN1:
 		return true
 	default:
 		return false
@@ -736,35 +823,165 @@ type AlertDTOSeverity string
 // AlertDTOStatus defines model for AlertDTO.Status.
 type AlertDTOStatus string
 
-// BackupConfigParams defines model for BackupConfigParams.
-type BackupConfigParams struct {
-	AccessKeyId      *string `json:"access_key_id,omitempty"`
-	BucketName       *string `json:"bucket_name,omitempty"`
-	LocalEndpoint    *string `json:"local_endpoint,omitempty"`
-	LocalTesting     *bool   `json:"local_testing,omitempty"`
-	S3ThreadPoolSize *int    `json:"s3_thread_pool_size,omitempty"`
-	SecondaryTarget  *int    `json:"secondary_target,omitempty"`
-	SecretAccessKey  *string `json:"secret_access_key,omitempty"`
-	SnapshotBackups  *bool   `json:"snapshot_backups,omitempty"`
-	WithCompression  *bool   `json:"with_compression,omitempty"`
+// BackupConfigInput A cluster's backup configuration: a location plus how to authenticate to it.
+type BackupConfigInput struct {
+	BucketName       string         `json:"bucket_name"`
+	Credentials      *S3Credentials `json:"credentials,omitempty"`
+	Endpoint         *string        `json:"endpoint,omitempty"`
+	Region           *string        `json:"region,omitempty"`
+	S3ThreadPoolSize *int           `json:"s3_thread_pool_size,omitempty"`
+
+	// SecondaryTarget The kind of secondary store, numbered as the data plane's RPC expects.
+	SecondaryTarget *SecondaryTarget `json:"secondary_target,omitempty"`
+	SnapshotBackups *bool            `json:"snapshot_backups,omitempty"`
+	UsePathStyle    *bool            `json:"use_path_style,omitempty"`
+	VerifyTls       *bool            `json:"verify_tls,omitempty"`
+	WithCompression *bool            `json:"with_compression,omitempty"`
+}
+
+// BackupConfigOutput A cluster's backup configuration: a location plus how to authenticate to it.
+type BackupConfigOutput struct {
+	BucketName       string         `json:"bucket_name"`
+	Credentials      *S3Credentials `json:"credentials,omitempty"`
+	Endpoint         *string        `json:"endpoint,omitempty"`
+	Region           *string        `json:"region,omitempty"`
+	S3ThreadPoolSize *int           `json:"s3_thread_pool_size,omitempty"`
+	SecondaryTarget  *int           `json:"secondary_target,omitempty"`
+	SnapshotBackups  *bool          `json:"snapshot_backups,omitempty"`
+	UsePathStyle     *bool          `json:"use_path_style,omitempty"`
+	VerifyTls        *bool          `json:"verify_tls,omitempty"`
+	WithCompression  *bool          `json:"with_compression,omitempty"`
 }
 
 // BackupDTO defines model for BackupDTO.
 type BackupDTO struct {
-	AllowedHosts    []map[string]interface{} `json:"allowed_hosts"`
-	CompletedAt     int                      `json:"completed_at"`
-	CreatedAt       int                      `json:"created_at"`
-	Id              openapi_types.UUID       `json:"id"`
-	LvolId          string                   `json:"lvol_id"`
-	LvolName        string                   `json:"lvol_name"`
-	NodeId          string                   `json:"node_id"`
-	PrevBackupId    string                   `json:"prev_backup_id"`
-	S3Id            int                      `json:"s3_id"`
-	Size            int                      `json:"size"`
-	SnapshotId      string                   `json:"snapshot_id"`
-	SnapshotName    string                   `json:"snapshot_name"`
-	SourceClusterId string                   `json:"source_cluster_id"`
-	Status          string                   `json:"status"`
+	CompletedAt  int                 `json:"completed_at"`
+	CreatedAt    int                 `json:"created_at"`
+	Encrypted    bool                `json:"encrypted"`
+	Id           openapi_types.UUID  `json:"id"`
+	LvolId       openapi_types.UUID  `json:"lvol_id"`
+	LvolName     string              `json:"lvol_name"`
+	NodeId       openapi_types.UUID  `json:"node_id"`
+	PrevBackupId *openapi_types.UUID `json:"prev_backup_id,omitempty"`
+	S3Id         int                 `json:"s3_id"`
+	Size         int                 `json:"size"`
+	SnapshotId   openapi_types.UUID  `json:"snapshot_id"`
+	SnapshotName string              `json:"snapshot_name"`
+	Status       string              `json:"status"`
+}
+
+// BackupExportInput Backups carried out of a cluster in a file, grouped by where they live.
+//
+// Grouped rather than one location for the whole document because a cluster
+// can hold backups in several buckets at once -- its own, plus any it has
+// imported -- and stamping all of them with a single bucket leaves the ones it
+// does not describe unrestorable, which is discovered during the recovery they
+// were meant to serve.
+//
+// A group's manifests are all in one bucket by construction: a chain cannot
+// span buckets, so the only way to collect backups from several is to walk
+// more than one chain.
+type BackupExportInput struct {
+	Groups        []LocatedManifestsInput `json:"groups"`
+	SchemaVersion *int                    `json:"schema_version,omitempty"`
+}
+
+// BackupExportOutput Backups carried out of a cluster in a file, grouped by where they live.
+//
+// Grouped rather than one location for the whole document because a cluster
+// can hold backups in several buckets at once -- its own, plus any it has
+// imported -- and stamping all of them with a single bucket leaves the ones it
+// does not describe unrestorable, which is discovered during the recovery they
+// were meant to serve.
+//
+// A group's manifests are all in one bucket by construction: a chain cannot
+// span buckets, so the only way to collect backups from several is to walk
+// more than one chain.
+type BackupExportOutput struct {
+	Groups        []LocatedManifestsOutput `json:"groups"`
+	SchemaVersion *int                     `json:"schema_version,omitempty"`
+}
+
+// BackupLocationInput Where a backup's objects are, and how to interpret them. Never secret.
+//
+// Every field here affects whether the objects can be read back at all, which
+// is why the whole model is embedded in each backup rather than looked up from
+// the cluster that happened to create it.
+type BackupLocationInput struct {
+	BucketName string  `json:"bucket_name"`
+	Endpoint   *string `json:"endpoint,omitempty"`
+	Region     *string `json:"region,omitempty"`
+
+	// SecondaryTarget The kind of secondary store, numbered as the data plane's RPC expects.
+	SecondaryTarget *SecondaryTarget `json:"secondary_target,omitempty"`
+	SnapshotBackups *bool            `json:"snapshot_backups,omitempty"`
+	UsePathStyle    *bool            `json:"use_path_style,omitempty"`
+	VerifyTls       *bool            `json:"verify_tls,omitempty"`
+	WithCompression *bool            `json:"with_compression,omitempty"`
+}
+
+// BackupLocationOutput Where a backup's objects are, and how to interpret them. Never secret.
+//
+// Every field here affects whether the objects can be read back at all, which
+// is why the whole model is embedded in each backup rather than looked up from
+// the cluster that happened to create it.
+type BackupLocationOutput struct {
+	BucketName      string  `json:"bucket_name"`
+	Endpoint        *string `json:"endpoint,omitempty"`
+	Region          *string `json:"region,omitempty"`
+	SecondaryTarget *int    `json:"secondary_target,omitempty"`
+	SnapshotBackups *bool   `json:"snapshot_backups,omitempty"`
+	UsePathStyle    *bool   `json:"use_path_style,omitempty"`
+	VerifyTls       *bool   `json:"verify_tls,omitempty"`
+	WithCompression *bool   `json:"with_compression,omitempty"`
+}
+
+// BackupManifest defines model for BackupManifest.
+type BackupManifest struct {
+	BackupId    openapi_types.UUID `json:"backup_id"`
+	CompletedAt int                `json:"completed_at"`
+	CreatedAt   int                `json:"created_at"`
+
+	// Dataplane How the objects are encoded, so a later format change is detectable.
+	//
+	// Everything here has to be recorded because reading the bucket cannot
+	// recover it -- unlike the bucket's name, region and endpoint, which the
+	// reader necessarily supplied to get this far.
+	Dataplane  ManifestDataPlane `json:"dataplane"`
+	Encryption *struct {
+		union json.RawMessage
+	} `json:"encryption,omitempty"`
+	PrevBackupId  *openapi_types.UUID `json:"prev_backup_id,omitempty"`
+	S3Id          int                 `json:"s3_id"`
+	SchemaVersion *int                `json:"schema_version,omitempty"`
+	Size          int                 `json:"size"`
+
+	// Source Where this backup came from. Provenance for an operator reading a bucket.
+	//
+	// Nothing may resolve configuration or keys through these -- that dependency
+	// on the originating cluster is the whole problem being removed.
+	Source ManifestSource `json:"source"`
+
+	// Volume The shape of the volume this backup was taken from.
+	//
+	// Split in two by what is knowable. The identity and size come off the backup
+	// record and are always present. The settings below them come off the live
+	// volume, so they are absent together once that volume is deleted -- and
+	// absent is not the same answer as ``0``, which for a QoS cap means
+	// "unlimited" and for a priority class is a real class.
+	//
+	// Nothing reads the settings yet; restore still creates its volume with
+	// hardcoded defaults. They are recorded anyway because a manifest is read
+	// years after it is written, and a backup taken today cannot be given a shape
+	// retroactively once its volume is gone.
+	//
+	// The volume's allow-list is deliberately not among them. Who may attach is a
+	// property of the pool a volume lives in, not of the bytes a backup holds, and
+	// a restore lands in whichever pool it is given -- possibly in another cluster,
+	// where the source volume's NQNs mean nothing. So a restored volume takes the
+	// target pool's host configuration, and a stale allow-list from the source
+	// never overrides it.
+	Volume ManifestVolume `json:"volume"`
 }
 
 // BackupPolicyDTO defines model for BackupPolicyDTO.
@@ -849,7 +1066,7 @@ type ClusterLogEntryDTO struct {
 // ClusterParams defines model for ClusterParams.
 type ClusterParams struct {
 	Atomic4k               *bool                    `json:"atomic_4k,omitempty"`
-	BackupConfig           *BackupConfigParams      `json:"backup_config,omitempty"`
+	BackupConfig           *UnresolvedBackupConfig  `json:"backup_config,omitempty"`
 	BlkSize                *ClusterParamsBlkSize    `json:"blk_size,omitempty"`
 	CapCrit                *int                     `json:"cap_crit,omitempty"`
 	CapWarn                *int                     `json:"cap_warn,omitempty"`
@@ -992,6 +1209,15 @@ type DeviceHealthInfoDTO struct {
 	WarningTemperatureTimeMinutes           int                `json:"warning_temperature_time_minutes"`
 }
 
+// FDBKeyDescriptor Keys held in the cluster's own FoundationDB, by “LocalKMS“.
+type FDBKeyDescriptor struct {
+	DekPath string                `json:"dek_path"`
+	Type    *FDBKeyDescriptorType `json:"type,omitempty"`
+}
+
+// FDBKeyDescriptorType defines model for FDBKeyDescriptor.Type.
+type FDBKeyDescriptorType string
+
 // FailbackParams defines model for FailbackParams.
 type FailbackParams struct {
 	SourceClusterId *openapi_types.UUID `json:"source_cluster_id,omitempty"`
@@ -1009,6 +1235,19 @@ type FailoverResultDTO struct {
 // FailoverResultDTOStatus defines model for FailoverResultDTO.Status.
 type FailoverResultDTOStatus string
 
+// HCPKeyDescriptor Keys held in HashiCorp Vault, wrapped under a named transit key.
+type HCPKeyDescriptor struct {
+	DekPath      string                `json:"dek_path"`
+	KekName      string                `json:"kek_name"`
+	KvMount      *string               `json:"kv_mount,omitempty"`
+	TransitMount *string               `json:"transit_mount,omitempty"`
+	Type         *HCPKeyDescriptorType `json:"type,omitempty"`
+	VaultBaseUrl *string               `json:"vault_base_url,omitempty"`
+}
+
+// HCPKeyDescriptorType defines model for HCPKeyDescriptor.Type.
+type HCPKeyDescriptorType string
+
 // HTTPValidationError defines model for HTTPValidationError.
 type HTTPValidationError struct {
 	Detail *[]ValidationError `json:"detail,omitempty"`
@@ -1022,6 +1261,28 @@ type HashicorpVaultSettings struct {
 	TransitMount *string `json:"transit_mount,omitempty"`
 }
 
+// LocatedManifestsInput Manifests that were read from one location, and that location.
+type LocatedManifestsInput struct {
+	// Location Where a backup's objects are, and how to interpret them. Never secret.
+	//
+	// Every field here affects whether the objects can be read back at all, which
+	// is why the whole model is embedded in each backup rather than looked up from
+	// the cluster that happened to create it.
+	Location  BackupLocationInput `json:"location"`
+	Manifests []BackupManifest    `json:"manifests"`
+}
+
+// LocatedManifestsOutput Manifests that were read from one location, and that location.
+type LocatedManifestsOutput struct {
+	// Location Where a backup's objects are, and how to interpret them. Never secret.
+	//
+	// Every field here affects whether the objects can be read back at all, which
+	// is why the whole model is embedded in each backup rather than looked up from
+	// the cluster that happened to create it.
+	Location  BackupLocationOutput `json:"location"`
+	Manifests []BackupManifest     `json:"manifests"`
+}
+
 // ManagementNodeDTO defines model for ManagementNodeDTO.
 type ManagementNodeDTO struct {
 	Hostname string             `json:"hostname"`
@@ -1029,6 +1290,69 @@ type ManagementNodeDTO struct {
 	Ip       string             `json:"ip"`
 	Status   string             `json:"status"`
 }
+
+// ManifestDataPlane How the objects are encoded, so a later format change is detectable.
+//
+// Everything here has to be recorded because reading the bucket cannot
+// recover it -- unlike the bucket's name, region and endpoint, which the
+// reader necessarily supplied to get this far.
+type ManifestDataPlane struct {
+	ClusterSize     *int    `json:"cluster_size,omitempty"`
+	KeyFormat       *string `json:"key_format,omitempty"`
+	WithCompression *bool   `json:"with_compression,omitempty"`
+}
+
+// ManifestSource Where this backup came from. Provenance for an operator reading a bucket.
+//
+// Nothing may resolve configuration or keys through these -- that dependency
+// on the originating cluster is the whole problem being removed.
+type ManifestSource struct {
+	ClusterId   openapi_types.UUID `json:"cluster_id"`
+	ClusterName *string            `json:"cluster_name,omitempty"`
+	NodeId      openapi_types.UUID `json:"node_id"`
+}
+
+// ManifestVolume The shape of the volume this backup was taken from.
+//
+// Split in two by what is knowable. The identity and size come off the backup
+// record and are always present. The settings below them come off the live
+// volume, so they are absent together once that volume is deleted -- and
+// absent is not the same answer as “0“, which for a QoS cap means
+// "unlimited" and for a priority class is a real class.
+//
+// Nothing reads the settings yet; restore still creates its volume with
+// hardcoded defaults. They are recorded anyway because a manifest is read
+// years after it is written, and a backup taken today cannot be given a shape
+// retroactively once its volume is gone.
+//
+// The volume's allow-list is deliberately not among them. Who may attach is a
+// property of the pool a volume lives in, not of the bytes a backup holds, and
+// a restore lands in whichever pool it is given -- possibly in another cluster,
+// where the source volume's NQNs mean nothing. So a restored volume takes the
+// target pool's host configuration, and a stale allow-list from the source
+// never overrides it.
+type ManifestVolume struct {
+	Fabric            *ManifestVolumeFabric `json:"fabric,omitempty"`
+	HaType            *ManifestVolumeHaType `json:"ha_type,omitempty"`
+	LvolId            openapi_types.UUID    `json:"lvol_id"`
+	LvolName          string                `json:"lvol_name"`
+	LvolPriorityClass *int                  `json:"lvol_priority_class,omitempty"`
+	MaxSize           *int                  `json:"max_size,omitempty"`
+	PoolName          *string               `json:"pool_name,omitempty"`
+	RMbytesPerSec     *int                  `json:"r_mbytes_per_sec,omitempty"`
+	RwIosPerSec       *int                  `json:"rw_ios_per_sec,omitempty"`
+	RwMbytesPerSec    *int                  `json:"rw_mbytes_per_sec,omitempty"`
+	Size              int                   `json:"size"`
+	SnapshotId        openapi_types.UUID    `json:"snapshot_id"`
+	SnapshotName      string                `json:"snapshot_name"`
+	WMbytesPerSec     *int                  `json:"w_mbytes_per_sec,omitempty"`
+}
+
+// ManifestVolumeFabric defines model for ManifestVolume.Fabric.
+type ManifestVolumeFabric string
+
+// ManifestVolumeHaType defines model for ManifestVolume.HaType.
+type ManifestVolumeHaType string
 
 // MigrationDTO defines model for MigrationDTO.
 type MigrationDTO struct {
@@ -1170,6 +1494,18 @@ type RootModelUnionCreateParamsCloneParams struct {
 	union json.RawMessage
 }
 
+// S3Credentials A static key pair.
+//
+// A pair rather than two independent fields, so "access key set, secret
+// missing" is unrepresentable instead of something a validator has to catch.
+type S3Credentials struct {
+	AccessKeyId     *string `json:"access_key_id,omitempty"`
+	SecretAccessKey *string `json:"secret_access_key,omitempty"`
+}
+
+// SecondaryTarget The kind of secondary store, numbered as the data plane's RPC expects.
+type SecondaryTarget int
+
 // SnapshotDTO defines model for SnapshotDTO.
 type SnapshotDTO struct {
 	CreatedAt   time.Time          `json:"created_at"`
@@ -1310,6 +1646,33 @@ type TaskDTOFunctionName string
 // TaskDTOStatus defines model for TaskDTO.Status.
 type TaskDTOStatus string
 
+// UnresolvedBackupConfig A backup configuration as a caller can state it, before a cluster resolves it.
+//
+// Identical to :class:`BackupConfig` except that “bucket_name“ may be absent,
+// because the default is derived from a cluster id that does not exist yet at
+// cluster-create time (“Cluster.default_backup_bucket_name“). Hand one to
+// “Cluster.set_backup_config“, which resolves it; nothing further down ever
+// sees a configuration without a bucket.
+//
+// Which is also why an instance must be turned back into a plain dict at the
+// boundary it arrived on rather than passed along as a “BackupConfig“: the
+// inherited :meth:`location` cannot produce a location for a bucket nobody has
+// named yet.
+type UnresolvedBackupConfig struct {
+	BucketName       *string        `json:"bucket_name,omitempty"`
+	Credentials      *S3Credentials `json:"credentials,omitempty"`
+	Endpoint         *string        `json:"endpoint,omitempty"`
+	Region           *string        `json:"region,omitempty"`
+	S3ThreadPoolSize *int           `json:"s3_thread_pool_size,omitempty"`
+
+	// SecondaryTarget The kind of secondary store, numbered as the data plane's RPC expects.
+	SecondaryTarget *SecondaryTarget `json:"secondary_target,omitempty"`
+	SnapshotBackups *bool            `json:"snapshot_backups,omitempty"`
+	UsePathStyle    *bool            `json:"use_path_style,omitempty"`
+	VerifyTls       *bool            `json:"verify_tls,omitempty"`
+	WithCompression *bool            `json:"with_compression,omitempty"`
+}
+
 // UpdatableClusterParameters defines model for UpdatableClusterParameters.
 type UpdatableClusterParameters struct {
 	Name *string `json:"name,omitempty"`
@@ -1419,11 +1782,6 @@ type UnderscoreBackupSnapshotParams struct {
 	SnapshotId string `json:"snapshot_id"`
 }
 
-// UnderscoreBackupSourceSwitchParams defines model for _BackupSourceSwitchParams.
-type UnderscoreBackupSourceSwitchParams struct {
-	SourceClusterId string `json:"source_cluster_id"`
-}
-
 // UnderscoreCloneParams defines model for _CloneParams.
 type UnderscoreCloneParams struct {
 	ConsistencyGroup       *string `json:"consistency_group,omitempty"`
@@ -1472,9 +1830,33 @@ type CreateParamsHaType string
 // CreateParamsPriorityClass defines model for CreateParams.PriorityClass.
 type CreateParamsPriorityClass int
 
-// UnderscoreImportParams defines model for _ImportParams.
-type UnderscoreImportParams struct {
-	Metadata []map[string]interface{} `json:"metadata"`
+// UnderscoreImportFromBucket Import whatever a bucket turns out to contain.
+//
+// The disaster-recovery path: it needs a bucket and credentials for it, and
+// nothing from the cluster that wrote the backups.
+type UnderscoreImportFromBucket struct {
+	// Bucket A cluster's backup configuration: a location plus how to authenticate to it.
+	Bucket BackupConfigInput `json:"bucket"`
+}
+
+// UnderscoreImportManifests An export carried in the request itself, e.g. read from a file.
+//
+// Nothing beside it names a bucket: an export groups its manifests by the
+// location each was read from, so the caller states nothing the document has
+// not already recorded, and backups from several buckets import in one go.
+type UnderscoreImportManifests struct {
+	// Metadata Backups carried out of a cluster in a file, grouped by where they live.
+	//
+	// Grouped rather than one location for the whole document because a cluster
+	// can hold backups in several buckets at once -- its own, plus any it has
+	// imported -- and stamping all of them with a single bucket leaves the ones it
+	// does not describe unrestorable, which is discovered during the recovery they
+	// were meant to serve.
+	//
+	// A group's manifests are all in one bucket by construction: a chain cannot
+	// span buckets, so the only way to collect backups from several is to walk
+	// more than one chain.
+	Metadata BackupExportInput `json:"metadata"`
 }
 
 // UnderscoreMigrationParams defines model for _MigrationParams.
@@ -1509,10 +1891,11 @@ type UnderscoreRestartParams struct {
 
 // UnderscoreRestoreParams defines model for _RestoreParams.
 type UnderscoreRestoreParams struct {
-	BackupId     string  `json:"backup_id"`
-	LvolName     string  `json:"lvol_name"`
-	Pool         string  `json:"pool"`
-	TargetNodeId *string `json:"target_node_id,omitempty"`
+	BackupId      string         `json:"backup_id"`
+	LvolName      string         `json:"lvol_name"`
+	Pool          string         `json:"pool"`
+	S3Credentials *S3Credentials `json:"s3_credentials,omitempty"`
+	TargetNodeId  *string        `json:"target_node_id,omitempty"`
 }
 
 // UnderscoreSnapshotParams defines model for _SnapshotParams.
@@ -1581,11 +1964,16 @@ type ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormat 
 
 // ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetParams defines parameters for ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet.
 type ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetParams struct {
-	// BackupId Export only the chain containing this backup UUID
+	// BackupId Export only the chain ending at this backup UUID
 	BackupId *string `form:"backup_id,omitempty" json:"backup_id,omitempty"`
 
 	// LvolName Export all completed backups for this lvol name
 	LvolName *string `form:"lvol_name,omitempty" json:"lvol_name,omitempty"`
+}
+
+// ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody defines parameters for ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPost.
+type ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody struct {
+	union json.RawMessage
 }
 
 // ClustersCapacityApiV2ClustersClusterIdCapacityGetParams defines parameters for ClustersCapacityApiV2ClustersClusterIdCapacityGet.
@@ -1858,14 +2246,14 @@ type ClustersBackupPoliciesAttachApiV2ClustersClusterIdBackupsBackupPoliciesPoli
 // ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPostJSONRequestBody defines body for ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPost for application/json ContentType.
 type ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPostJSONRequestBody = UnderscoreAttachParams
 
+// ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostJSONRequestBody defines body for ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost for application/json ContentType.
+type ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostJSONRequestBody = BackupConfigInput
+
 // ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONRequestBody defines body for ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPost for application/json ContentType.
-type ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONRequestBody = UnderscoreImportParams
+type ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONRequestBody ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody
 
 // ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePostJSONRequestBody defines body for ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePost for application/json ContentType.
 type ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePostJSONRequestBody = UnderscoreRestoreParams
-
-// ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostJSONRequestBody defines body for ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost for application/json ContentType.
-type ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostJSONRequestBody = UnderscoreBackupSourceSwitchParams
 
 // ClustersConsistencyGroupsMembersJoinApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPostJSONRequestBody defines body for ClustersConsistencyGroupsMembersJoinApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPost for application/json ContentType.
 type ClustersConsistencyGroupsMembersJoinApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPostJSONRequestBody = ConsistencyGroupMemberJoinDTO
@@ -2054,6 +2442,68 @@ func (t *ValidationError_Loc_Item) UnmarshalJSON(b []byte) error {
 	return err
 }
 
+// AsUnderscoreImportManifests returns the union data inside the ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody as a UnderscoreImportManifests
+func (t ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) AsUnderscoreImportManifests() (UnderscoreImportManifests, error) {
+	var body UnderscoreImportManifests
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromUnderscoreImportManifests overwrites any union data inside the ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody as the provided UnderscoreImportManifests
+func (t *ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) FromUnderscoreImportManifests(v UnderscoreImportManifests) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeUnderscoreImportManifests performs a merge with any union data inside the ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody, using the provided UnderscoreImportManifests
+func (t *ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) MergeUnderscoreImportManifests(v UnderscoreImportManifests) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsUnderscoreImportFromBucket returns the union data inside the ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody as a UnderscoreImportFromBucket
+func (t ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) AsUnderscoreImportFromBucket() (UnderscoreImportFromBucket, error) {
+	var body UnderscoreImportFromBucket
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromUnderscoreImportFromBucket overwrites any union data inside the ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody as the provided UnderscoreImportFromBucket
+func (t *ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) FromUnderscoreImportFromBucket(v UnderscoreImportFromBucket) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeUnderscoreImportFromBucket performs a merge with any union data inside the ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody, using the provided UnderscoreImportFromBucket
+func (t *ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) MergeUnderscoreImportFromBucket(v UnderscoreImportFromBucket) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
 // AsMigrationDTO returns the union data inside the ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet200JSONResponseBody_Item as a MigrationDTO
 func (t ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet200JSONResponseBody_Item) AsMigrationDTO() (MigrationDTO, error) {
 	var body MigrationDTO
@@ -2210,6 +2660,9 @@ type ServerInterface interface {
 	// ClustersAlertsListApiV2ClustersClusterIdAlertsGet Clusters:Alerts:List
 	// (GET /api/v2/clusters/{cluster_id}/alerts/)
 	ClustersAlertsListApiV2ClustersClusterIdAlertsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams)
+	// ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet Clusters:Backup-Config:Get
+	// (GET /api/v2/clusters/{cluster_id}/backup-config)
+	ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
 	// ClustersBackupsListApiV2ClustersClusterIdBackupsGet Clusters:Backups:List
 	// (GET /api/v2/clusters/{cluster_id}/backups/)
 	ClustersBackupsListApiV2ClustersClusterIdBackupsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
@@ -2231,6 +2684,9 @@ type ServerInterface interface {
 	// ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPost Clusters:Backup-Policies:Detach
 	// (POST /api/v2/clusters/{cluster_id}/backups/backup-policies/{policy_id}/detach)
 	ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, policyId openapi_types.UUID)
+	// ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost Clusters:Backups:Discover
+	// (POST /api/v2/clusters/{cluster_id}/backups/discover)
+	ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
 	// ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet Clusters:Backups:Export
 	// (GET /api/v2/clusters/{cluster_id}/backups/export)
 	ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetParams)
@@ -2240,12 +2696,6 @@ type ServerInterface interface {
 	// ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePost Clusters:Backups:Restore
 	// (POST /api/v2/clusters/{cluster_id}/backups/restore)
 	ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
-	// ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost Clusters:Backups:Source-Switch
-	// (POST /api/v2/clusters/{cluster_id}/backups/source-switch)
-	ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
-	// ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet Clusters:Backups:Sources
-	// (GET /api/v2/clusters/{cluster_id}/backups/sources)
-	ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
 	// ClustersBackupsDetailApiV2ClustersClusterIdBackupsBackupIdGet Clusters:Backups:Detail
 	// (GET /api/v2/clusters/{cluster_id}/backups/{backup_id}/)
 	ClustersBackupsDetailApiV2ClustersClusterIdBackupsBackupIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, backupId openapi_types.UUID)
@@ -2359,6 +2809,9 @@ type ServerInterface interface {
 	// ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet Clusters:Storage Nodes:Devices:Capacity
 	// (GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/capacity)
 	ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGetParams)
+	// ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost Clusters:Storage Nodes:Devices:Fail
+	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/fail)
+	ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID)
 	// ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet Clusters:Storage Nodes:Devices:Get-Device-Health-Info
 	// (GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-info)
 	ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID)
@@ -2906,6 +3359,32 @@ func (siw *ServerInterfaceWrapper) ClustersAlertsListApiV2ClustersClusterIdAlert
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersBackupsListApiV2ClustersClusterIdBackupsGet operation middleware
 func (siw *ServerInterfaceWrapper) ClustersBackupsListApiV2ClustersClusterIdBackupsGet(w http.ResponseWriter, r *http.Request) {
 
@@ -3131,6 +3610,32 @@ func (siw *ServerInterfaceWrapper) ClustersBackupPoliciesDetachApiV2ClustersClus
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet operation middleware
 func (siw *ServerInterfaceWrapper) ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet(w http.ResponseWriter, r *http.Request) {
 
@@ -3229,58 +3734,6 @@ func (siw *ServerInterfaceWrapper) ClustersBackupsRestoreApiV2ClustersClusterIdB
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePost(w, r, clusterId)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost operation middleware
-func (siw *ServerInterfaceWrapper) ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-	_ = err
-
-	// ------------- Path parameter "cluster_id" -------------
-	var clusterId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost(w, r, clusterId)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet operation middleware
-func (siw *ServerInterfaceWrapper) ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-	_ = err
-
-	// ------------- Path parameter "cluster_id" -------------
-	var clusterId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet(w, r, clusterId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -4758,6 +5211,50 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesCapacityApiV2Clust
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet(w, r, clusterId, storageNodeId, deviceId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "storage_node_id" -------------
+	var storageNodeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "storage_node_id", r.PathValue("storage_node_id"), &storageNodeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "storage_node_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "device_id" -------------
+	var deviceId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "device_id", r.PathValue("device_id"), &deviceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "device_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost(w, r, clusterId, storageNodeId, deviceId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -7820,6 +8317,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/activate", wrapper.ClustersActivateApiV2ClustersClusterIdActivatePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/addreplication", wrapper.ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/alerts/{$}", wrapper.ClustersAlertsListApiV2ClustersClusterIdAlertsGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backup-config", wrapper.ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/{$}", wrapper.ClustersBackupsListApiV2ClustersClusterIdBackupsGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/{$}", wrapper.ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/{backup_id}/{$}", wrapper.ClustersBackupsDetailApiV2ClustersClusterIdBackupsBackupIdGet)
@@ -7829,11 +8327,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/backup-policies/{policy_id}", wrapper.ClustersBackupPoliciesDeleteApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDelete)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/backup-policies/{policy_id}/attach", wrapper.ClustersBackupPoliciesAttachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdAttachPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/backup-policies/{policy_id}/detach", wrapper.ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/discover", wrapper.ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/export", wrapper.ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/import", wrapper.ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/restore", wrapper.ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePost)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/source-switch", wrapper.ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost)
-	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/sources", wrapper.ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/capacity", wrapper.ClustersCapacityApiV2ClustersClusterIdCapacityGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{$}", wrapper.ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/{$}", wrapper.ClustersConsistencyGroupsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdGet)
@@ -7869,6 +8366,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{$}", wrapper.ClustersStorageNodesDevicesListApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/{$}", wrapper.ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/capacity", wrapper.ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/fail", wrapper.ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-info", wrapper.ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/iostats", wrapper.ClustersStorageNodesDevicesIostatsApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdIostatsGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/remove", wrapper.ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePost)

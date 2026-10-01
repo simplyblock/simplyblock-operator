@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/internal/cpapi"
 	"github.com/simplyblock/atlas/ptr"
@@ -41,41 +43,58 @@ const AttachTargetVolume = "lvol"
 // volume rather than a backup because the control plane holds a volume's copies
 // as one incremental chain, is deprecated upstream as well.
 //
+// The cluster that wrote the copy is not among the fields, because the wire no
+// longer carries it. A store several clusters have configured reports every
+// backup in it to all of them, so the reporting cluster is the scope of the call
+// rather than a property of the backup, and a caller that needs the writer reads
+// the exported manifest instead.
+//
 // Times are absolute instants rather than the Unix seconds the wire carries, and
 // a zero Time means the control plane reported none: a backup that has not
 // completed has no completion instant, and 1970 is not the honest way to say so.
 type Backup struct {
-	ID              string
-	SourceClusterID string
-	S3ID            int64
-	LvolID          string
-	LvolName        string
-	SnapshotID      string
-	SnapshotName    string
-	NodeID          string
-	Status          string
-	PrevBackupID    string
-	SizeBytes       int64
-	CreatedAt       time.Time
-	CompletedAt     time.Time
+	ID           string
+	S3ID         int64
+	LvolID       string
+	LvolName     string
+	SnapshotID   string
+	SnapshotName string
+	NodeID       string
+	Status       string
+	PrevBackupID string
+	Encrypted    bool
+	SizeBytes    int64
+	CreatedAt    time.Time
+	CompletedAt  time.Time
 }
 
 func backupFromDTO(d cpapi.BackupDTO) Backup {
 	return Backup{
-		ID:              d.Id.String(),
-		SourceClusterID: d.SourceClusterId,
-		S3ID:            int64(d.S3Id),
-		LvolID:          d.LvolId,
-		LvolName:        d.LvolName,
-		SnapshotID:      d.SnapshotId,
-		SnapshotName:    d.SnapshotName,
-		NodeID:          d.NodeId,
-		Status:          d.Status,
-		PrevBackupID:    d.PrevBackupId,
-		SizeBytes:       int64(d.Size),
-		CreatedAt:       unixSeconds(d.CreatedAt),
-		CompletedAt:     unixSeconds(d.CompletedAt),
+		ID:           d.Id.String(),
+		S3ID:         int64(d.S3Id),
+		LvolID:       d.LvolId.String(),
+		LvolName:     d.LvolName,
+		SnapshotID:   d.SnapshotId.String(),
+		SnapshotName: d.SnapshotName,
+		NodeID:       d.NodeId.String(),
+		Status:       d.Status,
+		PrevBackupID: uuidOrEmpty(d.PrevBackupId),
+		Encrypted:    d.Encrypted,
+		SizeBytes:    int64(d.Size),
+		CreatedAt:    unixSeconds(d.CreatedAt),
+		CompletedAt:  unixSeconds(d.CompletedAt),
 	}
+}
+
+// uuidOrEmpty renders an optional identifier, reading an absent one as the empty
+// string. The nil UUID is not the honest way to say that a field was not sent:
+// the first backup of a chain has no predecessor, and
+// "00000000-0000-0000-0000-000000000000" reads as one.
+func uuidOrEmpty(id *uuid.UUID) string {
+	if id == nil {
+		return ""
+	}
+	return id.String()
 }
 
 // unixSeconds converts a control-plane timestamp into an instant, reading a
