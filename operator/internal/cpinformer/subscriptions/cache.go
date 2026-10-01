@@ -14,6 +14,7 @@ package subscriptions
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
@@ -98,6 +99,11 @@ func (c *Cache[DTO]) Ingest(ev cpinformer.Event, onChange Changed) error {
 			return fmt.Errorf("decode deleted: %w", err)
 		}
 		id := c.idOf(dto)
+		if id == "" {
+			// A record that is physically gone is reported with an empty body
+			// and its id in the stream's id field, possibly cluster-prefixed.
+			id = ev.ID[strings.LastIndex(ev.ID, "/")+1:]
+		}
 		if id == "" {
 			return nil
 		}
