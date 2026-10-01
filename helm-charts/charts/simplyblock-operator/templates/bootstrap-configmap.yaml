@@ -8,11 +8,11 @@
 # would delete a finalizer-holding object while deleting the controller that
 # releases it.
 #
-# It renders for both profiles, and the profile decides what is in it rather than
+# It renders for every profile, and the profile decides what is in it rather than
 # whether it exists. An absent ConfigMap already means something: an
 # installation predating this file, which keeps the behavior it was installed
-# with. So a managed installation has to say that it raises no run rather than
-# saying nothing.
+# with. So a managed or empty installation has to say that it raises no run
+# rather than saying nothing.
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -29,8 +29,9 @@ data:
   bootstrap.yaml: |
     {{- toYaml .Values.discovery | nindent 4 }}
 {{- else }}
-  # The cluster that manages this one raises the discovery run, in the namespace
-  # it chooses for the installation. This operator raises none of its own.
+  # Under managed, the cluster that manages this one raises the discovery run, in
+  # the namespace it chooses for the installation. Under empty, the administrator
+  # writes the cluster. This operator raises no run of its own in either.
   bootstrap.yaml: |
     enabled: false
 {{- end }}

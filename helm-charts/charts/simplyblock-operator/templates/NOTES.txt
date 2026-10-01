@@ -1,7 +1,9 @@
 The simplyblock operator is being deployed to your cluster.
 
 The following components are being installed or updated:
+{{- if eq (include "simplyblock.rendersCSIDriver" .) "true" }}
 - simplyblock CSI Driver
+{{- end }}
 - simplyblock Operator and its CRDs
 {{- if eq .Values.deployment.profile "standalone" }}
 - simplyblock Control Plane, installed by the operator
@@ -21,6 +23,18 @@ Wait for it to become Available:
 
   kubectl --namespace={{ .Release.Namespace }} wait controlplane simplyblock \
     --for=jsonpath='{.status.phase}'=Available --timeout=600s
+{{- else if eq .Values.deployment.profile "empty" }}
+This deployment installs the operator alone. Nothing is running for it to act
+on until you write the objects it reconciles, in this order:
+
+  1. A ControlPlane named simplyblock, with spec.source.local to host the control
+     plane here or spec.source.managed to point at one elsewhere.
+  2. A SimplyblockDriver, which is what the operator builds the CSI driver from.
+     Volumes cannot be provisioned until it exists.
+
+Check that the operator is running:
+
+  kubectl --namespace={{ .Release.Namespace }} rollout status deployment/simplyblock-operator
 {{- else }}
 This deployment is managed by a control plane at
 {{ .Values.controlplane.managed.endpoint }}. Nothing is installed here for it:

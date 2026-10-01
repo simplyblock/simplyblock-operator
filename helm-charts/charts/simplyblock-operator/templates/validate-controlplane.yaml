@@ -12,8 +12,8 @@ only come up in plaintext is expressible and the refusal is gone.
 */}}
 
 
-{{- if not (has .Values.deployment.profile (list "standalone" "managed")) -}}
-{{- fail (printf "deployment.profile is %q: it is one of standalone (this cluster hosts its own control plane) or managed (a control plane elsewhere manages this cluster's storage)." .Values.deployment.profile) -}}
+{{- if not (has .Values.deployment.profile (list "standalone" "managed" "empty")) -}}
+{{- fail (printf "deployment.profile is %q: it is one of standalone (this cluster hosts its own control plane), managed (a control plane elsewhere manages this cluster's storage), or empty (the operator alone, with the ControlPlane and the SimplyblockDriver written afterward)." .Values.deployment.profile) -}}
 {{- end -}}
 
 {{/*

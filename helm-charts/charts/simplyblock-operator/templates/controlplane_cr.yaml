@@ -10,7 +10,9 @@
 # This object is the whole of what the chart renders for the control plane. Which
 # member of spec.source it names is what deployment.profile selects, and the
 # operator does the rest: it installs the control plane for the standalone
-# profile, and resolves and probes a remote one for the managed profile.
+# profile, and resolves and probes a remote one for the managed profile. The empty
+# profile renders none: its administrator writes the ControlPlane.
+{{- if has .Values.deployment.profile (list "standalone" "managed") }}
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ControlPlane
 metadata:
@@ -97,4 +99,4 @@ spec:
         name: {{ .Values.controlplane.managed.caBundleSecretRef | quote }}
       {{- end }}
 {{- end }}
-
+{{- end }}
