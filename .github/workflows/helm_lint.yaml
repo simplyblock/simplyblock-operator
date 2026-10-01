@@ -43,6 +43,9 @@ jobs:
       - name: Required objects
         run: helm-charts/scripts/check-rendered-objects.sh
 
+      - name: KMS setup script
+        run: helm-charts/scripts/test-setup-kms.sh
+
       - name: Value references
         run: |
           make -C operator yq
