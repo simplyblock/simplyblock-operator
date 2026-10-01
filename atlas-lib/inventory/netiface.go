@@ -136,6 +136,16 @@ type Interface struct {
 	// even where it holds one.
 	Bridge bool
 
+	// VLAN is the tag a VLAN interface carries, and nil for any other kind or
+	// where the tag could not be read. Like the addresses it does not come from
+	// sysfs, which publishes no tag: it is read through Config.InterfaceLinks.
+	VLAN *VLANTag
+
+	// VXLAN is the network identifier a VXLAN interface carries, and nil for
+	// any other kind or where it could not be read. It comes through
+	// Config.InterfaceLinks for the same reason VLAN does.
+	VXLAN *VXLANOverlay
+
 	// Addresses are the IP addresses assigned to the interface, as plain
 	// addresses without a prefix length, in the order the host reports them.
 	//
@@ -209,10 +219,21 @@ func ReadInterfaces(cfg Config) ([]Interface, error) {
 		}
 	}
 
+	// The tags and network identifiers come from one netlink dump for the same
+	// reason, and a failed dump costs them and nothing else.
+	identities := map[string]LinkIdentity{}
+	if reader := cfg.links(); reader != nil {
+		if read, err := reader(); err == nil {
+			identities = read
+		}
+	}
+
 	ifaces := make([]Interface, 0, len(entries))
 	for _, entry := range entries {
 		iface := readInterface(filepath.Join(base, entry.Name()), entry.Name())
 		iface.Addresses = addresses[entry.Name()]
+		identity := identities[entry.Name()]
+		iface.VLAN, iface.VXLAN = identity.VLAN, identity.VXLAN
 		ifaces = append(ifaces, iface)
 	}
 

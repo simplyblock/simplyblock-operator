@@ -146,6 +146,10 @@ func capturedHost(path, name, address string, memory statedMemory) nodeprobe.Rep
 		InterfaceAddresses: func() (map[string][]string, error) {
 			return map[string][]string{"eth0": {address}}, nil
 		},
+		// The tags and network identifiers are netlink's too, and these hosts
+		// have no VLAN or VXLAN, so the answer is stated as none rather than
+		// read from whatever machine regenerates the fixtures.
+		InterfaceLinks: func() (map[string]inventory.LinkIdentity, error) { return nil, nil },
 	})
 	// The paths a device is at on the machine, rather than inside the temporary
 	// tree this transcript was replayed in: both are built from DevRoot, and a
