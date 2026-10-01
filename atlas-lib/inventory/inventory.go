@@ -103,6 +103,11 @@ type Config struct {
 	// the host's for a caller running with host networking.
 	InterfaceAddresses AddressReader
 
+	// InterfaceLinks answers which VLAN tag or VXLAN network identifier each
+	// interface carries. A nil reader is LocalLinks, which asks netlink in this
+	// process's own network namespace and has the same caveat as the addresses.
+	InterfaceLinks LinkReader
+
 	// Machine answers what hardware the kernel is running on. A nil reader is
 	// LocalMachine, the uname of the kernel this process runs under, which is
 	// the host's kernel whether or not the process is in a container.
@@ -145,6 +150,14 @@ func (c Config) addresses() AddressReader {
 		return c.InterfaceAddresses
 	}
 	return LocalAddresses
+}
+
+// links is the link-identity reader to use, defaulted.
+func (c Config) links() LinkReader {
+	if c.InterfaceLinks != nil {
+		return c.InterfaceLinks
+	}
+	return LocalLinks
 }
 
 // KubernetesSources is what the environment is concluded from.
