@@ -66,8 +66,14 @@ deployment:
   #
   # empty installs the operator, its CRDs, and its webhooks, and nothing for it to
   # act on: no ControlPlane, no SimplyblockDriver, and no discovery run. The
-  # administrator writes the ControlPlane and the SimplyblockDriver afterward, and
-  # the `driver` and `discovery` sections below are not read.
+  # administrator writes the ControlPlane and the SimplyblockDriver afterward. The
+  # `driver` section below is not read, and of `discovery` only `namespace` is:
+  # the node-probe ServiceAccount and Role go there, and a discovery run raised
+  # later by hand needs them in its namespace.
+  #
+  # A release cannot switch to empty while a ControlPlane or SimplyblockDriver it
+  # created still exists, because Helm keeps both on the upgrade and the operator
+  # goes on running them. validate-controlplane.yaml says how to take them over.
   #
   # Observability under controlplane is rendered for standalone only: it stores
   # what it collects in the object store a hosted control plane brings.

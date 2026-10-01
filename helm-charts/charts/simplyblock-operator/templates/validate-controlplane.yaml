@@ -26,6 +26,30 @@ field of a CRD the reader has not seen.
 {{- end -}}
 
 {{/*
+An upgrade to the empty profile from one that rendered the ControlPlane or the
+SimplyblockDriver would leave both running.
+
+Both carry helm.sh/resource-policy: keep, so Helm does not delete them when the
+new manifest drops them, and the operator goes on reconciling a control plane and
+a CSI driver that the release, and its notes, say are not there. Deleting them
+is not the answer either: one is the FoundationDB behind every volume, and the
+other is what detaches them. So the switch is refused until the administrator
+takes the objects over, which is what the empty profile means for them anyway.
+
+Only objects this release created count. One the administrator wrote carries no
+release annotation and is exactly what the profile expects to find.
+*/}}
+{{- if eq .Values.deployment.profile "empty" -}}
+{{-   range $kind := list "ControlPlane" "SimplyblockDriver" -}}
+{{-     $live := lookup "storage.simplyblock.io/v1alpha2" $kind $.Release.Namespace "simplyblock" -}}
+{{-     if and $live (eq (index ($live.metadata.annotations | default dict) "meta.helm.sh/release-name" | default "") $.Release.Name) -}}
+{{-       $resource := lower $kind -}}
+{{-       fail (printf "deployment.profile=empty, and this release created the %s simplyblock, which is still there. Helm keeps it on this upgrade and the operator goes on reconciling it. To keep it running as your own object, remove the release's claim on it first:\n\n  kubectl -n %s annotate %s simplyblock meta.helm.sh/release-name- meta.helm.sh/release-namespace-\n  kubectl -n %s label %s simplyblock app.kubernetes.io/managed-by-\n\nthen upgrade. To remove it instead, delete it while the operator is running, so its finalizer is honored." $kind $.Release.Namespace $resource $.Release.Namespace $resource) -}}
+{{-     end -}}
+{{-   end -}}
+{{- end -}}
+
+{{/*
 An in-place upgrade from a release that installed the control plane itself would
 prune it.
 
