@@ -91,7 +91,10 @@ var storageNodeOpsActionFromHub = invertStringMap(storageNodeOpsActionToHub)
 var subPhaseToStep = map[v1alpha2.StorageNodeOpsAction]map[string]string{
 	v1alpha2.StorageNodeOpsActionRemove: {
 		string(StorageNodeOpsSubPhaseValidating): string(v1alpha2.StorageNodeOpsStepValidating),
-		string(StorageNodeOpsSubPhaseSuspending): string(v1alpha2.StorageNodeOpsStepSuspending),
+		// This version suspended the node here. The hub's step in the same
+		// place is the trigger, which a removal that has moved nothing yet is
+		// the right one to run next.
+		string(StorageNodeOpsSubPhaseSuspending): string(v1alpha2.StorageNodeOpsStepPreparingRemoval),
 		string(StorageNodeOpsSubPhaseMigrating):  string(v1alpha2.StorageNodeOpsStepMigratingVolumes),
 		string(StorageNodeOpsSubPhaseVerifying):  string(v1alpha2.StorageNodeOpsStepVerifying),
 		string(StorageNodeOpsSubPhaseRemoving):   string(v1alpha2.StorageNodeOpsStepRemoving),
@@ -118,7 +121,8 @@ var subPhaseToStep = map[v1alpha2.StorageNodeOpsAction]map[string]string{
 // sub-phase, and the stash carries the real step.
 var stepToSubPhase = map[string]StorageNodeOpsSubPhase{
 	string(v1alpha2.StorageNodeOpsStepValidating):       StorageNodeOpsSubPhaseValidating,
-	string(v1alpha2.StorageNodeOpsStepSuspending):       StorageNodeOpsSubPhaseSuspending,
+	string(v1alpha2.StorageNodeOpsStepPreparingRemoval): StorageNodeOpsSubPhaseSuspending,
+	string(v1alpha2.StorageNodeOpsStepMigratingDevices): StorageNodeOpsSubPhaseSuspending,
 	string(v1alpha2.StorageNodeOpsStepMigratingVolumes): StorageNodeOpsSubPhaseMigrating,
 	string(v1alpha2.StorageNodeOpsStepVerifying):        StorageNodeOpsSubPhaseVerifying,
 	string(v1alpha2.StorageNodeOpsStepRemoving):         StorageNodeOpsSubPhaseRemoving,

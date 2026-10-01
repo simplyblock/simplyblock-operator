@@ -61,6 +61,14 @@ var undeletableNodeSteps = map[simplyblockv1alpha2.StorageNodeOpsStep]string{
 		"restart and is carrying it out whether or not this record exists",
 	simplyblockv1alpha2.StorageNodeOpsStepAwaiting: "the control plane is carrying out the " +
 		"action, and it is doing so whether or not this record exists",
+	simplyblockv1alpha2.StorageNodeOpsStepPreparingRemoval: "the removal is being triggered, " +
+		"and a node marked pending_removal is moved on only by the removal this record drives",
+	simplyblockv1alpha2.StorageNodeOpsStepMigratingDevices: "the node's devices are being " +
+		"rebuilt onto its peers, and the node is the removal's from here on",
+	simplyblockv1alpha2.StorageNodeOpsStepMigratingVolumes: "the node's volumes are being moved " +
+		"off it, and the node is the removal's from here on",
+	simplyblockv1alpha2.StorageNodeOpsStepVerifying: "the node is being checked empty before it " +
+		"is removed, and the node is the removal's from here on",
 	simplyblockv1alpha2.StorageNodeOpsStepRemoving: "the node is being taken out of the cluster",
 	simplyblockv1alpha2.StorageNodeOpsStepRelocating: "the node is being restarted onto its " +
 		"target host",

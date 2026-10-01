@@ -67,7 +67,7 @@ const (
 // StorageNodeOpsStep is one step of a running node operation. The enum is the
 // union of every action's steps; which steps belong to which action is declared by
 // the graph rather than by this type.
-// +kubebuilder:validation:Enum=Requesting;Departing;Awaiting;Validating;Suspending;MigratingVolumes;Verifying;Removing;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
+// +kubebuilder:validation:Enum=Requesting;Departing;Awaiting;Validating;PreparingRemoval;MigratingDevices;MigratingVolumes;Verifying;Removing;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
 type StorageNodeOpsStep string
 
 const (
@@ -79,9 +79,12 @@ const (
 	StorageNodeOpsStepDeparting  StorageNodeOpsStep = "Departing"
 	StorageNodeOpsStepAwaiting   StorageNodeOpsStep = "Awaiting"
 
-	// Remove.
+	// Remove. PreparingRemoval and MigratingDevices are the control plane's
+	// first removal step, prepare-removal, split at the point the node has
+	// been admitted: the trigger, then the device rebuild it starts.
 	StorageNodeOpsStepValidating       StorageNodeOpsStep = "Validating"
-	StorageNodeOpsStepSuspending       StorageNodeOpsStep = "Suspending"
+	StorageNodeOpsStepPreparingRemoval StorageNodeOpsStep = "PreparingRemoval"
+	StorageNodeOpsStepMigratingDevices StorageNodeOpsStep = "MigratingDevices"
 	StorageNodeOpsStepMigratingVolumes StorageNodeOpsStep = "MigratingVolumes"
 	StorageNodeOpsStepVerifying        StorageNodeOpsStep = "Verifying"
 	StorageNodeOpsStepRemoving         StorageNodeOpsStep = "Removing"
@@ -218,7 +221,7 @@ type StorageNodeOpsStatus struct {
 
 	// Step is the position of the running action's state machine. The value is
 	// one of the steps the running action declares.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Departing','Awaiting','Validating','Suspending','MigratingVolumes','Verifying','Removing','Preparing','Relocating','AwaitingNode','Promoting','Holding','ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Departing','Awaiting','Validating','PreparingRemoval','MigratingDevices','MigratingVolumes','Verifying','Removing','Preparing','Relocating','AwaitingNode','Promoting','Holding','ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

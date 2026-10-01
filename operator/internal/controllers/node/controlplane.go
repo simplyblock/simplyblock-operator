@@ -78,7 +78,37 @@ const (
 	nodeStatusInRestart  = "in_restart"
 	nodeStatusInShutdown = "in_shutdown"
 	nodeStatusActive     = "active"
+
+	// The removal's statuses, in the order the control plane moves a node
+	// through them. Every one of them is past the trigger: nothing moves a node
+	// out of pending_removal except the removal itself.
+	nodeStatusPendingRemoval   = "pending_removal"
+	nodeStatusMigratingDevices = "migrating_devices"
+	nodeStatusMigratingLvols   = "migrating_lvols"
+	nodeStatusInRemoval        = "in_removal"
+	nodeStatusRemovedFailed    = "removed_failed"
 )
+
+// RemovalProgress is the control plane's answer to GET prepare-removal. Done is
+// the only field a caller must honor: it is set once every data device is rebuilt
+// and the node has moved on to migrating_lvols. The counts are for reporting, and
+// Failed is non-zero when the rebuild gave up, with the reason in Message.
+type RemovalProgress struct {
+	Done       bool   `json:"done"`
+	Total      int    `json:"total"`
+	Completed  int    `json:"completed"`
+	Failed     int    `json:"failed"`
+	Message    string `json:"message"`
+	NodeStatus string `json:"node_status"`
+}
+
+// DrainVerification is the control plane's answer to verify-drained: whether the
+// node still hosts anything, and what.
+type DrainVerification struct {
+	Drained   bool     `json:"drained"`
+	Lvols     []string `json:"lvols"`
+	Snapshots []string `json:"snapshots"`
+}
 
 // RestartParams are what the control plane's restart endpoint takes. Three
 // actions use it and each fills a different subset: a plain Restart passes only
@@ -125,6 +155,20 @@ type ControlPlane interface {
 	// be undone: it activates the target host's devices, fails and migrates the
 	// origin host's, starts a rebalance, and re-homes the logical volumes (§9).
 	Promote(ctx context.Context, clusterID, nodeID string) error
+
+	// PrepareRemoval is the removal's first step on the control plane: it admits
+	// the node, marks it pending_removal, shuts it down, and rebuilds its devices
+	// onto its peers. A refused admission is a 400 and changes nothing. From
+	// pending_removal on there is no way back, and a repeat only makes sure the
+	// rebuild is running (§8.2).
+	PrepareRemoval(ctx context.Context, clusterID, nodeID string) error
+
+	// RemovalProgress is how far PrepareRemoval's device rebuild has got.
+	RemovalProgress(ctx context.Context, clusterID, nodeID string) (RemovalProgress, error)
+
+	// VerifyDrained is the control plane's own check that the node hosts no
+	// volume and no snapshot any more. It moves nothing and changes no status.
+	VerifyDrained(ctx context.Context, clusterID, nodeID string) (DrainVerification, error)
 
 	// RemoveNode is the drain's last step. A 404 is success: a node the control
 	// plane no longer knows about is a node that has been removed, and a retry
@@ -229,6 +273,38 @@ func (c *httpControlPlane) RestartNode(
 
 func (c *httpControlPlane) Promote(ctx context.Context, clusterID, nodeID string) error {
 	return c.post(ctx, c.nodePath(clusterID, nodeID, "promote"), nil)
+}
+
+func (c *httpControlPlane) PrepareRemoval(ctx context.Context, clusterID, nodeID string) error {
+	return c.post(ctx, c.nodePath(clusterID, nodeID, "prepare-removal"), nil)
+}
+
+func (c *httpControlPlane) RemovalProgress(
+	ctx context.Context, clusterID, nodeID string,
+) (RemovalProgress, error) {
+	var progress RemovalProgress
+	body, err := c.call(ctx, http.MethodGet, c.nodePath(clusterID, nodeID, "prepare-removal"), nil)
+	if err != nil {
+		return progress, err
+	}
+	if err := json.Unmarshal(body, &progress); err != nil {
+		return progress, fmt.Errorf("read the removal progress of node %s: %w", nodeID, err)
+	}
+	return progress, nil
+}
+
+func (c *httpControlPlane) VerifyDrained(
+	ctx context.Context, clusterID, nodeID string,
+) (DrainVerification, error) {
+	var verification DrainVerification
+	body, err := c.call(ctx, http.MethodPost, c.nodePath(clusterID, nodeID, "verify-drained"), nil)
+	if err != nil {
+		return verification, err
+	}
+	if err := json.Unmarshal(body, &verification); err != nil {
+		return verification, fmt.Errorf("read the drain verification of node %s: %w", nodeID, err)
+	}
+	return verification, nil
 }
 
 // RemoveNode does not force the removal. The drain has already moved every

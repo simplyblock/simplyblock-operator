@@ -45,7 +45,8 @@ func (r *StorageNodeOpsReconciler) perform(
 	case stepAwaiting:
 		return r.await(ctx, ops)
 
-	case stepValidating, stepSuspending, stepMigratingVolumes, stepVerifying, stepRemoving:
+	case stepValidating, stepPreparingRemoval, stepMigratingDevices,
+		stepMigratingVolumes, stepVerifying, stepRemoving:
 		return r.performRemoveStep(ctx, ops, current)
 
 	case stepPreparing, stepRelocating, stepAwaitingNode, stepPromoting:

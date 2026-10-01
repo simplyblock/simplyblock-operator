@@ -136,14 +136,13 @@ func TestTheLastStepFinishingEndsTheOperation(t *testing.T) {
 	}
 }
 
-// An abort at a step the graph declares abortable stops the operation there, and
-// the node is put back into service on the way out: a node past the suspend is
-// serving nothing, and leaving it that way takes capacity out of the cluster for
-// as long as nobody notices.
-func TestAnAbortAtAnAbortableStepStopsAndResumesTheNode(t *testing.T) {
-	api := aControlPlane().reporting(nodeStatusSuspended)
+// An abort before the removal is triggered stops the drain there and touches
+// nothing: Validating has done nothing to the node, so there is nothing to put
+// back.
+func TestAnAbortBeforeTheTriggerStopsWithoutTouchingTheNode(t *testing.T) {
+	api := aControlPlane()
 	ops := anAdvancingOperation("a-drain",
-		simplyblockv1alpha2.StorageNodeOpsActionRemove, stepMigratingVolumes)
+		simplyblockv1alpha2.StorageNodeOpsActionRemove, stepValidating)
 	ops.Spec.Abort = true
 	r, apiClient := anOpsWorld(t, api, ops)
 	r.Mover = &scriptedMover{}
@@ -155,11 +154,35 @@ func TestAnAbortAtAnAbortableStepStopsAndResumesTheNode(t *testing.T) {
 	if got.Status.Phase != simplyblockv1alpha2.StorageNodeOpsPhaseAborted {
 		t.Errorf("phase = %q, want Aborted", got.Status.Phase)
 	}
-	if asked := api.asked("Resume"); asked != 1 {
-		t.Errorf("Resume was issued %d time(s), want the node put back into service", asked)
+	if asked := api.asked("Resume") + api.asked("PrepareRemoval"); asked != 0 {
+		t.Errorf("the abort issued %d call(s) against a node Validating never touched", asked)
 	}
 	if !announcedReason(r, OperationAborted) {
 		t.Error("nothing announced the abort")
+	}
+}
+
+// Once the removal is triggered the node is pending_removal, and nothing moves it
+// out of there except the removal itself. An abort has nothing to return the node
+// to, so it is refused and the drain carries on: stopping would leave a node that
+// is neither serving nor being removed.
+func TestAnAbortAfterTheTriggerIsRefusedAndTheDrainRunsOn(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingLvols)
+	ops := anAdvancingOperation("a-drain",
+		simplyblockv1alpha2.StorageNodeOpsActionRemove, stepMigratingVolumes)
+	ops.Spec.Abort = true
+	r, apiClient := anOpsWorld(t, api, ops)
+	r.Mover = &scriptedMover{}
+	lockedBy(t, apiClient, "a-drain")
+
+	pass(t, r, "a-drain")
+
+	got := operationRead(t, apiClient, "a-drain")
+	if got.Status.Phase != simplyblockv1alpha2.StorageNodeOpsPhaseRunning {
+		t.Errorf("phase = %q, want the drain still running", got.Status.Phase)
+	}
+	if asked := api.asked("Resume"); asked != 0 {
+		t.Errorf("Resume was issued %d time(s) against a node the removal has taken", asked)
 	}
 }
 
@@ -395,17 +418,18 @@ func TestARemovalRunsAgainstARebalancingCluster(t *testing.T) {
 	pass(t, r, "a-drain")
 
 	got := operationRead(t, apiClient, "a-drain")
-	if got.Status.Step.State != string(stepSuspending) {
+	if got.Status.Step.State != string(stepPreparingRemoval) {
 		t.Errorf("step = %q, want the drain past validation despite the rebalance",
 			got.Status.Step.State)
 	}
 }
 
 // A step that outlived its deadline fails the operation rather than retrying
-// forever, and the node is resumed where the step it failed on left it
-// suspended.
+// forever. Past the trigger the failure resumes nothing: the node is
+// pending_removal or later, and a resume would be refused by a control plane that
+// moves it only forward. A later Remove drives it the rest of the way.
 func TestAStepThatOutlivedItsDeadlineFailsTheOperation(t *testing.T) {
-	api := aControlPlane().reporting(nodeStatusSuspended)
+	api := aControlPlane().reporting(nodeStatusMigratingLvols)
 	ops := anAdvancingOperation("a-drain",
 		simplyblockv1alpha2.StorageNodeOpsActionRemove, stepMigratingVolumes)
 	expired := metav1.NewTime(time.Now().Add(-time.Minute))
@@ -423,12 +447,47 @@ func TestAStepThatOutlivedItsDeadlineFailsTheOperation(t *testing.T) {
 	if !announcedReason(r, StepDeadlineExceeded) {
 		t.Error("nothing announced the expiry, so a failed operation looks like a slow one")
 	}
-	if asked := api.asked("Resume"); asked != 1 {
-		t.Errorf("Resume was issued %d time(s); a drain that failed past the suspend owes it",
-			asked)
+	if asked := api.asked("Resume"); asked != 0 {
+		t.Errorf("Resume was issued %d time(s) against a node the removal has taken", asked)
 	}
 	if holder := lockHolder(t, apiClient); holder != "" {
 		t.Errorf("the node is still held by %q after the operation failed", holder)
+	}
+}
+
+// The device rebuild is the control plane's to finish once it has started, and
+// how long it takes depends on how much data the node held. Failing the
+// operation when its budget runs out would undo nothing and hide a removal that
+// is still running, so the expiry is announced, the budget re-armed, and the
+// step keeps waiting.
+func TestTheDeviceRebuildOutlivingItsDeadlineHoldsTheDrain(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingDevices)
+	api.progress = RemovalProgress{Total: 4, Completed: 1, NodeStatus: nodeStatusMigratingDevices}
+	ops := anAdvancingOperation("a-drain",
+		simplyblockv1alpha2.StorageNodeOpsActionRemove, stepMigratingDevices)
+	expired := metav1.NewTime(time.Now().Add(-time.Minute))
+	ops.Status.Step.Deadline = &expired
+	r, apiClient := anOpsWorld(t, api, ops)
+	r.Mover = &scriptedMover{}
+	lockedBy(t, apiClient, "a-drain")
+
+	pass(t, r, "a-drain")
+
+	got := operationRead(t, apiClient, "a-drain")
+	if got.Status.Phase != simplyblockv1alpha2.StorageNodeOpsPhaseRunning {
+		t.Errorf("phase = %q, want the drain still waiting on the rebuild", got.Status.Phase)
+	}
+	if got.Status.Step.State != string(stepMigratingDevices) {
+		t.Errorf("step = %q, want MigratingDevices", got.Status.Step.State)
+	}
+	if !announcedReason(r, StepDeadlineExceeded) {
+		t.Error("nothing announced that the rebuild outlived its budget")
+	}
+	if deadline := got.Status.Step.Deadline; deadline == nil || !deadline.After(time.Now()) {
+		t.Errorf("deadline = %v, want it re-armed into the future", deadline)
+	}
+	if holder := lockHolder(t, apiClient); holder != "a-drain" {
+		t.Errorf("the node is held by %q, want the drain to keep its lock", holder)
 	}
 }
 

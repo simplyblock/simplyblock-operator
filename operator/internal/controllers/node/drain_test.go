@@ -1,12 +1,13 @@
 // Draining a node before it leaves.
 //
 // Removing a storage node destroys it, so every logical volume whose data lives
-// on it has to be somewhere else first. The five steps are ordered around that
-// one fact: validation runs before the suspend, because suspending a node whose
-// drain cannot complete takes capacity out of the cluster and leaves it out for
-// as long as the blocker goes unnoticed; verification runs after the migration,
-// because the census is the authority on what is left rather than the counter of
-// what moved; and the removal is the last step rather than the operation.
+// on it has to be somewhere else first. The six steps are ordered around that
+// one fact. Validation runs before the trigger, because a node marked
+// pending_removal never goes back into service. The devices are rebuilt before
+// the volumes move, because that is the order the control plane's removal runs
+// in. Verification runs after the migration, because the census and the control
+// plane's own check are the authority on what is left rather than the counter of
+// what moved. The removal is the last step rather than the operation.
 //
 // design-storagenode.md §8.
 
@@ -15,6 +16,8 @@ package node
 import (
 	"context"
 	"errors"
+	"net/http"
+	"strings"
 	"testing"
 
 	"k8s.io/client-go/tools/events"
@@ -86,8 +89,9 @@ func aDraining(
 
 // A pinned claim stops the drain where nothing has been done yet, and says which
 // annotation to remove from which volume. Blocking here rather than later is
-// what leaves the node fully operational while somebody decides.
-func TestAPinnedVolumeStopsTheDrainBeforeItSuspendsAnything(t *testing.T) {
+// what leaves the node fully operational while somebody decides: once the
+// removal is triggered, the node does not go back into service.
+func TestAPinnedVolumeStopsTheDrainBeforeItTriggersTheRemoval(t *testing.T) {
 	api := aControlPlane().holding(onNode("volume-1", "pvc-abc"))
 	r, _ := aDraining(t, api, &scriptedMover{},
 		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", true))
@@ -101,8 +105,8 @@ func TestAPinnedVolumeStopsTheDrainBeforeItSuspendsAnything(t *testing.T) {
 	if blocked.reason != DrainBlocked {
 		t.Errorf("the hold is announced as %q, want %q", blocked.reason, DrainBlocked)
 	}
-	if asked := api.asked("Suspend"); asked != 0 {
-		t.Errorf("the node was suspended %d time(s) by a drain that cannot finish", asked)
+	if asked := api.asked("PrepareRemoval"); asked != 0 {
+		t.Errorf("the removal was triggered %d time(s) by a drain that cannot finish", asked)
 	}
 }
 
@@ -166,43 +170,169 @@ func TestAnIncompleteCensusIsRetriedRatherThanReportedAsABlocker(t *testing.T) {
 	}
 }
 
-// The suspend is skipped against a node already at or past where it would put
-// it, which is what makes re-entering the step after a lost response harmless.
-func TestTheSuspendIsSkippedWhenTheNodeIsAlreadyOutOfService(t *testing.T) {
-	for _, status := range []string{nodeStatusSuspended, nodeStatusOffline} {
+// The trigger is skipped against a node the removal already has, which is what
+// makes re-entering the step after a lost response harmless. Every status from
+// pending_removal on is the removal's: nothing else moves a node into them.
+func TestTheTriggerIsSkippedWhenTheRemovalAlreadyHasTheNode(t *testing.T) {
+	for _, status := range []string{
+		nodeStatusPendingRemoval, nodeStatusMigratingDevices, nodeStatusMigratingLvols,
+		nodeStatusInRemoval, nodeStatusRemovedFailed,
+	} {
 		t.Run(status, func(t *testing.T) {
 			api := aControlPlane().reporting(status)
 			r, _ := aDraining(t, api, &scriptedMover{})
 
-			done, err := r.perform(context.Background(), aDrain(), stepSuspending)
+			done, err := r.perform(context.Background(), aDrain(), stepPreparingRemoval)
 			if err != nil {
-				t.Fatalf("suspending: %v", err)
+				t.Fatalf("preparing the removal: %v", err)
 			}
 			if !done {
 				t.Errorf("the step did not finish against a node already %s", status)
 			}
-			if asked := api.asked("Suspend"); asked != 0 {
-				t.Errorf("Suspend was issued %d time(s) against a node already %s", asked, status)
+			if asked := api.asked("PrepareRemoval"); asked != 0 {
+				t.Errorf("PrepareRemoval was issued %d time(s) against a node already %s",
+					asked, status)
 			}
 		})
 	}
 }
 
-// An online node is suspended, and the step does not finish on the call: it
-// finishes when the control plane reports the node suspended.
-func TestAnOnlineNodeIsSuspendedAndWaitedFor(t *testing.T) {
-	api := aControlPlane()
+// The trigger is sent for a node that is serving and for one that is already
+// down: the admission, the pending_removal stamp, and the device rebuild are
+// needed either way. The step finishes when the control plane reports the node
+// as the removal's, not on the call.
+func TestTheRemovalIsTriggeredAndWaitedFor(t *testing.T) {
+	for _, status := range []string{nodeStatusOnline, nodeStatusSuspended, nodeStatusOffline} {
+		t.Run(status, func(t *testing.T) {
+			api := aControlPlane().reporting(status)
+			r, _ := aDraining(t, api, &scriptedMover{})
+
+			done, err := r.perform(context.Background(), aDrain(), stepPreparingRemoval)
+			if err != nil {
+				t.Fatalf("preparing the removal: %v", err)
+			}
+			if done {
+				t.Error("the step finished on the call rather than on the node reporting pending_removal")
+			}
+			if asked := api.asked("PrepareRemoval"); asked != 1 {
+				t.Errorf("PrepareRemoval was issued %d time(s), want once", asked)
+			}
+		})
+	}
+}
+
+// A shutdown somebody else started is waited for rather than triggered over.
+// Stamping pending_removal under a running shutdown loses the stamp to the
+// shutdown's own final write, which is offline.
+func TestTheTriggerWaitsForAShutdownAlreadyRunning(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusInShutdown)
 	r, _ := aDraining(t, api, &scriptedMover{})
 
-	done, err := r.perform(context.Background(), aDrain(), stepSuspending)
-	if err != nil {
-		t.Fatalf("suspending: %v", err)
+	done, err := r.perform(context.Background(), aDrain(), stepPreparingRemoval)
+	var blocked *blockedStepError
+	if err != nil && !errors.As(err, &blocked) {
+		t.Fatalf("err = %v, want a wait", err)
 	}
 	if done {
-		t.Error("the step finished on the call rather than on the node reporting suspended")
+		t.Error("the step finished while the node was still shutting down")
 	}
-	if asked := api.asked("Suspend"); asked != 1 {
-		t.Errorf("Suspend was issued %d time(s), want once", asked)
+	if asked := api.asked("PrepareRemoval"); asked != 0 {
+		t.Errorf("PrepareRemoval was issued %d time(s) under a running shutdown", asked)
+	}
+}
+
+// A refused admission is the control plane's answer about what the cluster can
+// afford to lose, and it changed nothing on the node. Retrying cannot change the
+// answer, so the operation fails.
+func TestARefusedAdmissionEndsTheDrain(t *testing.T) {
+	api := aControlPlane().refusing("PrepareRemoval",
+		&ControlPlaneError{Status: http.StatusBadRequest, Body: `{"detail":"Can not remove node: FTT"}`})
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	_, err := r.perform(context.Background(), aDrain(), stepPreparingRemoval)
+
+	var fatal *terminalStepError
+	if !errors.As(err, &fatal) {
+		t.Errorf("err = %v, want the terminal kind for a refused admission", err)
+	}
+}
+
+// A node mid-transition is the control plane saying "not now" (503), which a
+// later pass asks again rather than failing on.
+func TestABusyControlPlaneIsAskedAgain(t *testing.T) {
+	api := aControlPlane().refusing("PrepareRemoval",
+		&ControlPlaneError{Status: http.StatusServiceUnavailable, Body: "node transition in progress"})
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	_, err := r.perform(context.Background(), aDrain(), stepPreparingRemoval)
+
+	var fatal *terminalStepError
+	if err == nil || errors.As(err, &fatal) {
+		t.Errorf("err = %v, want an ordinary retry", err)
+	}
+}
+
+// The rebuild is waited for until the control plane says it is done, and each
+// pass makes sure it is running: a repeat is a no-op while it runs, and it is
+// what restarts a rebuild a control-plane restart lost.
+func TestTheDeviceRebuildIsKeptRunningUntilDone(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingDevices)
+	api.progress = RemovalProgress{Total: 4, Completed: 1, NodeStatus: nodeStatusMigratingDevices}
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	done, err := r.perform(context.Background(), aDrain(), stepMigratingDevices)
+	if err != nil {
+		t.Fatalf("migrating devices: %v", err)
+	}
+	if done {
+		t.Error("the step finished with three of four devices still to rebuild")
+	}
+	if asked := api.asked("PrepareRemoval"); asked != 1 {
+		t.Errorf("PrepareRemoval was issued %d time(s), want the rebuild kept running", asked)
+	}
+}
+
+// Done is the control plane's word and the only one honored: the counts are for
+// reporting.
+func TestTheDeviceRebuildFinishesWhenTheControlPlaneSaysSo(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingLvols)
+	api.progress = RemovalProgress{Done: true, Total: 4, Completed: 4, NodeStatus: nodeStatusMigratingLvols}
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	done, err := r.perform(context.Background(), aDrain(), stepMigratingDevices)
+	if err != nil {
+		t.Fatalf("migrating devices: %v", err)
+	}
+	if !done {
+		t.Error("the step did not finish although the control plane reports the rebuild done")
+	}
+	if asked := api.asked("PrepareRemoval"); asked != 0 {
+		t.Errorf("PrepareRemoval was issued %d time(s) after the rebuild finished", asked)
+	}
+}
+
+// A rebuild that gave up holds the drain rather than failing it. Failing would
+// undo nothing, since the node is the removal's, and moving volumes on top of a
+// device that was never rebuilt widens the exposure the removal exists to end.
+func TestAFailedDeviceRebuildHoldsTheDrain(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingDevices)
+	api.progress = RemovalProgress{
+		Total: 4, Completed: 3, Failed: 1, Message: "device dev-4 stalled",
+		NodeStatus: nodeStatusMigratingDevices,
+	}
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	done, err := r.perform(context.Background(), aDrain(), stepMigratingDevices)
+
+	var blocked *blockedStepError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("err = %v, want the drain held on the failed rebuild", err)
+	}
+	if done {
+		t.Error("the step finished on a rebuild that gave up")
+	}
+	if !strings.Contains(blocked.message, "dev-4") {
+		t.Errorf("message = %q, want the control plane's reason", blocked.message)
 	}
 }
 
@@ -412,6 +542,28 @@ func TestABenchmarkVolumeThatCannotBeDeletedEndsTheDrain(t *testing.T) {
 	}
 }
 
+// The census counts volumes, and the control plane also knows about snapshots.
+// A node the census calls empty is held while the control plane still sees
+// anything on it, because the DELETE that follows would destroy it.
+func TestVerificationHoldsWhileTheControlPlaneSeesASnapshot(t *testing.T) {
+	api := aControlPlane()
+	api.verification = DrainVerification{Snapshots: []string{"snap-1"}}
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	done, err := r.perform(context.Background(), aDrain(), stepVerifying)
+
+	var blocked *blockedStepError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("err = %v, want the removal held while a snapshot is on the node", err)
+	}
+	if done {
+		t.Error("the node passed verification with a snapshot still on it")
+	}
+	if !strings.Contains(blocked.message, "snap-1") {
+		t.Errorf("message = %q, want it to name what is left", blocked.message)
+	}
+}
+
 // An empty node passes verification.
 func TestAnEmptyNodePassesVerification(t *testing.T) {
 	r, _ := aDraining(t, aControlPlane(), &scriptedMover{})
@@ -427,7 +579,7 @@ func TestAnEmptyNodePassesVerification(t *testing.T) {
 
 // The removal is the last step, and a refusal is the control plane's answer
 // about what the cluster can afford to lose. Retrying cannot change it, so the
-// operation fails and the unwind puts the node back into service.
+// operation fails, and the node stays in the removal for a later Remove.
 func TestARefusedRemovalEndsTheDrain(t *testing.T) {
 	api := aControlPlane().refusing("RemoveNode", errors.New("the cluster cannot lose this node"))
 	r, _ := aDraining(t, api, &scriptedMover{})

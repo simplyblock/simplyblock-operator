@@ -91,6 +91,12 @@ type scriptedControlPlane struct {
 	// restarts carries the parameters of each restart, because three actions
 	// issue one and they differ precisely in what they fill in.
 	restarts []RestartParams
+
+	// progress is what GET prepare-removal answers, and verification what
+	// verify-drained does. A node with nothing left on it is the default, so a
+	// suite that is not about verification passes it.
+	progress     RemovalProgress
+	verification DrainVerification
 }
 
 // aControlPlane reports one online node and nothing else.
@@ -99,8 +105,9 @@ func aControlPlane() *scriptedControlPlane {
 		nodes: map[string]NodeReading{
 			opsNodeID: {UUID: opsNodeID, Status: nodeStatusOnline, ManagementIP: "10.0.0.1"},
 		},
-		volumes: map[string][]webapi.VolumeInfo{},
-		refuse:  map[string]error{},
+		volumes:      map[string][]webapi.VolumeInfo{},
+		refuse:       map[string]error{},
+		verification: DrainVerification{Drained: true},
 	}
 }
 
@@ -206,6 +213,28 @@ func (c *scriptedControlPlane) Promote(_ context.Context, _, nodeID string) erro
 
 func (c *scriptedControlPlane) RemoveNode(_ context.Context, _, nodeID string) error {
 	return c.record("RemoveNode", nodeID)
+}
+
+func (c *scriptedControlPlane) PrepareRemoval(_ context.Context, _, nodeID string) error {
+	return c.record("PrepareRemoval", nodeID)
+}
+
+func (c *scriptedControlPlane) RemovalProgress(
+	_ context.Context, _, nodeID string,
+) (RemovalProgress, error) {
+	if err := c.record("RemovalProgress", nodeID); err != nil {
+		return RemovalProgress{}, err
+	}
+	return c.progress, nil
+}
+
+func (c *scriptedControlPlane) VerifyDrained(
+	_ context.Context, _, nodeID string,
+) (DrainVerification, error) {
+	if err := c.record("VerifyDrained", nodeID); err != nil {
+		return DrainVerification{}, err
+	}
+	return c.verification, nil
 }
 
 func (c *scriptedControlPlane) StoragePools(

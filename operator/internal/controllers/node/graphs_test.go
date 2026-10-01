@@ -31,8 +31,8 @@ import (
 // same set: deriving it from the graph would make the test agree with itself.
 var everyStep = []string{
 	"Awaiting", "AwaitingHost", "AwaitingNode", "Cleanup", "Departing", "Holding",
-	"MigratingVolumes", "Preparing", "Promoting", "Relocating", "Releasing",
-	"Removing", "Requesting", "Restarting", "ShuttingDown", "Suspending",
+	"MigratingDevices", "MigratingVolumes", "Preparing", "PreparingRemoval", "Promoting",
+	"Relocating", "Releasing", "Removing", "Requesting", "Restarting", "ShuttingDown",
 	"Validating", "Verifying",
 }
 
@@ -103,7 +103,8 @@ func celRuleValues(rule string) []string {
 // rule living in a struct tag; the tests above are what make the copies worth
 // having.
 const opsStepCELRule = "!has(self.state) || self.state in " +
-	"['Requesting','Departing','Awaiting','Validating','Suspending','MigratingVolumes','Verifying'," +
+	"['Requesting','Departing','Awaiting','Validating','PreparingRemoval','MigratingDevices'," +
+	"'MigratingVolumes','Verifying'," +
 	"'Removing','Preparing','Relocating','AwaitingNode','Promoting','Holding'," +
 	"'ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']"
 
@@ -148,6 +149,15 @@ func TestNoStepPastThePointOfNoReturnIsAbortable(t *testing.T) {
 		stepAwaitingNode,
 		// The restart has been issued and is the control plane's to finish.
 		stepDeparting,
+		// The removal has been triggered. Nothing moves a node out of
+		// pending_removal except the removal itself, so an abort has nothing to
+		// return the node to, and the operation is what drives it the rest of
+		// the way (§8.3).
+		stepPreparingRemoval,
+		stepMigratingDevices,
+		stepMigratingVolumes,
+		stepVerifying,
+		stepRemoving,
 		// The node is down for a reboot nothing else will bring it back from.
 		stepShuttingDown,
 		stepReleasing,
@@ -172,11 +182,6 @@ func TestTheStepsAnAbortStopsCleanly(t *testing.T) {
 		// No side effect at all, which is why an abort here is an Aborted
 		// directly rather than an unwind (§8.3).
 		stepValidating,
-		// Past the suspend, and the unwind is the resume the graph already
-		// performs on every other terminal outcome from here on.
-		stepSuspending,
-		stepMigratingVolumes,
-		stepVerifying,
 		// A target host has been labeled and nothing more.
 		stepPreparing,
 		// The window before the node is taken down for maintenance.
@@ -185,24 +190,6 @@ func TestTheStepsAnAbortStopsCleanly(t *testing.T) {
 		if slices.Contains(unabortable, state) {
 			t.Errorf("step %q refuses an abort, and nothing it has done needs finishing", state)
 		}
-	}
-}
-
-// Every terminal outcome from Suspending onward owes the node a resume, because a
-// node past the suspend is not serving and an operation that stopped there would
-// take capacity out of the cluster for as long as nobody noticed (§8.3).
-func TestTheDrainStepsPastTheSuspendUnwind(t *testing.T) {
-	for _, state := range []step{
-		stepSuspending, stepMigratingVolumes, stepVerifying, stepRemoving,
-	} {
-		if !unwinds(state) {
-			t.Errorf("step %q leaves the node suspended and owes it a resume", state)
-		}
-	}
-	// Validating performs no side effect at all, which is what makes an abort
-	// there an Aborted directly rather than an unwind.
-	if unwinds(stepValidating) {
-		t.Error("Validating touches nothing and must not issue a resume")
 	}
 }
 
@@ -227,11 +214,13 @@ func TestAStepOfAnotherActionIsRejected(t *testing.T) {
 }
 
 // The drain's graph is the line §8.2 states, and its ordering is the design:
-// validation before the suspend, so a drain that cannot complete never takes
-// capacity out of the cluster.
-func TestTheRemoveGraphValidatesBeforeItSuspends(t *testing.T) {
+// validation before the trigger, so a drain that cannot complete never takes the
+// node out of the cluster, and the devices before the volumes, because that is
+// the order the control plane's own removal steps run in.
+func TestTheRemoveGraphValidatesBeforeItTriggersTheRemoval(t *testing.T) {
 	assertLine(t, simplyblockv1alpha2.StorageNodeOpsActionRemove, []step{
-		stepValidating, stepSuspending, stepMigratingVolumes, stepVerifying, stepRemoving,
+		stepValidating, stepPreparingRemoval, stepMigratingDevices,
+		stepMigratingVolumes, stepVerifying, stepRemoving,
 	})
 }
 

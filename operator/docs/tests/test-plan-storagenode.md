@@ -479,41 +479,48 @@ File: `operator/internal/controllers/node/classify_test.go`
 Files: `operator/internal/controllers/node/drain_test.go`, `peertargets_test.go`,
 `advance_test.go`, `remove_gone_test.go`
 
-| #     | Scenario                                                                                 | Type       | Test                                                                                   |
-|-------|------------------------------------------------------------------------------------------|------------|----------------------------------------------------------------------------------------|
-| U-147 | Validation clear: the step advances to `Suspending`                                      | Positive   | `TestValidationWritesTheTotalTheDrainIsMeasuredAgainst`                                |
-| U-148 | Pinned volumes present: the step holds and no suspend is issued                          | Negative   | `TestAPinnedVolumeStopsTheDrainBeforeItSuspendsAnything`                               |
-| U-149 | Unmanaged volumes present: the step holds and no suspend is issued                       | Negative   | `TestAnUnmanagedVolumeStopsTheDrain`                                                   |
-| U-150 | The pin is removed: the next reconcile advances without further input                    | Positive   | —                                                                                      |
-| U-151 | The node is already suspended: no suspend call is issued and the step advances           | Negative   | `TestTheSuspendIsSkippedWhenTheNodeIsAlreadyOutOfService`                              |
-| U-152 | Migration targets are spread evenly across the online peers                              | Positive   | `TestTheVolumesAreSpreadOverEveryOnlinePeer`                                           |
-| U-153 | No online peer: the step holds and emits `NoMigrationTarget`                             | Negative   | `TestADrainWithNowhereToMoveToHolds`                                                   |
-| U-154 | Offline peers are excluded from target selection                                         | Negative   | `TestAnOfflinePeerIsNotATarget`                                                        |
-| U-155 | Exactly one online peer: every volume goes to it                                         | Boundary   | —                                                                                      |
-| U-156 | Every migration completed: the step advances to `Verifying`                              | Positive   | `TestADrainIsDoneWhenTheNodeHoldsNothingMovable`                                       |
-| U-157 | Verification finds non-system volumes: the step holds and retries                        | Negative   | `TestVerificationHoldsWhileAUsersVolumeIsStillThere`                                   |
-| U-158 | Verification finds only system volumes: they are deleted, then the step advances         | Positive   | `TestVerificationDeletesTheBenchmarkVolumesAndRereads`                                 |
-| U-159 | A system-volume delete returns 404: treated as success                                   | Boundary   | —                                                                                      |
-| U-160 | A system-volume delete is rejected: the node is resumed and the operation fails          | Negative   | `TestABenchmarkVolumeThatCannotBeDeletedEndsTheDrain`                                  |
-| U-161 | The node delete returns 200, 204, or 404: the operation succeeds                         | Boundary   | `TestAnAcceptedRemovalFinishesTheDrain`                                                |
-| U-162 | The node delete returns 5xx: retried, and the operation does not fail                    | Negative   | —                                                                                      |
-| U-163 | The node delete is rejected: the node is resumed and the operation fails                 | Negative   | `TestARefusedRemovalEndsTheDrain`, `TestAStepThatOutlivedItsDeadlineFailsTheOperation` |
-| U-164 | A resume that itself fails: the operation still reaches `Failed`, with an event          | Negative   | —                                                                                      |
-| U-165 | `spec.abort` set during `Validating`: `Aborted` with no resume call issued               | Boundary   | —                                                                                      |
-| U-166 | `spec.abort` set during `MigratingVolumes`: migrations deleted, node resumed             | Positive   | `TestAnAbortAtAnAbortableStepStopsAndResumesTheNode`                                   |
-| U-167 | A step's deadline expires mid-drain: the node is resumed and the operation fails         | Boundary   | `TestAStepThatOutlivedItsDeadlineFailsTheOperation`                                    |
-| U-168 | `status.drain.volumesTotal` is written once and not recomputed on later passes           | Positive   | `TestValidationWritesTheTotalTheDrainIsMeasuredAgainst`                                |
-| U-169 | A drain with zero volumes: `volumesTotal` is 0 and the step advances immediately         | Boundary   | `TestADrainIsDoneWhenTheNodeHoldsNothingMovable`                                       |
-| U-332 | A node the control plane has forgotten: every step of the removal is done                | Regression | `TestARemovalOfAGoneNodeIsDoneAtEveryStep`                                             |
-| U-333 | An incomplete census is retried rather than reported as a blocker                        | Negative   | `TestAnIncompleteCensusIsRetriedRatherThanReportedAsABlocker`                          |
-| U-334 | A node already offline is past the state a suspend produces, so none is issued           | Boundary   | `TestTheSuspendIsSkippedWhenTheNodeIsAlreadyOutOfService`                              |
-| U-335 | An online node is suspended, and the step waits for the backend to report it             | Positive   | `TestAnOnlineNodeIsSuspendedAndWaitedFor`                                              |
-| U-336 | An empty node passes verification                                                        | Boundary   | `TestAnEmptyNodePassesVerification`                                                    |
-| U-337 | A suspended peer is not a migration target either                                        | Negative   | `TestASuspendedPeerIsNotATarget`                                                       |
-| U-338 | The drained node is never chosen as its own target                                       | Negative   | `TestTheDrainedNodeIsNeverItsOwnTarget`                                                |
-| U-339 | The peer assignment is the same on every pass, so a retry is deliberate                  | Positive   | `TestTheAssignmentIsTheSameOnEveryPass`                                                |
-| U-340 | The peers come from the stream once it has delivered, and the control plane is not asked | Positive   | `TestThePeersComeFromTheStreamOnceItHasDelivered`                                      |
-| U-341 | A stream that has not delivered falls back to the control plane                          | Boundary   | `TestAnUndeliveredStreamFallsBackToTheControlPlane`                                    |
+| #     | Scenario                                                                                                      | Type       | Test                                                          |
+|-------|---------------------------------------------------------------------------------------------------------------|------------|---------------------------------------------------------------|
+| U-147 | Validation clear: the step advances to `PreparingRemoval`                                                     | Positive   | `TestValidationWritesTheTotalTheDrainIsMeasuredAgainst`       |
+| U-148 | Pinned volumes present: the step holds and the removal is not triggered                                       | Negative   | `TestAPinnedVolumeStopsTheDrainBeforeItTriggersTheRemoval`    |
+| U-149 | Unmanaged volumes present: the step holds and the removal is not triggered                                    | Negative   | `TestAnUnmanagedVolumeStopsTheDrain`                          |
+| U-150 | The pin is removed: the next reconcile advances without further input                                         | Positive   | —                                                             |
+| U-151 | The removal already has the node (`pending_removal` or later): no trigger is sent and the step advances       | Negative   | `TestTheTriggerIsSkippedWhenTheRemovalAlreadyHasTheNode`      |
+| U-152 | Migration targets are spread evenly across the online peers                                                   | Positive   | `TestTheVolumesAreSpreadOverEveryOnlinePeer`                  |
+| U-153 | No online peer: the step holds and emits `NoMigrationTarget`                                                  | Negative   | `TestADrainWithNowhereToMoveToHolds`                          |
+| U-154 | Offline peers are excluded from target selection                                                              | Negative   | `TestAnOfflinePeerIsNotATarget`                               |
+| U-155 | Exactly one online peer: every volume goes to it                                                              | Boundary   | —                                                             |
+| U-156 | Every migration completed: the step advances to `Verifying`                                                   | Positive   | `TestADrainIsDoneWhenTheNodeHoldsNothingMovable`              |
+| U-157 | Verification finds non-system volumes: the step holds and retries                                             | Negative   | `TestVerificationHoldsWhileAUsersVolumeIsStillThere`          |
+| U-158 | Verification finds only system volumes: they are deleted, then the step advances                              | Positive   | `TestVerificationDeletesTheBenchmarkVolumesAndRereads`        |
+| U-159 | A system-volume delete returns 404: treated as success                                                        | Boundary   | —                                                             |
+| U-160 | A system-volume delete is rejected: the operation fails and the node stays in the removal                     | Negative   | `TestABenchmarkVolumeThatCannotBeDeletedEndsTheDrain`         |
+| U-161 | The node delete returns 200, 204, or 404: the operation succeeds                                              | Boundary   | `TestAnAcceptedRemovalFinishesTheDrain`                       |
+| U-162 | The node delete returns 5xx: retried, and the operation does not fail                                         | Negative   | —                                                             |
+| U-163 | The node delete is rejected: the operation fails and the node stays in the removal                            | Negative   | `TestARefusedRemovalEndsTheDrain`                             |
+| U-165 | `spec.abort` set during `Validating`: `Aborted` with no call issued                                           | Boundary   | `TestAnAbortBeforeTheTriggerStopsWithoutTouchingTheNode`      |
+| U-166 | `spec.abort` set during `MigratingVolumes`: refused, and the drain runs on                                    | Negative   | `TestAnAbortAfterTheTriggerIsRefusedAndTheDrainRunsOn`        |
+| U-167 | A step's deadline expires after the trigger: the operation fails and no resume is issued                      | Boundary   | `TestAStepThatOutlivedItsDeadlineFailsTheOperation`           |
+| U-168 | `status.drain.volumesTotal` is written once and not recomputed on later passes                                | Positive   | `TestValidationWritesTheTotalTheDrainIsMeasuredAgainst`       |
+| U-169 | A drain with zero volumes: `volumesTotal` is 0 and the step advances immediately                              | Boundary   | `TestADrainIsDoneWhenTheNodeHoldsNothingMovable`              |
+| U-332 | A node the control plane has forgotten: every step of the removal is done                                     | Regression | `TestARemovalOfAGoneNodeIsDoneAtEveryStep`                    |
+| U-333 | An incomplete census is retried rather than reported as a blocker                                             | Negative   | `TestAnIncompleteCensusIsRetriedRatherThanReportedAsABlocker` |
+| U-336 | An empty node passes verification                                                                             | Boundary   | `TestAnEmptyNodePassesVerification`                           |
+| U-337 | A suspended peer is not a migration target either                                                             | Negative   | `TestASuspendedPeerIsNotATarget`                              |
+| U-338 | The drained node is never chosen as its own target                                                            | Negative   | `TestTheDrainedNodeIsNeverItsOwnTarget`                       |
+| U-339 | The peer assignment is the same on every pass, so a retry is deliberate                                       | Positive   | `TestTheAssignmentIsTheSameOnEveryPass`                       |
+| U-340 | The peers come from the stream once it has delivered, and the control plane is not asked                      | Positive   | `TestThePeersComeFromTheStreamOnceItHasDelivered`             |
+| U-341 | A stream that has not delivered falls back to the control plane                                               | Boundary   | `TestAnUndeliveredStreamFallsBackToTheControlPlane`           |
+| U-449 | An online, suspended, or offline node: the removal is triggered, and the step waits for the node to report it | Positive   | `TestTheRemovalIsTriggeredAndWaitedFor`                       |
+| U-450 | A shutdown somebody else started: waited for, and no trigger is sent under it                                 | Negative   | `TestTheTriggerWaitsForAShutdownAlreadyRunning`               |
+| U-451 | The admission is refused (4xx): the operation fails with nothing to undo                                      | Negative   | `TestARefusedAdmissionEndsTheDrain`                           |
+| U-452 | `prepare-removal` answers 503: asked again on a later pass                                                    | Negative   | `TestABusyControlPlaneIsAskedAgain`                           |
+| U-453 | The device rebuild is unfinished: `prepare-removal` is re-sent and the step waits                             | Positive   | `TestTheDeviceRebuildIsKeptRunningUntilDone`                  |
+| U-454 | The control plane reports the rebuild done: the step advances and nothing is re-sent                          | Positive   | `TestTheDeviceRebuildFinishesWhenTheControlPlaneSaysSo`       |
+| U-455 | The rebuild gave up: the drain holds with the control plane's reason                                          | Negative   | `TestAFailedDeviceRebuildHoldsTheDrain`                       |
+| U-456 | `MigratingDevices` outlives its deadline: announced and re-armed, and the drain keeps its lock                | Boundary   | `TestTheDeviceRebuildOutlivingItsDeadlineHoldsTheDrain`       |
+| U-457 | `verify-drained` still sees a snapshot: the removal is held, naming it                                        | Negative   | `TestVerificationHoldsWhileTheControlPlaneSeesASnapshot`      |
+| U-458 | A second `Remove` on a node a failed one left in the removal carries on from where it stopped                 | Positive   | —                                                             |
 
 ### Operation: The Fan-Out (design §8.4)
 
@@ -626,45 +633,45 @@ machine is declared beside them. The three lists that have to agree are the
 graph's states, the `Enum` marker on `status.step.state`, and the CEL rule the
 CRD carries.
 
-| #     | Scenario                                                                           | Type       | Test                                                     |
-|-------|------------------------------------------------------------------------------------|------------|----------------------------------------------------------|
-| U-217 | Every declared graph builds, including the ones the action under test does not use | Positive   | `TestEveryActionDeclaresAGraph`                          |
-| U-218 | An action with no declared graph: refused rather than stalled                      | Negative   | `TestAStepThatBelongsToNoActionEndsTheOperation`         |
-| U-219 | `Remove` transitioning to `Promoting`: rejected as an illegal transition           | Negative   | `TestAStepOfAnotherActionIsRejected`                     |
-| U-220 | `Migrate` transitioning to `Removing`: rejected as an illegal transition           | Negative   | `TestAStepOfAnotherActionIsRejected`                     |
-| U-221 | `HostMaintenance` transitioning to `Suspending`: rejected                          | Negative   | `TestAStepOfAnotherActionIsRejected`                     |
-| U-222 | An empty `status.step`: restores to the action's declared initial state            | Boundary   | `TestTheFirstPassArmsTheStepAMachineIsBornIn`            |
-| U-223 | A step value that belongs to a different action: restoration fails informatively   | Negative   | `TestAStepOfAnotherActionIsRejected`                     |
-| U-224 | A step value outside the enum: restoration fails rather than stalling              | Negative   | `TestAStepThisOperatorCannotResumeEndsTheOperation`      |
-| U-225 | The snapshot round-trips through `Snapshot` and `FromSnapshot` unchanged           | Positive   | —                                                        |
-| U-226 | A deadline persisted and restored is the same absolute instant                     | Positive   | —                                                        |
-| U-227 | A deadline that passed while the operator was down: restores as expired            | Boundary   | `TestAStepThatOutlivedItsDeadlineFailsTheOperation`      |
-| U-228 | A step with no deadline: restores with none rather than with a zero instant        | Boundary   | —                                                        |
-| U-229 | A terminal step: `IsTerminal` is true and no transition is attempted               | Boundary   | `TestTheLastStepFinishingEndsTheOperation`               |
-| U-230 | The outer phase machine is separate from the step machine                          | Positive   | —                                                        |
-| U-231 | Every state each graph declares appears in the step `Enum` marker                  | Boundary   | `TestTheStepEnumCoversEveryDeclaredState`                |
-| U-232 | Every state each graph declares appears in the `status.step` CEL rule              | Boundary   | `TestTheCELRuleCoversEveryDeclaredState`                 |
-| U-233 | The CEL rule names no value the graphs do not declare                              | Negative   | `TestTheCELRuleCoversEveryDeclaredState`                 |
-| U-234 | A stored step from another action: refused, naming the declared set                | Negative   | `TestAStepOfAnotherActionIsRejected`                     |
-| U-235 | A restore that fails: the operation is `Failed` with the error, not requeued       | Negative   | `TestAStepThisOperatorCannotResumeEndsTheOperation`      |
-| U-365 | The provisioning graph's states cover its own `Enum` and CEL rule                  | Boundary   | `TestTheNodeStepEnumAndRuleCoverTheProvisioningGraph`    |
-| U-366 | No step past the point of no return declares an abort edge                         | Negative   | `TestNoStepPastThePointOfNoReturnIsAbortable`            |
-| U-367 | The steps an abort stops from are the ones that unwind cleanly                     | Positive   | `TestTheStepsAnAbortStopsCleanly`                        |
-| U-368 | Every drain step past the suspend owes the resume                                  | Boundary   | `TestTheDrainStepsPastTheSuspendUnwind`                  |
-| U-369 | Every step carries a budget, so none is the step that cannot time out              | Boundary   | `TestEveryStepHasABudget`                                |
-| U-370 | The remove graph validates before it suspends                                      | Positive   | `TestTheRemoveGraphValidatesBeforeItSuspends`            |
-| U-371 | The migrate graph splits the restart from the wait                                 | Positive   | `TestTheMigrateGraphSplitsTheRestartFromTheWait`         |
-| U-372 | The host maintenance graph is the six-step window                                  | Positive   | `TestTheHostMaintenanceGraphIsTheSixStepWindow`          |
-| U-373 | The four single-step actions share one line                                        | Positive   | `TestTheSingleStepActionsShareOneLine`                   |
-| U-374 | Adoption is reachable from every gate before the add, the slot queue included      | Boundary   | `TestAdoptionIsReachableFromEveryGateBeforeTheAdd`       |
-| U-375 | `AwaitingSlot` may go straight to `Resolving` when a sibling claimed the worker    | Boundary   | `TestAwaitingSlotMayGoStraightToResolving`               |
-| U-384 | A worker that is not Ready or is cordoned holds `Posting` at `AwaitingWorker`      | Regression | `TestAWorkerThatWentAwayHoldsTheNodeRatherThanFailingIt` |
-| U-385 | The held step carries its own budget rather than the one it was diverted from      | Regression | `TestTheHeldNodeGetsAFreshBudget`                        |
-| U-386 | The worker coming back starts the path again at `CheckingHost`                     | Positive   | `TestAWorkerThatCameBackRestartsThePath`                 |
-| U-387 | A held node emits `WorkerAway` rather than holding silently                        | Positive   | `TestTheHeldNodeStaysAndSaysSo`                          |
-| U-388 | A node that never claimed its worker takes no slot while the worker is away        | Negative   | `TestAnUnclaimedNodeTakesNoSlotWhileItsWorkerIsAway`     |
-| U-389 | A held node keeps its claim, so the node-add cap stays closed                      | Regression | `TestAHeldNodeKeepsItsClaim`                             |
-| U-390 | A sibling posts no add while another worker is held at `AwaitingWorker`            | Negative   | `TestASiblingWaitsWhileAnotherWorkerIsHeld`              |
+| #     | Scenario                                                                                                        | Type       | Test                                                     |
+|-------|-----------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------|
+| U-217 | Every declared graph builds, including the ones the action under test does not use                              | Positive   | `TestEveryActionDeclaresAGraph`                          |
+| U-218 | An action with no declared graph: refused rather than stalled                                                   | Negative   | `TestAStepThatBelongsToNoActionEndsTheOperation`         |
+| U-219 | `Remove` transitioning to `Promoting`: rejected as an illegal transition                                        | Negative   | `TestAStepOfAnotherActionIsRejected`                     |
+| U-220 | `Migrate` transitioning to `Removing`: rejected as an illegal transition                                        | Negative   | `TestAStepOfAnotherActionIsRejected`                     |
+| U-221 | `HostMaintenance` transitioning to `MigratingDevices`: rejected                                                 | Negative   | `TestAStepOfAnotherActionIsRejected`                     |
+| U-222 | An empty `status.step`: restores to the action's declared initial state                                         | Boundary   | `TestTheFirstPassArmsTheStepAMachineIsBornIn`            |
+| U-223 | A step value that belongs to a different action: restoration fails informatively                                | Negative   | `TestAStepOfAnotherActionIsRejected`                     |
+| U-224 | A step value outside the enum: restoration fails rather than stalling                                           | Negative   | `TestAStepThisOperatorCannotResumeEndsTheOperation`      |
+| U-225 | The snapshot round-trips through `Snapshot` and `FromSnapshot` unchanged                                        | Positive   | —                                                        |
+| U-226 | A deadline persisted and restored is the same absolute instant                                                  | Positive   | —                                                        |
+| U-227 | A deadline that passed while the operator was down: restores as expired                                         | Boundary   | `TestAStepThatOutlivedItsDeadlineFailsTheOperation`      |
+| U-228 | A step with no deadline: restores with none rather than with a zero instant                                     | Boundary   | —                                                        |
+| U-229 | A terminal step: `IsTerminal` is true and no transition is attempted                                            | Boundary   | `TestTheLastStepFinishingEndsTheOperation`               |
+| U-230 | The outer phase machine is separate from the step machine                                                       | Positive   | —                                                        |
+| U-231 | Every state each graph declares appears in the step `Enum` marker                                               | Boundary   | `TestTheStepEnumCoversEveryDeclaredState`                |
+| U-232 | Every state each graph declares appears in the `status.step` CEL rule                                           | Boundary   | `TestTheCELRuleCoversEveryDeclaredState`                 |
+| U-233 | The CEL rule names no value the graphs do not declare                                                           | Negative   | `TestTheCELRuleCoversEveryDeclaredState`                 |
+| U-234 | A stored step from another action: refused, naming the declared set                                             | Negative   | `TestAStepOfAnotherActionIsRejected`                     |
+| U-235 | A restore that fails: the operation is `Failed` with the error, not requeued                                    | Negative   | `TestAStepThisOperatorCannotResumeEndsTheOperation`      |
+| U-365 | The provisioning graph's states cover its own `Enum` and CEL rule                                               | Boundary   | `TestTheNodeStepEnumAndRuleCoverTheProvisioningGraph`    |
+| U-366 | No step past the point of no return declares an abort edge                                                      | Negative   | `TestNoStepPastThePointOfNoReturnIsAbortable`            |
+| U-367 | The steps an abort stops from are the ones that unwind cleanly                                                  | Positive   | `TestTheStepsAnAbortStopsCleanly`                        |
+| U-368 | No drain step resumes the node: from the trigger on, the node is the removal's                                  | Boundary   | `TestAStepThatOutlivedItsDeadlineFailsTheOperation`      |
+| U-369 | Every step carries a budget, so none is the step that cannot time out                                           | Boundary   | `TestEveryStepHasABudget`                                |
+| U-370 | The remove graph validates before it triggers the removal, and rebuilds the devices before it moves the volumes | Positive   | `TestTheRemoveGraphValidatesBeforeItTriggersTheRemoval`  |
+| U-371 | The migrate graph splits the restart from the wait                                                              | Positive   | `TestTheMigrateGraphSplitsTheRestartFromTheWait`         |
+| U-372 | The host maintenance graph is the six-step window                                                               | Positive   | `TestTheHostMaintenanceGraphIsTheSixStepWindow`          |
+| U-373 | The four single-step actions share one line                                                                     | Positive   | `TestTheSingleStepActionsShareOneLine`                   |
+| U-374 | Adoption is reachable from every gate before the add, the slot queue included                                   | Boundary   | `TestAdoptionIsReachableFromEveryGateBeforeTheAdd`       |
+| U-375 | `AwaitingSlot` may go straight to `Resolving` when a sibling claimed the worker                                 | Boundary   | `TestAwaitingSlotMayGoStraightToResolving`               |
+| U-384 | A worker that is not Ready or is cordoned holds `Posting` at `AwaitingWorker`                                   | Regression | `TestAWorkerThatWentAwayHoldsTheNodeRatherThanFailingIt` |
+| U-385 | The held step carries its own budget rather than the one it was diverted from                                   | Regression | `TestTheHeldNodeGetsAFreshBudget`                        |
+| U-386 | The worker coming back starts the path again at `CheckingHost`                                                  | Positive   | `TestAWorkerThatCameBackRestartsThePath`                 |
+| U-387 | A held node emits `WorkerAway` rather than holding silently                                                     | Positive   | `TestTheHeldNodeStaysAndSaysSo`                          |
+| U-388 | A node that never claimed its worker takes no slot while the worker is away                                     | Negative   | `TestAnUnclaimedNodeTakesNoSlotWhileItsWorkerIsAway`     |
+| U-389 | A held node keeps its claim, so the node-add cap stays closed                                                   | Regression | `TestAHeldNodeKeepsItsClaim`                             |
+| U-390 | A sibling posts no add while another worker is held at `AwaitingWorker`                                         | Negative   | `TestASiblingWaitsWhileAnotherWorkerIsHeld`              |
 
 `U-384` to `U-390` are the reboot. The storage pool's MachineConfig is applied by
 rebooting the machine, so the first node of a fresh cluster is cordoned, drained

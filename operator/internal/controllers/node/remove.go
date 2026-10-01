@@ -5,18 +5,24 @@
 // that makes that true, and the removal is the last step rather than the
 // operation.
 //
-//	Validating ──► Suspending ──► MigratingVolumes ──► Verifying ──► Removing
+//	Validating ──► PreparingRemoval ──► MigratingDevices ──► MigratingVolumes ──► Verifying ──► Removing
 //
-// Validation runs before the suspend, and that ordering is the design. A suspended
-// node accepts no new volume placement, so suspending one whose drain cannot
-// complete takes capacity out of the cluster and leaves it out for as long as the
-// blocker goes unnoticed. Blocking first leaves the node fully operational while
-// somebody decides what to do about the pinned claim.
+// The control plane splits a removal into three steps, and this graph follows
+// them. prepare-removal (PreparingRemoval, then MigratingDevices while its device
+// rebuild runs) admits the node, marks it pending_removal, shuts it down, and
+// rebuilds its devices onto its peers. verify-drained closes Verifying once the
+// volumes have moved. The node DELETE is Removing.
 //
-// Every terminal outcome from Suspending onward resumes the node first, which is
-// the unwind the graph's abort edges are declared against. It lives in the
-// reconciler rather than here because a failure of any kind owes it, not only a
-// failure of a step in this file.
+// Validation runs before the trigger, and that ordering is the design. Nothing
+// moves a node out of pending_removal except the removal itself, so triggering
+// one whose drain cannot complete takes the node out of the cluster for good.
+// Blocking first leaves the node fully operational while somebody decides what
+// to do about the pinned claim.
+//
+// For the same reason no failure from PreparingRemoval onward resumes the node.
+// The operation fails with the node left in the removal, and a later Remove
+// drives it the rest of the way: every step here finds the node where an earlier
+// attempt left it and carries on from there.
 //
 // The migration is fanned out as one move per volume through the mover of
 // internal/volumemigration, which raises whichever kind the deployment runs: the
@@ -31,7 +37,9 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -77,8 +85,10 @@ func (r *StorageNodeOpsReconciler) performRemoveStep(
 	switch current {
 	case stepValidating:
 		return r.drainValidate(ctx, ops, clusterID, nodeID)
-	case stepSuspending:
-		return r.drainSuspend(ctx, ops, clusterID, nodeID)
+	case stepPreparingRemoval:
+		return r.drainPrepare(ctx, ops, clusterID, nodeID)
+	case stepMigratingDevices:
+		return r.drainMigrateDevices(ctx, ops, clusterID, nodeID)
 	case stepMigratingVolumes:
 		return r.drainMigrate(ctx, ops, clusterID, nodeID)
 	case stepVerifying:
@@ -155,26 +165,86 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 	return err == nil, err
 }
 
-// drainSuspend takes the node out of service so that no new volume is placed on
-// it while its own are being moved. The call is skipped when the node is already
-// suspended or past it, which is what makes re-entering the step harmless.
-func (r *StorageNodeOpsReconciler) drainSuspend(
+// drainPrepare triggers the removal on the control plane. It is skipped for a
+// node the removal already has, which is what makes re-entering the step after a
+// lost response harmless, and the step finishes when the control plane reports
+// the node as the removal's rather than on the call.
+//
+// It is sent for a node that is already down too: the admission, the
+// pending_removal stamp, and the device rebuild are all still needed.
+func (r *StorageNodeOpsReconciler) drainPrepare(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, clusterID, nodeID string,
 ) (bool, error) {
 	reading, err := r.nodeReading(ctx, clusterID, nodeID)
 	if err != nil {
 		return false, err
 	}
-	if reading.Status == nodeStatusSuspended {
+	if inRemoval(reading.Status) {
 		return true, nil
 	}
-	// A node already offline is past the state a suspend would produce: it is
-	// serving nothing, which is what the suspend exists to achieve.
-	if reading.Status == nodeStatusOffline {
+	// A shutdown somebody else started is waited for. Stamping pending_removal
+	// under it loses the stamp to the shutdown's own final write, which is
+	// offline, and with it the status that sends the rebuild to a peer.
+	if reading.Status == nodeStatusInShutdown {
+		return false, blockedf(RemovalWaiting,
+			"node %s is shutting down; the removal is triggered once it has stopped",
+			ops.Spec.NodeRef)
+	}
+	if err := r.API.PrepareRemoval(ctx, clusterID, nodeID); err != nil {
+		// A 4xx is the admission refusing, which changed nothing on the node and
+		// which retrying cannot change. A 503 is a node mid-transition and
+		// anything else is transport, and both are asked again.
+		var refusal *ControlPlaneError
+		if errors.As(err, &refusal) && refusal.Status >= 400 && refusal.Status < 500 {
+			return false, fatalf("the control plane refused to remove node %s: %v",
+				ops.Spec.NodeRef, err)
+		}
+		return false, fmt.Errorf("trigger the removal of node %s: %w", ops.Spec.NodeRef, err)
+	}
+	return false, nil
+}
+
+// inRemoval reports a status the removal has put the node in. Nothing else moves
+// a node into any of them.
+func inRemoval(status string) bool {
+	switch status {
+	case nodeStatusPendingRemoval, nodeStatusMigratingDevices, nodeStatusMigratingLvols,
+		nodeStatusInRemoval, nodeStatusRemovedFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// drainMigrateDevices waits for the device rebuild prepare-removal started, and
+// completes when the control plane says it is done: done is the one field the
+// progress carries that a caller must honor, and the counts are for reporting.
+//
+// Every pass that finds it unfinished re-sends prepare-removal. On a node already
+// in the removal that only makes sure the rebuild is running, which is a no-op
+// while it runs and what restarts one a control-plane restart lost.
+//
+// A rebuild that gave up holds rather than failing. Failing would undo nothing,
+// and moving volumes on top of a device that was never rebuilt widens the
+// exposure the removal exists to end.
+func (r *StorageNodeOpsReconciler) drainMigrateDevices(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, clusterID, nodeID string,
+) (bool, error) {
+	progress, err := r.API.RemovalProgress(ctx, clusterID, nodeID)
+	if err != nil {
+		return false, fmt.Errorf("read the device rebuild of node %s: %w", ops.Spec.NodeRef, err)
+	}
+	if progress.Done {
 		return true, nil
 	}
-	if err := r.API.Suspend(ctx, clusterID, nodeID); err != nil {
-		return false, fmt.Errorf("suspend node %s: %w", ops.Spec.NodeRef, err)
+	if err := r.API.PrepareRemoval(ctx, clusterID, nodeID); err != nil {
+		return false, fmt.Errorf("keep the device rebuild of node %s running: %w",
+			ops.Spec.NodeRef, err)
+	}
+	if progress.Failed > 0 {
+		return false, blockedf(DeviceRebuildFailed,
+			"the device rebuild of node %s gave up and is being restarted: %s",
+			ops.Spec.NodeRef, progress.Message)
 	}
 	return false, nil
 }
@@ -331,7 +401,26 @@ func (r *StorageNodeOpsReconciler) drainVerify(
 	// deletion is asynchronous, so the node is not empty until a later pass says
 	// so. Reporting unfinished is what makes the next pass re-read rather than
 	// trust this one's arithmetic.
-	return len(census.System) == 0, nil
+	if len(census.System) > 0 {
+		return false, nil
+	}
+
+	// The census counts volumes and nothing else. The control plane's own check
+	// counts snapshots too, and the DELETE that follows would destroy whatever
+	// it still sees.
+	verification, err := r.API.VerifyDrained(ctx, clusterID, nodeID)
+	if err != nil {
+		return false, fmt.Errorf("verify that node %s is drained: %w", ops.Spec.NodeRef, err)
+	}
+	if !verification.Drained {
+		left := append(slices.Clone(verification.Lvols), verification.Snapshots...)
+		return false, blockedf(DrainBlocked,
+			"the control plane still sees %d %s and %d %s on the node (%s); the removal is held",
+			len(verification.Lvols), plural(len(verification.Lvols), "volume", "volumes"),
+			len(verification.Snapshots), plural(len(verification.Snapshots), "snapshot", "snapshots"),
+			strings.Join(left, ", "))
+	}
+	return true, nil
 }
 
 // drainRemove deletes the backend node. A 404 is success, since a node the control
@@ -340,10 +429,10 @@ func (r *StorageNodeOpsReconciler) drainRemove(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, clusterID, nodeID string,
 ) (bool, error) {
 	if err := r.API.RemoveNode(ctx, clusterID, nodeID); err != nil {
-		// The control plane's own admission refused the removal, which is its
-		// answer about what the cluster can afford to lose. Retrying cannot change
-		// it, so the operation fails and the resume of §8.3 puts the node back
-		// into service.
+		// The control plane refused the removal, which is its answer about what
+		// the cluster can afford to lose. Retrying cannot change it, so the
+		// operation fails and the node stays in the removal for a later Remove
+		// (§8.3).
 		return false, fatalf("the control plane refused to remove node %s: %v",
 			ops.Spec.NodeRef, err)
 	}
@@ -456,20 +545,6 @@ func (r *StorageNodeOpsReconciler) cascadeMigrations(
 		}
 	}
 	return pending, nil
-}
-
-// abortMigrations is the abort path's half of the cascade: a drain called off
-// mid-flight leaves nothing moving behind it.
-func (r *StorageNodeOpsReconciler) abortMigrations(
-	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, current step,
-) {
-	if current != stepMigratingVolumes && current != stepVerifying {
-		return
-	}
-	if _, err := r.cascadeMigrations(ctx, ops); err != nil {
-		logf.FromContext(ctx).Error(err, "the drain's migrations could not all be stopped",
-			"operation", ops.Name)
-	}
 }
 
 // migrationFormula names one volume's move. It is derived rather than generated

@@ -87,10 +87,14 @@ const (
 	// DrainCompleted says every volume has been migrated off the node.
 	DrainCompleted = "DrainCompleted"
 
-	// NodeResumeFailed is the one that cannot be retried away. The unwind of §8.3
-	// is best-effort, so a resume that fails leaves a node suspended and out of
-	// service, and this event is the only place that is visible.
-	NodeResumeFailed = "NodeResumeFailed"
+	// RemovalWaiting says the removal is not triggered yet because somebody
+	// else's shutdown of the node is still running.
+	RemovalWaiting = "RemovalWaiting"
+
+	// DeviceRebuildFailed says the device rebuild of a node being removed gave
+	// up. The drain holds and asks the control plane to restart it, because
+	// the node is the removal's and failing would undo nothing.
+	DeviceRebuildFailed = "DeviceRebuildFailed"
 
 	// MaintenanceQueued says a maintenance window is holding for another worker,
 	// which is correct behavior and looks like a stalled controller without it.
