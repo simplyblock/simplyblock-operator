@@ -450,6 +450,32 @@ func TestTheServicePoolsRunWhatTheyDeclare(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-01 — the tasks-runner-backup-merge container named a module
+// that does not exist in the control-plane image (backup_merge_service.py); the
+// real service is tasks_runner_backup_merge.py, like every other tasks-runner-*.
+// The container crash-looped ("python3: can't open file
+// '/app/simplyblock_core/services/backup_merge_service.py'"), which pinned the
+// whole tasks pod in CrashLoopBackOff. A .py-suffix check does not catch it, so
+// pin the real module name.
+func TestTheBackupMergeRunnerNamesItsRealModule(t *testing.T) {
+	cp := localControlPlane()
+	d := findDeployment(t, managementAPIObjects(cp), ComponentTasks)
+	const want = "simplyblock_core/services/tasks_runner_backup_merge.py"
+	found := false
+	for _, container := range d.Spec.Template.Spec.Containers {
+		if container.Name != "tasks-runner-backup-merge" {
+			continue
+		}
+		found = true
+		if len(container.Command) != 2 || container.Command[1] != want {
+			t.Errorf("tasks-runner-backup-merge runs %v, want python3 %q", container.Command, want)
+		}
+	}
+	if !found {
+		t.Fatal("no tasks-runner-backup-merge container in the tasks deployment")
+	}
+}
+
 // The control plane's account is granted exec on pods, which is the strongest
 // thing in its role and the one an audit has to be able to find. Losing it would
 // stop the control plane driving the storage nodes' processes, which is not a

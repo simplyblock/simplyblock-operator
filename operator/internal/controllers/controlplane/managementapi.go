@@ -422,7 +422,7 @@ func taskServices() []service {
 		{name: "tasks-runner-node-removal", module: "simplyblock_core/services/tasks_runner_node_removal.py"},
 		{name: "tasks-runner-snapshot-replication", module: "simplyblock_core/services/snapshot_replication.py"},
 		{name: "tasks-runner-backup", module: "simplyblock_core/services/tasks_runner_backup.py"},
-		{name: "tasks-runner-backup-merge", module: "simplyblock_core/services/backup_merge_service.py"},
+		{name: "tasks-runner-backup-merge", module: "simplyblock_core/services/tasks_runner_backup_merge.py"},
 		{name: "tasks-runner-replication-final", module: "simplyblock_core/services/tasks_runner_replication_final.py"},
 	}
 }
