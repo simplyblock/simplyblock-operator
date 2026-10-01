@@ -46,6 +46,7 @@ import (
 	atlaskube "github.com/simplyblock/atlas/kube"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -319,12 +320,12 @@ func (w *Workload) stripStoragePlane(
 	return nil
 }
 
-// PodReady reports whether the storage-node pod on one worker is running and
+// PodReady reports whether the node agent's pod on one worker is running and
 // ready.
 func (w *Workload) PodReady(
 	ctx context.Context, namespace, cluster, worker string,
 ) (bool, error) {
-	pod, found, err := w.podOn(ctx, namespace, cluster, worker)
+	pod, found, err := w.agentPodOn(ctx, namespace, cluster, worker)
 	if err != nil || !found {
 		return false, err
 	}
@@ -339,33 +340,77 @@ func (w *Workload) PodReady(
 	return false, nil
 }
 
-// PodGone reports whether the storage-node pod has left the worker, which is what
-// a maintenance window waits for once it has relaxed the budget.
-func (w *Workload) PodGone(
-	ctx context.Context, namespace, cluster, worker string,
+// SpdkPodGone reports whether the SPDK pod has left the worker, which is what a
+// maintenance window waits for once it has released the budget.
+//
+// It is the SPDK pod rather than the node agent's, and the distinction is the
+// whole of §10's correctness. The agent runs in a DaemonSet, and a DaemonSet pod
+// is one `kubectl drain --ignore-daemonsets` never evicts, the controller puts
+// straight back on every labeled worker, and a rebooting host leaves Running in
+// the API because DaemonSet pods tolerate unreachable forever. Waiting for it is
+// waiting for something no drain, no reboot, and no window can bring about. The
+// SPDK pod is the opposite: the control plane creates it and deletes it, its
+// graceful shutdown ends in that deletion, and its absence is exactly what "the
+// SPDK process is off this host" means.
+//
+// Regression: 2026-09-29-maintenance-waits-on-the-node-agent.
+func (w *Workload) SpdkPodGone(
+	ctx context.Context, namespace, worker string,
 ) (bool, error) {
-	_, found, err := w.podOn(ctx, namespace, cluster, worker)
-	return !found, err
+	pods, err := w.podsMatching(ctx, namespace, worker,
+		map[string]string{utils.LabelRole: utils.LabelSpdkProxyRole})
+	return len(pods) == 0, err
 }
 
-// podOn finds the storage-node pod scheduled onto one worker.
-func (w *Workload) podOn(
+// agentPodOn finds the node agent's pod scheduled onto one worker.
+func (w *Workload) agentPodOn(
 	ctx context.Context, namespace, cluster, worker string,
 ) (*corev1.Pod, bool, error) {
-	var pods corev1.PodList
-	err := w.List(ctx, &pods, client.InNamespace(namespace), client.MatchingLabels{
+	pods, err := w.podsMatching(ctx, namespace, worker, map[string]string{
 		atlaskube.LabelApp:            atlaskube.AppStorageNode,
 		atlaskube.LabelStorageNodeSet: cluster,
 	})
-	if err != nil {
-		return nil, false, fmt.Errorf("list the cluster's storage-node pods: %w", err)
+	if err != nil || len(pods) == 0 {
+		return nil, false, err
 	}
+	return &pods[0], true, nil
+}
+
+// evictionTargets are the pods a maintenance window holds on the worker being
+// drained, each named by the labels that select it.
+//
+// The SPDK pod is the one the window is about. The control plane's own two are
+// here because a shutdown needs the control plane it is talking to: losing the
+// management API or a FoundationDB process while the node is going down leaves
+// the window with nothing to ask, which is what the operator saw on 2026-09-29
+// when its shutdown took a connection refused from the webAPI mid-flight.
+//
+// The node agent's DaemonSet pod is deliberately absent. A budget over it holds
+// no drain, and the agent is what the window needs answering in AwaitingHost.
+var evictionTargets = []map[string]string{
+	{utils.LabelRole: utils.LabelSpdkProxyRole},
+	{atlaskube.LabelApp: controlplane.ComponentWebAPI},
+	{utils.LabelFDBClusterName: controlplane.ComponentFDBCluster},
+}
+
+// podsMatching lists the pods on one worker that carry every given label,
+// skipping any that is already on its way out.
+func (w *Workload) podsMatching(
+	ctx context.Context, namespace, worker string, labels map[string]string,
+) ([]corev1.Pod, error) {
+	var pods corev1.PodList
+	err := w.List(ctx, &pods,
+		client.InNamespace(namespace), client.MatchingLabels(labels))
+	if err != nil {
+		return nil, fmt.Errorf("list the pods matching %v: %w", labels, err)
+	}
+	on := make([]corev1.Pod, 0, len(pods.Items))
 	for i := range pods.Items {
 		if pods.Items[i].Spec.NodeName == worker && pods.Items[i].DeletionTimestamp.IsZero() {
-			return &pods.Items[i], true, nil
+			on = append(on, pods.Items[i])
 		}
 	}
-	return nil, false, nil
+	return on, nil
 }
 
 // PublishedInDNS reports whether the worker's per-pod DNS name is in the headless
@@ -434,40 +479,53 @@ func (w *Workload) HostAnswers(ctx context.Context, namespace, worker string) (b
 	return true, nil
 }
 
-// BlockEviction labels the worker's storage pod and creates a budget that allows
-// no disruption, so `kubectl drain` blocks on it while the backend node is being
-// taken down gracefully (§10).
+// BlockEviction labels every pod on the worker that a drain would evict and
+// creates a budget that allows no disruption, so `kubectl drain` blocks on it
+// while the backend node is being taken down gracefully (§10).
+//
+// Nothing to label is not an error: a window re-entering the step after the
+// shutdown has already deleted the SPDK pod is further along than it thought,
+// and the budget still goes up so a pod that comes back is covered.
 func (w *Workload) BlockEviction(
 	ctx context.Context, namespace, cluster, worker string,
 ) error {
-	pod, found, err := w.podOn(ctx, namespace, cluster, worker)
-	if err != nil {
-		return err
-	}
-	if !found {
-		// Nothing to hold. The pod has already gone, which is the state Releasing
-		// waits for, so the window is further along than it thought.
-		return nil
-	}
-	if pod.Labels[maintenanceLabel] != worker {
-		patch := client.MergeFrom(pod.DeepCopy())
-		if pod.Labels == nil {
-			pod.Labels = map[string]string{}
+	for _, selector := range evictionTargets {
+		pods, err := w.podsMatching(ctx, namespace, worker, selector)
+		if err != nil {
+			return err
 		}
-		pod.Labels[maintenanceLabel] = worker
-		if err := w.Patch(ctx, pod, patch); err != nil {
-			return fmt.Errorf("label the storage pod on worker %s: %w", worker, err)
+		for i := range pods {
+			pod := &pods[i]
+			if pod.Labels[maintenanceLabel] == worker {
+				continue
+			}
+			patch := client.MergeFrom(pod.DeepCopy())
+			if pod.Labels == nil {
+				pod.Labels = map[string]string{}
+			}
+			pod.Labels[maintenanceLabel] = worker
+			if err := w.Patch(ctx, pod, patch); err != nil {
+				return fmt.Errorf("label pod %s on worker %s: %w", pod.Name, worker, err)
+			}
 		}
 	}
-	return w.setBudget(ctx, namespace, cluster, worker, 0)
+	return w.blockBudget(ctx, namespace, cluster, worker)
 }
 
-// AllowEviction relaxes the budget to permit the one eviction the drain is waiting
-// on.
+// AllowEviction removes the budget, which is what lets the drain the window was
+// holding proceed.
+//
+// Removing rather than relaxing to one disruption, because the budget covers
+// several pods and one of them has no replacement. A budget at maxUnavailable=1
+// permits the first eviction and then reads zero allowed disruptions until the
+// evicted pod is healthy again, and the SPDK pod is owned by nothing, so nothing
+// reschedules it: the drain this step just released would block on the budget
+// for the rest of the window. The labels stay, because the window's Cleanup is
+// what owns taking them off.
 func (w *Workload) AllowEviction(
 	ctx context.Context, namespace, cluster, worker string,
 ) error {
-	return w.setBudget(ctx, namespace, cluster, worker, 1)
+	return w.deleteBudget(ctx, namespace, cluster, worker)
 }
 
 // ClearEvictionBudget removes the budget and the label the window put in place, so
@@ -479,32 +537,34 @@ func (w *Workload) AllowEviction(
 func (w *Workload) ClearEvictionBudget(
 	ctx context.Context, namespace, cluster, worker string,
 ) error {
-	budget := &policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{
-		Name:      maintenanceBudgetName(cluster, worker),
-		Namespace: namespace,
-	}}
-	if err := w.Delete(ctx, budget); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete the maintenance budget for worker %s: %w", worker, err)
-	}
-
-	pod, found, err := w.podOn(ctx, namespace, cluster, worker)
-	if err != nil || !found {
+	if err := w.deleteBudget(ctx, namespace, cluster, worker); err != nil {
 		return err
 	}
-	if _, labeled := pod.Labels[maintenanceLabel]; !labeled {
-		return nil
+
+	// The pods are found by the label rather than by the selectors that put it
+	// there, so one rescheduled out from under a target selector is still
+	// unlabeled. A label nothing takes off is what a later window's budget
+	// would select by accident.
+	var pods corev1.PodList
+	err := w.List(ctx, &pods, client.InNamespace(namespace),
+		client.MatchingLabels{maintenanceLabel: worker})
+	if err != nil {
+		return fmt.Errorf("list the pods held by worker %s's window: %w", worker, err)
 	}
-	patch := client.MergeFrom(pod.DeepCopy())
-	delete(pod.Labels, maintenanceLabel)
-	if err := w.Patch(ctx, pod, patch); err != nil {
-		return fmt.Errorf("unlabel the storage pod on worker %s: %w", worker, err)
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		patch := client.MergeFrom(pod.DeepCopy())
+		delete(pod.Labels, maintenanceLabel)
+		if err := w.Patch(ctx, pod, patch); err != nil {
+			return fmt.Errorf("unlabel pod %s on worker %s: %w", pod.Name, worker, err)
+		}
 	}
 	return nil
 }
 
-// setBudget creates or updates the per-worker budget with the given allowance.
-func (w *Workload) setBudget(
-	ctx context.Context, namespace, cluster, worker string, allowed int32,
+// blockBudget creates or tightens the per-worker budget to allow no disruption.
+func (w *Workload) blockBudget(
+	ctx context.Context, namespace, cluster, worker string,
 ) error {
 	desired := &policyv1.PodDisruptionBudget{
 		ObjectMeta: metav1.ObjectMeta{
@@ -516,7 +576,7 @@ func (w *Workload) setBudget(
 			},
 		},
 		Spec: policyv1.PodDisruptionBudgetSpec{
-			MaxUnavailable: &intstr.IntOrString{Type: intstr.Int, IntVal: allowed},
+			MaxUnavailable: &intstr.IntOrString{Type: intstr.Int, IntVal: 0},
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{maintenanceLabel: worker},
 			},
@@ -536,14 +596,29 @@ func (w *Workload) setBudget(
 		return fmt.Errorf("read the maintenance budget for worker %s: %w", worker, err)
 	}
 
-	if existing.Spec.MaxUnavailable != nil && existing.Spec.MaxUnavailable.IntVal == allowed {
+	if existing.Spec.MaxUnavailable != nil && existing.Spec.MaxUnavailable.IntVal == 0 {
 		return nil
 	}
 	patch := client.MergeFrom(existing.DeepCopy())
 	existing.Spec.MaxUnavailable = desired.Spec.MaxUnavailable
 	existing.Spec.Selector = desired.Spec.Selector
 	if err := w.Patch(ctx, &existing, patch); err != nil {
-		return fmt.Errorf("relax the maintenance budget for worker %s: %w", worker, err)
+		return fmt.Errorf("tighten the maintenance budget for worker %s: %w", worker, err)
+	}
+	return nil
+}
+
+// deleteBudget removes the per-worker budget, and a budget that is not there is
+// the state it is asked for.
+func (w *Workload) deleteBudget(
+	ctx context.Context, namespace, cluster, worker string,
+) error {
+	budget := &policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{
+		Name:      maintenanceBudgetName(cluster, worker),
+		Namespace: namespace,
+	}}
+	if err := w.Delete(ctx, budget); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete the maintenance budget for worker %s: %w", worker, err)
 	}
 	return nil
 }

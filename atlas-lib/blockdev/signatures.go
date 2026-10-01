@@ -39,6 +39,14 @@ type regions struct {
 	tailAt int64
 	size   int64
 	lbs    int64
+
+	// grid is a window past the head, read for a storage node's page grid and
+	// for nothing else. It is separate from head because head is what the zero
+	// rule reads: widening head to reach the grid would change what "blank"
+	// means for every device, and this has to change what is recognized without
+	// changing that.
+	grid   []byte
+	gridAt int64
 }
 
 // at returns the n bytes at absolute offset off, and reports whether they were
@@ -50,6 +58,10 @@ func (r regions) at(off, n int64) ([]byte, bool) {
 	}
 	if off+n <= int64(len(r.head)) {
 		return r.head[off : off+n], true
+	}
+	if len(r.grid) > 0 && off >= r.gridAt && off+n <= r.gridAt+int64(len(r.grid)) {
+		s := off - r.gridAt
+		return r.grid[s : s+n], true
 	}
 	if len(r.tail) > 0 && off >= r.tailAt && off+n <= r.tailAt+int64(len(r.tail)) {
 		s := off - r.tailAt
@@ -71,6 +83,14 @@ func (r regions) u16(off int64) (uint16, bool) {
 		return 0, false
 	}
 	return binary.LittleEndian.Uint16(b), true
+}
+
+func (r regions) u64(off int64) (uint64, bool) {
+	b, ok := r.at(off, 8)
+	if !ok {
+		return 0, false
+	}
+	return binary.LittleEndian.Uint64(b), true
 }
 
 func (r regions) u32(off int64) (uint32, bool) {
@@ -99,7 +119,7 @@ func detect(r regions) []find {
 var detectors = []func(regions) (find, bool){
 	detectExt, detectXFS, detectLVM2, detectLUKS, detectGPT, detectMBR,
 	detectExFAT, detectFAT, detectBtrfs, detectSwap, detectMDRaid, detectZFS,
-	detectAlceml,
+	detectAlceml, detectAlcemlPages, detectBcache,
 }
 
 // The storage superblock a storage node writes, at the very start of a device
@@ -107,6 +127,22 @@ var detectors = []func(regions) (find, bool){
 // not read here: what this answers is whose the device is, and the layout
 // behind the magic is the storage node's to change.
 var alcemlMagic = []byte("ALCEML_STORAGE\x00\x00")
+
+// The magic in a bcache superblock, which make-bcache writes at 4096 and which
+// begins twenty-four bytes into it. It is a UUID rather than a word.
+var bcacheMagic = []byte{
+	0xc6, 0x85, 0x73, 0xf6, 0x4e, 0x1a, 0x45, 0xca,
+	0x82, 0x65, 0xf5, 0x7f, 0x48, 0xba, 0x6d, 0x81,
+}
+
+// The header a storage node writes at the start of every page of its grid, and
+// the one it writes for a page it has not written yet. They repeat with the
+// grid rather than naming the device once, which is what makes them readable on
+// a device whose superblock is gone.
+var (
+	alcemlPageMagic     = []byte("ALCEML_PAGEv2")
+	alcemlUnmappedMagic = []byte("_UNMAPPED_")
+)
 
 // The ext superblock sits at 1024, so its magic is at 1080 and its three
 // feature words follow at 1116, 1120, and 1124.
@@ -144,10 +180,108 @@ func detectAlceml(r regions) (find, bool) {
 		"a simplyblock storage superblock at 0"}, true
 }
 
+// detectAlcemlPages names a device this product took whose superblock is gone.
+//
+// The superblock is one block at offset 0, so anything that zeroes a device's
+// first few kilobytes erases the only name detectAlceml can read, and what is
+// left is a device covered in this product's pages that the catalog has no word
+// for. It then falls to the head-only zero rule, which answers correctly only
+// when the zeroing happened to reach past the mapping region: on the OKD lab of
+// 2026-09-30 exactly the superblock of one disk of twelve had been zeroed, and
+// the fleet lost 1.5 TB and its uniformity to that difference.
+//
+// The page header is the second name and it survives, because it repeats with
+// the grid instead of naming the device once. Two headers exist: a page a node
+// has written, and a page it has not.
+//
+// What makes a ten-character word safe to key on is the shape of the block
+// rather than the word. An unmapped page is the magic and then zeros to the end
+// of its 4096 bytes, so the test is the whole block: a device carrying the word
+// in prose, in a backup index, or in somebody else's metadata does not have
+// 4086 zeros behind it. A written page's header is not zero-filled and is
+// matched on its own magic, which is thirteen bytes this product invented.
+//
+// The scan is at 4096-byte alignment because the grid is, which also bounds the
+// work: a region is scanned in region/4096 comparisons rather than byte by byte.
+// Where the grid starts is the device's business and is not assumed here, only
+// that a header lands on a block boundary somewhere in what was read.
+func detectAlcemlPages(r regions) (find, bool) {
+	for _, span := range []struct {
+		at   int64
+		data []byte
+	}{{0, r.head}, {r.gridAt, r.grid}} {
+		for off := int64(0); off+alcemlPageSize <= int64(len(span.data)); off += alcemlPageSize {
+			if (span.at+off)%alcemlPageSize != 0 {
+				break
+			}
+			block := span.data[off : off+alcemlPageSize]
+			switch {
+			case bytes.HasPrefix(block, alcemlPageMagic):
+				return find{ContentSimplyblock, "simplyblock_alceml", span.at + off,
+					fmt.Sprintf("a simplyblock page header at %d", span.at+off)}, true
+			case bytes.HasPrefix(block, alcemlUnmappedMagic) &&
+				isZero(block[len(alcemlUnmappedMagic):]):
+				return find{ContentSimplyblock, "simplyblock_alceml", span.at + off,
+					fmt.Sprintf("a simplyblock unwritten-page header at %d", span.at+off)}, true
+			}
+		}
+	}
+	return find{}, false
+}
+
+// alcemlPageSize is the block a page header occupies and the alignment the grid
+// is laid out on. It is the header's size and says nothing about how much data
+// a page carries behind it, which this package does not decode.
+const alcemlPageSize = 4096
+
+// isZero reports whether every byte is zero.
+func isZero(b []byte) bool {
+	for _, c := range b {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// detectBcache names a device holding a block-layer cache.
+//
+// It is the one format in the catalog whose signature sits behind a zero first
+// block: make-bcache starts its superblock at 4096, so the block the blank rule
+// reads is zero on every bcache device there is. Without this the device is
+// refused only if something else happens to look further, which is not a rule
+// anybody can rely on, and the refusal cannot say what it found.
+//
+// The magic is twenty-four bytes into the superblock, after the checksum, the
+// offset, and the version, so it is at 4120 and not at 4096.
+func detectBcache(r regions) (find, bool) {
+	const off = 4096 + 24
+	if !r.eq(off, bcacheMagic) {
+		return find{}, false
+	}
+	return find{ContentForeign, "bcache", off, fmt.Sprintf("a bcache superblock at %d", off-24)}, true
+}
+
 // detectExt names the exact member of the ext family. The distinction is worth
 // making because a reading that rounded every ext filesystem up to ext4 would
 // disagree with the claim annotation for a volume this driver did not create,
 // and all three mount through the kernel's ext4 driver anyway.
+// extMember names which of the family a superblock belongs to, from the three
+// feature words. They are read apart from detectExt because they outlive the
+// magic: a wiped ext4 is still legibly ext4, and the excision check names it.
+func extMember(r regions) string {
+	compat, _ := r.u32(extSuperblock + 92)
+	incompat, _ := r.u32(extSuperblock + 96)
+	roCompat, _ := r.u32(extSuperblock + 100)
+	switch {
+	case incompat&ext4Incompat != 0 || roCompat&(ext4RoCompat|ext4RoCompat2) != 0:
+		return "ext4"
+	case compat&extCompatHasJournal != 0:
+		return "ext3"
+	}
+	return "ext2"
+}
+
 func detectExt(r regions) (find, bool) {
 	if m, ok := r.u16(extMagicOffset); !ok || m != extMagic {
 		return find{}, false
@@ -156,13 +290,8 @@ func detectExt(r regions) (find, bool) {
 	incompat, _ := r.u32(extSuperblock + 96)
 	roCompat, _ := r.u32(extSuperblock + 100)
 
-	typ := "ext2"
-	switch {
-	case incompat&ext4Incompat != 0 || roCompat&(ext4RoCompat|ext4RoCompat2) != 0:
-		typ = "ext4"
-	case compat&extCompatHasJournal != 0:
-		typ = "ext3"
-	}
+	typ := extMember(r)
+	_, _, _ = compat, incompat, roCompat
 	return find{ContentFilesystem, typ, extMagicOffset,
 		fmt.Sprintf("%s superblock at %d", typ, extSuperblock)}, true
 }

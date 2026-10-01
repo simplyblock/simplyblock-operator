@@ -192,6 +192,28 @@ spec:
                         foundationDB:
                           description: FoundationDB sizes the FoundationDB the management API stores its state in.
                           properties:
+                            nodeSelector:
+                              additionalProperties:
+                                type: string
+                              description: |-
+                                NodeSelector pins the database's own processes, and nothing else the
+                                control plane runs. Unset leaves them wherever the control plane as a
+                                whole is placed.
+
+                                It is stated apart from that placement because the database is the part
+                                whose host matters to something else: adding a storage node reboots its
+                                worker, and a worker running a FoundationDB process is added on its own
+                                however many nodes the cluster's provisioning budget allows at once.
+                                Confining the database to a few workers is what leaves the rest of the
+                                fleet free to be added together.
+
+                                It has to select at least as many workers as
+                                spec.source.local.foundationDB.replicas, because the worker is the
+                                database's fault domain. The anti-affinity between processes of one class
+                                is a preference rather than a requirement, so a narrower selector places
+                                the coordinators anyway, several to a worker, where one worker's loss
+                                takes more of them than the redundancy mode was configured to survive.
+                              type: object
                             replicas:
                               default: 3
                               description: |-

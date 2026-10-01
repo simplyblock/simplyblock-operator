@@ -16,8 +16,27 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
 
-// blockClass is the filter that makes a run scan logical block devices.
+// blockClass is the filter that makes a run scan logical block devices, on a
+// run that has already decided about the journal.
+//
+// forceJournalDevice is set because a fleet of identical disks is the ordinary
+// fleet, and identical disks say nothing about which one carries the journal: a
+// block run over one is refused rather than guessed at, and every case using
+// this helper is about something else — which devices reach the draft, how they
+// are grouped, what a held device does. Without it they would all record the
+// same refusal and none of them would test its own subject.
+//
+// blockClassUndecided is the run that has not decided, and the case that is
+// about the refusal itself uses it.
 func blockClass() *simplyblockv1alpha2.DiscoverSpec {
+	spec := blockClassUndecided()
+	spec.ForceJournalDevice = ptr.To(true)
+	return spec
+}
+
+// blockClassUndecided scans logical block devices and says nothing about the
+// journal, which is what an administrator writes the first time.
+func blockClassUndecided() *simplyblockv1alpha2.DiscoverSpec {
 	return &simplyblockv1alpha2.DiscoverSpec{
 		DeviceFilter: &simplyblockv1alpha2.DeviceFilter{
 			EnableLogicalBlockDevices: ptr.To(true),
@@ -152,6 +171,7 @@ func devCases() map[string]Case {
 			Reports: []nodeprobe.Report{host("worker-01", single, disks(
 				attachedVolume("nvme3n1", "792e184c-0a1b-2c3d-4e5f-60718293a4b5"),
 				blk("vdb", 2*tb),
+				blk("vdc", 4*tb),
 			))},
 		},
 		"DEV-15": {
@@ -168,6 +188,7 @@ func devCases() map[string]Case {
 			Reports: []nodeprobe.Report{host("worker-01", single, disks(
 				iscsiLUN("sdb", 2*tb),
 				blk("vdb", 2*tb),
+				blk("vdc", 4*tb),
 			))},
 		},
 		"DEV-18": {
@@ -177,6 +198,7 @@ func devCases() map[string]Case {
 					EnableLogicalBlockDevices: ptr.To(true),
 					BlockAllowList:            []string{"/dev/sdb", "/dev/vdb"},
 				},
+				ForceJournalDevice: ptr.To(true),
 			},
 			Reports: []nodeprobe.Report{host("worker-01", single, disks(
 				iscsiLUN("sdb", 2*tb),
@@ -189,6 +211,22 @@ func devCases() map[string]Case {
 				iscsiLUN("sdb", 2*tb),
 				nvme("nvme0n1", "0000:5e:00.0", 0, 3*tb),
 			))},
+		},
+		"DEV-20": {
+			Family: "dev", Slug: "equal-block-disks-with-no-journal-decision",
+			// The one block case that does not force, which is what makes it
+			// about the refusal. DEV-02 is the same four disks and drafts,
+			// because its run decided.
+			Discover: blockClassUndecided(),
+			Reports:  []nodeprobe.Report{host("worker-01", single, disks(virtioDisks(4)...))},
+			Note: "The ordinary fleet: four disks of one size, which is how machines are " +
+				"bought. Nothing about them says which carries the journal, and taking " +
+				"one spends a disk the fleet did not set aside. An NVMe run in this shape " +
+				"leaves enableJournalDevice unset and the backend carves a journal " +
+				"partition out of every device; a block cluster has no such layout, so a " +
+				"document written here would create the cluster, format its drives, and " +
+				"then fail every node_add. The run refuses instead, and names the field " +
+				"that decides it.",
 		},
 		"DEV-16": {
 			Family: "dev", Slug: "a-fabric-namespace-of-another-product",

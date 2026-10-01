@@ -16,6 +16,13 @@ info() { echo "[INFO]  $*"; }
 warn() { echo "[WARN]  $*" >&2; }
 die()  { echo "[ERROR] $*" >&2; exit 1; }
 
+# Dumps the pod's log so a failure shows what the server said.
+die_with_logs() {
+  echo "[ERROR] $*" >&2
+  kubectl -n "$NAMESPACE" logs "$POD" --tail=200 >&2 || true
+  exit 1
+}
+
 bao() {
   kubectl -n "$NAMESPACE" exec -i "$POD" -- \
     env BAO_ADDR="$BAO_ADDR" BAO_TOKEN="$ROOT_TOKEN" bao "$@"
@@ -59,9 +66,22 @@ kubectl -n "$NAMESPACE" wait pod/"$POD" \
 
 # ── Init + unseal ──────────────────────────────────────────────────────────────
 if [[ -z "$ROOT_TOKEN" ]]; then
+  # Phase Running only means the container started; the listener comes up later.
+  # bao status exits 2 for a sealed or uninitialized server, which is the answer wanted.
+  info "Waiting for the OpenBao listener..."
+  for _ in $(seq 1 60); do
+    rc=0
+    kubectl -n "$NAMESPACE" exec "$POD" -- \
+      env BAO_ADDR="$BAO_ADDR" bao status &>/dev/null || rc=$?
+    [[ $rc -ne 1 ]] && break
+    sleep 2
+  done
+  [[ $rc -ne 1 ]] || die_with_logs "OpenBao did not answer on $BAO_ADDR within 120s"
+
   info "Initializing OpenBao..."
   INIT_OUTPUT="$(kubectl -n "$NAMESPACE" exec "$POD" -- \
-    env BAO_ADDR="$BAO_ADDR" bao operator init 2>&1)"
+    env BAO_ADDR="$BAO_ADDR" bao operator init 2>&1)" \
+    || die_with_logs "bao operator init failed: $INIT_OUTPUT"
 
   echo ""
   echo "=========================================="

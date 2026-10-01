@@ -12,13 +12,19 @@
 # The privilege the probe does need is not here. It is in the pod's security
 # context, which internal/nodeprobe/job.go sets and justifies: privileged, so
 # that the device cgroup does not deny it every disk on the machine.
+#
+# It is created where the run is, which is discovery.namespace when the
+# installation states one. The probe Jobs land in the run's namespace, so a
+# service account left behind in the release namespace is every probe pod failing
+# to start with nothing to run as.
 {{- if .Values.rbac.create }}
+{{- $namespace := .Values.discovery.namespace | default .Release.Namespace }}
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: simplyblock-nodeprobe-sa
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ $namespace }}
   labels:
     storage.simplyblock.io/component: nodeprobe
 ---
@@ -26,7 +32,7 @@ kind: Role
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: simplyblock-nodeprobe-role
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ $namespace }}
   labels:
     storage.simplyblock.io/component: nodeprobe
 rules:
@@ -42,13 +48,13 @@ kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: simplyblock-nodeprobe-rolebinding
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ $namespace }}
   labels:
     storage.simplyblock.io/component: nodeprobe
 subjects:
   - kind: ServiceAccount
     name: simplyblock-nodeprobe-sa
-    namespace: {{ .Release.Namespace }}
+    namespace: {{ $namespace }}
 roleRef:
   kind: Role
   name: simplyblock-nodeprobe-role

@@ -298,7 +298,7 @@ spec:
                     AllowedNodes restricts which hosts may carry this pool's volumes, by
                     Kubernetes Node name. Empty means every node in the cluster. Narrowing it
                     stops new volumes landing on the removed nodes and leaves the existing
-                    ones where they are.
+                    ones where they are. Requires volumeDefaults.enableDHCHAP to be true.
 
                     The list is left exactly as authored: a name that no longer resolves is
                     dropped from Status.AllowedNodes rather than pruned from here, so a node
@@ -373,6 +373,9 @@ spec:
                           type: integer
                       type: object
                   type: object
+                  x-kubernetes-validations:
+                    - message: limits.iops and limits.throughput are not yet supported in beta1
+                      rule: '!has(self.iops) && !has(self.throughput)'
                 volumeDefaults:
                   description: |-
                     VolumeDefaults are what every volume in the pool is created with.
@@ -405,11 +408,6 @@ spec:
                         Authentication is only enforced when AllowedNodes is non-empty, because
                         the generated class gets its node selector from that list and a class's
                         parameters cannot be edited afterward.
-                      type: boolean
-                    enableEncryption:
-                      description: |-
-                        EnableEncryption encrypts logical volumes, using the key store the cluster
-                        names in its own spec.
                       type: boolean
                     enableReplication:
                       description: EnableReplication replicates logical volumes.
@@ -487,6 +485,8 @@ spec:
               x-kubernetes-validations:
                 - message: field volumeDefaults is immutable once set
                   rule: '!has(oldSelf.volumeDefaults) || has(self.volumeDefaults)'
+                - message: allowedNodes requires volumeDefaults.enableDHCHAP to be true
+                  rule: '!has(self.allowedNodes) || size(self.allowedNodes) == 0 || (has(self.volumeDefaults) && has(self.volumeDefaults.enableDHCHAP) && self.volumeDefaults.enableDHCHAP)'
             status:
               description: StoragePoolStatus is the observed state of one pool.
               properties:

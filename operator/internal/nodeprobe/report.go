@@ -38,7 +38,15 @@ import (
 // because a probe pod outlives the operator that created it across an upgrade:
 // the image is pinned in the Job, and a Job already running keeps the image it
 // started with.
-const ReportVersion = 7
+//
+// Version 8 added StablePath, and it is a bump rather than an additive field
+// because absence means something. A version-7 report decodes with StablePath
+// empty on every device, which a reader takes as "udev published no link" and
+// falls back to the kernel path for — so an old probe's report, read by a new
+// operator, drafts exactly the enumeration-order names this version exists to
+// replace, and says nothing about having done so. Refusing it re-runs the probe,
+// which is cheap and correct.
+const ReportVersion = 8
 
 // Report is one worker's inventory as the probe found it.
 type Report struct {
@@ -297,6 +305,21 @@ type Device struct {
 	// block-device deployment names a device by its path.
 	Name string `json:"name"`
 	Path string `json:"path"`
+
+	// StablePath is the persistent /dev/disk name udev publishes for the
+	// device, and is what a logical block-device deployment names it by.
+	//
+	// Path is not. It is a position in this boot's enumeration order, so a
+	// machine that comes back with its controllers probed in another order
+	// hands /dev/sdb to a different disk, and a deployment that recorded it
+	// would select that other disk on the next configure. This is read off the
+	// device itself (its WWN, or the identifier in its own partition table),
+	// and outlives the reboot.
+	//
+	// Empty for a device udev published no link for, which is an answer rather
+	// than an omission: such a device has no persistent name, and a reader has
+	// to be able to tell that apart from one this probe did not look up.
+	StablePath string `json:"stablePath,omitempty"`
 
 	// PCIAddress is the slot, in the form an NVMe deployment names a device by.
 	PCIAddress string `json:"pciAddress,omitempty"`

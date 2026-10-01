@@ -44,6 +44,14 @@ spec:
         {{- if .Values.controlplane.storageclass.name }}
         storageClassName: {{ .Values.controlplane.storageclass.name }}
         {{- end }}
+        {{- with .Values.controlplane.foundationdb.nodeSelector }}
+        # Where the database's processes go, which is stated apart from
+        # controlplane.nodeSelector because it is the database alone that the
+        # node-add cap serializes against. Unset leaves them with the rest of
+        # the control plane.
+        nodeSelector:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
       # The chart states both halves explicitly rather than leaving the CR's
       # defaults to decide. The CR defaults to serving TLS, and the chart's
       # tls.enabled defaults to off, and a release that said nothing would get

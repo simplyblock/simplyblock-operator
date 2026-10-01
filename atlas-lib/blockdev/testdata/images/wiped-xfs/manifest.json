@@ -1,0 +1,16 @@
+{
+  "name": "wiped-xfs",
+  "tool": "mkfs.xfs",
+  "tool_version": "mkfs.xfs version 6.13.0",
+  "command": "mkfs.xfs -q -f, then wipefs -a",
+  "device_size": 536870912,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-30T16:15:43Z",
+  "captured_on": "Debian GNU/Linux 13 (trixie), kernel 6.12.0-142.el10.x86_64",
+  "blkid": "",
+  "head_sha256": "2173380c2c216ef5456a817d6ba3d3678f70e89f45a7805eed0afdd1478b411f",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "filled": true,
+  "note": "wipefs -a reported: 4 bytes were erased at offset 0x00000000 (xfs): 58 46 53 42. "
+}

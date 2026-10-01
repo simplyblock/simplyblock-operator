@@ -136,6 +136,7 @@ func devicesOf(candidates []blockdev.Candidate) []Device {
 		device := Device{
 			Name:       c.Name,
 			Path:       c.Path,
+			StablePath: c.StablePath,
 			PCIAddress: c.PCIAddress,
 			SizeBytes:  c.SizeBytes,
 			Kind:       string(c.Kind),

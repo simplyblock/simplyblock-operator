@@ -75,7 +75,6 @@ func TestStoragePoolSpecRegroupsToTheHub(t *testing.T) {
 				Read: ptr.To(int32(300)), Write: ptr.To(int32(200)), ReadWrite: ptr.To(int32(512)),
 			},
 			Filesystem:                "xfs",
-			EnableEncryption:          ptr.To(true),
 			EnableDHCHAP:              ptr.To(true),
 			Fabric:                    "tcp",
 			MaxNamespacesPerSubsystem: ptr.To(int32(4)),
@@ -204,6 +203,53 @@ func TestStoragePoolRemovedSpecFieldsRoundTrip(t *testing.T) {
 	}
 	if _, ok := back.Annotations[annoV1Alpha1PoolAction]; ok {
 		t.Errorf("the stash annotation survived the trip down: %v", back.Annotations)
+	}
+}
+
+// Encryption is a StorageClass parameter, so the hub has no field for it. A
+// pool's storageClassParameters.encryption is stashed on the way up and comes
+// back on the way down, whether it is true, an explicit false, or unset, and
+// even when it is the only parameter the pool set.
+func TestStoragePoolEncryptionRoundTripsThroughTheStash(t *testing.T) {
+	for name, encryption := range map[string]*bool{
+		"true": ptr.To(true), "explicit false": ptr.To(false), "unset": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			src := &StoragePool{
+				ObjectMeta: metav1.ObjectMeta{Name: "tenant-a"},
+				Spec: StoragePoolSpec{
+					ClusterName:            "production",
+					StorageClassParameters: &StorageClassParameters{Encryption: encryption},
+				},
+			}
+
+			var hub v1alpha2.StoragePool
+			if err := src.ConvertTo(&hub); err != nil {
+				t.Fatalf("ConvertTo: %v", err)
+			}
+			if hub.Spec.VolumeDefaults != nil {
+				t.Errorf("volumeDefaults = %+v, want none: encryption is not a pool default", hub.Spec.VolumeDefaults)
+			}
+			_, stashed := hub.Annotations[annoV1Alpha1PoolEncryption]
+			if stashed != (encryption != nil) {
+				t.Errorf("stash present = %v, want %v", stashed, encryption != nil)
+			}
+
+			var back StoragePool
+			if err := back.ConvertFrom(&hub); err != nil {
+				t.Fatalf("ConvertFrom: %v", err)
+			}
+			var got *bool
+			if back.Spec.StorageClassParameters != nil {
+				got = back.Spec.StorageClassParameters.Encryption
+			}
+			if diff := cmp.Diff(encryption, got); diff != "" {
+				t.Errorf("encryption after the round trip (-want +got):\n%s", diff)
+			}
+			if _, ok := back.Annotations[annoV1Alpha1PoolEncryption]; ok {
+				t.Errorf("the stash annotation survived the trip down: %v", back.Annotations)
+			}
+		})
 	}
 }
 

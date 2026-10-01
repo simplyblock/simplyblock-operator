@@ -858,7 +858,7 @@ kind exists for.
 |-------------------------------------------------------|-------------------------------------------------------------|
 | The Kubernetes API's node list                        | Worker hostnames, labels, taints, and allocatable resources |
 | Each node's available NVMe devices                    | Candidate devices, by PCI address (§8.2)                    |
-| Each node's available block devices, where enabled    | Candidate devices, by path (§8.2)                           |
+| Each node's available block devices, where enabled    | Candidate devices, by persistent path (§8.2)                |
 | Node labels, annotations, and cluster-scoped services | `spec.environment`, from the markers a distribution leaves  |
 | Each node's `/etc/os-release` and `uname`             | `spec.hostOS`, when every worker agrees                     |
 | `StorageNode` objects in the namespace                | Which workers and devices are already taken                 |
@@ -867,6 +867,22 @@ kind exists for.
 free is a property of the worker, so the Kubernetes API and the node itself are
 where both halves of it are read. There is no control-plane client and no backend
 call, which is why this document has no backend API requirements.
+
+**A block device is named by the persistent path udev published for it, never by
+its kernel path.** A document is written once and read back on every configure
+the deployment performs, the first of them possibly after a reboot, and
+`/dev/sdb` names whichever disk the kernel found second this boot. On the QEMU
+workers this was developed against, the disk the kernel calls `sdb` is the one
+the hypervisor calls `drive-scsi0` and `sda` is `drive-scsi2`, so a host that
+probes its controllers in another order hands each kernel name to another disk;
+both names exist and both resolve, so a document naming the first would hand a
+storage node a disk it was never given and nothing would say so. The probe
+therefore reports the `/dev/disk` link a device answers to alongside its kernel
+path, preferring the one built from what the device itself reports — a WWN, an
+NVMe namespace's EUI or UUID, the identifier in a partition's own partition
+table — over one assembled from the model and serial its enclosure exports. A
+device udev published no link for is named by its kernel path, which is all
+there is.
 
 **A discovery run reports only what is unclaimed, which is what makes re-running
 it useful.** A worker that already carries a `StorageNode`, and a device that node
@@ -986,6 +1002,19 @@ rather than removing it.
 **How workers should be grouped.** It groups by identical hardware, which is a
 guess at intent: two racks with identical machines are one group by that rule and
 two by any sensible operational one. A reviewer regroups.
+
+Identical hardware means the same device list, and a group carries one list for
+every worker in it, so what counts as identical follows from how a device is
+named (§8.1). Under kernel names it meant identical enumeration order, which is
+not a property of the hardware at all: two machines with genuinely different
+disks both call theirs `sda` and grouped together, which wrote one device list
+that was wrong for whichever of them the reviewer did not check. Under persistent
+names it means what it says. A fleet of cloned virtual machines names its disks
+identically — `drive-scsi0` is `drive-scsi0` on every one of them — and groups as
+one; a fleet of real machines names each disk by something only that disk
+carries, so each worker describes its own group. The second is the honest
+document: one device list shared between workers was only ever correct because
+kernel names repeat.
 
 **What the failure domains are.** Rack and power topology is not in the
 Kubernetes API. Where nodes carry `topology.kubernetes.io/zone` discovery copies

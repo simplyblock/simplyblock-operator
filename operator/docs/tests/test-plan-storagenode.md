@@ -577,37 +577,45 @@ Files: `operator/internal/controllers/node/migrate_test.go`,
 Files: `operator/internal/controllers/node/hostmaintenance_test.go`,
 `selfbudget_test.go`, `syncstatus_test.go`
 
-| #     | Scenario                                                                            | Type       | Test                                                     |
-|-------|-------------------------------------------------------------------------------------|------------|----------------------------------------------------------|
-| U-201 | A worker becomes unschedulable: a `HostMaintenance` operation is raised             | Positive   | `TestACordonedWorkerRaisesItsMaintenanceWindow`          |
-| U-202 | The worker is uncordoned before the operation starts: it completes as a no-op       | Negative   | —                                                        |
-| U-203 | A second reconcile while one is running: no second operation is created             | Negative   | `TestACordonedWorkerRaisesItsMaintenanceWindow`          |
-| U-204 | The concurrency limit is reached: the operation holds at `Holding`                  | Negative   | `TestOneWorkerAtATimeIsWhatAnUnstatedConcurrencyMeans`   |
-| U-205 | Two nodes on one worker: the pair counts as one worker against the limit            | Boundary   | `TestASiblingSocketOfTheSameWorkerIsNotASecondWorker`    |
-| U-206 | The limit is the cluster's effective value rather than what it asked for            | Boundary   | `TestTheClusterSaysHowManyWorkersMayBeDownAtOnce`        |
-| U-207 | A blocking budget is created before the shutdown call                               | Positive   | `TestTheEvictionIsBlockedBeforeTheNodeIsTakenDown`       |
-| U-208 | The node reports offline: the budget is relaxed                                     | Positive   | `TestReleasingRelaxesTheBudgetAndWaitsForThePodToGo`     |
-| U-209 | The budget is relaxed only after the node is offline, never before                  | Negative   | —                                                        |
-| U-210 | The storage pod is gone: the step advances to `AwaitingHost`                        | Positive   | `TestReleasingRelaxesTheBudgetAndWaitsForThePodToGo`     |
-| U-211 | The worker's API answers again: the restart is issued                               | Positive   | `TestTheNodeIsRestartedOnceTheHostIsBack`                |
-| U-212 | The node is already online when `Restarting` is entered: no restart call is issued  | Negative   | `TestTheNodeIsRestartedOnceTheHostIsBack`                |
-| U-213 | The node comes back online: the budget and the pod label are removed                | Positive   | `TestCleanupLeavesTheWorkerDrainableAgain`               |
-| U-214 | The operation fails: the budget is still removed, so the worker stays drainable     | Negative   | `TestCleanupLeavesTheWorkerDrainableAgain`               |
-| U-215 | A stale operator self-budget from a previous crash is cleaned up                    | Negative   | `TestAStaleSelfBudgetIsCleanedUp`                        |
-| U-216 | The `AwaitingHost` deadline expires: the operation fails and the node stays offline | Boundary   | —                                                        |
-| U-352 | A window still at `Holding` occupies no slot, so a deployment cannot deadlock       | Boundary   | `TestAWindowStillWaitingHoldsNoSlot`                     |
-| U-353 | A finished window occupies no slot either                                           | Boundary   | `TestAFinishedWindowHoldsNoSlot`                         |
-| U-354 | A window in another cluster does not hold this one back                             | Negative   | `TestAWindowInAnotherClusterDoesNotHoldThisOneBack`      |
-| U-355 | An offline node needs no shutdown, and none is issued                               | Boundary   | `TestAnOfflineNodeNeedsNoShutdown`                       |
-| U-356 | A node mid-restart is waited for rather than shut down into an in-flight restart    | Boundary   | `TestANodeMidRestartIsWaitedForRatherThanShutDown`       |
-| U-357 | The manager holds its own eviction on the worker it is draining                     | Positive   | `TestTheManagerHoldsItselfOnTheWorkerItIsDraining`       |
-| U-358 | The manager holds nothing on somebody else's worker                                 | Negative   | `TestTheManagerDoesNotHoldItselfOnSomebodyElsesWorker`   |
-| U-359 | A manager that does not know where it runs holds nothing                            | Boundary   | `TestAManagerThatDoesNotKnowWhereItRunsHoldsNothing`     |
-| U-360 | Releasing the manager's own budget is what lets the drain finish                    | Positive   | `TestReleasingTheManagerIsWhatLetsTheDrainFinish`        |
-| U-361 | The self-budget carries the labels its group is selected by                         | Positive   | `TestTheSelfBudgetCarriesTheGroupsLabels`                |
-| U-362 | The window holds the manager before anything that can fail                          | Regression | `TestTheWindowHoldsTheManagerBeforeAnythingThatCanFail`  |
-| U-363 | The window lets the manager go when it lets the storage pod go                      | Regression | `TestTheWindowLetsTheManagerGoWhenItLetsTheStoragePodGo` |
-| U-364 | A step of another action reached under this one: terminal rather than stalled       | Negative   | `TestAStepOfAnotherActionEndsTheWindow`                  |
+| #     | Scenario                                                                            | Type       | Test                                                        |
+|-------|-------------------------------------------------------------------------------------|------------|-------------------------------------------------------------|
+| U-201 | A worker becomes unschedulable: a `HostMaintenance` operation is raised             | Positive   | `TestACordonedWorkerRaisesItsMaintenanceWindow`             |
+| U-202 | The worker is uncordoned while the window is still at `Holding`: it is called off   | Regression | `TestAnUncordonCallsOffAWindowStillHolding`                 |
+| U-203 | A second reconcile while one is running: no second operation is created             | Negative   | `TestACordonedWorkerRaisesItsMaintenanceWindow`             |
+| U-204 | The concurrency limit is reached: the operation holds at `Holding`                  | Negative   | `TestOneWorkerAtATimeIsWhatAnUnstatedConcurrencyMeans`      |
+| U-205 | Two nodes on one worker: the pair counts as one worker against the limit            | Boundary   | `TestASiblingSocketOfTheSameWorkerIsNotASecondWorker`       |
+| U-206 | The limit is the cluster's effective value rather than what it asked for            | Boundary   | `TestTheClusterSaysHowManyWorkersMayBeDownAtOnce`           |
+| U-207 | A blocking budget is created before the shutdown call                               | Positive   | `TestTheEvictionIsBlockedBeforeTheNodeIsTakenDown`          |
+| U-208 | The node reports offline: the budget is taken away rather than relaxed to one       | Regression | `TestReleasingTakesTheBudgetAwayRatherThanRelaxingIt`       |
+| U-209 | The budget is released only after the node is offline, never before                 | Negative   | —                                                           |
+| U-210 | The SPDK pod is gone: the step advances to `AwaitingHost`                           | Regression | `TestReleasingWaitsForTheSpdkPodRatherThanTheNodeAgent`     |
+| U-211 | The worker's API answers again: the restart is issued                               | Positive   | `TestTheNodeIsRestartedOnceTheHostIsBack`                   |
+| U-212 | The node is already online when `Restarting` is entered: no restart call is issued  | Negative   | `TestTheNodeIsRestartedOnceTheHostIsBack`                   |
+| U-213 | The node comes back online: the budget and the pod label are removed                | Positive   | `TestCleanupLeavesTheWorkerDrainableAgain`                  |
+| U-214 | The operation fails: both budgets and the label go, so the worker stays drainable   | Regression | `TestAFailedWindowLeavesTheWorkerDrainable`                 |
+| U-215 | A stale operator self-budget from a previous crash is cleaned up                    | Negative   | `TestAStaleSelfBudgetIsCleanedUp`                           |
+| U-216 | The `AwaitingHost` deadline expires: the operation fails and the node stays offline | Boundary   | —                                                           |
+| U-352 | A window still at `Holding` occupies no slot, so a deployment cannot deadlock       | Boundary   | `TestAWindowStillWaitingHoldsNoSlot`                        |
+| U-353 | A finished window occupies no slot either                                           | Boundary   | `TestAFinishedWindowHoldsNoSlot`                            |
+| U-354 | A window in another cluster does not hold this one back                             | Negative   | `TestAWindowInAnotherClusterDoesNotHoldThisOneBack`         |
+| U-355 | An offline node needs no shutdown, and none is issued                               | Boundary   | `TestAnOfflineNodeNeedsNoShutdown`                          |
+| U-356 | A node mid-restart is waited for rather than shut down into an in-flight restart    | Boundary   | `TestANodeMidRestartIsWaitedForRatherThanShutDown`          |
+| U-357 | The manager holds its own eviction on the worker it is draining                     | Positive   | `TestTheManagerHoldsItselfOnTheWorkerItIsDraining`          |
+| U-358 | The manager holds nothing on somebody else's worker                                 | Negative   | `TestTheManagerDoesNotHoldItselfOnSomebodyElsesWorker`      |
+| U-359 | A manager that does not know where it runs holds nothing                            | Boundary   | `TestAManagerThatDoesNotKnowWhereItRunsHoldsNothing`        |
+| U-441 | The budget guards the SPDK pod and the control plane's, never the node agent's      | Regression | `TestTheBudgetGuardsThePodsADrainCanEvict`                  |
+| U-442 | A node already `in_shutdown` is waited for rather than shut down a second time      | Regression | `TestAShutdownIsNotReissuedAgainstANodeAlreadyShuttingDown` |
+| U-443 | A finished window is cleared on the uncordon, so the next cordon raises one         | Regression | `TestAFinishedWindowIsClearedWhenTheWorkerComesBack`        |
+| U-444 | The worker's budget outlives the first socket to reach `Releasing`                  | Regression | `TestTheWorkersBudgetOutlivesTheFirstSocketToRelease`       |
+| U-445 | A window that fails leaves a sibling socket's budget and labels standing            | Regression | `TestAFailedWindowLeavesASiblingsGuardStanding`             |
+| U-446 | A manager budget that cannot be deleted does not strand the worker's                | Regression | `TestTheTerminalTeardownTakesDownWhatItCan`                 |
+| U-447 | A teardown that cannot read its node announces the markers it left                  | Regression | `TestTheTerminalTeardownAnnouncesANodeItCannotRead`         |
+| U-448 | An uncordon calls off a window raised but not yet admitted                          | Regression | `TestAnUncordonCallsOffAWindowThatHasNotStarted`            |
+| U-360 | Releasing the manager's own budget is what lets the drain finish                    | Positive   | `TestReleasingTheManagerIsWhatLetsTheDrainFinish`           |
+| U-361 | The self-budget carries the labels its group is selected by                         | Positive   | `TestTheSelfBudgetCarriesTheGroupsLabels`                   |
+| U-362 | The window holds the manager before anything that can fail                          | Regression | `TestTheWindowHoldsTheManagerBeforeAnythingThatCanFail`     |
+| U-363 | The window lets the manager go when it lets the storage pod go                      | Regression | `TestTheWindowLetsTheManagerGoWhenItLetsTheStoragePodGo`    |
+| U-364 | A step of another action reached under this one: terminal rather than stalled       | Negative   | `TestAStepOfAnotherActionEndsTheWindow`                     |
 
 ### Ops Shape: The Step Machine (design §6.3)
 
@@ -983,7 +991,7 @@ row that depends on one of them is covered.
 | U-150, U-155, U-159, U-162, U-164, U-165 | The drain's remaining edges                                              | `U-162` is written against a behavior the code does not have: a refused removal is terminal whatever its status, so either the row or `drainRemove` has to move                                 |
 | U-171, U-177                             | Migration naming under collision and across namespaces                   | The formula is atlas-lib's and is tested there. What is missing is the assertion that this caller's inputs cannot collide                                                                       |
 | U-196, U-199, U-200                      | The relocation's abort, and the source worker's labels                   | `ReleaseWorker` decides whether a worker keeps its labels and no row exercises the two-socket case                                                                                              |
-| U-202, U-209, U-216                      | The maintenance window's remaining edges                                 | An uncordon mid-window, the ordering of the release against the node going offline, and the deadline that is a detection mechanism rather than a recovery one                                   |
+| U-209, U-216                             | The maintenance window's remaining edges                                 | The ordering of the release against the node going offline, and the deadline that is a detection mechanism rather than a recovery one                                                           |
 | U-225, U-226, U-228, U-230               | The snapshot's round trip                                                | Covered by `atlas-lib/statemachine`'s own suite for the type, and not by this package for the values it stores                                                                                  |
 | U-236 … U-238                            | The device summary                                                       | `applyReading` writes the pair and the absent case, and the rows that pin the ordering the string form got backward are unwritten                                                               |
 | U-244 … U-247                            | The widened `deviceNames`                                                | The field takes a PCI address and a device path in one list, and nothing asserts either form reaches the node                                                                                   |

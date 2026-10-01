@@ -94,11 +94,13 @@ jobs:
     uses: ./.github/workflows/csi_chart_release.yaml
     secrets: inherit
 
-  # Waits on build-operator: the chart's values.yaml pins the image tags it ships.
+  # Waits on build-operator: the packaged chart names the images that job pushes.
   package-operator-chart:
     name: Package operator chart
     needs: [setup, build-operator]
     uses: ./.github/workflows/helm_release.yaml
+    with:
+      version: ${{ needs.setup.outputs.version }}
     secrets: inherit
 
   merge-helm:

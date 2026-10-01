@@ -170,7 +170,6 @@ func ClassParameters(p *simplyblockv1alpha2.StoragePool, clusterUUID string) map
 		setInt(kube.ParamMaxReadMBytesPerSec, t.Read)
 		setInt(kube.ParamMaxWriteMBytesPerSec, t.Write)
 	}
-	setBool(kube.ParamEncryption, defaults.EnableEncryption)
 	setBool(kube.ParamCompression, defaults.EnableCompression)
 	setBool(kube.ParamClientCompression, defaults.EnableClientCompression)
 	setBool(kube.ParamClientDeduplication, defaults.EnableClientDeduplication)

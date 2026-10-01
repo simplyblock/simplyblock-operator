@@ -786,6 +786,7 @@ func main() {
 		Recorder:   mgr.GetEventRecorder("operatorops-controller"),
 		Discovery:  operatorOpsDiscovery,
 		ProbeImage: os.Getenv(deployment.NodeProbeImageEnv),
+		Namespace:  operatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OperatorOps")
 		os.Exit(1)

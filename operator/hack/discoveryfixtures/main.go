@@ -1,5 +1,5 @@
 // Writes the discovery generator's test fixtures: one directory per case in
-// discovery-generator-test-cases.md, holding the probe reports, the Kubernetes
+// docs/tests/discovery-generator-case-catalog.md, holding the probe reports, the
 // nodes, and the OperatorOps that case is run from.
 //
 // It is a program rather than a table inside a test because the fixtures are
@@ -29,7 +29,7 @@ import (
 )
 
 func main() {
-	document := flag.String("document", "../discovery-generator-test-cases.md",
+	document := flag.String("document", "docs/tests/discovery-generator-case-catalog.md",
 		"the case document to read the rows from")
 	out := flag.String("out", "internal/controllers/deployment/testdata/discovery",
 		"the directory to write the case tree into")

@@ -7,6 +7,7 @@
 package blockdev
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -56,13 +57,51 @@ var catalog = []want{
 	// a storage node, so the image comes off a device this product wrote.
 	{"alceml", ContentSimplyblock, "simplyblock_alceml",
 		"U-65: an alceml superblock, which blkid and wipefs both read as nothing"},
-	// The same product's device without the superblock that names it. This row
-	// probes at the capture's own 2 MiB region, which reaches the first page
-	// header and so finds the device not empty. At the 1 MiB a host probes with
-	// it reads Blank instead, which is the whole point of the capture and is
-	// asserted by the test below.
-	{"alceml-pages", ContentForeign, "",
-		"U-65: an alceml device whose superblock is gone, probed wide enough to see its first page"},
+	// The same product's device without the superblock that names it. The page
+	// grid names it instead, so the answer is the product's own content and not
+	// an absence: what was lost with the superblock was the name, not the
+	// evidence.
+	{"alceml-pages", ContentSimplyblock, "simplyblock_alceml",
+		"U-65: an alceml device whose superblock is gone, named by the pages it is covered in"},
+	// The block-layer caches. Only bcache writes a signature a whole disk
+	// carries, and the other two rows are here to show that rather than to
+	// assert it: an lvmcache disk is an LVM physical volume, and a dm-cache
+	// metadata device is named by nothing but starts at a byte that is not zero.
+	{"bcache", ContentForeign, "bcache",
+		"a backing device, whose superblock is at 4096 behind a zero first block"},
+	{"lvmcache", ContentStackLayer, "LVM2_member",
+		"a whole disk holding an lvmcache, which is an LVM physical volume and nothing else"},
+	{"dm-cache-metadata", ContentForeign, "",
+		"the metadata device of a raw dm-cache, whose superblock is at offset 0"},
+	// What a wipe leaves: the format, legible from its own structure, with the
+	// word naming it taken out of the one offset it lives at. Every format the
+	// catalog knows has a row here, captured by running the real tool and then
+	// the real wipefs over a device with data written into it.
+	{"wiped-ext2", ContentReleased, "ext2", "the ext2 feature words outlive the magic"},
+	{"wiped-ext3", ContentReleased, "ext3", "the journal flag outlives the magic"},
+	{"wiped-ext4", ContentReleased, "ext4", "the ext4 feature words outlive the magic"},
+	{"wiped-xfs", ContentReleased, "xfs", "the block size follows the magic and is big-endian"},
+	{"wiped-btrfs", ContentReleased, "btrfs", "the superblock checksum sits 64 bytes before the magic"},
+	{"wiped-bcache", ContentReleased, "bcache", "the superblock keeps the sector it lives at, which is 8"},
+	{"wiped-swap", ContentReleased, "swap", "the header is at the start of the page and the signature at its end"},
+	{"wiped-lvm2", ContentReleased, "LVM2_member", "LABELONE stays and the type after it goes"},
+	{"wiped-luks1", ContentReleased, "crypto_LUKS", "the version follows the magic"},
+	{"wiped-luks2", ContentReleased, "crypto_LUKS", "the version follows the magic"},
+	{"wiped-exfat", ContentReleased, "exfat", "the jump instruction opens the boot sector and stays"},
+	{"wiped-fat12", ContentReleased, "vfat", "the BIOS parameter block stays and the type string goes"},
+	{"wiped-fat16", ContentReleased, "vfat", "the BIOS parameter block stays and the type string goes"},
+	{"wiped-fat32", ContentReleased, "vfat", "the BIOS parameter block stays and the type string goes"},
+	{"wiped-gpt", ContentReleased, "gpt", "the protective MBR entry keeps its 0xEE type byte"},
+	{"wiped-gpt-4kn", ContentReleased, "gpt", "the same, with the header at 4096 on a 4Kn device"},
+	{"wiped-mbr", ContentReleased, "dos", "the partition table stays and the boot signature goes"},
+	{"wiped-mdraid-090", ContentReleased, "linux_raid_member", "0.90 keeps a major of 0 and a minor of 90"},
+	{"wiped-mdraid-10", ContentReleased, "linux_raid_member", "1.0 keeps its superblock in the tail"},
+	{"wiped-mdraid-11", ContentReleased, "linux_raid_member", "1.1 keeps a major of 1 after the magic"},
+	{"wiped-mdraid-12", ContentReleased, "linux_raid_member", "1.2 keeps the same, at 4096"},
+	// And what a wipe leaves when it had nothing to erase. wipefs reported
+	// success and removed no bytes, so nothing says this disk was given up.
+	{"wiped-random", ContentForeign, "",
+		"random bytes wipefs reported clean after erasing nothing, because it knew no signature"},
 	// U-15: the only reading that permits a format.
 	{"blank", ContentBlank, "", "U-15: a device that has never been written to"},
 }
@@ -175,12 +214,11 @@ func TestZeroReadingAuthorizesNothing(t *testing.T) {
 // The offsets the alceml-pages capture is read against. They are the device's,
 // measured on the capture, and not a layout this package decodes: what the test
 // needs from them is that the page grid exists and where it starts.
+//
+// alcemlPageMagic, which opens every page a storage node writes, has since moved
+// into the catalog: it is a signature the prober matches rather than a constant
+// only a test knows. This still reads it, and reads it from there.
 const (
-	// alcemlPageMagic opens every page a storage node writes. It is not the
-	// superblock magic: the superblock names the device once at offset 0, and
-	// this repeats with the grid.
-	alcemlPageMagic = "ALCEML_PAGEv2"
-
 	// alcemlFirstPage is where the grid starts on the captured device. It is
 	// 12288 bytes past the end of a default head region, which is the whole
 	// reason the device reads as it does. The stride to the next page is
@@ -190,8 +228,8 @@ const (
 )
 
 // Regression: 2026-09-28-alceml-without-a-superblock-reads-as-foreign. A
-// simplyblock device whose superblock has been wiped reads as blank, and the
-// pages that would have named it start just past where the head region stops.
+// simplyblock device whose superblock has been wiped reads as somebody else's,
+// and the pages that would have named it start just past where the head stops.
 //
 // Every 1.5 TB disk of all four workers of the OKD lab cluster was in this state
 // on 2026-09-28: the ALCEML_STORAGE superblock at offset 0 gone, and the device
@@ -200,12 +238,20 @@ const (
 // deployment came up with one 30 GB disk per worker, so no storage node could
 // configure itself.
 //
-// Blank is the wanted answer, and it is a decision rather than a discovery:
-// zeroing the head is how a device is released for reuse, so a head that is zero
-// and a catalog that matches nothing mean the device is free. The capture is
-// what keeps that decision honest. It holds the pages the rule now steps over,
-// so anyone changing the rule back can see exactly what a format would destroy.
-func TestAnAlcemlDeviceWithoutItsSuperblockReadsAsBlank(t *testing.T) {
+// This first read Blank, on the head-only zero rule: zeroing the head is how a
+// device is released for reuse, so a head of zeros the catalog cannot place is
+// free to take. That answer was right and the reasoning was thin, because it
+// rested on the wipe having reached far enough rather than on anything about the
+// device, and 2026-09-30 is what that cost. On one disk of twelve, exactly the
+// 4096-byte superblock had been zeroed, its mapping region survived, the head
+// was therefore not zero, and the device was refused. See alceml-map-pages.
+//
+// The answer is now the product's own content, and it is a discovery rather than
+// a decision: the pages name the device whatever the wipe reached. The head-only rule stays
+// for a device that carries nothing at all, and no longer has to carry this one.
+// The capture holds the pages either way, so anyone changing the rule can still
+// see exactly what a format would destroy.
+func TestAnAlcemlDeviceWithoutItsSuperblockIsNamedByItsPages(t *testing.T) {
 	im := loadImage(t, "alceml-pages")
 
 	// What the device is, read off the capture rather than asserted about it.
@@ -213,45 +259,36 @@ func TestAnAlcemlDeviceWithoutItsSuperblockReadsAsBlank(t *testing.T) {
 		t.Fatalf("offset 0 carries %q, so this capture still has its superblock "+
 			"and is not the case this test covers", got)
 	}
-	if got := string(im.head[alcemlFirstPage : alcemlFirstPage+len(alcemlPageMagic)]); got != alcemlPageMagic {
+	if got := im.head[alcemlFirstPage : alcemlFirstPage+len(alcemlPageMagic)]; !bytes.Equal(got, alcemlPageMagic) {
 		t.Fatalf("offset %d carries %q, want %q: the capture no longer shows the page "+
 			"that proves this device is not empty", alcemlFirstPage, got, alcemlPageMagic)
 	}
 
-	// What a host reads, at the region a host probes with.
-	p := NewProberWithOpener(
-		func(context.Context, Device) (Reader, error) { return im.Reader(), nil },
-		WithRegionSize(DefaultRegionSize))
-	got, err := p.Read(context.Background(), im.Device())
-	if err != nil {
-		t.Fatalf("Read(alceml-pages): %v", err)
-	}
-	if got.Content != ContentBlank {
-		t.Errorf("Read(alceml-pages).Content = %s, want Blank: a device whose head is zero "+
-			"and whose signature nothing matches has been released\ndetail: %s", got.Content, got.Detail)
-	}
-	if got.Type != "" {
-		t.Errorf("Read(alceml-pages).Type = %q, want empty for a blank device", got.Type)
-	}
-
-	// The same device, probed wide enough to reach its first page, is not empty.
-	// The answer turns on how far the head region reaches, and the two readings
-	// are here together so that nobody has to take that on trust.
-	wide := NewProberWithOpener(
-		func(context.Context, Device) (Reader, error) { return im.Reader(), nil },
-		WithRegionSize(im.RegionSize))
-	got, err = wide.Read(context.Background(), im.Device())
-	if err != nil {
-		t.Fatalf("Read(alceml-pages) at %d: %v", im.RegionSize, err)
-	}
-	if got.Content != ContentForeign {
-		t.Errorf("at a %d-byte region Read(alceml-pages).Content = %s, want Foreign: "+
-			"the head then covers the page at %d", im.RegionSize, got.Content, alcemlFirstPage)
-	}
-
-	// The reach that separates the two readings.
+	// The page is past the head a host probes with, so the head alone cannot be
+	// what finds it. This is the reach the readings below depend on, asserted
+	// before them rather than taken on trust.
 	if alcemlFirstPage <= DefaultRegionSize {
-		t.Errorf("the first page is at %d, inside a %d-byte head region, so the two readings "+
-			"above cannot differ and this test proves nothing", alcemlFirstPage, DefaultRegionSize)
+		t.Fatalf("the first page is at %d, inside a %d-byte head region, so this test "+
+			"proves nothing about reading past the head", alcemlFirstPage, DefaultRegionSize)
+	}
+
+	// What a host reads, at the region a host probes with and at the capture's
+	// own wider one. Both name the device, which is the point: the answer no
+	// longer turns on how far a region happens to reach.
+	for _, region := range []int64{DefaultRegionSize, im.RegionSize} {
+		p := NewProberWithOpener(
+			func(context.Context, Device) (Reader, error) { return im.Reader(), nil },
+			WithRegionSize(region))
+		got, err := p.Read(context.Background(), im.Device())
+		if err != nil {
+			t.Fatalf("Read(alceml-pages) at %d: %v", region, err)
+		}
+		if got.Content == ContentBlank {
+			t.Errorf("at a %d-byte region Read(alceml-pages).Content = Blank: the device is "+
+				"covered in this product's pages and is being called empty", region)
+		}
+		if got.Content != ContentSimplyblock {
+			t.Errorf("at a %d-byte region Read(alceml-pages).Content = %s, want Simplyblock", region, got.Content)
+		}
 	}
 }

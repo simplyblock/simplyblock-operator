@@ -269,7 +269,8 @@ func (m *Mounter) ForceUnmount(stagingPath string) error {
 	return nil
 }
 
-// isStaged if stagingPath is a mount point, it means it is already staged, and vice versa
+// IsMounted reports whether stagingPath is a mount point, which for a staging
+// path is the same question as whether the volume is staged.
 func (m *Mounter) IsMounted(stagingPath string) (bool, error) {
 	isMount, err := m.mounter.IsMountPoint(stagingPath)
 	if err != nil {

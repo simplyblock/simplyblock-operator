@@ -19,8 +19,11 @@ const (
 
 // configureInvocation is the tail every configure script ends with, after the
 // per-node and fleet arguments have been assembled into ARGS.
+//
+// Runs without sudo: the container needs to run as root (BuildStorageNodeDaemonSet
+// sets runAsUser 0), so no escalation is needed.
 const configureInvocation = `"
-eval sudo -E python3 simplyblock_web/node_configure.py ${ARGS}
+eval python3 simplyblock_web/node_configure.py ${ARGS}
 `
 
 // nodeEnvScripts returns the configure script and the writer that feeds it.

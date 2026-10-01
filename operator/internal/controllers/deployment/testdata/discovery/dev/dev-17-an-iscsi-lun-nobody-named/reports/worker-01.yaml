@@ -2,7 +2,7 @@ apiVersion: v1
 data:
   report.json: |-
     {
-      "version": 7,
+      "version": 8,
       "node": "worker-01",
       "probedAt": "2026-09-18T09:00:00Z",
       "cpu": {
@@ -129,6 +129,16 @@ data:
           "name": "vdb",
           "path": "/dev/vdb",
           "sizeBytes": 2199023255552,
+          "kind": "Disk",
+          "transport": "Virtio",
+          "numaNode": 0,
+          "available": true,
+          "content": "Blank"
+        },
+        {
+          "name": "vdc",
+          "path": "/dev/vdc",
+          "sizeBytes": 4398046511104,
           "kind": "Disk",
           "transport": "Virtio",
           "numaNode": 0,

@@ -35,10 +35,14 @@ for chart in "${CHARTS[@]}"; do
   referenced="$(grep -rhoE '\.Values\.[A-Za-z_][A-Za-z0-9_.]*' "$chart/templates" 2>/dev/null |
     sed -e 's/^\.Values\.//' -e 's/\.$//' | sort -u)"
 
+  # grep reads the list from a here-string rather than from a pipe. "pipefail"
+  # is set, and grep -q closes the pipe the moment it matches, so the printf
+  # feeding it dies of SIGPIPE and the pipeline reports 141: a defined path read
+  # as an undefined one, on whichever run the write had not finished.
   missing=0
   while read -r path; do
     [ -z "$path" ] && continue
-    if ! printf '%s\n' "$defined" | grep -qxF "$path"; then
+    if ! grep -qxF "$path" <<<"$defined"; then
       echo "  ${name}: .Values.${path} is read by a template and not defined"
       grep -rn "Values\.${path}" "$chart/templates" | sed 's|^|      |'
       missing=1

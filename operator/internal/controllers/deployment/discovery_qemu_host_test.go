@@ -25,10 +25,18 @@ import (
 // qemuHostCase is the recorded case this file makes claims about.
 const qemuHostCase = "host/host-03-a-captured-qemu-worker-with-an-optical-drive"
 
-// The two Samsung namespaces and the drive, as the kernel presents them.
+// The two Samsung namespaces, by the identifier each one reports for itself,
+// and the drive as the kernel presents it.
+//
+// The EUIs rather than /dev/nvme0n1 and /dev/nvme1n1. A kernel name states a
+// position in one boot's enumeration order and udev publishes three names for
+// each of these namespaces, two of them built from the controller's model and
+// serial: the EUI is the one read off the namespace, and the one that still
+// names this disk after the machine comes back with its controllers probed in
+// another order.
 const (
-	qemuFirstNVMe  = "/dev/nvme0n1"
-	qemuSecondNVMe = "/dev/nvme1n1"
+	qemuFirstNVMe  = "/dev/disk/by-id/nvme-eui.34333930547014240025384300000001"
+	qemuSecondNVMe = "/dev/disk/by-id/nvme-eui.34333930547013130025384300000001"
 	qemuOptical    = "sr0"
 )
 
@@ -37,7 +45,7 @@ const (
 // device through the kernel. Refusing them would leave the machine undeployable:
 // the NVMe pair is the only storage on it, and which class a machine is
 // deployed as is the administrator's statement rather than the bus's.
-func TestCapturedQEMUWorkerOffersItsNVMeDisksByPath(t *testing.T) {
+func TestCapturedQEMUWorkerOffersItsNVMeDisksByTheirPersistentNames(t *testing.T) {
 	document := runQEMUHostCase(t)
 
 	offered := map[string]bool{}

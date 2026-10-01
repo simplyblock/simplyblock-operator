@@ -2161,6 +2161,28 @@ spec:
                         description: FoundationDB sizes the FoundationDB the management
                           API stores its state in.
                         properties:
+                          nodeSelector:
+                            additionalProperties:
+                              type: string
+                            description: |-
+                              NodeSelector pins the database's own processes, and nothing else the
+                              control plane runs. Unset leaves them wherever the control plane as a
+                              whole is placed.
+
+                              It is stated apart from that placement because the database is the part
+                              whose host matters to something else: adding a storage node reboots its
+                              worker, and a worker running a FoundationDB process is added on its own
+                              however many nodes the cluster's provisioning budget allows at once.
+                              Confining the database to a few workers is what leaves the rest of the
+                              fleet free to be added together.
+
+                              It has to select at least as many workers as
+                              spec.source.local.foundationDB.replicas, because the worker is the
+                              database's fault domain. The anti-affinity between processes of one class
+                              is a preference rather than a requirement, so a narrower selector places
+                              the coordinators anyway, several to a worker, where one worker's loss
+                              takes more of them than the redundancy mode was configured to survive.
+                            type: object
                           replicas:
                             default: 3
                             description: |-
@@ -2805,6 +2827,35 @@ spec:
                       infrastructure runs on, and simplyblock storage is infrastructure. A fleet
                       with disks in its infra nodes meant those disks to be the storage, so a draft
                       proposes them ahead of the workers rather than leaving them out.
+                    type: boolean
+                  forceJournalDevice:
+                    description: |-
+                      ForceJournalDevice makes the run dedicate a journal device even where the
+                      fleet's disks do not say which one.
+
+                      A run proposes a dedicated journal device when every worker hands over one
+                      disk smaller than its others, because a fleet built that way was built that
+                      way on purpose. Where several disks share the smallest size, nothing says
+                      which to take, and taking one spends a whole disk the fleet did not set
+                      aside: on a worker with ten 10 TB disks that is 10 TB, silently. So the run
+                      does not guess.
+
+                      What it does instead depends on the class. An NVMe cluster with no
+                      dedicated journal device carves a journal partition out of every device, so
+                      the run leaves the field unset, says so, and every disk stays storage. A
+                      logical block-device cluster has no such layout — the control plane refuses
+                      the partitioned journal for the class — so the run fails rather than
+                      writing a document that creates the cluster, formats its drives, and then
+                      fails every node_add. Setting this is what asks for one of the equal disks
+                      to be taken anyway, and the draft says the disk was taken rather than
+                      offered.
+
+                      It does not force the cases that are impossible rather than ambiguous. A
+                      worker handing over a single disk is refused with it or without it, because
+                      dedicating that disk leaves the worker nothing to store on, and so is a
+                      worker whose disks report no size. The tie it does resolve is broken by
+                      address, ascending, so two runs over one unchanged fleet propose the same
+                      document.
                     type: boolean
                   nodeSelector:
                     additionalProperties:
@@ -10793,7 +10844,7 @@ spec:
                   AllowedNodes restricts which hosts may carry this pool's volumes, by
                   Kubernetes Node name. Empty means every node in the cluster. Narrowing it
                   stops new volumes landing on the removed nodes and leaves the existing
-                  ones where they are.
+                  ones where they are. Requires volumeDefaults.enableDHCHAP to be true.
 
                   The list is left exactly as authored: a name that no longer resolves is
                   dropped from Status.AllowedNodes rather than pruned from here, so a node
@@ -10868,6 +10919,10 @@ spec:
                         type: integer
                     type: object
                 type: object
+                x-kubernetes-validations:
+                - message: limits.iops and limits.throughput are not yet supported
+                    in beta1
+                  rule: '!has(self.iops) && !has(self.throughput)'
               volumeDefaults:
                 description: |-
                   VolumeDefaults are what every volume in the pool is created with.
@@ -10900,11 +10955,6 @@ spec:
                       Authentication is only enforced when AllowedNodes is non-empty, because
                       the generated class gets its node selector from that list and a class's
                       parameters cannot be edited afterward.
-                    type: boolean
-                  enableEncryption:
-                    description: |-
-                      EnableEncryption encrypts logical volumes, using the key store the cluster
-                      names in its own spec.
                     type: boolean
                   enableReplication:
                     description: EnableReplication replicates logical volumes.
@@ -10983,6 +11033,9 @@ spec:
             x-kubernetes-validations:
             - message: field volumeDefaults is immutable once set
               rule: '!has(oldSelf.volumeDefaults) || has(self.volumeDefaults)'
+            - message: allowedNodes requires volumeDefaults.enableDHCHAP to be true
+              rule: '!has(self.allowedNodes) || size(self.allowedNodes) == 0 || (has(self.volumeDefaults)
+                && has(self.volumeDefaults.enableDHCHAP) && self.volumeDefaults.enableDHCHAP)'
           status:
             description: StoragePoolStatus is the observed state of one pool.
             properties:
@@ -12099,6 +12152,7 @@ rules:
   - delete
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - ""

@@ -71,6 +71,7 @@ type ThroughputLimits struct {
 // pool's budget rather than a volume's: a volume's own defaults are in
 // StoragePoolSpec.VolumeDefaults, and the two use the same units so that a
 // reader can compare them.
+// +kubebuilder:validation:XValidation:rule="!has(self.iops) && !has(self.throughput)",message="limits.iops and limits.throughput are not yet supported in beta1"
 type PoolLimits struct {
 	// Capacity is the total capacity the pool may allocate, written the way an
 	// administrator writes one: `10T`, `500G`. Empty is unlimited.
@@ -139,11 +140,6 @@ type VolumeDefaults struct {
 	// +optional
 	EnableClientDeduplication *bool `json:"enableClientDeduplication,omitempty"`
 
-	// EnableEncryption encrypts logical volumes, using the key store the cluster
-	// names in its own spec.
-	// +optional
-	EnableEncryption *bool `json:"enableEncryption,omitempty"`
-
 	// EnableReplication replicates logical volumes.
 	// +optional
 	EnableReplication *bool `json:"enableReplication,omitempty"`
@@ -180,6 +176,7 @@ type VolumeDefaults struct {
 }
 
 // StoragePoolSpec is the desired state of one tenancy unit within a cluster.
+// +kubebuilder:validation:XValidation:rule="!has(self.allowedNodes) || size(self.allowedNodes) == 0 || (has(self.volumeDefaults) && has(self.volumeDefaults.enableDHCHAP) && self.volumeDefaults.enableDHCHAP)",message="allowedNodes requires volumeDefaults.enableDHCHAP to be true"
 type StoragePoolSpec struct {
 	// ClusterRef names the StorageCluster this pool is carved out of, in this
 	// pool's own namespace. The cluster owns this object by controller
@@ -200,7 +197,7 @@ type StoragePoolSpec struct {
 	// AllowedNodes restricts which hosts may carry this pool's volumes, by
 	// Kubernetes Node name. Empty means every node in the cluster. Narrowing it
 	// stops new volumes landing on the removed nodes and leaves the existing
-	// ones where they are.
+	// ones where they are. Requires volumeDefaults.enableDHCHAP to be true.
 	//
 	// The list is left exactly as authored: a name that no longer resolves is
 	// dropped from Status.AllowedNodes rather than pruned from here, so a node

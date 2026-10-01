@@ -48,9 +48,11 @@ func (r ISCSIRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, str
 		return true, ""
 	}
 
-	address := r.Class.Address(device)
+	// Every spelling the LUN answers to, for the reason AllowDenyRule matches
+	// that way: this rule refuses by default, so a list that stopped matching
+	// would make a named LUN untakeable rather than merely unfiltered.
 	for _, allowed := range r.Allow {
-		if strings.EqualFold(address, allowed) {
+		if r.Class.Names(device, allowed) {
 			return true, ""
 		}
 	}

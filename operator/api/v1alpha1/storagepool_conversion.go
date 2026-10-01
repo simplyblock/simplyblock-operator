@@ -10,8 +10,9 @@
 //   - spec.storageClassParameters.* gathers under spec.volumeDefaults, which is
 //     what each volume in the pool gets, and the four QoS ceilings stop being
 //     strings on the way.
-//   - spec.dhchap moves into that block as enableDHCHAP, and encryption becomes
-//     enableEncryption.
+//   - spec.dhchap moves into that block as enableDHCHAP. Encryption has no home
+//     there: it is a StorageClass parameter, so storageClassParameters.encryption
+//     is stashed (see below).
 //   - status.qos becomes status.limits.
 //
 // **A regrouping allocates its parent only when it has something to put in it**
@@ -27,9 +28,11 @@
 //
 //   - A field this version has and the hub removed is stashed on the way *up*
 //     under storage.simplyblock.io/v1alpha1-<field> and read back on the way
-//     down. spec.action and spec.status are the two, and what is preserved is
-//     the text a user typed rather than any behavior: both were marked unused
-//     here and neither ever had an effect.
+//     down. spec.action and spec.status are two, and what is preserved is the
+//     text a user typed rather than any behavior: both were marked unused here
+//     and neither ever had an effect. The third is
+//     spec.storageClassParameters.encryption, which the hub leaves to the
+//     StorageClass.
 //   - A field the hub has and this version cannot express is stashed on the way
 //     *down* under storage.simplyblock.io/conversion-<field> and restored on the
 //     way up. Without it, every one of them would be lost on each write for as
@@ -55,10 +58,11 @@ import (
 	"github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// The annotations holding the two spec fields the hub removed.
+// The annotations holding the spec fields the hub removed.
 const (
-	annoV1Alpha1PoolAction = "storage.simplyblock.io/v1alpha1-action"
-	annoV1Alpha1PoolStatus = "storage.simplyblock.io/v1alpha1-status"
+	annoV1Alpha1PoolAction     = "storage.simplyblock.io/v1alpha1-action"
+	annoV1Alpha1PoolStatus     = "storage.simplyblock.io/v1alpha1-status"
+	annoV1Alpha1PoolEncryption = "storage.simplyblock.io/v1alpha1-encryption"
 )
 
 // The annotations holding the hub fields this version cannot express. The key
@@ -93,6 +97,11 @@ func (src *StoragePool) ConvertTo(dstRaw conversion.Hub) error {
 	dst.ObjectMeta = *src.ObjectMeta.DeepCopy()
 	stashRemoved(&dst.ObjectMeta, annoV1Alpha1PoolAction, src.Spec.Action)
 	stashRemoved(&dst.ObjectMeta, annoV1Alpha1PoolStatus, src.Spec.Status)
+	if params := src.Spec.StorageClassParameters; params != nil {
+		stashRemovedBool(&dst.ObjectMeta, annoV1Alpha1PoolEncryption, params.Encryption)
+	} else {
+		clear(&dst.ObjectMeta, annoV1Alpha1PoolEncryption)
+	}
 
 	dst.Spec = v1alpha2.StoragePoolSpec{
 		ClusterRef:     src.Spec.ClusterName,
@@ -124,6 +133,12 @@ func (dst *StoragePool) ConvertFrom(srcRaw conversion.Hub) error {
 	}
 	poolLimitsFromHub(&dst.Spec, src.Spec.Limits)
 	volumeDefaultsFromHub(&dst.Spec, src.Spec.VolumeDefaults)
+	if encryption := unstashRemovedBool(&dst.ObjectMeta, annoV1Alpha1PoolEncryption); encryption != nil {
+		if dst.Spec.StorageClassParameters == nil {
+			dst.Spec.StorageClassParameters = &StorageClassParameters{}
+		}
+		dst.Spec.StorageClassParameters.Encryption = encryption
+	}
 
 	dst.Status = StoragePoolStatus{
 		UUID:         src.Status.UUID,
@@ -397,7 +412,6 @@ func volumeDefaultsToHub(spec StoragePoolSpec) *v1alpha2.VolumeDefaults {
 			defaults.Throughput = &throughput
 		}
 		defaults.Filesystem = p.Filesystem
-		defaults.EnableEncryption = p.Encryption
 		defaults.Fabric = p.Fabric
 		defaults.MaxNamespacesPerSubsystem = parseInt32(p.MaxNamespacePerSubsys)
 		defaults.Tune2fsReservedBlocks = p.Tune2fsReservedBlocks
@@ -419,7 +433,6 @@ func volumeDefaultsFromHub(spec *StoragePoolSpec, defaults *v1alpha2.VolumeDefau
 	params := StorageClassParameters{
 		QosRwIops:             formatInt32(defaults.IOPS),
 		Filesystem:            defaults.Filesystem,
-		Encryption:            defaults.EnableEncryption,
 		Fabric:                defaults.Fabric,
 		MaxNamespacePerSubsys: formatInt32(defaults.MaxNamespacesPerSubsystem),
 		Tune2fsReservedBlocks: defaults.Tune2fsReservedBlocks,

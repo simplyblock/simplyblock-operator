@@ -1152,8 +1152,8 @@ func (r *StorageNodeReconciler) capacitySample(
 	return sample, ok
 }
 
-// raiseMaintenance raises a HostMaintenance operation when the node's worker has
-// been cordoned, and reports whether it did.
+// raiseMaintenance keeps the node's maintenance window in step with its worker's
+// cordon, and reports whether it changed anything.
 //
 // The operator raises this and a user does not, which is what §10 means by the
 // trigger being the cordon. A user creating one by hand is accepted and behaves
@@ -1166,10 +1166,59 @@ func (r *StorageNodeReconciler) raiseMaintenance(
 		return false, client.IgnoreNotFound(err)
 	}
 	if !worker.Spec.Unschedulable {
-		return false, nil
+		return r.releaseMaintenance(ctx, node)
 	}
 	return r.ensureOps(ctx, node, simplyblockv1alpha2.StorageNodeOpsActionHostMaintenance,
 		node.Name+"-maintenance")
+}
+
+// releaseMaintenance answers the cordon being undone, which is the signal that
+// the maintenance is over however it went.
+//
+// Two things happen to the window, depending on how far it got.
+//
+// One still in Holding has done nothing to the node yet and is waiting for a
+// slot, so an uncordon calls it off: the graph marks that step abortable for
+// exactly this, and a window left running would hold the node's lock for six
+// hours over a cordon that lasted a minute. From ShuttingDown onward the node
+// is down and something has to bring it back, so the window runs on and the
+// uncordon it is waiting for is the one AwaitingHost reads.
+//
+// A window that has finished is deleted, and that is not tidiness. The name is
+// derived from the node's, so ensureOps finds the terminal record of the last
+// maintenance on the next cordon and raises nothing — one window per node for
+// the lifetime of the object, with every drain after the first unheld. The
+// worker being schedulable again is the boundary the record belongs on.
+//
+// Regression: 2026-09-29-an-uncordon-does-not-reach-the-window.
+func (r *StorageNodeReconciler) releaseMaintenance(
+	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
+) (bool, error) {
+	var window simplyblockv1alpha2.StorageNodeOps
+	key := types.NamespacedName{Name: node.Name + "-maintenance", Namespace: node.Namespace}
+	if err := r.Get(ctx, key, &window); err != nil {
+		return false, client.IgnoreNotFound(err)
+	}
+
+	if terminalOps(window.Status.Phase) {
+		if err := r.Delete(ctx, &window); err != nil {
+			return false, client.IgnoreNotFound(err)
+		}
+		return true, nil
+	}
+
+	// A window with no step recorded has been raised and not yet admitted, and
+	// it is the one most worth calling off: nothing has happened to the node
+	// at all. Matching on Holding alone left it running, and it would go on to
+	// take the lock and shut a node down on a worker nobody is draining.
+	if !callableOff(step(window.Status.Step.State)) || window.Spec.Abort {
+		return false, nil
+	}
+	window.Spec.Abort = true
+	if err := r.Update(ctx, &window); err != nil {
+		return false, fmt.Errorf("call off the maintenance window on node %s: %w", node.Name, err)
+	}
+	return true, nil
 }
 
 // teardown drains the node before the object goes.
@@ -1203,9 +1252,10 @@ func (r *StorageNodeReconciler) teardown(
 		return ctrl.Result{}, err
 	}
 
-	// The drain reaching a terminal phase is what says it has finished, whatever
-	// its outcome. A failed removal leaves the operation as the record of why, so
-	// the object is not held forever by a drain nobody is going to retry.
+	// The drain reaching a terminal phase says it has stopped, not that the node
+	// is gone. Only a removal that succeeded releases the object; one that ended
+	// otherwise holds it, because the object is the only handle on a node that may
+	// still be running with its data on it.
 	//
 	// The node's lock is not the signal, and the difference is not cosmetic: a
 	// drain that has just been raised holds no lock yet, so a teardown reading the
@@ -1213,9 +1263,18 @@ func (r *StorageNodeReconciler) teardown(
 	// on the same pass that asked for the drain. The object then goes, and with it
 	// the operation it owns, and the backend node is left running with its data on
 	// it and nothing in Kubernetes tracking it.
-	if finished, err := r.drainFinished(ctx, node); err != nil {
+	ops, finished, err := r.drainOutcome(ctx, node)
+	if err != nil {
 		return ctrl.Result{}, err
-	} else if !finished {
+	}
+	if !finished {
+		return ctrl.Result{RequeueAfter: nodeRetry}, nil
+	}
+	if ops.Status.Phase != simplyblockv1alpha2.StorageNodeOpsPhaseSucceeded {
+		// The removal ended without the node leaving, so the object stays. The
+		// refusal is repeated in the control plane's words on every pass, so it is
+		// on the object that is still there.
+		r.emit(node, corev1.EventTypeWarning, OperationFailed, ops.Status.Message)
 		return ctrl.Result{RequeueAfter: nodeRetry}, nil
 	}
 
@@ -1224,25 +1283,25 @@ func (r *StorageNodeReconciler) teardown(
 	return ctrl.Result{}, r.Update(ctx, node)
 }
 
-// drainFinished reports whether the removal this node raised for itself has
-// reached a terminal phase.
+// drainOutcome reads the removal this node raised for itself and reports whether
+// it has reached a terminal phase.
 //
 // An operation that is not there is a drain that has not started rather than one
 // that is over: the pass before this one raises it, and one deleted out of band
 // is raised again. Treating a missing record as a finished drain is the same
 // mistake as treating an unheld lock as one (§4.5).
-func (r *StorageNodeReconciler) drainFinished(
+func (r *StorageNodeReconciler) drainOutcome(
 	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
-) (bool, error) {
+) (*simplyblockv1alpha2.StorageNodeOps, bool, error) {
 	var ops simplyblockv1alpha2.StorageNodeOps
 	key := types.NamespacedName{Name: node.Name + "-remove", Namespace: node.Namespace}
 	if err := r.Get(ctx, key, &ops); err != nil {
 		if apierrors.IsNotFound(err) {
-			return false, nil
+			return nil, false, nil
 		}
-		return false, fmt.Errorf("read the removal of node %s: %w", node.Name, err)
+		return nil, false, fmt.Errorf("read the removal of node %s: %w", node.Name, err)
 	}
-	return terminalOps(ops.Status.Phase), nil
+	return &ops, terminalOps(ops.Status.Phase), nil
 }
 
 // ensureOps raises one operation the entity created for itself, idempotently by

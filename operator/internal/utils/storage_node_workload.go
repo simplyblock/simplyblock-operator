@@ -339,7 +339,10 @@ func BuildStorageNodeDaemonSet(
 							Image:           image,
 							ImagePullPolicy: imagePullPolicy,
 							Command:         initCmd,
-							SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true)},
+							// node_configure.py's device inspection needs root, so
+							// the container runs as root outright rather than
+							// escalating via sudo.
+							SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true), RunAsUser: ptr.To(int64(0))},
 							VolumeMounts:    initMounts,
 							Resources:       effectiveResources(wl.InitContainerResources, defaultInitContainerResources),
 							Env: []corev1.EnvVar{
@@ -357,18 +360,21 @@ func BuildStorageNodeDaemonSet(
 							ImagePullPolicy: imagePullPolicy,
 							// The entry is sourced and one variable is exported
 							// out of it, because sourcing alone sets a shell
-							// variable and sudo passes the environment. Only
-							// that one: exporting the entry wholesale would put
-							// the device lists and the class flag into the
+							// variable and exec only inherits what is exported.
+							// Only that one: exporting the entry wholesale would
+							// put the device lists and the class flag into the
 							// agent's environment, where nothing asked for them.
 							// An entry that states none leaves the pod's own
 							// RESERVED_SYSTEM_CPUS, which is the fleet's.
 							Command: []string{"sh", "-c",
 								`[ -f /etc/node-env/env.sh ] && . /etc/node-env/env.sh
 [ -n "${RESERVED_SYSTEM_CPUS}" ] && export RESERVED_SYSTEM_CPUS
-exec sudo -E python3 simplyblock_web/node_webapp.py storage_node_k8s`,
+exec python3 simplyblock_web/node_webapp.py storage_node_k8s`,
 							},
-							SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true)},
+							// node_webapp.py needs root for device access, so the
+							// container runs as root outright rather than
+							// escalating via sudo.
+							SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true), RunAsUser: ptr.To(int64(0))},
 							Resources:       effectiveResources(wl.ContainerResources, defaultContainerResources),
 							ReadinessProbe:  readinessProbe,
 							Env:             mainEnv,

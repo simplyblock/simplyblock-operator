@@ -152,6 +152,9 @@ ClusterRef string `json:"clusterRef"`
 `spec.allowedNodes` restricts which hosts may carry the pool's volumes, and it
 names Kubernetes `Node` objects rather than `StorageNode`s, for the reason §4.3
 gives. Empty means every node in the cluster, which is the usual case.
+It requires `spec.volumeDefaults.enableDHCHAP`, which a CEL rule on the spec enforces at
+admission: the nodes are registered as the pool's allowed hosts, and the control plane accepts
+that only for a DHCHAP pool.
 
 **The pool's own ceilings, under `spec.limits`.** These are what the pool as a
 whole may consume, enforced by the control plane against the pool.
@@ -177,6 +180,10 @@ type PoolLimits struct {
 	// ...
 }
 ```
+
+`spec.limits.iops` and `spec.limits.throughput` are refused at admission for now, by a CEL
+rule on `PoolLimits`: the data plane's pool-wide QoS is not reliable. `capacity` and
+`maxVolumeSize` are plain admission checks in the control plane and are unaffected.
 
 **The defaults its volumes get, under `spec.volumeDefaults`.** These are the values
 a class assigned to this pool is expected to carry in its `parameters`, which is how
@@ -990,7 +997,7 @@ volume keeps serving I/O after its class is gone needs a real data path.
 | `spec.qos.*`                                                                           | `spec.limits.{iops,throughput}` (§3.1)                                                         | Spec regrouping, so that the pool's ceilings are named for what they limit                              |
 | `spec.storageClassParameters.*`                                                        | `spec.volumeDefaults.*` (§3.1)                                                                 | Spec regrouping, and the units align with `spec.limits`                                                 |
 | `spec.dhchap`                                                                          | `spec.volumeDefaults.enableDHCHAP` (§3.1)                                                      | Spec rename, owned by `design-crd-model.md` §9.6                                                        |
-| `encryption`, `replicate` in the class parameters                                      | `enableEncryption`, `enableReplication`                                                        | Spec renames, from the same list                                                                        |
+| `replicate` in the class parameters                                                    | `enableReplication`                                                                            | Spec rename, from the same list. `encryption` stays a class parameter                                   |
 | `qos_rw_iops`, `qos_rw_mbytes`, `qos_r_mbytes`, `qos_w_mbytes` in the class parameters | `max_iops`, `max_mbytes_per_sec`, `max_read_mbytes_per_sec`, `max_write_mbytes_per_sec` (§5.1) | Parameter renames. The old keys are read indefinitely, because a class's parameters cannot be rewritten |
 | `simplyblock.io/qos-*` overrides on a claim                                            | `storage.simplyblock.io/max-*` (§5.1)                                                          | Annotation renames, taking the group's key prefix. Both older spellings stay in the resolver            |
 | Untyped `status`, no phase                                                             | `StoragePoolPhase` (§3.3)                                                                      | Additive                                                                                                |
@@ -1164,11 +1171,6 @@ type VolumeDefaults struct {
 	// EnableCompression compresses logical volumes.
 	// +optional
 	EnableCompression *bool `json:"enableCompression,omitempty"`
-
-	// EnableEncryption encrypts logical volumes, using the key store the cluster
-	// names in spec.kms.
-	// +optional
-	EnableEncryption *bool `json:"enableEncryption,omitempty"`
 
 	// EnableReplication replicates logical volumes.
 	// +optional

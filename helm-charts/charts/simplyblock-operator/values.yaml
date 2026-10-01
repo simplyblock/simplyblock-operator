@@ -17,15 +17,11 @@ image:
     pullPolicy: Always
   simplyblock:
     repository: quay.io/simplyblock-io/simplyblock
-    tag: "26.2.6-PRE"
-    pullPolicy: Always
-  storageNode:
-    repository: quay.io/simplyblock-io/storage-node-handler
-    tag: v0.1.9
+    tag: "main"
     pullPolicy: Always
   operator:
     repository: quay.io/simplyblock-io/simplyblock-operator
-    tag: v26.2.6
+    tag: "main"
     pullPolicy: Always
   rebalancer:
     repository: quay.io/simplyblock-io/simplyblock-rebalancer
@@ -36,10 +32,6 @@ image:
     repository: quay.io/simplyblock-io/numa-resource-plugin
     tag: latest
     pullPolicy: Always
-serviceAccount:
-  # Specifies whether a serviceAccount should be created
-  create: true
-
 rbac:
   # Specifies whether RBAC resources should be created
   create: true
@@ -100,6 +92,269 @@ deployment:
   # Observability under controlplane is rendered for standalone only: it stores
   # what it collects in the object store a hosted control plane brings.
   profile: standalone
+
+# The one discovery run a fresh install performs by itself.
+#
+# The operator raises it, inspects every worker this section allows it to, and
+# writes a ClusterDeploymentConfig in Draft. Nothing is deployed until somebody
+# reads that draft and sets `approved: true` on it: `helm install` is not where a
+# running cluster comes from, and there is no value here that makes it one.
+#
+# It happens once per installation. The operator declines the run the moment any
+# OperatorOps, ClusterDeploymentConfig, or StorageCluster already exists, so
+# changing anything below and running `helm upgrade` changes nothing: the run it
+# would configure has already happened. Raising another is
+# `kubectl create -f` against an OperatorOps of your own.
+#
+# Rendered for the managed profile as `enabled: false` alone: there, the cluster
+# that manages this one raises the run, in the namespace it chooses.
+discovery:
+  # Whether this installation raises the run at all. An installation that wants
+  # no draft waiting for it sets this to false and writes its
+  # ClusterDeploymentConfig by hand.
+  enabled: true
+
+  # What the run is called. It is also what the draft is named after, unless
+  # draft.name below states one, and the draft's name is what the proposed
+  # StorageCluster is named after in turn, so a long name here is refused by the
+  # 37-character check on that last one.
+  name: initial-discovery
+
+  # Where the run, its probe Jobs, their reports, and the draft go. Empty is the
+  # namespace this release is installed into.
+  #
+  # It places those four things. What follows from it is the deployment config
+  # controller's own behavior rather than this value's: approving a draft builds
+  # the StorageCluster and its StorageNodes in the draft's namespace, so a draft
+  # placed here is a cluster placed here. The namespace has to exist already, and
+  # `helm uninstall` does not remove what was built in it.
+  #
+  #   namespace: simplyblock-storage
+  namespace: ""
+
+  # Which workers the run inspects, by label on the Kubernetes Node. Empty
+  # inspects every schedulable worker, which is the usual first run: what it
+  # produces is a draft of everything the fleet has, and narrowing it is what a
+  # reviewer does against a draft they can see.
+  #
+  # It also decides whether the run is raised at all. A fleet where nothing
+  # matches this selector is a fleet with nothing to inspect, and a run raised
+  # against one fails.
+  #
+  # The entries are ANDed, and the labels are the fleet's own rather than keys
+  # this product defines:
+  #
+  #   nodeSelector:
+  #     node-role.kubernetes.io/simplyblock-storage: ""
+  nodeSelector: {}
+
+  # What the run's probe pods tolerate, in the ordinary Kubernetes shape.
+  #
+  # A fleet that dedicates machines to storage taints them, and a run that
+  # tolerates nothing inspects nothing. They reach the draft as well, because the
+  # taints a probe had to tolerate are the taints the storage nodes have to live
+  # with, so this is also what the storage-node DaemonSet ends up tolerating:
+  #
+  #   tolerations:
+  #     - key: storage.simplyblock.io/dedicated
+  #       operator: Equal
+  #       value: "true"
+  #       effect: NoSchedule
+  #     - key: node.kubernetes.io/unreachable
+  #       operator: Exists
+  #       effect: NoExecute
+  #       tolerationSeconds: 300
+  tolerations: []
+
+  # Let the run consider the machines that run the API server and etcd.
+  #
+  # Off, because a storage node is a data path and putting one on an etcd host is
+  # a placement almost nobody intends. The single-node development cluster and the
+  # combined three-node deployment are what it is for, and on a single-node
+  # cluster it is what makes the run happen at all: the one machine there is the
+  # control-plane node.
+  enableControlPlaneNodes: false
+
+  # Dedicate a journal device on a fleet whose disks do not say which one.
+  #
+  # The run proposes a dedicated journal device when every worker hands over one
+  # disk smaller than its others, because a fleet built that way was built that
+  # way on purpose. Where several disks share the smallest size nothing says
+  # which to take, and taking one spends a whole disk the fleet did not set
+  # aside: on a worker with ten 10 TB disks that is 10 TB, silently. So the run
+  # does not guess.
+  #
+  # What happens instead depends on the class. An NVMe cluster carves a journal
+  # partition out of every device when none is dedicated, so the run leaves the
+  # field unset, says so, and every disk stays storage. A cluster of logical
+  # block devices has no such layout, so the run fails rather than writing a
+  # document that creates the cluster, formats its drives, and then fails every
+  # node_add. Set this on such a fleet to have one of the equal disks taken
+  # anyway, and read the draft's note to see which disk it cost.
+  #
+  # It does not force a worker that hands over a single disk, with or without
+  # this: dedicating that disk leaves the worker nothing to store on.
+  forceJournalDevice: false
+
+  # Which of an inspected worker's devices reach the draft. What is filtered out
+  # here never appears in the document, so this is the place to keep a boot disk
+  # out of a fifty-worker draft nobody reads line by line.
+  deviceFilter:
+    # Scan each worker's logical block devices instead of its NVMe devices. It
+    # selects the class rather than adding one: a cluster is built out of one
+    # class of backend storage, and a draft describes one cluster.
+    enableLogicalBlockDevices: false
+
+    # Report devices carrying a partition table alongside the available ones. On,
+    # because a machine that has held data before carries one on every disk and
+    # refusing them makes the run meant to show a fleet what it has report that it
+    # has nothing. It waives the table and nothing else: a device that is also
+    # mounted, held by the kernel, or carrying swap stays out.
+    enablePartitionedDevices: true
+
+    # The two block-device lists, which require enableLogicalBlockDevices.
+    #
+    # A deny list is the one most deployments want: on a fleet that boots from
+    # /dev/sda, this single entry keeps the root disk out of every group of the
+    # draft. An allow list is the opposite and is narrow enough to be dangerous,
+    # because a draft it emptied looks the same as a fleet with no disks. Prefer
+    # narrowing the draft, which a reviewer can see and correct.
+    #
+    #   blockAllowList:
+    #     - /dev/nvme0n1
+    #   blockDenyList:
+    #     - /dev/sda
+    blockAllowList: []
+    blockDenyList: []
+
+    # The NVMe class's half of the same thing, by PCI address. The deny entry is
+    # the slot every worker in a uniform fleet boots from.
+    #
+    #   pcieAllowList:
+    #     - "0000:5e:00.0"
+    #   pcieDenyList:
+    #     - "0000:00:1f.2"
+    pcieAllowList: []
+    pcieDenyList: []
+
+    # Restrict candidates to devices whose PCI model string matches, which is how
+    # a fleet with one drive model among several hands over only that model. It
+    # narrows the NVMe class alone.
+    #
+    #   pcieModel: SAMSUNG MZQL23T8HCLS-00A07
+    pcieModel: ""
+
+    # Size range a candidate has to fall in, which is how the system disks of a
+    # uniform fleet are excluded. It applies to whichever class is being scanned:
+    #
+    #   driveSizeRange: 1T-16T
+    driveSizeRange: ""
+
+  # What the draft proposes, for the parts no probe can read.
+  #
+  # Every field here is one discovery would otherwise guess at, and the guesses
+  # that matter are the ones nobody can take back. stripe,
+  # enableChecksumValidation, and enableAtomicity4K are immutable on the
+  # StorageCluster the draft expands into, and enableDriveFormat is spent when a
+  # node takes its devices, which is destructive and happens once.
+  # maxSubsystemCount is the exception and can be corrected on the cluster later.
+  # It is here because nothing about the hardware decides it.
+  #
+  # What is left out is what the probes answer better than an installation can:
+  # the vCPU count, the huge-page size, the journal device, the host OS, and the
+  # workers themselves.
+  #
+  # It seeds this run's draft and no other. A discovery run somebody raises later
+  # describes whatever the fleet has become by then.
+  draft:
+    # What the document is called. Empty is "discovered-" followed by the run's
+    # name, so the default is "discovered-initial-discovery."
+    #
+    #   name: production-draft
+    name: ""
+
+    # State that this is an edge deployment, which differs from a datacenter one
+    # in topology and scale rather than in kind. Left out, the draft says nothing
+    # about it.
+    # edgeCluster: true
+
+    # Images the draft pins, as full repository:tag references. Empty leaves each
+    # to its own default, which is the pairing this release was tested as. The
+    # node agent is not here: a draft that pins none takes the ControlPlane
+    # object's image, which this chart already writes.
+    #
+    #   images:
+    #     spdk: quay.io/simplyblock-io/spdk:v26.2.6
+    #     spdkProxy: quay.io/simplyblock-io/spdk-proxy:v26.2.6
+    images:
+      spdk: ""
+      spdkProxy: ""
+
+    cluster:
+      # The StorageCluster's name. Empty is the draft's name with "-cluster"
+      # appended, so the default is "discovered-initial-discovery-cluster," which
+      # is 36 of the 37 characters the control plane allows. It derives its own
+      # names from this one, and the chart refuses a longer one rather than
+      # letting the draft fail at CreatingCluster.
+      #
+      #   name: production
+      name: ""
+
+      # The erasure-coding layout. Empty derives one from the number of storage
+      # nodes the run found, which is a fact about the fleet rather than about how
+      # much redundancy this deployment wants: a fleet of three gets 1+1 and a
+      # fleet of twelve gets 2+1, whatever it was built for. A cluster's stripe
+      # cannot be changed afterward.
+      #
+      #   stripe:
+      #     dataChunks: 4
+      #     parityChunks: 2
+      stripe: {}
+
+      # How many NVMe-oF subsystems each storage node serves. Left out, the draft
+      # proposes 30, which is the middle of the range this API accepts and not a
+      # reading: the number follows from how many volumes the deployment expects
+      # to serve and how they are spread.
+      # maxSubsystemCount: 50
+
+      # Format every device the draft names before a storage node takes it. Left
+      # out, the draft proposes it set, because a drive carrying anything is not
+      # usable otherwise. State false for a fleet whose drives must be handed over
+      # as they are. The draft still lists them either way, so a reviewer sees
+      # which disks are involved.
+      # enableDriveFormat: false
+
+      # Validate a CRC on every I/O, for silent-data-error protection. Left out,
+      # the cluster's own default decides, which is off.
+      #
+      # The backend bakes the checksum method into each device when the cluster is
+      # created and never re-applies it, so a cluster created without this is one
+      # nobody can turn it on for. It needs a 4K logical block size, which
+      # enableDriveFormat produces on an NVMe device that can be reformatted and
+      # enableAtomicity4K is the alternative to on one that cannot.
+      #
+      # It is stated as null rather than left out, unlike the values above it,
+      # because the chart itself reads this one: the check below refuses 4K
+      # atomicity without it, and a template may only read a value the chart
+      # defines. Null is what "left out" means everywhere else here, and the
+      # operator reads it the same way.
+      enableChecksumValidation: null
+
+      # Enforce 4K write atomicity on every device the draft names, which is what
+      # lets checksum validation run on a device whose logical block size is under
+      # the data plane's 4K minimum. Left out, the cluster's own default decides,
+      # which is off.
+      #
+      # It is an enforcement and not a reading. A SATA drive presenting 512-byte
+      # logical blocks over a 4K physical sector reports 512 and nothing more, and
+      # a kernel older than 6.11 publishes no atomic write attributes at all, so
+      # this asserts a guarantee nothing verified. Where the hardware does not keep
+      # it, a torn write becomes a checksum that silently disagrees with the data.
+      # The device reports in the run's own draft are what to check it against.
+      #
+      # Stated as null for the reason enableChecksumValidation is: the chart
+      # reads it, and the check below is what reads it.
+      enableAtomicity4K: null
 
 # The CSI driver, as the SimplyblockDriver the chart renders for every profile
 # that runs one.
@@ -204,23 +459,21 @@ controlplane:
     # required in practice for any StorageCluster that does not set its own.
     storageNodeImage: ""
 
-  # Accept a pod's service-account token from the CSI driver's two accounts
-  # instead of requiring the static cluster secret. This is the control
-  # plane's half of the switch: set it together with
-  # spec.enableServiceAccountAuth on the SimplyblockDriver, which is what
-  # makes the plugins present a token in the first place.
-  trustCSIServiceAccounts: false
-
   observability:
     enabled: false
     secret: "sWbpOgba1bKnCfcPkVQi"
-    deletionInterval: "3d"
-    level: "DEBUG"
+    mongodb:
+      # Whether the chart applies the MongoDBCommunity CRD it carries. Graylog
+      # stores its configuration in a MongoDBCommunity, so the kind has to be
+      # served wherever observability is enabled. A cluster that already serves
+      # it keeps what it has whatever this says, so turning it off is only for a
+      # cluster that installs the CRD separately, after this chart.
+      installCRDs: true
     # Parser used by fluent-bit to read /var/log/containers/*.log.
     # "cri" is correct for every CRI runtime (containerd and CRI-O), which covers
-    # OpenShift, vanilla Kubernetes >= 1.24, k3s/RKE2, Talos, kind and the managed
-    # clouds. Only set this to "docker" on legacy dockershim clusters (k8s <= 1.23),
-    # which write Docker JSON log files instead.
+    # OpenShift, vanilla Kubernetes >= 1.24, k3s/RKE2, Talos, kind, and the
+    # managed clouds. Only set this to `docker` on legacy dockershim clusters
+    # (Kubernetes 1.23 and older), which write Docker JSON log files instead.
     logParser: "cri"
     graylog:
       repository: quay.io/simplyblock-io/graylog
@@ -321,9 +574,6 @@ controlplane:
     key: 
     value:
 
-  ports:
-    lvolNvmfPortStart: 9110
-
   csiHostpathDriver:
     enabled: false
     image:
@@ -348,18 +598,36 @@ controlplane:
     allowedTopologyZones: []
 
   foundationdb:
-    enabled: true
-    multiAZ: false
+    # Whether the chart applies the FoundationDB CRDs it carries. They are the
+    # ones fdb-kubernetes-operator v2.13.0 ships, which is the release the
+    # operator deploys. A cluster that already serves the kinds keeps what it
+    # has whatever this says, so turning it off is only for a cluster that
+    # installs them separately, after this chart.
+    installCRDs: true
     # redundancyMode controls FDB coordinator count:
     # "double" = 3 coordinators (suitable for 3 workers, tolerates 1 failure)
     # "triple" = 5 coordinators (suitable for 5+ workers, tolerates 2 failures)
     redundancyMode: double
-    # nodeSelector pins FDB pods to dedicated nodes, leaving the remaining
-    # storage workers as non-FDB nodes that can be added in parallel.
-    # Label target nodes first: kubectl label node <node> simplyblock.io/fdb-node=true
-    # Example:
+    # Which workers the database's own processes run on. Empty leaves them with
+    # the rest of the control plane, wherever controlplane.nodeSelector put it.
+    #
+    # It is worth stating because of what it does to expansion. Adding a storage
+    # node reboots its worker, and a worker running a FoundationDB process is
+    # added on its own however many nodes storageNodes.nodeProvisioningBudget
+    # allows at once. Confining the database to a few workers is what leaves the
+    # remaining ones free to be added together.
+    #
+    # State at least as many workers as redundancyMode asks for coordinators:
+    # three for double, and five for triple. A narrower selector still places
+    # them, several to a worker, where one worker's loss takes more coordinators
+    # than the redundancy mode was configured to survive.
+    #
+    # The label is the fleet's own, and the workers carry it first:
+    #
+    #   kubectl label node <worker> storage.simplyblock.io/foundationdb=""
+    #
     #   nodeSelector:
-    #     simplyblock.io/fdb-node: "true"
+    #     storage.simplyblock.io/foundationdb: ""
     nodeSelector: {}
     image:
       operator:
@@ -369,7 +637,7 @@ controlplane:
         repository: quay.io/simplyblock-io/fdb-kubernetes-monitor
         tag: "7.3.63"
       # Set baseImage to use a custom FDB image registry. With imageType: unified
-      # the same fdb-kubernetes-monitor image runs as the foundationdb container,
+      # the same fdb-kubernetes-monitor image runs as the `foundationdb` container,
       # so this points at the monitor repo. When empty, no imageConfigs block is
       # rendered and the operator uses its default.
       mainContainer:
@@ -379,20 +647,9 @@ controlplane:
     # (workload, latency, storage, coordinator health) on :9444/metrics.
     # Upstream: https://github.com/aikoven/foundationdb-exporter
     exporter:
+      # The exporter's own image and sizing are the operator's, which builds it
+      # beside the management API.
       enabled: true
-      image:
-        repository: aikoven/foundationdb-exporter
-        tag: "3.1.0"
-      resources:
-        requests:
-          cpu: 50m
-          memory: 64Mi
-        limits:
-          cpu: 200m
-          memory: 128Mi
-
-operator:
-  openShiftCluster: true
 
 # How a volume's move is raised. The operator raises one when the rebalancer
 # moves a volume off a hot node, when a node is drained, and when a claim is
@@ -695,7 +952,8 @@ tls:
   # refuses off OpenShift. A cluster that has neither sets this to false.
   enabled: true
 
-  # Provider responsible for issuing serving certificates. One of: openshift, cert-manager. Required if enabled.
+  # Provider responsible for issuing serving certificates. One of `openshift` or
+  # `cert-manager`. Required if enabled.
   provider: cert-manager
 
   # Required if provider == cert-manager. Names a ClusterIssuer used to mint

@@ -99,8 +99,15 @@ func TestBlankRequiresTheHeadRegionZero(t *testing.T) {
 	}
 }
 
-// U-16, U-18: one byte anywhere in the head region defeats blank, and the two
-// ends of the region are where an off-by-one would hide.
+// U-16: one byte anywhere in the block the blank rule reads defeats blank, and
+// both ends of that block are where an off-by-one would hide.
+//
+// U-18 used to sit here and asked the same of the last byte of the whole head
+// region. The rule does not read that far any more: a disk is released by
+// erasing the signature, which is what wipefs does, or by zeroing the front of
+// it, and neither reaches the end of a megabyte. What lives past the block is
+// still read and still offered to every detector, so a format there is still
+// named; it is only the zero test that stops at the block.
 func TestOneNonZeroByteInTheHeadDefeatsBlank(t *testing.T) {
 	const size = 8 << 20
 	region := int64(MinRegionSize)
@@ -109,9 +116,9 @@ func TestOneNonZeroByteInTheHeadDefeatsBlank(t *testing.T) {
 		name string
 		off  int64
 	}{
-		{"U-16: first byte of the head region", 0},
-		{"U-16: inside the head region", 1234},
-		{"U-18: last byte of the head region", region - 1},
+		{"U-16: first byte of the block", 0},
+		{"U-16: inside the block", 1234},
+		{"U-16: last byte of the block", BlankHeadSize - 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -424,11 +431,13 @@ func TestTheBlankSentenceCountsWhatWasRead(t *testing.T) {
 			t.Fatalf("Read(%d).Content = %s, want Blank", size, got.Content)
 		}
 
-		// A device of two regions or less is read whole, so the head is the
-		// device; above that the head is one region.
+		// A device of two regions or less is read whole, and every byte of it
+		// is then examined. Above that the rule reads one block of the head,
+		// and the sentence has to say the block rather than the region: it is
+		// the evidence a format rests on, so it states what was looked at.
 		read := size
 		if read > 2*region {
-			read = region
+			read = BlankHeadSize
 		}
 		want := fmt.Sprintf("the first %d bytes", read)
 		if !strings.Contains(got.Detail, want) {

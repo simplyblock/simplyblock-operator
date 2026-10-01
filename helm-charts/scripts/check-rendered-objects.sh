@@ -63,8 +63,12 @@ check() {
   fi
 
   present="$(printf '%s\n' "$out" | objects)"
+  # Every membership test below reads the list from a here-string. "pipefail" is
+  # set, and grep -q closes the pipe as soon as it matches, so feeding it from a
+  # pipe reports the SIGPIPE of the writer and turns a present object into a
+  # missing one whenever the list is long enough for the write to be unfinished.
   for want in "${required[@]}"; do
-    if ! printf '%s\n' "$present" | grep -qxF "$want"; then
+    if ! grep -qxF "$want" <<<"$present"; then
       echo "  ${profile}: MISSING ${want}"
       missing=1
       fail=1
@@ -97,7 +101,7 @@ checkPair() {
   local present
 
   present="$(render standalone)"
-  if printf '%s\n' "$present" | grep -qxF "StorageClass/local-hostpath"; then
+  if grep -qxF "StorageClass/local-hostpath" <<<"$present"; then
     echo "  hostpath: StorageClass/local-hostpath is rendered while its provisioner is not installed"
     fail=1
   else
@@ -107,15 +111,77 @@ checkPair() {
   present="$(render standalone --set controlplane.csiHostpathDriver.enabled=true)"
   local want
   for want in "StorageClass/local-hostpath" "CSIDriver/hostpath.csi.k8s.io"; do
-    if ! printf '%s\n' "$present" | grep -qxF "$want"; then
+    if ! grep -qxF "$want" <<<"$present"; then
       echo "  hostpath: MISSING ${want} with the driver enabled"
       fail=1
     fi
   done
 }
 
+# checkVendoredCRDs asserts that the CRDs the chart carries for FoundationDB and
+# for MongoDB are rendered by default, and that each one's value drops its own
+# and leaves the other alone.
+#
+# They are templates rather than crds/ entries so that a deployment can decline
+# them, and crds/ is applied whatever a value says. A guard that read a path
+# values.yaml does not define would render nothing at all, and one written
+# against the wrong value would go on installing a CRD a cluster asked the chart
+# to leave to its own operator.
+checkVendoredCRDs() {
+  local present want
+  local -a fdb=(
+    "CustomResourceDefinition/foundationdbclusters.apps.foundationdb.org"
+    "CustomResourceDefinition/foundationdbbackups.apps.foundationdb.org"
+    "CustomResourceDefinition/foundationdbrestores.apps.foundationdb.org"
+  )
+  local mongo="CustomResourceDefinition/mongodbcommunity.mongodbcommunity.mongodb.com"
+  local missing=0
+
+  present="$(render standalone)"
+  for want in "${fdb[@]}" "$mongo"; do
+    if ! grep -qxF "$want" <<<"$present"; then
+      echo "  crds: MISSING ${want} by default"
+      missing=1
+      fail=1
+    fi
+  done
+
+  present="$(render standalone --set controlplane.foundationdb.installCRDs=false)"
+  for want in "${fdb[@]}"; do
+    if grep -qxF "$want" <<<"$present"; then
+      echo "  crds: ${want} is rendered with controlplane.foundationdb.installCRDs=false"
+      missing=1
+      fail=1
+    fi
+  done
+  if ! grep -qxF "$mongo" <<<"$present"; then
+    echo "  crds: controlplane.foundationdb.installCRDs=false also dropped ${mongo}"
+    missing=1
+    fail=1
+  fi
+
+  present="$(render standalone --set controlplane.observability.mongodb.installCRDs=false)"
+  if grep -qxF "$mongo" <<<"$present"; then
+    echo "  crds: ${mongo} is rendered with controlplane.observability.mongodb.installCRDs=false"
+    missing=1
+    fail=1
+  fi
+  for want in "${fdb[@]}"; do
+    if ! grep -qxF "$want" <<<"$present"; then
+      echo "  crds: controlplane.observability.mongodb.installCRDs=false also dropped ${want}"
+      missing=1
+      fail=1
+    fi
+  done
+
+  if [ "$missing" -eq 0 ]; then
+    echo "  crds: the 4 vendored CRDs render by default, and each value drops its own"
+  fi
+}
+
 check standalone "${COMMON[@]}"
 check managed "${COMMON[@]}"
 checkPair
+checkVendoredCRDs
 
 exit "$fail"
