@@ -7762,14 +7762,17 @@ spec:
                 description: |-
                   Abort asks a running operation to stop at its next step and unwind.
 
-                  Restart can be aborted before its call is issued and not after: a restart
-                  the control plane has accepted is one nothing can recall, so the graph
-                  declares where the edge exists rather than this field promising one.
+                  Each action can be aborted before it has issued anything and not after: a
+                  restart the control plane has accepted is one nothing can recall, and a
+                  device a failure has already removed is one this operator has no call to
+                  put back. The graph declares where the edge exists rather than this field
+                  promising one.
                 type: boolean
               action:
                 description: Action is the operation to perform.
                 enum:
                 - Restart
+                - Fail
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -7848,7 +7851,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Requesting'',''Awaiting'']'
+                  rule: '!has(self.state) || self.state in [''Requesting'',''Awaiting'',''Removing'',''Failing'']'
             type: object
         type: object
     served: true

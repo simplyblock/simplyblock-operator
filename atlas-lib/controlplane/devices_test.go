@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/simplyblock/atlas/errs"
@@ -116,5 +117,70 @@ func TestDeviceCallsRefuseAnIdentifierThatIsNotAUUID(t *testing.T) {
 	}
 	if _, err := c.Device(t.Context(), testDeviceCluster, testDeviceNode, "nope"); err == nil {
 		t.Error("a device id that is not a UUID was accepted")
+	}
+}
+
+// A Fail is two calls, and the first of them is the removal: the control plane
+// refuses to fail a device that is still in the data path, so a client that
+// offered only the second would issue a call that can only be refused.
+func TestRemoveDeviceIssuesThePost(t *testing.T) {
+	var path, method, query string
+	c := deviceClient(t, func(w http.ResponseWriter, r *http.Request) {
+		path, method, query = r.URL.Path, r.Method, r.URL.RawQuery
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	if err := c.RemoveDevice(t.Context(), testDeviceCluster, testDeviceNode, testDeviceID); err != nil {
+		t.Fatalf("removing: %v", err)
+	}
+	if method != http.MethodPost {
+		t.Errorf("method = %s, want POST", method)
+	}
+	if want := "/api/v2/clusters/" + testDeviceCluster + "/storage-nodes/" + testDeviceNode +
+		"/devices/" + testDeviceID + "/remove"; path != want {
+		t.Errorf("path = %s, want %s", path, want)
+	}
+	// The removal is never forced. A force flag is what turns the control
+	// plane's own refusals into silence, and every one of them is a state the
+	// caller needs to see rather than override.
+	if strings.Contains(query, "force=true") {
+		t.Errorf("query = %q, want no force", query)
+	}
+}
+
+func TestFailDeviceIssuesThePost(t *testing.T) {
+	var path, method string
+	c := deviceClient(t, func(w http.ResponseWriter, r *http.Request) {
+		path, method = r.URL.Path, r.Method
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	if err := c.FailDevice(t.Context(), testDeviceCluster, testDeviceNode, testDeviceID); err != nil {
+		t.Fatalf("failing: %v", err)
+	}
+	if method != http.MethodPost {
+		t.Errorf("method = %s, want POST", method)
+	}
+	if want := "/api/v2/clusters/" + testDeviceCluster + "/storage-nodes/" + testDeviceNode +
+		"/devices/" + testDeviceID + "/fail"; path != want {
+		t.Errorf("path = %s, want %s", path, want)
+	}
+}
+
+// The control plane refuses to fail a device that is not already removed, and
+// refuses either call while a migration is running anywhere in the cluster.
+// Both arrive as a non-2xx, and reporting one as performed would leave the
+// caller waiting for a device to report a state nothing asked it for.
+func TestDeviceRemovalAndFailureReportARefusal(t *testing.T) {
+	c := deviceClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"Device must be in removed status"}`))
+	})
+
+	if err := c.RemoveDevice(t.Context(), testDeviceCluster, testDeviceNode, testDeviceID); err == nil {
+		t.Error("a refused removal was reported as performed")
+	}
+	if err := c.FailDevice(t.Context(), testDeviceCluster, testDeviceNode, testDeviceID); err == nil {
+		t.Error("a refused failure was reported as performed")
 	}
 }

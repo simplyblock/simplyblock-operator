@@ -2,7 +2,7 @@
 
 **Status:** Partially Implemented  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-30 (last updated 2026-09-10)  
+**Date:** 2026-08-30 (last updated 2026-10-01)  
 **Test Plan:** [`tests/test-plan-storagedevice.md`](../../tests/test-plan-storagedevice.md)
 
 Both kinds are new, so §10 is what they replace rather than a migration. The
@@ -10,9 +10,11 @@ document also fills in the far side of the `StorageNode` owns `StorageDevice`
 edge that [`design-crd-model.md`](design-crd-model.md) §9.3 draws.
 
 `StorageDevice` and its mirror exist (§4, §5), along with the readings of §4.4
-and the observability of §8. `StorageDeviceOps` does not: §6 and Appendix B
-specify it and nothing implements them, and each of the two says so where it
-starts.
+and the observability of §8. `StorageDeviceOps` exists for two of its five
+actions: `Restart` and `Fail` are built, and `SelfTest`, `Replace`, and `Migrate`
+wait on control-plane verbs the v2 API does not offer. §6 says which is which
+where it starts, and Appendix B carries the whole type rather than the narrowed
+one that ships.
 
 ---
 
@@ -552,10 +554,10 @@ Declared in `operator/api/v1alpha2/storagedeviceops_types.go`, short name
 `operator/internal/controller/storagedeviceops_controller.go`. The type is
 Appendix B.
 
-**One of the five actions is implemented, and it is the one the kind exists
-for.** `Restart` is built: the kind, its graph, the reconciler, and the device
-lock §4.2 declared empty against this section arriving. The other four are
-blocked on control-plane verbs the v2 API does not offer, and the ask is the
+**Two of the five actions are implemented, and they are the two the kind exists
+for.** `Restart` and `Fail` are built: the kind, their graphs, the reconciler, and
+the device lock §4.2 declared empty against this section arriving. The other three
+are blocked on control-plane verbs the v2 API does not offer, and the ask is the
 `TODO(storagedeviceops)` beside their constants in `storagedeviceops_types.go`,
 which names the endpoint each one needs.
 
@@ -567,9 +569,9 @@ can act on. Widening an enum is additive, so each action arrives with its
 endpoint.
 
 ```go
-// What ships today. The other four constants are declared without being in the
+// What ships today. The other three constants are declared without being in the
 // marker, so the names exist where the reasons do.
-// +kubebuilder:validation:Enum=Restart
+// +kubebuilder:validation:Enum=Restart;Fail
 type StorageDeviceOpsAction string
 ```
 
@@ -577,7 +579,7 @@ type StorageDeviceOpsAction string
 |------------|------------------------------------------------------------------------|-----------------------------------------------------|
 | `Restart`  | `Requesting` → `Awaiting`                                              | One device. Its node keeps serving from the rest    |
 | `SelfTest` | `Validating` → `Requesting` → `Awaiting`                               | One device, out of service while the test runs      |
-| `Fail`     | `Requesting` → `Awaiting`                                              | One device, out of the data path, still in the slot |
+| `Fail`     | `Removing` → `Failing` → `Awaiting`                                    | One device, out of the data path, still in the slot |
 | `Replace`  | `Validating` → `Removing` → `AwaitingDevice` → `Adding` → `Rebuilding` | One device, and a rebuild onto the one that arrives |
 | `Migrate`  | `Validating` → `Detaching` → `AwaitingMove` → `Attaching`              | One device, and two nodes for as long as it takes   |
 
@@ -638,6 +640,30 @@ redundancy elsewhere and stops trusting it, while the hardware stays where it is
 somebody is ready to deal with it. It is the action that separates a drive being bad
 from a drive being gone, which one action covering both would conflate.
 
+**`Fail` is two calls, which is why its graph has a step the other one-call
+actions do not.** The control plane fails only a device it already holds as
+removed, so `Removing` takes the device out of the data path and `Failing`
+declares it untrustworthy. Each step reads the device's reported status before it
+acts, which is what lets the action resume: a pass that died between a call and
+its record finds the device where the call left it and issues nothing. A device
+already out of the data path, by an earlier pass or by somebody's hand, skips
+`Removing` and is failed where it stands.
+
+**A device that is already failed is refused rather than failed again.** The
+action records a decision somebody made, and reporting that the decision was
+carried out when nothing was issued hides the likelier reading, that the
+operation names a device somebody else has already dealt with. The same reading
+closes the gap between the two steps: a device that came back into service
+between them, through self-repair or a restart somebody issued, is refused at
+`Failing` rather than failed from a state the control plane does not accept.
+
+**The removal is never forced.** The control plane's own force flag skips the
+refusals it raises for a device in a state it cannot be removed from and for a
+restart already running against it, and for a cluster with a volume migration in
+flight on any of its nodes. Each of those is a fact the operation reports rather
+than overrides, and the last of them is the reason a `Fail` can be refused by
+work happening on a node other than the device's own.
+
 **`Fail` proceeds at any redundancy, which is the one asymmetry in the set.**
 `SelfTest` and `Replace` refuse when the cluster's fault tolerance does not survive
 losing a device. `Fail` acts regardless, because its premise is that the device is
@@ -652,12 +678,27 @@ phase and are indistinguishable in it. `status.deviceStatus`, which keeps the co
 plane's own spelling (§4.2), is where the two differ if the control plane distinguishes
 them.
 
+**The abort edge sits on `Removing` and nowhere else.** Until the removal is
+issued the operation has done nothing, so an abort stops it cleanly. Afterward
+the device is out of the data path and this operator has no call that puts it
+back, so an abort in `Failing` or `Awaiting` would record a stop while leaving the
+device removed under an object saying nothing happened. The only call that returns
+a removed device to service is the adopt §7 lists, and the v2 API does not serve
+it.
+
+**The edge is also refused where the device is already removed, which the graph
+cannot see.** The call is issued inside `Removing`, so a pass that died between
+the call and the transition leaves the operation in the step that declares the
+edge with the device out of the data path. The abort therefore reads the device
+first and is refused on anything but a device still in service, which is the
+same question `Removing` itself asks before it issues anything.
+
 **`Failed` is terminal, so `Fail` has no inverse and the action is not reversible.**
 A device that has been failed does not return to service: there is no `Recover`, the
 control plane offers nothing to return it, and the two ways out of the phase are both
 physical: the drive is swapped (`Replace`) or pulled, and pulling it deletes the object
-(§5.2). The abort edge exists from `Pending` only, because once `Requesting` has issued
-the call there is nothing to undo.
+(§5.2). The abort edge exists before the removal only, because once the device is out of
+the data path there is nothing this operator can undo it with.
 
 **That makes a mistaken `Fail` expensive, and the expense is the point.** Failing a
 healthy device costs a physical replacement of working hardware, so the action is worth
@@ -731,9 +772,9 @@ onward.
 **A `DELETE` is refused from every step that declares no abort edge**, which is the
 group rule reading this kind's graph
 ([`design-crd-model.md`](design-crd-model.md) §3.1). Those steps are `Requesting`,
-`Awaiting`, `Removing`, `AwaitingDevice`, `Adding`, `Rebuilding`, `Detaching`, and
-`Attaching`, leaving `Validating` and `AwaitingMove` as the two a delete is admitted
-from, where `storage.simplyblock.io/storagedeviceops-finalizer` unwinds the operation
+`Awaiting`, `Failing`, `AwaitingDevice`, `Adding`, `Rebuilding`, `Detaching`, and
+`Attaching`, leaving `Validating`, `Removing`, and `AwaitingMove` as the three a
+delete is admitted from, where `storage.simplyblock.io/storagedeviceops-finalizer` unwinds the operation
 before it clears. The two deadlineless steps are what make the rule matter here rather than
 elsewhere: `AwaitingDevice` and `AwaitingMove` both wait on somebody walking to a
 machine, so an object in one of them can sit for days and is exactly what somebody
@@ -751,8 +792,9 @@ The webhook rejects an operation naming a `StorageDevice` that does not exist an
 
 **Readiness stays with the controller.** A target node that exists and is offline, a
 device that is already `Failed`, and a cluster below its redundancy target are all facts
-about now: the create is admitted and `Validating` decides them, with the events §8.1
-lists. A target node in another cluster is the one exception worth checking at
+about now: the create is admitted and the operation's first step decides them, with the
+events §8.1 lists. For the three actions that have one that step is `Validating`, and for
+`Fail` it is `Removing`, which reads the device before it issues anything. A target node in another cluster is the one exception worth checking at
 admission, because a device cannot move between clusters and both sides of that
 comparison are immutable.
 
@@ -780,15 +822,15 @@ a call is a verb those steps already need.
 
 ## 7. Backend API Requirements
 
-| Method | Endpoint                                                                     | Notes                                                                            |
-|--------|------------------------------------------------------------------------------|----------------------------------------------------------------------------------|
-| `GET`  | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/`                   | The device stream the objects are built from, one per node (§5.1)                |
-| `POST` | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/{device}/restart`   | The `Restart` action                                                             |
-| `POST` | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/{device}/remove`    | `Replace`'s and `Migrate`'s removal step                                         |
-| `POST` | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/{device}/self-test` | The `SelfTest` action, with the mode in the body                                 |
-| `POST` | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/{device}/fail`      | The `Fail` action                                                                |
-| `POST` | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/{device}/detach`    | `Migrate`'s `Detaching` step                                                     |
-| `POST` | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/adopt`              | `Replace`'s `Adding` and `Migrate`'s `Attaching`, which name the arriving device |
+| Method | Endpoint                                                                     | Notes                                                                                           |
+|--------|------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------|
+| `GET`  | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/`                   | The device stream the objects are built from, one per node (§5.1)                               |
+| `POST` | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/{device}/restart`   | The `Restart` action                                                                            |
+| `POST` | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/{device}/remove`    | `Fail`'s first step, and `Replace`'s and `Migrate`'s removal step                               |
+| `POST` | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/{device}/self-test` | The `SelfTest` action, with the mode in the body                                                |
+| `POST` | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/{device}/fail`      | The `Fail` action's second step, which the control plane serves only once the device is removed |
+| `POST` | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/{device}/detach`    | `Migrate`'s `Detaching` step                                                                    |
+| `POST` | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/adopt`              | `Replace`'s `Adding` and `Migrate`'s `Attaching`, which name the arriving device                |
 
 **The first row is a Server-Sent-Events subscription rather than a request that
 returns**, delivered by the control plane's SSE work
@@ -809,19 +851,30 @@ than degrading it.
 `Adding` step is the adopt call, and its `Rebuilding` step is a wait on the device
 stream. The action is a graph over calls the other actions already need.
 
-**Measured against the shipped v2 API, three device verbs exist and four do
-not.** `restart`, `remove`, and `reset` are served; `self-test`, `fail`,
-`detach`, and `adopt` are not. `Restart` is built on the first. `remove` exists
-and buys no action on its own: it is a step of `Replace` and of `Migrate`, and
-both also need the adopt call that names the device arriving. `reset` is a verb
-this document did not ask for and no action uses.
+**Measured against the shipped v2 API, four device verbs exist and three do
+not.** The served ones are `restart`, `remove`, `fail`, and `reset`. The missing
+ones are `self-test`, `detach`, and the adopt call. `Restart` is built on the
+first, and `Fail` on the second and the third together, because the control plane
+fails only a device it already holds as removed. `remove` buys no further action on its own: it is also
+a step of `Replace` and of `Migrate`, and both of those need the adopt call that
+names the device arriving. `reset` is a verb this document did not ask for and no
+action uses.
+
+**What the three missing verbs cost differs, and only one of them is absent from
+the control plane as well as from its API.** The adopt call `Replace` needs
+exists behind the control plane's own command line, as a pairing that mints a
+record for the device arriving in a failed one's slot and then builds its stack,
+so the ask there is that the v2 API expose what is already written. A device
+self-test is implemented nowhere, so `SelfTest` waits on the capability rather
+than on its endpoint. `Migrate` waits on both a detach and an adopt that accepts a
+device with its contents, and the adopt that exists clears the device it adopts.
 
 **The device stream and the hardware fields are in use, and the per-action verbs are
 what remain.** The stream reports a PCI address, a serial number, a model, an NVMe
 controller, a status, the health signals of §4.2, and a size for each device, which
 is everything §5.1 builds an object from and everything `status.hardware` and
-`status.capacity` publish. What is not yet confirmed is one verb per action:
-`self-test`, `fail`, `detach`, and the adopt call. Each is a request rather than an
+`status.capacity` publish. What is not yet served is one verb per remaining action:
+`self-test`, `detach`, and the adopt call. Each is a request rather than an
 observation, so a missing one removes an action and leaves the rest of the kind
 standing.
 
@@ -890,8 +943,9 @@ exception, and it is a different event on a different object.
 | The replacement was adopted and the rebuild started           | `Normal`  | `ReplacementAdopted`     | `StorageDeviceOps` |
 | The device was accepted by its target node                    | `Normal`  | `DeviceMoved`            | `StorageDeviceOps` |
 
-The first eight are emitted, and every row whose object is a `StorageDeviceOps`
-waits on §6.
+The first eight are emitted, as are the `OperationStarted`, `OperationSucceeded`,
+`OperationFailed`, `OperationAborted`, and `StepDeadlineExceeded` rows of the two
+actions §6 implements. The rest wait on the actions that own them.
 
 **`DeviceDisappeared` is the one the section exists for.** A drive pulled from a
 running node had no expression anywhere in Kubernetes: the node's count dropped
@@ -974,11 +1028,15 @@ the identity and the namespace, so the four cases it separates are four calls.
 
 The risk unit tests do not reach is the operations, and it is not evenly
 distributed. `Restart` is testable against a mock and verifiable on a live cluster
-by watching a device leave and rejoin. `Replace` destroys capacity and is only
-honestly testable on hardware somebody is willing to lose. `SelfTest` takes a device
-out of service, so exercising it on a cluster at its redundancy limit is the
-scenario that proves the check in §6 works, and it is the one nobody will want to
-run.
+by watching a device leave and rejoin. `Fail` is testable against a mock for its
+ordering, its refusals, and its resumption, and each of those is a question about
+what the operator issues rather than about what the cluster does with it. What a
+mock cannot show is the rebuild the failure starts, which is the part that costs a
+cluster its spare capacity and is only observable on hardware. `Replace` destroys
+capacity and is only honestly testable on hardware somebody is willing to lose.
+`SelfTest` takes a device out of service, so exercising it on a cluster at its
+redundancy limit is the scenario that proves the check in §6 works, and it is the
+one nobody will want to run.
 
 ---
 
@@ -994,6 +1052,7 @@ Nothing is migrated, because both kinds are new.
 | No per-device occupancy anywhere                | `StorageDeviceMetrics` and a gauge (§4.4, §8.2)                          |
 | No way to tell which device failed              | `status.phase` per device, and `DeviceFailed` naming it (§8.1)           |
 | Restarting a device means restarting its node   | `StorageDeviceOps` with `action: Restart` (§6)                           |
+| No way to say a device is untrustworthy         | `StorageDeviceOps` with `action: Fail` (§6)                              |
 | A pulled drive is a count changing              | `DeviceDisappeared` on the node (§5.2)                                   |
 | `StorageNode` owns nothing                      | It owns its devices, establishing `design-crd-model.md` §9.3's last edge |
 
@@ -1005,12 +1064,15 @@ Nothing is migrated, because both kinds are new.
 
 ## 11. Open Questions
 
-**Q1: Which of the four per-action verbs the control plane offers.** §7 accounts
-for the device stream and the hardware fields and leaves `self-test`, `fail`,
-`detach`, and the adopt call unconfirmed. Each is one action's whole content, so a
-missing verb removes an action and leaves the rest of the kind standing. The
-exception is the adopt call, which `Migrate` needs in its stronger form: accepting
-a device as another node's with its contents, rather than as an empty one.
+**Q1: Which of the three remaining per-action verbs the control plane will
+offer.** §7 accounts for the device stream, the hardware fields, and the removal
+and failure `Fail` is built on, and leaves `self-test`, `detach`, and the adopt
+call outstanding. Each is one action's whole content, so a missing verb removes an
+action and leaves the rest of the kind standing. Two of the three are asks of
+different sizes: the adopt call exists behind the control plane's command line and
+has no v2 endpoint, while a device self-test is implemented nowhere. The third is
+the adopt call in its stronger form, which `Migrate` needs: accepting a device as
+another node's with its contents, rather than as an empty one.
 
 **Q2: Whether an operation may target a device in `Unknown`.** §5.2 keeps the objects of
 an unreachable node and moves them to `Unknown`, so an operation can name a device whose
@@ -1275,8 +1337,9 @@ type StorageDeviceList struct {
 
 ## Appendix B: `storagedeviceops_types.go`
 
-The type as it is to be written, in `operator/api/v1alpha2/`. Nothing in this
-appendix exists yet (§6).
+The type as it is to be written, in `operator/api/v1alpha2/`. The shipped file
+carries all of it except the parameter blocks of the actions that wait on §7's
+missing verbs, and narrows the action enum to the two the operator performs (§6).
 
 ```go
 // StorageDeviceOpsAction is the operation a StorageDeviceOps performs. There is no
@@ -1297,8 +1360,9 @@ const (
 	StorageDeviceOpsActionSelfTest StorageDeviceOpsAction = "SelfTest"
 	// Fail marks a device failed and leaves it in the slot, so the cluster
 	// rebuilds its redundancy elsewhere and stops reading from a device
-	// somebody has judged untrustworthy. It carries no redundancy check, and
-	// Failed is terminal: there is no inverse action (§6).
+	// somebody has judged untrustworthy. It is two calls, because the control
+	// plane fails only a device it already holds as removed. It carries no
+	// redundancy check, and Failed is terminal: there is no inverse action (§6).
 	StorageDeviceOpsActionFail StorageDeviceOpsAction = "Fail"
 	// Replace removes a device and adopts the one that arrives in its place,
 	// which is one action because the pairing is what makes the arrival
@@ -1324,7 +1388,7 @@ const (
 // StorageDeviceOpsStep is one step of a running device operation. The enum is
 // the union of every action's steps; which steps belong to which action is
 // declared by the graph rather than by this type.
-// +kubebuilder:validation:Enum=Validating;Requesting;Awaiting;Removing;AwaitingDevice;Adding;Rebuilding;Detaching;AwaitingMove;Attaching
+// +kubebuilder:validation:Enum=Validating;Requesting;Awaiting;Removing;Failing;AwaitingDevice;Adding;Rebuilding;Detaching;AwaitingMove;Attaching
 type StorageDeviceOpsStep string
 
 const (
@@ -1335,13 +1399,23 @@ const (
 	// Validating step, because it proceeds at any redundancy (§6).
 	StorageDeviceOpsStepValidating StorageDeviceOpsStep = "Validating"
 
-	// Restart, SelfTest, and Fail: one call, then a wait for the control plane
-	// to report the device in the state the call asked for.
+	// Restart and SelfTest: one call, then a wait for the control plane to
+	// report the device in the state the call asked for. Awaiting is shared by
+	// every action that ends in a wait, including Fail.
 	StorageDeviceOpsStepRequesting StorageDeviceOpsStep = "Requesting"
 	StorageDeviceOpsStepAwaiting   StorageDeviceOpsStep = "Awaiting"
 
-	// Replace: the removal that its arrival is paired with.
+	// Fail's first step, and the removal Replace pairs its arrival with. It is
+	// the only step of a failure an abort stops, and the reconciler reads the
+	// device before honoring one, because the call is issued inside the step.
 	StorageDeviceOpsStepRemoving StorageDeviceOpsStep = "Removing"
+
+	// Fail's second step, which declares the removed device untrustworthy. It is
+	// named for what it does rather than reusing Requesting, because the two
+	// differ in the one way the step vocabulary has to record: Requesting can be
+	// aborted and this cannot, and the abort table a DELETE guard reads is a set
+	// of step names with no action beside them.
+	StorageDeviceOpsStepFailing StorageDeviceOpsStep = "Failing"
 
 	// Replace. AwaitingDevice holds without a deadline, because it waits on
 	// somebody walking to the machine; Adding adopts the device that arrived;
@@ -1394,8 +1468,8 @@ type StorageDeviceOpsSpec struct {
 	Action StorageDeviceOpsAction `json:"action"`
 
 	// Abort asks a running operation to stop at its next step and unwind. A
-	// A Replace or Migrate past its removal cannot be unwound, which those actions'
-	// graph declares rather than this field.
+	// Fail, Replace, or Migrate past its removal cannot be unwound, which those
+	// actions' graphs declare rather than this field.
 	// +optional
 	Abort bool `json:"abort,omitempty"`
 
@@ -1423,7 +1497,7 @@ type StorageDeviceOpsStatus struct {
 
 	// Step is the position of the running action's state machine. It is
 	// persisted before the side effect that step performs.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Requesting','Awaiting','Removing','AwaitingDevice','Adding','Rebuilding','Detaching','AwaitingMove','Attaching']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Requesting','Awaiting','Removing','Failing','AwaitingDevice','Adding','Rebuilding','Detaching','AwaitingMove','Attaching']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
