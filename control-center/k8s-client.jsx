@@ -71,6 +71,7 @@ const RESOURCES = {
   TestSchedule:         {plural: "testschedules",         short: "tsched",   core: DR_API_GROUP, namespaced: true, dr: true},
   RestoreAction:        {plural: "restoreactions",        short: "rsa",      core: DR_API_GROUP, namespaced: true, dr: true},
   SiteProfile:          {plural: "siteprofiles",          short: "sprof",    core: SITEMAP_API_GROUP, namespaced: false, dr: true},
+  DHCPServer:           {plural: "dhcpservers",           short: "dhcps",    core: SITEMAP_API_GROUP, namespaced: false, dr: true},
   // Ramen and OCM objects the hub derives — instances only, read-only here
   DRPolicy:              {plural: "drpolicies",             core: RAMEN_API_GROUP, namespaced: false},
   DRCluster:             {plural: "drclusters",             core: RAMEN_API_GROUP, namespaced: false},

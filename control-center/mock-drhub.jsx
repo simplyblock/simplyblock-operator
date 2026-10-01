@@ -19,7 +19,7 @@
   const check = (name, status, blocking, reason, message) => ({name, status, blocking, reason, message});
   const OPS = "ramen-ops";
 
-  const store = {ProtectionPlan: [], DRPath: [], ProtectedApplication: [], RecoveryPlan: [], RecoveryAction: [], TestBubble: [], TestSchedule: [], RestoreAction: [], SiteProfile: [], DRConfig: []};
+  const store = {ProtectionPlan: [], DRPath: [], ProtectedApplication: [], RecoveryPlan: [], RecoveryAction: [], TestBubble: [], TestSchedule: [], RestoreAction: [], SiteProfile: [], DRConfig: [], DHCPServer: []};
   const api = (kind, group) => ({apiVersion: group || "dr.simplyblock.io/v1alpha1", kind});
 
   // ---- plans ---------------------------------------------------------------
@@ -72,7 +72,24 @@
       health: {probes: [{name: "storefront", type: "http", target: "http://shop.shop.svc/healthz", expectStatus: 200}]}}},
     [{name: "fra-a-to-fra-b", from: "fra-a", to: "fra-b", actions: ["Failover", "Relocate", "Test"], readiness: {verdict: "Degraded", checks: readyChecks(true), lastTransitionTime: agoIso(600)}},
      {name: "fra-b-to-fra-a", from: "fra-b", to: "fra-a", actions: ["Relocate"], readiness: {verdict: "Degraded", checks: readyChecks(false, [check("at-path-source", "Fail", true, "NotAtSource", "application runs on cluster-a, path starts at fra-b")]).map(c => c.name === "at-path-source" && c.status === "Pass" ? null : c).filter(Boolean), lastTransitionTime: agoIso(600)}}],
-    {drpc: `${OPS}/shop`, placement: `${OPS}/shop-placement`, drPolicy: "fra-primary-5m", recipe: {name: "shop", namespace: OPS, generated: true, hash: "9c1e2f"}, lastAction: `${OPS}/test-shop-w4`}));
+    {drpc: `${OPS}/shop`, placement: `${OPS}/shop-placement`, drPolicy: "fra-primary-5m", recipe: {name: "shop", namespace: OPS, generated: true, hash: "9c1e2f"}, lastAction: `${OPS}/test-shop-w4`, siteMapping: "NotApplicable"}));
+  // a KubeVirt application on the cross-cluster plan: one NAD resolved by role, one open; guests on the backend role (ADR 0020)
+  store.ProtectedApplication.push(app("erp-vms", OPS, "fra", "fra-a", "fra-b", "discovered",
+    {spec: {method: "primary", discovered: {protectedNamespaces: ["erp"], pvcSelector: {matchLabels: {app: "erp"}}}, tiers: [{name: "db", selector: {resourceTypes: ["virtualmachines"], matchLabels: {tier: "db"}}, ready: [{type: "vmRunning"}]}, {name: "app", selector: {resourceTypes: ["virtualmachines"], matchLabels: {tier: "app"}}, ready: [{type: "vmRunning"}]}]}},
+    [{name: "fra-a-to-fra-b", from: "fra-a", to: "fra-b", actions: ["Failover", "Relocate", "Test"], readiness: {verdict: "NotReady", checks: readyChecks(true).concat([check("findings-resolved", "Fail", true, "Open", "erp/erp-app network mgmt: role mgmt unbound on fra-b"), check("artifacts-current", "Pass", false, "Current", "sitemap-live 7c1d2e on cluster-b")]), lastTransitionTime: agoIso(40)}},
+     {name: "fra-b-to-fra-a", from: "fra-b", to: "fra-a", actions: ["Relocate"], readiness: {verdict: "NotReady", checks: [check("at-path-source", "Fail", true, "NotAtSource", "application runs on cluster-a")], lastTransitionTime: agoIso(600)}}],
+    {drpc: `${OPS}/erp-vms`, drPolicy: "fra-primary-5m", recipe: {name: "erp-vms", namespace: OPS, generated: true, hash: "e0e0aa"}, siteMapping: "Open",
+      renderings: {"velero/sitemap-live@cluster-b": "7c1d2e", "dhcp/sitemap-hosts@cluster-b": "91ab00"},
+      mapping: {site: "fra-a", counts: {open: 2, resolved: 3},
+        findings: [
+          {vm: "erp/erp-db", network: "backend", index: 1, category: "nad", value: "apps/backend", networkName: "apps/backend", paths: [{path: "fra-a-to-fra-b", site: "fra-b", cluster: "cluster-b", result: "Resolved", strategy: "map", role: "backend", to: "apps/vlan210-backend"}]},
+          {vm: "erp/erp-app", network: "backend", index: 1, category: "nad", value: "apps/backend", networkName: "apps/backend", paths: [{path: "fra-a-to-fra-b", site: "fra-b", cluster: "cluster-b", result: "Resolved", strategy: "map", role: "backend", to: "apps/vlan210-backend"}]},
+          {vm: "erp/erp-app", network: "mgmt", index: 2, category: "nad", value: "apps/mgmt", networkName: "mgmt", paths: [{path: "fra-a-to-fra-b", site: "fra-b", cluster: "cluster-b", result: "Open", reason: "role mgmt is not bound on the target profile", candidates: ["apps/vlan220-mgmt", "infra/mgmt-b"]}]}],
+        guests: [
+          {vm: "erp/erp-db", network: "backend", mac: "52:54:00:a1:b2:01", role: "backend", currentSite: "fra-a", ips: {"fra-a": "192.168.110.21", "fra-b": "192.168.210.21"}, result: "Resolved",
+            reservations: [{site: "fra-a", cluster: "cluster-a", ip: "192.168.110.21", dhcpServer: "dhcp-cluster-a", result: "Resolved"}, {site: "fra-b", cluster: "cluster-b", path: "fra-a-to-fra-b", ip: "192.168.210.21", dhcpServer: "dhcp-cluster-b", result: "Resolved"}]},
+          {vm: "erp/erp-app", network: "backend", mac: "", role: "backend", currentSite: "fra-a", ips: {"fra-a": "192.168.110.22"}, result: "Open", reason: "MAC not pinned: KubeVirt would assign a new one on restore",
+            reservations: [{site: "fra-a", cluster: "cluster-a", ip: "192.168.110.22", dhcpServer: "dhcp-cluster-a", result: "Open", reason: "MAC not pinned"}, {site: "fra-b", cluster: "cluster-b", path: "fra-a-to-fra-b", result: "Open", reason: "MAC not pinned"}]}]}}));
   store.ProtectedApplication.push(app("ledger", OPS, "fra", "fra-a", "fra-b", "discovered",
     {spec: {method: "vault", discovered: {protectedNamespaces: ["ledger"], pvcSelector: {matchLabels: {app: "ledger"}}, recipeRef: {name: "ledger-recipe"}}}},
     [{name: "fra-a-to-fra-b", from: "fra-a", to: "fra-b", actions: ["Failover", "Relocate", "Test"], readiness: {verdict: "NotReady", checks: readyChecks(true).map(c => c.name === "ramen-healthy" ? check("ramen-healthy", "Fail", true, "VRGUnhealthy", "VolumeReplicationGroup ledger: DataProtected=False (lastGroupSyncTime 2h old)") : c), lastTransitionTime: agoIso(115)}},
@@ -87,7 +104,7 @@
   store.ProtectedApplication.push(app("vm-erp", OPS, "metro", "metro-1a", "metro-1c", "discovered",
     {spec: {discovered: {protectedNamespaces: ["erp"], pvcSelector: {matchLabels: {"kubevirt.io/domain": "erp"}}}, tiers: [{name: "vm", selector: {resourceTypes: ["virtualmachines"]}, ready: [{type: "vmRunning"}]}]}},
     [{name: "metro-1a-to-1c", from: "metro-1a", to: "metro-1c", actions: ["Relocate", "Failover"], readiness: {verdict: "NotReady", checks: [check("path-declared", "Pass", true, "Declared", ""), check("zone-protected", "Pass", true, "Bound", "zone binding eu-central-1a"), check("executor-ready", "Fail", true, "AgentUnavailable", "dr-agent on stretch has not reported for 12m"), check("recipe-valid", "Pass", true, "Valid", "")], lastTransitionTime: agoIso(12)}}],
-    {zoneBinding: `dr-zone-binding-${OPS}-vm-erp`, currentCluster: "stretch/eu-central-1a", recipe: {name: "vm-erp", namespace: OPS, generated: true, hash: "44d1c9"}}));
+    {zoneBinding: `dr-zone-binding-${OPS}-vm-erp`, currentCluster: "stretch/eu-central-1a", recipe: {name: "vm-erp", namespace: OPS, generated: true, hash: "44d1c9"}, siteMapping: "Unknown"}));
   store.ProtectedApplication.push(app("archive", OPS, "fra", "fra-a", "fra-b", "discovered",
     {meta: {annotations: {"dr.simplyblock.io/awaiting-restore": "2026-09-28T07:12:00Z"}}, spec: {method: "vault", discovered: {protectedNamespaces: ["archive"], pvcSelector: {matchLabels: {app: "archive"}}}}},
     [{name: "fra-a-to-fra-b", from: "fra-a", to: "fra-b", actions: ["Failover", "Relocate", "Test"], readiness: {verdict: "NotReady", checks: [check("protection-bound", "Fail", true, "AwaitingRestore", "volumes not restored yet")], lastTransitionTime: agoIso(300)}}],
@@ -111,7 +128,8 @@
     spec: {kind: "Failover", pathRef: {name: "fra-a-to-fra-b"}, applicationRef: {name: "payments"}, override: {reason: "storage-replicating advisory only; site A network partitioned, business decision to fail over"}, timeout: "30m"},
     status: {phase: "Failed", startTime: agoIso(60 * 24 * 2), completionTime: agoIso(60 * 24 * 2 - 14), sourceCluster: "cluster-a", targetCluster: "cluster-b",
       steps: [step("pre-flight", "Succeeded", 60 * 24 * 2, 3, "Degraded, overridden"), step("ramen failover", "Succeeded", 60 * 24 * 2 - 1, 480, "DRPC FailedOver"), step("target starting", "Failed", 60 * 24 * 2 - 9, 300, "tier web: deployment payments-web not ready after 5m (ImagePullBackOff: registry mirror not bound on fra-b)")],
-      report: {operator: "bob@example.com", overrideReason: "storage-replicating advisory only; site A network partitioned, business decision to fail over", rtoSeconds: null, achievedRPOSeconds: 240, probes: [], hooks: [], warnings: ["registry mirror role unbound on target site profile"], preFlight: {verdict: "Degraded", checks: readyChecks(true)}},
+      report: {operator: "bob@example.com", overrideReason: "storage-replicating advisory only; site A network partitioned, business decision to fail over", rtoSeconds: null, achievedRPOSeconds: 240, probes: [], hooks: [], warnings: ["registry mirror role unbound on target site profile"], preFlight: {verdict: "Degraded", checks: readyChecks(true)},
+        guests: [{vm: "payments/pay-vm-0", network: "backend", expectedIP: "192.168.210.40", observedIP: "192.168.210.40", match: true}, {vm: "payments/pay-vm-1", network: "backend", expectedIP: "192.168.210.41", observedIP: "192.168.210.133", match: false}]},
       reportKey: "dr/reports/payments/recoveryaction/2026/09/20260927T091500Z-failover-payments-x7-1a2b3c4d.json", conditions: [cond("Completed", false, "Failed", "target starting failed", 60 * 24 * 2 - 14)]}}));
   store.RecoveryAction.push(Object.assign(api("RecoveryAction"), {metadata: meta("relocate-shop-live", OPS, {annotations: {"dr.simplyblock.io/created-by": "alice@example.com"}, creationTimestamp: agoIso(6)}),
     spec: {kind: "Relocate", pathRef: {name: "fra-a-to-fra-b"}, applicationRef: {name: "shop"}, timeout: "30m"},
@@ -149,8 +167,15 @@
       storageClasses: [{name: "sb-dr", driver: "csi.simplyblock.io", labels: {"simplyblock.io/dr": "true"}}, {name: "sb-fast", driver: "csi.simplyblock.io"}], volumeSnapshotClasses: [{name: "sb-snap", driver: "csi.simplyblock.io"}],
       ingressClasses: [{name: "nginx"}], gatewayClasses: [], ipAddressPools: [{ns: "metallb", name: "public", addresses: ["203.0.113.0/26"], autoAssign: true}], ingressDomains: [`apps.${name}.example.com`], baseDomain: `${name}.example.com`,
       registryMirrors: [{source: "quay.io", mirrors: [`mirror.${name}.example.com`]}], podCIDRs: ["10.128.0.0/14"], serviceCIDRs: ["172.30.0.0/16"]}, (extra && extra.inv) || {}), conditions: [cond("InventoryReported", true, "Reported", "", 9)]}});
-  store.SiteProfile.push(sprof("cluster-a", ["eu-central-1a"], {spec: {logicalNetworks: [{role: "backend", nad: "apps/backend"}], registryMirror: "mirror.cluster-a.example.com"}}));
-  store.SiteProfile.push(sprof("cluster-b", ["eu-central-1b"], {notReady: true}));
+  store.SiteProfile.push(sprof("cluster-a", ["eu-central-1a"], {spec: {logicalNetworks: [{role: "backend", nad: "apps/backend"}, {role: "mgmt", nad: "apps/mgmt"}], guestNetworks: [{role: "backend", cidr: "192.168.110.0/24", gateway: "192.168.110.1", reservedHostIDs: [1, 2, 254], dhcpServerRef: "dhcp-cluster-a"}], registryMirror: "mirror.cluster-a.example.com"}}));
+  store.SiteProfile.push(sprof("cluster-b", ["eu-central-1b"], {notReady: true, spec: {logicalNetworks: [{role: "backend", nad: "apps/vlan210-backend"}], guestNetworks: [{role: "backend", cidr: "192.168.210.0/24", gateway: "192.168.210.1", reservedHostIDs: [1, 2, 254], dhcpServerRef: "dhcp-cluster-b"}]},
+    inv: {nads: [{namespace: "apps", name: "vlan210-backend", type: "macvlan", master: "bond0.210", vlan: 210, ipamType: "whereabouts", ipamRanges: ["192.168.210.0/24"]}, {namespace: "apps", name: "vlan220-mgmt", type: "macvlan", master: "bond0.220", vlan: 220}, {namespace: "infra", name: "mgmt-b", type: "bridge", bridge: "br-mgmt"}, {namespace: "dr-test", name: "isolated", type: "bridge", bridge: "br-test", ipamType: "static"}]}}));
+  store.SiteProfile[0].status.renderings = {"velero/sitemap-live": "0d0d0d", "dhcp/sitemap-hosts": "5e5e5e"};
+  store.SiteProfile[1].status.renderings = {"velero/sitemap-live": "7c1d2e", "dhcp/sitemap-hosts": "91ab00"};
+  const dhcp = (name, site, ns, cm, n, gen) => Object.assign(api("DHCPServer", "sitemap.simplyblock.io/v1alpha1"), {metadata: meta(name), spec: {site, type: "dnsmasq", dnsmasq: {namespace: ns, configMap: cm}},
+    status: {reservations: n, generation: gen, conditions: [cond("Rendered", true, "Rendered", `${n} reservations`, 30)]}});
+  store.DHCPServer.push(dhcp("dhcp-cluster-a", "cluster-a", "dhcp", "sitemap-hosts", 3, "5e5e5e"));
+  store.DHCPServer.push(dhcp("dhcp-cluster-b", "cluster-b", "dhcp", "sitemap-hosts", 3, "91ab00"));
   store.SiteProfile.push(sprof("stretch", ["eu-central-1a", "eu-central-1c"]));
   store.DRConfig.push(Object.assign(api("DRConfig"), {metadata: meta("default"),
     spec: {executor: {default: "inCluster"}, agent: {namespace: "simplyblock-dr-agent", statusInterval: "15s", hookImageAllowList: ["quay.io/simplyblock-io/*"]}, ramen: {namespace: "ramen-system", configMapName: "ramen-hub-operator-config", managed: true, veleroNamespace: "velero", opsNamespace: OPS},
@@ -210,6 +235,7 @@
     if (kind === "DRPath") obj.status = {applications: [], drPolicies: [], profileConsistency: "Unknown", profileComparison: [], conditions: [cond("Valid", true, "Valid", "", 0)]};
     if (kind === "ProtectedApplication") obj.status = {paths: [], conditions: [cond("Bound", false, "Binding", "waiting for the DRPC", 0), cond("Protected", false, "Binding", "", 0)]};
     if (kind === "RecoveryPlan") obj.status = {readiness: {verdict: "Unknown", checks: []}, conditions: [cond("Valid", true, "Valid", "", 0)]};
+    if (kind === "DHCPServer") obj.status = {reservations: 0, conditions: []};
     store[kind].push(obj);
     return {obj: strip(obj)};
   };

@@ -138,7 +138,7 @@ const deleteDialog = (o, note, needsConfirm) => ({
   run: () => drhub.remove(o, needsConfirm)
 });
 const KIND_LABEL_DR = {pplan: "protection plan", drpath: "DR path", papp: "protected application", rplan: "recovery plan", raction: "recovery action",
-  tbubble: "test", tsched: "test schedule", restore: "restore", siteprofile: "site profile", drconfig: "DR configuration"};
+  tbubble: "test", tsched: "test schedule", restore: "restore", siteprofile: "site profile", drconfig: "DR configuration", dhcpserver: "DHCP server"};
 
 const METHOD_TYPES = [{v: "async", l: "async — block replication per interval"}, {v: "sync", l: "sync — stretch cluster, RPO 0"},
   {v: "s3-backup", l: "s3-backup — snapshot backups to S3 only"}, {v: "async-s3-backup", l: "async + s3-backup"}, {v: "sync-s3-backup", l: "sync + s3-backup"}];
@@ -270,6 +270,20 @@ const newScheduleDialog = (target, nsHint) => ({
   run: v => drhub.createSchedule({name: v.name, namespace: target ? target.namespace : nsHint, schedule: v.schedule.trim(), target, path: v.path, keepLast: v.keepLast, keepFor: v.keepFor && v.keepFor.trim(), suspend: v.suspend})
 });
 
+const newDHCPServerDialog = sites => ({
+  title: "Register a DHCP server", confirm: "Create", done: "DHCPServer created",
+  desc: "A DHCP server of one site that guest addresses are reserved on. dr-hub never talks to it: it renders the reservations (<mac>,<ip>,<vm>) into the server's ConfigMap on the site, and dnsmasq reads them from its --dhcp-hostsdir. A SiteProfile's guestNetworks[role].dhcpServerRef (or spec.dhcpServerRef) names it.",
+  fields: [
+    {k: "site", label: "Site (managed cluster)", type: "select", required: true, options: sites.map(s => ({v: s, l: s})), empty: "No site profile reported yet."},
+    {k: "name", label: "Name", type: "text", required: true, placeholder: "dhcp-site-a"},
+    {k: "type", label: "Type", type: "select", options: [{v: "dnsmasq", l: "dnsmasq — reservations ConfigMap mounted as --dhcp-hostsdir"}]},
+    {k: "namespace", label: "ConfigMap namespace (on the site)", type: "text", required: true, placeholder: "dhcp"},
+    {k: "configMap", label: "ConfigMap name", type: "text", required: true, placeholder: "sitemap-hosts"},
+    {k: "n1", type: "note", label: "Then bind it on the site profile: spec.guestNetworks[].dhcpServerRef or spec.dhcpServerRef (kubectl in this phase). Guests need a pinned MAC and an address inside the role's CIDR to get a reservation."}
+  ],
+  run: v => drhub.createDHCPServer({name: v.name.trim(), site: v.site, namespace: v.namespace.trim(), configMap: v.configMap.trim()})
+});
+
 // ---- command registry (kebab menus) ----------------------------------------
 // `op` is what access.can() checks: failover/relocate/restart/test map to
 // create on the run kinds, override to the override verb, delete to delete.
@@ -313,6 +327,9 @@ Object.assign(ACTIONS, {
     {label: "Delete record", icon: "trash", danger: true, op: "delete", removes: true, disabled: !r.terminal, hint: "A running restore cannot be deleted", dialog: deleteDialog(r, "")}
   ],
   siteprofile: () => [],
+  dhcpserver: d => [
+    {label: "Delete server", icon: "trash", danger: true, op: "delete", removes: true, dialog: deleteDialog(d, "Reservations rendered for this server stay in its ConfigMap until the hub re-renders the site; guests whose role names it become Open.")}
+  ],
   drconfig: () => []
 });
 
@@ -379,6 +396,8 @@ function PAppTile({o: a, nav}) {
         {a.protected === false && <span className="lab warn">not protected</span>}
         {a.awaitingRestore && <span className="lab warn">awaiting restore</span>}
         {a.zoneBinding && <span className="lab"><i>zone</i>{a.zoneBinding}</span>}
+        {a.siteMapping === "Open" && <span className="lab warn"><i>site mapping</i>{a.counts.openFindings} open</span>}
+        {a.siteMapping === "Resolved" && <span className="lab"><i>site mapping</i>resolved</span>}
       </div>
       <div className="mlist">
         {a.paths.map(p => <div className={"mrow" + (p.verdict === "NotReady" ? " bad" : "")} key={p.name}>
@@ -495,6 +514,64 @@ function SiteProfileTile({o: s, nav}) {
         <div><span>address pools</span><b>{s.ipAddressPools.length}</b></div>
       </div>
       <Foot items={[{label: "Details", right: true, onClick: () => nav.detail(s)}]} />
+    </div>
+  );
+}
+
+function DHCPServerTile({o: d, nav}) {
+  return (
+    <div className="tile" style={{"--sc": STATUS_META[d.status].c}} onDoubleClick={() => nav.detail(d)}>
+      <TileHead obj={d} left={<><TrafficLight status={d.status} /><Name>{d.name}</Name></>} right={<span className="badge">{d.type}</span>} />
+      <div className="tsub" style={{marginTop: 2}}>site {d.site} · {d.target}</div>
+      <Uuid value={d.id} />
+      <div className="kv">
+        <div><span>reservations</span><b>{d.reservations}</b></div>
+        <div><span>generation</span><b>{d.generation || "—"}</b></div>
+      </div>
+      <Foot items={[{label: "Details", right: true, onClick: () => nav.detail(d)}]} />
+    </div>
+  );
+}
+
+// ---- site mapping (ADR 0020) ------------------------------------------------------
+const MappingResult = ({r}) => <TrafficLight status={r || "Unknown"} sm />;
+function FindingsTable({findings, nav}) {
+  const rows = findings.flatMap(f => (f.paths && f.paths.length ? f.paths : [null]).map(p => [
+    <Mono>{f.vm}</Mono>, <Mono dim>{f.network} <span style={{color: "var(--dim2)"}}>#{f.index}</span></Mono>, <span className="badge">{f.category}</span>, <Mono>{f.value}</Mono>,
+    p ? <Mono dim>{p.path}</Mono> : "", p ? <MappingResult r={p.result} /> : <span style={{color: "var(--dim2)"}}>no path</span>,
+    p ? <Mono dim>{p.strategy}{p.role ? ` · role ${p.role}` : ""}</Mono> : "", p ? <Mono>{p.to}</Mono> : "",
+    p ? <span>{p.reason}{p.candidates && p.candidates.length ? <span style={{color: "var(--dim2)"}}> · candidates: {p.candidates.join(", ")}</span> : null}</span> : ""]));
+  return <Table cols={["VM", "Network", "Category", "Source value", "Path", "Result", "Strategy", "Target value", "Reason / candidates"]} empty="No site-specific reference found." rows={rows} />;
+}
+function GuestsTable({guests}) {
+  const rows = guests.flatMap(g => (g.reservations && g.reservations.length ? g.reservations : [null]).map((r, i) => [
+    i === 0 ? <Mono>{g.vm}</Mono> : "", i === 0 ? <Mono dim>{g.network}</Mono> : "", i === 0 ? <Mono dim>{g.mac || <span style={{color: "var(--bad)"}}>unpinned</span>}</Mono> : "", i === 0 ? <span className="badge">{g.role}</span> : "",
+    r ? <Mono>{r.site}{r.path ? <span style={{color: "var(--dim2)"}}> ← {r.path}</span> : <span style={{color: "var(--dim2)"}}> (current)</span>}</Mono> : <Mono dim>{g.currentSite}</Mono>,
+    r ? <Mono>{r.ip}</Mono> : <Mono dim>{Object.entries(g.ips || {}).map(([s, ip]) => `${s}: ${ip}`).join(", ")}</Mono>, r ? <Mono dim>{r.dhcpServer}</Mono> : "",
+    <MappingResult r={r ? r.result : g.result} />, r ? r.reason : g.reason]));
+  return <Table cols={["VM", "Network", "MAC", "Role", "Site", "Address", "DHCP server", "Result", "Reason"]} empty="No guest interface on a guest network." rows={rows} />;
+}
+const Renderings = ({r}) => <Table cols={["Artifact (ConfigMap)", "Generation"]} empty="Nothing rendered for this site yet." rows={Object.entries(r || {}).sort().map(([k, v]) => [<Mono>{k}</Mono>, <Mono dim>{v}</Mono>])} />;
+function MappingPanel({a}) {
+  const m = a.mapping;
+  return (
+    <div style={{marginTop: 10}}>
+      {a.siteMapping === "Open" && <div className="banner" style={{color: "var(--warn)", borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)", background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"}}><Icon n="alert" s={15} />
+        <span><b>{m ? m.counts.open : 0} open on at least one path</b> — readiness fails findings-resolved there. The fix is a decision on the target's SiteProfile (bind the logical-network role to a NAD, add a guest network with a DHCP server), a pinned MAC on the VM, or a DHCPServer object; not an override.</span></div>}
+      {a.siteMapping === "NotApplicable" && <div className="nolim">No VM on a multus network: nothing to map; the application recovers exactly as captured.</div>}
+      {a.siteMapping === "Unknown" && <div className="nolim">The current site's dr-agent has not reported the VMs yet.</div>}
+      {m && <>
+        <div className="stats" style={{marginTop: 10}}>
+          <Stat k="Verdict" v={<TrafficLight status={a.siteMapping} />} s={m.site ? `discovered on ${m.site}` : ""} />
+          <Stat k="Findings" v={m.findings.length} s={`${m.counts.resolved} resolved · ${m.counts.open} open (per path)`} c={m.counts.open ? "var(--warn)" : null} />
+          <Stat k="Guest interfaces" v={m.guests.length} s={`${m.guests.filter(g => g.result === "Open").length} open`} />
+          <Stat k="Renderings" v={Object.keys(a.renderings).length} s="artifacts delivered per site" />
+        </div>
+        <div className="card" style={{marginTop: 10}}><h3>Findings · VM networks (NAD) per declared path</h3><div className="bd" style={{overflowX: "auto"}}><FindingsTable findings={m.findings} /></div></div>
+        <div className="card" style={{marginTop: 10}}><h3>Guest addresses · DHCP reservations</h3><div className="bd" style={{overflowX: "auto"}}><GuestsTable guests={m.guests} /></div>
+          <div className="bd" style={{paddingTop: 0}}><p className="mdesc" style={{margin: 0}}>The target address keeps the host ID of the current one inside the target role's CIDR. A reservation is written to the role's DHCP server on every site a declared path leads to; after a move the RecoveryAction report compares expected and observed addresses.</p></div></div>
+        <div className="card" style={{marginTop: 10}}><h3>Renderings</h3><div className="bd"><Renderings r={a.renderings} /></div></div>
+      </>}
     </div>
   );
 }
@@ -626,15 +703,19 @@ function PAppDetail({o: a, nav}) {
         <span><b>{running.length} run{running.length === 1 ? "" : "s"} in progress:</b> {running.map(r => <Ref key={r.id} label={`${r.action || "Test"} ${r.name}`} onClick={() => nav.detail(r)} />)}</span></div>}
       {a.verdict === "NotReady" && <div className="banner"><Icon n="alert" s={15} /><span><b>Not ready on at least one path.</b> The run-action controls need an override with a reason on that path; the failing checks are listed under Readiness.</span></div>}
       {a.awaitingRestore && <div className="banner" style={{color: "var(--warn)", borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)", background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"}}><Icon n="cloud" s={15} /><span><b>Awaiting restore.</b> The DR state was restored onto a rebuilt site; the volumes come back from the newest S3 capture when a dr-admin creates a RestoreAction.</span></div>}
+      {a.siteMapping === "Open" && tab !== "mapping" && <div className="banner" style={{color: "var(--warn)", borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)", background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"}}><Icon n="link" s={15} /><span><b>Site mapping open: {a.counts.openFindings} VM network or guest address cannot be carried to a target.</b> <Ref label="See the findings" onClick={() => setTab("mapping")} /></span></div>}
       <div className="stats">
         <Stat k="Readiness" v={<VerdictBadge v={a.verdict} />} s={`${a.paths.length} declared path${a.paths.length === 1 ? "" : "s"}`} />
         <Stat k="Currently on" v={a.currentCluster || "—"} s={a.zoneBinding ? `zone binding ${a.zoneBinding}` : a.drpc ? `DRPC ${a.drpc}` : ""} />
         <Stat k="Plan" v={a.planName} s={a.drPolicy ? `DRPolicy ${a.drPolicy}` : ""} />
         <Stat k="Last action" v={a.lastAction ? a.lastAction.name : "—"} />
+        <Stat k="Site mapping" v={<TrafficLight status={a.siteMapping} />} s={a.mapping ? `${a.counts.openFindings} open · ${a.mapping.counts.resolved} resolved` : "VM networks and guest addresses"} />
         <Stat k="Runs" v={actions.length + tests.length} s={`${actions.length} actions · ${tests.length} tests`} />
       </div>
-      <Tabs items={[{k: "readiness", label: "Readiness", icon: "shield", n: a.paths.length}, {k: "runs", label: "Runs", icon: "clock", n: actions.length + tests.length},
+      <Tabs items={[{k: "readiness", label: "Readiness", icon: "shield", n: a.paths.length}, {k: "mapping", label: "Site mapping", icon: "link", n: a.counts.findings + a.counts.guests},
+        {k: "runs", label: "Runs", icon: "clock", n: actions.length + tests.length},
         {k: "binding", label: "Binding & recipe", icon: "link"}, {k: "schedules", label: "Schedules & restores", icon: "camera", n: scheds.length + restores.length}]} active={tab} onChange={setTab} />
+      {tab === "mapping" && <MappingPanel a={a} />}
       {tab === "readiness" && <>
         {a.paths.map(p => <div className="card" key={p.name} style={{marginTop: 10}}>
           <h3 style={{display: "flex", alignItems: "center", gap: 10}}><span>{p.name}</span><PathArrow from={p.from} to={p.to} /><VerdictBadge v={p.verdict} sm /><span className="spacer" style={{flex: 1}}></span><span style={{textTransform: "none", letterSpacing: 0}}>{p.actions.join(" · ")}{p.since ? ` · since ${fmtAgo(p.since)}` : ""}</span></h3>
@@ -750,6 +831,9 @@ function RActionDetail({o: a, nav}) {
               {!!(r.hooks || []).length && <><div className="sech" style={{margin: "12px 0 8px"}}><h2>Hooks</h2><span className="ln"></span></div>
                 <Table cols={["Point", "Hook", "Result", "Duration", "Message"]} rows={r.hooks.map(h => [<Mono dim>{h.point}</Mono>, <b>{h.name}</b>, <TrafficLight status={h.result} sm />, h.durationSeconds != null ? fmtSecs(h.durationSeconds) : "", h.message])} /></>}
               {r.preFlight && <><div className="sech" style={{margin: "12px 0 8px"}}><h2>Pre-flight · {r.preFlight.verdict}</h2><span className="ln"></span></div><CheckTable checks={r.preFlight.checks} /></>}
+              {!!a.guests.length && <><div className="sech" style={{margin: "12px 0 8px"}}><h2>Guest addresses on the target</h2><span className="ln"></span></div>
+                <Table cols={["VM", "Network", "Expected", "Observed", "Match"]} rows={a.guests.map(g => [<Mono>{g.vm}</Mono>, <Mono dim>{g.network}</Mono>, <Mono>{g.expectedIP}</Mono>, <Mono>{g.observedIP}</Mono>, g.match ? <span style={{color: "var(--ok)"}}>yes</span> : <span style={{color: "var(--bad)"}}>no</span>])} />
+                {a.guests.some(g => !g.match) && <p className="mdesc" style={{margin: "8px 0 0"}}>A mismatch is reported, not fatal: the guest got an address other than its reservation. Check the DHCP server's ConfigMap generation on the site and the VM's pinned MAC.</p>}</>}
               {r.restart && <><div className="sech" style={{margin: "12px 0 8px"}}><h2>Storage recovery</h2><span className="ln"></span></div>
                 <Props rows={[["Storage cluster", <Mono>{r.restart.storageCluster}</Mono>], ["Recovery", r.restart.recovery], ["Recovered at", r.restart.recoveredAt ? fmtDate(r.restart.recoveredAt) : ""],
                   ["Recovery → ready", r.restart.recoveryToReadySeconds != null ? fmtSecs(r.restart.recoveryToReadySeconds) : ""], ["Volumes reconnected", r.restart.volumesReconnected]]} /></>}
@@ -863,6 +947,7 @@ function RestoreDetail({o: r, nav}) {
 
 function SiteProfileDetail({o: s, nav}) {
   const paths = useResource("sprof.paths|" + s.id, () => drhub.siteProfilePaths(s.id), 15000);
+  const dhcp = useResource("sprof.dhcp|" + s.id, () => drhub.siteDHCPServers(s.id), 15000);
   const inv = s.inventory, sp = s.spec || {};
   return (
     <div>
@@ -874,6 +959,8 @@ function SiteProfileDetail({o: s, nav}) {
         <Stat k="Storage classes" v={s.storageClasses.length} s={`${s.snapshotClasses.length} snapshot classes`} />
         <Stat k="Networks" v={s.nads.length} s={`${s.ipAddressPools.length} address pools`} />
         <Stat k="On paths" v={(paths.data || []).length} />
+        <Stat k="DHCP servers" v={(dhcp.data || []).length} s={`${(dhcp.data || []).reduce((n, d) => n + d.reservations, 0)} reservations rendered`} />
+        <Stat k="Renderings" v={Object.keys(s.renderings).length} s="site-mapper artifacts" />
       </div>
       <div className="dcols">
         <div>
@@ -892,14 +979,44 @@ function SiteProfileDetail({o: s, nav}) {
             {!!s.registryMirrors.length && <Table cols={["Registry", "Mirrors"]} rows={s.registryMirrors.map(m => [<Mono>{m.source}</Mono>, <Mono dim>{(m.mirrors || []).join(", ")}</Mono>])} />}
           </div></div>
           <div className="card" style={{marginTop: 10}}><h3>Bindings (spec)</h3><div className="bd">
-            <Props rows={[["Logical networks", (sp.logicalNetworks || []).map(l => `${l.role} → ${l.nad}`).join("; ")], ["Guest networks", (sp.guestNetworks || []).map(g => `${g.role}: ${g.cidr}`).join("; ")],
-              ["Address pools", (sp.addressPools || []).map(a => `${a.role} → ${a.pool}`).join("; ")], ["Domains", sp.domains ? JSON.stringify(sp.domains) : ""], ["Registry mirror", sp.registryMirror], ["DHCP server", refName2(sp.dhcpServerRef)]]} />
+            <Props rows={[["Logical networks", (sp.logicalNetworks || []).map(l => `${l.role} → ${l.nad}`).join("; ")],
+              ["Address pools", (sp.addressPools || []).map(a => `${a.role} → ${a.pool}`).join("; ")], ["Domains", sp.domains ? JSON.stringify(sp.domains) : ""], ["Registry mirror", sp.registryMirror], ["Site DHCP server", typeof sp.dhcpServerRef === "string" ? sp.dhcpServerRef : refName2(sp.dhcpServerRef)]]} />
+            <div className="sech" style={{margin: "12px 0 8px"}}><h2>Guest networks</h2><span className="ln"></span></div>
+            <Table cols={["Role", "CIDR", "Gateway", "Reserved host IDs", "DHCP server"]} empty="No guest network bound — guest addresses are not reserved on this site." rows={(sp.guestNetworks || []).map(g => [<span className="badge">{g.role}</span>, <Mono>{g.cidr}</Mono>, <Mono dim>{g.gateway}</Mono>, <Mono dim>{(g.reservedHostIDs || []).join(", ")}</Mono>, <Mono dim>{g.dhcpServerRef || (typeof sp.dhcpServerRef === "string" ? sp.dhcpServerRef + " (site default)" : "")}</Mono>])} />
+            <p className="mdesc" style={{margin: "9px 0 0"}}>A role names the same logical network on every site; binding it here is what resolves a VM's NAD finding and derives its guest address on this site.</p>
+          </div></div>
+          <div className="card" style={{marginTop: 10}}><h3>DHCP servers & renderings</h3><div className="bd">
+            <Table cols={["Server", "Type", "Target ConfigMap", "Reservations", "Generation"]} empty="No DHCPServer registered for this site." rows={(dhcp.data || []).map(d => [<Ref label={d.name} onClick={() => nav.detail(d)} />, <span className="badge">{d.type}</span>, <Mono dim>{d.target}</Mono>, d.reservations, <Mono dim>{d.generation}</Mono>])} />
+            <div className="sech" style={{margin: "12px 0 8px"}}><h2>Rendered artifacts</h2><span className="ln"></span></div>
+            <Renderings r={s.renderings} />
+            <p className="mdesc" style={{margin: "9px 0 0"}}>sitemap-live (the Velero resource-modifier) and the DHCP ConfigMaps, delivered by ManifestWork; artifacts-current compares these generations with what dr-agent finds on the site.</p>
           </div></div>
         </div>
       </div>
       <div className="sech"><h2>DR paths touching this site</h2><span className="ln"></span></div>
       <div className="grid">{(paths.data || []).map(p => <DRPathTile key={p.id} o={p} nav={nav} />)}</div>
       <Conditions o={s} />
+    </div>
+  );
+}
+
+function DHCPServerDetail({o: d, nav}) {
+  const apps = useResource("dhcp.apps|" + d.id, () => drhub.apps(), 15000);
+  const guests = (apps.data || []).flatMap(a => (a.mapping ? a.mapping.guests : []).flatMap(g => (g.reservations || []).filter(r => r.dhcpServer === d.name).map(r => ({app: `${a.namespace}/${a.name}`, g, r}))));
+  return (
+    <div>
+      <DetailHead obj={d} title={d.name} sub={<span className="mono" style={{color: "var(--dim)"}}>DHCPServer · site {d.site}</span>} badge={<span className="badge">{d.type}</span>} />
+      <div className="stats">
+        <Stat k="State" v={<TrafficLight status={d.status} />} />
+        <Stat k="Reservations" v={d.reservations} s="rendered by dr-hub" />
+        <Stat k="Generation" v={d.generation || "—"} s="content hash of the rendering" />
+        <Stat k="Target" v={d.target} s="ConfigMap on the site, key sitemap.hosts" />
+      </div>
+      <div className="card"><h3>Reservations known from the applications</h3><div className="bd" style={{overflowX: "auto"}}>
+        <Table cols={["Application", "VM", "Network", "MAC", "Address", "Site", "Result", "Reason"]} empty="No guest interface names this server yet." rows={guests.map(x => [<Mono dim>{x.app}</Mono>, <Mono>{x.g.vm}</Mono>, <Mono dim>{x.g.network}</Mono>, <Mono dim>{x.g.mac}</Mono>, <Mono>{x.r.ip}</Mono>, <Mono dim>{x.r.site}{x.r.path ? ` ← ${x.r.path}` : ""}</Mono>, <MappingResult r={x.r.result} />, x.r.reason])} />
+        <p className="mdesc" style={{margin: "9px 0 0"}}>The ConfigMap is the API: one "mac,ip,name" line per reservation, dnsmasq --dhcp-hostsdir format. The hub never talks to the server.</p>
+      </div></div>
+      <Conditions o={d} />
     </div>
   );
 }
@@ -963,6 +1080,8 @@ function DrHubHome({nav}) {
   const mayPlan = acc.can("create", "drhub", {kind: "pplan"});
   const mayPath = acc.can("create", "drhub", {kind: "drpath"});
   const mayApp = acc.can("create", "drhub", {kind: "papp", namespace: DR_NS()});
+  const inbox = openFindings(as);
+  const mappingOpen = as.filter(a => a.siteMapping === "Open").length;
   const gate = (ok, el, why) => ok ? el : React.cloneElement(el, {disabled: true, title: why, onClick: undefined});
   return (
     <div>
@@ -985,6 +1104,7 @@ function DrHubHome({nav}) {
         <Stat k="Applications" v={as.length} s={`${byV("Ready")} ready · ${byV("Degraded")} degraded · ${byV("NotReady")} not ready`} c={byV("NotReady") ? "var(--bad)" : byV("Degraded") ? "var(--warn)" : null} />
         <Stat k="Running now" v={running.length} s={`${actions.filter(a => !a.terminal).length} actions · ${tests.filter(t => !t.terminal).length} tests`} c={running.length ? "var(--info)" : null} />
         <Stat k="Sites with agent" v={c ? `${c.counts.agentsAvailable}/${c.counts.agents}` : "—"} c={c && c.counts.agentsAvailable < c.counts.agents ? "var(--warn)" : null} />
+        <Stat k="Open findings" v={inbox.length} s={`${mappingOpen} application${mappingOpen === 1 ? "" : "s"} with open site mapping`} c={inbox.length ? "var(--warn)" : null} />
         <Stat k="Last failover RTO" v={(() => { const f = actions.filter(a => a.action === "Failover" && a.rtoSeconds != null).sort((x, y) => Date.parse(y.completionTime) - Date.parse(x.completionTime))[0]; return f ? fmtSecs(f.rtoSeconds) : "—"; })()} />
       </div>
 
@@ -996,6 +1116,18 @@ function DrHubHome({nav}) {
             ...dp.map(p => { const x = a.paths.find(y => y.name === p.name); return x ? <span title={x.checks.filter(c => c.status === "Fail").map(c => c.name).join(", ")}><VerdictBadge v={x.verdict} sm /></span> : <span style={{color: "var(--dim2)"}}>·</span>; })])} />}
         <p className="mdesc" style={{margin: "9px 0 0"}}>Columns are exactly the declared paths. A dot means the path does not cover that application; a Relocate-only path is never red for a missing rehearsal.</p>
       </div></div>
+
+      {!!inbox.length && <>
+        <div className="sech"><h2>Resolution inbox · open site-mapping decisions</h2><span className="ln"></span></div>
+        <div className="card"><div className="bd" style={{overflowX: "auto"}}>
+          <Table cols={["Path → target", "Category", "Source value", "Role", "Applications · VMs", "Reason", "Candidates on the target", "Where to decide"]} rows={inbox.map(g => [
+            <Mono>{g.path || "current site"} <span style={{color: "var(--dim2)"}}>→</span> {g.site}</Mono>, <span className="badge">{g.category}</span>, <Mono>{g.value}</Mono>, <Mono dim>{g.role}</Mono>,
+            <span title={g.vms.join(", ")}>{g.apps.map(n => { const a = as.find(x => `${x.namespace}/${x.name}` === n); return a ? <Ref key={n} label={n} onClick={() => nav.detail(a)} /> : <Mono key={n}>{n}</Mono>; })} <span style={{color: "var(--dim2)"}}>· {g.vms.length} VM{g.vms.length === 1 ? "" : "s"}</span></span>,
+            g.reason, <Mono dim>{g.candidates.join(", ")}</Mono>,
+            g.kind === "guest" ? <span>SiteProfile <Mono>{g.cluster}</Mono>: guestNetworks[{g.role}] + DHCPServer; pinned MAC on the VM</span> : <span>SiteProfile <Mono>{g.cluster}</Mono>: bind logicalNetworks[{g.role || "role"}] to a candidate NAD</span>])} />
+          <p className="mdesc" style={{margin: "9px 0 0"}}>One decision per row clears every occurrence on that path. Decisions are taken on the target's SiteProfile (and DHCPServer objects), never as an override; readiness check findings-resolved blocks the path until then.</p>
+        </div></div>
+      </>}
 
       <div className="sech"><h2>Protection plans</h2><span className="ln"></span><button className="chip" onClick={() => nav.drLayer("plans")}>Open all</button></div>
       {ps.length ? <div className="grid">{ps.slice(0, 6).map(p => <PPlanTile key={p.id} o={p} nav={nav} />)}</div>
@@ -1014,13 +1146,14 @@ function DrHubHome({nav}) {
       <div className="navcards">
         <NavCard icon="list" title="Recovery plans" sub="ordered sets of applications" count="→" onClick={() => nav.drLayer("rplans")} />
         <NavCard icon="cloud" title="Restores" sub="from S3 backups onto rebuilt sites" count="→" onClick={() => nav.drLayer("restores")} />
-        <NavCard icon="k8s" title="Site profiles" sub="per-cluster inventory" count="→" onClick={() => nav.drLayer("siteprofiles")} />
+        <NavCard icon="k8s" title="Site profiles" sub="per-cluster inventory and bindings" count="→" onClick={() => nav.drLayer("siteprofiles")} />
+        <NavCard icon="link" title="DHCP servers" sub="guest address reservations per site" count="→" onClick={() => nav.drLayer("dhcpservers")} />
         <NavCard icon="gauge" title="DR configuration" sub="agents, Ramen, archive, executor" count="→" onClick={() => nav.drLayer("drconfig")} />
       </div>
     </div>
   );
 }
 
-Object.assign(window, {DrHubHome, DRConfigView, PPlanTile, DRPathTile, PAppTile, RPlanTile, RActionTile, TBubbleTile, TSchedTile, RestoreTile, SiteProfileTile,
-  PPlanDetail, DRPathDetail, PAppDetail, RPlanDetail, RActionDetail, TBubbleDetail, TSchedDetail, RestoreDetail, SiteProfileDetail,
-  runActionDialog, runTestDialog, restoreDialog, newPPlanDialog: newPlanDialog, newPathDialog, protectAppDialogDR, newRPlanDialog, newScheduleDialog, ACTION_KIND_META, KIND_LABEL_DR});
+Object.assign(window, {DrHubHome, DRConfigView, PPlanTile, DRPathTile, PAppTile, RPlanTile, RActionTile, TBubbleTile, TSchedTile, RestoreTile, SiteProfileTile, DHCPServerTile,
+  PPlanDetail, DRPathDetail, PAppDetail, RPlanDetail, RActionDetail, TBubbleDetail, TSchedDetail, RestoreDetail, SiteProfileDetail, DHCPServerDetail, MappingPanel,
+  runActionDialog, runTestDialog, restoreDialog, newPPlanDialog: newPlanDialog, newPathDialog, protectAppDialogDR, newRPlanDialog, newScheduleDialog, newDHCPServerDialog, ACTION_KIND_META, KIND_LABEL_DR});

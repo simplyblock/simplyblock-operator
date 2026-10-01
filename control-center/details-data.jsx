@@ -334,7 +334,7 @@ const DETAIL_KIND = {pair: "PairDetail", rpolicy: "RPolicyDetail", zone: "ZoneDe
   k8sc: "K8sDetail", storageclass: "StorageClassDetail", pvc: "PvcDetail", bucket: "BucketDetail",
   // DR hub kinds live in drhub.jsx
   pplan: "PPlanDetail", drpath: "DRPathDetail", papp: "PAppDetail", rplan: "RPlanDetail", raction: "RActionDetail",
-  tbubble: "TBubbleDetail", tsched: "TSchedDetail", restore: "RestoreDetail", siteprofile: "SiteProfileDetail",
+  tbubble: "TBubbleDetail", tsched: "TSchedDetail", restore: "RestoreDetail", siteprofile: "SiteProfileDetail", dhcpserver: "DHCPServerDetail",
   deployconfig: "DeployConfigDetail", mpath: "MPathDetail", appgroup: "AppGroupDetail"};
 const Detail = ({obj, nav}) => {
   const C = DETAILS[obj.kind] || (DETAIL_KIND[obj.kind] ? window[DETAIL_KIND[obj.kind]] : null);

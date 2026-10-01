@@ -137,8 +137,13 @@ The Disaster recovery section is a thin client of the DR hub
 ([simplyblock-dr](https://github.com/simplyblock/simplyblock-dr)): every screen
 is a CR of `dr.simplyblock.io/v1alpha1` read through the Kubernetes API proxy
 (ProtectionPlan, DRPath, ProtectedApplication, RecoveryPlan, RecoveryAction,
-TestBubble, TestSchedule, RestoreAction, DRConfig, plus `SiteProfile` from
-`sitemap.simplyblock.io`), and every write is a CR write with the caller's RBAC.
+TestBubble, TestSchedule, RestoreAction, DRConfig, plus `SiteProfile` and
+`DHCPServer` from `sitemap.simplyblock.io`), and every write is a CR write with
+the caller's RBAC. The site mapper (ADR 0020) shows up as the application's
+site-mapping verdict and findings (VM networks per declared path, guest
+addresses and their DHCP reservations), the resolution inbox on the dashboard,
+guest address verification in action reports, and the renderings and DHCP
+servers per site profile.
 There is no DR REST API. When the CRDs are absent the section says so.
 
 `SB_MODE=dr` is the same image stripped down to that section, for a DR hub

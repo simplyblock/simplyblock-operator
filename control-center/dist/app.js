@@ -227,6 +227,13 @@ const RESOURCES = {
     namespaced: false,
     dr: true
   },
+  DHCPServer: {
+    plural: "dhcpservers",
+    short: "dhcps",
+    core: SITEMAP_API_GROUP,
+    namespaced: false,
+    dr: true
+  },
   // Ramen and OCM objects the hub derives — instances only, read-only here
   DRPolicy: {
     plural: "drpolicies",
@@ -3339,7 +3346,8 @@ const DR_KINDS = {
   tsched: "TestSchedule",
   restore: "RestoreAction",
   siteprofile: "SiteProfile",
-  drconfig: "DRConfig"
+  drconfig: "DRConfig",
+  dhcpserver: "DHCPServer"
 };
 const DR_ANN = {
   createdBy: "dr.simplyblock.io/created-by",
@@ -3565,6 +3573,21 @@ Object.assign(STATUS_META, {
     rank: 2,
     label: "n/a"
   },
+  Resolved: {
+    c: "var(--ok)",
+    rank: 0,
+    label: "resolved"
+  },
+  Open: {
+    c: "var(--warn)",
+    rank: 3,
+    label: "open"
+  },
+  Rendered: {
+    c: "var(--ok)",
+    rank: 0,
+    label: "rendered"
+  },
   Aborted: {
     c: "var(--warn)",
     rank: 3,
@@ -3734,16 +3757,30 @@ function normPApp(o) {
     zoneBinding: st.zoneBinding || "",
     currentCluster: st.currentCluster || "",
     paths,
-    siteMapping: st.siteMapping || "",
+    siteMapping: st.siteMapping || "Unknown",
     recipe: st.recipe || null,
     suggestedTiers: st.suggestedTiers || [],
     lastAction: st.lastAction ? splitRef(st.lastAction) : null,
+    // site mapper (ADR 0020): VM network findings and guest addresses, resolved per declared path
+    mapping: st.mapping ? {
+      site: st.mapping.site || "",
+      findings: st.mapping.findings || [],
+      guests: st.mapping.guests || [],
+      counts: st.mapping.counts || {
+        open: 0,
+        resolved: 0
+      }
+    } : null,
+    renderings: st.renderings || {},
     awaitingRestore: anns[DR_ANN.awaitingRestore] !== undefined,
     autoRestartOptOut: anns[DR_ANN.autoRestart] === "false",
     counts: {
       paths: paths.length,
       tiers: (sp.tiers || []).length,
-      probes: ((sp.health || {}).probes || []).length
+      probes: ((sp.health || {}).probes || []).length,
+      openFindings: st.mapping ? (st.mapping.counts || {}).open || 0 : 0,
+      findings: st.mapping ? (st.mapping.findings || []).length : 0,
+      guests: st.mapping ? (st.mapping.guests || []).length : 0
     }
   }));
 }
@@ -3797,6 +3834,7 @@ function normRAction(o) {
     reportKey: st.reportKey || "",
     rtoSeconds: report ? report.rtoSeconds : null,
     rpoSeconds: report ? report.achievedRPOSeconds : null,
+    guests: report ? report.guests || [] : [],
     createdBy: (drMeta(o).annotations || {})[DR_ANN.createdBy] || report && report.operator || "",
     counts: {
       steps: (st.steps || []).length,
@@ -3904,6 +3942,7 @@ function normSiteProfile(o) {
     inventory: inv,
     reportedAt: st.reportedAt,
     spec: sp,
+    renderings: st.renderings || {},
     zones: inv.zones || [],
     nodes: inv.nodes || [],
     nads: inv.nads || [],
@@ -3947,6 +3986,23 @@ function normDRConfig(o) {
     }
   }));
 }
+function normDHCPServer(o) {
+  const sp = o.spec || {},
+    st = o.status || {};
+  const failed = (st.conditions || []).some(c => c.status === "False");
+  return reg(Object.assign(base(o, "dhcpserver"), {
+    status: failed ? "NotReady" : st.generation ? "Rendered" : "Pending",
+    site: sp.site || "",
+    type: sp.type || "",
+    dnsmasq: sp.dnsmasq || null,
+    target: sp.dnsmasq ? `${sp.dnsmasq.namespace}/${sp.dnsmasq.configMap}` : "",
+    reservations: st.reservations || 0,
+    generation: st.generation || "",
+    counts: {
+      reservations: st.reservations || 0
+    }
+  }));
+}
 const NORM = {
   pplan: normPPlan,
   drpath: normDRPath,
@@ -3957,8 +4013,67 @@ const NORM = {
   tsched: normTSched,
   restore: normRestore,
   siteprofile: normSiteProfile,
-  drconfig: normDRConfig
+  drconfig: normDRConfig,
+  dhcpserver: normDHCPServer
 };
+
+// The resolution inbox (design 13.1): open findings of every application,
+// grouped by (path, category, source value) so one decision clears every
+// occurrence. The decision itself — binding the role on the target
+// SiteProfile, pinning a MAC, adding a DHCPServer — is taken on those objects.
+function openFindings(apps) {
+  const groups = {};
+  apps.forEach(a => {
+    if (!a.mapping) return;
+    a.mapping.findings.forEach(f => (f.paths || []).forEach(p => {
+      if (p.result !== "Open") return;
+      const key = `${p.path}|${f.category}|${f.value}`;
+      const g = groups[key] = groups[key] || {
+        key,
+        path: p.path,
+        site: p.site,
+        cluster: p.cluster,
+        category: f.category,
+        value: f.value,
+        role: p.role || "",
+        reason: p.reason || "",
+        candidates: new Set(),
+        apps: new Set(),
+        vms: new Set(),
+        kind: "finding"
+      };
+      g.apps.add(`${a.namespace}/${a.name}`);
+      g.vms.add(f.vm);
+      (p.candidates || []).forEach(c => g.candidates.add(c));
+      if (!g.reason && p.reason) g.reason = p.reason;
+    }));
+    a.mapping.guests.forEach(g0 => (g0.reservations || []).forEach(r => {
+      if (r.result !== "Open") return;
+      const key = `${r.path || "current"}|guest|${g0.role}|${r.reason}`;
+      const g = groups[key] = groups[key] || {
+        key,
+        path: r.path || "",
+        site: r.site,
+        cluster: r.cluster,
+        category: "guest-address",
+        value: `role ${g0.role}`,
+        role: g0.role,
+        reason: r.reason || "",
+        candidates: new Set(),
+        apps: new Set(),
+        vms: new Set(),
+        kind: "guest"
+      };
+      g.apps.add(`${a.namespace}/${a.name}`);
+      g.vms.add(g0.vm);
+    }));
+  });
+  return Object.values(groups).map(g => Object.assign(g, {
+    candidates: [...g.candidates],
+    apps: [...g.apps],
+    vms: [...g.vms]
+  })).sort((x, y) => y.apps.length - x.apps.length || x.path.localeCompare(y.path));
+}
 
 // ---- reads ---------------------------------------------------------------------------
 const drList = kind => k8s.list(DR_KINDS[kind], RESOURCES[DR_KINDS[kind]].namespaced ? {
@@ -3994,6 +4109,9 @@ const drhub = {
   restoreAction: drById("restore"),
   siteProfiles: () => drList("siteprofile"),
   siteProfile: drById("siteprofile"),
+  dhcpServers: () => drList("dhcpserver"),
+  dhcpServer: drById("dhcpserver"),
+  siteDHCPServers: id => Promise.all([drhub.siteProfile(id), drhub.dhcpServers()]).then(([sp, ds]) => ds.filter(d => d.site === sp.name)),
   configs: () => drList("drconfig"),
   config: () => drList("drconfig").then(cs => cs.find(c => c.name === "default") || cs[0] || null),
   // derived Ramen objects, read-only
@@ -4233,6 +4351,28 @@ const drhub = {
   }, {
     namespace
   }),
+  // A DHCP server of a site (ADR 0020): dr-hub renders the guest reservations
+  // into its ConfigMap on the site; the hub never talks to the server.
+  createDHCPServer: ({
+    name,
+    site,
+    namespace,
+    configMap
+  }) => k8s.create("DHCPServer", {
+    apiVersion: "sitemap.simplyblock.io/v1alpha1",
+    kind: "DHCPServer",
+    metadata: {
+      name: dns63(name)
+    },
+    spec: {
+      site,
+      type: "dnsmasq",
+      dnsmasq: {
+        namespace,
+        configMap
+      }
+    }
+  }),
   // Optional per-application knob: opt out of the automatic restart after a
   // storage recovery (ADR 0017).
   setAutoRestart: (a, on) => k8s.patch("ProtectedApplication", a.name, {
@@ -4274,7 +4414,8 @@ Object.assign(GETTER, {
   tsched: drhub.schedule,
   restore: drhub.restoreAction,
   siteprofile: drhub.siteProfile,
-  drconfig: drhub.config
+  drconfig: drhub.config,
+  dhcpserver: drhub.dhcpServer
 });
 Object.assign(window, {
   drhub,
@@ -4291,6 +4432,7 @@ Object.assign(window, {
   kvToObj,
   csv,
   dns63,
+  openFindings,
   normPPlan,
   normDRPath,
   normPApp,
@@ -4300,7 +4442,8 @@ Object.assign(window, {
   normTSched,
   normRestore,
   normSiteProfile,
-  normDRConfig
+  normDRConfig,
+  normDHCPServer
 });
 })();
 // ---- agent.jsx ----
@@ -4848,7 +4991,8 @@ const KIND_ENTITY = {
   tsched: "drhub",
   restore: "drhub",
   drconfig: "drhub",
-  siteprofile: "drhub"
+  siteprofile: "drhub",
+  dhcpserver: "drhub"
 };
 // UI kind -> the CRD resource the API server checks (§3.5, the console's column)
 const KIND_RESOURCE = {
@@ -4894,7 +5038,8 @@ const KIND_RESOURCE = {
   tsched: "testschedules",
   restore: "restoreactions",
   drconfig: "drconfigs",
-  siteprofile: "siteprofiles"
+  siteprofile: "siteprofiles",
+  dhcpserver: "dhcpservers"
 };
 // UI kind -> API group, where it is not the default simplyblock group
 const KIND_GROUP = {
@@ -4907,7 +5052,8 @@ const KIND_GROUP = {
   tsched: "dr.simplyblock.io",
   restore: "dr.simplyblock.io",
   drconfig: "dr.simplyblock.io",
-  siteprofile: "sitemap.simplyblock.io"
+  siteprofile: "sitemap.simplyblock.io",
+  dhcpserver: "sitemap.simplyblock.io"
 };
 const ENTITY_GROUP = {
   drhub: "dr.simplyblock.io"
@@ -23324,7 +23470,8 @@ const KIND_LABEL_DR = {
   tsched: "test schedule",
   restore: "restore",
   siteprofile: "site profile",
-  drconfig: "DR configuration"
+  drconfig: "DR configuration",
+  dhcpserver: "DHCP server"
 };
 const METHOD_TYPES = [{
   v: "async",
@@ -23855,6 +24002,59 @@ const newScheduleDialog = (target, nsHint) => ({
     suspend: v.suspend
   })
 });
+const newDHCPServerDialog = sites => ({
+  title: "Register a DHCP server",
+  confirm: "Create",
+  done: "DHCPServer created",
+  desc: "A DHCP server of one site that guest addresses are reserved on. dr-hub never talks to it: it renders the reservations (<mac>,<ip>,<vm>) into the server's ConfigMap on the site, and dnsmasq reads them from its --dhcp-hostsdir. A SiteProfile's guestNetworks[role].dhcpServerRef (or spec.dhcpServerRef) names it.",
+  fields: [{
+    k: "site",
+    label: "Site (managed cluster)",
+    type: "select",
+    required: true,
+    options: sites.map(s => ({
+      v: s,
+      l: s
+    })),
+    empty: "No site profile reported yet."
+  }, {
+    k: "name",
+    label: "Name",
+    type: "text",
+    required: true,
+    placeholder: "dhcp-site-a"
+  }, {
+    k: "type",
+    label: "Type",
+    type: "select",
+    options: [{
+      v: "dnsmasq",
+      l: "dnsmasq — reservations ConfigMap mounted as --dhcp-hostsdir"
+    }]
+  }, {
+    k: "namespace",
+    label: "ConfigMap namespace (on the site)",
+    type: "text",
+    required: true,
+    placeholder: "dhcp"
+  }, {
+    k: "configMap",
+    label: "ConfigMap name",
+    type: "text",
+    required: true,
+    placeholder: "sitemap-hosts"
+  }, {
+    k: "n1",
+    type: "note",
+    label: "Then bind it on the site profile: spec.guestNetworks[].dhcpServerRef or spec.dhcpServerRef (kubectl in this phase). Guests need a pinned MAC and an address inside the role's CIDR to get a reservation."
+  }],
+  run: v => drhub.createDHCPServer({
+    name: v.name.trim(),
+    site: v.site,
+    namespace: v.namespace.trim(),
+    configMap: v.configMap.trim()
+  })
+});
 
 // ---- command registry (kebab menus) ----------------------------------------
 // `op` is what access.can() checks: failover/relocate/restart/test map to
@@ -24019,6 +24219,14 @@ Object.assign(ACTIONS, {
     dialog: deleteDialog(r, "")
   }],
   siteprofile: () => [],
+  dhcpserver: d => [{
+    label: "Delete server",
+    icon: "trash",
+    danger: true,
+    op: "delete",
+    removes: true,
+    dialog: deleteDialog(d, "Reservations rendered for this server stay in its ConfigMap until the hub re-renders the site; guests whose role names it become Open.")
+  }],
   drconfig: () => []
 });
 
@@ -24191,7 +24399,11 @@ function PAppTile({
     className: "lab warn"
   }, "awaiting restore"), a.zoneBinding && /*#__PURE__*/React.createElement("span", {
     className: "lab"
-  }, /*#__PURE__*/React.createElement("i", null, "zone"), a.zoneBinding)), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("i", null, "zone"), a.zoneBinding), a.siteMapping === "Open" && /*#__PURE__*/React.createElement("span", {
+    className: "lab warn"
+  }, /*#__PURE__*/React.createElement("i", null, "site mapping"), a.counts.openFindings, " open"), a.siteMapping === "Resolved" && /*#__PURE__*/React.createElement("span", {
+    className: "lab"
+  }, /*#__PURE__*/React.createElement("i", null, "site mapping"), "resolved")), /*#__PURE__*/React.createElement("div", {
     className: "mlist"
   }, a.paths.map(p => /*#__PURE__*/React.createElement("div", {
     className: "mrow" + (p.verdict === "NotReady" ? " bad" : ""),
@@ -24465,6 +24677,218 @@ function SiteProfileTile({
       onClick: () => nav.detail(s)
     }]
   }));
+}
+function DHCPServerTile({
+  o: d,
+  nav
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "tile",
+    style: {
+      "--sc": STATUS_META[d.status].c
+    },
+    onDoubleClick: () => nav.detail(d)
+  }, /*#__PURE__*/React.createElement(TileHead, {
+    obj: d,
+    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TrafficLight, {
+      status: d.status
+    }), /*#__PURE__*/React.createElement(Name, null, d.name)),
+    right: /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, d.type)
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "tsub",
+    style: {
+      marginTop: 2
+    }
+  }, "site ", d.site, " \xB7 ", d.target), /*#__PURE__*/React.createElement(Uuid, {
+    value: d.id
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "kv"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "reservations"), /*#__PURE__*/React.createElement("b", null, d.reservations)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "generation"), /*#__PURE__*/React.createElement("b", null, d.generation || "—"))), /*#__PURE__*/React.createElement(Foot, {
+    items: [{
+      label: "Details",
+      right: true,
+      onClick: () => nav.detail(d)
+    }]
+  }));
+}
+
+// ---- site mapping (ADR 0020) ------------------------------------------------------
+const MappingResult = ({
+  r
+}) => /*#__PURE__*/React.createElement(TrafficLight, {
+  status: r || "Unknown",
+  sm: true
+});
+function FindingsTable({
+  findings,
+  nav
+}) {
+  const rows = findings.flatMap(f => (f.paths && f.paths.length ? f.paths : [null]).map(p => [/*#__PURE__*/React.createElement(Mono, null, f.vm), /*#__PURE__*/React.createElement(Mono, {
+    dim: true
+  }, f.network, " ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "var(--dim2)"
+    }
+  }, "#", f.index)), /*#__PURE__*/React.createElement("span", {
+    className: "badge"
+  }, f.category), /*#__PURE__*/React.createElement(Mono, null, f.value), p ? /*#__PURE__*/React.createElement(Mono, {
+    dim: true
+  }, p.path) : "", p ? /*#__PURE__*/React.createElement(MappingResult, {
+    r: p.result
+  }) : /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "var(--dim2)"
+    }
+  }, "no path"), p ? /*#__PURE__*/React.createElement(Mono, {
+    dim: true
+  }, p.strategy, p.role ? ` · role ${p.role}` : "") : "", p ? /*#__PURE__*/React.createElement(Mono, null, p.to) : "", p ? /*#__PURE__*/React.createElement("span", null, p.reason, p.candidates && p.candidates.length ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "var(--dim2)"
+    }
+  }, " \xB7 candidates: ", p.candidates.join(", ")) : null) : ""]));
+  return /*#__PURE__*/React.createElement(Table, {
+    cols: ["VM", "Network", "Category", "Source value", "Path", "Result", "Strategy", "Target value", "Reason / candidates"],
+    empty: "No site-specific reference found.",
+    rows: rows
+  });
+}
+function GuestsTable({
+  guests
+}) {
+  const rows = guests.flatMap(g => (g.reservations && g.reservations.length ? g.reservations : [null]).map((r, i) => [i === 0 ? /*#__PURE__*/React.createElement(Mono, null, g.vm) : "", i === 0 ? /*#__PURE__*/React.createElement(Mono, {
+    dim: true
+  }, g.network) : "", i === 0 ? /*#__PURE__*/React.createElement(Mono, {
+    dim: true
+  }, g.mac || /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "var(--bad)"
+    }
+  }, "unpinned")) : "", i === 0 ? /*#__PURE__*/React.createElement("span", {
+    className: "badge"
+  }, g.role) : "", r ? /*#__PURE__*/React.createElement(Mono, null, r.site, r.path ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "var(--dim2)"
+    }
+  }, " \u2190 ", r.path) : /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "var(--dim2)"
+    }
+  }, " (current)")) : /*#__PURE__*/React.createElement(Mono, {
+    dim: true
+  }, g.currentSite), r ? /*#__PURE__*/React.createElement(Mono, null, r.ip) : /*#__PURE__*/React.createElement(Mono, {
+    dim: true
+  }, Object.entries(g.ips || {}).map(([s, ip]) => `${s}: ${ip}`).join(", ")), r ? /*#__PURE__*/React.createElement(Mono, {
+    dim: true
+  }, r.dhcpServer) : "", /*#__PURE__*/React.createElement(MappingResult, {
+    r: r ? r.result : g.result
+  }), r ? r.reason : g.reason]));
+  return /*#__PURE__*/React.createElement(Table, {
+    cols: ["VM", "Network", "MAC", "Role", "Site", "Address", "DHCP server", "Result", "Reason"],
+    empty: "No guest interface on a guest network.",
+    rows: rows
+  });
+}
+const Renderings = ({
+  r
+}) => /*#__PURE__*/React.createElement(Table, {
+  cols: ["Artifact (ConfigMap)", "Generation"],
+  empty: "Nothing rendered for this site yet.",
+  rows: Object.entries(r || {}).sort().map(([k, v]) => [/*#__PURE__*/React.createElement(Mono, null, k), /*#__PURE__*/React.createElement(Mono, {
+    dim: true
+  }, v)])
+});
+function MappingPanel({
+  a
+}) {
+  const m = a.mapping;
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10
+    }
+  }, a.siteMapping === "Open" && /*#__PURE__*/React.createElement("div", {
+    className: "banner",
+    style: {
+      color: "var(--warn)",
+      borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)",
+      background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, m ? m.counts.open : 0, " open on at least one path"), " \u2014 readiness fails findings-resolved there. The fix is a decision on the target's SiteProfile (bind the logical-network role to a NAD, add a guest network with a DHCP server), a pinned MAC on the VM, or a DHCPServer object; not an override.")), a.siteMapping === "NotApplicable" && /*#__PURE__*/React.createElement("div", {
+    className: "nolim"
+  }, "No VM on a multus network: nothing to map; the application recovers exactly as captured."), a.siteMapping === "Unknown" && /*#__PURE__*/React.createElement("div", {
+    className: "nolim"
+  }, "The current site's dr-agent has not reported the VMs yet."), m && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "stats",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "Verdict",
+    v: /*#__PURE__*/React.createElement(TrafficLight, {
+      status: a.siteMapping
+    }),
+    s: m.site ? `discovered on ${m.site}` : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Findings",
+    v: m.findings.length,
+    s: `${m.counts.resolved} resolved · ${m.counts.open} open (per path)`,
+    c: m.counts.open ? "var(--warn)" : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Guest interfaces",
+    v: m.guests.length,
+    s: `${m.guests.filter(g => g.result === "Open").length} open`
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Renderings",
+    v: Object.keys(a.renderings).length,
+    s: "artifacts delivered per site"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Findings \xB7 VM networks (NAD) per declared path"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      overflowX: "auto"
+    }
+  }, /*#__PURE__*/React.createElement(FindingsTable, {
+    findings: m.findings
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Guest addresses \xB7 DHCP reservations"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      overflowX: "auto"
+    }
+  }, /*#__PURE__*/React.createElement(GuestsTable, {
+    guests: m.guests
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      paddingTop: 0
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: 0
+    }
+  }, "The target address keeps the host ID of the current one inside the target role's CIDR. A reservation is written to the role's DHCP server on every site a declared path leads to; after a move the RecoveryAction report compares expected and observed addresses."))), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Renderings"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Renderings, {
+    r: a.renderings
+  })))));
 }
 
 // ---- details ------------------------------------------------------------------
@@ -24860,7 +25284,20 @@ function PAppDetail({
   }, /*#__PURE__*/React.createElement(Icon, {
     n: "cloud",
     s: 15
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Awaiting restore."), " The DR state was restored onto a rebuilt site; the volumes come back from the newest S3 capture when a dr-admin creates a RestoreAction.")), /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Awaiting restore."), " The DR state was restored onto a rebuilt site; the volumes come back from the newest S3 capture when a dr-admin creates a RestoreAction.")), a.siteMapping === "Open" && tab !== "mapping" && /*#__PURE__*/React.createElement("div", {
+    className: "banner",
+    style: {
+      color: "var(--warn)",
+      borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)",
+      background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "link",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Site mapping open: ", a.counts.openFindings, " VM network or guest address cannot be carried to a target."), " ", /*#__PURE__*/React.createElement(Ref, {
+    label: "See the findings",
+    onClick: () => setTab("mapping")
+  }))), /*#__PURE__*/React.createElement("div", {
     className: "stats"
   }, /*#__PURE__*/React.createElement(Stat, {
     k: "Readiness",
@@ -24880,6 +25317,12 @@ function PAppDetail({
     k: "Last action",
     v: a.lastAction ? a.lastAction.name : "—"
   }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Site mapping",
+    v: /*#__PURE__*/React.createElement(TrafficLight, {
+      status: a.siteMapping
+    }),
+    s: a.mapping ? `${a.counts.openFindings} open · ${a.mapping.counts.resolved} resolved` : "VM networks and guest addresses"
+  }), /*#__PURE__*/React.createElement(Stat, {
     k: "Runs",
     v: actions.length + tests.length,
     s: `${actions.length} actions · ${tests.length} tests`
@@ -24889,6 +25332,11 @@ function PAppDetail({
       label: "Readiness",
       icon: "shield",
       n: a.paths.length
+    }, {
+      k: "mapping",
+      label: "Site mapping",
+      icon: "link",
+      n: a.counts.findings + a.counts.guests
     }, {
       k: "runs",
       label: "Runs",
@@ -24906,6 +25354,8 @@ function PAppDetail({
     }],
     active: tab,
     onChange: setTab
+  }), tab === "mapping" && /*#__PURE__*/React.createElement(MappingPanel, {
+    a: a
   }), tab === "readiness" && /*#__PURE__*/React.createElement(React.Fragment, null, a.paths.map(p => /*#__PURE__*/React.createElement("div", {
     className: "card",
     key: p.name,
@@ -25332,7 +25782,32 @@ function RActionDetail({
     className: "ln"
   })), /*#__PURE__*/React.createElement(CheckTable, {
     checks: r.preFlight.checks
-  })), r.restart && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  })), !!a.guests.length && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      margin: "12px 0 8px"
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Guest addresses on the target"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement(Table, {
+    cols: ["VM", "Network", "Expected", "Observed", "Match"],
+    rows: a.guests.map(g => [/*#__PURE__*/React.createElement(Mono, null, g.vm), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, g.network), /*#__PURE__*/React.createElement(Mono, null, g.expectedIP), /*#__PURE__*/React.createElement(Mono, null, g.observedIP), g.match ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--ok)"
+      }
+    }, "yes") : /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--bad)"
+      }
+    }, "no")])
+  }), a.guests.some(g => !g.match) && /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: "8px 0 0"
+    }
+  }, "A mismatch is reported, not fatal: the guest got an address other than its reservation. Check the DHCP server's ConfigMap generation on the site and the VM's pinned MAC.")), r.restart && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "sech",
     style: {
       margin: "12px 0 8px"
@@ -25665,6 +26140,7 @@ function SiteProfileDetail({
   nav
 }) {
   const paths = useResource("sprof.paths|" + s.id, () => drhub.siteProfilePaths(s.id), 15000);
+  const dhcp = useResource("sprof.dhcp|" + s.id, () => drhub.siteDHCPServers(s.id), 15000);
   const inv = s.inventory,
     sp = s.spec || {};
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
@@ -25710,6 +26186,14 @@ function SiteProfileDetail({
   }), /*#__PURE__*/React.createElement(Stat, {
     k: "On paths",
     v: (paths.data || []).length
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "DHCP servers",
+    v: (dhcp.data || []).length,
+    s: `${(dhcp.data || []).reduce((n, d) => n + d.reservations, 0)} reservations rendered`
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Renderings",
+    v: Object.keys(s.renderings).length,
+    s: "site-mapper artifacts"
   })), /*#__PURE__*/React.createElement("div", {
     className: "dcols"
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
@@ -25782,8 +26266,66 @@ function SiteProfileDetail({
   }, /*#__PURE__*/React.createElement("h3", null, "Bindings (spec)"), /*#__PURE__*/React.createElement("div", {
     className: "bd"
   }, /*#__PURE__*/React.createElement(Props, {
-    rows: [["Logical networks", (sp.logicalNetworks || []).map(l => `${l.role} → ${l.nad}`).join("; ")], ["Guest networks", (sp.guestNetworks || []).map(g => `${g.role}: ${g.cidr}`).join("; ")], ["Address pools", (sp.addressPools || []).map(a => `${a.role} → ${a.pool}`).join("; ")], ["Domains", sp.domains ? JSON.stringify(sp.domains) : ""], ["Registry mirror", sp.registryMirror], ["DHCP server", refName2(sp.dhcpServerRef)]]
-  }))))), /*#__PURE__*/React.createElement("div", {
+    rows: [["Logical networks", (sp.logicalNetworks || []).map(l => `${l.role} → ${l.nad}`).join("; ")], ["Address pools", (sp.addressPools || []).map(a => `${a.role} → ${a.pool}`).join("; ")], ["Domains", sp.domains ? JSON.stringify(sp.domains) : ""], ["Registry mirror", sp.registryMirror], ["Site DHCP server", typeof sp.dhcpServerRef === "string" ? sp.dhcpServerRef : refName2(sp.dhcpServerRef)]]
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      margin: "12px 0 8px"
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Guest networks"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement(Table, {
+    cols: ["Role", "CIDR", "Gateway", "Reserved host IDs", "DHCP server"],
+    empty: "No guest network bound \u2014 guest addresses are not reserved on this site.",
+    rows: (sp.guestNetworks || []).map(g => [/*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, g.role), /*#__PURE__*/React.createElement(Mono, null, g.cidr), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, g.gateway), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, (g.reservedHostIDs || []).join(", ")), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, g.dhcpServerRef || (typeof sp.dhcpServerRef === "string" ? sp.dhcpServerRef + " (site default)" : ""))])
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: "9px 0 0"
+    }
+  }, "A role names the same logical network on every site; binding it here is what resolves a VM's NAD finding and derives its guest address on this site."))), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "DHCP servers & renderings"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Server", "Type", "Target ConfigMap", "Reservations", "Generation"],
+    empty: "No DHCPServer registered for this site.",
+    rows: (dhcp.data || []).map(d => [/*#__PURE__*/React.createElement(Ref, {
+      label: d.name,
+      onClick: () => nav.detail(d)
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, d.type), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, d.target), d.reservations, /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, d.generation)])
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      margin: "12px 0 8px"
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Rendered artifacts"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement(Renderings, {
+    r: s.renderings
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: "9px 0 0"
+    }
+  }, "sitemap-live (the Velero resource-modifier) and the DHCP ConfigMaps, delivered by ManifestWork; artifacts-current compares these generations with what dr-agent finds on the site."))))), /*#__PURE__*/React.createElement("div", {
     className: "sech"
   }, /*#__PURE__*/React.createElement("h2", null, "DR paths touching this site"), /*#__PURE__*/React.createElement("span", {
     className: "ln"
@@ -25795,6 +26337,77 @@ function SiteProfileDetail({
     nav: nav
   }))), /*#__PURE__*/React.createElement(Conditions, {
     o: s
+  }));
+}
+function DHCPServerDetail({
+  o: d,
+  nav
+}) {
+  const apps = useResource("dhcp.apps|" + d.id, () => drhub.apps(), 15000);
+  const guests = (apps.data || []).flatMap(a => (a.mapping ? a.mapping.guests : []).flatMap(g => (g.reservations || []).filter(r => r.dhcpServer === d.name).map(r => ({
+    app: `${a.namespace}/${a.name}`,
+    g,
+    r
+  }))));
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
+    obj: d,
+    title: d.name,
+    sub: /*#__PURE__*/React.createElement("span", {
+      className: "mono",
+      style: {
+        color: "var(--dim)"
+      }
+    }, "DHCPServer \xB7 site ", d.site),
+    badge: /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, d.type)
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "State",
+    v: /*#__PURE__*/React.createElement(TrafficLight, {
+      status: d.status
+    })
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Reservations",
+    v: d.reservations,
+    s: "rendered by dr-hub"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Generation",
+    v: d.generation || "—",
+    s: "content hash of the rendering"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Target",
+    v: d.target,
+    s: "ConfigMap on the site, key sitemap.hosts"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Reservations known from the applications"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      overflowX: "auto"
+    }
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Application", "VM", "Network", "MAC", "Address", "Site", "Result", "Reason"],
+    empty: "No guest interface names this server yet.",
+    rows: guests.map(x => [/*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, x.app), /*#__PURE__*/React.createElement(Mono, null, x.g.vm), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, x.g.network), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, x.g.mac), /*#__PURE__*/React.createElement(Mono, null, x.r.ip), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, x.r.site, x.r.path ? ` ← ${x.r.path}` : ""), /*#__PURE__*/React.createElement(MappingResult, {
+      r: x.r.result
+    }), x.r.reason])
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: "9px 0 0"
+    }
+  }, "The ConfigMap is the API: one \"mac,ip,name\" line per reservation, dnsmasq --dhcp-hostsdir format. The hub never talks to the server."))), /*#__PURE__*/React.createElement(Conditions, {
+    o: d
   }));
 }
 function DRConfigView({
@@ -25978,6 +26591,8 @@ function DrHubHome({
     kind: "papp",
     namespace: DR_NS()
   });
+  const inbox = openFindings(as);
+  const mappingOpen = as.filter(a => a.siteMapping === "Open").length;
   const gate = (ok, el, why) => ok ? el : React.cloneElement(el, {
     disabled: true,
     title: why,
@@ -26087,6 +26702,11 @@ function DrHubHome({
     v: c ? `${c.counts.agentsAvailable}/${c.counts.agents}` : "—",
     c: c && c.counts.agentsAvailable < c.counts.agents ? "var(--warn)" : null
   }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Open findings",
+    v: inbox.length,
+    s: `${mappingOpen} application${mappingOpen === 1 ? "" : "s"} with open site mapping`,
+    c: inbox.length ? "var(--warn)" : null
+  }), /*#__PURE__*/React.createElement(Stat, {
     k: "Last failover RTO",
     v: (() => {
       const f = actions.filter(a => a.action === "Failover" && a.rtoSeconds != null).sort((x, y) => Date.parse(y.completionTime) - Date.parse(x.completionTime))[0];
@@ -26133,7 +26753,51 @@ function DrHubHome({
     style: {
       margin: "9px 0 0"
     }
-  }, "Columns are exactly the declared paths. A dot means the path does not cover that application; a Relocate-only path is never red for a missing rehearsal."))), /*#__PURE__*/React.createElement("div", {
+  }, "Columns are exactly the declared paths. A dot means the path does not cover that application; a Relocate-only path is never red for a missing rehearsal."))), !!inbox.length && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Resolution inbox \xB7 open site-mapping decisions"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      overflowX: "auto"
+    }
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Path → target", "Category", "Source value", "Role", "Applications · VMs", "Reason", "Candidates on the target", "Where to decide"],
+    rows: inbox.map(g => [/*#__PURE__*/React.createElement(Mono, null, g.path || "current site", " ", /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim2)"
+      }
+    }, "\u2192"), " ", g.site), /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, g.category), /*#__PURE__*/React.createElement(Mono, null, g.value), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, g.role), /*#__PURE__*/React.createElement("span", {
+      title: g.vms.join(", ")
+    }, g.apps.map(n => {
+      const a = as.find(x => `${x.namespace}/${x.name}` === n);
+      return a ? /*#__PURE__*/React.createElement(Ref, {
+        key: n,
+        label: n,
+        onClick: () => nav.detail(a)
+      }) : /*#__PURE__*/React.createElement(Mono, {
+        key: n
+      }, n);
+    }), " ", /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim2)"
+      }
+    }, "\xB7 ", g.vms.length, " VM", g.vms.length === 1 ? "" : "s")), g.reason, /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, g.candidates.join(", ")), g.kind === "guest" ? /*#__PURE__*/React.createElement("span", null, "SiteProfile ", /*#__PURE__*/React.createElement(Mono, null, g.cluster), ": guestNetworks[", g.role, "] + DHCPServer; pinned MAC on the VM") : /*#__PURE__*/React.createElement("span", null, "SiteProfile ", /*#__PURE__*/React.createElement(Mono, null, g.cluster), ": bind logicalNetworks[", g.role || "role", "] to a candidate NAD")])
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: "9px 0 0"
+    }
+  }, "One decision per row clears every occurrence on that path. Decisions are taken on the target's SiteProfile (and DHCPServer objects), never as an override; readiness check findings-resolved blocks the path until then.")))), /*#__PURE__*/React.createElement("div", {
     className: "sech"
   }, /*#__PURE__*/React.createElement("h2", null, "Protection plans"), /*#__PURE__*/React.createElement("span", {
     className: "ln"
@@ -26214,9 +26878,15 @@ function DrHubHome({
   }), /*#__PURE__*/React.createElement(NavCard, {
     icon: "k8s",
     title: "Site profiles",
-    sub: "per-cluster inventory",
+    sub: "per-cluster inventory and bindings",
     count: "\u2192",
     onClick: () => nav.drLayer("siteprofiles")
+  }), /*#__PURE__*/React.createElement(NavCard, {
+    icon: "link",
+    title: "DHCP servers",
+    sub: "guest address reservations per site",
+    count: "\u2192",
+    onClick: () => nav.drLayer("dhcpservers")
   }), /*#__PURE__*/React.createElement(NavCard, {
     icon: "gauge",
     title: "DR configuration",
@@ -26237,6 +26907,7 @@ Object.assign(window, {
   TSchedTile,
   RestoreTile,
   SiteProfileTile,
+  DHCPServerTile,
   PPlanDetail,
   DRPathDetail,
   PAppDetail,
@@ -26246,6 +26917,8 @@ Object.assign(window, {
   TSchedDetail,
   RestoreDetail,
   SiteProfileDetail,
+  DHCPServerDetail,
+  MappingPanel,
   runActionDialog,
   runTestDialog,
   restoreDialog,
@@ -26254,6 +26927,7 @@ Object.assign(window, {
   protectAppDialogDR,
   newRPlanDialog,
   newScheduleDialog,
+  newDHCPServerDialog,
   ACTION_KIND_META,
   KIND_LABEL_DR
 });
@@ -27055,6 +27729,7 @@ const DETAIL_KIND = {
   tsched: "TSchedDetail",
   restore: "RestoreDetail",
   siteprofile: "SiteProfileDetail",
+  dhcpserver: "DHCPServerDetail",
   deployconfig: "DeployConfigDetail",
   mpath: "MPathDetail",
   appgroup: "AppGroupDetail"
@@ -27230,6 +27905,13 @@ const LAYER_META = {
   },
   siteprofile: {
     icon: "k8s"
+  },
+  dhcpservers: {
+    label: "DHCP servers",
+    icon: "link"
+  },
+  dhcpserver: {
+    icon: "link"
   },
   drconfig: {
     label: "DR configuration",
@@ -27457,6 +28139,14 @@ const pSProf = id => [{
   t: "siteprofile",
   id
 }];
+const pDhcp = id => [{
+  t: "dr"
+}, {
+  t: "dhcpservers"
+}, {
+  t: "dhcpserver",
+  id
+}];
 const pPair = id => [{
   t: "dr"
 }, {
@@ -27553,7 +28243,7 @@ const pAg = (pid, id) => [...pMp(pid), {
   t: "appgroup",
   id
 }];
-const detailPath = o => o.kind === "cluster" ? pC(o.id) : o.kind === "deployconfig" ? pDep(o.k8sClusterId, o.id) : o.kind === "host" ? pH(o.clusterId, o.id) : o.kind === "node" ? pN(o.clusterId, o.id) : o.kind === "device" ? pD(o.clusterId, o.nodeId, o.id) : o.kind === "pool" ? pP(o.clusterId, o.id) : o.kind === "volume" ? pV(o.clusterId, o.poolId, o.id) : o.kind === "pplan" ? pPPlan(o.id) : o.kind === "drpath" ? pDRPath(o.id) : o.kind === "papp" ? pPApp(o.id) : o.kind === "rplan" ? pRPlan(o.id) : o.kind === "raction" ? pRAction(o.id) : o.kind === "tbubble" ? pTBubble(o.id) : o.kind === "tsched" ? pTSched(o.id) : o.kind === "restore" ? pRestore(o.id) : o.kind === "siteprofile" ? pSProf(o.id) : o.kind === "pair" ? pPair(o.id) : o.kind === "slot" ? pSlot(o.id) : o.kind === "replops" ? pReplOp(o.id) : o.kind === "rpolicy" ? pRPol(o.id) : o.kind === "zone" ? pZone(o.id) : o.kind === "mpath" ? pMp(o.id) : o.kind === "appgroup" ? pAg(o.pathId, o.id) : o.kind === "bucket" ? pBucket(o.clusterId, o.id) : o.kind === "k8sc" ? pK(o.id) : o.kind === "storageclass" ? pSc(o.k8sClusterId, o.id) : o.kind === "pvc" ? pPvc(o.k8sClusterId, o.id) : o.kind === "migration" ? pMig(o.sourceClusterId || o.clusterId, o.id) : o.kind === "cgroup" ? pCg(o.clusterId, o.id) : o.kind === "cgsnapshot" ? [...pCg(o.clusterId, o.cgId), {
+const detailPath = o => o.kind === "cluster" ? pC(o.id) : o.kind === "deployconfig" ? pDep(o.k8sClusterId, o.id) : o.kind === "host" ? pH(o.clusterId, o.id) : o.kind === "node" ? pN(o.clusterId, o.id) : o.kind === "device" ? pD(o.clusterId, o.nodeId, o.id) : o.kind === "pool" ? pP(o.clusterId, o.id) : o.kind === "volume" ? pV(o.clusterId, o.poolId, o.id) : o.kind === "pplan" ? pPPlan(o.id) : o.kind === "drpath" ? pDRPath(o.id) : o.kind === "papp" ? pPApp(o.id) : o.kind === "rplan" ? pRPlan(o.id) : o.kind === "raction" ? pRAction(o.id) : o.kind === "tbubble" ? pTBubble(o.id) : o.kind === "tsched" ? pTSched(o.id) : o.kind === "restore" ? pRestore(o.id) : o.kind === "siteprofile" ? pSProf(o.id) : o.kind === "dhcpserver" ? pDhcp(o.id) : o.kind === "pair" ? pPair(o.id) : o.kind === "slot" ? pSlot(o.id) : o.kind === "replops" ? pReplOp(o.id) : o.kind === "rpolicy" ? pRPol(o.id) : o.kind === "zone" ? pZone(o.id) : o.kind === "mpath" ? pMp(o.id) : o.kind === "appgroup" ? pAg(o.pathId, o.id) : o.kind === "bucket" ? pBucket(o.clusterId, o.id) : o.kind === "k8sc" ? pK(o.id) : o.kind === "storageclass" ? pSc(o.k8sClusterId, o.id) : o.kind === "pvc" ? pPvc(o.k8sClusterId, o.id) : o.kind === "migration" ? pMig(o.sourceClusterId || o.clusterId, o.id) : o.kind === "cgroup" ? pCg(o.clusterId, o.id) : o.kind === "cgsnapshot" ? [...pCg(o.clusterId, o.cgId), {
   t: "cgsnapshots"
 }, {
   t: "cgsnapshot",
@@ -27664,6 +28354,7 @@ const SORT_KEYS = {
   tsched: ["health", "name", "newest"],
   restore: ["newest", "health", "name"],
   siteprofile: ["health", "name"],
+  dhcpserver: ["health", "name"],
   pair: ["health", "name", "slots", "newest"],
   slot: ["health", "name", "newest"],
   replops: ["newest", "health", "name"],
@@ -27785,6 +28476,11 @@ const VIEWS = {
     load: () => drhub.siteProfiles(),
     api: () => "GET /apis/sitemap.simplyblock.io/v1alpha1/siteprofiles"
   },
+  dhcpservers: {
+    kind: "dhcpserver",
+    load: p => p.t === "siteprofile" ? drhub.siteDHCPServers(p.id) : drhub.dhcpServers(),
+    api: () => "GET /apis/sitemap.simplyblock.io/v1alpha1/dhcpservers"
+  },
   storageclasses: {
     kind: "storageclass",
     load: p => p.t === "pool" ? api.poolStorageClasses(p.id) : api.k8sStorageClasses(p.id),
@@ -27879,6 +28575,7 @@ const DETAIL_API = {
   tsched: drcrd("testschedules/{name}", true),
   restore: drcrd("restoreactions/{name}", true),
   siteprofile: "GET /apis/sitemap.simplyblock.io/v1alpha1/siteprofiles/{name}",
+  dhcpserver: "GET /apis/sitemap.simplyblock.io/v1alpha1/dhcpservers/{name}",
   pair: crd1("replicationpairs"),
   rpolicy: crd1("replicationpolicies"),
   slot: crd1("replicationslots"),
@@ -27912,6 +28609,7 @@ const KIND_LABEL = {
   tsched: "test schedule",
   restore: "restore",
   siteprofile: "site profile",
+  dhcpserver: "DHCP server",
   pair: "replication pair",
   rpolicy: "replication policy",
   slot: "replication slot",
@@ -28212,6 +28910,7 @@ const TILE = {
   tsched: TSchedTile,
   restore: RestoreTile,
   siteprofile: SiteProfileTile,
+  dhcpserver: DHCPServerTile,
   pair: PairTile,
   rpolicy: RPolicyTile,
   slot: SlotTile,
@@ -28246,6 +28945,7 @@ const TKEY = {
   tsched: "o",
   restore: "o",
   siteprofile: "o",
+  dhcpserver: "o",
   policy: "p",
   pair: "p",
   rpolicy: "p",
@@ -28486,7 +29186,16 @@ function OverviewView({
     }, /*#__PURE__*/React.createElement(Icon, {
       n: "plus",
       s: 12
-    }), "New recovery plan") : seg.t === "pairs" ? /*#__PURE__*/React.createElement("button", {
+    }), "New recovery plan") : seg.t === "dhcpservers" ? /*#__PURE__*/React.createElement("button", {
+      className: "btn primary",
+      onClick: () => drhub.siteProfiles().then(ss => window.__ui.dialog(newDHCPServerDialog(parent && parent.t === "siteprofile" && REG[parent.id] ? [REG[parent.id].name] : ss.map(s => s.name)), {
+        kind: "dhcpserver",
+        id: "new"
+      }))
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "plus",
+      s: 12
+    }), "Register DHCP server") : seg.t === "pairs" ? /*#__PURE__*/React.createElement("button", {
       className: "btn primary",
       onClick: () => window.__ui.dialog(newPairDialog(), {
         kind: "pair",

@@ -151,8 +151,11 @@ rules:
     resources: ["recoveryactions"]
     verbs: ["override"]
   - apiGroups: ["sitemap.simplyblock.io"]
-    resources: ["siteprofiles"]
+    resources: ["siteprofiles", "dhcpservers"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["sitemap.simplyblock.io"]
+    resources: ["dhcpservers"]
+    verbs: ["create", "update", "patch", "delete"]
   # the console asks the API server what its identity may do, to disable controls
   - apiGroups: ["authorization.k8s.io"]
     resources: ["selfsubjectaccessreviews", "selfsubjectrulesreviews"]

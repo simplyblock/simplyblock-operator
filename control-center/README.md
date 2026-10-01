@@ -20,7 +20,8 @@ sections are Clusters, Kubernetes, Disaster recovery and Control plane.
 - **DR hub client** — the Disaster recovery section now reads and writes the
   `dr.simplyblock.io` CRs of [simplyblock-dr](https://github.com/simplyblock/simplyblock-dr)
   (plans, DR paths, protected applications, recovery plans, actions, tests,
-  schedules, restores, site profiles, DRConfig) through the Kubernetes API
+  schedules, restores, site profiles, DHCP servers, DRConfig; site-mapper
+  findings, guest reservations and the resolution inbox) through the Kubernetes API
   (`drhub-api.jsx`, `drhub.jsx`); the `/operator/v1/proposed` DR endpoints
   described further down are superseded for the top layer. `SB_MODE=dr` is the
   stripped-down DR-only console for a hub without a simplyblock control plane

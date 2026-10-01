@@ -41,7 +41,7 @@ const KIND_ENTITY = {
   // the DR hub's kinds (dr.simplyblock.io) — one entity, authorised by the
   // hub chart's dr-viewer / dr-operator / dr-admin roles
   pplan: "drhub", drpath: "drhub", papp: "drhub", rplan: "drhub", raction: "drhub", tbubble: "drhub", tsched: "drhub",
-  restore: "drhub", drconfig: "drhub", siteprofile: "drhub"
+  restore: "drhub", drconfig: "drhub", siteprofile: "drhub", dhcpserver: "drhub"
 };
 // UI kind -> the CRD resource the API server checks (§3.5, the console's column)
 const KIND_RESOURCE = {
@@ -53,12 +53,12 @@ const KIND_RESOURCE = {
   plan: "protectionplans", method: "protectionplans", site: "drclusters", mpath: "protectionplans", appgroup: "protectionplans",
   protectedapp: "protectedapplications", role: "clusterroles", binding: "accessgrants", grant: "accessgrants",
   pplan: "protectionplans", drpath: "drpaths", papp: "protectedapplications", rplan: "recoveryplans", raction: "recoveryactions",
-  tbubble: "testbubbles", tsched: "testschedules", restore: "restoreactions", drconfig: "drconfigs", siteprofile: "siteprofiles"
+  tbubble: "testbubbles", tsched: "testschedules", restore: "restoreactions", drconfig: "drconfigs", siteprofile: "siteprofiles", dhcpserver: "dhcpservers"
 };
 // UI kind -> API group, where it is not the default simplyblock group
 const KIND_GROUP = {pplan: "dr.simplyblock.io", drpath: "dr.simplyblock.io", papp: "dr.simplyblock.io", rplan: "dr.simplyblock.io",
   raction: "dr.simplyblock.io", tbubble: "dr.simplyblock.io", tsched: "dr.simplyblock.io", restore: "dr.simplyblock.io",
-  drconfig: "dr.simplyblock.io", siteprofile: "sitemap.simplyblock.io"};
+  drconfig: "dr.simplyblock.io", siteprofile: "sitemap.simplyblock.io", dhcpserver: "sitemap.simplyblock.io"};
 const ENTITY_GROUP = {drhub: "dr.simplyblock.io"};
 const ENTITY_RESOURCE = {k8scluster: "managedclusters", storagecluster: "storageclusters", storagepool: "storagepools", backupop: "backups",
   replicationpolicy: "replicationpolicies", backuppolicy: "backuppolicies", drpolicy: "drpolicies", application: "protectedapplications", role: "clusterroles", binding: "accessgrants",

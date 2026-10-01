@@ -16,7 +16,7 @@
 // ---------------------------------------------------------------------------
 const DR_KINDS = {pplan: "ProtectionPlan", drpath: "DRPath", papp: "ProtectedApplication", rplan: "RecoveryPlan",
   raction: "RecoveryAction", tbubble: "TestBubble", tsched: "TestSchedule", restore: "RestoreAction",
-  siteprofile: "SiteProfile", drconfig: "DRConfig"};
+  siteprofile: "SiteProfile", drconfig: "DRConfig", dhcpserver: "DHCPServer"};
 const DR_ANN = {
   createdBy: "dr.simplyblock.io/created-by",
   confirmDelete: "dr.simplyblock.io/confirm-delete",
@@ -72,6 +72,9 @@ Object.assign(STATUS_META, {
   Warn: {c: "var(--warn)", rank: 3, label: "warn"},
   Info: {c: "var(--info)", rank: 1, label: "info"},
   NotApplicable: {c: "var(--dim2)", rank: 2, label: "n/a"},
+  Resolved: {c: "var(--ok)", rank: 0, label: "resolved"},
+  Open: {c: "var(--warn)", rank: 3, label: "open"},
+  Rendered: {c: "var(--ok)", rank: 0, label: "rendered"},
   Aborted: {c: "var(--warn)", rank: 3, label: "aborted"}
 });
 
@@ -141,9 +144,13 @@ function normPApp(o) {
     managed: sp.managed || null, discovered: sp.discovered || null, drpcRef: refName(sp.drpcRef),
     probes: (sp.health || {}).probes || [], tiers: sp.tiers || [], externalHooks: sp.externalHooks || {}, dependsOn: sp.dependsOn || [],
     drpc: st.drpc || "", placement: st.placement || "", drPolicy: st.drPolicy || "", zoneBinding: st.zoneBinding || "", currentCluster: st.currentCluster || "",
-    paths, siteMapping: st.siteMapping || "", recipe: st.recipe || null, suggestedTiers: st.suggestedTiers || [], lastAction: st.lastAction ? splitRef(st.lastAction) : null,
+    paths, siteMapping: st.siteMapping || "Unknown", recipe: st.recipe || null, suggestedTiers: st.suggestedTiers || [], lastAction: st.lastAction ? splitRef(st.lastAction) : null,
+    // site mapper (ADR 0020): VM network findings and guest addresses, resolved per declared path
+    mapping: st.mapping ? {site: st.mapping.site || "", findings: st.mapping.findings || [], guests: st.mapping.guests || [], counts: st.mapping.counts || {open: 0, resolved: 0}} : null,
+    renderings: st.renderings || {},
     awaitingRestore: anns[DR_ANN.awaitingRestore] !== undefined, autoRestartOptOut: anns[DR_ANN.autoRestart] === "false",
-    counts: {paths: paths.length, tiers: (sp.tiers || []).length, probes: ((sp.health || {}).probes || []).length}
+    counts: {paths: paths.length, tiers: (sp.tiers || []).length, probes: ((sp.health || {}).probes || []).length,
+      openFindings: st.mapping ? (st.mapping.counts || {}).open || 0 : 0, findings: st.mapping ? (st.mapping.findings || []).length : 0, guests: st.mapping ? (st.mapping.guests || []).length : 0}
   }));
 }
 
@@ -169,6 +176,7 @@ function normRAction(o) {
     durationMs: durMs(st.startTime, st.completionTime), sourceCluster: st.sourceCluster || "", targetCluster: st.targetCluster || "",
     steps: st.steps || [], children: st.children || [], report, reportKey: st.reportKey || "",
     rtoSeconds: report ? report.rtoSeconds : null, rpoSeconds: report ? report.achievedRPOSeconds : null,
+    guests: report ? report.guests || [] : [],
     createdBy: (drMeta(o).annotations || {})[DR_ANN.createdBy] || (report && report.operator) || "",
     counts: {steps: (st.steps || []).length, children: (st.children || []).length, warnings: report ? (report.warnings || []).length : 0}
   }));
@@ -220,7 +228,7 @@ function normSiteProfile(o) {
   const reported = drCondOK(o, "InventoryReported");
   return reg(Object.assign(base(o, "siteprofile"), {
     status: reported === true || st.reportedAt ? "Reported" : "NotReported",
-    inventory: inv, reportedAt: st.reportedAt, spec: sp,
+    inventory: inv, reportedAt: st.reportedAt, spec: sp, renderings: st.renderings || {},
     zones: inv.zones || [], nodes: inv.nodes || [], nads: inv.nads || [], storageClasses: inv.storageClasses || [], snapshotClasses: inv.volumeSnapshotClasses || [],
     ingressClasses: inv.ingressClasses || [], gatewayClasses: inv.gatewayClasses || [], ipAddressPools: inv.ipAddressPools || [], registryMirrors: inv.registryMirrors || [],
     counts: {zones: (inv.zones || []).length, nodes: (inv.nodes || []).length, nodesReady: (inv.nodes || []).filter(n => n.ready).length, nads: (inv.nads || []).length, storageClasses: (inv.storageClasses || []).length}
@@ -239,8 +247,46 @@ function normDRConfig(o) {
   }));
 }
 
+function normDHCPServer(o) {
+  const sp = o.spec || {}, st = o.status || {};
+  const failed = (((st.conditions) || []).some(c => c.status === "False"));
+  return reg(Object.assign(base(o, "dhcpserver"), {
+    status: failed ? "NotReady" : st.generation ? "Rendered" : "Pending",
+    site: sp.site || "", type: sp.type || "", dnsmasq: sp.dnsmasq || null,
+    target: sp.dnsmasq ? `${sp.dnsmasq.namespace}/${sp.dnsmasq.configMap}` : "",
+    reservations: st.reservations || 0, generation: st.generation || "",
+    counts: {reservations: st.reservations || 0}
+  }));
+}
+
 const NORM = {pplan: normPPlan, drpath: normDRPath, papp: normPApp, rplan: normRPlan, raction: normRAction, tbubble: normTBubble,
-  tsched: normTSched, restore: normRestore, siteprofile: normSiteProfile, drconfig: normDRConfig};
+  tsched: normTSched, restore: normRestore, siteprofile: normSiteProfile, drconfig: normDRConfig, dhcpserver: normDHCPServer};
+
+// The resolution inbox (design 13.1): open findings of every application,
+// grouped by (path, category, source value) so one decision clears every
+// occurrence. The decision itself — binding the role on the target
+// SiteProfile, pinning a MAC, adding a DHCPServer — is taken on those objects.
+function openFindings(apps) {
+  const groups = {};
+  apps.forEach(a => {
+    if (!a.mapping) return;
+    a.mapping.findings.forEach(f => (f.paths || []).forEach(p => {
+      if (p.result !== "Open") return;
+      const key = `${p.path}|${f.category}|${f.value}`;
+      const g = groups[key] = groups[key] || {key, path: p.path, site: p.site, cluster: p.cluster, category: f.category, value: f.value, role: p.role || "", reason: p.reason || "", candidates: new Set(), apps: new Set(), vms: new Set(), kind: "finding"};
+      g.apps.add(`${a.namespace}/${a.name}`); g.vms.add(f.vm); (p.candidates || []).forEach(c => g.candidates.add(c));
+      if (!g.reason && p.reason) g.reason = p.reason;
+    }));
+    a.mapping.guests.forEach(g0 => (g0.reservations || []).forEach(r => {
+      if (r.result !== "Open") return;
+      const key = `${r.path || "current"}|guest|${g0.role}|${r.reason}`;
+      const g = groups[key] = groups[key] || {key, path: r.path || "", site: r.site, cluster: r.cluster, category: "guest-address", value: `role ${g0.role}`, role: g0.role, reason: r.reason || "", candidates: new Set(), apps: new Set(), vms: new Set(), kind: "guest"};
+      g.apps.add(`${a.namespace}/${a.name}`); g.vms.add(g0.vm);
+    }));
+  });
+  return Object.values(groups).map(g => Object.assign(g, {candidates: [...g.candidates], apps: [...g.apps], vms: [...g.vms]}))
+    .sort((x, y) => y.apps.length - x.apps.length || x.path.localeCompare(y.path));
+}
 
 // ---- reads ---------------------------------------------------------------------------
 const drList = kind => k8s.list(DR_KINDS[kind], RESOURCES[DR_KINDS[kind]].namespaced ? {allNamespaces: true} : {}).then(items => items.map(NORM[kind]));
@@ -262,6 +308,8 @@ const drhub = {
   schedules: () => drList("tsched"), schedule: drById("tsched"),
   restores: () => drList("restore"), restoreAction: drById("restore"),
   siteProfiles: () => drList("siteprofile"), siteProfile: drById("siteprofile"),
+  dhcpServers: () => drList("dhcpserver"), dhcpServer: drById("dhcpserver"),
+  siteDHCPServers: id => Promise.all([drhub.siteProfile(id), drhub.dhcpServers()]).then(([sp, ds]) => ds.filter(d => d.site === sp.name)),
   configs: () => drList("drconfig"), config: () => drList("drconfig").then(cs => cs.find(c => c.name === "default") || cs[0] || null),
   // derived Ramen objects, read-only
   drpcs: () => k8s.list("DRPlacementControl", {allNamespaces: true}).catch(() => []),
@@ -322,6 +370,10 @@ const drhub = {
   createPath: spec => k8s.create("DRPath", {apiVersion: DR_API_GROUP, kind: "DRPath", metadata: {name: dns63(spec.name)}, spec: spec.spec}),
   createApp: ({name, namespace, spec}) => k8s.create("ProtectedApplication", {apiVersion: DR_API_GROUP, kind: "ProtectedApplication", metadata: {name: dns63(name), namespace}, spec}, {namespace}),
   createRPlan: ({name, namespace, spec}) => k8s.create("RecoveryPlan", {apiVersion: DR_API_GROUP, kind: "RecoveryPlan", metadata: {name: dns63(name), namespace}, spec}, {namespace}),
+  // A DHCP server of a site (ADR 0020): dr-hub renders the guest reservations
+  // into its ConfigMap on the site; the hub never talks to the server.
+  createDHCPServer: ({name, site, namespace, configMap}) => k8s.create("DHCPServer", {apiVersion: "sitemap.simplyblock.io/v1alpha1", kind: "DHCPServer", metadata: {name: dns63(name)},
+    spec: {site, type: "dnsmasq", dnsmasq: {namespace, configMap}}}),
   // Optional per-application knob: opt out of the automatic restart after a
   // storage recovery (ADR 0017).
   setAutoRestart: (a, on) => k8s.patch("ProtectedApplication", a.name, {metadata: {annotations: {[DR_ANN.autoRestart]: on ? null : "false"}}}, {namespace: a.namespace}),
@@ -337,7 +389,7 @@ const drhub = {
 
 // The generic detail loader keys on the breadcrumb's layer name.
 Object.assign(GETTER, {pplan: drhub.plan, drpath: drhub.path, papp: drhub.app, rplan: drhub.rplan, raction: drhub.action,
-  tbubble: drhub.test, tsched: drhub.schedule, restore: drhub.restoreAction, siteprofile: drhub.siteProfile, drconfig: drhub.config});
+  tbubble: drhub.test, tsched: drhub.schedule, restore: drhub.restoreAction, siteprofile: drhub.siteProfile, drconfig: drhub.config, dhcpserver: drhub.dhcpServer});
 
-Object.assign(window, {drhub, DR_KINDS, DR_ANN, VERDICT_RANK, ACTION_TERMINAL, TEST_TERMINAL, worstVerdict, fmtSecs, drCond, drCondOK, splitRef, kvToObj, csv, dns63,
-  normPPlan, normDRPath, normPApp, normRPlan, normRAction, normTBubble, normTSched, normRestore, normSiteProfile, normDRConfig});
+Object.assign(window, {drhub, DR_KINDS, DR_ANN, VERDICT_RANK, ACTION_TERMINAL, TEST_TERMINAL, worstVerdict, fmtSecs, drCond, drCondOK, splitRef, kvToObj, csv, dns63, openFindings,
+  normPPlan, normDRPath, normPApp, normRPlan, normRAction, normTBubble, normTSched, normRestore, normSiteProfile, normDRConfig, normDHCPServer});
