@@ -21,6 +21,37 @@ func (f fakeServerGroupsGetter) ServerGroups() (*metav1.APIGroupList, error) {
 	return list, nil
 }
 
+// Regression: 2026-10-01 — the operator crashed at startup on every cluster
+// outside the hub. The TestFailover controller unconditionally watched OCM's
+// ManifestWork (.Owns(&workv1.ManifestWork{})), but ManifestWork is served only
+// on the hub — managed clusters read it from the hub and never serve it locally.
+// Without the CRD the controller's cache never syncs and the manager exits
+// ("failed to wait for testfailover caches to sync ... *v1.ManifestWork"),
+// taking every other controller (replication, storagecluster, …) down with it.
+// Registration must be gated on the work API actually being served.
+func TestServerHasAPIGroup(t *testing.T) {
+	tests := []struct {
+		name   string
+		groups []string
+		want   bool
+	}{
+		{name: "work api served (hub)", groups: []string{ocmWorkAPIGroup, "storage.simplyblock.io"}, want: true},
+		{name: "work api absent (managed cluster)", groups: []string{"storage.simplyblock.io"}, want: false},
+		{name: "no groups at all", groups: nil, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := serverHasAPIGroup(fakeServerGroupsGetter{groups: tc.groups}, ocmWorkAPIGroup)
+			if err != nil {
+				t.Fatalf("serverHasAPIGroup returned error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("serverHasAPIGroup = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestValidateTLSConfiguration(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -83,10 +83,31 @@ var (
 const (
 	openShiftConfigAPIGroup = "config.openshift.io"
 	certManagerAPIGroup     = "cert-manager.io"
+	// ocmWorkAPIGroup is OCM's ManifestWork API group. It is served on the hub
+	// and absent on managed clusters, which read ManifestWork from the hub rather
+	// than serving it locally. The TestFailover controller watches ManifestWork,
+	// so it is registered only where this group is served.
+	ocmWorkAPIGroup = "work.open-cluster-management.io"
 )
 
 type serverGroupsGetter interface {
 	ServerGroups() (*metav1.APIGroupList, error)
+}
+
+// serverHasAPIGroup reports whether the API server serves the named group. Used
+// to skip controllers that watch a kind the cluster does not define, since a
+// watch whose cache can never sync takes the whole manager down at startup.
+func serverHasAPIGroup(discoveryClient serverGroupsGetter, group string) (bool, error) {
+	groupList, err := discoveryClient.ServerGroups()
+	if err != nil {
+		return false, fmt.Errorf("discover API groups: %w", err)
+	}
+	for _, g := range groupList.Groups {
+		if g.Name == group {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func init() {
@@ -904,13 +925,32 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "VolumeGroupSnapshotOps")
 		os.Exit(1)
 	}
-	if err := (&controller.TestFailoverReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("testfailover-controller"),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "TestFailover")
+	// The TestFailover controller watches OCM ManifestWork, which only the hub
+	// serves; registering it where the work API is absent leaves a watch whose
+	// cache never syncs and the manager exits at startup, taking every other
+	// controller with it. It is a hub-only drill, so skip it off the hub.
+	workDiscovery, err := discovery.NewDiscoveryClientForConfig(cfg)
+	if err != nil {
+		setupLog.Error(err, "unable to build a discovery client to check for the OCM work API")
 		os.Exit(1)
+	}
+	hasWorkAPI, err := serverHasAPIGroup(workDiscovery, ocmWorkAPIGroup)
+	if err != nil {
+		setupLog.Error(err, "unable to determine whether the OCM work API is served")
+		os.Exit(1)
+	}
+	if hasWorkAPI {
+		if err := (&controller.TestFailoverReconciler{
+			Client:   mgr.GetClient(),
+			Scheme:   mgr.GetScheme(),
+			Recorder: mgr.GetEventRecorder("testfailover-controller"),
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "TestFailover")
+			os.Exit(1)
+		}
+	} else {
+		setupLog.Info("OCM ManifestWork API not served; skipping TestFailover controller (hub-only)",
+			"apiGroup", ocmWorkAPIGroup)
 	}
 	// +kubebuilder:scaffold:builder
 
