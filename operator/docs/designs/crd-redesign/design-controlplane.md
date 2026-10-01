@@ -330,6 +330,9 @@ declares one graph, because it has no `spec.action` to key a `MultiConfig` on.
   spec.source.managed
     │
     ▼
+  ApplyingDatastore     ← the document store the management API needs, and the
+    │                      bucket configuration the Prometheus pods mount
+    ▼
   ApplyingFoundationDB  ← the FoundationDBCluster and its RBAC
     │
     ▼
@@ -337,9 +340,6 @@ declares one graph, because it has no `spec.action` to key a `MultiConfig` on.
     │
     ▼
   BuildingIndices       ← the database's secondary indices are declared ready
-    │
-    ▼
-  ApplyingDatastore     ← the document store the management API needs
     │
     ▼
   ApplyingAPI           ← the management API workload, Services, certificates

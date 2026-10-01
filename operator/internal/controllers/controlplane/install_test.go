@@ -39,15 +39,15 @@ import (
 func TestTheInstallationGraphIsALine(t *testing.T) {
 	graph := installGraph()
 
-	if graph.Initial != stepApplyingFoundationDB {
-		t.Errorf("the install starts at %s, want %s", graph.Initial, stepApplyingFoundationDB)
+	if graph.Initial != stepApplyingDatastore {
+		t.Errorf("the install starts at %s, want %s", graph.Initial, stepApplyingDatastore)
 	}
 
 	want := map[installStep]installStep{
+		stepApplyingDatastore:    stepApplyingFoundationDB,
 		stepApplyingFoundationDB: stepAwaitingFoundationDB,
 		stepAwaitingFoundationDB: stepBuildingIndices,
-		stepBuildingIndices:      stepApplyingDatastore,
-		stepApplyingDatastore:    stepApplyingAPI,
+		stepBuildingIndices:      stepApplyingAPI,
 		stepApplyingAPI:          stepAwaitingAPI,
 	}
 	for from, to := range want {
