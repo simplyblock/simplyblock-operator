@@ -205,6 +205,35 @@ spec:
                       with disks in its infra nodes meant those disks to be the storage, so a draft
                       proposes them ahead of the workers rather than leaving them out.
                     type: boolean
+                  forceJournalDevice:
+                    description: |-
+                      ForceJournalDevice makes the run dedicate a journal device even where the
+                      fleet's disks do not say which one.
+
+                      A run proposes a dedicated journal device when every worker hands over one
+                      disk smaller than its others, because a fleet built that way was built that
+                      way on purpose. Where several disks share the smallest size, nothing says
+                      which to take, and taking one spends a whole disk the fleet did not set
+                      aside: on a worker with ten 10 TB disks that is 10 TB, silently. So the run
+                      does not guess.
+
+                      What it does instead depends on the class. An NVMe cluster with no
+                      dedicated journal device carves a journal partition out of every device, so
+                      the run leaves the field unset, says so, and every disk stays storage. A
+                      logical block-device cluster has no such layout — the control plane refuses
+                      the partitioned journal for the class — so the run fails rather than
+                      writing a document that creates the cluster, formats its drives, and then
+                      fails every node_add. Setting this is what asks for one of the equal disks
+                      to be taken anyway, and the draft says the disk was taken rather than
+                      offered.
+
+                      It does not force the cases that are impossible rather than ambiguous. A
+                      worker handing over a single disk is refused with it or without it, because
+                      dedicating that disk leaves the worker nothing to store on, and so is a
+                      worker whose disks report no size. The tie it does resolve is broken by
+                      address, ascending, so two runs over one unchanged fleet propose the same
+                      document.
+                    type: boolean
                   nodeSelector:
                     additionalProperties:
                       type: string

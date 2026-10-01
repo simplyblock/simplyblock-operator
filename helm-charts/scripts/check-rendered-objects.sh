@@ -63,8 +63,12 @@ check() {
   fi
 
   present="$(printf '%s\n' "$out" | objects)"
+  # Every membership test below reads the list from a here-string. "pipefail" is
+  # set, and grep -q closes the pipe as soon as it matches, so feeding it from a
+  # pipe reports the SIGPIPE of the writer and turns a present object into a
+  # missing one whenever the list is long enough for the write to be unfinished.
   for want in "${required[@]}"; do
-    if ! printf '%s\n' "$present" | grep -qxF "$want"; then
+    if ! grep -qxF "$want" <<<"$present"; then
       echo "  ${profile}: MISSING ${want}"
       missing=1
       fail=1
@@ -97,7 +101,7 @@ checkPair() {
   local present
 
   present="$(render standalone)"
-  if printf '%s\n' "$present" | grep -qxF "StorageClass/local-hostpath"; then
+  if grep -qxF "StorageClass/local-hostpath" <<<"$present"; then
     echo "  hostpath: StorageClass/local-hostpath is rendered while its provisioner is not installed"
     fail=1
   else
@@ -107,7 +111,7 @@ checkPair() {
   present="$(render standalone --set controlplane.csiHostpathDriver.enabled=true)"
   local want
   for want in "StorageClass/local-hostpath" "CSIDriver/hostpath.csi.k8s.io"; do
-    if ! printf '%s\n' "$present" | grep -qxF "$want"; then
+    if ! grep -qxF "$want" <<<"$present"; then
       echo "  hostpath: MISSING ${want} with the driver enabled"
       fail=1
     fi

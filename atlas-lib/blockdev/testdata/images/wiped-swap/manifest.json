@@ -1,0 +1,16 @@
+{
+  "name": "wiped-swap",
+  "tool": "mkswap",
+  "tool_version": "mkswap from util-linux 2.41.5 (features: extends-check, nocow, fallocate, blkid-check, uuid, selinux)",
+  "command": "mkswap, then wipefs -a",
+  "device_size": 67108864,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-30T16:15:49Z",
+  "captured_on": "Debian GNU/Linux 13 (trixie), kernel 6.12.0-142.el10.x86_64",
+  "blkid": "",
+  "head_sha256": "628dcc5680187e07a923539c4bc1cd76f656a25128fa83561b545d781aee4136",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "filled": true,
+  "note": "wipefs -a reported: 10 bytes were erased at offset 0x00000ff6 (swap): 53 57 41 50 53 50 41 43 45 32. the signature sits at page size minus ten, so it moves with the page size"
+}

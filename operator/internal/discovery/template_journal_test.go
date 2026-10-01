@@ -44,7 +44,10 @@ func fleetWithDisks(sizes ...[]uint64) Plan {
 
 func proposedJournalFlag(t *testing.T, plan Plan) (bool, bool) {
 	t.Helper()
-	template := ClusterTemplateFor("a-cluster", plan, nil)
+	template, err := ClusterTemplateFor("a-cluster", plan, TemplateOptions{})
+	if err != nil {
+		t.Fatalf("the fleet was refused: %v", err)
+	}
 	if template.Template.EnableJournalDevice == nil {
 		return false, false
 	}
@@ -137,8 +140,11 @@ func TestTheDraftProposesAJournalDeviceForAFleetThatHasOne(t *testing.T) {
 // A proposal that costs a drive says which drive, because the reviewer's job is
 // to strike it if the fleet was not built that way.
 func TestTheDraftSaysWhichDiskItGaveToTheJournal(t *testing.T) {
-	template := ClusterTemplateFor("a-cluster",
-		fleetWithDisks([]uint64{3 * tib, 3 * tib, 3 * tib, 32 * gib}), nil)
+	template, err := ClusterTemplateFor("a-cluster",
+		fleetWithDisks([]uint64{3 * tib, 3 * tib, 3 * tib, 32 * gib}), TemplateOptions{})
+	if err != nil {
+		t.Fatalf("the fleet was refused: %v", err)
+	}
 
 	var found string
 	for _, note := range template.Notes {
@@ -169,8 +175,11 @@ func TestTheDraftSaysWhichDiskItGaveToTheJournal(t *testing.T) {
 // layout: a reviewer who expected the flag has to be able to see it was
 // considered.
 func TestAFleetWithNoJournalDiskIsSaidSo(t *testing.T) {
-	template := ClusterTemplateFor("a-cluster",
-		fleetWithDisks([]uint64{3 * tib, 3 * tib, 3 * tib, 3 * tib}), nil)
+	template, err := ClusterTemplateFor("a-cluster",
+		fleetWithDisks([]uint64{3 * tib, 3 * tib, 3 * tib, 3 * tib}), TemplateOptions{})
+	if err != nil {
+		t.Fatalf("the fleet was refused: %v", err)
+	}
 
 	for _, note := range template.Notes {
 		if strings.Contains(note, "enableJournalDevice") {
@@ -275,7 +284,10 @@ func TestTheJournalNoteNamesAnAddressTheDraftCarries(t *testing.T) {
 		namespace{"0000:5e:00.0", 2 * tib},
 		namespace{"0000:5e:00.0", 2 * tib},
 		namespace{"0000:5f:00.0", 1 * tib})
-	template := ClusterTemplateFor("a-cluster", Plan{Class: ClassNVMe, Workers: []Worker{worker}}, nil)
+	template, err := ClusterTemplateFor("a-cluster", Plan{Class: ClassNVMe, Workers: []Worker{worker}}, TemplateOptions{})
+	if err != nil {
+		t.Fatalf("the fleet was refused: %v", err)
+	}
 
 	var note string
 	for _, candidate := range template.Notes {

@@ -63,9 +63,10 @@ func TestBlockPathsReachTheBlockNameList(t *testing.T) {
 	got := renderedFor(t, simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock,
 		"/dev/sda", "/dev/sdb")
 
-	// As kernel names: TestBlockPathsReachTheBackendAsKernelNames is why.
-	if names := got["BLK_NAMES"]; names != "sda,sdb" {
-		t.Errorf("BLK_NAMES = %q, and --blk-names takes names like sda,sdb", names)
+	// Whole: TestADevicesPersistentNameReachesTheBackendWhole is why.
+	if names := got["BLK_NAMES"]; names != "/dev/sda,/dev/sdb" {
+		t.Errorf("BLK_NAMES = %q, and --blk-names is the channel the block class "+
+			"leaves through", names)
 	}
 	if devices := got["NVME_DEVICES"]; devices != "" {
 		t.Errorf("NVME_DEVICES = %q, which the backend matches against `nvme list` "+
@@ -195,28 +196,51 @@ func renderedWithBlockFormat(
 	return out
 }
 
-// --blk-names is matched against the kernel name -- node_configure.py builds
-// {d["name"]: d} and looks the requested strings up in it -- so a path selects
-// nothing and fails the add with "requested block devices are not eligible".
-// The document names devices by path because that is what a reviewer reads and
-// what DeviceSelection's pattern requires, and this is where the one becomes
-// the other.
-func TestBlockPathsReachTheBackendAsKernelNames(t *testing.T) {
-	got := renderedFor(t, simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock,
-		"/dev/sdb", "/dev/sdc")
+// A device reaches the backend spelled the way the document spells it.
+//
+// Nothing here shortens a name any more. The document names a block device by
+// the persistent name udev published for it, and the point of that name is that
+// it identifies one physical device rather than a position in a boot's
+// enumeration order: /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi2 is
+// one disk, and sda is whichever disk the kernel found first this boot. Taking
+// the last path element would hand the backend "scsi-0QEMU_..." as though it
+// were a kernel name, which selects nothing, and taking the device it currently
+// resolves to would hand over the position again -- resolving it is the node's
+// to do, because the link exists only where the device does.
+func TestADevicesPersistentNameReachesTheBackendWhole(t *testing.T) {
+	const (
+		sda = "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi2"
+		sdc = "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi1"
+	)
+	got := renderedFor(t, simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock, sda, sdc)
 
-	if names := got["BLK_NAMES"]; names != "sdb,sdc" {
-		t.Errorf("BLK_NAMES = %q, and --blk-names takes names like sdb,sdc", names)
+	if names := got["BLK_NAMES"]; names != sda+","+sdc {
+		t.Errorf("BLK_NAMES = %q, want the two names whole", names)
 	}
 }
 
 // A partition is named the way its disk is, which is what lets a block
-// deployment claim one at all.
-func TestAPartitionReachesTheBackendAsItsOwnName(t *testing.T) {
-	got := renderedFor(t, simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock,
-		"/dev/sdb1")
+// deployment claim one at all. Its persistent name is the identifier in the
+// partition table, which names neither the disk nor a position on it.
+func TestAPartitionsPersistentNameReachesTheBackendWhole(t *testing.T) {
+	const sdb4 = "/dev/disk/by-partuuid/28427de0-1916-4c05-895f-0829cd8790ba"
 
-	if names := got["BLK_NAMES"]; names != "sdb1" {
-		t.Errorf("BLK_NAMES = %q, want sdb1", names)
+	got := renderedFor(t, simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock, sdb4)
+
+	if names := got["BLK_NAMES"]; names != sdb4 {
+		t.Errorf("BLK_NAMES = %q, want %s", names, sdb4)
+	}
+}
+
+// A document that names a device the older way still says what it said. The
+// backend takes a kernel path, a bare kernel name, and a persistent name alike,
+// so a deployment written before the persistent names existed is not rewritten
+// here and not refused.
+func TestAKernelPathStillReachesTheBackend(t *testing.T) {
+	got := renderedFor(t, simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock,
+		"/dev/sdb", "sdc")
+
+	if names := got["BLK_NAMES"]; names != "/dev/sdb,sdc" {
+		t.Errorf("BLK_NAMES = %q, want /dev/sdb,sdc", names)
 	}
 }

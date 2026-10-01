@@ -98,6 +98,16 @@ const (
 	ConfigWritten  = "ConfigWritten"
 	ConfigExists   = "ConfigExists"
 	DeviceDeclined = "DeviceDeclined"
+
+	// ConfigRefused is a fleet the run inspected and could not draft a document
+	// for. It is not a device or a worker being declined, which leaves a smaller
+	// draft: it is the whole document, and the run fails.
+	//
+	// It carries the reason because a run that produced nothing is otherwise a
+	// phase and a message, and the message is one line: the event is where the
+	// worker, the shape of its disks, and the field that would change the answer
+	// fit.
+	ConfigRefused = "ConfigRefused"
 )
 
 // OperatorOpsReconciler runs operations against the operator itself.
@@ -620,7 +630,16 @@ func (r *OperatorOpsReconciler) write(
 			"could not be parsed; the draft states what this run found")
 	}
 
-	config, notes := r.draftFor(ops, spec, plan, installation)
+	config, notes, err := r.draftFor(ops, spec, plan, installation)
+	if err != nil {
+		// A fleet the run read and cannot draft a document for. The reason names
+		// the worker and the shape of its disks, and the run's own message is one
+		// line, so it goes out as an event as well: a run that produced nothing
+		// is otherwise a phase, and a phase is not something anybody can act on.
+		r.event(ops, corev1.EventTypeWarning, ConfigRefused, err.Error())
+		return false, refusef(OperationFailed, "no document could be drafted: %v", err)
+	}
+
 	if err := r.Create(ctx, config); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
 			return false, err
@@ -683,7 +702,7 @@ func (r *OperatorOpsReconciler) draftFor(
 	spec *simplyblockv1alpha2.DiscoverSpec,
 	plan discoverypkg.Plan,
 	installation *bootstrap.Config,
-) (*simplyblockv1alpha2.ClusterDeploymentConfig, []string) {
+) (*simplyblockv1alpha2.ClusterDeploymentConfig, []string, error) {
 	name := spec.ConfigName
 	if name == "" {
 		name = configNamePrefix + ops.Name
@@ -751,7 +770,14 @@ func (r *OperatorOpsReconciler) draftFor(
 			clusterName = seed.Name
 		}
 
-		template := discoverypkg.ClusterTemplateFor(clusterName, plan, seed)
+		template, err := discoverypkg.ClusterTemplateFor(clusterName, plan,
+			discoverypkg.TemplateOptions{
+				Seed:               seed,
+				ForceJournalDevice: ptr.BoolFromOrFalse(spec.ForceJournalDevice),
+			})
+		if err != nil {
+			return nil, notes, err
+		}
 		config.Spec.Cluster = template.Template
 		notes = append(notes, template.Notes...)
 
@@ -767,7 +793,7 @@ func (r *OperatorOpsReconciler) draftFor(
 				len(spec.Tolerations)))
 		}
 	}
-	return config, notes
+	return config, notes, nil
 }
 
 // kubeNodesFor reads what Kubernetes says about the workers this run settled

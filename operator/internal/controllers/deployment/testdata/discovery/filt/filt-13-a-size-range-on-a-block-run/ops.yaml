@@ -9,6 +9,7 @@ spec:
     deviceFilter:
       driveSizeRange: 3T-8T
       enableLogicalBlockDevices: true
+    forceJournalDevice: true
 status:
   environment: K3s
   step: {}

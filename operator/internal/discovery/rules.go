@@ -116,10 +116,28 @@ func ClassOf(filter *simplyblockv1alpha2.DeviceFilter) DeviceClass {
 }
 
 // Address is how the draft names a device of this class: its PCI address for
-// NVMe, its path for a logical block device. It is empty when the device cannot
-// be named in the class at all, which is what AdmitClass refuses on.
+// NVMe, and for a logical block device the persistent name udev published for
+// it. It is empty when the device cannot be named in the class at all, which is
+// what AdmitClass refuses on.
+//
+// The persistent name rather than the kernel path, because a draft is written
+// once and read back on every configure the deployment performs, the first of
+// them possibly after a reboot. The kernel path states a position in one boot's
+// enumeration order: on the lab worker this was developed against the disk the
+// kernel calls sdb is the one the hypervisor calls drive-scsi0, and sda is
+// drive-scsi2, so a machine that probes its controllers in another order hands
+// each name to another disk. Both names exist and both resolve, so a deployment
+// naming the first would be handed a different disk and nothing would say so.
+//
+// A device udev published nothing for falls back to its kernel path, which is
+// all there is. That is the weaker name and it carries the failure above, but
+// refusing the device would hold up a deployment on a host whose disks are
+// otherwise perfectly usable, over a udev that published no link.
 func (c DeviceClass) Address(device nodeprobe.Device) string {
 	if c == ClassBlock {
+		if device.StablePath != "" {
+			return device.StablePath
+		}
 		return device.Path
 	}
 	return device.PCIAddress
@@ -278,10 +296,8 @@ func (AllowDenyRule) Name() string { return "allow and deny lists" }
 // a hundred separate findings rather than one list and a number.
 
 func (r AllowDenyRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
-	address := r.Class.Address(device)
-
 	for _, denied := range r.Deny {
-		if strings.EqualFold(address, denied) {
+		if r.Class.Names(device, denied) {
 			return false, "it is in the deny list"
 		}
 	}
@@ -289,11 +305,33 @@ func (r AllowDenyRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool,
 		return true, ""
 	}
 	for _, allowed := range r.Allow {
-		if strings.EqualFold(address, allowed) {
+		if r.Class.Names(device, allowed) {
 			return true, ""
 		}
 	}
 	return false, "it is not in the allow list"
+}
+
+// Names reports whether an entry of a filter list refers to this device.
+//
+// It is every spelling the device answers to rather than the one the draft
+// writes, and the difference is the whole of this method. A block draft names a
+// device by the persistent /dev/disk path udev published, and a filter is
+// written by somebody reading `lsblk`, or copied from a document written before
+// the persistent names existed: matching only the drafted name breaks such a
+// list, and breaks it in opposite directions on the two lists. An allow list
+// stops admitting the disk it names; a deny list stops denying it, which puts a
+// mounted boot disk into a document whose whole purpose is to list free ones.
+//
+// The NVMe class has one spelling and keeps it. A controller is named by its
+// slot, a filter names the slot, and a udev link on one of its namespaces is not
+// another name for the controller.
+func (c DeviceClass) Names(device nodeprobe.Device, entry string) bool {
+	if c != ClassBlock {
+		return strings.EqualFold(device.PCIAddress, entry)
+	}
+	return (device.Path != "" && strings.EqualFold(device.Path, entry)) ||
+		(device.StablePath != "" && strings.EqualFold(device.StablePath, entry))
 }
 
 // ModelRule admits a device whose model string contains the wanted text.

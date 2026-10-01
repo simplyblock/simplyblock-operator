@@ -130,6 +130,17 @@ type Candidate struct {
 	// Rejections is every ground the device was refused on, in the order they
 	// were established, and is empty for a device that may be handed over.
 	Rejections []Rejection
+
+	// StablePath is the persistent /dev/disk name of this device, or empty when
+	// udev published none. It is what a caller accepting the candidate records,
+	// because Path is a position in this boot's enumeration order and names
+	// another device after the next reboot. StableLinkSet documents which link
+	// is chosen and why.
+	//
+	// It is on the candidate rather than on the embedded Disk because the two
+	// come from different places: a Disk is what sysfs says, and is readable
+	// from a captured tree, while these links exist only in a live /dev.
+	StablePath string
 }
 
 // Available reports whether the device may be handed to a storage cluster.
@@ -196,6 +207,14 @@ func (in Inspector) Candidates(ctx context.Context) ([]Candidate, error) {
 		return nil, err
 	}
 
+	// The persistent names, read once for the whole host: every device's links
+	// sit in the same two directories, so a reading per device would walk them
+	// again for each disk.
+	links, err := ReadStableLinks(in.Config)
+	if err != nil {
+		return nil, err
+	}
+
 	prober := in.Prober
 	if prober == nil {
 		prober = NewProber()
@@ -203,7 +222,9 @@ func (in Inspector) Candidates(ctx context.Context) ([]Candidate, error) {
 
 	candidates := make([]Candidate, 0, len(disks))
 	for _, disk := range disks {
-		candidates = append(candidates, judge(ctx, prober, disk, usage[disk.Name]))
+		candidate := judge(ctx, prober, disk, usage[disk.Name])
+		candidate.StablePath = links.Preferred(disk.Path)
+		candidates = append(candidates, candidate)
 	}
 	return candidates, nil
 }
@@ -285,6 +306,16 @@ func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage) Candidat
 		c.reject(ReasonNotBlank, reading.Detail)
 	case ContentFilesystem, ContentStackLayer:
 		c.reject(ReasonNotBlank, reading.Detail)
+	case ContentReleased:
+		// Not a rejection. The signature was erased where the format keeps it,
+		// which is what wipefs does and what an administrator runs it for, so
+		// the device was handed over on purpose. The reading carries which
+		// format it was and where the name went, so a caller taking it can say
+		// what it is taking.
+		//
+		// It is written out rather than left to fall through, for the reason
+		// below: a content this package adds later must not become available by
+		// default the way this one would have.
 	case ContentSimplyblock:
 		// Not a rejection, and the reading is what says so: a device a storage
 		// node is driving is bound to a userspace driver, which takes the block

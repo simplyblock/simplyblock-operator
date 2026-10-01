@@ -161,11 +161,17 @@ func filterCases() map[string]Case {
 	with := func(reports []nodeprobe.Report, spec *simplyblockv1alpha2.DiscoverSpec) Case {
 		return Case{Family: "filt", Reports: reports, Nodes: kubeFleet(reports), Discover: spec}
 	}
+	// forceJournalDevice for the reason blockClass sets it: every case here is
+	// about a filter, and the worker's disks come in equal sizes, so a run that
+	// had not decided about the journal would record that refusal instead of
+	// what its filter did.
 	block := func(edit func(*simplyblockv1alpha2.DeviceFilter)) *simplyblockv1alpha2.DiscoverSpec {
-		return filtered(func(f *simplyblockv1alpha2.DeviceFilter) {
+		spec := filtered(func(f *simplyblockv1alpha2.DeviceFilter) {
 			f.EnableLogicalBlockDevices = ptr.To(true)
 			edit(f)
 		})
+		spec.ForceJournalDevice = ptr.To(true)
+		return spec
 	}
 
 	cases := map[string]Case{

@@ -4,9 +4,14 @@
 #
 # It is run by hand on a machine worth keeping a transcript of, not in CI:
 #
-#     oc debug node/<node> --quiet -- chroot /host python3 - \
+#     oc debug node/<node> --quiet --no-stdin=false --no-tty=true \
+#         -- chroot /host python3 - \
 #         < hack/inventory/capture-host.py \
 #         | gzip -9 > atlas-lib/inventory/testdata/hosts/<name>.json.gz
+#
+# --no-stdin=false is what sends this script to the node. `oc debug` passes
+# stdin only when it is starting a shell, so a command given after -- gets none
+# and the capture writes an empty file with no error to say why.
 #
 # Only the trees the readers walk are taken, and a symlink into /sys/devices is
 # followed a little way so the class directories have the attributes behind them.
@@ -34,13 +39,22 @@ SEEDS = [
     "kernel/mm/hugepages",
 ]
 
-# The udev link directories worth keeping, and the two that are not.
+# The udev link directories worth keeping, and the ones that are not.
 #
-# by-id and by-path name a device: by-id from what the device says it is (a
-# serial, a WWN, or the identification page a driver exposes instead), by-path
-# from where it is attached. Both survive a reboot, which the kernel name does
-# not -- sd letters are handed out in probe order, so the disk that was sdb
-# comes back as sdc and a document naming the first now names the second.
+# by-id, by-partuuid, and by-path name a device: by-id from what the device says
+# it is (a serial, a WWN, or the identification page a driver exposes instead),
+# by-partuuid from the identifier a partition carries in its own partition
+# table, by-path from where it is attached. All three survive a reboot, which
+# the kernel name does not -- sd letters are handed out in probe order, so the
+# disk that was sdb comes back as sdc and a document naming the first now names
+# the second.
+#
+# All three are taken although the reader prefers one of them, because a capture
+# is evidence and the alternatives are what make the preference readable: a
+# transcript holding only the winning link would let the ranking be checked
+# against a tree that offered it no choice. by-path in particular is taken to be
+# ignored: it survives a reboot and moves to the replacement when a disk is
+# swapped, which is the one failure a persistent name exists to prevent.
 #
 # by-uuid and by-label are deliberately not taken. They name the filesystem a
 # device carries rather than the device, so they are content: they change when
@@ -48,6 +62,7 @@ SEEDS = [
 # what a machine *is* should not turn over when its data does.
 DEV_LINK_DIRS = [
     "disk/by-id",
+    "disk/by-partuuid",
     "disk/by-path",
 ]
 

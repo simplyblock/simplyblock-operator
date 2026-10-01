@@ -273,6 +273,13 @@ func unreportedContent(
 			if device.Path != "" {
 				names[device.Path] = struct{}{}
 			}
+			// Every spelling the probe reported, because a block draft names a
+			// device by the persistent name udev published for it rather than
+			// by the kernel path. Leaving it out would make the invariant
+			// report every block document as naming something unreported.
+			if device.StablePath != "" {
+				names[device.StablePath] = struct{}{}
+			}
 		}
 		for _, controller := range report.NVMeControllers {
 			names[controller.Address] = struct{}{}

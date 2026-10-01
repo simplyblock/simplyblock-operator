@@ -10,6 +10,7 @@ spec:
   approved: false
   cluster:
     enableDriveFormat: true
+    enableJournalDevice: true
     maxSubsystemCount: 30
     minHugePagesSize: 16G
     name: discovered-discover-dev-17-cluster
@@ -26,8 +27,9 @@ spec:
     - devices:
         block:
         - /dev/vdb
+        - /dev/vdc
       mgmtInterface: eth0
-      name: group-1-block-1x2T
+      name: group-1-block-2x3T
       workers:
       - worker-01
     name: discovered

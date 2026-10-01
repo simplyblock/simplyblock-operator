@@ -1,0 +1,16 @@
+{
+  "name": "wiped-gpt-4kn",
+  "tool": "sgdisk",
+  "tool_version": "GPT fdisk (sgdisk) version 1.0.10",
+  "command": "sgdisk -o -n 1:0:0 -t 1:8300, then wipefs -a",
+  "device_size": 67108864,
+  "logical_block_size": 4096,
+  "region_size": 1048576,
+  "captured": "2026-09-30T16:15:47Z",
+  "captured_on": "Debian GNU/Linux 13 (trixie), kernel 6.12.0-142.el10.x86_64",
+  "blkid": "",
+  "head_sha256": "282a0f4f6eac85e008fca5721bd31bbab72bbe714a919a9ca0182087c62db797",
+  "tail_sha256": "d9a54a74b1b7b3fef15d2a25e4546d657a7ed953d84ee6d738f2a86f1d93facb",
+  "filled": true,
+  "note": "wipefs -a reported: 8 bytes were erased at offset 0x00001000 (gpt): 45 46 49 20 50 41 52 54;8 bytes were erased at offset 0x03fff000 (gpt): 45 46 49 20 50 41 52 54;2 bytes were erased at offset 0x000001fe (PMBR): 55 aa;calling ioctl to re-read partition table: Invalid argument. 4Kn: the GPT header is at offset 4096, not 512"
+}
