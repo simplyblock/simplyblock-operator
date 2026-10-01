@@ -14,7 +14,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -82,7 +81,7 @@ func TestARunWithNoRangeToReadIsAdmitted(t *testing.T) {
 	for _, run := range []*simplyblockv1alpha2.OperatorOps{
 		discoverWith(nil),
 		discoverWith(&simplyblockv1alpha2.DeviceFilter{}),
-		discoverWith(&simplyblockv1alpha2.DeviceFilter{EnablePartitionedDevices: ptr.To(true)}),
+		discoverWith(&simplyblockv1alpha2.DeviceFilter{PcieModel: "PM1733"}),
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "oops-2", Namespace: "simplyblock"},
 			Spec: simplyblockv1alpha2.OperatorOpsSpec{

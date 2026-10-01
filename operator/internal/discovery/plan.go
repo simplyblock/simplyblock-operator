@@ -396,8 +396,8 @@ func BasicDeviceRules(run *simplyblockv1alpha2.DiscoverSpec) []DeviceRule {
 		ClassRule{Class: class},
 	}
 
-	allowPartitioned := filter != nil &&
-		filter.EnablePartitionedDevices != nil && *filter.EnablePartitionedDevices
+	allowPartitioned := run != nil &&
+		run.EnablePartitionedDevices != nil && *run.EnablePartitionedDevices
 	rules = append(rules, AvailableRule{AllowPartitioned: allowPartitioned})
 
 	if filter == nil {

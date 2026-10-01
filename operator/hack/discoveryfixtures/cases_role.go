@@ -199,9 +199,9 @@ func filterCases() map[string]Case {
 		"FILT-08": with(blockWorker(), block(func(f *simplyblockv1alpha2.DeviceFilter) {
 			f.BlockAllowList = []string{"/dev/vdb", "/dev/vdc"}
 		})),
-		"FILT-09": with(nvmeWorker(), filtered(func(f *simplyblockv1alpha2.DeviceFilter) {
-			f.EnablePartitionedDevices = ptr.To(true)
-		})),
+		"FILT-09": with(nvmeWorker(), &simplyblockv1alpha2.DiscoverSpec{
+			EnablePartitionedDevices: ptr.To(true),
+		}),
 		"FILT-10": with(nvmeWorker(), filtered(func(f *simplyblockv1alpha2.DeviceFilter) {
 			f.PcieAllowList = []string{"0000:ff:00.0"}
 		})),

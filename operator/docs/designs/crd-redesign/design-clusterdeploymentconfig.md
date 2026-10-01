@@ -949,9 +949,8 @@ It is the only place in either kind that a device is described by a rule, and it
 has one set of filters per class. `pcieAllowList`, `pcieDenyList`, and `pcieModel`
 narrow the NVMe class, matching on an address and a model string only an NVMe
 device has. `blockAllowList` and `blockDenyList` narrow the block class, matching
-device paths. `driveSizeRange` and `enablePartitionedDevices` apply to whichever
-class the run is scanning, because a size and a partition table are properties of
-any device.
+device paths. `driveSizeRange` applies to whichever class the run is scanning,
+because a size is a property of any device.
 
 **A filter for the class the run is not scanning is refused.** A PCI list beside
 `enableLogicalBlockDevices: true` describes devices this run will never look at,
@@ -987,9 +986,11 @@ an inspection cannot tell, so the inspection excludes it rather than handing a
 reviewer the job of noticing.
 
 **Partitions are the one condition an administrator can override.**
-`spec.discover.deviceFilter.enablePartitionedDevices` reports partitioned devices
-alongside the available ones, for the case where the partition table is stale and
-the device is meant to be handed over anyway. Naming such a device in a group is
+`spec.discover.enablePartitionedDevices` reports partitioned devices alongside
+the available ones, for the case where the partition table is stale and the
+device is meant to be handed over anyway. It sits on `spec.discover` rather than
+inside `deviceFilter` because it widens what a run reports, where every filter
+narrows it. Naming such a device in a group is
 then how it is forced into use (§3.1). Mounted and busy stay absolute: a device
 another subsystem is writing to is one simplyblock would corrupt, and a flag that
 turned that into an intention would be a flag for losing data.
@@ -1963,21 +1964,14 @@ const (
 // ClusterDeploymentConfig carries the explicit list the filter produced, not the
 // rule that produced it.
 //
-// Every member narrows the devices of the class a run scans, and none of them
-// chooses that class: the class is spec.discover.enableLogicalBlockDevices,
-// because it decides which kind of cluster the draft describes rather than which
-// devices reach it. The filters come in two sets, one per class, and the rules
-// on DiscoverSpec reject the set belonging to the class the run is not scanning.
+// Every member narrows the devices of the class a run scans. Neither choosing
+// that class nor waiving an availability condition is a member: both are
+// statements about the run, spec.discover.enableLogicalBlockDevices and
+// spec.discover.enablePartitionedDevices, because the first decides which kind
+// of cluster the draft describes and the second widens what is reported. The
+// filters come in two sets, one per class, and the rules on DiscoverSpec reject
+// the set belonging to the class the run is not scanning.
 type DeviceFilter struct {
-	// EnablePartitionedDevices reports devices carrying a partition table
-	// alongside the available ones, for the administrator who knows the table is
-	// stale and intends to hand the device over anyway. It is the only one of the
-	// three availability conditions that can be waived: a mounted or otherwise
-	// busy device is never reported, because simplyblock taking it would corrupt
-	// whatever is using it.
-	// +optional
-	EnablePartitionedDevices *bool `json:"enablePartitionedDevices,omitempty"`
-
 	// PcieAllowList restricts candidates to these PCI addresses. This and the two
 	// PCI filters below narrow the NVMe class alone, because a logical block
 	// device has no PCI address to match, so setting any of them on a run that
@@ -2088,6 +2082,20 @@ type DiscoverSpec struct {
 	// differently.
 	// +optional
 	EnableLogicalBlockDevices *bool `json:"enableLogicalBlockDevices,omitempty"`
+
+	// EnablePartitionedDevices reports devices carrying a partition table
+	// alongside the available ones, for the administrator who knows the table is
+	// stale and intends to hand the device over anyway. It is the only one of the
+	// three availability conditions that can be waived: a mounted or otherwise
+	// busy device is never reported, because simplyblock taking it would corrupt
+	// whatever is using it.
+	//
+	// It is a statement about the run rather than a member of DeviceFilter for
+	// the reason EnableLogicalBlockDevices is: it waives an availability
+	// condition for whichever class is scanned, and so widens what is reported,
+	// where every member of the filter narrows it.
+	// +optional
+	EnablePartitionedDevices *bool `json:"enablePartitionedDevices,omitempty"`
 
 	// DeviceFilter narrows which of an inspected worker's devices reach the
 	// draft. Empty reports every device the worker advertises, including the one

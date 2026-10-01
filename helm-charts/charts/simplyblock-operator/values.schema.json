@@ -499,6 +499,9 @@
         "enableLogicalBlockDevices": {
           "type": "boolean"
         },
+        "enablePartitionedDevices": {
+          "type": "boolean"
+        },
         "forceJournalDevice": {
           "type": "boolean"
         },
@@ -506,9 +509,6 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "enablePartitionedDevices": {
-              "type": "boolean"
-            },
             "blockAllowList": {
               "type": "array",
               "items": {

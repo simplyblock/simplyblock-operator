@@ -70,6 +70,29 @@ func TestTheDeviceFilterNoLongerCarriesTheClass(t *testing.T) {
 	}
 }
 
+// The partition waiver is a statement about the run as well: it waives one of
+// the availability conditions for whichever class is scanned, and it widens
+// what is reported where every member of the filter narrows it.
+func TestTheRunStatesItsPartitionWaiverOnTheDiscoverBlock(t *testing.T) {
+	apiClient := apiServer(t)
+
+	run := aDiscoverRun(map[string]any{"enablePartitionedDevices": true})
+	if err := apiClient.Create(context.Background(), run, client.FieldValidation("Strict")); err != nil {
+		t.Fatalf("a run stating the waiver on spec.discover was refused: %v", err)
+	}
+
+	inside := aDiscoverRun(map[string]any{
+		"deviceFilter": map[string]any{"enablePartitionedDevices": true},
+	})
+	err := apiClient.Create(context.Background(), inside, client.FieldValidation("Strict"))
+	if err == nil {
+		t.Fatal("a run stating the waiver inside deviceFilter was stored")
+	}
+	if !strings.Contains(err.Error(), "enablePartitionedDevices") {
+		t.Errorf("refused for the wrong reason: %v", err)
+	}
+}
+
 // The block lists still need the block class, and the PCI filters still refuse
 // it, with the class read from spec.discover.
 func TestTheFiltersOfTheClassNotScannedAreRefused(t *testing.T) {

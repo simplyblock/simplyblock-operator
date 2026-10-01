@@ -86,6 +86,11 @@ type Config struct {
 	// out of.
 	EnableLogicalBlockDevices *bool `json:"enableLogicalBlockDevices,omitempty"`
 
+	// EnablePartitionedDevices reports devices carrying a partition table
+	// alongside the available ones. Unset is on, for the reason DiscoverSpec
+	// gives.
+	EnablePartitionedDevices *bool `json:"enablePartitionedDevices,omitempty"`
+
 	// ForceJournalDevice dedicates a journal device on a fleet whose disks do
 	// not say which one, by taking one of the equal-smallest disks.
 	//
@@ -270,16 +275,15 @@ func (c *Config) RunNamespace(fallback string) string {
 
 // DiscoverSpec is the run this installation asks for.
 //
-// An installation that states no device filter gets the partition waiver, which
-// is what the operator raised before this file existed: a machine that has held
-// data before carries a table on every disk, so refusing them makes the run meant
-// to show a fleet what it has report that it has nothing.
+// An installation that states nothing about partitioned devices gets the
+// partition waiver, which is what the operator raised before this file existed:
+// a machine that has held data before carries a table on every disk, so
+// refusing them makes the run meant to show a fleet what it has report that it
+// has nothing. The waiver is what an installation that decided nothing gets,
+// not a floor under one that decided no: an installation refusing partitioned
+// devices has refused them.
 func (c *Config) DiscoverSpec() *simplyblockv1alpha2.DiscoverSpec {
-	spec := &simplyblockv1alpha2.DiscoverSpec{
-		DeviceFilter: &simplyblockv1alpha2.DeviceFilter{
-			EnablePartitionedDevices: ptr.To(true),
-		},
-	}
+	spec := &simplyblockv1alpha2.DiscoverSpec{EnablePartitionedDevices: ptr.To(true)}
 	if c == nil {
 		return spec
 	}
@@ -287,6 +291,9 @@ func (c *Config) DiscoverSpec() *simplyblockv1alpha2.DiscoverSpec {
 	spec.ConfigName = strings.TrimSpace(c.Draft.Name)
 	spec.EnableControlPlaneNodes = c.EnableControlPlaneNodes
 	spec.EnableLogicalBlockDevices = c.EnableLogicalBlockDevices
+	if c.EnablePartitionedDevices != nil {
+		spec.EnablePartitionedDevices = c.EnablePartitionedDevices
+	}
 	spec.ForceJournalDevice = c.ForceJournalDevice
 	if len(c.NodeSelector) > 0 {
 		spec.NodeSelector = maps.Clone(c.NodeSelector)
@@ -294,9 +301,6 @@ func (c *Config) DiscoverSpec() *simplyblockv1alpha2.DiscoverSpec {
 	if len(c.Tolerations) > 0 {
 		spec.Tolerations = slices.Clone(c.Tolerations)
 	}
-	// A stated filter is taken whole. The waiver above is what an installation
-	// that decided nothing gets, not a floor under one that decided no: an
-	// installation refusing partitioned devices has refused them.
 	if c.DeviceFilter != nil {
 		spec.DeviceFilter = c.DeviceFilter.DeepCopy()
 	}

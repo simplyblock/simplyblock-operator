@@ -152,15 +152,6 @@ spec:
                                   DriveSizeRange restricts candidates by size ("100G-2T"). Unlike the
                                   per-class filters, it applies to whichever class the run is scanning.
                                 type: string
-                              enablePartitionedDevices:
-                                description: |-
-                                  EnablePartitionedDevices reports devices carrying a partition table
-                                  alongside the available ones, for the administrator who knows the table is
-                                  stale and intends to hand the device over anyway. It is the only one of the
-                                  three availability conditions that can be waived: a mounted or otherwise
-                                  busy device is never reported, because simplyblock taking it would corrupt
-                                  whatever is using it.
-                                type: boolean
                               pcieAllowList:
                                 description: |-
                                   PcieAllowList restricts candidates to these PCI addresses. This and the two
@@ -216,6 +207,20 @@ spec:
                               them is looked at, which filters in DeviceFilter apply, and what
                               ForceJournalDevice resolves, since the two classes lay out a journal
                               differently.
+                            type: boolean
+                          enablePartitionedDevices:
+                            description: |-
+                              EnablePartitionedDevices reports devices carrying a partition table
+                              alongside the available ones, for the administrator who knows the table is
+                              stale and intends to hand the device over anyway. It is the only one of the
+                              three availability conditions that can be waived: a mounted or otherwise
+                              busy device is never reported, because simplyblock taking it would corrupt
+                              whatever is using it.
+
+                              It is a statement about the run rather than a member of DeviceFilter for
+                              the reason EnableLogicalBlockDevices is: it waives an availability
+                              condition for whichever class is scanned, and so widens what is reported,
+                              where every member of the filter narrows it.
                             type: boolean
                           forceJournalDevice:
                             description: |-

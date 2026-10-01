@@ -169,6 +169,15 @@ discovery:
   # resolves, which is why it sits here rather than among the filters.
   enableLogicalBlockDevices: false
 
+  # Report devices carrying a partition table alongside the available ones. On,
+  # because a machine that has held data before carries one on every disk and
+  # refusing them makes the run meant to show a fleet what it has report that it
+  # has nothing. It waives the table and nothing else: a device that is also
+  # mounted, held by the kernel, or carrying swap stays out. It widens what the
+  # run reports for either class, which is why it sits here rather than among
+  # the filters.
+  enablePartitionedDevices: true
+
   # Dedicate a journal device on a fleet whose disks do not say which one.
   #
   # The run proposes a dedicated journal device when every worker hands over one
@@ -194,13 +203,6 @@ discovery:
   # here never appears in the document, so this is the place to keep a boot disk
   # out of a fifty-worker draft nobody reads line by line.
   deviceFilter:
-    # Report devices carrying a partition table alongside the available ones. On,
-    # because a machine that has held data before carries one on every disk and
-    # refusing them makes the run meant to show a fleet what it has report that it
-    # has nothing. It waives the table and nothing else: a device that is also
-    # mounted, held by the kernel, or carrying swap stays out.
-    enablePartitionedDevices: true
-
     # The two block-device lists, which require enableLogicalBlockDevices.
     #
     # A deny list is the one most deployments want: on a fleet that boots from

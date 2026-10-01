@@ -82,8 +82,8 @@ tolerations:
     value: dedicated
     effect: NoSchedule
 enableLogicalBlockDevices: true
+enablePartitionedDevices: false
 deviceFilter:
-  enablePartitionedDevices: false
   blockDenyList:
     - /dev/sda
 draft:
@@ -117,7 +117,7 @@ draft:
 	if filter == nil {
 		t.Fatal("the stated device filter did not reach the run")
 	}
-	if ptr.BoolFromOrFalse(filter.EnablePartitionedDevices) {
+	if ptr.BoolFromOrFalse(run.Spec.Discover.EnablePartitionedDevices) {
 		t.Error("the stated partition refusal was overridden by the default waiver")
 	}
 	if len(filter.BlockDenyList) != 1 {
@@ -233,7 +233,7 @@ func TestAnUnreadableConfigMapStillRaisesTheOperatorsOwnRun(t *testing.T) {
 	if run.Name != InitialDiscoveryName {
 		t.Errorf("the run is named %q, want the operator's own constant", run.Name)
 	}
-	if !ptr.BoolFromOrFalse(run.Spec.Discover.DeviceFilter.EnablePartitionedDevices) {
+	if !ptr.BoolFromOrFalse(run.Spec.Discover.EnablePartitionedDevices) {
 		t.Error("unreadable content cost the fleet its partition waiver")
 	}
 }
