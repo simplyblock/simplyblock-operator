@@ -38,6 +38,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -83,27 +84,40 @@ var (
 const (
 	openShiftConfigAPIGroup = "config.openshift.io"
 	certManagerAPIGroup     = "cert-manager.io"
-	// ocmWorkAPIGroup is OCM's ManifestWork API group. It is served on the hub
-	// and absent on managed clusters, which read ManifestWork from the hub rather
-	// than serving it locally. The TestFailover controller watches ManifestWork,
-	// so it is registered only where this group is served.
-	ocmWorkAPIGroup = "work.open-cluster-management.io"
+	// ocmWorkGroupVersion is OCM's work API group/version, and ocmManifestWorkResource
+	// the ManifestWork resource within it. ManifestWork is served only on the hub;
+	// a managed cluster serves the SAME group/version for AppliedManifestWork (the
+	// work-agent's local record) but NOT ManifestWork, so the presence check must
+	// be resource-level, not group-level — a group-level check sees the group as
+	// served everywhere AppliedManifestWork exists. The TestFailover controller
+	// watches ManifestWork, so it is registered only where ManifestWork is served.
+	ocmWorkGroupVersion     = "work.open-cluster-management.io/v1"
+	ocmManifestWorkResource = "manifestworks"
 )
 
 type serverGroupsGetter interface {
 	ServerGroups() (*metav1.APIGroupList, error)
 }
 
-// serverHasAPIGroup reports whether the API server serves the named group. Used
-// to skip controllers that watch a kind the cluster does not define, since a
-// watch whose cache can never sync takes the whole manager down at startup.
-func serverHasAPIGroup(discoveryClient serverGroupsGetter, group string) (bool, error) {
-	groupList, err := discoveryClient.ServerGroups()
+type serverResourcesGetter interface {
+	ServerResourcesForGroupVersion(groupVersion string) (*metav1.APIResourceList, error)
+}
+
+// serverHasResource reports whether the API server serves the named resource in
+// the given group/version. Used to skip a controller that watches a kind the
+// cluster does not serve, since a watch whose cache can never sync takes the
+// whole manager down at startup. A group/version the server does not serve at
+// all is reported as absent rather than an error.
+func serverHasResource(discoveryClient serverResourcesGetter, groupVersion, resource string) (bool, error) {
+	list, err := discoveryClient.ServerResourcesForGroupVersion(groupVersion)
 	if err != nil {
-		return false, fmt.Errorf("discover API groups: %w", err)
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("discover resources for %s: %w", groupVersion, err)
 	}
-	for _, g := range groupList.Groups {
-		if g.Name == group {
+	for _, r := range list.APIResources {
+		if r.Name == resource {
 			return true, nil
 		}
 	}
@@ -934,12 +948,12 @@ func main() {
 		setupLog.Error(err, "unable to build a discovery client to check for the OCM work API")
 		os.Exit(1)
 	}
-	hasWorkAPI, err := serverHasAPIGroup(workDiscovery, ocmWorkAPIGroup)
+	hasManifestWork, err := serverHasResource(workDiscovery, ocmWorkGroupVersion, ocmManifestWorkResource)
 	if err != nil {
-		setupLog.Error(err, "unable to determine whether the OCM work API is served")
+		setupLog.Error(err, "unable to determine whether the OCM ManifestWork resource is served")
 		os.Exit(1)
 	}
-	if hasWorkAPI {
+	if hasManifestWork {
 		if err := (&controller.TestFailoverReconciler{
 			Client:   mgr.GetClient(),
 			Scheme:   mgr.GetScheme(),
@@ -949,8 +963,8 @@ func main() {
 			os.Exit(1)
 		}
 	} else {
-		setupLog.Info("OCM ManifestWork API not served; skipping TestFailover controller (hub-only)",
-			"apiGroup", ocmWorkAPIGroup)
+		setupLog.Info("OCM ManifestWork resource not served; skipping TestFailover controller (hub-only)",
+			"groupVersion", ocmWorkGroupVersion, "resource", ocmManifestWorkResource)
 	}
 	// +kubebuilder:scaffold:builder
 
