@@ -223,20 +223,21 @@ A failure is two calls, so most of these rows are about which call is issued and
 in which order, rather than about what the cluster does with the result. The
 rebuild the failure starts is `E-15`, because a mock has nothing to rebuild.
 
-| #     | Scenario                                                                            | Type     | Test                                                         |
-|-------|-------------------------------------------------------------------------------------|----------|--------------------------------------------------------------|
-| U-124 | `Fail` on a serving device: the removal is issued, then the failure, in that order  | Positive | `TestFailRemovesTheDeviceBeforeItIsFailed`                   |
-| U-125 | `Fail` on a device already out of the data path: the removal is skipped             | Boundary | `TestFailSkipsTheRemovalOfADeviceAlreadyOutOfTheDataPath`    |
-| U-126 | `Fail` on a device already failed: refused, and neither call is issued              | Negative | `TestFailIsRefusedForADeviceThatIsAlreadyFailed`             |
-| U-127 | The device comes back into service between the two calls: refused at `Failing`      | Negative | `TestFailRefusesToFailADeviceThatCameBackIntoService`        |
-| U-128 | The removal is refused: the operation fails and no failure is issued                | Negative | `TestARefusedRemovalStopsTheFailure`                         |
-| U-129 | `Awaiting` holds while the device has not been reported failed                      | Positive | `TestFailWaitsForTheControlPlaneToReportTheDeviceFailed`     |
-| U-130 | A device already past the failure, in `failed_and_migrated`, satisfies the wait     | Boundary | `TestFailAcceptsADeviceWhoseRebuildHasFinished`              |
-| U-131 | An abort in `Removing` with the device still serving: `Aborted`, nothing issued     | Positive | `TestAnAbortBeforeTheRemovalStopsTheFailure`                 |
-| U-132 | An abort in `Removing` with the device already removed: refused, the operation runs | Negative | `TestAnAbortIsRefusedOnceTheDeviceIsAlreadyOutOfTheDataPath` |
-| U-133 | An abort in `Failing`: refused by the graph, the operation runs on                  | Negative | `TestAnAbortAfterTheRemovalIsRefused`                        |
-| U-134 | A device in `Unknown`, whose node cannot be reached: design §11 Q2 decides it       | Boundary | —                                                            |
-| U-135 | The failure is issued once across a resumed operation                               | Boundary | —                                                            |
+| #     | Scenario                                                                                     | Type     | Test                                                         |
+|-------|----------------------------------------------------------------------------------------------|----------|--------------------------------------------------------------|
+| U-124 | `Fail` on a serving device: the removal is issued, then the failure, in that order           | Positive | `TestFailRemovesTheDeviceBeforeItIsFailed`                   |
+| U-125 | `Fail` on a device already out of the data path: the removal is skipped                      | Boundary | `TestFailSkipsTheRemovalOfADeviceAlreadyOutOfTheDataPath`    |
+| U-126 | `Fail` on a device already failed: refused, and neither call is issued                       | Negative | `TestFailIsRefusedForADeviceThatIsAlreadyFailed`             |
+| U-127 | The device comes back into service between the two calls: refused at `Failing`               | Negative | `TestFailRefusesToFailADeviceThatCameBackIntoService`        |
+| U-128 | The removal is refused: the operation fails and no failure is issued                         | Negative | `TestARefusedRemovalStopsTheFailure`                         |
+| U-129 | `Awaiting` holds while the device has not been reported failed                               | Positive | `TestFailWaitsForTheControlPlaneToReportTheDeviceFailed`     |
+| U-130 | A device already past the failure, in `failed_and_migrated`, satisfies the wait              | Boundary | `TestFailAcceptsADeviceWhoseRebuildHasFinished`              |
+| U-131 | An abort in `Removing` with the device still serving: `Aborted`, nothing issued              | Positive | `TestAnAbortBeforeTheRemovalStopsTheFailure`                 |
+| U-132 | An abort in `Removing` with the device already removed: refused, and the failure still lands | Negative | `TestAnAbortIsRefusedOnceTheDeviceIsAlreadyOutOfTheDataPath` |
+| U-133 | An abort in `Failing`: refused by the graph, and the failure still lands                     | Negative | `TestAnAbortAfterTheRemovalIsRefusedAndTheFailureFinishes`   |
+| U-142 | A refused abort emits `AbortRefused` and leaves the message to the running step              | Positive | `TestAnAbortAfterTheRemovalIsRefusedAndTheFailureFinishes`   |
+| U-134 | A device in `Unknown`, whose node cannot be reached: design §11 Q2 decides it                | Boundary | —                                                            |
+| U-135 | The failure is issued once across a resumed operation                                        | Boundary | —                                                            |
 
 ### StorageDeviceOps: The Graph and the Refusals Both Actions Share (design §6)
 
@@ -250,6 +251,7 @@ File: `operator/internal/controllers/node/storagedeviceops_test.go`
 | U-139 | A device the control plane stops holding mid-wait: the operation fails         | Negative | `TestADeviceThatDoesNotComeBackFailsTheOperation` |
 | U-140 | A refused `Restart`: the operation fails with the control plane's reason       | Negative | `TestARefusedRestartFailsTheOperation`            |
 | U-141 | A device reporting no cluster, node, and device id: refused, nothing addressed | Negative | `TestADeviceWithNoBackendIdentityIsRefused`       |
+| U-143 | An abort in a `Restart`'s `Awaiting`: refused, and the restart still completes | Negative | `TestARefusedAbortLetsTheRestartFinish`           |
 
 ---
 
@@ -372,11 +374,11 @@ node down with it and costs the cluster a node's worth of redundancy.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 129       | 100     | 29          |
+| Unit        | 131       | 102     | 29          |
 | Integration | 16        | 0       | 16          |
 | E2E         | 16        | 0       | 16          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **164**   | **100** | **64**      |
+| **Total**   | **166**   | **102** | **64**      |
 
 Superseded rows are excluded from the counts: their behavior is gone rather than
 untested.

@@ -61,6 +61,7 @@ const (
 	DeviceRestartRequested   = "DeviceRestartRequested"
 	DeviceRemovalRequested   = "DeviceRemovalRequested"
 	DeviceFailRequested      = "DeviceFailRequested"
+	DeviceAbortRefused       = "AbortRefused"
 	DeviceStepDeadlineGone   = "StepDeadlineExceeded"
 )
 
@@ -181,12 +182,21 @@ func (r *StorageDeviceOpsReconciler) advance(
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		if blocked != "" {
-			return ctrl.Result{RequeueAfter: deviceOpsRetry}, r.note(ctx, ops,
-				fmt.Sprintf("an abort was asked for and step %s cannot be stopped; %s",
-					current, blocked))
+		if blocked == "" {
+			return ctrl.Result{}, r.abort(ctx, ops, device, current)
 		}
-		return ctrl.Result{}, r.abort(ctx, ops, device, current)
+		// Refused, and the operation runs on rather than stopping here. An
+		// operation halted by a refused abort would be stranded in the step it
+		// was refused in: a failure would leave the device out of the data path
+		// and never failed, which is the state the refusal exists to avoid, and
+		// either action would hold the device's lock until somebody noticed.
+		//
+		// The refusal is an event rather than the status message, because the
+		// message belongs to the step the operation is still running and two
+		// writers would alternate it every pass. Repeating the event is what the
+		// recorder aggregates.
+		r.event(ops, corev1.EventTypeWarning, DeviceAbortRefused,
+			fmt.Sprintf("the abort asked for in step %s was refused: %s", current, blocked))
 	}
 
 	if machine.TimeoutReached() {

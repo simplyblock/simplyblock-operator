@@ -200,11 +200,29 @@ func failOperation() *simplyblockv1alpha2.StorageDeviceOps {
 	return ops
 }
 
+// deviceRecorder remembers the events the operation emits, which is where a
+// refused abort is recorded: the status message belongs to the step the
+// operation is running, because the operation runs on.
+type deviceRecorder struct {
+	reasons []string
+}
+
+func (r *deviceRecorder) Eventf(
+	_ runtime.Object, _ runtime.Object, _, reason, _, _ string, _ ...any,
+) {
+	r.reasons = append(r.reasons, reason)
+}
+
+func (r *deviceRecorder) has(reason string) bool {
+	return slices.Contains(r.reasons, reason)
+}
+
 type deviceWorld struct {
-	t   *testing.T
-	c   client.Client
-	r   *StorageDeviceOpsReconciler
-	api *deviceCalls
+	t      *testing.T
+	c      client.Client
+	r      *StorageDeviceOpsReconciler
+	api    *deviceCalls
+	events *deviceRecorder
 }
 
 func newDeviceWorld(t *testing.T, api *deviceCalls, objects ...client.Object) *deviceWorld {
@@ -224,8 +242,9 @@ func newDeviceWorld(t *testing.T, api *deviceCalls, objects ...client.Object) *d
 			&simplyblockv1alpha2.StorageDeviceOps{}, &simplyblockv1alpha2.StorageDevice{}).
 		Build()
 
-	return &deviceWorld{t: t, c: c, api: api, r: &StorageDeviceOpsReconciler{
-		Client: c, Scheme: scheme, API: api,
+	events := &deviceRecorder{}
+	return &deviceWorld{t: t, c: c, api: api, events: events, r: &StorageDeviceOpsReconciler{
+		Client: c, Scheme: scheme, API: api, Recorder: events,
 	}}
 }
 
@@ -577,23 +596,38 @@ func TestAnAbortBeforeTheRemovalStopsTheFailure(t *testing.T) {
 	}
 }
 
-// An abort after it is refused, because the device is out of the data path by
-// then and this operator has no call that puts it back. Recording a stop would
-// leave a device removed under an object that says nothing happened.
-func TestAnAbortAfterTheRemovalIsRefused(t *testing.T) {
-	api := &deviceCalls{status: cpDeviceOnline, frozen: false}
+// An abort after the removal is refused, because the device is out of the data
+// path by then and this operator has no call that puts it back. Recording a stop
+// would leave a device removed under an object that says nothing happened.
+//
+// **The refusal does not halt the operation, which is the half that matters.** A
+// refused abort that also stopped the operation from stepping would strand the
+// device in exactly the state the refusal exists to avoid: removed from the data
+// path, never failed, and never rebuilt from.
+func TestAnAbortAfterTheRemovalIsRefusedAndTheFailureFinishes(t *testing.T) {
+	api := &deviceCalls{status: cpDeviceOnline}
 	w := newDeviceWorld(t, api, failOperation(), deviceObject())
 
 	w.driveTo(stepDeviceFailing)
 	w.abort()
-	ops, _ := w.settle()
+	ops, device := w.settle()
 
-	if ops.Status.Phase == simplyblockv1alpha2.StorageDeviceOpsPhaseAborted {
-		t.Error("the operation was aborted after the device had been removed, so the " +
-			"device is out of the data path under an object that says nothing happened")
+	if ops.Status.Phase != simplyblockv1alpha2.StorageDeviceOpsPhaseSucceeded {
+		t.Errorf("phase = %s (%s), want Succeeded: a refused abort does not stop the "+
+			"operation, and a device left removed and never failed is the state the "+
+			"refusal exists to avoid", ops.Status.Phase, ops.Status.Message)
 	}
-	if api.removals != 1 {
-		t.Errorf("%d removals were issued, want one", api.removals)
+	if api.removals != 1 || api.failures != 1 {
+		t.Errorf("%d removals and %d failures were issued, want one of each",
+			api.removals, api.failures)
+	}
+	if !w.events.has(DeviceAbortRefused) {
+		t.Errorf("no %s event; the refusal is the operation's answer to what was asked "+
+			"for, and the status message belongs to the step it is running",
+			DeviceAbortRefused)
+	}
+	if device.Status.ActiveOpsRef != "" {
+		t.Errorf("the finished operation still holds device %s", device.Name)
 	}
 }
 
@@ -668,7 +702,38 @@ func TestAnAbortIsRefusedOnceTheDeviceIsAlreadyOutOfTheDataPath(t *testing.T) {
 		t.Fatal("the operation was aborted while its device was already removed, so the " +
 			"device is out of the data path under an object that says nothing happened")
 	}
-	if !strings.Contains(ops.Status.Message, "abort") {
-		t.Errorf("message = %q, want it to say why the abort was refused", ops.Status.Message)
+	if ops.Status.Phase != simplyblockv1alpha2.StorageDeviceOpsPhaseSucceeded {
+		t.Errorf("phase = %s (%s), want Succeeded: the refusal does not stop the operation",
+			ops.Status.Phase, ops.Status.Message)
+	}
+	if api.failures != 1 {
+		t.Errorf("%d failures were issued, want one", api.failures)
+	}
+	if !w.events.has(DeviceAbortRefused) {
+		t.Errorf("no %s event; nothing records that the abort was refused", DeviceAbortRefused)
+	}
+}
+
+// The same for a restart, where the step the graph refuses is the wait. The
+// control plane has accepted the restart and nothing recalls one, so an
+// operation halted here would stop watching a device that is restarting anyway
+// and would hold its lock until somebody noticed.
+func TestARefusedAbortLetsTheRestartFinish(t *testing.T) {
+	api := &deviceCalls{status: cpDeviceOnline, frozen: true}
+	w := newDeviceWorld(t, api, deviceOperation(), deviceObject())
+
+	w.driveTo(stepDeviceAwaiting)
+	w.abort()
+	ops, device := w.settle()
+
+	if ops.Status.Phase != simplyblockv1alpha2.StorageDeviceOpsPhaseSucceeded {
+		t.Errorf("phase = %s (%s), want Succeeded", ops.Status.Phase, ops.Status.Message)
+	}
+	if !w.events.has(DeviceAbortRefused) {
+		t.Errorf("no %s event; nothing records that the abort was refused",
+			DeviceAbortRefused)
+	}
+	if device.Status.ActiveOpsRef != "" {
+		t.Errorf("the finished operation still holds device %s", device.Name)
 	}
 }

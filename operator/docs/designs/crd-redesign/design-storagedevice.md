@@ -693,6 +693,15 @@ edge with the device out of the data path. The abort therefore reads the device
 first and is refused on anything but a device still in service, which is the
 same question `Removing` itself asks before it issues anything.
 
+**A refused abort does not stop the operation.** The refusal answers what was
+asked for and changes nothing else: the step runs to its end and the action
+finishes. What makes that the rule is the state a halt leaves behind, because a
+failure stopped in `Failing` has its device out of the data path with nothing
+left to fail it, and holds the device's lock (§4.2) for as long as it sits
+there. The refusal is `AbortRefused` on the operation, and `status.message` goes
+on describing the step the operation is running, because that is what the
+operation is doing.
+
 **`Failed` is terminal, so `Fail` has no inverse and the action is not reversible.**
 A device that has been failed does not return to service: there is no `Recover`, the
 control plane offers nothing to return it, and the two ways out of the phase are both
@@ -937,6 +946,7 @@ exception, and it is a different event on a different object.
 | The operation was aborted and its unwind finished             | `Normal`  | `OperationAborted`       | `StorageDeviceOps` |
 | A step's deadline expired                                     | `Warning` | `StepDeadlineExceeded`   | `StorageDeviceOps` |
 | An action was refused because redundancy would not survive it | `Warning` | `InsufficientRedundancy` | `StorageDeviceOps` |
+| An abort arrived at a step that cannot be stopped             | `Warning` | `AbortRefused`           | `StorageDeviceOps` |
 | A self-test finished and the device reported a failure        | `Warning` | `SelfTestFailed`         | `StorageDeviceOps` |
 | The operation is waiting for somebody to swap or move a drive | `Normal`  | `AwaitingPhysicalAction` | `StorageDeviceOps` |
 | Two unknown devices appeared, so the replacement is ambiguous | `Warning` | `ReplacementAmbiguous`   | `StorageDeviceOps` |
@@ -944,8 +954,8 @@ exception, and it is a different event on a different object.
 | The device was accepted by its target node                    | `Normal`  | `DeviceMoved`            | `StorageDeviceOps` |
 
 The first eight are emitted, as are the `OperationStarted`, `OperationSucceeded`,
-`OperationFailed`, `OperationAborted`, and `StepDeadlineExceeded` rows of the two
-actions §6 implements. The rest wait on the actions that own them.
+`OperationFailed`, `OperationAborted`, `AbortRefused`, and `StepDeadlineExceeded`
+rows of the two actions §6 implements. The rest wait on the actions that own them.
 
 **`DeviceDisappeared` is the one the section exists for.** A drive pulled from a
 running node had no expression anywhere in Kubernetes: the node's count dropped
