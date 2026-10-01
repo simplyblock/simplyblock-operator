@@ -130,6 +130,10 @@ type controlPlane struct {
 	deletes int
 	hosts   []string
 
+	// lastAuth is the Authorization header of the most recently handled
+	// request, which is what a test checks a call authenticated with.
+	lastAuth string
+
 	server *httptest.Server
 }
 
@@ -150,6 +154,7 @@ func (cp *controlPlane) client() func() *webapi.Client {
 }
 
 func (cp *controlPlane) handle(w http.ResponseWriter, r *http.Request) {
+	cp.lastAuth = r.Header.Get("Authorization")
 	switch {
 	case r.Method == http.MethodPost && hasSuffix(r.URL.Path, "/host"):
 		cp.hosts = append(cp.hosts, "added")

@@ -815,7 +815,10 @@ func TestARunThatOutlivesItsDeadlineSaysWhereTheEvidenceIs(t *testing.T) {
 // approving it sees what the cluster will be told and the expansion has
 // something to spend on ubuntuHost.
 func TestTheDraftStatesTheHostOSTheProbesRead(t *testing.T) {
-	r := &OperatorOpsReconciler{}
+	// draftFor reads kube-system's UID to disambiguate the cluster name; a fake
+	// client with no such namespace returns NotFound, so the disambiguator falls
+	// back cleanly and this test still asserts only the host OS.
+	r := &OperatorOpsReconciler{Client: fake.NewClientBuilder().WithScheme(opsScheme(t)).Build()}
 	ops := &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "discover-1"}}
 	plan := discoverypkg.Plan{Workers: []discoverypkg.Worker{{
 		Name: "worker-01",
@@ -824,7 +827,7 @@ func TestTheDraftStatesTheHostOSTheProbesRead(t *testing.T) {
 		}},
 	}}}
 
-	config, notes, err := r.draftFor(ops, &simplyblockv1alpha2.DiscoverSpec{}, plan, nil)
+	config, notes, err := r.draftFor(context.Background(), ops, &simplyblockv1alpha2.DiscoverSpec{}, plan, nil)
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
 	}
@@ -848,7 +851,7 @@ func TestTheDraftStatesTheHostOSTheProbesRead(t *testing.T) {
 // A fleet whose workers run different distributions gets no host OS and a note
 // naming the split, because one document becomes one DaemonSet with one flag.
 func TestTheDraftStatesNoHostOSForAFleetThatDisagrees(t *testing.T) {
-	r := &OperatorOpsReconciler{}
+	r := &OperatorOpsReconciler{Client: fake.NewClientBuilder().WithScheme(opsScheme(t)).Build()}
 	ops := &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "discover-1"}}
 	worker := func(name, distro string) discoverypkg.Worker {
 		return discoverypkg.Worker{
@@ -861,7 +864,7 @@ func TestTheDraftStatesNoHostOSForAFleetThatDisagrees(t *testing.T) {
 		worker("worker-02", "rocky"),
 	}}
 
-	config, notes, err := r.draftFor(ops, &simplyblockv1alpha2.DiscoverSpec{}, plan, nil)
+	config, notes, err := r.draftFor(context.Background(), ops, &simplyblockv1alpha2.DiscoverSpec{}, plan, nil)
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
 	}
@@ -909,11 +912,11 @@ func TestDiscoverProbesTolerateWhatTheRunWasToldTo(t *testing.T) {
 // drafts has to live with, so the draft states them rather than leaving a
 // reviewer to work out that the DaemonSet will schedule nowhere.
 func TestTheDraftCarriesTheTolerationsTheRunProbedWith(t *testing.T) {
-	r := &OperatorOpsReconciler{}
+	r := &OperatorOpsReconciler{Client: fake.NewClientBuilder().WithScheme(opsScheme(t)).Build()}
 	ops := &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "discover-1"}}
 	spec := &simplyblockv1alpha2.DiscoverSpec{Tolerations: storagePlaneTaint}
 
-	config, notes, err := r.draftFor(ops, spec, discoverypkg.Plan{}, nil)
+	config, notes, err := r.draftFor(context.Background(), ops, spec, discoverypkg.Plan{}, nil)
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
 	}
@@ -939,7 +942,7 @@ func TestAGrowthDraftCarriesNoTolerations(t *testing.T) {
 		Tolerations: storagePlaneTaint,
 	}
 
-	config, _, err := r.draftFor(ops, spec, discoverypkg.Plan{}, nil)
+	config, _, err := r.draftFor(context.Background(), ops, spec, discoverypkg.Plan{}, nil)
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
 	}

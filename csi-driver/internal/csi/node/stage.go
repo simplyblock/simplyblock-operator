@@ -80,6 +80,13 @@ func (ns *Server) NodeStageVolume(
 	}
 
 	vc := req.GetVolumeContext()
+	if vc == nil {
+		// A statically provisioned PV can carry no csi.volumeAttributes, which
+		// arrives here as a nil map. The volume's identity is re-resolved from its
+		// handle by refreshVolumeContext regardless, so an empty context is enough
+		// to stage; a nil one would panic on the first write below.
+		vc = map[string]string{}
+	}
 	vc["stagingParentPath"] = stagingParentPath
 	ns.refreshVolumeContext(ctx, volumeID, vc)
 
@@ -590,7 +597,7 @@ func (ns *Server) refreshVolumeContext(ctx context.Context, volumeID string, vc 
 			// The source volume was deleted by a migration with --delete-source.
 			// The replication relationship survives it and names the active
 			// volume on the target cluster, which is what this redirects to.
-			connInfo = ns.redirectToActiveVolume(ctx, sbcClient, spdkVol.VolumeID, volumeID, vc)
+			connInfo = redirectToActiveVolume(ctx, sbcClient, spdkVol.VolumeID, volumeID, vc)
 		}
 		if connInfo == nil {
 			klog.Warningf("failed to fetch volume connection info for %s: %v", volumeID, infoErr)

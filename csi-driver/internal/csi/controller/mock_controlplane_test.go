@@ -27,6 +27,12 @@ type mockVolume struct {
 	Size    int64
 	Status  string // defaults to "online" when empty
 	GroupID string // consistency group id, "" for a non-member
+
+	// ReplicationPolicyID is the policy this volume currently follows, ""
+	// when none. Set by a PUT carrying replication_policy_id (a string
+	// attaches, an explicit JSON null detaches; the key's absence, as an
+	// ordinary resize PUT sends, leaves it untouched).
+	ReplicationPolicyID string
 }
 
 // status returns the volume's reported status, defaulting to `online`.
@@ -103,13 +109,68 @@ type mockSBCLI struct {
 	// It lets a test drive an RPC through every control-plane response and assert
 	// the resulting gRPC code.
 	injectStatus func(r *http.Request) int
+
+	// replicationStatus, keyed by volume id, is the raw JSON body GET
+	// .../replication/status serves for that volume. A test sets it directly
+	// rather than the mock deriving it, since the derivation itself
+	// (get_replication_info) is sbcli's, already covered there; this mock
+	// only has to prove the driver maps whatever shape the endpoint returns.
+	replicationStatus map[string]map[string]any
+
+	// replicationRelationship, keyed by volume id (either side of the
+	// pairing), is the raw JSON body GET .../replication/ serves for that
+	// volume. Absent means no relationship exists yet (404, matching
+	// sbcli's get_relationship returning None for a volume never enabled for
+	// replication) -- this look-up deliberately does not require the id to
+	// exist in m.volumes, matching the real backend, whose relationship
+	// records outlive a deleted source volume.
+	replicationRelationship map[string]map[string]any
+
+	// replicationPUTStatus, when set, makes every PUT carrying
+	// replication_policy_id respond with this HTTP status instead of the
+	// normal idempotent update, modeling a backend refusal (e.g., a policy
+	// that is not active) or a transient failure.
+	replicationPUTStatus int
+
+	// failoverStatus, when set, is the HTTP status POST .../failover answers
+	// with instead of its default success (204) -- modeling the planned
+	// gate's 409 (demote still converging) and 412 (no demote requested).
+	failoverStatus int
+	// lastFailoverQuery captures the raw query string of the last failover
+	// call, so a test can assert the driver actually sent planned=true/false
+	// rather than only checking the resulting gRPC code.
+	lastFailoverQuery string
+	// lastFailoverVolumeID captures which volume's path the last failover
+	// call landed on, so a test can assert a relationship-resolved call
+	// reached the TARGET volume rather than the one it was originally given.
+	lastFailoverVolumeID string
+
+	// demoteStatus, when set, is the HTTP status POST .../demote answers with
+	// instead of its default success (204). 202 models "still converging."
+	demoteStatus int
+	// lastDemoteVolumeID captures which volume's path the last demote call
+	// landed on, so a test can assert a relationship-resolved call reached
+	// the TARGET volume rather than the one it was originally given.
+	lastDemoteVolumeID string
+
+	// failbackStatus, when set, is the HTTP status POST .../failback answers
+	// with instead of its default success (204).
+	failbackStatus int
+	// lastFailbackBody captures the raw JSON body of the last failback call.
+	lastFailbackBody []byte
+	// lastFailbackVolumeID captures which volume's path the last failback
+	// call landed on, so a test can assert the relationship resolution
+	// redirected it -- the same capture handleFailover keeps for promote.
+	lastFailbackVolumeID string
 }
 
 func newMockSBCLI() *mockSBCLI {
 	m := &mockSBCLI{
-		volumes:   make(map[string]*mockVolume),
-		snapshots: make(map[string]*mockSnapshot),
-		groups:    make(map[string]*mockGroup),
+		volumes:                 make(map[string]*mockVolume),
+		snapshots:               make(map[string]*mockSnapshot),
+		groups:                  make(map[string]*mockGroup),
+		replicationStatus:       make(map[string]map[string]any),
+		replicationRelationship: make(map[string]map[string]any),
 	}
 
 	mux := http.NewServeMux()
@@ -127,6 +188,31 @@ func newMockSBCLI() *mockSBCLI {
 	mux.HandleFunc(
 		"PUT /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/",
 		m.locked(m.handleResizeVolume),
+	)
+	mux.HandleFunc(
+		"GET /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/replication/status",
+		m.locked(m.handleReplicationStatus),
+	)
+	mux.HandleFunc(
+		// Cluster-scoped, not pool-scoped: GetVolumeReplicationRelationship
+		// must stay resolvable by source id after the source volume itself is
+		// deleted, which the pool-scoped route (requiring the volume to still
+		// exist) cannot do -- see TestClientGetVolumeReplicationRelationship
+		// in atlas-lib/controlplane for the live-confirmed reason.
+		"GET /api/v2/clusters/{clusterID}/replication/relationships/{volumeID}",
+		m.locked(m.handleReplicationRelationship),
+	)
+	mux.HandleFunc(
+		"POST /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/replication/failover",
+		m.locked(m.handleFailover),
+	)
+	mux.HandleFunc(
+		"POST /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/replication/demote",
+		m.locked(m.handleDemote),
+	)
+	mux.HandleFunc(
+		"POST /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/replication/failback",
+		m.locked(m.handleFailback),
 	)
 	mux.HandleFunc(
 		"GET /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/connect",
@@ -149,8 +235,32 @@ func newMockSBCLI() *mockSBCLI {
 		m.locked(m.handleDeleteSnapshot),
 	)
 	mux.HandleFunc(
+		"GET /api/v2/clusters/{clusterID}/consistency-groups/{$}",
+		m.locked(m.handleListGroups),
+	)
+	mux.HandleFunc(
 		"GET /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/members",
 		m.locked(m.handleGroupMembers),
+	)
+	mux.HandleFunc(
+		"PUT /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/replication",
+		m.locked(m.handleConfigureGroupReplication),
+	)
+	mux.HandleFunc(
+		"POST /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/replication/failover",
+		m.locked(m.handleGroupFailover),
+	)
+	mux.HandleFunc(
+		"POST /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/replication/demote",
+		m.locked(m.handleGroupDemote),
+	)
+	mux.HandleFunc(
+		"POST /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/replication/failback",
+		m.locked(m.handleGroupFailback),
+	)
+	mux.HandleFunc(
+		"GET /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/replication/status",
+		m.locked(m.handleGroupReplicationStatus),
 	)
 	mux.HandleFunc(
 		"POST /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/snapshots",
@@ -262,12 +372,104 @@ func (m *mockSBCLI) handleResizeVolume(w http.ResponseWriter, r *http.Request) {
 	if volume == nil {
 		return
 	}
-	var body struct {
-		Size int64 `json:"size"`
+	if m.replicationPUTStatus != 0 {
+		writeJSON(w, m.replicationPUTStatus, map[string]string{"detail": "injected status"})
+		return
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	if body.Size > 0 {
-		volume.Size = body.Size
+	raw, _ := io.ReadAll(r.Body)
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &fields)
+
+	if sizeRaw, ok := fields["size"]; ok {
+		var size int64
+		if err := json.Unmarshal(sizeRaw, &size); err == nil && size > 0 {
+			volume.Size = size
+		}
+	}
+	// A key present with a JSON null attaches nothing (detach); a key present
+	// with a string attaches that policy; the key's absence (an ordinary
+	// resize PUT) leaves the volume's policy untouched -- omitted and null
+	// are different requests, which is exactly the distinction this mock
+	// exists to exercise.
+	if policyRaw, ok := fields["replication_policy_id"]; ok {
+		if string(policyRaw) == "null" {
+			volume.ReplicationPolicyID = ""
+		} else {
+			var policyID string
+			_ = json.Unmarshal(policyRaw, &policyID)
+			volume.ReplicationPolicyID = policyID
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleReplicationStatus serves the typed steady-state status a test
+// configured via replicationStatus, or a default "not_replicating" body for
+// a volume nothing has configured -- the same "never a 404" contract P0-1
+// promises for a volume that exists but never replicated.
+func (m *mockSBCLI) handleReplicationStatus(w http.ResponseWriter, r *http.Request) {
+	volumeID := r.PathValue("volumeID")
+	if m.lookupVolume(w, volumeID) == nil {
+		return
+	}
+	body, ok := m.replicationStatus[volumeID]
+	if !ok {
+		body = map[string]any{
+			"role": "none", "state": "not_replicating",
+			"outstanding_count": 0, "outstanding_bytes": 0,
+			"failing_count": 0, "max_retry_reached": false, "resyncing": false,
+		}
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+func (m *mockSBCLI) handleReplicationRelationship(w http.ResponseWriter, r *http.Request) {
+	volumeID := r.PathValue("volumeID")
+	body, ok := m.replicationRelationship[volumeID]
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "Volume has no replication relationship"})
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+func (m *mockSBCLI) handleFailover(w http.ResponseWriter, r *http.Request) {
+	volumeID := r.PathValue("volumeID")
+	if m.lookupVolume(w, volumeID) == nil {
+		return
+	}
+	m.lastFailoverQuery = r.URL.RawQuery
+	m.lastFailoverVolumeID = volumeID
+	if m.failoverStatus != 0 {
+		writeJSON(w, m.failoverStatus, map[string]string{"detail": "injected status"})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (m *mockSBCLI) handleDemote(w http.ResponseWriter, r *http.Request) {
+	volumeID := r.PathValue("volumeID")
+	if m.lookupVolume(w, volumeID) == nil {
+		return
+	}
+	m.lastDemoteVolumeID = volumeID
+	if m.demoteStatus != 0 {
+		writeJSON(w, m.demoteStatus, map[string]bool{"demoted": m.demoteStatus == http.StatusNoContent})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (m *mockSBCLI) handleFailback(w http.ResponseWriter, r *http.Request) {
+	volumeID := r.PathValue("volumeID")
+	if m.lookupVolume(w, volumeID) == nil {
+		return
+	}
+	m.lastFailbackBody, _ = io.ReadAll(r.Body)
+	m.lastFailbackVolumeID = volumeID
+	if m.failbackStatus != 0 {
+		writeJSON(w, m.failbackStatus, map[string]string{"detail": "injected status"})
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -461,6 +663,13 @@ type mockGroup struct {
 	Members []string // lvol UUIDs with an open epoch
 	LastSeq int
 	Gens    map[int][]mockGenMember
+	// Group-replication state the driver's group-handle routing drives.
+	PolicyID         string
+	Promoted         bool
+	Demoted          bool
+	DemoteConverging bool // when set, /demote answers 202 (still converging)
+	FailbackSource   string
+	LastReplicatedAt int64 // unix seconds surfaced by /replication/status
 }
 
 // seedGroup registers a group with the given member lvol UUIDs and stamps each
@@ -474,6 +683,93 @@ func (m *mockSBCLI) seedGroup(groupID string, memberUUIDs ...string) {
 			m.volumes[id] = &mockVolume{UUID: id, Name: id, Size: 1 << 30, GroupID: sanityClusterID + "/" + groupID}
 		}
 	}
+}
+
+func (m *mockSBCLI) handleListGroups(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	rows := make([]map[string]any, 0, len(m.groups))
+	for id, g := range m.groups {
+		gname := "cg-" + id
+		if name != "" && name != gname {
+			continue
+		}
+		rows = append(rows, map[string]any{
+			"id": id, "cluster_id": r.PathValue("clusterID"), "name": gname,
+			"member_count": len(g.Members), "last_group_seq": g.LastSeq,
+		})
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (m *mockSBCLI) handleConfigureGroupReplication(w http.ResponseWriter, r *http.Request) {
+	g := m.groups[r.PathValue("groupID")]
+	if g == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "group not found"})
+		return
+	}
+	var body struct {
+		ReplicationPolicyID *string `json:"replication_policy_id"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.ReplicationPolicyID == nil {
+		g.PolicyID = ""
+	} else {
+		g.PolicyID = *body.ReplicationPolicyID
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (m *mockSBCLI) handleGroupFailover(w http.ResponseWriter, r *http.Request) {
+	g := m.groups[r.PathValue("groupID")]
+	if g == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "group not found"})
+		return
+	}
+	g.Promoted = true
+	writeJSON(w, http.StatusOK, map[string]any{"members": []any{}})
+}
+
+func (m *mockSBCLI) handleGroupDemote(w http.ResponseWriter, r *http.Request) {
+	g := m.groups[r.PathValue("groupID")]
+	if g == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "group not found"})
+		return
+	}
+	if g.DemoteConverging {
+		writeJSON(w, http.StatusAccepted, map[string]any{"demoted": false})
+		return
+	}
+	g.Demoted = true
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (m *mockSBCLI) handleGroupFailback(w http.ResponseWriter, r *http.Request) {
+	g := m.groups[r.PathValue("groupID")]
+	if g == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "group not found"})
+		return
+	}
+	var body struct {
+		SourceClusterID *string `json:"source_cluster_id"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.SourceClusterID != nil {
+		g.FailbackSource = *body.SourceClusterID
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (m *mockSBCLI) handleGroupReplicationStatus(w http.ResponseWriter, r *http.Request) {
+	g := m.groups[r.PathValue("groupID")]
+	if g == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "group not found"})
+		return
+	}
+	out := map[string]any{"role": "source", "state": "in_sync", "member_count": len(g.Members)}
+	if g.LastReplicatedAt != 0 {
+		out["last_replicated_at"] = time.Unix(g.LastReplicatedAt, 0).UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (m *mockSBCLI) handleGroupMembers(w http.ResponseWriter, r *http.Request) {

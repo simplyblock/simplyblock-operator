@@ -1,0 +1,299 @@
+# Identity and permissions of the csi-addons controller-manager, vendored from
+# csi-addons/kubernetes-csi-addons v0.15.0 (deploy/controller/rbac.yaml) with
+# names prefixed simplyblock- and namespaces bound to the release. The upstream
+# file's four unbound editor and viewer convenience roles are deliberately not
+# vendored: nothing binds them, so shipping them would grant nothing and audit
+# as dead surface. What remains is exactly what the manager's ServiceAccount
+# holds.
+{{- if .Values.csiaddons.create -}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: simplyblock-csi-addons-controller-manager
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: simplyblock-csi-addons-leader-election-role
+  namespace: {{ .Release.Namespace }}
+rules:
+  # rbac-justified: controller-runtime leader election holds a Lease (and the
+  # legacy ConfigMap lock) in the manager's own namespace, and records election
+  # events there.
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: simplyblock-csi-addons-manager-role
+rules:
+  # rbac-justified: the reconcilers emit events on the objects they drive
+  # (VolumeReplication, ReclaimSpaceJob, NetworkFence) in every namespace.
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+  # rbac-justified: the manager resolves the sidecar pod behind each
+  # CSIAddonsNode to build its gRPC connection, and lists namespaces to fan
+  # per-namespace ReclaimSpaceCronJob scheduling out cluster-wide.
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+  # rbac-justified: the VolumeReplication reconciler resolves the protected
+  # PVC, and the reclaim-space and volume-health paths annotate it. The
+  # finalizer update protects a replicated PVC from deletion mid-operation.
+  - apiGroups:
+      - ""
+    resources:
+      - persistentvolumeclaims
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  # rbac-justified: an addition beyond the stock upstream manifest, which
+  # omits this too (it's an opt-in feature, not something every deployment
+  # uses). The manager's sidecar-facing ReplicationServer proxy
+  # (internal/sidecar/service/volumereplication.go) hard-requires resolving
+  # a Secret named by VolumeReplicationClass's
+  # replication.storage.openshift.io/replication-secret-name(space)
+  # parameters before it will proxy ANY Replication RPC, even to a driver
+  # (like this one) that never reads the secret's own contents -- confirmed
+  # against a live cluster, where every EnableVolumeReplication attempt
+  # failed with "Failed to get secret ... resource name may not be empty"
+  # before ever reaching the sidecar. get only, no list/watch: the manager
+  # reads one named Secret per VolumeReplicationClass, never enumerates.
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+  - apiGroups:
+      - ""
+    resources:
+      - persistentvolumeclaims/finalizers
+    verbs:
+      - update
+  # rbac-justified: the PVC's volume handle (the id every csi-addons RPC
+  # addresses) lives on the PV, and the reclaim-space controller records
+  # progress annotations there.
+  - apiGroups:
+      - ""
+    resources:
+      - persistentvolumes
+    verbs:
+      - get
+      - list
+      - update
+      - watch
+  # rbac-justified: the manager reads the sidecars' leader-election Leases to
+  # pick the active sidecar per driver. Its own election lock is the
+  # namespaced Role above.
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - get
+      - list
+      - watch
+  # rbac-justified: the manager owns these kinds: sidecars publish
+  # CSIAddonsNode, cron controllers materialize their child jobs, and every
+  # reconciler maintains status and finalizers on its own objects.
+  - apiGroups:
+      - csiaddons.openshift.io
+    resources:
+      - csiaddonsnodes
+      - encryptionkeyrotationcronjobs
+      - encryptionkeyrotationjobs
+      - networkfenceclasses
+      - networkfences
+      - reclaimspacecronjobs
+      - reclaimspacejobs
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - csiaddons.openshift.io
+    resources:
+      - csiaddonsnodes/finalizers
+      - encryptionkeyrotationcronjobs/finalizers
+      - encryptionkeyrotationjobs/finalizers
+      - networkfenceclasses/finalizers
+      - networkfences/finalizers
+      - reclaimspacecronjobs/finalizers
+      - reclaimspacejobs/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - csiaddons.openshift.io
+    resources:
+      - csiaddonsnodes/status
+      - encryptionkeyrotationcronjobs/status
+      - encryptionkeyrotationjobs/status
+      - networkfenceclasses/status
+      - networkfences/status
+      - reclaimspacecronjobs/status
+      - reclaimspacejobs/status
+    verbs:
+      - get
+      - patch
+      - update
+  # rbac-justified: classes are read-only inputs (parameters, provisioner
+  # matching). The replication objects themselves are reconciled, so they and
+  # their status and finalizers are written, and VolumeGroupReplicationContent
+  # is created by the group flow the manager owns.
+  - apiGroups:
+      - replication.storage.openshift.io
+    resources:
+      - volumegroupreplicationclasses
+      - volumereplicationclasses
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - replication.storage.openshift.io
+    resources:
+      - volumegroupreplicationcontents
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - replication.storage.openshift.io
+    resources:
+      - volumegroupreplicationcontents/finalizers
+      - volumegroupreplications/finalizers
+      - volumereplications/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - replication.storage.openshift.io
+    resources:
+      - volumegroupreplicationcontents/status
+      - volumegroupreplications/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - replication.storage.openshift.io
+    resources:
+      - volumegroupreplications
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - replication.storage.openshift.io
+    resources:
+      - volumereplications
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - update
+      - watch
+  - apiGroups:
+      - replication.storage.openshift.io
+    resources:
+      - volumereplications/status
+    verbs:
+      - get
+      - list
+      - update
+  # rbac-justified: the scheduling and peer-matching logic resolves a PVC's
+  # StorageClass and its attachment state, both read-only.
+  - apiGroups:
+      - storage.k8s.io
+    resources:
+      - storageclasses
+      - volumeattachments
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: simplyblock-csi-addons-leader-election-rolebinding
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: simplyblock-csi-addons-leader-election-role
+subjects:
+  - kind: ServiceAccount
+    name: simplyblock-csi-addons-controller-manager
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: simplyblock-csi-addons-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: simplyblock-csi-addons-manager-role
+subjects:
+  - kind: ServiceAccount
+    name: simplyblock-csi-addons-controller-manager
+    namespace: {{ .Release.Namespace }}
+{{- end -}}

@@ -295,6 +295,60 @@ func (e ReplicationStartParamsMode) Valid() bool {
 	}
 }
 
+// Defines values for ReplicationStatusDTORole.
+const (
+	ReplicationStatusDTORoleFailedOver ReplicationStatusDTORole = "failed_over"
+	ReplicationStatusDTORoleNone       ReplicationStatusDTORole = "none"
+	ReplicationStatusDTORoleSecondary  ReplicationStatusDTORole = "secondary"
+	ReplicationStatusDTORoleSource     ReplicationStatusDTORole = "source"
+)
+
+// Valid indicates whether the value is a known member of the ReplicationStatusDTORole enum.
+func (e ReplicationStatusDTORole) Valid() bool {
+	switch e {
+	case ReplicationStatusDTORoleFailedOver:
+		return true
+	case ReplicationStatusDTORoleNone:
+		return true
+	case ReplicationStatusDTORoleSecondary:
+		return true
+	case ReplicationStatusDTORoleSource:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReplicationStatusDTOState.
+const (
+	ReplicationStatusDTOStateDegraded       ReplicationStatusDTOState = "degraded"
+	ReplicationStatusDTOStateError          ReplicationStatusDTOState = "error"
+	ReplicationStatusDTOStateInSync         ReplicationStatusDTOState = "in_sync"
+	ReplicationStatusDTOStateLagging        ReplicationStatusDTOState = "lagging"
+	ReplicationStatusDTOStateNotReplicating ReplicationStatusDTOState = "not_replicating"
+	ReplicationStatusDTOStateReplicating    ReplicationStatusDTOState = "replicating"
+)
+
+// Valid indicates whether the value is a known member of the ReplicationStatusDTOState enum.
+func (e ReplicationStatusDTOState) Valid() bool {
+	switch e {
+	case ReplicationStatusDTOStateDegraded:
+		return true
+	case ReplicationStatusDTOStateError:
+		return true
+	case ReplicationStatusDTOStateInSync:
+		return true
+	case ReplicationStatusDTOStateLagging:
+		return true
+	case ReplicationStatusDTOStateNotReplicating:
+		return true
+	case ReplicationStatusDTOStateReplicating:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ReplicationTargetDTOStatus.
 const (
 	ReplicationTargetDTOStatusActive   ReplicationTargetDTOStatus = "active"
@@ -1076,6 +1130,7 @@ type PolicyParams struct {
 	KeepReplicated   *int               `json:"keep_replicated,omitempty"`
 	Mode             *PolicyParamsMode  `json:"mode,omitempty"`
 	PolicyName       string             `json:"policy_name"`
+	RpoTargetSeconds *int               `json:"rpo_target_seconds,omitempty"`
 	TargetId         openapi_types.UUID `json:"target_id"`
 }
 
@@ -1092,6 +1147,30 @@ type ReplicateLVolParams struct {
 	LvolId openapi_types.UUID `json:"lvol_id"`
 }
 
+// ReplicatedGenerationDTO One complete, fully replicated consistency-group generation, every
+// member addressed as a cloneable object on the secondary.
+type ReplicatedGenerationDTO struct {
+	GroupSeq int                     `json:"group_seq"`
+	Members  []ReplicatedSnapshotDTO `json:"members"`
+}
+
+// ReplicatedSnapshotDTO A fully replicated snapshot on the secondary, addressed as a cloneable
+// object. “lvol_id“ is the volume the snapshot belongs to on the
+// SECONDARY cluster, not the source volume the caller asked about, because
+// that is the identity the ordinary CSI clone path resolves a
+// “dataSource“ against.
+type ReplicatedSnapshotDTO struct {
+	ClusterId  openapi_types.UUID  `json:"cluster_id"`
+	CreatedAt  time.Time           `json:"created_at"`
+	GroupId    *string             `json:"group_id,omitempty"`
+	GroupSeq   *int                `json:"group_seq,omitempty"`
+	LvolId     *openapi_types.UUID `json:"lvol_id,omitempty"`
+	PoolId     *openapi_types.UUID `json:"pool_id,omitempty"`
+	Size       int                 `json:"size"`
+	SnapshotId openapi_types.UUID  `json:"snapshot_id"`
+	UsedSize   int                 `json:"used_size"`
+}
+
 // ReplicationPolicyDTO defines model for ReplicationPolicyDTO.
 type ReplicationPolicyDTO struct {
 	ClusterId        openapi_types.UUID         `json:"cluster_id"`
@@ -1104,6 +1183,7 @@ type ReplicationPolicyDTO struct {
 	KeepReplicated   int                        `json:"keep_replicated"`
 	Mode             ReplicationPolicyDTOMode   `json:"mode"`
 	PolicyName       string                     `json:"policy_name"`
+	RpoTargetSeconds *int                       `json:"rpo_target_seconds,omitempty"`
 	Status           ReplicationPolicyDTOStatus `json:"status"`
 	TargetId         openapi_types.UUID         `json:"target_id"`
 }
@@ -1150,6 +1230,34 @@ type ReplicationStartParams struct {
 
 // ReplicationStartParamsMode defines model for ReplicationStartParams.Mode.
 type ReplicationStartParamsMode string
+
+// ReplicationStatusDTO The typed steady-state replication status of one volume.
+//
+// Serves what “lvol_controller.get_replication_info“ computes, for the
+// volume's WHOLE replicated life — unlike “ReplicationRelationshipDTO“,
+// which only exists once a cutover or fail-over has created a relationship
+// record. “state: not_replicating, role: none“ is a valid answer, never a
+// 404, because the csi-addons adapter polls this on every reconcile.
+type ReplicationStatusDTO struct {
+	FailingCount     *int                      `json:"failing_count,omitempty"`
+	LagBudgetSeconds *int                      `json:"lag_budget_seconds,omitempty"`
+	LagSeconds       *int                      `json:"lag_seconds,omitempty"`
+	LastCycleBytes   *int                      `json:"last_cycle_bytes,omitempty"`
+	LastCycleSeconds *int                      `json:"last_cycle_seconds,omitempty"`
+	LastReplicatedAt *time.Time                `json:"last_replicated_at,omitempty"`
+	MaxRetryReached  *bool                     `json:"max_retry_reached,omitempty"`
+	OutstandingBytes *int                      `json:"outstanding_bytes,omitempty"`
+	OutstandingCount *int                      `json:"outstanding_count,omitempty"`
+	Resyncing        *bool                     `json:"resyncing,omitempty"`
+	Role             ReplicationStatusDTORole  `json:"role"`
+	State            ReplicationStatusDTOState `json:"state"`
+}
+
+// ReplicationStatusDTORole defines model for ReplicationStatusDTO.Role.
+type ReplicationStatusDTORole string
+
+// ReplicationStatusDTOState defines model for ReplicationStatusDTO.State.
+type ReplicationStatusDTOState string
 
 // ReplicationTargetDTO defines model for ReplicationTargetDTO.
 type ReplicationTargetDTO struct {
@@ -2311,9 +2419,15 @@ type ServerInterface interface {
 	// ClustersReplicationPoliciesFailoverApiV2ClustersClusterIdReplicationPoliciesPolicyIdFailoverPost Clusters:Replication:Policies:Failover
 	// (POST /api/v2/clusters/{cluster_id}/replication/policies/{policy_id}/failover)
 	ClustersReplicationPoliciesFailoverApiV2ClustersClusterIdReplicationPoliciesPolicyIdFailoverPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, policyId openapi_types.UUID)
+	// ClustersReplicationPoliciesLatestGenerationApiV2ClustersClusterIdReplicationPoliciesPolicyIdLatestGenerationGet Clusters:Replication:Policies:Latest-Generation
+	// (GET /api/v2/clusters/{cluster_id}/replication/policies/{policy_id}/latest-generation)
+	ClustersReplicationPoliciesLatestGenerationApiV2ClustersClusterIdReplicationPoliciesPolicyIdLatestGenerationGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, policyId openapi_types.UUID)
 	// ClustersReplicationRelationshipsDetailApiV2ClustersClusterIdReplicationRelationshipsLvolIdGet Clusters:Replication:Relationships:Detail
 	// (GET /api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id})
 	ClustersReplicationRelationshipsDetailApiV2ClustersClusterIdReplicationRelationshipsLvolIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, lvolId openapi_types.UUID)
+	// ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGet Clusters:Replication:Relationships:Latest-Snapshot
+	// (GET /api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}/latest-snapshot)
+	ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, lvolId openapi_types.UUID)
 	// ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGet Clusters:Replication:Targets:List
 	// (GET /api/v2/clusters/{cluster_id}/replication/targets/)
 	ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
@@ -2500,6 +2614,9 @@ type ServerInterface interface {
 	// ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPost Clusters:Storage-Pools:Volumes:Replication:Start
 	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/start)
 	ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
+	// ClustersStoragePoolsVolumesReplicationStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStatusGet Clusters:Storage-Pools:Volumes:Replication:Status
+	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/status)
+	ClustersStoragePoolsVolumesReplicationStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStatusGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
 	// ClustersStoragePoolsVolumesReplicationStopApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStopPost Clusters:Storage-Pools:Volumes:Replication:Stop
 	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/stop)
 	ClustersStoragePoolsVolumesReplicationStopApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStopPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
@@ -4073,6 +4190,41 @@ func (siw *ServerInterfaceWrapper) ClustersReplicationPoliciesFailoverApiV2Clust
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersReplicationPoliciesLatestGenerationApiV2ClustersClusterIdReplicationPoliciesPolicyIdLatestGenerationGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersReplicationPoliciesLatestGenerationApiV2ClustersClusterIdReplicationPoliciesPolicyIdLatestGenerationGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "policy_id" -------------
+	var policyId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "policy_id", r.PathValue("policy_id"), &policyId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "policy_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersReplicationPoliciesLatestGenerationApiV2ClustersClusterIdReplicationPoliciesPolicyIdLatestGenerationGet(w, r, clusterId, policyId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersReplicationRelationshipsDetailApiV2ClustersClusterIdReplicationRelationshipsLvolIdGet operation middleware
 func (siw *ServerInterfaceWrapper) ClustersReplicationRelationshipsDetailApiV2ClustersClusterIdReplicationRelationshipsLvolIdGet(w http.ResponseWriter, r *http.Request) {
 
@@ -4099,6 +4251,41 @@ func (siw *ServerInterfaceWrapper) ClustersReplicationRelationshipsDetailApiV2Cl
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ClustersReplicationRelationshipsDetailApiV2ClustersClusterIdReplicationRelationshipsLvolIdGet(w, r, clusterId, lvolId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "lvol_id" -------------
+	var lvolId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "lvol_id", r.PathValue("lvol_id"), &lvolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "lvol_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGet(w, r, clusterId, lvolId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -7014,6 +7201,50 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationStartAp
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersStoragePoolsVolumesReplicationStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStatusGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStatusGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "pool_id" -------------
+	var poolId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "pool_id", r.PathValue("pool_id"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pool_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "volume_id" -------------
+	var volumeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "volume_id", r.PathValue("volume_id"), &volumeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "volume_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStoragePoolsVolumesReplicationStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStatusGet(w, r, clusterId, poolId, volumeId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersStoragePoolsVolumesReplicationStopApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStopPost operation middleware
 func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationStopApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStopPost(w http.ResponseWriter, r *http.Request) {
 
@@ -7853,7 +8084,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/policies/{policy_id}/{$}", wrapper.ClustersReplicationPoliciesDeleteApiV2ClustersClusterIdReplicationPoliciesPolicyIdDelete)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/policies/{policy_id}/{$}", wrapper.ClustersReplicationPoliciesDetailApiV2ClustersClusterIdReplicationPoliciesPolicyIdGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/policies/{policy_id}/failover", wrapper.ClustersReplicationPoliciesFailoverApiV2ClustersClusterIdReplicationPoliciesPolicyIdFailoverPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/policies/{policy_id}/latest-generation", wrapper.ClustersReplicationPoliciesLatestGenerationApiV2ClustersClusterIdReplicationPoliciesPolicyIdLatestGenerationGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}", wrapper.ClustersReplicationRelationshipsDetailApiV2ClustersClusterIdReplicationRelationshipsLvolIdGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}/latest-snapshot", wrapper.ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/targets/{$}", wrapper.ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/targets/{$}", wrapper.ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPost)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/targets/{target_id}/{$}", wrapper.ClustersReplicationTargetsDeleteApiV2ClustersClusterIdReplicationTargetsTargetIdDelete)
@@ -7915,6 +8148,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/failback", wrapper.ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/failover", wrapper.ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/start", wrapper.ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/status", wrapper.ClustersStoragePoolsVolumesReplicationStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStatusGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/stop", wrapper.ClustersStoragePoolsVolumesReplicationStopApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStopPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/tasks", wrapper.ClustersStoragePoolsVolumesReplicationTasksApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTasksGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/trigger", wrapper.ClustersStoragePoolsVolumesReplicationTriggerApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTriggerPost)

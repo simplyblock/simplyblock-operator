@@ -144,7 +144,7 @@ func TestTheAddCarriesWhatTheNodeSaysAboutItself(t *testing.T) {
 	}
 
 	r, _ := aSteadyNode(t, aControlPlane())
-	params := r.addParams(node, cluster)
+	params := r.addParams(context.Background(), node, cluster)
 
 	if params.SPDKImage != "example.test/spdk:v1" ||
 		params.SPDKProxyImage != "example.test/spdk-proxy:v1" ||
@@ -181,7 +181,7 @@ func TestTheAddCarriesWhatTheNodeSaysAboutItself(t *testing.T) {
 func TestAnUnstatedJournalShareIsTheDefaultAndTheCountIsNot(t *testing.T) {
 	r, _ := aSteadyNode(t, aControlPlane())
 
-	params := r.addParams(anUnprovisionedNode(stepPosting), anOpsCluster())
+	params := r.addParams(context.Background(), anUnprovisionedNode(stepPosting), anOpsCluster())
 
 	if params.JMPercent != 3 {
 		t.Errorf("the journal share is %d%%, want the default 3", params.JMPercent)
@@ -201,18 +201,18 @@ func TestOnlyAFaultGroupThatIsANumberIsSentToTheControlPlane(t *testing.T) {
 
 	numbered := anUnprovisionedNode(stepPosting)
 	numbered.Spec.Config.FailureDomain = "2"
-	if index := r.addParams(numbered, anOpsCluster()).FailureDomain; index == nil || *index != 2 {
+	if index := r.addParams(context.Background(), numbered, anOpsCluster()).FailureDomain; index == nil || *index != 2 {
 		t.Errorf("failureDomain = %v, want the index the label spells", index)
 	}
 
 	named := anUnprovisionedNode(stepPosting)
 	named.Spec.Config.FailureDomain = "rack-1"
-	if index := r.addParams(named, anOpsCluster()).FailureDomain; index != nil {
+	if index := r.addParams(context.Background(), named, anOpsCluster()).FailureDomain; index != nil {
 		t.Errorf("failureDomain = %v, want none: the control plane has no field for a name",
 			index)
 	}
 
-	if index := r.addParams(anUnprovisionedNode(stepPosting), anOpsCluster()).FailureDomain; index != nil {
+	if index := r.addParams(context.Background(), anUnprovisionedNode(stepPosting), anOpsCluster()).FailureDomain; index != nil {
 		t.Errorf("failureDomain = %v, want none for a node that declares no group", index)
 	}
 }

@@ -95,6 +95,76 @@ func TestSnapshotterSidecarIsAppliedRegardlessOfTheToggle(t *testing.T) {
 	}
 }
 
+// The csi-addons sidecar is appended after the plugin container (index 6),
+// never inserted: containerStatefulSet's positional tweaks (containers[1]'s
+// SecurityContext, containers[4]'s Ports) only stay pointed at the snapshotter
+// and health-monitor if nothing ahead of them shifts.
+func TestCSIAddonsSidecarIsAppliedAfterThePlugin(t *testing.T) {
+	d := testDriver("simplyblock")
+	containers := controllerStatefulSet(d, testImage).Spec.Template.Spec.Containers
+
+	if len(containers) != 7 {
+		t.Fatalf("got %d containers, want 7", len(containers))
+	}
+	if containers[5].Name != "csi-controller" || containers[6].Name != "csi-addons" {
+		t.Errorf("containers[5:7] = %q, %q, want csi-controller, csi-addons",
+			containers[5].Name, containers[6].Name)
+	}
+
+	addr, ok := argValue(&containers[6], "--csi-addons-address")
+	if !ok || addr != controllerSocketPath {
+		t.Errorf("csi-addons --csi-addons-address = %q, want %q", addr, controllerSocketPath)
+	}
+}
+
+// The sidecar advertises itself as pod://<pod>.<namespace>, never a bare
+// ip:port: the controller-manager's own resolveEndpoint (v0.15.0) hard-requires
+// url.Parse's Scheme to equal "pod" and rejects everything else with
+// "endpoint scheme %q not supported" -- confirmed against a live cluster,
+// where passing --controller-ip produced a bare "<ip>:<port>" (no scheme)
+// that the controller-manager could never parse, so it kept failing every
+// connection attempt and deleting the CSIAddonsNode in a tight loop.
+func TestCSIAddonsSidecarAdvertisesItsOwnPod(t *testing.T) {
+	d := testDriver("simplyblock")
+	c := containerNamed(controllerStatefulSet(d, testImage).Spec.Template.Spec.Containers, "csi-addons")
+	if c == nil {
+		t.Fatal("csi-addons is not applied")
+	}
+
+	wantFieldPaths := map[string]string{
+		"NODE_ID": "spec.nodeName", "POD_NAME": "metadata.name",
+		"POD_NAMESPACE": "metadata.namespace", "POD_UID": "metadata.uid",
+	}
+	for _, e := range c.Env {
+		want, known := wantFieldPaths[e.Name]
+		if !known {
+			continue
+		}
+		delete(wantFieldPaths, e.Name)
+		if e.ValueFrom == nil || e.ValueFrom.FieldRef == nil || e.ValueFrom.FieldRef.FieldPath != want {
+			t.Errorf("%s field path = %+v, want %q", e.Name, e.ValueFrom, want)
+		}
+	}
+	for name := range wantFieldPaths {
+		t.Errorf("no %s env var", name)
+	}
+
+	// Required, not cosmetic: csiaddonsnode.Manager.Node rejects an empty
+	// value with "invalid configuration: missing node" before it ever
+	// creates the CSIAddonsNode object (confirmed against a live cluster).
+	if nodeID, ok := argValue(c, "--node-id"); !ok || nodeID != "$(NODE_ID)" {
+		t.Errorf("--node-id = %q, want $(NODE_ID)", nodeID)
+	}
+	// --controller-ip must NEVER be set: it takes BuildEndpointURL's bare
+	// ip:port branch, which this controller-manager version cannot parse.
+	if _, ok := argValue(c, "--controller-ip"); ok {
+		t.Error("--controller-ip is set; the pod:// addressing scheme requires omitting it")
+	}
+	if ns, ok := argValue(c, "--leader-election-namespace"); !ok || ns != "$(POD_NAMESPACE)" {
+		t.Errorf("--leader-election-namespace = %q, want $(POD_NAMESPACE)", ns)
+	}
+}
+
 // U-33 and U-34: the driver name reaches the kubelet registration path and the
 // hostPath the node plugin mounts, which is what design §9 Q3 says the chart
 // writes literally.

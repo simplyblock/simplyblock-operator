@@ -159,6 +159,100 @@ func TestSitePair_CreatesBackendTarget(t *testing.T) {
 	}
 }
 
+// ---------- EndpointResolver overrides the default/env-var endpoint ----------
+
+// TestSitePair_UsesEndpointResolver proves the reconciler reaches the control
+// plane through EndpointResolver, the same mechanism StoragePoolReconciler
+// already uses (controlplane.NewEndpointResolver, wired from
+// ControlPlane.status.endpoint) -- required for a managed cluster whose own
+// operator has no reachable simplyblock-webappapi Service, only the hub's
+// externally-published one. SIMPLYBLOCK_WEBAPI_BASE_URL is deliberately left
+// unset here so a pass proves the resolver path, not the pre-existing
+// env-var fallback TestSitePair_CreatesBackendTarget already covers.
+func TestSitePair_UsesEndpointResolver(t *testing.T) {
+	cluster1 := testCluster("default", "cluster1", "src-uuid")
+	cluster2 := testCluster("default", "cluster2", "tgt-uuid")
+	pair := newSitePair()
+
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		if req.Method == http.MethodPost {
+			w.WriteHeader(http.StatusCreated)
+			resp, _ := json.Marshal(map[string]string{"id": "tgt-backend-uuid"})
+			_, _ = w.Write(resp)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	})
+
+	r, cl := newSitePairReconciler(t, cluster1, cluster2, pair)
+	r.EndpointResolver = func(context.Context) string { return srv.URL }
+
+	res, err := r.Reconcile(context.Background(), sitePairRequest("pair1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.RequeueAfter != replPairSyncInterval {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairSyncInterval)
+	}
+
+	got := getSitePair(t, cl)
+	if !got.Status.Ready {
+		t.Errorf("pair.Status.Ready = false, want true (EndpointResolver should have been used)")
+	}
+	if got.Status.BackendTargetID != "tgt-backend-uuid" {
+		t.Errorf("BackendTargetID = %q, want tgt-backend-uuid", got.Status.BackendTargetID)
+	}
+}
+
+// TestSitePair_AuthenticatesAsSourceClusterOnceSecretIsKnown mirrors
+// internal/controllers/pool's TestAPoolAuthenticatesAsItsClusterOnceTheSecretIsKnown
+// -- same fix, same reason: cluster B's operator authenticating as its own
+// Kubernetes identity can never pass a TokenReview on the hub's cluster (the
+// whole reason per-cluster secrets exist at all), confirmed live this session
+// as the very next error once EndpointResolver alone let the request reach
+// the right endpoint ("status 401: Invalid token").
+func TestSitePair_AuthenticatesAsSourceClusterOnceSecretIsKnown(t *testing.T) {
+	cluster1 := testCluster("default", "cluster1", "src-uuid")
+	cluster2 := testCluster("default", "cluster2", "tgt-uuid")
+	pair := newSitePair()
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-cluster-cluster1",
+			Namespace: "default",
+		},
+		Data: map[string][]byte{"secret": []byte("cluster1-own-secret")},
+	}
+
+	var gotAuth string
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		gotAuth = req.Header.Get("Authorization")
+		if req.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		resp, _ := json.Marshal(map[string]string{"id": "tgt-backend-uuid"})
+		_, _ = w.Write(resp)
+	})
+
+	r, _ := newSitePairReconciler(t, cluster1, cluster2, pair, secret)
+	r.EndpointResolver = func(context.Context) string { return srv.URL }
+
+	if _, err := r.Reconcile(context.Background(), sitePairRequest("pair1")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if gotAuth != "Bearer cluster1-own-secret" {
+		t.Errorf("authorization = %q, want the source cluster's own secret", gotAuth)
+	}
+}
+
 // ---------- backend target already exists → reuses it ----------
 
 func TestSitePair_ReuseExistingTarget(t *testing.T) {

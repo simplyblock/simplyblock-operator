@@ -26,6 +26,13 @@ var clusterRoleComponents = []string{
 // rather than the controller plugin's.
 const nodeComponent = "node"
 
+// csiAddonsComponent is not a clusterRoleComponents entry: CSIAddonsNode is a
+// namespaced kind (helm-charts' csiaddons.openshift.io_csiaddonsnodes.yaml
+// sets scope: Namespaced), so its sidecar gets a namespaced Role instead of a
+// sixth ClusterRole, per rbac-hardening's preference for the narrowest scope
+// that works. See rbac.go's csiAddonsRoleRules.
+const csiAddonsComponent = "csi-addons"
+
 // objectNames is the whole naming surface of one deployment.
 type objectNames struct {
 	prefix string
@@ -78,6 +85,17 @@ func (n objectNames) clusterRole(component string) string {
 }
 
 func (n objectNames) clusterRoleBinding(component string) string {
+	return n.prefix + component + "-binding"
+}
+
+// role and roleBinding name the namespaced counterparts. Only csiAddonsComponent
+// uses these today; the suffixes match clusterRole/clusterRoleBinding because
+// the two are different Kinds and do not share a namespace with each other.
+func (n objectNames) role(component string) string {
+	return n.prefix + component + "-role"
+}
+
+func (n objectNames) roleBinding(component string) string {
 	return n.prefix + component + "-binding"
 }
 

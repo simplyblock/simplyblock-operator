@@ -99,6 +99,16 @@ func ResolveClusterUUID(
 	clusterName string,
 ) (string, error) {
 
+	// A cluster on a different physical Kubernetes cluster has no local
+	// StorageCluster object to match by name -- the object only exists on
+	// that other cluster's own API server. The backend control plane is
+	// shared across clusters and addresses cluster pairs by this same UUID,
+	// so a raw UUID is passed through unresolved rather than requiring a
+	// local name match that can never succeed for a genuinely remote target.
+	if IsUUID(clusterName) {
+		return clusterName, nil
+	}
+
 	var clusters simplyblockv1alpha2.StorageClusterList
 	if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
 		return "", err

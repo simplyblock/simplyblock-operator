@@ -593,6 +593,14 @@ spec:
         displayName: Tasks
         path: tasks
       version: v1alpha1
+    - description: TestFailover is a one-way, non-disruptive test-failover drill.
+        It recovers a source volume, or a consistency group, from a snapshot into
+        an isolated namespace on a chosen cluster as bound PVCs, without touching
+        the source.
+      displayName: Test Failover
+      kind: TestFailover
+      name: testfailovers.storage.simplyblock.io
+      version: v1alpha2
   description: The Simplyblock Operator helps with installation, operation, and management
     of Simplyblock Control Planes, Storage Planes, and the CSI Driver.
   displayName: Simplyblock Operator

@@ -4303,6 +4303,75 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/status": {
+      "get": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Storage-Pools:Volumes:Replication:Status",
+        "description": "The typed steady-state replication status.\n\nUnlike the relationship read above, which serves cutover records and 404s\nfor a volume's whole healthy replicated life, this endpoint always answers\nfor a volume that exists: ``state: not_replicating, role: none`` is the\nvalid answer for an unreplicated volume. The csi-addons adapter derives\nits conditions and ``lastSyncTime`` from this read on every reconcile.",
+        "operationId": "clusters_storage_pools_volumes_replication_status_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "pool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Pool Id"
+            }
+          },
+          {
+            "name": "volume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Volume Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplicationStatusDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/start": {
       "post": {
         "tags": [
@@ -4510,7 +4579,7 @@
           "replication"
         ],
         "summary": "Clusters:Storage-Pools:Volumes:Replication:Failover",
-        "description": "Bring the volume up on the target cluster.\n\nThe counterpart's id is read back from this volume's replication\nrelationship, its connection paths from the target volume's `connect`.\n\n``generation`` selects WHICH retained point-in-time to come up on: 0 (the\ndefault) is the newest, 1 the one before it, and so on through the\nhistory a retention schedule keeps. Failing over to an older generation\nis the recovery path for a logical corruption, which the newest copy has\nfaithfully replicated.",
+        "description": "Bring the volume up on the target cluster.\n\nThe counterpart's id is read back from this volume's replication\nrelationship, its connection paths from the target volume's `connect`.\n\n``generation`` selects WHICH retained point-in-time to come up on: 0 (the\ndefault) is the newest, 1 the one before it, and so on through the\nhistory a retention schedule keeps. Failing over to an older generation\nis the recovery path for a logical corruption, which the newest copy has\nfaithfully replicated.\n\n``planned=True`` gates on a completed demote (P0-3) so a planned swap\nloses nothing: 409 while demote is still converging (retryable -- 409\nmust never become a code the controller reads as permission to force,\nsince that controller escalates on ANY FAILED_PRECONDITION from a\nforce=false promote with no wait-and-retry grace period of its own).\nWhen no demote was ever requested, the source's own health decides: a\ngenuinely healthy, still-serving source means there is nothing to fail\nover -- this is the vendored csi-addons controller's OWN first-ever\nreconcile of a `VolumeReplication` that already lives here, not a\ndisaster, and this call succeeds as the no-op it is. A source that is\nNOT healthy gets 412, the caller's premise that it was reachable to\ndemote was wrong, and 412 is what lets the controller's own\nforce-escalation take over. Unplanned failover (the default) ignores\ndemote state entirely, unchanged from today: its whole premise is that\nthe source may never have been reachable to demote.",
         "operationId": "clusters_storage_pools_volumes_replication_failover_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_failover_post",
         "security": [
           {
@@ -4556,6 +4625,16 @@
               "type": "integer",
               "default": 0,
               "title": "Generation"
+            }
+          },
+          {
+            "name": "planned",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Planned"
             }
           }
         ],
@@ -4641,6 +4720,71 @@
         "responses": {
           "202": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/demote": {
+      "post": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Storage-Pools:Volumes:Replication:Demote",
+        "description": "Fence the source and confirm the last write replicated (P0-3).\n\nSynchronous and re-drivable, not queued: each call does only the work its\ncurrent state calls for (fence + trigger the final snapshot once, then\njust check whether it has landed), so the caller re-invokes this route\nuntil it reports 204. A 202 means still waiting -- call again, the same\nway `GET .../status` is re-read rather than pushed.",
+        "operationId": "clusters_storage_pools_volumes_replication_demote_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_demote_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "pool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Pool Id"
+            }
+          },
+          {
+            "name": "volume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Volume Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "202": {
+            "description": "Accepted"
           },
           "422": {
             "description": "Validation Error",
@@ -6312,6 +6456,65 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}/latest-snapshot": {
+      "get": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Replication:Relationships:Latest-Snapshot",
+        "description": "The volume's newest fully replicated snapshot, on the secondary, as a\ncloneable object. Exists for the volume's whole replicated life: a\ntest-failover drill (design \u00a714) resolves its test point through this\nread, without touching the real replication state to find out what it is.",
+        "operationId": "clusters_replication_relationships_latest_snapshot_api_v2_clusters__cluster_id__replication_relationships__lvol_id__latest_snapshot_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lvol_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lvol Id"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplicatedSnapshotDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/replication/targets/": {
       "get": {
         "tags": [
@@ -6883,6 +7086,65 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/replication/policies/{policy_id}/latest-generation": {
+      "get": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Replication:Policies:Latest-Generation",
+        "description": "The consistency group's newest fully replicated generation, every\nmember as a cloneable object on the secondary. Refused as a 400 when the\npolicy has no consistency group, when no generation is complete for\nevery current member yet, or when members are already split across\ngenerations: the same refusal a real group fail-over applies, so a drill\nnever addresses a mixed-generation cut.",
+        "operationId": "clusters_replication_policies_latest_generation_api_v2_clusters__cluster_id__replication_policies__policy_id__latest_generation_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "policy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Policy Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplicatedGenerationDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/consistency-groups/": {
       "get": {
         "tags": [
@@ -7428,6 +7690,305 @@
             }
           }
         ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication": {
+      "put": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Replication:Configure",
+        "description": "Enable or disable group replication (design-csi-addons-replication.md\n\u00a714.4): a policy id attaches the whole group to that group replication\npolicy; ``null`` detaches it (the group and its members stay grouped by\nlabel). A refused attach (not a consistency-group policy, missing policy) is\na 409.",
+        "operationId": "clusters_consistency_groups_replication_configure_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsistencyGroupReplicationIntentDTO"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/status": {
+      "get": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Replication:Status",
+        "description": "The group's replication status as one unit: oldest recovery point, worst\nmember lag and health, summed backlog (design-csi-addons-replication.md\n\u00a714.4/\u00a714.6). Never 404s -- a group with no replicating member reports\n``state: not_replicating``.",
+        "operationId": "clusters_consistency_groups_replication_status_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsistencyGroupReplicationStatusDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failover": {
+      "post": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Replication:Failover",
+        "description": "Fail the whole group over as ONE unit through its replication policy\n(design-csi-addons-replication.md \u00a714.4): every member is pinned to the same\ngroup generation, all-or-nothing. Refuses (412) a group not attached to a\npolicy.",
+        "operationId": "clusters_consistency_groups_replication_failover_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_failover_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Clusters Consistency Groups Replication Failover Api V2 Clusters  Cluster Id  Consistency Groups  Group Id  Replication Failover Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/demote": {
+      "post": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Replication:Demote",
+        "description": "Demote the whole group: fence every member and confirm each one's last\nwrite replicated (design-csi-addons-replication.md \u00a714.4). Re-drivable, not\nqueued: 204 once every member is demoted, 202 (with per-member detail) while\nany is still converging, 500 on a hard failure.",
+        "operationId": "clusters_consistency_groups_replication_demote_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_demote_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "202": {
+            "description": "Accepted"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failback": {
+      "post": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Replication:Failback",
+        "description": "Fail the whole group back: point every member's replication back at the\nsource cluster (design-csi-addons-replication.md \u00a714.4). The cutover itself is\neach member's own commit.",
+        "operationId": "clusters_consistency_groups_replication_failback_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_failback_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupFailbackParams"
+              }
+            }
+          }
+        },
         "responses": {
           "204": {
             "description": "Successful Response"
@@ -8651,6 +9212,108 @@
         "title": "ConsistencyGroupMemberJoinDTO",
         "description": "Request body for the late join of an existing volume (design \u00a74.5)."
       },
+      "ConsistencyGroupReplicationIntentDTO": {
+        "properties": {
+          "replication_policy_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replication Policy Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "replication_policy_id"
+        ],
+        "title": "ConsistencyGroupReplicationIntentDTO",
+        "description": "Request body to enable or disable group replication (design \u00a714.4).\n\nA UUID attaches the whole consistency group to that group replication policy;\nan explicit ``null`` detaches it (the group and its members stay grouped by\nlabel, only replication stops). The field is required, so omitting it is a\n422 rather than an ambiguous no-op."
+      },
+      "ConsistencyGroupReplicationStatusDTO": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "source",
+              "secondary",
+              "failed_over",
+              "none"
+            ],
+            "title": "Role"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "in_sync",
+              "replicating",
+              "lagging",
+              "degraded",
+              "error",
+              "not_replicating"
+            ],
+            "title": "State"
+          },
+          "member_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Member Count",
+            "default": 0
+          },
+          "last_replicated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Replicated At"
+          },
+          "lag_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lag Seconds"
+          },
+          "outstanding_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Outstanding Count",
+            "default": 0
+          },
+          "outstanding_bytes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Outstanding Bytes",
+            "default": 0
+          },
+          "resyncing": {
+            "type": "boolean",
+            "title": "Resyncing",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "role",
+          "state"
+        ],
+        "title": "ConsistencyGroupReplicationStatusDTO",
+        "description": "The replication status of a consistency group as one unit.\n\nA group's recovery point is its OLDEST member's, its lag and health its\nWORST member's, and its backlog the sum, because a group is only as\nprotected as its slowest, sickest member. Never a 404, matching the\nper-volume ``ReplicationStatusDTO`` (design-csi-addons-replication.md\n\u00a714.4/\u00a714.6)."
+      },
       "DeviceDTO": {
         "properties": {
           "id": {
@@ -8965,6 +9628,24 @@
         ],
         "title": "FailoverResultDTO"
       },
+      "GroupFailbackParams": {
+        "properties": {
+          "source_cluster_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Cluster Id"
+          }
+        },
+        "type": "object",
+        "title": "GroupFailbackParams"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -9276,6 +9957,18 @@
             ],
             "title": "Keep Replicated"
           },
+          "rpo_target_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rpo Target Seconds"
+          },
           "consistency_group": {
             "type": "boolean",
             "title": "Consistency Group",
@@ -9316,6 +10009,103 @@
           "lvol_id"
         ],
         "title": "ReplicateLVolParams"
+      },
+      "ReplicatedGenerationDTO": {
+        "properties": {
+          "group_seq": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Group Seq"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/ReplicatedSnapshotDTO"
+            },
+            "type": "array",
+            "title": "Members"
+          }
+        },
+        "type": "object",
+        "required": [
+          "group_seq",
+          "members"
+        ],
+        "title": "ReplicatedGenerationDTO",
+        "description": "One complete, fully replicated consistency-group generation, every\nmember addressed as a cloneable object on the secondary."
+      },
+      "ReplicatedSnapshotDTO": {
+        "properties": {
+          "snapshot_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Snapshot Id"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cluster Id"
+          },
+          "pool_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pool Id"
+          },
+          "lvol_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lvol Id"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Size"
+          },
+          "used_size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Used Size"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "group_id": {
+            "type": "string",
+            "title": "Group Id",
+            "default": ""
+          },
+          "group_seq": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Group Seq",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "snapshot_id",
+          "cluster_id",
+          "size",
+          "used_size",
+          "created_at"
+        ],
+        "title": "ReplicatedSnapshotDTO",
+        "description": "A fully replicated snapshot on the secondary, addressed as a cloneable\nobject. ``lvol_id`` is the volume the snapshot belongs to on the\nSECONDARY cluster, not the source volume the caller asked about, because\nthat is the identity the ordinary CSI clone path resolves a\n``dataSource`` against."
       },
       "ReplicationPolicyDTO": {
         "properties": {
@@ -9362,6 +10152,18 @@
               "inactive"
             ],
             "title": "Status"
+          },
+          "rpo_target_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rpo Target Seconds"
           },
           "consistency_group": {
             "type": "boolean",
@@ -9593,6 +10395,127 @@
         },
         "type": "object",
         "title": "ReplicationStartParams"
+      },
+      "ReplicationStatusDTO": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "source",
+              "secondary",
+              "failed_over",
+              "none"
+            ],
+            "title": "Role"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "in_sync",
+              "replicating",
+              "lagging",
+              "degraded",
+              "error",
+              "not_replicating"
+            ],
+            "title": "State"
+          },
+          "last_replicated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Replicated At"
+          },
+          "lag_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lag Seconds"
+          },
+          "lag_budget_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lag Budget Seconds"
+          },
+          "outstanding_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Outstanding Count",
+            "default": 0
+          },
+          "outstanding_bytes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Outstanding Bytes",
+            "default": 0
+          },
+          "failing_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Failing Count",
+            "default": 0
+          },
+          "max_retry_reached": {
+            "type": "boolean",
+            "title": "Max Retry Reached",
+            "default": false
+          },
+          "last_cycle_bytes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Cycle Bytes"
+          },
+          "last_cycle_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Cycle Seconds"
+          },
+          "resyncing": {
+            "type": "boolean",
+            "title": "Resyncing",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "role",
+          "state"
+        ],
+        "title": "ReplicationStatusDTO",
+        "description": "The typed steady-state replication status of one volume.\n\nServes what ``lvol_controller.get_replication_info`` computes, for the\nvolume's WHOLE replicated life \u2014 unlike ``ReplicationRelationshipDTO``,\nwhich only exists once a cutover or fail-over has created a relationship\nrecord. ``state: not_replicating, role: none`` is a valid answer, never a\n404, because the csi-addons adapter polls this on every reconcile."
       },
       "ReplicationTargetDTO": {
         "properties": {

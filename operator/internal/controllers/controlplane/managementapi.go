@@ -274,6 +274,21 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 		{Name: "SB_K8S_METRICS_SERVICE_ACCOUNTS",
 			Value: "system:serviceaccount:" + cp.Namespace + ":simplyblock-prometheus"},
 	}
+	if ref := managed.AdminTokenSecretRef; ref != nil && ref.Name != "" {
+		// Sourced from the Secret directly rather than read and copied in here,
+		// so this operator never itself holds the plaintext -- the same reason
+		// resolveManaged reads ManagedControlPlane.CredentialsSecretRef on the
+		// other side only to attach it to a request, never to log or store it.
+		env = append(env, corev1.EnvVar{
+			Name: "SB_ADMIN_TOKENS",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: *ref,
+					Key:                  "token",
+				},
+			},
+		})
+	}
 	env = append(env, prometheusEnv()...)
 	env = append(env, tlsEnv(managed)...)
 
