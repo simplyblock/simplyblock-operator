@@ -126,7 +126,7 @@ func (ns *Server) NodeUnstageVolume(
 		volumeContext = map[string]string{}
 	}
 
-	plan, err := ns.teardownPlan(volumeID, stagingTargetPath, volumeContext)
+	plan, err := ns.teardownPlan(ctx, volumeID, stagingTargetPath, volumeContext)
 	if err != nil {
 		klog.Errorf("failed to read what was staged for %s: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
@@ -291,6 +291,7 @@ func (ns *Server) attachPlan(
 // volume was staged by a version predating the stack, and what that version
 // built is fabric → filesystem.
 func (ns *Server) teardownPlan(
+	ctx context.Context,
 	volumeID, stagingTargetPath string,
 	vc map[string]string,
 ) (volstack.Plan, error) {
@@ -325,12 +326,56 @@ func (ns *Server) teardownPlan(
 	}
 	connection, err := teardownConnection(record, vc)
 	if err != nil {
-		return nil, err
+		// Neither the stash nor the record names it, which is the volume the
+		// previous node service staged and never finished recording. The host
+		// is asked before the refusal stands (legacy.go).
+		connection, err = ns.identifyFromHost(ctx, stagingTargetPath, err)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	node := ns.stack.node("", nil)
 	volume := stackVolume(stagingTargetPath, vc, nil)
 	return planFor(node, connection, volume, options, shape), nil
+}
+
+// identifyFromHost is the last source a teardown has, and it reports the
+// refusal it was given when the host cannot answer either.
+//
+// The refusal is what it returns rather than its own error, because what the
+// caller must be told is that the volume names itself nowhere: how the reading
+// of the host failed is a detail of the attempt, and it is logged as one.
+func (ns *Server) identifyFromHost(
+	ctx context.Context, stagingTargetPath string, refusal error,
+) (lvol.Connection, error) {
+	if ns.identifyStaged == nil {
+		return lvol.Connection{}, refusal
+	}
+
+	connection, err := ns.identifyStaged(ctx, stagingTargetPath)
+	if err != nil {
+		klog.Warningf(
+			"the host cannot name what is staged at %s either: %v", stagingTargetPath, err)
+		return lvol.Connection{}, refusal
+	}
+	// One namespace, not a subsystem. A selector whose NSID is zero matches
+	// every namespace the subsystem holds, so an NQN on its own would release
+	// whichever one ranked first, and on a subsystem serving several volumes
+	// that is a co-tenant's. The UUID names one namespace by itself; the NQN
+	// only does so beside a namespace id.
+	if connection.UUID == "" && (connection.NQN == "" || connection.NSID == 0) {
+		klog.Warningf(
+			"the host names no single namespace at %s (nqn=%q nsid=%d), so there is "+
+				"nothing that can be released without guessing",
+			stagingTargetPath, connection.NQN, connection.NSID)
+		return lvol.Connection{}, refusal
+	}
+
+	klog.Infof(
+		"volume staged at %s names itself nowhere; releasing the namespace the host reports there "+
+			"(nqn=%s nsid=%d)", stagingTargetPath, connection.NQN, connection.NSID)
+	return connection, nil
 }
 
 // teardownConnection identifies the namespace a release acts on, from the

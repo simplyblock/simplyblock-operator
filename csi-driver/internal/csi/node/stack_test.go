@@ -393,7 +393,7 @@ func TestTeardownPlanFollowsTheRecord(t *testing.T) {
 			ns, _ := newStackedServer(t, newRecordingRunner())
 			writeRecord(t, ns.stack, pvcTestHandle, tc.layers)
 
-			plan, err := ns.teardownPlan(pvcTestHandle, "/staging", stagedContext())
+			plan, err := ns.teardownPlan(context.Background(), pvcTestHandle, "/staging", stagedContext())
 			if tc.wantErr != "" {
 				if err == nil {
 					t.Fatalf("the teardown accepted a plan it cannot release: %v", plan.Names())
@@ -419,7 +419,7 @@ func TestTeardownPlanFollowsTheRecord(t *testing.T) {
 func TestTeardownPlanFallsBackToTheLegacyShape(t *testing.T) {
 	ns, _ := newStackedServer(t, newRecordingRunner())
 
-	plan, err := ns.teardownPlan(pvcTestHandle, "/staging", stagedContext())
+	plan, err := ns.teardownPlan(context.Background(), pvcTestHandle, "/staging", stagedContext())
 	if err != nil {
 		t.Fatalf("teardownPlan: %v", err)
 	}
@@ -436,7 +436,7 @@ func TestTeardownPlanRefusesAnUnreadableRecord(t *testing.T) {
 	writeRecord(t, ns.stack, pvcTestHandle, []string{"fabric", "filesystem"})
 	corruptRecord(t, recordDir)
 
-	if _, err := ns.teardownPlan(pvcTestHandle, "/staging", stagedContext()); err == nil {
+	if _, err := ns.teardownPlan(context.Background(), pvcTestHandle, "/staging", stagedContext()); err == nil {
 		t.Fatal("the teardown fell back to the legacy plan on a record it could not read")
 	}
 }
