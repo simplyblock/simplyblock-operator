@@ -151,7 +151,6 @@ func TestTheBackupStoreResolvesItsCredentials(t *testing.T) {
 		c.Spec.Backup = &simplyblockv1alpha2.BackupStoreSpec{
 			Endpoint:             "https://203.0.113.20:9000",
 			Bucket:               "simplyblock-backups",
-			Prefix:               "production/",
 			Region:               "eu-central-1",
 			CredentialsSecretRef: corev1.LocalObjectReference{Name: "backup-credentials"},
 		}
@@ -162,15 +161,14 @@ func TestTheBackupStoreResolvesItsCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("backupConfig: %v", err)
 	}
-	if got.AccessKeyID != "the-key" || got.SecretAccessKey != "the-secret" {
+	if got.Credentials.AccessKeyID != "the-key" || got.Credentials.SecretAccessKey != "the-secret" {
 		t.Errorf("the credentials were not read from the Secret: %+v", got)
 	}
-	if got.LocalEndpoint != "https://203.0.113.20:9000" || got.Bucket != "simplyblock-backups" ||
-		got.Prefix != "production/" || got.Region != "eu-central-1" {
+	if got.Endpoint != "https://203.0.113.20:9000" || got.BucketName != "simplyblock-backups" ||
+		got.Region != "eu-central-1" {
 		t.Errorf("the store's location was not carried: %+v", got)
 	}
-	if got.SnapshotBackups != nil || got.WithCompression != nil ||
-		got.LocalTesting != nil || got.SecondaryTarget != nil {
+	if got.SnapshotBackups != nil || got.WithCompression != nil || got.SecondaryTarget != nil {
 		t.Errorf("the operator is still sending how a copy is taken: %+v", got)
 	}
 }

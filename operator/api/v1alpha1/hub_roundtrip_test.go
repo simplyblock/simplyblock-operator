@@ -392,7 +392,6 @@ func TestStorageClusterRoundTripsFromTheHub(t *testing.T) {
 			Backup: &v1alpha2.BackupStoreSpec{
 				Endpoint:             "https://s3.example.com",
 				Bucket:               "simplyblock-backups",
-				Prefix:               "production/",
 				Region:               "eu-central-1",
 				CredentialsSecretRef: corev1.LocalObjectReference{Name: "backup-credentials"},
 			},

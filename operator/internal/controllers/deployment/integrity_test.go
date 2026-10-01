@@ -176,7 +176,6 @@ func TestTheDocumentsBackupStoreReachesTheCluster(t *testing.T) {
 		c.Spec.Cluster.Backup = &simplyblockv1alpha2.BackupStoreSpec{
 			Endpoint:             "https://s3.example.com",
 			Bucket:               "simplyblock-backups",
-			Prefix:               "production/",
 			Region:               "eu-central-1",
 			CredentialsSecretRef: corev1.LocalObjectReference{Name: "backup-credentials"},
 		}
@@ -186,8 +185,8 @@ func TestTheDocumentsBackupStoreReachesTheCluster(t *testing.T) {
 	if store == nil {
 		t.Fatal("the cluster carries no backup store")
 	}
-	if store.Bucket != "simplyblock-backups" || store.Prefix != "production/" {
-		t.Errorf("the store is %+v, want the document's bucket and prefix", store)
+	if store.Bucket != "simplyblock-backups" {
+		t.Errorf("the store is %+v, want the document's bucket", store)
 	}
 	if store.Endpoint != "https://s3.example.com" || store.Region != "eu-central-1" {
 		t.Errorf("the store is %+v, want the document's endpoint and region", store)

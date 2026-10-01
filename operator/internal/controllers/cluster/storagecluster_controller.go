@@ -1025,12 +1025,13 @@ func (r *StorageClusterReconciler) backupConfig(
 	}
 
 	return &utils.BackupConfig{
-		AccessKeyID:     string(accessKeyID),
-		SecretAccessKey: string(secretAccessKey),
-		LocalEndpoint:   store.Endpoint,
-		Bucket:          store.Bucket,
-		Prefix:          store.Prefix,
-		Region:          store.Region,
+		Credentials: &utils.BackupCredentials{
+			AccessKeyID:     string(accessKeyID),
+			SecretAccessKey: string(secretAccessKey),
+		},
+		Endpoint:   store.Endpoint,
+		BucketName: store.Bucket,
+		Region:     store.Region,
 	}, nil
 }
 

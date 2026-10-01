@@ -672,11 +672,6 @@ spec:
                       description: Endpoint is the S3 endpoint, for example, https://s3.example.com.
                       pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                       type: string
-                    prefix:
-                      description: |-
-                        Prefix narrows the store to one key prefix, so that several clusters can
-                        share a bucket without each walking the others' backups.
-                      type: string
                     region:
                       description: Region is the bucket's region, for endpoints that do not imply one.
                       type: string

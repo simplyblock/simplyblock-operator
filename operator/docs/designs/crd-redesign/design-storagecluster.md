@@ -307,7 +307,7 @@ whether it came from the auto-rebalancer, a manual migration, or a drain, so it
 cannot sit under the rebalancing policy that is only one of its three sources.
 
 **`spec.backup` is where the cluster's backups live, and setting it is what makes
-them visible.** It names an S3 endpoint, a bucket, an optional prefix, and the Secret
+them visible.** It names an S3 endpoint, a bucket, and the Secret
 holding the credentials, and it is the one location the control plane writes copies to
 and the operator reads them from. Setting it at creation and setting it a year later are
 the same operation, which is why it is one of the few mutable fields here: a cluster
@@ -595,7 +595,6 @@ spec:
   backup:
     endpoint: https://s3.example.com
     bucket: simplyblock-backups
-    prefix: production/
     credentialsSecretRef:
       name: backup-credentials
 
@@ -1548,7 +1547,7 @@ has to carry it.
 | `volumeAutoPlacement.enabled`                                                       | `spec.enableVolumeAutoPlacement` (§3.1)                                   | The same, and it is the choice `design-crd-model.md` §9.6 deferred to this kind                                                                                                                                                                                                                                                                                           |
 | `volumeMigrationSettings.enabled`                                                   | Removed (§3.1)                                                            | Behavioral. Migration cannot be turned off, because a drain, a rebalance, and a device replacement are performed by moving volumes                                                                                                                                                                                                                                        |
 | `spec.backup`, typed `BackupSpec`                                                   | The same field, typed `BackupStoreSpec` (Appendix A)                      | Type rename. `design-controlplane.md` declares a different `BackupSpec` in the same package, and two cannot coexist                                                                                                                                                                                                                                                       |
-| `spec.backup.localEndpoint`                                                         | `endpoint`, plus `bucket`, `prefix`, and `region` (Appendix A)            | Field rename and three additions. The registered type had no bucket, so nothing in the store could be located                                                                                                                                                                                                                                                             |
+| `spec.backup.localEndpoint`                                                         | `endpoint`, plus `bucket` and `region` (Appendix A)                       | Field rename and two additions. The registered type had no bucket, so nothing in the store could be located                                                                                                                                                                                                                                                               |
 | `spec.backup.withCompression`, `snapshotBackups`, `secondaryTarget`, `localTesting` | Removed (Appendix A)                                                      | Spec removals. The store is a location, and how a copy is taken is the control plane's: it keeps accepting these values, so what changes is that the operator stops sending them and the backend's defaults apply                                                                                                                                                         |
 | `spec.backup` as a write target only                                                | Also the inventory backups are discovered from (§3.1)                     | Behavioral, and it is what retires backup import and export                                                                                                                                                                                                                                                                                                               |
 | No `status.tasks`                                                                   | Present, capped at twenty (§3.4)                                          | Additive, and what the retired task mirror becomes                                                                                                                                                                                                                                                                                                                        |
@@ -1886,11 +1885,6 @@ type BackupStoreSpec struct {
 	// Bucket is the bucket backups are written to and read from.
 	// +kubebuilder:validation:Required
 	Bucket string `json:"bucket"`
-
-	// Prefix narrows the store to one key prefix, so that several clusters can
-	// share a bucket without each walking the others' backups.
-	// +optional
-	Prefix string `json:"prefix,omitempty"`
 
 	// Region is the bucket's region, for endpoints that do not imply one.
 	// +optional
