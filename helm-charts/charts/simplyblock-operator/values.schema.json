@@ -496,6 +496,9 @@
         "enableControlPlaneNodes": {
           "type": "boolean"
         },
+        "enableLogicalBlockDevices": {
+          "type": "boolean"
+        },
         "forceJournalDevice": {
           "type": "boolean"
         },
@@ -503,9 +506,6 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "enableLogicalBlockDevices": {
-              "type": "boolean"
-            },
             "enablePartitionedDevices": {
               "type": "boolean"
             },

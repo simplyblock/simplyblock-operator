@@ -159,8 +159,8 @@ tolerations:
     value: dedicated
     effect: NoSchedule
 enableControlPlaneNodes: true
+enableLogicalBlockDevices: true
 deviceFilter:
-  enableLogicalBlockDevices: true
   enablePartitionedDevices: false
   blockDenyList:
     - /dev/sda
@@ -209,11 +209,11 @@ draft:
 	if !ptr.BoolFromOrFalse(spec.EnableControlPlaneNodes) {
 		t.Error("enableControlPlaneNodes was dropped")
 	}
+	if !ptr.BoolFromOrFalse(spec.EnableLogicalBlockDevices) {
+		t.Error("enableLogicalBlockDevices was dropped")
+	}
 	if spec.DeviceFilter == nil {
 		t.Fatal("the stated device filter was dropped")
-	}
-	if !ptr.BoolFromOrFalse(spec.DeviceFilter.EnableLogicalBlockDevices) {
-		t.Error("enableLogicalBlockDevices was dropped")
 	}
 	// Stated false, and false is what the run gets: the waiver is the default for
 	// an installation that says nothing, not an override of one that says no.

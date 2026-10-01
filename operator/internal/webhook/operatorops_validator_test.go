@@ -82,7 +82,7 @@ func TestARunWithNoRangeToReadIsAdmitted(t *testing.T) {
 	for _, run := range []*simplyblockv1alpha2.OperatorOps{
 		discoverWith(nil),
 		discoverWith(&simplyblockv1alpha2.DeviceFilter{}),
-		discoverWith(&simplyblockv1alpha2.DeviceFilter{EnableLogicalBlockDevices: ptr.To(true)}),
+		discoverWith(&simplyblockv1alpha2.DeviceFilter{EnablePartitionedDevices: ptr.To(true)}),
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "oops-2", Namespace: "simplyblock"},
 			Spec: simplyblockv1alpha2.OperatorOpsSpec{

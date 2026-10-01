@@ -104,12 +104,12 @@ const (
 	ClassBlock DeviceClass = "block"
 )
 
-// ClassOf reads which class a run is scanning out of its filter. Absent, or a
-// filter that does not ask for block devices, is NVMe: that is what every
-// deployment before the logical block-device class existed was built out of, so
-// it is what a run that says nothing keeps reporting.
-func ClassOf(filter *simplyblockv1alpha2.DeviceFilter) DeviceClass {
-	if filter != nil && filter.EnableLogicalBlockDevices != nil && *filter.EnableLogicalBlockDevices {
+// ClassOf reads which class a run is scanning. Absent, or a run that does not
+// ask for block devices, is NVMe: that is what every deployment before the
+// logical block-device class existed was built out of, so it is what a run that
+// says nothing keeps reporting.
+func ClassOf(run *simplyblockv1alpha2.DiscoverSpec) DeviceClass {
+	if run != nil && run.EnableLogicalBlockDevices != nil && *run.EnableLogicalBlockDevices {
 		return ClassBlock
 	}
 	return ClassNVMe
@@ -191,8 +191,8 @@ func (r AvailableRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool,
 // reaches a device through the kernel, where a local NVMe namespace at
 // /dev/nvme0n1 is a block device like any other, so it is admitted. One machine
 // can therefore be deployed either way, and which way is the administrator's
-// statement through EnableLogicalBlockDevices rather than something the bus
-// decides for them.
+// statement through spec.discover.enableLogicalBlockDevices rather than
+// something the bus decides for them.
 //
 // A fabric namespace is the one bus the block class still refuses. It is a
 // volume something else exported rather than a disk the machine has, so it

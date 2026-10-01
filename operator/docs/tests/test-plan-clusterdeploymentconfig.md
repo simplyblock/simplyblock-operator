@@ -522,9 +522,9 @@ immutability rules are CEL and cannot be exercised any other way.
 | I-41     | Two groups of one node set naming different classes: rejected by the spec's CEL rule                                   | Negative | —                                                  |
 | I-42     | Two node sets naming different classes: rejected by the same rule                                                      | Negative | —                                                  |
 | I-43     | Every group of every node set naming `block`: accepted                                                                 | Positive | —                                                  |
-| I-44     | `enableLogicalBlockDevices` with a `pcieDenyList`: rejected by the filter's CEL rule                                   | Negative | —                                                  |
-| I-45     | `blockDenyList` with `enableLogicalBlockDevices` unset: rejected by the same rule                                      | Negative | —                                                  |
-| I-46     | `enableLogicalBlockDevices` with a `blockAllowList`: accepted                                                          | Positive | —                                                  |
+| I-44     | `enableLogicalBlockDevices` with a `pcieDenyList`: rejected by the discover block's CEL rule                           | Negative | `TestTheFiltersOfTheClassNotScannedAreRefused`     |
+| I-45     | `blockDenyList` with `enableLogicalBlockDevices` unset: rejected by the same rule                                      | Negative | `TestTheFiltersOfTheClassNotScannedAreRefused`     |
+| I-46     | `enableLogicalBlockDevices` with a `blockAllowList`: accepted                                                          | Positive | `TestABlockRunStatesItsClassOnTheDiscoverBlock`    |
 | I-47     | The PCI filters with `enableLogicalBlockDevices` unset: accepted                                                       | Positive | —                                                  |
 | I-48     | A group's `failureDomain` of `rack-b`: accepted                                                                        | Positive | —                                                  |
 | I-49     | A `failureDomain` holding a slash, and one of 64 characters: both rejected by the schema                               | Boundary | —                                                  |
@@ -537,6 +537,7 @@ immutability rules are CEL and cannot be exercised any other way.
 | I-56     | An image slot stating no `imagePullPolicy`: the stored document reads `Always`                                         | Boundary | `TestTheApiserverStampsAndPolicesTheImageSlots`    |
 | I-57     | An `imagePullPolicy` outside the enum: rejected                                                                        | Negative | `TestTheApiserverStampsAndPolicesTheImageSlots`    |
 | I-58     | An image from a registry outside the trusted set: rejected by the pattern                                              | Negative | `TestTheApiserverStampsAndPolicesTheImageSlots`    |
+| I-59     | `deviceFilter.enableLogicalBlockDevices`, the class inside the filter: rejected as an unknown field                    | Negative | `TestTheDeviceFilterNoLongerCarriesTheClass`       |
 
 ---
 

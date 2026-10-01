@@ -589,9 +589,8 @@ func (r *OperatorOpsReconciler) write(
 		return false, err
 	}
 
-	filter := spec.DeviceFilter
 	planner := discoverypkg.Planner{KubeNodes: kubeNodes}
-	plan := planner.Plan(collected, filter)
+	plan := planner.Plan(collected, spec)
 
 	if len(plan.NodeSets) == 0 {
 		// The rules worked out why every machine was dropped, and a run that

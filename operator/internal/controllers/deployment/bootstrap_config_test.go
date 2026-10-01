@@ -81,8 +81,8 @@ tolerations:
     operator: Equal
     value: dedicated
     effect: NoSchedule
+enableLogicalBlockDevices: true
 deviceFilter:
-  enableLogicalBlockDevices: true
   enablePartitionedDevices: false
   blockDenyList:
     - /dev/sda
@@ -110,12 +110,12 @@ draft:
 	if len(run.Spec.Discover.Tolerations) != 1 {
 		t.Errorf("tolerations = %+v, want the stated one", run.Spec.Discover.Tolerations)
 	}
+	if !ptr.BoolFromOrFalse(run.Spec.Discover.EnableLogicalBlockDevices) {
+		t.Error("enableLogicalBlockDevices was dropped")
+	}
 	filter := run.Spec.Discover.DeviceFilter
 	if filter == nil {
 		t.Fatal("the stated device filter did not reach the run")
-	}
-	if !ptr.BoolFromOrFalse(filter.EnableLogicalBlockDevices) {
-		t.Error("enableLogicalBlockDevices was dropped")
 	}
 	if ptr.BoolFromOrFalse(filter.EnablePartitionedDevices) {
 		t.Error("the stated partition refusal was overridden by the default waiver")

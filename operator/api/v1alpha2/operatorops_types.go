@@ -70,22 +70,12 @@ const (
 // ClusterDeploymentConfig carries the explicit list the filter produced, not the
 // rule that produced it.
 //
-// The filters come in two sets, one per device class, and a run scans one class.
-// The two rules below reject the set belonging to the class this run is not
-// scanning, because a filter that will never be applied is one an administrator
-// reads as having narrowed a draft that was never narrowed.
-//
-// +kubebuilder:validation:XValidation:rule="!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !(has(self.pcieAllowList) || has(self.pcieDenyList) || has(self.pcieModel))",message="the PCI filters select NVMe devices and cannot be combined with enableLogicalBlockDevices; use blockAllowList and blockDenyList"
-// +kubebuilder:validation:XValidation:rule="(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !(has(self.blockAllowList) || has(self.blockDenyList))",message="blockAllowList and blockDenyList select logical block devices and require enableLogicalBlockDevices"
+// Every member narrows the devices of the class a run scans, and none of them
+// chooses that class: the class is spec.discover.enableLogicalBlockDevices,
+// because it decides which kind of cluster the draft describes rather than which
+// devices reach it. The filters come in two sets, one per class, and the rules
+// on DiscoverSpec reject the set belonging to the class the run is not scanning.
 type DeviceFilter struct {
-	// EnableLogicalBlockDevices scans a worker's available logical block devices
-	// instead of its available NVMe devices. It selects the class rather than
-	// adding one, because the draft a run writes describes one cluster and a
-	// cluster is built out of one class. Unset scans NVMe, so that upgrading to
-	// 26.4 does not change what a discovery run reports.
-	// +optional
-	EnableLogicalBlockDevices *bool `json:"enableLogicalBlockDevices,omitempty"`
-
 	// EnablePartitionedDevices reports devices carrying a partition table
 	// alongside the available ones, for the administrator who knows the table is
 	// stale and intends to hand the device over anyway. It is the only one of the
@@ -144,6 +134,13 @@ type DeviceFilter struct {
 // intersected because the intersection of a name list and a label selector is a
 // question nobody asks deliberately, and reading one as narrowing the other
 // would make a run inspect fewer machines than either field says.
+//
+// The device filters come in two sets, one per device class, and a run scans
+// one class. The two class rules reject the set belonging to the class this run
+// is not scanning, because a filter that will never be applied is one an
+// administrator reads as having narrowed a draft that was never narrowed.
+// +kubebuilder:validation:XValidation:rule="!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !has(self.deviceFilter) || !(has(self.deviceFilter.pcieAllowList) || has(self.deviceFilter.pcieDenyList) || has(self.deviceFilter.pcieModel))",message="the PCI filters select NVMe devices and cannot be combined with enableLogicalBlockDevices; use blockAllowList and blockDenyList"
+// +kubebuilder:validation:XValidation:rule="(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !has(self.deviceFilter) || !(has(self.deviceFilter.blockAllowList) || has(self.deviceFilter.blockDenyList))",message="blockAllowList and blockDenyList select logical block devices and require enableLogicalBlockDevices"
 // +kubebuilder:validation:XValidation:rule="!(has(self.workers) && size(self.workers) > 0 && has(self.nodeSelector) && size(self.nodeSelector) > 0)",message="spec.discover names workers and also carries a nodeSelector; state one or the other"
 type DiscoverSpec struct {
 	// ConfigName is the ClusterDeploymentConfig to write. Absent generates one
@@ -206,6 +203,20 @@ type DiscoverSpec struct {
 	// proposes them ahead of the workers rather than leaving them out.
 	// +optional
 	EnableControlPlaneNodes *bool `json:"enableControlPlaneNodes,omitempty"`
+
+	// EnableLogicalBlockDevices scans a worker's available logical block devices
+	// instead of its available NVMe devices. It selects the class rather than
+	// adding one, because the draft a run writes describes one cluster and a
+	// cluster is built out of one class. Unset scans NVMe, so that upgrading to
+	// 26.4 does not change what a discovery run reports.
+	//
+	// It is a statement about the run rather than a member of DeviceFilter,
+	// because it does not narrow the devices reported: it decides which class of
+	// them is looked at, which filters in DeviceFilter apply, and what
+	// ForceJournalDevice resolves, since the two classes lay out a journal
+	// differently.
+	// +optional
+	EnableLogicalBlockDevices *bool `json:"enableLogicalBlockDevices,omitempty"`
 
 	// ForceJournalDevice makes the run dedicate a journal device even where the
 	// fleet's disks do not say which one.

@@ -81,6 +81,11 @@ type Config struct {
 	// deployment is.
 	EnableControlPlaneNodes *bool `json:"enableControlPlaneNodes,omitempty"`
 
+	// EnableLogicalBlockDevices scans the workers' logical block devices instead
+	// of their NVMe devices, which is the class the drafted cluster is built
+	// out of.
+	EnableLogicalBlockDevices *bool `json:"enableLogicalBlockDevices,omitempty"`
+
 	// ForceJournalDevice dedicates a journal device on a fleet whose disks do
 	// not say which one, by taking one of the equal-smallest disks.
 	//
@@ -281,6 +286,7 @@ func (c *Config) DiscoverSpec() *simplyblockv1alpha2.DiscoverSpec {
 
 	spec.ConfigName = strings.TrimSpace(c.Draft.Name)
 	spec.EnableControlPlaneNodes = c.EnableControlPlaneNodes
+	spec.EnableLogicalBlockDevices = c.EnableLogicalBlockDevices
 	spec.ForceJournalDevice = c.ForceJournalDevice
 	if len(c.NodeSelector) > 0 {
 		spec.NodeSelector = maps.Clone(c.NodeSelector)

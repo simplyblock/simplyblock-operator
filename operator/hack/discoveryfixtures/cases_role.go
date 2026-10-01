@@ -166,10 +166,8 @@ func filterCases() map[string]Case {
 	// had not decided about the journal would record that refusal instead of
 	// what its filter did.
 	block := func(edit func(*simplyblockv1alpha2.DeviceFilter)) *simplyblockv1alpha2.DiscoverSpec {
-		spec := filtered(func(f *simplyblockv1alpha2.DeviceFilter) {
-			f.EnableLogicalBlockDevices = ptr.To(true)
-			edit(f)
-		})
+		spec := filtered(edit)
+		spec.EnableLogicalBlockDevices = ptr.To(true)
 		spec.ForceJournalDevice = ptr.To(true)
 		return spec
 	}

@@ -247,18 +247,18 @@ func TestClassOfDefaultsToNVMe(t *testing.T) {
 		t.Errorf("a run with no filter scans %q, want %q: NVMe is what every "+
 			"deployment before the block class was built out of", got, ClassNVMe)
 	}
-	if got := ClassOf(&simplyblockv1alpha2.DeviceFilter{}); got != ClassNVMe {
-		t.Errorf("an empty filter scans %q, want %q", got, ClassNVMe)
+	if got := ClassOf(&simplyblockv1alpha2.DiscoverSpec{}); got != ClassNVMe {
+		t.Errorf("an empty run scans %q, want %q", got, ClassNVMe)
 	}
-	if got := ClassOf(&simplyblockv1alpha2.DeviceFilter{
+	if got := ClassOf(&simplyblockv1alpha2.DiscoverSpec{
 		EnableLogicalBlockDevices: ptr.To(true),
 	}); got != ClassBlock {
-		t.Errorf("a filter asking for block devices scans %q, want %q", got, ClassBlock)
+		t.Errorf("a run asking for block devices scans %q, want %q", got, ClassBlock)
 	}
-	if got := ClassOf(&simplyblockv1alpha2.DeviceFilter{
+	if got := ClassOf(&simplyblockv1alpha2.DiscoverSpec{
 		EnableLogicalBlockDevices: ptr.To(false),
 	}); got != ClassNVMe {
-		t.Errorf("a filter declining block devices scans %q, want %q", got, ClassNVMe)
+		t.Errorf("a run declining block devices scans %q, want %q", got, ClassNVMe)
 	}
 }
 
@@ -406,7 +406,9 @@ func TestClassRuleRefusesOnlyAFabricNamespaceOnABlockRun(t *testing.T) {
 // comparing two spellings of one number. What they wrote is what they can act
 // on, so that is what the refusal says.
 func TestTheRefusalQuotesTheBoundAsItWasWritten(t *testing.T) {
-	rules := BasicDeviceRules(&simplyblockv1alpha2.DeviceFilter{DriveSizeRange: "1920G-4T"})
+	rules := BasicDeviceRules(&simplyblockv1alpha2.DiscoverSpec{
+		DeviceFilter: &simplyblockv1alpha2.DeviceFilter{DriveSizeRange: "1920G-4T"},
+	})
 
 	var size SizeRule
 	for _, rule := range rules {
