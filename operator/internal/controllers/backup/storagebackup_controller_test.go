@@ -194,6 +194,41 @@ func TestMirrorDeletesAnObjectWhoseBackupLeftTheStore(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-01-merged-backup-lingers — retention merges the oldest
+// backup into its successor and the control plane keeps a record of it, status
+// merged, with its manifest deleted and its keys unmapped. The mirror did not
+// know the status, so it kept an object for it, phase Pending, for ever.
+func TestMirrorTreatsAMergedBackupAsGone(t *testing.T) {
+	merged := reportedBackup()
+	merged.Status = "merged"
+
+	recorded := &simplyblockv1alpha2.StorageBackup{
+		ObjectMeta: metav1.ObjectMeta{Name: backupObjectName(), Namespace: testNamespace},
+		Spec: simplyblockv1alpha2.StorageBackupSpec{
+			ClusterRef: testClusterCR, BackupID: testBackupID,
+		},
+		Status: simplyblockv1alpha2.StorageBackupStatus{ClusterID: testClusterID},
+	}
+	for name, objs := range map[string][]client.Object{
+		"the object it already has is removed": {testClusterObject(), recorded},
+		"no object is created for it":          {testClusterObject(), sourceVolume()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := backupMirror(t, syncedCache(merged), objs...)
+
+			if _, err := r.Reconcile(context.Background(), backupRequest()); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+
+			var backup simplyblockv1alpha2.StorageBackup
+			err := r.Get(context.Background(), backupRequest().NamespacedName, &backup)
+			if !apierrors.IsNotFound(err) {
+				t.Errorf("a merged backup has an object, phase %q: %v", backup.Status.Phase, err)
+			}
+		})
+	}
+}
+
 // A cold cache has said nothing at all, and deleting on that would empty the
 // inventory on every operator restart. This is the single most important
 // assertion about the mirror's delete path.
