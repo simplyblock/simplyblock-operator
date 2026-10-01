@@ -1080,7 +1080,8 @@ func equalOpsStatus(a, b simplyblockv1alpha2.StorageNodeOpsStatus) bool {
 	}
 	return a.Drain.VolumesTotal == b.Drain.VolumesTotal &&
 		a.Drain.VolumesMigrated == b.Drain.VolumesMigrated &&
-		equalCount(a.Drain.DevicesTotal, b.Drain.DevicesTotal)
+		equalCount(a.Drain.DevicesTotal, b.Drain.DevicesTotal) &&
+		equalCount(a.Drain.DevicesMigrated, b.Drain.DevicesMigrated)
 }
 
 // equalCount compares two optional counts, absent being equal only to absent.
@@ -1121,6 +1122,10 @@ func (r *StorageNodeOpsReconciler) waitingMessage(
 ) string {
 	if d := ops.Status.Drain; d != nil && current == stepMigratingVolumes {
 		return fmt.Sprintf("%d of %d volumes migrated", d.VolumesMigrated, d.VolumesTotal)
+	}
+	if d := ops.Status.Drain; d != nil && current == stepMigratingDevices &&
+		d.DevicesTotal != nil && d.DevicesMigrated != nil {
+		return fmt.Sprintf("%d of %d devices rebuilt", *d.DevicesMigrated, *d.DevicesTotal)
 	}
 	return fmt.Sprintf("waiting on %s", current)
 }

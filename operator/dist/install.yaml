@@ -8397,6 +8397,13 @@ spec:
                   Drain is the drain's progress over the node's volumes, set only for action
                   Remove.
                 properties:
+                  devicesMigrated:
+                    description: |-
+                      DevicesMigrated is how many of them have been rebuilt, absent until the
+                      devices are counted.
+                    format: int32
+                    minimum: 0
+                    type: integer
                   devicesTotal:
                     description: |-
                       DevicesTotal is the number of data devices the removal rebuilds onto the

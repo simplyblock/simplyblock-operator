@@ -234,7 +234,7 @@ func TestStorageNodeOpsRoundTripsFromTheHub(t *testing.T) {
 	started := metav1.Now()
 	filter := testSystemVolumeFilter
 	force := true
-	devices := int32(4)
+	devices, rebuilt := int32(4), int32(3)
 
 	hub := &v1alpha2.StorageNodeOps{
 		ObjectMeta: metav1.ObjectMeta{Name: "ops-1", Namespace: "sb"},
@@ -256,7 +256,8 @@ func TestStorageNodeOpsRoundTripsFromTheHub(t *testing.T) {
 			Step:    statemachine.KubeSnapshot{State: string(v1alpha2.StorageNodeOpsStepAwaitingNode)},
 			Message: "waiting for node-1",
 			Drain: &v1alpha2.DrainStatus{
-				VolumesTotal: 10, VolumesMigrated: 7, DevicesTotal: &devices,
+				VolumesTotal: 10, VolumesMigrated: 7,
+				DevicesTotal: &devices, DevicesMigrated: &rebuilt,
 			},
 			ObservedGeneration: 3,
 			StartedAt:          &started,

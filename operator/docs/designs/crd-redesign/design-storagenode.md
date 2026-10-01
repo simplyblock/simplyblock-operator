@@ -1259,11 +1259,14 @@ VolumesMigrated int32 `json:"volumesMigrated"`
 // DevicesTotal is the number of data devices the removal rebuilds onto the
 // node's peers, as the control plane counts them during MigratingDevices.
 DevicesTotal *int32 `json:"devicesTotal,omitempty"`
+
+// DevicesMigrated is how many of them have been rebuilt.
+DevicesMigrated *int32 `json:"devicesMigrated,omitempty"`
 ```
 
 Neither volume field takes `omitempty`: zero is a meaningful value for both, and a
 field that disappears at zero makes "nothing to move" and "not yet counted" the
-same wire value. The device count is a pointer for the same reason. It is counted
+same wire value. The device counts are pointers for the same reason. It is counted
 after the block exists, so absent means it has not been counted yet and zero is a
 node with no data devices.
 
@@ -1289,6 +1292,7 @@ status:
     volumesTotal: 12
     volumesMigrated: 7
     devicesTotal: 4
+    devicesMigrated: 4
   message: 7 of 12 volumes migrated
   startedAt: "2026-08-28T11:44:02Z"
   observedGeneration: 1
@@ -3020,6 +3024,12 @@ type DrainStatus struct {
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	DevicesTotal *int32 `json:"devicesTotal,omitempty"`
+
+	// DevicesMigrated is how many of them have been rebuilt, absent until the
+	// devices are counted.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	DevicesMigrated *int32 `json:"devicesMigrated,omitempty"`
 }
 
 // StorageNodeOpsStatus is the observed state of one node operation.

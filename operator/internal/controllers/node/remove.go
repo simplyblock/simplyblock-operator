@@ -363,8 +363,9 @@ func (r *StorageNodeOpsReconciler) recordDeviceProgress(
 		if status.Drain == nil {
 			status.Drain = &simplyblockv1alpha2.DrainStatus{}
 		}
-		total := int32(progress.Total)
+		total, completed := int32(progress.Total), int32(progress.Completed)
 		status.Drain.DevicesTotal = &total
+		status.Drain.DevicesMigrated = &completed
 	})
 }
 

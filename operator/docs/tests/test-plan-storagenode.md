@@ -479,49 +479,50 @@ File: `operator/internal/controllers/node/classify_test.go`
 Files: `operator/internal/controllers/node/drain_test.go`, `peertargets_test.go`,
 `advance_test.go`, `remove_gone_test.go`
 
-| #     | Scenario                                                                                                      | Type       | Test                                                          |
-|-------|---------------------------------------------------------------------------------------------------------------|------------|---------------------------------------------------------------|
-| U-147 | Validation clear: the step advances to `PreparingRemoval`                                                     | Positive   | `TestValidationWritesTheTotalTheDrainIsMeasuredAgainst`       |
-| U-148 | Pinned volumes present: the step holds and the removal is not triggered                                       | Negative   | `TestAPinnedVolumeStopsTheDrainBeforeItTriggersTheRemoval`    |
-| U-149 | Unmanaged volumes present: the step holds and the removal is not triggered                                    | Negative   | `TestAnUnmanagedVolumeStopsTheDrain`                          |
-| U-150 | The pin is removed: the next reconcile advances without further input                                         | Positive   | —                                                             |
-| U-151 | The removal already has the node (`pending_removal` or later): no trigger is sent and the step advances       | Negative   | `TestTheTriggerIsSkippedWhenTheRemovalAlreadyHasTheNode`      |
-| U-152 | Migration targets are spread evenly across the online peers                                                   | Positive   | `TestTheVolumesAreSpreadOverEveryOnlinePeer`                  |
-| U-153 | No online peer: the step holds and emits `NoMigrationTarget`                                                  | Negative   | `TestADrainWithNowhereToMoveToHolds`                          |
-| U-154 | Offline peers are excluded from target selection                                                              | Negative   | `TestAnOfflinePeerIsNotATarget`                               |
-| U-155 | Exactly one online peer: every volume goes to it                                                              | Boundary   | —                                                             |
-| U-156 | Every migration completed: the step advances to `Verifying`                                                   | Positive   | `TestADrainIsDoneWhenTheNodeHoldsNothingMovable`              |
-| U-157 | Verification finds non-system volumes: the step holds and retries                                             | Negative   | `TestVerificationHoldsWhileAUsersVolumeIsStillThere`          |
-| U-158 | Verification finds only system volumes: they are deleted, then the step advances                              | Positive   | `TestVerificationDeletesTheBenchmarkVolumesAndRereads`        |
-| U-159 | A system-volume delete returns 404: treated as success                                                        | Boundary   | —                                                             |
-| U-160 | A system-volume delete is rejected: the operation fails and the node stays in the removal                     | Negative   | `TestABenchmarkVolumeThatCannotBeDeletedEndsTheDrain`         |
-| U-161 | The node delete returns 200, 204, or 404: the operation succeeds                                              | Boundary   | `TestAnAcceptedRemovalFinishesTheDrain`                       |
-| U-162 | The node delete returns 5xx: retried, and the operation does not fail                                         | Negative   | —                                                             |
-| U-163 | The node delete is rejected: the operation fails and the node stays in the removal                            | Negative   | `TestARefusedRemovalEndsTheDrain`                             |
-| U-165 | `spec.abort` set during `Validating`: `Aborted` with no call issued                                           | Boundary   | `TestAnAbortBeforeTheTriggerStopsWithoutTouchingTheNode`      |
-| U-166 | `spec.abort` set during `MigratingVolumes`: refused, and the drain runs on                                    | Negative   | `TestAnAbortAfterTheTriggerIsRefusedAndTheDrainRunsOn`        |
-| U-167 | A step's deadline expires after the trigger: the operation fails and no resume is issued                      | Boundary   | `TestAStepThatOutlivedItsDeadlineFailsTheOperation`           |
-| U-168 | `status.drain.volumesTotal` is written once and not recomputed on later passes                                | Positive   | `TestValidationWritesTheTotalTheDrainIsMeasuredAgainst`       |
-| U-169 | A drain with zero volumes: `volumesTotal` is 0 and the step advances immediately                              | Boundary   | `TestADrainIsDoneWhenTheNodeHoldsNothingMovable`              |
-| U-332 | A node the control plane has forgotten: every step of the removal is done                                     | Regression | `TestARemovalOfAGoneNodeIsDoneAtEveryStep`                    |
-| U-333 | An incomplete census is retried rather than reported as a blocker                                             | Negative   | `TestAnIncompleteCensusIsRetriedRatherThanReportedAsABlocker` |
-| U-336 | An empty node passes verification                                                                             | Boundary   | `TestAnEmptyNodePassesVerification`                           |
-| U-337 | A suspended peer is not a migration target either                                                             | Negative   | `TestASuspendedPeerIsNotATarget`                              |
-| U-338 | The drained node is never chosen as its own target                                                            | Negative   | `TestTheDrainedNodeIsNeverItsOwnTarget`                       |
-| U-339 | The peer assignment is the same on every pass, so a retry is deliberate                                       | Positive   | `TestTheAssignmentIsTheSameOnEveryPass`                       |
-| U-340 | The peers come from the stream once it has delivered, and the control plane is not asked                      | Positive   | `TestThePeersComeFromTheStreamOnceItHasDelivered`             |
-| U-341 | A stream that has not delivered falls back to the control plane                                               | Boundary   | `TestAnUndeliveredStreamFallsBackToTheControlPlane`           |
-| U-449 | An online, suspended, or offline node: the removal is triggered, and the step waits for the node to report it | Positive   | `TestTheRemovalIsTriggeredAndWaitedFor`                       |
-| U-450 | A shutdown somebody else started: waited for, and no trigger is sent under it                                 | Negative   | `TestTheTriggerWaitsForAShutdownAlreadyRunning`               |
-| U-451 | The admission is refused (4xx): the operation fails with nothing to undo                                      | Negative   | `TestARefusedAdmissionEndsTheDrain`                           |
-| U-452 | `prepare-removal` answers 503: asked again on a later pass                                                    | Negative   | `TestABusyControlPlaneIsAskedAgain`                           |
-| U-453 | The device rebuild is unfinished: `prepare-removal` is re-sent and the step waits                             | Positive   | `TestTheDeviceRebuildIsKeptRunningUntilDone`                  |
-| U-454 | The control plane reports the rebuild done: the step advances and nothing is re-sent                          | Positive   | `TestTheDeviceRebuildFinishesWhenTheControlPlaneSaysSo`       |
-| U-455 | The rebuild gave up: the drain holds with the control plane's reason                                          | Negative   | `TestAFailedDeviceRebuildHoldsTheDrain`                       |
-| U-456 | `MigratingDevices` outlives its deadline: announced and re-armed, and the drain keeps its lock                | Boundary   | `TestTheDeviceRebuildOutlivingItsDeadlineHoldsTheDrain`       |
-| U-457 | `verify-drained` still sees a snapshot: the removal is held, naming it                                        | Negative   | `TestVerificationHoldsWhileTheControlPlaneSeesASnapshot`      |
-| U-458 | A second `Remove` on a node a failed one left in the removal carries on from where it stopped                 | Positive   | —                                                             |
-| U-459 | `status.drain.devicesTotal` is the control plane's device count, written during `MigratingDevices`            | Positive   | `TestTheDeviceRebuildPublishesHowManyDevicesItRebuilds`       |
+| #     | Scenario                                                                                                          | Type       | Test                                                          |
+|-------|-------------------------------------------------------------------------------------------------------------------|------------|---------------------------------------------------------------|
+| U-147 | Validation clear: the step advances to `PreparingRemoval`                                                         | Positive   | `TestValidationWritesTheTotalTheDrainIsMeasuredAgainst`       |
+| U-148 | Pinned volumes present: the step holds and the removal is not triggered                                           | Negative   | `TestAPinnedVolumeStopsTheDrainBeforeItTriggersTheRemoval`    |
+| U-149 | Unmanaged volumes present: the step holds and the removal is not triggered                                        | Negative   | `TestAnUnmanagedVolumeStopsTheDrain`                          |
+| U-150 | The pin is removed: the next reconcile advances without further input                                             | Positive   | —                                                             |
+| U-151 | The removal already has the node (`pending_removal` or later): no trigger is sent and the step advances           | Negative   | `TestTheTriggerIsSkippedWhenTheRemovalAlreadyHasTheNode`      |
+| U-152 | Migration targets are spread evenly across the online peers                                                       | Positive   | `TestTheVolumesAreSpreadOverEveryOnlinePeer`                  |
+| U-153 | No online peer: the step holds and emits `NoMigrationTarget`                                                      | Negative   | `TestADrainWithNowhereToMoveToHolds`                          |
+| U-154 | Offline peers are excluded from target selection                                                                  | Negative   | `TestAnOfflinePeerIsNotATarget`                               |
+| U-155 | Exactly one online peer: every volume goes to it                                                                  | Boundary   | —                                                             |
+| U-156 | Every migration completed: the step advances to `Verifying`                                                       | Positive   | `TestADrainIsDoneWhenTheNodeHoldsNothingMovable`              |
+| U-157 | Verification finds non-system volumes: the step holds and retries                                                 | Negative   | `TestVerificationHoldsWhileAUsersVolumeIsStillThere`          |
+| U-158 | Verification finds only system volumes: they are deleted, then the step advances                                  | Positive   | `TestVerificationDeletesTheBenchmarkVolumesAndRereads`        |
+| U-159 | A system-volume delete returns 404: treated as success                                                            | Boundary   | —                                                             |
+| U-160 | A system-volume delete is rejected: the operation fails and the node stays in the removal                         | Negative   | `TestABenchmarkVolumeThatCannotBeDeletedEndsTheDrain`         |
+| U-161 | The node delete returns 200, 204, or 404: the operation succeeds                                                  | Boundary   | `TestAnAcceptedRemovalFinishesTheDrain`                       |
+| U-162 | The node delete returns 5xx: retried, and the operation does not fail                                             | Negative   | —                                                             |
+| U-163 | The node delete is rejected: the operation fails and the node stays in the removal                                | Negative   | `TestARefusedRemovalEndsTheDrain`                             |
+| U-165 | `spec.abort` set during `Validating`: `Aborted` with no call issued                                               | Boundary   | `TestAnAbortBeforeTheTriggerStopsWithoutTouchingTheNode`      |
+| U-166 | `spec.abort` set during `MigratingVolumes`: refused, and the drain runs on                                        | Negative   | `TestAnAbortAfterTheTriggerIsRefusedAndTheDrainRunsOn`        |
+| U-167 | A step's deadline expires after the trigger: the operation fails and no resume is issued                          | Boundary   | `TestAStepThatOutlivedItsDeadlineFailsTheOperation`           |
+| U-168 | `status.drain.volumesTotal` is written once and not recomputed on later passes                                    | Positive   | `TestValidationWritesTheTotalTheDrainIsMeasuredAgainst`       |
+| U-169 | A drain with zero volumes: `volumesTotal` is 0 and the step advances immediately                                  | Boundary   | `TestADrainIsDoneWhenTheNodeHoldsNothingMovable`              |
+| U-332 | A node the control plane has forgotten: every step of the removal is done                                         | Regression | `TestARemovalOfAGoneNodeIsDoneAtEveryStep`                    |
+| U-333 | An incomplete census is retried rather than reported as a blocker                                                 | Negative   | `TestAnIncompleteCensusIsRetriedRatherThanReportedAsABlocker` |
+| U-336 | An empty node passes verification                                                                                 | Boundary   | `TestAnEmptyNodePassesVerification`                           |
+| U-337 | A suspended peer is not a migration target either                                                                 | Negative   | `TestASuspendedPeerIsNotATarget`                              |
+| U-338 | The drained node is never chosen as its own target                                                                | Negative   | `TestTheDrainedNodeIsNeverItsOwnTarget`                       |
+| U-339 | The peer assignment is the same on every pass, so a retry is deliberate                                           | Positive   | `TestTheAssignmentIsTheSameOnEveryPass`                       |
+| U-340 | The peers come from the stream once it has delivered, and the control plane is not asked                          | Positive   | `TestThePeersComeFromTheStreamOnceItHasDelivered`             |
+| U-341 | A stream that has not delivered falls back to the control plane                                                   | Boundary   | `TestAnUndeliveredStreamFallsBackToTheControlPlane`           |
+| U-449 | An online, suspended, or offline node: the removal is triggered, and the step waits for the node to report it     | Positive   | `TestTheRemovalIsTriggeredAndWaitedFor`                       |
+| U-450 | A shutdown somebody else started: waited for, and no trigger is sent under it                                     | Negative   | `TestTheTriggerWaitsForAShutdownAlreadyRunning`               |
+| U-451 | The admission is refused (4xx): the operation fails with nothing to undo                                          | Negative   | `TestARefusedAdmissionEndsTheDrain`                           |
+| U-452 | `prepare-removal` answers 503: asked again on a later pass                                                        | Negative   | `TestABusyControlPlaneIsAskedAgain`                           |
+| U-453 | The device rebuild is unfinished: `prepare-removal` is re-sent and the step waits                                 | Positive   | `TestTheDeviceRebuildIsKeptRunningUntilDone`                  |
+| U-454 | The control plane reports the rebuild done: the step advances and nothing is re-sent                              | Positive   | `TestTheDeviceRebuildFinishesWhenTheControlPlaneSaysSo`       |
+| U-455 | The rebuild gave up: the drain holds with the control plane's reason                                              | Negative   | `TestAFailedDeviceRebuildHoldsTheDrain`                       |
+| U-456 | `MigratingDevices` outlives its deadline: announced and re-armed, and the drain keeps its lock                    | Boundary   | `TestTheDeviceRebuildOutlivingItsDeadlineHoldsTheDrain`       |
+| U-457 | `verify-drained` still sees a snapshot: the removal is held, naming it                                            | Negative   | `TestVerificationHoldsWhileTheControlPlaneSeesASnapshot`      |
+| U-458 | A second `Remove` on a node a failed one left in the removal carries on from where it stopped                     | Positive   | —                                                             |
+| U-459 | `status.drain.devicesTotal` is the control plane's device count, written during `MigratingDevices`                | Positive   | `TestTheDeviceRebuildPublishesHowManyDevicesItRebuilds`       |
+| U-460 | `status.drain.devicesMigrated` is the control plane's count of rebuilt devices, written during `MigratingDevices` | Positive   | `TestTheDeviceRebuildPublishesHowManyDevicesAreRebuilt`       |
 
 ### Operation: The Fan-Out (design §8.4)
 

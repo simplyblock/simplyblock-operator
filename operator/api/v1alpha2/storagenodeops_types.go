@@ -219,6 +219,12 @@ type DrainStatus struct {
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	DevicesTotal *int32 `json:"devicesTotal,omitempty"`
+
+	// DevicesMigrated is how many of them have been rebuilt, absent until the
+	// devices are counted.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	DevicesMigrated *int32 `json:"devicesMigrated,omitempty"`
 }
 
 // StorageNodeOpsStatus is the observed state of one node operation.

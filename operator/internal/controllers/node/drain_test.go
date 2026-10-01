@@ -329,6 +329,27 @@ func TestTheDeviceRebuildPublishesHowManyDevicesItRebuilds(t *testing.T) {
 	}
 }
 
+// How far the rebuild has got is published beside its size, from the control
+// plane's own count of the devices it has finished.
+func TestTheDeviceRebuildPublishesHowManyDevicesAreRebuilt(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingDevices)
+	api.progress = RemovalProgress{Total: 4, Completed: 3, NodeStatus: nodeStatusMigratingDevices}
+	r, apiClient := aDraining(t, api, &scriptedMover{})
+
+	if _, err := r.perform(context.Background(), aDrain(), stepMigratingDevices); err != nil {
+		t.Fatalf("migrating devices: %v", err)
+	}
+
+	got := operationRead(t, apiClient, "a-drain")
+	if got.Status.Drain == nil || got.Status.Drain.DevicesMigrated == nil ||
+		*got.Status.Drain.DevicesMigrated != 3 {
+		t.Errorf("status.drain = %+v, want devicesMigrated 3", got.Status.Drain)
+	}
+	if message := r.waitingMessage(got, stepMigratingDevices); message != "3 of 4 devices rebuilt" {
+		t.Errorf("message = %q, want the rebuild's progress", message)
+	}
+}
+
 // A rebuild that gave up holds the drain rather than failing it. Failing would
 // undo nothing, since the node is the removal's, and moving volumes on top of a
 // device that was never rebuilt widens the exposure the removal exists to end.

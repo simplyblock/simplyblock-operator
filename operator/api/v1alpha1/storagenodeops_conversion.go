@@ -57,7 +57,8 @@ const (
 	annoNodeOpsObserved = "storage.simplyblock.io/conversion-status.observedGeneration"
 	annoNodeOpsAbort    = "storage.simplyblock.io/conversion-spec.abort"
 
-	annoNodeOpsDevicesTotal = "storage.simplyblock.io/conversion-status.drain.devicesTotal"
+	annoNodeOpsDevicesTotal    = "storage.simplyblock.io/conversion-status.drain.devicesTotal"
+	annoNodeOpsDevicesMigrated = "storage.simplyblock.io/conversion-status.drain.devicesMigrated"
 )
 
 // storageNodeOpsActionToHub maps this version's lowercase actions onto the hub's
@@ -243,11 +244,14 @@ func stashNodeOpsHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageNodeOps) 
 	}
 	// The device rebuild has no counter here: this version's drain moved
 	// volumes only.
-	var devicesTotal *int32
+	var devicesTotal, devicesMigrated *int32
 	if src.Status.Drain != nil {
-		devicesTotal = src.Status.Drain.DevicesTotal
+		devicesTotal, devicesMigrated = src.Status.Drain.DevicesTotal, src.Status.Drain.DevicesMigrated
 	}
 	if err := stash(meta, annoNodeOpsDevicesTotal, devicesTotal); err != nil {
+		return err
+	}
+	if err := stash(meta, annoNodeOpsDevicesMigrated, devicesMigrated); err != nil {
 		return err
 	}
 
@@ -310,17 +314,21 @@ func restoreNodeOpsHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageNodeOps
 		return err
 	}
 
-	var devicesTotal *int32
+	var devicesTotal, devicesMigrated *int32
 	if err := unstash(meta, annoNodeOpsDevicesTotal, &devicesTotal); err != nil {
 		return err
 	}
-	if devicesTotal != nil {
+	if err := unstash(meta, annoNodeOpsDevicesMigrated, &devicesMigrated); err != nil {
+		return err
+	}
+	if devicesTotal != nil || devicesMigrated != nil {
 		// A drain with no volumes to move has no block on the way up, and a
 		// device count is reason enough to give it one.
 		if dst.Status.Drain == nil {
 			dst.Status.Drain = &v1alpha2.DrainStatus{}
 		}
 		dst.Status.Drain.DevicesTotal = devicesTotal
+		dst.Status.Drain.DevicesMigrated = devicesMigrated
 	}
 
 	if phase := unstashRemoved(meta, annoNodeOpsPhase); phase != "" {
