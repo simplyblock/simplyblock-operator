@@ -61,8 +61,11 @@ jobs:
 
       # The whole locked set, not a hand-picked subset: the export imports the
       # FastAPI app, which imports the controllers, and what those pull in is
-      # sbcli's business rather than something to track here. No database and no
-      # FoundationDB client library are needed — nothing connects at import time.
+      # sbcli's business rather than something to track here. No database
+      # connection is made at import time, but the `fdb` package now is: sbcli
+      # calls fdb.api_version() at module scope, which dlopens libfdb_c, so the
+      # native client library below has to be on the runner even though nothing
+      # ever talks to a cluster.
       #
       # The interpreter and the flags are the control plane's own, from sbcli's
       # docker/Dockerfile: free-threaded 3.14, no dependency groups, and --locked
@@ -72,6 +75,18 @@ jobs:
       # control plane runs.
       - name: Install sbcli's dependencies
         run: uv sync --locked --no-default-groups --python 3.14t --project .sbcli
+
+      # The `foundationdb` package uv just installed is the pure-Python binding.
+      # It still needs libfdb_c itself to load, the same native client sbcli's
+      # own Dockerfile installs from an RPM. Read the version off sbcli's own
+      # pin instead of a second copy here, so a bump in sbcli's pyproject.toml
+      # does not leave this step installing a mismatched client silently.
+      - name: Install the FoundationDB client library
+        run: |
+          fdb_version=$(grep -oP '(?<=^ {4}"foundationdb==)[0-9.]+' .sbcli/pyproject.toml)
+          curl -fsSL -o "$RUNNER_TEMP/foundationdb-clients.deb" \
+            "https://github.com/apple/foundationdb/releases/download/${fdb_version}/foundationdb-clients_${fdb_version}-1_amd64.deb"
+          sudo dpkg -i "$RUNNER_TEMP/foundationdb-clients.deb"
 
       - name: Export the spec
         id: export
