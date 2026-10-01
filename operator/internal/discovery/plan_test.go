@@ -210,7 +210,7 @@ func TestPlanAppliesTheFiltersItWasGiven(t *testing.T) {
 		DriveSizeRange: "1T-4T",
 	}
 
-	plan := Planner{}.Plan(fleet, filter)
+	plan := Planner{}.Plan(fleet, &simplyblockv1alpha2.DiscoverSpec{DeviceFilter: filter})
 
 	for _, worker := range plan.Workers {
 		if slices.Contains(worker.Addresses(), "0000:af:00.0") {
@@ -236,8 +236,8 @@ func TestPlanScansTheBlockClassWhenAskedTo(t *testing.T) {
 		blockDisk("vdc", 2*tb),
 	)}
 
-	filter := &simplyblockv1alpha2.DeviceFilter{EnableLogicalBlockDevices: ptr.To(true)}
-	plan := Planner{}.Plan(fleet, filter)
+	run := &simplyblockv1alpha2.DiscoverSpec{EnableLogicalBlockDevices: ptr.To(true)}
+	plan := Planner{}.Plan(fleet, run)
 
 	if plan.Class != ClassBlock {
 		t.Fatalf("the plan is for class %q, want %q", plan.Class, ClassBlock)
@@ -397,25 +397,25 @@ func TestAKernelBoundControllerIsNotCountedTwice(t *testing.T) {
 	}
 }
 
-// The class a run scans is the filter's to state, and the planner has no second
+// The class a run scans is the run's to state, and the planner has no second
 // opinion about it.
 //
 // Two statements of one fact can disagree, and this one disagreed silently: a
-// planner told nothing scanned NVMe, so a filter asking for logical block
+// planner told nothing scanned NVMe, so a run asking for logical block
 // devices had its allow and deny lists read on the branch that never runs and
 // dropped without a word. There is nothing for a caller to keep in step now,
 // because there is only one place the class is written down.
-func TestTheFilterDecidesTheClassWithoutBeingToldTwice(t *testing.T) {
+func TestTheRunDecidesTheClassWithoutBeingToldTwice(t *testing.T) {
 	fleet := []nodeprobe.Report{report("worker-1",
 		blockDisk("vdb", 2*tb),
 		blockDisk("vdc", 2*tb),
 	)}
-	filter := &simplyblockv1alpha2.DeviceFilter{
+	run := &simplyblockv1alpha2.DiscoverSpec{
 		EnableLogicalBlockDevices: ptr.To(true),
-		BlockDenyList:             []string{"/dev/vdc"},
+		DeviceFilter:              &simplyblockv1alpha2.DeviceFilter{BlockDenyList: []string{"/dev/vdc"}},
 	}
 
-	plan := Planner{}.Plan(fleet, filter)
+	plan := Planner{}.Plan(fleet, run)
 
 	if plan.Class != ClassBlock {
 		t.Fatalf("the plan is for class %q, want %q", plan.Class, ClassBlock)
@@ -445,7 +445,7 @@ func TestTheExplanationCountsByRuleRatherThanByWording(t *testing.T) {
 		disk("nvme3n1", "0000:b0:00.0", 0, tb),
 	)}
 
-	plan := Planner{}.Plan(fleet, filter)
+	plan := Planner{}.Plan(fleet, &simplyblockv1alpha2.DiscoverSpec{DeviceFilter: filter})
 
 	explained := plan.Explain()
 	if len(explained) != 1 {
@@ -475,7 +475,7 @@ func TestTheExplanationKeepsTheRulesApart(t *testing.T) {
 		disk("nvme1n1", "0000:5f:00.0", 0, tb),
 	)}
 
-	plan := Planner{}.Plan(fleet, filter)
+	plan := Planner{}.Plan(fleet, &simplyblockv1alpha2.DiscoverSpec{DeviceFilter: filter})
 
 	line := strings.Join(plan.Explain(), " ")
 	for _, rule := range []string{"allow and deny lists", "size range"} {

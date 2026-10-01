@@ -29,11 +29,11 @@ type Planner struct {
 	// DeviceRules are applied to every reported device, in order. Nil is the
 	// default set, which is what BasicDeviceRules returns.
 	//
-	// The class a run scans is not a field here. It is the filter's to state,
-	// through EnableLogicalBlockDevices, and a second statement of it could
-	// only ever agree or be wrong: a planner scanning NVMe with a filter
-	// carrying block lists read those lists on a branch that never ran and
-	// dropped them without a word.
+	// The class a run scans is not a field here. It is the run's to state,
+	// through spec.discover.enableLogicalBlockDevices, and a second statement of
+	// it could only ever agree or be wrong: a planner scanning NVMe with a
+	// filter carrying block lists read those lists on a branch that never ran
+	// and dropped them without a word.
 	DeviceRules []DeviceRule
 
 	// WorkerRules are applied to every worker whose devices survived. Nil is
@@ -368,7 +368,8 @@ func claimable(controller nodeprobe.Controller) bool {
 	return controller.BoundToUserspace() && controller.Free()
 }
 
-// BasicDeviceRules is the default device pipeline for a filter.
+// BasicDeviceRules is the default device pipeline for a run: the class it
+// scans and the filter it narrows that class with.
 //
 // The order is deliberate and is the order a reader wants the refusal in: what
 // the device is, then whether it is free, then whether this run wants it. A
@@ -382,8 +383,12 @@ func claimable(controller nodeprobe.Controller) bool {
 // disks proposed none. Putting the specific answer first is what puts it in
 // front of the reviewer, since the class rule's is a pre-filter and never
 // reaches the explanation.
-func BasicDeviceRules(filter *simplyblockv1alpha2.DeviceFilter) []DeviceRule {
-	class := ClassOf(filter)
+func BasicDeviceRules(run *simplyblockv1alpha2.DiscoverSpec) []DeviceRule {
+	class := ClassOf(run)
+	var filter *simplyblockv1alpha2.DeviceFilter
+	if run != nil {
+		filter = run.DeviceFilter
+	}
 
 	rules := []DeviceRule{
 		WholeDiskRule{Class: class},
@@ -391,8 +396,8 @@ func BasicDeviceRules(filter *simplyblockv1alpha2.DeviceFilter) []DeviceRule {
 		ClassRule{Class: class},
 	}
 
-	allowPartitioned := filter != nil &&
-		filter.EnablePartitionedDevices != nil && *filter.EnablePartitionedDevices
+	allowPartitioned := run != nil &&
+		run.EnablePartitionedDevices != nil && *run.EnablePartitionedDevices
 	rules = append(rules, AvailableRule{AllowPartitioned: allowPartitioned})
 
 	if filter == nil {
@@ -404,13 +409,12 @@ func BasicDeviceRules(filter *simplyblockv1alpha2.DeviceFilter) []DeviceRule {
 	// An iSCSI LUN is refused unless the run's allow list names it, and that
 	// holds for a run carrying no filter too, which is why the rule is added
 	// before the filter's own lists and not beside them.
-	rules = append(rules, ISCSIRule{Class: class, Allow: allowListFor(filter)})
+	rules = append(rules, ISCSIRule{Class: class, Allow: allowListFor(class, filter)})
 
-	// Each class reads its own lists, and the class is the filter's own answer,
-	// so the branch cannot be the one the filter was not written for. A PCI
-	// filter beside EnableLogicalBlockDevices describes devices the run will
-	// never look at, which is why the API refuses that combination rather than
-	// leaving it to be ignored here.
+	// Each class reads its own lists. A PCI filter on a run stating
+	// enableLogicalBlockDevices describes devices the run will never look at,
+	// which is why the API refuses that combination rather than leaving it to be
+	// ignored here.
 	if class == ClassNVMe {
 		if len(filter.PcieAllowList) > 0 || len(filter.PcieDenyList) > 0 {
 			rules = append(rules, AllowDenyRule{
@@ -443,11 +447,11 @@ func BasicDeviceRules(filter *simplyblockv1alpha2.DeviceFilter) []DeviceRule {
 
 // allowListFor is the run's allow list in the vocabulary of the class it scans,
 // which is the list an iSCSI LUN has to be named in.
-func allowListFor(filter *simplyblockv1alpha2.DeviceFilter) []string {
+func allowListFor(class DeviceClass, filter *simplyblockv1alpha2.DeviceFilter) []string {
 	if filter == nil {
 		return nil
 	}
-	if ClassOf(filter) == ClassBlock {
+	if class == ClassBlock {
 		return filter.BlockAllowList
 	}
 	return filter.PcieAllowList
@@ -458,12 +462,12 @@ func allowListFor(filter *simplyblockv1alpha2.DeviceFilter) []string {
 // The reports are taken in whatever order they arrived and the output does not
 // depend on it: workers are sorted by name before grouping, so two runs over
 // one fleet produce the same draft.
-func (p Planner) Plan(reports []nodeprobe.Report, filter *simplyblockv1alpha2.DeviceFilter) Plan {
-	class := ClassOf(filter)
+func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.DiscoverSpec) Plan {
+	class := ClassOf(run)
 
 	deviceRules := p.DeviceRules
 	if deviceRules == nil {
-		deviceRules = BasicDeviceRules(filter)
+		deviceRules = BasicDeviceRules(run)
 	}
 	workerRules := p.WorkerRules
 	if workerRules == nil {

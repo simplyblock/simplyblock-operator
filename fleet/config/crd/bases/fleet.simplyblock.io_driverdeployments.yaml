@@ -221,8 +221,8 @@ spec:
                       because the default Image is a moving tag: it follows the operator's own,
                       and a development build's tag is rebuilt in place. IfNotPresent against a
                       tag that moved leaves the workers that already pulled it running the old
-                      plugin and the workers that had not running the new one, which is the
-                      skew of §5 inside one deployment and invisible from the object.
+                      plugin and the workers that had not running the new one, which is version
+                      skew inside one deployment and invisible from the object.
                     enum:
                     - Always
                     - Never
@@ -337,10 +337,9 @@ spec:
                     description: |-
                       TLS configures whether both plugins reach the control plane over TLS.
                       Unset is plaintext, the shape every deployment ran before this field
-                      existed, so adoption of a deployment already running TLS needs this to
-                      already agree with what the plugins are configured for — see
-                      adoption.go's tlsAdoptionMismatch — rather than reading it off a live
-                      object the way spec.driverName's default cannot be.
+                      existed. Adopting a deployment that already runs TLS requires this to
+                      agree with what its plugins are configured for, because it is not read
+                      off the running objects.
                     properties:
                       enableMutualTLS:
                         default: false

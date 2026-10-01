@@ -328,11 +328,11 @@ matter:
 - A worker whose report names a node the run is not about is dropped in silence.
 - ~~`blockAllowList` and `blockDenyList` are silently ignored when the
   planner's class and the filter disagree.~~ **Fixed.** The planner carried a
-  class field beside the filter's own `enableLogicalBlockDevices`, so one fact
+  class field beside the run's own `enableLogicalBlockDevices`, so one fact
   had two statements and they could disagree: a planner told nothing scanned
   NVMe, read the PCI lists, and dropped the block lists on a branch that never
-  ran. The field is gone, and the class is read from the filter, where it was
-  always written.
+  ran. The field is gone, and the class is read from `spec.discover`, where the
+  run states it.
 
 **F-4.3. `InUse: false` is not distinguished from "never read."** The report's
 own comment says a reader deciding whether to reclaim a controller "has to find

@@ -111,7 +111,7 @@ spec:
                               cluster.
 
                               Bounded at what a StorageCluster name may be, since a longer value names
-                              nothing that can exist (design-api-upgrade.md §19.4).
+                              nothing that can exist.
                             maxLength: 63
                             type: string
                           configName:
@@ -152,23 +152,6 @@ spec:
                                   DriveSizeRange restricts candidates by size ("100G-2T"). Unlike the
                                   per-class filters, it applies to whichever class the run is scanning.
                                 type: string
-                              enableLogicalBlockDevices:
-                                description: |-
-                                  EnableLogicalBlockDevices scans a worker's available logical block devices
-                                  instead of its available NVMe devices. It selects the class rather than
-                                  adding one, because the draft a run writes describes one cluster and a
-                                  cluster is built out of one class. Unset scans NVMe, so that upgrading to
-                                  26.4 does not change what a discovery run reports.
-                                type: boolean
-                              enablePartitionedDevices:
-                                description: |-
-                                  EnablePartitionedDevices reports devices carrying a partition table
-                                  alongside the available ones, for the administrator who knows the table is
-                                  stale and intends to hand the device over anyway. It is the only one of the
-                                  three availability conditions that can be waived: a mounted or otherwise
-                                  busy device is never reported, because simplyblock taking it would corrupt
-                                  whatever is using it.
-                                type: boolean
                               pcieAllowList:
                                 description: |-
                                   PcieAllowList restricts candidates to these PCI addresses. This and the two
@@ -193,17 +176,6 @@ spec:
                                   whose PCI model string matches.
                                 type: string
                             type: object
-                            x-kubernetes-validations:
-                            - message: the PCI filters select NVMe devices and cannot
-                                be combined with enableLogicalBlockDevices; use blockAllowList
-                                and blockDenyList
-                              rule: '!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
-                                || !(has(self.pcieAllowList) || has(self.pcieDenyList)
-                                || has(self.pcieModel))'
-                            - message: blockAllowList and blockDenyList select logical
-                                block devices and require enableLogicalBlockDevices
-                              rule: (has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
-                                || !(has(self.blockAllowList) || has(self.blockDenyList))
                           enableControlPlaneNodes:
                             description: |-
                               EnableControlPlaneNodes lets the run consider machines that run the API
@@ -222,6 +194,63 @@ spec:
                               with disks in its infra nodes meant those disks to be the storage, so a draft
                               proposes them ahead of the workers rather than leaving them out.
                             type: boolean
+                          enableLogicalBlockDevices:
+                            description: |-
+                              EnableLogicalBlockDevices scans a worker's available logical block devices
+                              instead of its available NVMe devices. It selects the class rather than
+                              adding one, because the draft a run writes describes one cluster and a
+                              cluster is built out of one class. Unset scans NVMe, so that upgrading to
+                              26.4 does not change what a discovery run reports.
+
+                              It is a statement about the run rather than a member of DeviceFilter,
+                              because it does not narrow the devices reported: it decides which class of
+                              them is looked at, which filters in DeviceFilter apply, and what
+                              ForceJournalDevice resolves, since the two classes lay out a journal
+                              differently.
+                            type: boolean
+                          enablePartitionedDevices:
+                            description: |-
+                              EnablePartitionedDevices reports devices carrying a partition table
+                              alongside the available ones, for the administrator who knows the table is
+                              stale and intends to hand the device over anyway. It is the only one of the
+                              three availability conditions that can be waived: a mounted or otherwise
+                              busy device is never reported, because simplyblock taking it would corrupt
+                              whatever is using it.
+
+                              It is a statement about the run rather than a member of DeviceFilter for
+                              the reason EnableLogicalBlockDevices is: it waives an availability
+                              condition for whichever class is scanned, and so widens what is reported,
+                              where every member of the filter narrows it.
+                            type: boolean
+                          forceJournalDevice:
+                            description: |-
+                              ForceJournalDevice makes the run dedicate a journal device even where the
+                              fleet's disks do not say which one.
+
+                              A run proposes a dedicated journal device when every worker hands over one
+                              disk smaller than its others, because a fleet built that way was built that
+                              way on purpose. Where several disks share the smallest size, nothing says
+                              which to take, and taking one spends a whole disk the fleet did not set
+                              aside: on a worker with ten 10 TB disks that is 10 TB, silently. So the run
+                              does not guess.
+
+                              What it does instead depends on the class. An NVMe cluster with no
+                              dedicated journal device carves a journal partition out of every device, so
+                              the run leaves the field unset, says so, and every disk stays storage. A
+                              logical block-device cluster has no such layout — the control plane refuses
+                              the partitioned journal for the class — so the run fails rather than
+                              writing a document that creates the cluster, formats its drives, and then
+                              fails every node_add. Setting this is what asks for one of the equal disks
+                              to be taken anyway, and the draft says the disk was taken rather than
+                              offered.
+
+                              It does not force the cases that are impossible rather than ambiguous. A
+                              worker handing over a single disk is refused with it or without it, because
+                              dedicating that disk leaves the worker nothing to store on, and so is a
+                              worker whose disks report no size. The tie it does resolve is broken by
+                              address, ascending, so two runs over one unchanged fleet propose the same
+                              document.
+                            type: boolean
                           nodeSelector:
                             additionalProperties:
                               type: string
@@ -229,6 +258,60 @@ spec:
                               NodeSelector restricts which workers are inspected. Empty inspects every
                               schedulable worker, and it is exclusive with Workers.
                             type: object
+                          tolerations:
+                            description: |-
+                              Tolerations are what the probe pods tolerate, and what the draft states
+                              for the storage nodes it proposes.
+
+                              A probe is pinned to its worker with spec.nodeName rather than scheduled
+                              onto it, which bypasses the scheduler and not the taints: a NoSchedule
+                              taint still keeps the pod off, and a NoExecute taint evicts one that
+                              landed. A fleet that dedicates machines to storage taints them, so a run
+                              against one that tolerates nothing inspects nothing.
+
+                              They reach the draft as well, because the taints a run was allowed to
+                              probe through are the taints the cluster it proposes has to live with.
+                              Stating them in one place is what keeps a reviewer from approving a
+                              document whose DaemonSet schedules nowhere.
+                            items:
+                              description: |-
+                                The pod this Toleration is attached to tolerates any taint that matches
+                                the triple <key,value,effect> using the matching operator <operator>.
+                              properties:
+                                effect:
+                                  description: |-
+                                    Effect indicates the taint effect to match. Empty means match all taint effects.
+                                    When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                                  type: string
+                                key:
+                                  description: |-
+                                    Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                                    If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                                  type: string
+                                operator:
+                                  description: |-
+                                    Operator represents a key's relationship to the value.
+                                    Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                                    Exists is equivalent to wildcard for value, so that a pod can
+                                    tolerate all taints of a particular category.
+                                    Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                                  type: string
+                                tolerationSeconds:
+                                  description: |-
+                                    TolerationSeconds represents the period of time the toleration (which must be
+                                    of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                                    it is not set, which means tolerate the taint forever (do not evict). Zero and
+                                    negative values will be treated as 0 (evict immediately) by the system.
+                                  format: int64
+                                  type: integer
+                                value:
+                                  description: |-
+                                    Value is the taint value the toleration matches to.
+                                    If the operator is Exists, the value should be empty, otherwise just a regular string.
+                                  type: string
+                              type: object
+                            maxItems: 32
+                            type: array
                           workers:
                             description: |-
                               Workers are the workers to inspect, by node name.
@@ -248,6 +331,17 @@ spec:
                             type: array
                         type: object
                         x-kubernetes-validations:
+                        - message: the PCI filters select NVMe devices and cannot
+                            be combined with enableLogicalBlockDevices; use blockAllowList
+                            and blockDenyList
+                          rule: '!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
+                            || !has(self.deviceFilter) || !(has(self.deviceFilter.pcieAllowList)
+                            || has(self.deviceFilter.pcieDenyList) || has(self.deviceFilter.pcieModel))'
+                        - message: blockAllowList and blockDenyList select logical
+                            block devices and require enableLogicalBlockDevices
+                          rule: (has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
+                            || !has(self.deviceFilter) || !(has(self.deviceFilter.blockAllowList)
+                            || has(self.deviceFilter.blockDenyList))
                         - message: spec.discover names workers and also carries a
                             nodeSelector; state one or the other
                           rule: '!(has(self.workers) && size(self.workers) > 0 &&
@@ -292,7 +386,7 @@ spec:
                           ClusterRef names the StorageCluster the operation runs against.
 
                           Bounded at what a StorageCluster name may be, since a longer value names
-                          nothing that can exist (design-api-upgrade.md §19.4).
+                          nothing that can exist.
                         maxLength: 63
                         type: string
                         x-kubernetes-validations:
@@ -404,7 +498,7 @@ spec:
                           not delete the cluster it operated on.
 
                           Bounded at what a StorageCluster name may be, since a longer value names
-                          nothing that can exist (design-api-upgrade.md §19.4).
+                          nothing that can exist.
                         maxLength: 63
                         type: string
                         x-kubernetes-validations:

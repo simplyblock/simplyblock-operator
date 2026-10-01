@@ -166,10 +166,8 @@ func filterCases() map[string]Case {
 	// had not decided about the journal would record that refusal instead of
 	// what its filter did.
 	block := func(edit func(*simplyblockv1alpha2.DeviceFilter)) *simplyblockv1alpha2.DiscoverSpec {
-		spec := filtered(func(f *simplyblockv1alpha2.DeviceFilter) {
-			f.EnableLogicalBlockDevices = ptr.To(true)
-			edit(f)
-		})
+		spec := filtered(edit)
+		spec.EnableLogicalBlockDevices = ptr.To(true)
 		spec.ForceJournalDevice = ptr.To(true)
 		return spec
 	}
@@ -201,9 +199,9 @@ func filterCases() map[string]Case {
 		"FILT-08": with(blockWorker(), block(func(f *simplyblockv1alpha2.DeviceFilter) {
 			f.BlockAllowList = []string{"/dev/vdb", "/dev/vdc"}
 		})),
-		"FILT-09": with(nvmeWorker(), filtered(func(f *simplyblockv1alpha2.DeviceFilter) {
-			f.EnablePartitionedDevices = ptr.To(true)
-		})),
+		"FILT-09": with(nvmeWorker(), &simplyblockv1alpha2.DiscoverSpec{
+			EnablePartitionedDevices: ptr.To(true),
+		}),
 		"FILT-10": with(nvmeWorker(), filtered(func(f *simplyblockv1alpha2.DeviceFilter) {
 			f.PcieAllowList = []string{"0000:ff:00.0"}
 		})),

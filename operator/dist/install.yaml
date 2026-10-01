@@ -2714,23 +2714,6 @@ spec:
                           DriveSizeRange restricts candidates by size ("100G-2T"). Unlike the
                           per-class filters, it applies to whichever class the run is scanning.
                         type: string
-                      enableLogicalBlockDevices:
-                        description: |-
-                          EnableLogicalBlockDevices scans a worker's available logical block devices
-                          instead of its available NVMe devices. It selects the class rather than
-                          adding one, because the draft a run writes describes one cluster and a
-                          cluster is built out of one class. Unset scans NVMe, so that upgrading to
-                          26.4 does not change what a discovery run reports.
-                        type: boolean
-                      enablePartitionedDevices:
-                        description: |-
-                          EnablePartitionedDevices reports devices carrying a partition table
-                          alongside the available ones, for the administrator who knows the table is
-                          stale and intends to hand the device over anyway. It is the only one of the
-                          three availability conditions that can be waived: a mounted or otherwise
-                          busy device is never reported, because simplyblock taking it would corrupt
-                          whatever is using it.
-                        type: boolean
                       pcieAllowList:
                         description: |-
                           PcieAllowList restricts candidates to these PCI addresses. This and the two
@@ -2755,16 +2738,6 @@ spec:
                           PCI model string matches.
                         type: string
                     type: object
-                    x-kubernetes-validations:
-                    - message: the PCI filters select NVMe devices and cannot be combined
-                        with enableLogicalBlockDevices; use blockAllowList and blockDenyList
-                      rule: '!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
-                        || !(has(self.pcieAllowList) || has(self.pcieDenyList) ||
-                        has(self.pcieModel))'
-                    - message: blockAllowList and blockDenyList select logical block
-                        devices and require enableLogicalBlockDevices
-                      rule: (has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
-                        || !(has(self.blockAllowList) || has(self.blockDenyList))
                   enableControlPlaneNodes:
                     description: |-
                       EnableControlPlaneNodes lets the run consider machines that run the API
@@ -2782,6 +2755,34 @@ spec:
                       infrastructure runs on, and simplyblock storage is infrastructure. A fleet
                       with disks in its infra nodes meant those disks to be the storage, so a draft
                       proposes them ahead of the workers rather than leaving them out.
+                    type: boolean
+                  enableLogicalBlockDevices:
+                    description: |-
+                      EnableLogicalBlockDevices scans a worker's available logical block devices
+                      instead of its available NVMe devices. It selects the class rather than
+                      adding one, because the draft a run writes describes one cluster and a
+                      cluster is built out of one class. Unset scans NVMe, so that upgrading to
+                      26.4 does not change what a discovery run reports.
+
+                      It is a statement about the run rather than a member of DeviceFilter,
+                      because it does not narrow the devices reported: it decides which class of
+                      them is looked at, which filters in DeviceFilter apply, and what
+                      ForceJournalDevice resolves, since the two classes lay out a journal
+                      differently.
+                    type: boolean
+                  enablePartitionedDevices:
+                    description: |-
+                      EnablePartitionedDevices reports devices carrying a partition table
+                      alongside the available ones, for the administrator who knows the table is
+                      stale and intends to hand the device over anyway. It is the only one of the
+                      three availability conditions that can be waived: a mounted or otherwise
+                      busy device is never reported, because simplyblock taking it would corrupt
+                      whatever is using it.
+
+                      It is a statement about the run rather than a member of DeviceFilter for
+                      the reason EnableLogicalBlockDevices is: it waives an availability
+                      condition for whichever class is scanned, and so widens what is reported,
+                      where every member of the filter narrows it.
                     type: boolean
                   forceJournalDevice:
                     description: |-
@@ -2892,6 +2893,16 @@ spec:
                     type: array
                 type: object
                 x-kubernetes-validations:
+                - message: the PCI filters select NVMe devices and cannot be combined
+                    with enableLogicalBlockDevices; use blockAllowList and blockDenyList
+                  rule: '!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
+                    || !has(self.deviceFilter) || !(has(self.deviceFilter.pcieAllowList)
+                    || has(self.deviceFilter.pcieDenyList) || has(self.deviceFilter.pcieModel))'
+                - message: blockAllowList and blockDenyList select logical block devices
+                    and require enableLogicalBlockDevices
+                  rule: (has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
+                    || !has(self.deviceFilter) || !(has(self.deviceFilter.blockAllowList)
+                    || has(self.deviceFilter.blockDenyList))
                 - message: spec.discover names workers and also carries a nodeSelector;
                     state one or the other
                   rule: '!(has(self.workers) && size(self.workers) > 0 && has(self.nodeSelector)
