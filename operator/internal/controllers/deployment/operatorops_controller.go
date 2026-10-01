@@ -645,7 +645,7 @@ func (r *OperatorOpsReconciler) write(
 			"could not be parsed; the draft states what this run found")
 	}
 
-	config, notes, err := r.draftFor(ops, spec, plan, installation)
+	config, notes, err := r.draftFor(ctx, ops, spec, plan, installation)
 	if err != nil {
 		// A fleet the run read and cannot draft a document for. The reason names
 		// the worker and the shape of its disks, and the run's own message is one
@@ -733,6 +733,11 @@ func refuseUnreadableFilter(spec *simplyblockv1alpha2.DiscoverSpec) error {
 // either, and the caller falls back to the name exactly as it was before this
 // existed.
 func (r *OperatorOpsReconciler) clusterDisambiguator(ctx context.Context) string {
+	// No client to read kube-system from is the same as an unreadable one: no
+	// disambiguator, and the name is left as it was.
+	if r.Client == nil {
+		return ""
+	}
 	var ns corev1.Namespace
 	key := client.ObjectKey{Name: metav1.NamespaceSystem}
 	if err := r.Get(ctx, key, &ns); err != nil || ns.UID == "" {
@@ -817,6 +822,18 @@ func (r *OperatorOpsReconciler) draftFor(
 		// and cannot be changed, so a stated one is taken over the one derived
 		// from the draft's own name.
 		clusterName := name + clusterNameSuffix
+		if disambiguator := r.clusterDisambiguator(ctx); disambiguator != "" {
+			base := name
+			// Truncated so the disambiguated name still fits, the same way a
+			// name too long for the limit already does not: this does not newly
+			// break a base name that already did not fit, only keeps this suffix
+			// from being the reason a borderline one no longer does.
+			room := clusterNameLimit - len(clusterNameSuffix) - len(disambiguator) - 1
+			if room > 0 && len(base) > room {
+				base = base[:room]
+			}
+			clusterName = base + "-" + disambiguator + clusterNameSuffix
+		}
 		if seed != nil && seed.Name != "" {
 			clusterName = seed.Name
 		}
