@@ -286,6 +286,10 @@ func (r *StorageClusterOpsReconciler) advance(
 
 	done, err := r.perform(ctx, ops, current)
 	if err != nil {
+		var reverted *activationRevertedError
+		if errors.As(err, &reverted) {
+			return r.retryActivation(ctx, ops, machine, reverted)
+		}
 		var fatal *terminalStepError
 		if errors.As(err, &fatal) {
 			return r.finish(ctx, ops, simplyblockv1alpha2.StorageClusterOpsPhaseFailed, fatal.Error())

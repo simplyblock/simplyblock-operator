@@ -78,4 +78,10 @@ const (
 	// operator reports it: the control plane's own activation gate counts devices
 	// rather than nodes.
 	StripeNodesNotReady = "StripeNodesNotReady"
+
+	// ActivationRetried says the control plane gave up on an activation it had
+	// accepted and the operator asked again. The control plane reports that
+	// failure nowhere but in the cluster's status falling back, so this event is
+	// the only record that an attempt was made and lost.
+	ActivationRetried = "ActivationRetried"
 )
