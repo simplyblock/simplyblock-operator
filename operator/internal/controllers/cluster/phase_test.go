@@ -47,7 +47,7 @@ func TestThePhaseReadsTheControlPlanesLifecycle(t *testing.T) {
 		{"something_new", simplyblockv1alpha2.StorageClusterPhaseUnavailable},
 	} {
 		t.Run(tc.status, func(t *testing.T) {
-			if got := phaseFor(tc.status, false); got != tc.want {
+			if got := phaseFor(tc.status, phaseFlags{}); got != tc.want {
 				t.Errorf("phaseFor(%q) = %q, want %q", tc.status, got, tc.want)
 			}
 		})
@@ -70,8 +70,43 @@ func TestARebalanceIsReadOverTheServingStatusesOnly(t *testing.T) {
 		{"something_new", simplyblockv1alpha2.StorageClusterPhaseUnavailable},
 	} {
 		t.Run(tc.status, func(t *testing.T) {
-			if got := phaseFor(tc.status, true); got != tc.want {
+			if got := phaseFor(tc.status, phaseFlags{Rebalancing: true}); got != tc.want {
 				t.Errorf("phaseFor(%q, rebalancing) = %q, want %q", tc.status, got, tc.want)
+			}
+		})
+	}
+}
+
+// A node removal is read over the serving statuses the way a rebalance is, and
+// ahead of it: the removal's own volume moves set the rebalancing flag for its
+// whole length. A degraded cluster reads Shrinking only where the control plane
+// says the removal alone is the reason, so a cluster missing redundancy for any
+// other reason during a removal still reads Degraded.
+func TestARemovalIsReadAsShrinkingOverTheServingStatuses(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status string
+		flags  phaseFlags
+		want   simplyblockv1alpha2.StorageClusterPhase
+	}{
+		{"active", "active", phaseFlags{Shrinking: true},
+			simplyblockv1alpha2.StorageClusterPhaseShrinking},
+		{"active and rebalancing", "active", phaseFlags{Shrinking: true, Rebalancing: true},
+			simplyblockv1alpha2.StorageClusterPhaseShrinking},
+		{"degraded by the removal", "degraded",
+			phaseFlags{Shrinking: true, DegradedByRemoval: true, Rebalancing: true},
+			simplyblockv1alpha2.StorageClusterPhaseShrinking},
+		{"degraded by something else", "degraded",
+			phaseFlags{Shrinking: true, Rebalancing: true},
+			simplyblockv1alpha2.StorageClusterPhaseDegraded},
+		{"suspended", "suspended", phaseFlags{Shrinking: true, DegradedByRemoval: true},
+			simplyblockv1alpha2.StorageClusterPhaseSuspended},
+		{"unready", "unready", phaseFlags{Shrinking: true},
+			simplyblockv1alpha2.StorageClusterPhaseProvisioning},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := phaseFor(tc.status, tc.flags); got != tc.want {
+				t.Errorf("phaseFor(%q, %+v) = %q, want %q", tc.status, tc.flags, got, tc.want)
 			}
 		})
 	}
@@ -88,6 +123,7 @@ func TestEveryPhaseIsPublished(t *testing.T) {
 	for _, phase := range []simplyblockv1alpha2.StorageClusterPhase{
 		simplyblockv1alpha2.StorageClusterPhaseProvisioning,
 		simplyblockv1alpha2.StorageClusterPhaseActivating,
+		simplyblockv1alpha2.StorageClusterPhaseShrinking,
 	} {
 		if !published[phase] {
 			t.Errorf("%s has no gauge series", phase)

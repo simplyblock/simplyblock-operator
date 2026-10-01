@@ -7477,6 +7477,7 @@ spec:
                 - Activating
                 - Online
                 - Rebalancing
+                - Shrinking
                 - Degraded
                 - Unavailable
                 - Suspended

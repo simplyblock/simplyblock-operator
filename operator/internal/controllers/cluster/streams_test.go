@@ -113,6 +113,28 @@ func TestARebalancingClusterReportsItsPhase(t *testing.T) {
 	}
 }
 
+// A removal the stream reports is the phase, read from the flags beside the
+// status: a cluster degraded only by the removal is shrinking rather than
+// degraded, and the removal's own moves do not make it read as rebalancing.
+func TestAShrinkingClusterReportsItsPhase(t *testing.T) {
+	api := &fakeControlPlane{}
+	refuseClusterReads(t, api)
+	r := newClusterReconciler(t, api, &recorder{}, newTestCluster())
+	shrinking, byRemoval := true, true
+	r.Clusters = streamedCluster(func(dto *subscriptions.ClusterDTO) {
+		dto.Status = "degraded"
+		dto.Rebalancing = true
+		dto.Shrinking = &shrinking
+		dto.DegradedByRemoval = &byRemoval
+	})
+
+	cluster := reconcileCluster(t, r, 1)
+	if cluster.Status.Phase != simplyblockv1alpha2.StorageClusterPhaseShrinking {
+		t.Errorf("phase = %q for a cluster degraded only by its removal, want Shrinking",
+			cluster.Status.Phase)
+	}
+}
+
 // An unsynced cache is not read. A cluster missing from one and a cluster the
 // control plane has forgotten look identical, and reading the first as the
 // second would report a live cluster as gone.

@@ -594,7 +594,7 @@ func (r *StorageClusterReconciler) persist(
 		// The adoption record carries no rebalancing flag: it is the creation
 		// snapshot, and the steady-state pass rewrites the phase from the
 		// stream on the pass that follows.
-		status.Phase = phaseFor(found.Status, false)
+		status.Phase = phaseFor(found.Status, phaseFlags{})
 		status.Step = statemachine.KubeSnapshot{}
 		status.Message = ""
 	})
@@ -691,7 +691,11 @@ func (r *StorageClusterReconciler) sync(
 		status.MaxFaultTolerance = &ftt
 		status.MaxConcurrentWorkerRestarts = effectiveConcurrentRestarts(
 			cluster.Spec.MaxConcurrentWorkerRestarts, &ftt)
-		status.Phase = phaseFor(reading.Status, reading.Rebalancing)
+		status.Phase = phaseFor(reading.Status, phaseFlags{
+			Rebalancing:       reading.Rebalancing,
+			Shrinking:         ptr.BoolFromOrFalse(reading.Shrinking),
+			DegradedByRemoval: ptr.BoolFromOrFalse(reading.DegradedByRemoval),
+		})
 		status.Tasks = tasks
 	})
 	if err != nil {
@@ -1236,6 +1240,7 @@ var allPhases = []simplyblockv1alpha2.StorageClusterPhase{
 	simplyblockv1alpha2.StorageClusterPhaseActivating,
 	simplyblockv1alpha2.StorageClusterPhaseOnline,
 	simplyblockv1alpha2.StorageClusterPhaseRebalancing,
+	simplyblockv1alpha2.StorageClusterPhaseShrinking,
 	simplyblockv1alpha2.StorageClusterPhaseDegraded,
 	simplyblockv1alpha2.StorageClusterPhaseUnavailable,
 	simplyblockv1alpha2.StorageClusterPhaseSuspended,
@@ -1321,25 +1326,46 @@ func creationGraph() statemachine.Config[simplyblockv1alpha2.StorageClusterStep]
 	}
 }
 
+// phaseFlags are the control plane's flags beside a cluster's status that the
+// phase reads.
+type phaseFlags struct {
+	Rebalancing       bool
+	Shrinking         bool
+	DegradedByRemoval bool
+}
+
 // phaseFor reads the control plane's lifecycle string as this group's phase.
 // The values on the left are the control plane's own vocabulary, which is why
 // they are lowercase; only a value this API defines is PascalCase.
 //
-// The control plane reports a rebalance as a flag beside the status rather than
-// as a status, because a cluster is active and rebalancing, or degraded and
-// rebalancing, at once. The phase reads the flag over the two serving statuses
-// and over nothing else: a rebalance is what makes most operations unavailable,
-// so it is what a watch on the phase column should show, while a cluster that is
-// not serving is not serving whatever tasks it has queued.
-func phaseFor(status string, rebalancing bool) simplyblockv1alpha2.StorageClusterPhase {
+// The control plane reports a rebalance and a node removal as flags beside the
+// status rather than as statuses, because a cluster is active and rebalancing, or
+// degraded and shrinking, at once. The phase reads the flags over the two serving
+// statuses and over nothing else: they are what makes most operations
+// unavailable, so they are what a watch on the phase column should show, while a
+// cluster that is not serving is not serving whatever it has queued.
+//
+// A removal is read ahead of a rebalance, because the removal's own volume moves
+// set the rebalancing flag for its whole length. Over a degraded status it is
+// read only where the control plane says the removal alone is the reason, so a
+// cluster missing redundancy for another reason during a removal reads Degraded.
+func phaseFor(status string, flags phaseFlags) simplyblockv1alpha2.StorageClusterPhase {
 	switch lower(status) {
 	case utils.ClusterStatusActive:
-		if rebalancing {
+		switch {
+		case flags.Shrinking:
+			return simplyblockv1alpha2.StorageClusterPhaseShrinking
+		case flags.Rebalancing:
 			return simplyblockv1alpha2.StorageClusterPhaseRebalancing
 		}
 		return simplyblockv1alpha2.StorageClusterPhaseOnline
-	case "degraded", "read_only":
-		if rebalancing {
+	case utils.ClusterStatusDegraded, "read_only":
+		switch {
+		case flags.Shrinking && flags.DegradedByRemoval:
+			return simplyblockv1alpha2.StorageClusterPhaseShrinking
+		case flags.Shrinking:
+			return simplyblockv1alpha2.StorageClusterPhaseDegraded
+		case flags.Rebalancing:
 			return simplyblockv1alpha2.StorageClusterPhaseRebalancing
 		}
 		return simplyblockv1alpha2.StorageClusterPhaseDegraded

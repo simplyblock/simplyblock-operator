@@ -99,17 +99,19 @@ File: `operator/internal/controllers/cluster/storagecluster_controller_test.go`
 
 File: `operator/internal/controllers/cluster/storagecluster_controller_test.go`
 
-| #    | Scenario                                                                                      | Type     | Test                                                                                       |
-|------|-----------------------------------------------------------------------------------------------|----------|--------------------------------------------------------------------------------------------|
-| U-21 | Backend reports the same status, NQN, and rebalancing flag: no patch issued                   | Boundary | —                                                                                          |
-| U-22 | Backend status changed: status patched and requeued                                           | Positive | `TestTheEffectiveRestartLimitIsClampedToTheFaultTolerance`                                 |
-| U-23 | Backend read fails: requeue, status left untouched                                            | Negative | —                                                                                          |
-| U-24 | Per-cluster Secret missing: sync proceeds without the credentials upsert                      | Boundary | `TestTheTaskWindowHoldsOnlyWhatIsRunning`                                                  |
-| U-69 | `status.phase` follows the control plane's lifecycle string                                   | Positive | `TestThePhaseFollowsTheControlPlanesStatus`                                                |
-| U-99 | A rebalance is read as the phase over `active` and `degraded`, and over no not-serving status | Positive | `TestARebalancingClusterReportsItsPhase`, `TestARebalanceIsReadOverTheServingStatusesOnly` |
-| U-70 | `status.tasks` holds running and pending only, capped at 20, in the control plane's order     | Boundary | `TestTheTaskWindowHoldsOnlyWhatIsRunning`                                                  |
-| U-71 | A task that leaves the window emits `TaskCompleted`                                           | Positive | `TestATaskLeavingTheWindowEmitsAnEvent`                                                    |
-| U-72 | The task read fails: the recorded window is kept rather than emptied                          | Negative | `TestAFailedTaskReadLeavesTheWindowAlone`                                                  |
+| #     | Scenario                                                                                                                               | Type     | Test                                                                                          |
+|-------|----------------------------------------------------------------------------------------------------------------------------------------|----------|-----------------------------------------------------------------------------------------------|
+| U-21  | Backend reports the same status, NQN, and rebalancing flag: no patch issued                                                            | Boundary | —                                                                                             |
+| U-22  | Backend status changed: status patched and requeued                                                                                    | Positive | `TestTheEffectiveRestartLimitIsClampedToTheFaultTolerance`                                    |
+| U-23  | Backend read fails: requeue, status left untouched                                                                                     | Negative | —                                                                                             |
+| U-24  | Per-cluster Secret missing: sync proceeds without the credentials upsert                                                               | Boundary | `TestTheTaskWindowHoldsOnlyWhatIsRunning`                                                     |
+| U-69  | `status.phase` follows the control plane's lifecycle string                                                                            | Positive | `TestThePhaseFollowsTheControlPlanesStatus`                                                   |
+| U-99  | A rebalance is read as the phase over `active` and `degraded`, and over no not-serving status                                          | Positive | `TestARebalancingClusterReportsItsPhase`, `TestARebalanceIsReadOverTheServingStatusesOnly`    |
+| U-100 | A node removal is read as `Shrinking` over `active`, ahead of a rebalance, and over `degraded` only when the removal alone degrades it | Positive | `TestARemovalIsReadAsShrinkingOverTheServingStatuses`, `TestAShrinkingClusterReportsItsPhase` |
+| U-101 | A cluster degraded by something else during a removal reads `Degraded`                                                                 | Negative | `TestARemovalIsReadAsShrinkingOverTheServingStatuses`                                         |
+| U-70  | `status.tasks` holds running and pending only, capped at 20, in the control plane's order                                              | Boundary | `TestTheTaskWindowHoldsOnlyWhatIsRunning`                                                     |
+| U-71  | A task that leaves the window emits `TaskCompleted`                                                                                    | Positive | `TestATaskLeavingTheWindowEmitsAnEvent`                                                       |
+| U-72  | The task read fails: the recorded window is kept rather than emptied                                                                   | Negative | `TestAFailedTaskReadLeavesTheWindowAlone`                                                     |
 
 `U-72` is the row worth reading twice. An empty `status.tasks` means nothing is
 running, and a failed read does not say that, so a control plane that cannot be

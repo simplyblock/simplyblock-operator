@@ -737,7 +737,7 @@ response lost after the backend committed.
 
 ```go
 // StorageClusterPhase is where the operator has got to with this cluster.
-// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Rebalancing;Degraded;Unavailable;Suspended
+// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Rebalancing;Shrinking;Degraded;Unavailable;Suspended
 type StorageClusterPhase string
 
 // StorageClusterStep is one step of the creation path. There is one graph rather
@@ -751,16 +751,18 @@ control plane's lifecycle afterward.** `Pending` and `Creating` are the operator
 own. Every other value is a reading of the string the control plane reports, and
 the mapping is stated once rather than left to be inferred from a switch:
 
-| Control plane reports                                 | Phase          |
-|-------------------------------------------------------|----------------|
-| nothing yet                                           | `Pending`      |
-| `in_creation`, `in_expansion`, `unready`              | `Provisioning` |
-| `in_activation`                                       | `Activating`   |
-| `active`                                              | `Online`       |
-| `active`, `degraded`, or `read_only` with a rebalance | `Rebalancing`  |
-| `degraded`, `read_only`                               | `Degraded`     |
-| `suspended`                                           | `Suspended`    |
-| anything else                                         | `Unavailable`  |
+| Control plane reports                                    | Phase          |
+|----------------------------------------------------------|----------------|
+| nothing yet                                              | `Pending`      |
+| `in_creation`, `in_expansion`, `unready`                 | `Provisioning` |
+| `in_activation`                                          | `Activating`   |
+| `active`                                                 | `Online`       |
+| `active` with a node removal                             | `Shrinking`    |
+| `degraded` or `read_only` only because of a node removal | `Shrinking`    |
+| `active`, `degraded`, or `read_only` with a rebalance    | `Rebalancing`  |
+| `degraded`, `read_only`                                  | `Degraded`     |
+| `suspended`                                              | `Suspended`    |
+| anything else                                            | `Unavailable`  |
 
 **`Rebalancing` is read from the flag, over the serving statuses only.** The
 control plane reports a rebalance as `is_re_balancing` beside the status rather
@@ -772,6 +774,17 @@ replaces a phase that is not serving: a suspended cluster with a rebalance task
 still queued is suspended first. `status.status` keeps the control plane's own
 word beside it, and `status.rebalancing` the flag, which is how a rebalance on a
 degraded cluster is told from one on an active cluster.
+
+**`Shrinking` is read from the removal's flags, ahead of `Rebalancing`.** The
+control plane reports a node removal as `is_shrinking` beside the status, and
+`is_degraded_by_removal` when the removal alone is what makes the cluster
+degraded. `Shrinking` replaces `Online` and `Rebalancing` for as long as a removal
+runs, because the removal's own volume moves set `is_re_balancing` for its whole
+length and the phase would otherwise read `Rebalancing` throughout every removal.
+It replaces `Degraded` only with `is_degraded_by_removal`: a cluster missing
+redundancy for another reason during a removal reads `Degraded`, which is the
+reading an alert on the phase needs. Like a rebalance, it never replaces a phase
+that is not serving.
 
 `Provisioning` and `Activating` exist because a cluster being built is not a
 cluster that is broken. Without them `unready` and `in_activation` both read as
@@ -1767,7 +1780,7 @@ against the same conventions it audits the shipped types against.
 // StorageClusterPhase is where the operator has got to with this cluster. The
 // first two values are the operator's own creation path; the rest are its reading
 // of the lifecycle status.status carries in the control plane's own spelling.
-// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Rebalancing;Degraded;Unavailable;Suspended
+// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Rebalancing;Shrinking;Degraded;Unavailable;Suspended
 type StorageClusterPhase string
 
 const (
@@ -1796,6 +1809,11 @@ const (
 	// replaces Online and Degraded while a rebalance runs, and no phase that
 	// is not serving.
 	StorageClusterPhaseRebalancing StorageClusterPhase = "Rebalancing"
+
+	// Shrinking: serving, with a node removal in progress. It replaces Online
+	// and Rebalancing while a removal runs, and Degraded only where the removal
+	// alone is the reason.
+	StorageClusterPhaseShrinking StorageClusterPhase = "Shrinking"
 
 	// Degraded: serving, with less than the redundancy it was built for.
 	StorageClusterPhaseDegraded StorageClusterPhase = "Degraded"
