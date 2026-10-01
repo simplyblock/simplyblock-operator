@@ -78,6 +78,14 @@ if [[ -z "$ROOT_TOKEN" ]]; then
   done
   [[ $rc -ne 1 ]] || die_with_logs "OpenBao did not answer on $BAO_ADDR within 120s"
 
+  # A data volume that outlives the release leaves OpenBao initialized, and
+  # init on it fails. Its keys were printed once, by the run that created it.
+  STATUS="$(kubectl -n "$NAMESPACE" exec "$POD" -- \
+    env BAO_ADDR="$BAO_ADDR" bao status -format=json 2>/dev/null || true)"
+  if grep -Eq '"initialized": *true' <<<"$STATUS"; then
+    die "OpenBao is already initialized. Unseal it if it is sealed, then rerun with BAO_TOKEN set to its root token. Without the keys, uninstall the release and delete its PVCs in $NAMESPACE to start over."
+  fi
+
   info "Initializing OpenBao..."
   INIT_OUTPUT="$(kubectl -n "$NAMESPACE" exec "$POD" -- \
     env BAO_ADDR="$BAO_ADDR" bao operator init 2>&1)" \
