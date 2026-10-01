@@ -415,6 +415,13 @@ controlplane:
   observability:
     enabled: false
     secret: "sWbpOgba1bKnCfcPkVQi"
+    mongodb:
+      # Whether the chart applies the MongoDBCommunity CRD it carries. Graylog
+      # stores its configuration in a MongoDBCommunity, so the kind has to be
+      # served wherever observability is enabled. A cluster that already serves
+      # it keeps what it has whatever this says, so turning it off is only for a
+      # cluster that installs the CRD separately, after this chart.
+      installCRDs: true
     # Parser used by fluent-bit to read /var/log/containers/*.log.
     # "cri" is correct for every CRI runtime (containerd and CRI-O), which covers
     # OpenShift, vanilla Kubernetes >= 1.24, k3s/RKE2, Talos, kind, and the
@@ -529,6 +536,12 @@ controlplane:
     allowedTopologyZones: []
 
   foundationdb:
+    # Whether the chart applies the FoundationDB CRDs it carries. They are the
+    # ones fdb-kubernetes-operator v2.13.0 ships, which is the release the
+    # operator deploys. A cluster that already serves the kinds keeps what it
+    # has whatever this says, so turning it off is only for a cluster that
+    # installs them separately, after this chart.
+    installCRDs: true
     # redundancyMode controls FDB coordinator count:
     # "double" = 3 coordinators (suitable for 3 workers, tolerates 1 failure)
     # "triple" = 5 coordinators (suitable for 5+ workers, tolerates 2 failures)

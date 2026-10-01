@@ -118,8 +118,70 @@ checkPair() {
   done
 }
 
+# checkVendoredCRDs asserts that the CRDs the chart carries for FoundationDB and
+# for MongoDB are rendered by default, and that each one's value drops its own
+# and leaves the other alone.
+#
+# They are templates rather than crds/ entries so that a deployment can decline
+# them, and crds/ is applied whatever a value says. A guard that read a path
+# values.yaml does not define would render nothing at all, and one written
+# against the wrong value would go on installing a CRD a cluster asked the chart
+# to leave to its own operator.
+checkVendoredCRDs() {
+  local present want
+  local -a fdb=(
+    "CustomResourceDefinition/foundationdbclusters.apps.foundationdb.org"
+    "CustomResourceDefinition/foundationdbbackups.apps.foundationdb.org"
+    "CustomResourceDefinition/foundationdbrestores.apps.foundationdb.org"
+  )
+  local mongo="CustomResourceDefinition/mongodbcommunity.mongodbcommunity.mongodb.com"
+  local missing=0
+
+  present="$(render standalone)"
+  for want in "${fdb[@]}" "$mongo"; do
+    if ! grep -qxF "$want" <<<"$present"; then
+      echo "  crds: MISSING ${want} by default"
+      missing=1
+      fail=1
+    fi
+  done
+
+  present="$(render standalone --set controlplane.foundationdb.installCRDs=false)"
+  for want in "${fdb[@]}"; do
+    if grep -qxF "$want" <<<"$present"; then
+      echo "  crds: ${want} is rendered with controlplane.foundationdb.installCRDs=false"
+      missing=1
+      fail=1
+    fi
+  done
+  if ! grep -qxF "$mongo" <<<"$present"; then
+    echo "  crds: controlplane.foundationdb.installCRDs=false also dropped ${mongo}"
+    missing=1
+    fail=1
+  fi
+
+  present="$(render standalone --set controlplane.observability.mongodb.installCRDs=false)"
+  if grep -qxF "$mongo" <<<"$present"; then
+    echo "  crds: ${mongo} is rendered with controlplane.observability.mongodb.installCRDs=false"
+    missing=1
+    fail=1
+  fi
+  for want in "${fdb[@]}"; do
+    if ! grep -qxF "$want" <<<"$present"; then
+      echo "  crds: controlplane.observability.mongodb.installCRDs=false also dropped ${want}"
+      missing=1
+      fail=1
+    fi
+  done
+
+  if [ "$missing" -eq 0 ]; then
+    echo "  crds: the 4 vendored CRDs render by default, and each value drops its own"
+  fi
+}
+
 check standalone "${COMMON[@]}"
 check managed "${COMMON[@]}"
 checkPair
+checkVendoredCRDs
 
 exit "$fail"
