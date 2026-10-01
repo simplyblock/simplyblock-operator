@@ -1700,6 +1700,16 @@ first. A drain with no online peer to move to is a stall, not a failure, and emi
 `NoMigrationTarget`: the condition is resolved by another node coming back, and
 failing the operation would only mean starting it again afterward.
 
+**`MigratingVolumes` pauses on a cluster that cannot take more work.** A `Remove`
+skips the admission gate of §7.1, because removing a node is how an unready
+cluster is made ready, so this is the one place a drain looks at the cluster. It
+holds its next moves with `DrainPaused` while the cluster is not active, or while
+it is rebalancing its own data, and moves already running are left to finish. A
+cluster degraded only because of the node being removed (`is_degraded_by_removal`)
+counts as active here, because the drain is what ends that state. The
+rebalancing read is `is_data_rebalancing` rather than `is_re_balancing`, which
+counts the drain's own moves.
+
 **`Verifying` deletes system volumes rather than migrating them.** They are
 per-node benchmark artifacts, so moving one to a peer would produce a benchmark
 volume measuring the wrong node. A delete the control plane rejects for a reason
@@ -1724,21 +1734,22 @@ removal, and a later `Remove` on the same node drives it the rest of the way:
 `MigratingDevices` re-sends `prepare-removal`, which restarts the rebuild if it is
 not running.
 
-| Condition                                         | Step               | Result                                                         |
-|---------------------------------------------------|--------------------|----------------------------------------------------------------|
-| Pinned or unmanaged volumes                       | `Validating`       | Hold, emit, requeue. The node is untouched                     |
-| A shutdown is running on the node                 | `PreparingRemoval` | Hold, emit `RemovalWaiting`, requeue                           |
-| The admission was refused                         | `PreparingRemoval` | `Failed`. The node is untouched                                |
-| The device rebuild gave up                        | `MigratingDevices` | Hold, emit `DeviceRebuildFailed`, re-send `prepare-removal`    |
-| The device rebuild outlived its deadline          | `MigratingDevices` | Emit `StepDeadlineExceeded`, re-arm the deadline, keep waiting |
-| No online peer to migrate to                      | `MigratingVolumes` | Hold, emit, requeue                                            |
-| A `PersistentVolumeOps` failed                    | `MigratingVolumes` | Delete it and retry with a fresh target                        |
-| Volumes remain, or `verify-drained` sees anything | `Verifying`        | Hold, emit, requeue                                            |
-| A system volume cannot be deleted                 | `Verifying`        | `Failed`                                                       |
-| The removal call was rejected                     | `Removing`         | `Failed`                                                       |
-| Any other step's deadline expired                 | Any                | `Failed`                                                       |
-| `spec.abort` set                                  | `Validating`       | `Aborted` directly, since nothing has been done                |
-| `spec.abort` set                                  | Any later step     | Refused, and the operation runs on                             |
+| Condition                                                          | Step               | Result                                                         |
+|--------------------------------------------------------------------|--------------------|----------------------------------------------------------------|
+| Pinned or unmanaged volumes                                        | `Validating`       | Hold, emit, requeue. The node is untouched                     |
+| A shutdown is running on the node                                  | `PreparingRemoval` | Hold, emit `RemovalWaiting`, requeue                           |
+| The admission was refused                                          | `PreparingRemoval` | `Failed`. The node is untouched                                |
+| The device rebuild gave up                                         | `MigratingDevices` | Hold, emit `DeviceRebuildFailed`, re-send `prepare-removal`    |
+| The device rebuild outlived its deadline                           | `MigratingDevices` | Emit `StepDeadlineExceeded`, re-arm the deadline, keep waiting |
+| The cluster is degraded by something else, or rebalancing its data | `MigratingVolumes` | Hold the next moves, emit `DrainPaused`, requeue               |
+| No online peer to migrate to                                       | `MigratingVolumes` | Hold, emit, requeue                                            |
+| A `PersistentVolumeOps` failed                                     | `MigratingVolumes` | Delete it and retry with a fresh target                        |
+| Volumes remain, or `verify-drained` sees anything                  | `Verifying`        | Hold, emit, requeue                                            |
+| A system volume cannot be deleted                                  | `Verifying`        | `Failed`                                                       |
+| The removal call was rejected                                      | `Removing`         | `Failed`                                                       |
+| Any other step's deadline expired                                  | Any                | `Failed`                                                       |
+| `spec.abort` set                                                   | `Validating`       | `Aborted` directly, since nothing has been done                |
+| `spec.abort` set                                                   | Any later step     | Refused, and the operation runs on                             |
 
 **Nothing re-drives a failed removal by itself.** A node left `pending_removal` or
 later is out of the cluster without having been removed, and it stays that way
@@ -2100,6 +2111,7 @@ starts and the operation's name is not something they know yet.
 | A drain is blocked by pinned volumes                            | `Warning` | `DrainBlocked`         | `StorageNodeOps` |
 | A drain is blocked by unmanaged volumes                         | `Warning` | `DrainBlocked`         | `StorageNodeOps` |
 | A drain has no online peer to migrate to                        | `Warning` | `NoMigrationTarget`    | `StorageNodeOps` |
+| A drain holds its next moves on a cluster that cannot take them | `Warning` | `DrainPaused`          | `StorageNodeOps` |
 | A volume migration failed and is being retried                  | `Warning` | `MigrationRetried`     | `StorageNodeOps` |
 | Every volume has been migrated off the node                     | `Normal`  | `DrainCompleted`       | `StorageNodeOps` |
 | The control plane still sees a volume or snapshot on the node   | `Warning` | `DrainBlocked`         | `StorageNodeOps` |

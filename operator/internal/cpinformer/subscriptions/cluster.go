@@ -29,15 +29,18 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 )
 
-// ClusterDTO is the operator's view of a control-plane cluster, matching the
-// fields StorageCluster.status publishes and no others. Unknown fields are
-// ignored on decode, so the rest of a cluster's wire schema costs nothing here.
+// ClusterDTO is the operator's view of a control-plane cluster: the fields
+// StorageCluster.status publishes, and the removal's flags a node operation's
+// drain reads. Unknown fields are ignored on decode, so the rest of a cluster's
+// wire schema costs nothing here.
 //
-// Every field below is required by the control plane's ClusterDTO schema, which
-// is the completeness requirement a subscription has to meet before a
-// reconciler may read it instead of the detail endpoint: the reconciler
-// previously fetched one cluster at a time, and a list DTO thinner than the
-// detail one would have silently zeroed whatever it omitted.
+// Every field above the removal's flags is required by the control plane's
+// ClusterDTO schema, which is the completeness requirement a subscription has
+// to meet before a reconciler may read it instead of the detail endpoint: the
+// reconciler previously fetched one cluster at a time, and a list DTO thinner
+// than the detail one would have silently zeroed whatever it omitted. The flags
+// are optional, because a control plane older than the removal steps does not
+// report them.
 type ClusterDTO struct {
 	ID                string `json:"id"`
 	Name              string `json:"name"`
@@ -47,6 +50,16 @@ type ClusterDTO struct {
 	NDCS              int    `json:"distr_ndcs"`
 	NPCS              int    `json:"distr_npcs"`
 	MaxFaultTolerance int    `json:"max_fault_tolerance"`
+
+	// The removal's flags, beside the status rather than in it. Each is nil
+	// against a control plane that predates it, which is what keeps a field
+	// that was never reported from reading as false. DataRebalancing is the
+	// cluster moving data by itself, without the volume migrations
+	// Rebalancing also counts. Shrinking is a node removal in progress, and
+	// DegradedByRemoval says the status is degraded only because of it.
+	DataRebalancing   *bool `json:"is_data_rebalancing,omitempty"`
+	Shrinking         *bool `json:"is_shrinking,omitempty"`
+	DegradedByRemoval *bool `json:"is_degraded_by_removal,omitempty"`
 }
 
 // ClusterSubscription streams every cluster, decodes them into an in-memory

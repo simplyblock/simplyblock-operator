@@ -47,8 +47,10 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/simplyblock/atlas/kube"
+	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 )
 
@@ -302,6 +304,11 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 	}
 
 	if len(missing) > 0 {
+		if reason := r.drainPause(clusterID); reason != "" {
+			return false, blockedf(DrainPaused,
+				"%s; the next %d volume %s held until it settles",
+				reason, len(missing), plural(len(missing), "move is", "moves are"))
+		}
 		targets, err := r.peerTargets(ctx, clusterID, nodeID, missing)
 		if err != nil {
 			return false, err
@@ -367,6 +374,39 @@ func (r *StorageNodeOpsReconciler) recordDeviceProgress(
 		status.Drain.DevicesTotal = &total
 		status.Drain.DevicesMigrated = &completed
 	})
+}
+
+// drainPause says why the drain must hold its next volume moves, or "" when it
+// may raise them. Moves already running are left to finish either way.
+//
+// It holds on a cluster that is not active, except one that is degraded only
+// because of the node being removed. That state lasts until the node's data is
+// elsewhere, and the drain is what puts it there, so waiting for it to clear
+// would wait for ever. It holds on the cluster rebalancing its own data too, read
+// from is_data_rebalancing: is_re_balancing counts the drain's own moves, and
+// pausing on it pauses the drain on itself. A flag the control plane does not
+// report reads as nothing to wait for.
+//
+// It reads the cluster stream and nothing else, and a stream that has not
+// delivered is no reason to hold, for the reason the admission gate's is not.
+func (r *StorageNodeOpsReconciler) drainPause(clusterID string) string {
+	if r.Clusters == nil || !r.Clusters.SyncedRoot() {
+		return ""
+	}
+	reading, ok := r.Clusters.Lookup(clusterID)
+	if !ok {
+		return ""
+	}
+	switch {
+	case reading.Status == "" || reading.Status == utils.ClusterStatusActive:
+	case reading.Status == utils.ClusterStatusDegraded && ptr.BoolFromOrFalse(reading.DegradedByRemoval):
+	default:
+		return fmt.Sprintf("the cluster is %s rather than active", reading.Status)
+	}
+	if ptr.BoolFromOrFalse(reading.DataRebalancing) {
+		return "the cluster is rebalancing its data"
+	}
+	return ""
 }
 
 // recordDrainProgress writes how many volumes have moved. The total stays as

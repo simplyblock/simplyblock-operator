@@ -80,6 +80,11 @@ const (
 	// afterward.
 	NoMigrationTarget = "NoMigrationTarget"
 
+	// DrainPaused says a drain is holding its next volume moves because the
+	// cluster is degraded by something other than the removal, or is
+	// rebalancing its own data.
+	DrainPaused = "DrainPaused"
+
 	// MigrationRetried says one volume's move failed and is being retried
 	// against a fresh target.
 	MigrationRetried = "MigrationRetried"

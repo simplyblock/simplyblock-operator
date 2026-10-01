@@ -24,6 +24,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 )
 
@@ -409,6 +411,92 @@ func TestEveryMovableVolumeIsGivenAMove(t *testing.T) {
 			t.Errorf("the move carries %v, and the drain could not find its own fan-out",
 				request.Labels)
 		}
+	}
+}
+
+// aDrainOnTheCluster is a drain of two movable volumes, with the cluster stream
+// reporting what the case says about the cluster.
+func aDrainOnTheCluster(
+	t *testing.T, reading subscriptions.ClusterDTO,
+) (*StorageNodeOpsReconciler, *scriptedMover) {
+	t.Helper()
+	api := aControlPlane().
+		withPeer(opsPeerID, nodeStatusOnline).
+		holding(onNode("volume-1", "pvc-abc"), onNode("volume-2", "pvc-def"))
+	mover := &scriptedMover{}
+	r, _ := aDraining(t, api, mover,
+		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false),
+		aPersistentVolume("pv-2", "volume-2"), aClaim("pv-2", false))
+	reading.ID = opsClusterID
+	r.Clusters = &deliveredCluster{synced: true, reading: reading}
+	return r, mover
+}
+
+func flag(value bool) *bool { return &value }
+
+// A cluster degraded only by the removal is degraded because of the drain, and
+// the drain is what ends it. Waiting for it to clear waits for ever, which is
+// what the pre-rework drain did to a 1+1 cluster for the whole of its removal.
+func TestTheDrainMovesVolumesOnAClusterDegradedOnlyByTheRemoval(t *testing.T) {
+	r, mover := aDrainOnTheCluster(t, subscriptions.ClusterDTO{
+		Status: clusterStatusDegraded, DegradedByRemoval: flag(true), Shrinking: flag(true),
+		DataRebalancing: flag(false),
+	})
+
+	if _, err := r.perform(context.Background(), aDrain(), stepMigratingVolumes); err != nil {
+		t.Fatalf("migrating: %v", err)
+	}
+	if len(mover.started) != 2 {
+		t.Errorf("%d moves were raised, want both volumes moved off a node the removal degraded",
+			len(mover.started))
+	}
+}
+
+// The drain's own moves are counted in is_re_balancing, so pausing on it pauses
+// the drain on itself for the whole removal, as the pre-rework drain did
+// (2026-09-29). The cluster's own data rebalancing leaves them out, and that is
+// the flag read.
+func TestTheDrainDoesNotPauseOnItsOwnMigrations(t *testing.T) {
+	r, mover := aDrainOnTheCluster(t, subscriptions.ClusterDTO{
+		Status: utils.ClusterStatusActive, Rebalancing: true, DataRebalancing: flag(false),
+	})
+
+	if _, err := r.perform(context.Background(), aDrain(), stepMigratingVolumes); err != nil {
+		t.Fatalf("migrating: %v", err)
+	}
+	if len(mover.started) != 2 {
+		t.Errorf("%d moves were raised, want the drain to carry on beside its own migrations",
+			len(mover.started))
+	}
+}
+
+// A cluster that is degraded by something other than the removal, or that is
+// rebalancing its own data, is not given more data to move. The drain holds
+// without raising a move, and says why.
+func TestTheDrainPausesOnAClusterThatCannotTakeMoreWork(t *testing.T) {
+	for name, reading := range map[string]subscriptions.ClusterDTO{
+		"degraded by something else": {
+			Status: clusterStatusDegraded, DegradedByRemoval: flag(false), Shrinking: flag(true),
+		},
+		"suspended":        {Status: utils.ClusterStatusSuspended, DegradedByRemoval: flag(true)},
+		"rebalancing data": {Status: utils.ClusterStatusActive, DataRebalancing: flag(true)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, mover := aDrainOnTheCluster(t, reading)
+
+			_, err := r.perform(context.Background(), aDrain(), stepMigratingVolumes)
+
+			var blocked *blockedStepError
+			if !errors.As(err, &blocked) {
+				t.Fatalf("err = %v, want the drain paused", err)
+			}
+			if blocked.reason != DrainPaused {
+				t.Errorf("the pause is announced as %q, want %q", blocked.reason, DrainPaused)
+			}
+			if len(mover.started) != 0 {
+				t.Errorf("%d moves were raised on a cluster that cannot take them", len(mover.started))
+			}
+		})
 	}
 }
 

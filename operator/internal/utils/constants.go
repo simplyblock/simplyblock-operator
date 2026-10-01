@@ -48,6 +48,7 @@ const (
 	TaskStateDone = "done"
 
 	ClusterStatusActive    = "active"
+	ClusterStatusDegraded  = "degraded"
 	ClusterStatusSuspended = "suspended"
 	ClusterStatusUnready   = "unready"
 	// ClusterStatusRebalancing is a cluster redistributing data across its

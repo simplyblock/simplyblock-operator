@@ -523,6 +523,9 @@ Files: `operator/internal/controllers/node/drain_test.go`, `peertargets_test.go`
 | U-458 | A second `Remove` on a node a failed one left in the removal carries on from where it stopped                     | Positive   | —                                                             |
 | U-459 | `status.drain.devicesTotal` is the control plane's device count, written during `MigratingDevices`                | Positive   | `TestTheDeviceRebuildPublishesHowManyDevicesItRebuilds`       |
 | U-460 | `status.drain.devicesMigrated` is the control plane's count of rebuilt devices, written during `MigratingDevices` | Positive   | `TestTheDeviceRebuildPublishesHowManyDevicesAreRebuilt`       |
+| U-461 | A cluster degraded only by the removal: the drain raises its moves                                                | Regression | `TestTheDrainMovesVolumesOnAClusterDegradedOnlyByTheRemoval`  |
+| U-462 | `is_re_balancing` set by the drain's own moves, `is_data_rebalancing` clear: the drain raises its moves           | Regression | `TestTheDrainDoesNotPauseOnItsOwnMigrations`                  |
+| U-463 | A cluster degraded by something else, suspended, or rebalancing its data: no move is raised, `DrainPaused`        | Negative   | `TestTheDrainPausesOnAClusterThatCannotTakeMoreWork`          |
 
 ### Operation: The Fan-Out (design §8.4)
 
