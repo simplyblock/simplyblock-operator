@@ -10,6 +10,7 @@ package layers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -78,21 +79,43 @@ func (l *lvmCommands) run(_ context.Context, args ...string) (string, error) {
 	if asksForTags(args) && !l.unowned && args[0] == "vgs" {
 		return "  " + lvm.OwnerTag + "\n", nil
 	}
-	return "", nil
+	return reportWrap(args, ""), nil
 }
 
 // withOwnership appends the owner tag to a device probe's answer when the probe
 // asked for tags and the fake is not set to refuse, so a case scripting only the
 // group's name still reads as the driver's group.
 func (l *lvmCommands) withOwnership(args []string, out string) string {
-	if !asksForTags(args) || args[0] != "pvs" || l.unowned {
+	if asksForTags(args) && args[0] == "pvs" && !l.unowned {
+		if name := strings.TrimSpace(out); name != "" {
+			out = "  " + name + " " + lvm.OwnerTag + "\n"
+		}
+	}
+	return reportWrap(args, out)
+}
+
+// reportWrap wraps out as pvs/lvs --reportformat json would, when args asked for
+// it; every other answer passes through unchanged. out is treated as
+// whitespace-separated field values, matching how a test already scripts a
+// plain-text answer for the pre-JSON form of these same commands.
+func reportWrap(args []string, out string) string {
+	if !slices.Contains(args, "--reportformat") {
 		return out
 	}
-	name := strings.TrimSpace(out)
-	if name == "" {
-		return out
+	kind, field := "pv", "vg_name"
+	if args[0] == "lvs" {
+		kind, field = "lv", "lv_name"
 	}
-	return "  " + name + " " + lvm.OwnerTag + "\n"
+	var b strings.Builder
+	fmt.Fprintf(&b, `{"report":[{"%s":[`, kind)
+	for i, v := range strings.Fields(out) {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, `{"%s":"%s"}`, field, v)
+	}
+	b.WriteString("]}]}")
+	return b.String()
 }
 
 // asksForTags reports whether a command reads a group's tags.
