@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -32,9 +33,15 @@ type StreamConfig struct {
 	// Liveness is the maximum gap between frames (events or `: ping`) before a
 	// half-open connection is dropped. The server pings every 15s.
 	Liveness time.Duration
+	// PollInterval is how often a route that does not stream is asked for its
+	// listing again.
+	PollInterval time.Duration
 }
 
 func (c *StreamConfig) withDefaults() {
+	if c.PollInterval == 0 {
+		c.PollInterval = 30 * time.Second
+	}
 	if c.RetryBase == 0 {
 		c.RetryBase = 3 * time.Second
 	}
@@ -47,6 +54,13 @@ func (c *StreamConfig) withDefaults() {
 }
 
 var errLiveness = errors.New("cpinformer: liveness deadline exceeded")
+
+// errPolled ends a request that was answered with a plain listing rather than a
+// stream, so the caller waits PollInterval instead of backing off.
+var errPolled = errors.New("cpinformer: route does not stream")
+
+// maxListingBytes bounds a plain listing read in place of a stream.
+const maxListingBytes = 64 << 20
 
 // ScopeSet is a subscription's live set of scopes to stream. Callers add and
 // remove scopes as their source CRs come and go (e.g., a Pool controller adding a
@@ -287,6 +301,15 @@ func (m *SubscriptionManager) runStream(ctx context.Context, sub Subscription, s
 		if ctx.Err() != nil {
 			return
 		}
+		if errors.Is(err, errPolled) {
+			log.V(1).Info("route does not stream, polling its listing", "scope", scope.Key(), "every", m.cfg.PollInterval.String())
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(jitter(m.cfg.PollInterval)):
+			}
+			continue
+		}
 		if delivered {
 			backoff = m.cfg.RetryBase
 		}
@@ -315,6 +338,19 @@ func (m *SubscriptionManager) streamOnce(ctx context.Context, sub Subscription, 
 	defer deferrers.Close(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return false, fmt.Errorf("watch %s %s: unexpected status %s", sub.Name(), scope.Key(), resp.Status)
+	}
+
+	// A route the control plane does not stream answers with its plain listing,
+	// which is the snapshot a stream would have opened with.
+	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		data, err := io.ReadAll(io.LimitReader(resp.Body, maxListingBytes))
+		if err != nil {
+			return false, err
+		}
+		if err := m.dispatch(ctx, sub, scope, sseEvent{Name: EventSnapshot, Data: data}); err != nil {
+			return false, err
+		}
+		return true, errPolled
 	}
 
 	timer := time.AfterFunc(m.cfg.Liveness, cancel)

@@ -40,6 +40,10 @@
 //   - A scope is not authoritative until its first snapshot has been applied,
 //     so a reconciler must not delete an object merely because a cold cache
 //     does not have its entity.
+//   - A route the control plane does not stream answers with its plain listing,
+//     which is applied as the snapshot and asked for again every
+//     [StreamConfig.PollInterval]. A vanished entity is detected the same way
+//     as after a reconnect.
 //   - The Lister is not linearizable: a briefly stale read causes at most one
 //     extra, idempotent reconcile, never incorrectness.
 package cpinformer

@@ -585,9 +585,9 @@ reconnecting stream carries its own snapshot.
 **Both `?watch=true` rows are Server-Sent-Events subscriptions rather than requests
 that return**, and they arrive with the control plane's SSE work rather than with this
 design. Until that lands they are the external dependency this design cannot satisfy
-on its own, and this layer is the one with no fallback: §5.1 builds a `StorageBackup`
-from what the stream reports, so without it there is no inventory rather than a stale
-one.
+on its own. §5.1 builds a `StorageBackup` from what the stream reports, so until they
+land the manager applies the plain listing as the snapshot and asks for it again every
+30 seconds, which keeps the inventory current at the cost of that delay.
 
 **The stream is what makes a backup this operator did not ask for legible.** §4.2
 puts the schedule in the control plane, so most backups appear without the operator

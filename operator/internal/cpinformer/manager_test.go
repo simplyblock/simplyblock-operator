@@ -86,6 +86,50 @@ func TestSubscriptionManagerStreamsAndDispatches(t *testing.T) {
 	<-done
 }
 
+// Regression: 2026-10-01-backup-inventory-empty — the control plane serves no
+// ?watch=true for backups, so it answered the stream request with a plain JSON
+// list. The manager read no events from it and reconnected forever, so no
+// StorageBackup object was ever created. A list is the snapshot, and the route
+// is asked again for the next one.
+func TestSubscriptionManagerTreatsAPlainListingAsASnapshot(t *testing.T) {
+	var mu sync.Mutex
+	body := `[{"id":"b1"}]`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, body)
+	}))
+	defer srv.Close()
+
+	sub := &stubSub{path: "/backups/"}
+	m := NewSubscriptionManager(StreamConfig{
+		Endpoint: srv.URL, Liveness: 2 * time.Second, PollInterval: 20 * time.Millisecond,
+	}, logr.Discard(), LeaderOnly)
+	m.AddSubscription(sub).Add(Scope{"c"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = m.Start(ctx); close(done) }()
+
+	waitFor(t, func() bool { return len(sub.handled()) >= 1 }, "the listing as a snapshot")
+	mu.Lock()
+	body = `[]`
+	mu.Unlock()
+	waitFor(t, func() bool {
+		h := sub.handled()
+		return len(h) >= 2 && string(h[len(h)-1].Data) == `[]`
+	}, "the next listing, which no longer has the backup")
+
+	for _, ev := range sub.handled() {
+		if ev.Kind != EventSnapshot {
+			t.Errorf("event kind = %q, want snapshot", ev.Kind)
+		}
+	}
+	cancel()
+	<-done
+}
+
 func TestSubscriptionManagerAddScopeAfterStart(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
