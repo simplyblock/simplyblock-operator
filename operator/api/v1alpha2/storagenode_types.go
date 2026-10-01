@@ -507,7 +507,7 @@ type StorageNodeStatus struct {
 
 	// Health is the health flag the control plane reports.
 	// +optional
-	Health bool `json:"health,omitempty"`
+	Health bool `json:"health"`
 
 	// Hostname is the node hostname as the control plane reports it.
 	// +optional
