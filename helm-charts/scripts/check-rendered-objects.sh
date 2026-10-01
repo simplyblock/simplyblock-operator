@@ -19,13 +19,21 @@ fail=0
 # failure rather than as the objects it is meant to check.
 CAPABILITIES=(--api-versions cert-manager.io/v1)
 
-# Objects every profile renders, as `Kind/name`.
-COMMON=(
+# Objects every profile renders, as `Kind/name`: the operator and what a CSI
+# driver needs from it, whether the chart or an administrator writes the driver.
+OPERATOR=(
   "Deployment/simplyblock-operator"
   "Service/simplyblock-operator-webhook-service"
   "MutatingWebhookConfiguration/simplyblock-operator-mutating-webhook-configuration"
   "ValidatingWebhookConfiguration/simplyblock-operator-validating-webhook-configuration"
   "ServiceAccount/simplyblock-operator"
+  "Service/simplyblock-csi-link"
+  "ConfigMap/simplyblock-bootstrap"
+)
+
+# Objects the standalone and managed profiles render on top of OPERATOR.
+COMMON=(
+  "${OPERATOR[@]}"
   "ControlPlane/simplyblock"
   # Both profiles run workloads that mount simplyblock volumes, so both need a
   # CSI driver, and nothing but this object produces one: the chart stopped
@@ -179,8 +187,51 @@ checkVendoredCRDs() {
   fi
 }
 
+# checkEmpty asserts that the empty profile renders the operator and nothing it
+# would act on.
+#
+# The profile exists for an administrator who writes the ControlPlane and the
+# SimplyblockDriver by hand after the install. A chart-rendered one beside theirs
+# is a second CSI deployment, or a control plane they did not ask for, and the
+# discovery run is a draft cluster proposed from workers they did not choose.
+checkEmpty() {
+  local present unwanted bootstrap
+  local clean=1
+
+  present="$(render empty)"
+  if [ -z "$present" ]; then
+    # Absence is what this asserts, and nothing rendered is absent from.
+    echo "  empty: RENDER FAILED"
+    fail=1
+    return
+  fi
+  for unwanted in "ControlPlane/simplyblock" "SimplyblockDriver/simplyblock"; do
+    if grep -qxF "$unwanted" <<<"$present"; then
+      echo "  empty: ${unwanted} is rendered"
+      clean=0
+      fail=1
+    fi
+  done
+
+  bootstrap="$(helm template sb "$CHART" --namespace simplyblock \
+    "${CAPABILITIES[@]}" \
+    --set deployment.profile=empty \
+    --show-only templates/bootstrap-configmap.yaml 2>/dev/null)"
+  if ! grep -qE '^ +enabled: false$' <<<"$bootstrap"; then
+    echo "  empty: the bootstrap ConfigMap does not decline the discovery run"
+    clean=0
+    fail=1
+  fi
+
+  if [ "$clean" -eq 1 ]; then
+    echo "  empty: no ControlPlane, no SimplyblockDriver, no discovery run"
+  fi
+}
+
 check standalone "${COMMON[@]}"
 check managed "${COMMON[@]}"
+check empty "${OPERATOR[@]}"
+checkEmpty
 checkPair
 checkVendoredCRDs
 

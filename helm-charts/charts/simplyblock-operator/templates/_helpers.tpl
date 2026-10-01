@@ -8,10 +8,12 @@ by default, which is the wrong way round: a driver registers a provisioner and
 takes over the node plugin's socket on every worker, and a profile that wanted
 neither would get both by saying nothing.
 
-Both of today's profiles are here because both run workloads that mount
+standalone and managed are here because both run workloads that mount
 simplyblock volumes. What differs between them is where the control plane is,
 and the driver reaches it through the credentials Secret either way
-(design-simplyblockdriver.md §4.3).
+(design-simplyblockdriver.md §4.3). empty is not: its administrator writes the
+SimplyblockDriver, and a chart-rendered one beside it would be a second CSI
+deployment.
 */}}
 {{- define "simplyblock.rendersCSIDriver" -}}
 {{- if has .Values.deployment.profile (list "standalone" "managed") -}}

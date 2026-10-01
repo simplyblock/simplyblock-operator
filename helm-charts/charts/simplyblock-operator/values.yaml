@@ -55,7 +55,7 @@ multiCluster:
     workers:
 
 deployment:
-  # One of: standalone, managed.
+  # One of: standalone, managed, empty.
   #
   # standalone hosts its own control plane. The operator installs FoundationDB,
   # the object store, and the management API from the ControlPlane object this
@@ -63,6 +63,17 @@ deployment:
   #
   # managed registers this cluster's storage with a control plane elsewhere,
   # named by controlplane.managed below. Nothing is installed here.
+  #
+  # empty installs the operator, its CRDs, and its webhooks, and nothing for it to
+  # act on: no ControlPlane, no SimplyblockDriver, and no discovery run. The
+  # administrator writes the ControlPlane and the SimplyblockDriver afterward. The
+  # `driver` section below is not read, and of `discovery` only `namespace` is:
+  # the node-probe ServiceAccount and Role go there, and a discovery run raised
+  # later by hand needs them in its namespace.
+  #
+  # A release cannot switch to empty while a ControlPlane or SimplyblockDriver it
+  # created still exists, because Helm keeps both on the upgrade and the operator
+  # goes on running them. validate-controlplane.yaml says how to take them over.
   #
   # Observability under controlplane is rendered for standalone only: it stores
   # what it collects in the object store a hosted control plane brings.
@@ -82,7 +93,8 @@ deployment:
 # `kubectl create -f` against an OperatorOps of your own.
 #
 # Rendered for the managed profile as `enabled: false` alone: there, the cluster
-# that manages this one raises the run, in the namespace it chooses.
+# that manages this one raises the run, in the namespace it chooses. The empty
+# profile renders the same, because its administrator writes the cluster.
 discovery:
   # Whether this installation raises the run at all. An installation that wants
   # no draft waiting for it sets this to false and writes its
