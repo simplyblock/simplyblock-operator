@@ -12,14 +12,21 @@ import (
 
 const testBackup = "44444444-4444-4444-4444-444444444444"
 const testPolicy = "66666666-6666-6666-6666-666666666666"
+const testSnapshot = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+const testPrevBackup = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 
 // backupJSON is one BackupDTO with every field the wire declares, so that a
 // field the decoder stops reading shows up as a zero rather than as a decode
 // error nobody sees.
-const backupJSON = `{"id":"` + testBackup + `","source_cluster_id":"` + testCluster + `",` +
-	`"s3_id":7,"lvol_id":"` + testVolume + `","lvol_name":"vol1","snapshot_id":"snap-id",` +
-	`"snapshot_name":"snap-1","node_id":"node-1","status":"completed","prev_backup_id":"prev-1",` +
-	`"size":1024,"created_at":1700000000,"completed_at":1700000060,"allowed_hosts":[]}`
+//
+// The identifiers are UUIDs because the control plane types them as UUIDs: a
+// backup names a volume, a snapshot, a node, and the previous link in its chain,
+// and a fixture carrying `node-1` would decode against a client that had stopped
+// reading them as identifiers at all.
+const backupJSON = `{"id":"` + testBackup + `","s3_id":7,"lvol_id":"` + testVolume + `",` +
+	`"lvol_name":"vol1","snapshot_id":"` + testSnapshot + `","snapshot_name":"snap-1",` +
+	`"node_id":"` + testNode + `","status":"completed","prev_backup_id":"` + testPrevBackup + `",` +
+	`"size":1024,"created_at":1700000000,"completed_at":1700000060,"encrypted":true}`
 
 func TestClientListAndFindBackups(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -38,6 +45,12 @@ func TestClientListAndFindBackups(t *testing.T) {
 	got := backups[0]
 	if got.ID != testBackup || got.LvolID != testVolume || got.SizeBytes != 1024 {
 		t.Errorf("backups[0] = %+v", got)
+	}
+	if got.SnapshotID != testSnapshot || got.NodeID != testNode || got.PrevBackupID != testPrevBackup {
+		t.Errorf("backups[0] identifiers = %+v", got)
+	}
+	if !got.Encrypted {
+		t.Errorf("encrypted = false, want true")
 	}
 	if want := time.Unix(1700000000, 0).UTC(); !got.CreatedAt.Equal(want) {
 		t.Errorf("createdAt = %v, want %v", got.CreatedAt, want)
@@ -61,9 +74,10 @@ func TestClientListAndFindBackups(t *testing.T) {
 // A backup that has not finished carries no completion instant, and reporting
 // 1970 for it would make a duration metric and an age alert both wrong.
 func TestClientBackupWithoutTimestampsHasZeroTimes(t *testing.T) {
-	const running = `{"id":"` + testBackup + `","source_cluster_id":"","s3_id":0,"lvol_id":"",` +
-		`"lvol_name":"","snapshot_id":"","snapshot_name":"","node_id":"","status":"in_progress",` +
-		`"prev_backup_id":"","size":0,"created_at":0,"completed_at":0,"allowed_hosts":[]}`
+	const running = `{"id":"` + testBackup + `","s3_id":0,"lvol_id":"` + testVolume + `",` +
+		`"lvol_name":"vol1","snapshot_id":"` + testSnapshot + `","snapshot_name":"snap-1",` +
+		`"node_id":"` + testNode + `","status":"in_progress","size":0,` +
+		`"created_at":0,"completed_at":0,"encrypted":false}`
 
 	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -76,6 +90,11 @@ func TestClientBackupWithoutTimestampsHasZeroTimes(t *testing.T) {
 	}
 	if !backups[0].CreatedAt.IsZero() || !backups[0].CompletedAt.IsZero() {
 		t.Errorf("times = %v / %v, want both zero", backups[0].CreatedAt, backups[0].CompletedAt)
+	}
+	// The first backup of a chain has no predecessor, and the wire omits the
+	// key rather than sending an empty one.
+	if backups[0].PrevBackupID != "" {
+		t.Errorf("prevBackupID = %q, want empty", backups[0].PrevBackupID)
 	}
 }
 

@@ -68,6 +68,30 @@ type importBackupsResponse struct {
 	Imported int `json:"imported"`
 }
 
+// backupExport is the control plane's export document, read only as far as
+// telling an export that carries manifests from one that carries none.
+//
+// It is grouped by location because a cluster can hold backups in several
+// buckets at once (its own, plus any it has imported), and a chain never spans
+// two, so an export of more than one chain names more than one bucket. Nothing
+// beyond the count is decoded: the body goes back to the import endpoint
+// verbatim, and a second reading of it here would only be somewhere for the two
+// readings to disagree.
+type backupExport struct {
+	Groups []struct {
+		Manifests []json.RawMessage `json:"manifests"`
+	} `json:"groups"`
+}
+
+// manifests counts the backups an export carries across all of its groups.
+func (e backupExport) manifests() int {
+	total := 0
+	for _, group := range e.Groups {
+		total += len(group.Manifests)
+	}
+	return total
+}
+
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=backupimports,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=backupimports/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=backupimports/finalizers,verbs=update
@@ -211,12 +235,13 @@ func (r *BackupImportReconciler) exportBackup(
 	if status >= 300 {
 		return nil, fmt.Errorf("export API failed: status=%d body=%s", status, string(body))
 	}
-	// Validate it's a non-empty JSON array.
-	var items []json.RawMessage
-	if err := json.Unmarshal(body, &items); err != nil {
+	// An export that carries no manifest would import as a success and leave the
+	// restore with nothing to read, so it is refused here instead.
+	var export backupExport
+	if err := json.Unmarshal(body, &export); err != nil {
 		return nil, fmt.Errorf("unmarshal export response: %w", err)
 	}
-	if len(items) == 0 {
+	if export.manifests() == 0 {
 		return nil, fmt.Errorf("backup %s has no completed backups to export", backupID)
 	}
 	return body, nil
