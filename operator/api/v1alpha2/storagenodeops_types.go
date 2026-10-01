@@ -211,6 +211,14 @@ type DrainStatus struct {
 	// VolumesMigrated is how many of them have completed.
 	// +kubebuilder:validation:Minimum=0
 	VolumesMigrated int32 `json:"volumesMigrated"`
+
+	// DevicesTotal is the number of data devices the removal rebuilds onto the
+	// node's peers, as the control plane counts them during MigratingDevices.
+	// It is a pointer because it is counted after the volumes are: absent means
+	// it has not been counted yet, and zero is a node with no data devices.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	DevicesTotal *int32 `json:"devicesTotal,omitempty"`
 }
 
 // StorageNodeOpsStatus is the observed state of one node operation.

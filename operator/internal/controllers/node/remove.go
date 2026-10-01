@@ -234,6 +234,9 @@ func (r *StorageNodeOpsReconciler) drainMigrateDevices(
 	if err != nil {
 		return false, fmt.Errorf("read the device rebuild of node %s: %w", ops.Spec.NodeRef, err)
 	}
+	if err := r.recordDeviceProgress(ctx, ops, progress); err != nil {
+		return false, err
+	}
 	if progress.Done {
 		return true, nil
 	}
@@ -348,6 +351,21 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 		}
 	}
 	return false, nil
+}
+
+// recordDeviceProgress publishes the control plane's count of the rebuild beside
+// the volumes' own, which is what gives a removal that spends minutes on its
+// devices a number rather than an unexplained wait.
+func (r *StorageNodeOpsReconciler) recordDeviceProgress(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, progress RemovalProgress,
+) error {
+	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageNodeOpsStatus) {
+		if status.Drain == nil {
+			status.Drain = &simplyblockv1alpha2.DrainStatus{}
+		}
+		total := int32(progress.Total)
+		status.Drain.DevicesTotal = &total
+	})
 }
 
 // recordDrainProgress writes how many volumes have moved. The total stays as

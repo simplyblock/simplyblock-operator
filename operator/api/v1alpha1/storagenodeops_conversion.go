@@ -56,6 +56,8 @@ const (
 	annoNodeOpsPhase    = "storage.simplyblock.io/conversion-status.phase"
 	annoNodeOpsObserved = "storage.simplyblock.io/conversion-status.observedGeneration"
 	annoNodeOpsAbort    = "storage.simplyblock.io/conversion-spec.abort"
+
+	annoNodeOpsDevicesTotal = "storage.simplyblock.io/conversion-status.drain.devicesTotal"
 )
 
 // storageNodeOpsActionToHub maps this version's lowercase actions onto the hub's
@@ -239,6 +241,15 @@ func stashNodeOpsHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageNodeOps) 
 	if err := stash(meta, annoNodeOpsObserved, src.Status.ObservedGeneration); err != nil {
 		return err
 	}
+	// The device rebuild has no counter here: this version's drain moved
+	// volumes only.
+	var devicesTotal *int32
+	if src.Status.Drain != nil {
+		devicesTotal = src.Status.Drain.DevicesTotal
+	}
+	if err := stash(meta, annoNodeOpsDevicesTotal, devicesTotal); err != nil {
+		return err
+	}
 
 	// Only the phase this version cannot spell is recorded. Every other value
 	// survives the narrowing, and an annotation for each would be noise on every
@@ -297,6 +308,19 @@ func restoreNodeOpsHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageNodeOps
 
 	if err := unstash(meta, annoNodeOpsObserved, &dst.Status.ObservedGeneration); err != nil {
 		return err
+	}
+
+	var devicesTotal *int32
+	if err := unstash(meta, annoNodeOpsDevicesTotal, &devicesTotal); err != nil {
+		return err
+	}
+	if devicesTotal != nil {
+		// A drain with no volumes to move has no block on the way up, and a
+		// device count is reason enough to give it one.
+		if dst.Status.Drain == nil {
+			dst.Status.Drain = &v1alpha2.DrainStatus{}
+		}
+		dst.Status.Drain.DevicesTotal = devicesTotal
 	}
 
 	if phase := unstashRemoved(meta, annoNodeOpsPhase); phase != "" {

@@ -521,6 +521,7 @@ Files: `operator/internal/controllers/node/drain_test.go`, `peertargets_test.go`
 | U-456 | `MigratingDevices` outlives its deadline: announced and re-armed, and the drain keeps its lock                | Boundary   | `TestTheDeviceRebuildOutlivingItsDeadlineHoldsTheDrain`       |
 | U-457 | `verify-drained` still sees a snapshot: the removal is held, naming it                                        | Negative   | `TestVerificationHoldsWhileTheControlPlaneSeesASnapshot`      |
 | U-458 | A second `Remove` on a node a failed one left in the removal carries on from where it stopped                 | Positive   | —                                                             |
+| U-459 | `status.drain.devicesTotal` is the control plane's device count, written during `MigratingDevices`            | Positive   | `TestTheDeviceRebuildPublishesHowManyDevicesItRebuilds`       |
 
 ### Operation: The Fan-Out (design §8.4)
 

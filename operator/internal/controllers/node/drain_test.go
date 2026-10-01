@@ -311,6 +311,24 @@ func TestTheDeviceRebuildFinishesWhenTheControlPlaneSaysSo(t *testing.T) {
 	}
 }
 
+// The rebuild's size is published where the volumes' already is, so a removal
+// that spends twenty minutes on its devices has a number attached to the wait.
+func TestTheDeviceRebuildPublishesHowManyDevicesItRebuilds(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingDevices)
+	api.progress = RemovalProgress{Total: 4, Completed: 1, NodeStatus: nodeStatusMigratingDevices}
+	r, apiClient := aDraining(t, api, &scriptedMover{})
+
+	if _, err := r.perform(context.Background(), aDrain(), stepMigratingDevices); err != nil {
+		t.Fatalf("migrating devices: %v", err)
+	}
+
+	got := operationRead(t, apiClient, "a-drain")
+	if got.Status.Drain == nil || got.Status.Drain.DevicesTotal == nil ||
+		*got.Status.Drain.DevicesTotal != 4 {
+		t.Errorf("status.drain = %+v, want devicesTotal 4", got.Status.Drain)
+	}
+}
+
 // A rebuild that gave up holds the drain rather than failing it. Failing would
 // undo nothing, since the node is the removal's, and moving volumes on top of a
 // device that was never rebuilt widens the exposure the removal exists to end.

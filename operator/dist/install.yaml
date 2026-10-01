@@ -8397,6 +8397,15 @@ spec:
                   Drain is the drain's progress over the node's volumes, set only for action
                   Remove.
                 properties:
+                  devicesTotal:
+                    description: |-
+                      DevicesTotal is the number of data devices the removal rebuilds onto the
+                      node's peers, as the control plane counts them during MigratingDevices.
+                      It is a pointer because it is counted after the volumes are: absent means
+                      it has not been counted yet, and zero is a node with no data devices.
+                    format: int32
+                    minimum: 0
+                    type: integer
                   volumesMigrated:
                     description: VolumesMigrated is how many of them have completed.
                     format: int32

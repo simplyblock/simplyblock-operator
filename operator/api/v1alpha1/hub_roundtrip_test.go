@@ -234,6 +234,7 @@ func TestStorageNodeOpsRoundTripsFromTheHub(t *testing.T) {
 	started := metav1.Now()
 	filter := testSystemVolumeFilter
 	force := true
+	devices := int32(4)
 
 	hub := &v1alpha2.StorageNodeOps{
 		ObjectMeta: metav1.ObjectMeta{Name: "ops-1", Namespace: "sb"},
@@ -252,9 +253,11 @@ func TestStorageNodeOpsRoundTripsFromTheHub(t *testing.T) {
 			// AwaitingNode is the sharper half of the pair this version spells as
 			// one Restarting, so it is the value that proves the stash carries
 			// what the projection cannot.
-			Step:               statemachine.KubeSnapshot{State: string(v1alpha2.StorageNodeOpsStepAwaitingNode)},
-			Message:            "waiting for node-1",
-			Drain:              &v1alpha2.DrainStatus{VolumesTotal: 10, VolumesMigrated: 7},
+			Step:    statemachine.KubeSnapshot{State: string(v1alpha2.StorageNodeOpsStepAwaitingNode)},
+			Message: "waiting for node-1",
+			Drain: &v1alpha2.DrainStatus{
+				VolumesTotal: 10, VolumesMigrated: 7, DevicesTotal: &devices,
+			},
 			ObservedGeneration: 3,
 			StartedAt:          &started,
 		},

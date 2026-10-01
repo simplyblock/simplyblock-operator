@@ -1078,7 +1078,17 @@ func equalOpsStatus(a, b simplyblockv1alpha2.StorageNodeOpsStatus) bool {
 	if a.Drain == nil {
 		return true
 	}
-	return *a.Drain == *b.Drain
+	return a.Drain.VolumesTotal == b.Drain.VolumesTotal &&
+		a.Drain.VolumesMigrated == b.Drain.VolumesMigrated &&
+		equalCount(a.Drain.DevicesTotal, b.Drain.DevicesTotal)
+}
+
+// equalCount compares two optional counts, absent being equal only to absent.
+func equalCount(a, b *int32) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func equalTime(a, b *metav1.Time) bool {
