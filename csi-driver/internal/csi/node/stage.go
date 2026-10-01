@@ -80,6 +80,13 @@ func (ns *Server) NodeStageVolume(
 	}
 
 	vc := req.GetVolumeContext()
+	if vc == nil {
+		// A statically provisioned PV can carry no csi.volumeAttributes, which
+		// arrives here as a nil map. The volume's identity is re-resolved from its
+		// handle by refreshVolumeContext regardless, so an empty context is enough
+		// to stage; a nil one would panic on the first write below.
+		vc = map[string]string{}
+	}
 	vc["stagingParentPath"] = stagingParentPath
 	ns.refreshVolumeContext(ctx, volumeID, vc)
 

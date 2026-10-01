@@ -18,6 +18,8 @@ import (
 	"testing"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	k8smount "k8s.io/mount-utils"
 
@@ -282,6 +284,37 @@ func TestStageBringsTheStackUp(t *testing.T) {
 	if stashed[stagedFsTypeKey] != extFS {
 		t.Errorf("the staged filesystem was recorded as %q, and a restage has nothing else to go on",
 			stashed[stagedFsTypeKey])
+	}
+}
+
+// Regression: 2026-09-29-testfailover-nil-volumecontext — a statically
+// provisioned PV (the TestFailover bubble PV) carries no csi.volumeAttributes, so
+// NodeStageVolume received a nil VolumeContext and panicked with "assignment to
+// entry in nil map" at the first vc[...] write. The node plugin crash-looped, its
+// socket refused connections, and no pod could mount the clone. Staging must
+// tolerate a nil VolumeContext: the volume's identity is re-resolved from its
+// handle regardless.
+func TestStageToleratesNilVolumeContext(t *testing.T) {
+	runner := newRecordingRunner()
+	ns, _ := newStackedServer(t, runner)
+
+	req := &csi.NodeStageVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: t.TempDir(),
+		VolumeCapability:  mountCapability(),
+		VolumeContext:     nil, // a static PV with no volumeAttributes
+	}
+
+	// Before the fix this panicked on the nil map at the first vc[...] write. It
+	// must return instead. With no control plane in this unit harness to resolve
+	// the volume's identity from its handle, staging fails cleanly (fail-safe)
+	// rather than crashing the node plugin or attaching the wrong target.
+	_, err := ns.NodeStageVolume(context.Background(), req)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want a clean Internal error for an unresolvable nil-context stage, got %v", err)
+	}
+	if runner.called("up") {
+		t.Fatalf("stage attached a target with no resolved subsystem: %v", runner.calls)
 	}
 }
 

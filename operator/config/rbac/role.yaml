@@ -325,6 +325,7 @@ rules:
   - storagepoolops
   - storagepools
   - tasks
+  - testfailovers
   - volumemigrations
   verbs:
   - create
@@ -360,6 +361,7 @@ rules:
   - storagepoolops/finalizers
   - storagepools/finalizers
   - tasks/finalizers
+  - testfailovers/finalizers
   - volumemigrations/finalizers
   verbs:
   - update
@@ -392,6 +394,7 @@ rules:
   - storagepoolops/status
   - storagepools/status
   - tasks/status
+  - testfailovers/status
   - volumegroupsnapshotops/status
   - volumemigrations/status
   verbs:
@@ -417,4 +420,28 @@ rules:
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - view.open-cluster-management.io
+  resources:
+  - managedclusterviews
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - work.open-cluster-management.io
+  resources:
+  - manifestworks
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
   - watch

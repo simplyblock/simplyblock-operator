@@ -53,6 +53,7 @@ import (
 
 	volumegroupsnapshotv1beta1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
 	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
+	workv1 "open-cluster-management.io/api/work/v1"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -106,6 +107,9 @@ func init() {
 	// external-snapshotter VolumeSnapshot: the VolumeGroupSnapshotOps restore
 	// enumerates a group snapshot's member snapshots (design §7.4).
 	utilruntime.Must(snapshotv1.AddToScheme(scheme))
+	// OCM ManifestWork: the TestFailover controller places the bubble PV/PVC on a
+	// recovery cluster through it (design-test-failover.md §7.6).
+	utilruntime.Must(workv1.Install(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -897,6 +901,14 @@ func main() {
 		Recorder: mgr.GetEventRecorder("volumegroupsnapshotops-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "VolumeGroupSnapshotOps")
+		os.Exit(1)
+	}
+	if err := (&controller.TestFailoverReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("testfailover-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "TestFailover")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
