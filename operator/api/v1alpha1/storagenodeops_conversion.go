@@ -260,7 +260,7 @@ func stashNodeOpsHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageNodeOps) 
 // The projection is one-way, so the five Remove steps and two of the four Migrate
 // steps survive being written to subPhase and read back, and annotating those
 // would put a note on every drain that ever ran. What does not survive is a step
-// with a deadline, either half of the Relocating and AwaitingNode pair this
+// with a deadline or a claim, either half of the Relocating and AwaitingNode pair this
 // version spelled as one Restarting, and every step of an action subPhase never
 // covered.
 func stashNodeOpsStep(
@@ -269,7 +269,7 @@ func stashNodeOpsStep(
 	step statemachine.KubeSnapshot,
 ) error {
 	roundTrips := subPhaseToStep[action][string(stepToSubPhase[step.State])] == step.State
-	if step.Deadline == nil && roundTrips {
+	if step.Deadline == nil && step.Claim == nil && roundTrips {
 		clear(meta, annoNodeOpsStep)
 		return nil
 	}

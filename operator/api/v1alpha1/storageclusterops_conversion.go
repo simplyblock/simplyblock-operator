@@ -228,10 +228,13 @@ func stashOpsHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageClusterOps) e
 // The projection is one-way, so most of the rolling restart's steps survive
 // being written to nodePhase and read back, and annotating those would put a
 // note on every operation that ever ran. What does not survive is a step with a
-// deadline, a step of any action other than the rolling restart, and
-// CheckingPeers, which shares a v1alpha1 spelling with ShuttingDownNode.
+// deadline or a claim, a step of any action other than the rolling restart, and
+// CheckingPeers, which shares a v1alpha1 spelling with ShuttingDownNode. A claim
+// dropped here is a lease erased, and the next pass would make the step's call
+// again at once.
 func stashOpsStep(meta *metav1.ObjectMeta, step statemachine.KubeSnapshot) error {
-	if step.Deadline == nil && nodePhaseToStep[stepToNodePhase[step.State]] == step.State {
+	if step.Deadline == nil && step.Claim == nil &&
+		nodePhaseToStep[stepToNodePhase[step.State]] == step.State {
 		clear(meta, annoOpsStep)
 		return nil
 	}
