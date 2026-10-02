@@ -169,28 +169,29 @@ Files: `operator/internal/controllers/node/provisioning_test.go`,
 
 File: `operator/internal/controllers/node/syncstatus_test.go`
 
-| #     | Scenario                                                                       | Type     | Test                                                          |
-|-------|--------------------------------------------------------------------------------|----------|---------------------------------------------------------------|
-| U-48  | A streamed node object writes `status.status`, `health`, and the resources     | Positive | `TestAPushedNodeIsReadFromTheStreamRatherThanAskedFor`        |
-| U-49  | Nothing changed since the last pass: the reconcile issues no status patch      | Negative | `TestAPassThatFoundNothingNewWritesNothing`                   |
-| U-50  | The control-plane assigned fault group differs from the requested one          | Positive | —                                                             |
-| U-51  | A malformed streamed object: an error rather than a nil dereference            | Negative | —                                                             |
-| U-52  | `status.observedGeneration` matches `metadata.generation` after a sync         | Positive | —                                                             |
-| U-236 | A node reporting 3 of 4 devices online: `devices.online` 3, `devices.total` 4  | Positive | —                                                             |
-| U-237 | A node whose devices have not been reported: `devices` absent, not `{0, 0}`    | Boundary | —                                                             |
-| U-238 | A node with zero devices online: `devices.online` is 0 and present             | Boundary | —                                                             |
-| U-249 | The first capacity sample: `resources.capacity` written with its `sampledAt`   | Positive | `TestAFirstCapacityReadingIsAlwaysWritten`                    |
-| U-250 | A sample under the one-percent threshold: the reconcile issues no patch        | Negative | `TestASampleIsWrittenOnlyWhenItSaysSomethingNew`              |
-| U-251 | A sample over it: the new used size and the new sample time are written        | Positive | `TestASampleIsWrittenOnlyWhenItSaysSomethingNew`              |
-| U-252 | The total changed because a device joined: written whatever the used delta is  | Boundary | `TestASampleIsWrittenOnlyWhenItSaysSomethingNew`              |
-| U-253 | The capacity source is unreachable: the node is published without `capacity`   | Negative | `TestAFailingCapacitySourceStillLeavesTheNodePublished`       |
-| U-254 | A node the exporter has never measured: `capacity` absent rather than zeros    | Boundary | `TestANodeNobodySampledCarriesNoCapacity`                     |
-| U-276 | A node the stream has delivered costs no control-plane request to read back    | Positive | `TestAPushedNodeIsReadFromTheStreamRatherThanAskedFor`        |
-| U-277 | A node the stream has not delivered is read from the control plane instead     | Boundary | `TestANodeTheStreamHasNotDeliveredIsAskedFor`                 |
-| U-278 | Each control-plane status maps to the phase this operator publishes            | Positive | `TestThePhaseIsThisOperatorsReadingOfWhatTheControlPlaneSays` |
-| U-279 | A status this operator has never heard of: `Failed` rather than a guess        | Negative | `TestThePhaseIsThisOperatorsReadingOfWhatTheControlPlaneSays` |
-| U-280 | A stored UUID the control plane has forgotten: the object goes back to Pending | Boundary | `TestANodeTheControlPlaneHasForgottenGoesBackToProvisioning`  |
-| U-281 | A reading that did move is written rather than held back by the threshold      | Positive | `TestAPassThatFoundSomethingNewWritesIt`                      |
+| #     | Scenario                                                                       | Type       | Test                                                          |
+|-------|--------------------------------------------------------------------------------|------------|---------------------------------------------------------------|
+| U-48  | A streamed node object writes `status.status`, `health`, and the resources     | Positive   | `TestAPushedNodeIsReadFromTheStreamRatherThanAskedFor`        |
+| U-49  | Nothing changed since the last pass: the reconcile issues no status patch      | Negative   | `TestAPassThatFoundNothingNewWritesNothing`                   |
+| U-50  | The control-plane assigned fault group differs from the requested one          | Positive   | —                                                             |
+| U-51  | A malformed streamed object: an error rather than a nil dereference            | Negative   | —                                                             |
+| U-52  | `status.observedGeneration` matches `metadata.generation` after a sync         | Positive   | —                                                             |
+| U-236 | A node reporting 3 of 4 devices online: `devices.online` 3, `devices.total` 4  | Positive   | —                                                             |
+| U-237 | A node whose devices have not been reported: `devices` absent, not `{0, 0}`    | Boundary   | —                                                             |
+| U-238 | A node with zero devices online: `devices.online` is 0 and present             | Boundary   | —                                                             |
+| U-249 | The first capacity sample: `resources.capacity` written with its `sampledAt`   | Positive   | `TestAFirstCapacityReadingIsAlwaysWritten`                    |
+| U-250 | A sample under the one-percent threshold: the reconcile issues no patch        | Negative   | `TestASampleIsWrittenOnlyWhenItSaysSomethingNew`              |
+| U-251 | A sample over it: the new used size and the new sample time are written        | Positive   | `TestASampleIsWrittenOnlyWhenItSaysSomethingNew`              |
+| U-252 | The total changed because a device joined: written whatever the used delta is  | Boundary   | `TestASampleIsWrittenOnlyWhenItSaysSomethingNew`              |
+| U-253 | The capacity source is unreachable: the node is published without `capacity`   | Negative   | `TestAFailingCapacitySourceStillLeavesTheNodePublished`       |
+| U-254 | A node the exporter has never measured: `capacity` absent rather than zeros    | Boundary   | `TestANodeNobodySampledCarriesNoCapacity`                     |
+| U-276 | A node the stream has delivered costs no control-plane request to read back    | Positive   | `TestAPushedNodeIsReadFromTheStreamRatherThanAskedFor`        |
+| U-277 | A node the stream has not delivered is read from the control plane instead     | Boundary   | `TestANodeTheStreamHasNotDeliveredIsAskedFor`                 |
+| U-278 | Each control-plane status maps to the phase this operator publishes            | Positive   | `TestThePhaseIsThisOperatorsReadingOfWhatTheControlPlaneSays` |
+| U-279 | A status this operator has never heard of: `Failed` rather than a guess        | Negative   | `TestThePhaseIsThisOperatorsReadingOfWhatTheControlPlaneSays` |
+| U-449 | Removal statuses read `Removing`, then `Removed`, never `Failed` (2026-10-02)  | Regression | `TestANodeBeingRemovedReadsAsRemovingAndThenRemoved`          |
+| U-280 | A stored UUID the control plane has forgotten: the object goes back to Pending | Boundary   | `TestANodeTheControlPlaneHasForgottenGoesBackToProvisioning`  |
+| U-281 | A reading that did move is written rather than held back by the threshold      | Positive   | `TestAPassThatFoundSomethingNewWritesIt`                      |
 
 ### Entity: Deletion (design §4.5)
 

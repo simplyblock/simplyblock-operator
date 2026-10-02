@@ -9594,6 +9594,7 @@ spec:
                 - Provisioning
                 - Online
                 - Removing
+                - Removed
                 - Offline
                 - Degraded
                 - Failed

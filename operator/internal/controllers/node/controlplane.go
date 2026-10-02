@@ -78,6 +78,12 @@ const (
 	nodeStatusInRestart  = "in_restart"
 	nodeStatusInShutdown = "in_shutdown"
 	nodeStatusActive     = "active"
+
+	nodeStatusPendingRemoval   = "pending_removal"
+	nodeStatusMigratingDevices = "migrating_devices"
+	nodeStatusMigratingLvols   = "migrating_lvols"
+	nodeStatusInRemoval        = "in_removal"
+	nodeStatusRemoved          = "removed"
 )
 
 // RestartParams are what the control plane's restart endpoint takes. Three
