@@ -20,6 +20,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/simplyblock/atlas/ptr"
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -184,5 +185,36 @@ func TestAnActivationPastItsRetryBudgetFails(t *testing.T) {
 	}
 	if !rec.has(OperationFailed) {
 		t.Error("the failure emitted no OperationFailed")
+	}
+}
+
+// withFailureDomains turns on failure-domain mode for a cluster.
+func withFailureDomains(c *simplyblockv1alpha2.StorageCluster) {
+	c.Spec.EnableFailureDomains = ptr.To(true)
+}
+
+// reportingDomain is a node the control plane reports in the given domain.
+func reportingDomain(name, worker, domain string) *simplyblockv1alpha2.StorageNode {
+	node := nodeOfTestCluster(name, worker)
+	node.Status.FailureDomain = domain
+	return node
+}
+
+// Regression: 2026-10-02-activation-reads-retired-nodeset — the activation gate
+// read the domains from StorageNodeSet.status.nodes, which nothing writes any
+// more, so it saw no domain on a cluster whose nodes all reported one. The
+// operation held on FailureDomainNotReady until its step deadline and failed.
+func TestAnActivationIsRequestedOnceTheNodesReportTheirDomains(t *testing.T) {
+	api := clusterReadingAt(utils.ClusterStatusUnready)
+	r := newOpsReconciler(t, api, &recorder{},
+		newTestCluster(withStripe(1, 1), withFailureDomains, lockedBy(testOpsName)),
+		newTestOps(simplyblockv1alpha2.StorageClusterOpsActionActivate),
+		reportingDomain("node-1", "worker-1", "0"),
+		reportingDomain("node-2", "worker-2", "1"),
+		reportingDomain("node-3", "worker-3", "2"))
+
+	reconcileOps(t, r, 6)
+	if api.activateCalls != 1 {
+		t.Errorf("the control plane was asked to activate %d times, want 1", api.activateCalls)
 	}
 }
