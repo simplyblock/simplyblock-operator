@@ -134,7 +134,7 @@ func TestThePassThatClaimedTheStepRecordsTheNextOneBeforeItsCacheSeesTheClaim(t 
 	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
 		t.Fatalf("the pass that made the call failed to record the next step: %v", err)
 	}
-	cache.Reads = 0
+	cache.CatchUp()
 
 	ops, _ := reconcileOps(t, r, 0)
 	if got := ops.Status.Step.State; got != string(stepAwaiting) {

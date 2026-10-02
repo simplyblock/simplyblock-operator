@@ -100,29 +100,42 @@ func Cluster(namespace, name, uuid string) *simplyblockv1alpha2.StorageCluster {
 	}
 }
 
-// LaggingClient answers the next Reads reads of Stale's kind and key with a copy
-// of Stale, the way an informer does before the watch event of the latest write
+// LaggingClient answers reads of the objects it was told to lag with copies taken
+// earlier, the way an informer does before the watch event of the latest write
 // arrives. Every other read, and every write, goes to the client behind it. It is
 // what a test of a write-ahead record uses to put a pass one write behind.
 type LaggingClient struct {
 	client.Client
-	Stale client.Object
-	Reads int
+	lagged []*lag
 }
 
-// Lag makes the next reads reads of stale's kind and key answer with stale.
+// lag is one object answered from a stale copy, and how many more reads get it.
+type lag struct {
+	stale client.Object
+	reads int
+}
+
+// Lag answers the following reads of stale's kind and key with stale, as many
+// of them as the count says.
 func (c *LaggingClient) Lag(stale client.Object, reads int) {
-	c.Stale, c.Reads = stale, reads
+	c.lagged = append(c.lagged, &lag{stale: stale, reads: reads})
+}
+
+// CatchUp ends every lag, so that each read reaches the client behind.
+func (c *LaggingClient) CatchUp() {
+	c.lagged = nil
 }
 
 func (c *LaggingClient) Get(
 	ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption,
 ) error {
-	if c.Reads > 0 && c.Stale != nil &&
-		reflect.TypeOf(obj) == reflect.TypeOf(c.Stale) && key == client.ObjectKeyFromObject(c.Stale) {
-		reflect.ValueOf(obj).Elem().Set(reflect.ValueOf(c.Stale.DeepCopyObject()).Elem())
-		c.Reads--
-		return nil
+	for _, l := range c.lagged {
+		if l.reads > 0 && reflect.TypeOf(obj) == reflect.TypeOf(l.stale) &&
+			key == client.ObjectKeyFromObject(l.stale) {
+			reflect.ValueOf(obj).Elem().Set(reflect.ValueOf(l.stale.DeepCopyObject()).Elem())
+			l.reads--
+			return nil
+		}
 	}
 	return c.Client.Get(ctx, key, obj, opts...)
 }

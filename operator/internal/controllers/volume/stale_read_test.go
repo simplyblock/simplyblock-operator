@@ -98,7 +98,7 @@ func TestThePassThatCreatedTheMigrationRecordsItBeforeItsCacheSeesTheClaim(t *te
 	}
 	_, err := r.Reconcile(context.Background(),
 		ctrl.Request{NamespacedName: types.NamespacedName{Name: testOpsName}})
-	cache.Reads = 0
+	cache.CatchUp()
 	if err != nil {
 		t.Fatalf("the pass that created the migration failed to record it: %v", err)
 	}
