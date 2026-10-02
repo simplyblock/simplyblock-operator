@@ -367,6 +367,14 @@ const drhub = {
   }, {namespace}),
   suspendSchedule: (s, suspend) => k8s.patch("TestSchedule", s.name, {spec: {suspend: !!suspend}}, {namespace: s.namespace}),
   createPlan: spec => k8s.create("ProtectionPlan", {apiVersion: DR_API_GROUP, kind: "ProtectionPlan", metadata: {name: dns63(spec.name)}, spec: spec.spec}),
+  // Mutable parts of a plan's spec: the per-site S3 stores and the Velero
+  // namespace (Ramen keys on sites and methods, which stay).
+  patchPlan: (p, spec) => k8s.patch("ProtectionPlan", p.name, {spec}),
+  // Tiers (boot order) and health probes of an application; a merge patch
+  // replaces the lists wholesale.
+  patchApp: (a, spec) => k8s.patch("ProtectedApplication", a.name, {spec}, {namespace: a.namespace}),
+  // A site profile's bindings: logical networks, guest networks, DHCP server.
+  patchSiteProfile: (s, spec) => k8s.patch("SiteProfile", s.name, {spec}),
   createPath: spec => k8s.create("DRPath", {apiVersion: DR_API_GROUP, kind: "DRPath", metadata: {name: dns63(spec.name)}, spec: spec.spec}),
   createApp: ({name, namespace, spec}) => k8s.create("ProtectedApplication", {apiVersion: DR_API_GROUP, kind: "ProtectedApplication", metadata: {name: dns63(name), namespace}, spec}, {namespace}),
   createRPlan: ({name, namespace, spec}) => k8s.create("RecoveryPlan", {apiVersion: DR_API_GROUP, kind: "RecoveryPlan", metadata: {name: dns63(name), namespace}, spec}, {namespace}),
