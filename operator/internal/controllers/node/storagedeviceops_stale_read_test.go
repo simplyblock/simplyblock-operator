@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
@@ -74,5 +75,34 @@ func TestADevicePassReadingTheOperationBeforeTheCallDoesNotCallAgain(t *testing.
 					"operation before the first one made it; issued: %v", got, api.issued)
 			}
 		})
+	}
+}
+
+// A pass that writes twice, recording the status of a device already out of
+// the data path and then the step that follows, must not have its second write
+// conflict with its first. The first write's version is the one the second
+// patches against, and a cache that has not caught up cannot supply it.
+func TestADevicePassThatWritesTwiceDoesNotConflictWithItself(t *testing.T) {
+	api := &deviceCalls{status: cpDeviceRemoved, frozen: true}
+	w := newDeviceWorld(t, api, deviceObject(), failOperation())
+	cache := &testsupport.LaggingClient{Client: w.r.Client}
+	w.r.Client = cache
+
+	before := w.driveTo(stepDeviceRemoving)
+	cache.Lag(before, 20)
+	_, err := w.r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: deviceOpsNamespace, Name: deviceOpsName},
+	})
+	cache.CatchUp()
+	if err != nil {
+		t.Fatalf("the pass failed on its own write: %v", err)
+	}
+
+	ops, _ := w.read()
+	if got := ops.Status.Step.State; got != string(stepDeviceFailing) {
+		t.Errorf("step = %q, want Failing", got)
+	}
+	if got := ops.Status.DeviceStatusBefore; got != cpDeviceRemoved {
+		t.Errorf("deviceStatusBefore = %q, want %q", got, cpDeviceRemoved)
 	}
 }

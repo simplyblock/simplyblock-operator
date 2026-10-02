@@ -831,7 +831,10 @@ func (r *StorageDeviceOpsReconciler) writeStatus(
 		if err := r.Status().Patch(ctx, &fresh, patch); err != nil {
 			return err
 		}
+		// The version travels back with the status, because the next write in
+		// this pass starts from ops and patches against it.
 		fresh.Status.DeepCopyInto(&ops.Status)
+		ops.ResourceVersion = fresh.ResourceVersion
 		return nil
 	})
 	if err != nil {
