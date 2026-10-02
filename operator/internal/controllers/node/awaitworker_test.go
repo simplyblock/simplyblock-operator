@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -280,5 +281,100 @@ func TestAnAddThatGaveUpIsActuallyReposted(t *testing.T) {
 	}
 	if got := stepOf(t, apiClient, node); got != stepPosting {
 		t.Errorf("the step is %q, want Posting so the add is actually asked for again", got)
+	}
+}
+
+// theAddTask is the ID the fake control plane gives the task of every add.
+const theAddTask = "task-1"
+
+// nodeAddTaskBackend answers every task read with one task.
+type nodeAddTaskBackend struct {
+	countingBackend
+	task TaskReading
+}
+
+func (b nodeAddTaskBackend) Task(context.Context, string, string) (TaskReading, error) {
+	return b.task, nil
+}
+
+// Regression: 2026-10-02-node-add-suspended-invisible — a node_add the control plane
+// had restarted and suspended was read as work in progress, so the node showed
+// only the step it waited on, with no event, for its whole deadline. The task
+// is the node's own: it was read by the ID the add returned.
+func TestAFailingAddIsReportedOnTheNodeThatPostedIt(t *testing.T) {
+	node := aProvisioningNode(stepResolving, time.Hour)
+	node.Status.NodeAddTaskID = theAddTask
+	r, cluster, apiClient, adds := aProvisioner(t, aWorkerIn(true, false), node)
+	r.API = nodeAddTaskBackend{
+		countingBackend: countingBackend{adds: adds},
+		task:            TaskReading{Status: "suspended", Retry: 5, Result: "Node add result: False: no failure domain"},
+	}
+
+	if _, err := r.provision(context.Background(), node, cluster); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	var read simplyblockv1alpha2.StorageNode
+	if err := apiClient.Get(context.Background(), client.ObjectKeyFromObject(node), &read); err != nil {
+		t.Fatalf("reading the node back: %v", err)
+	}
+	if want := "task task-1 failed: Node add result: False: no failure domain"; !strings.Contains(read.Status.Message, want) {
+		t.Errorf("status.message = %q, want it to contain %q", read.Status.Message, want)
+	}
+	if line := <-r.Recorder.(*events.FakeRecorder).Events; !strings.Contains(line, NodeAddFailing) {
+		t.Errorf("the event was %q, want one naming %s", line, NodeAddFailing)
+	}
+}
+
+// The node keeps the ID the add returned, which is what lets a later pass read
+// that task and no other.
+func TestThePostedAddsTaskIsRecordedOnTheNode(t *testing.T) {
+	node := aProvisioningNode(stepPosting, time.Hour)
+	r, cluster, apiClient, _ := aProvisioner(t, aWorkerIn(true, false), node)
+
+	if _, err := r.provision(context.Background(), node, cluster); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	var read simplyblockv1alpha2.StorageNode
+	if err := apiClient.Get(context.Background(), client.ObjectKeyFromObject(node), &read); err != nil {
+		t.Fatalf("reading the node back: %v", err)
+	}
+	if read.Status.NodeAddTaskID != theAddTask {
+		t.Errorf("status.nodeAddTaskID = %q, want the task the add returned", read.Status.NodeAddTaskID)
+	}
+}
+
+// Regression: 2026-10-02-node-add-result-overflows-event — the task's result is
+// free text and went into the event and the status message whole. An event note
+// is at most 1 KiB, so a long result made the event fail to record.
+func TestALongTaskResultIsClippedToWhatAnEventTakes(t *testing.T) {
+	node := aProvisioningNode(stepResolving, time.Hour)
+	node.Status.NodeAddTaskID = theAddTask
+	r, cluster, apiClient, adds := aProvisioner(t, aWorkerIn(true, false), node)
+	// Two-byte characters after an odd-length prefix, so that a cut at the limit
+	// falls inside one.
+	r.API = nodeAddTaskBackend{
+		countingBackend: countingBackend{adds: adds},
+		task:            TaskReading{Status: "suspended", Retry: 5, Result: "x" + strings.Repeat("é", 600)},
+	}
+
+	if _, err := r.provision(context.Background(), node, cluster); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	var read simplyblockv1alpha2.StorageNode
+	if err := apiClient.Get(context.Background(), client.ObjectKeyFromObject(node), &read); err != nil {
+		t.Fatalf("reading the node back: %v", err)
+	}
+	message := read.Status.Message
+	if len(message) > 1024 {
+		t.Errorf("status.message is %d bytes, want at most 1024", len(message))
+	}
+	if !utf8.ValidString(message) {
+		t.Error("status.message was cut inside a character")
+	}
+	if !strings.HasPrefix(message, "node_add task task-1 failed: x") || !strings.HasSuffix(message, "…") {
+		t.Errorf("status.message = %.60q…, want the task's result, clipped and marked", message)
 	}
 }
