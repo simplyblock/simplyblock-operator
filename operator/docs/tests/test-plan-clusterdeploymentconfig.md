@@ -51,30 +51,33 @@ File: `operator/internal/controllers/deployment/clusterdeploymentconfig_validate
 
 File: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_test.go`
 
-| #        | Scenario                                                                                                 | Type     | Test                                                |
-|----------|----------------------------------------------------------------------------------------------------------|----------|-----------------------------------------------------|
-| U-12     | One group of two workers, one socket, one node per socket: two `StorageNode` objects                     | Positive | —                                                   |
-| U-13     | The same on a two-socket layout: four objects, slots 0 and 1 per worker                                  | Positive | —                                                   |
-| U-14     | `nodesPerSocket` of 2 on two sockets: four slots per worker                                              | Boundary | —                                                   |
-| U-15     | Each node carries its group's device selection                                                           | Positive | —                                                   |
-| U-16     | Each node carries the cluster block's sizing in `spec.config.sizing`                                     | Positive | —                                                   |
-| U-17     | Each node carries `spec.nodeSet` naming the set it was declared in                                       | Positive | —                                                   |
-| U-18     | Each node carries a controller reference to the `StorageCluster`, not to the config                      | Positive | —                                                   |
-| ~~U-19~~ | Two node sets with different sizing. Withdrawn: sizing is the cluster's, and a set has none to differ in | —        | —                                                   |
-| U-20     | Re-entering `CreatingNodes` with every node present: nothing is created                                  | Negative | —                                                   |
-| U-21     | Re-entering with half the nodes present: only the missing slots are created                              | Positive | —                                                   |
-| U-22     | `status.clusterRef` and `status.nodeRefs` record what was produced                                       | Positive | —                                                   |
-| U-23     | The expansion finishes without waiting for a node to be provisioned                                      | Positive | —                                                   |
-| U-24     | A cluster whose creation fails: the phase becomes `Failed` with the reason                               | Negative | —                                                   |
-| U-25     | `AwaitingCluster` holds until `status.uuid` is set                                                       | Negative | —                                                   |
-| U-26     | A step's deadline expires: `StepDeadlineExceeded`, phase does not advance                                | Boundary | —                                                   |
-| U-185    | The template's `nodeProvisioningBudget` reaches the cluster the expansion creates                        | Positive | `TestTheProvisioningBudgetReachesTheCreatedCluster` |
-| U-186    | A template stating no budget leaves the field unset, so the cluster's default decides it                 | Negative | `TestAnUnstatedProvisioningBudgetIsNotInvented`     |
-| U-223    | `CreatingNodes` maps every group's `failureDomain` into the cluster's `status.failureDomains`            | Positive | `TestCreatingNodesMapsTheDocumentsFailureDomains`   |
-| U-224    | A growth document adds its new labels and keeps every index already assigned                             | Positive | `TestAGrowthDocumentExtendsTheClustersMapping`      |
-| U-225    | New labels are indexed in name order, from the lowest free index                                         | Positive | `TestFailureDomainLabelsAreIndexedInNameOrder`      |
-| U-226    | A numeric label claims its own index when it is free, and the next free one when it is not               | Boundary | `TestANumericLabelClaimsItsOwnIndex`                |
-| U-227    | A document declaring no failure domain writes no mapping                                                 | Negative | `TestADocumentWithoutFailureDomainsMapsNothing`     |
+| #        | Scenario                                                                                                  | Type     | Test                                                                                         |
+|----------|-----------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------------------------------------------------|
+| U-12     | One group of two workers, one socket, one node per socket: two `StorageNode` objects                      | Positive | —                                                                                            |
+| U-13     | The same on a two-socket layout: four objects, slots 0 and 1 per worker                                   | Positive | —                                                                                            |
+| U-14     | `nodesPerSocket` of 2 on two sockets: four slots per worker                                               | Boundary | —                                                                                            |
+| U-15     | Each node carries its group's device selection                                                            | Positive | —                                                                                            |
+| U-16     | Each node carries the cluster block's sizing in `spec.config.sizing`                                      | Positive | —                                                                                            |
+| U-17     | Each node carries `spec.nodeSet` naming the set it was declared in                                        | Positive | —                                                                                            |
+| U-18     | Each node carries a controller reference to the `StorageCluster`, not to the config                       | Positive | —                                                                                            |
+| ~~U-19~~ | Two node sets with different sizing. Withdrawn: sizing is the cluster's, and a set has none to differ in  | —        | —                                                                                            |
+| U-20     | Re-entering `CreatingNodes` with every node present: nothing is created                                   | Negative | —                                                                                            |
+| U-21     | Re-entering with half the nodes present: only the missing slots are created                               | Positive | —                                                                                            |
+| U-22     | `status.clusterRef` and `status.nodeRefs` record what was produced                                        | Positive | —                                                                                            |
+| U-23     | The expansion finishes without waiting for a node to be provisioned                                       | Positive | —                                                                                            |
+| U-24     | A cluster whose creation fails: the phase becomes `Failed` with the reason                                | Negative | —                                                                                            |
+| U-25     | `AwaitingCluster` holds until `status.uuid` is set                                                        | Negative | —                                                                                            |
+| U-26     | A step's deadline expires: `StepDeadlineExceeded`, phase does not advance                                 | Boundary | —                                                                                            |
+| U-185    | The template's `nodeProvisioningBudget` reaches the cluster the expansion creates                         | Positive | `TestTheProvisioningBudgetReachesTheCreatedCluster`                                          |
+| U-186    | A template stating no budget leaves the field unset, so the cluster's default decides it                  | Negative | `TestAnUnstatedProvisioningBudgetIsNotInvented`                                              |
+| U-223    | `CreatingNodes` maps every group's `failureDomain` into the cluster's `status.failureDomains`             | Positive | `TestCreatingNodesMapsTheDocumentsFailureDomains`                                            |
+| U-224    | A growth document adds its new labels and keeps every index already assigned                              | Positive | `TestAGrowthDocumentExtendsTheClustersMapping`                                               |
+| U-225    | New labels are indexed in name order, from the lowest free index                                          | Positive | `TestFailureDomainLabelsAreIndexedInNameOrder`                                               |
+| U-226    | A numeric label claims its own index when it is free, and the next free one when it is not                | Boundary | `TestANumericLabelClaimsItsOwnIndex`, `TestANumericLabelWhoseIndexIsTakenGetsTheNextFreeOne` |
+| U-227    | A document declaring no failure domain writes no mapping                                                  | Negative | `TestADocumentWithoutFailureDomainsMapsNothing`                                              |
+| U-228    | A document whose labels exceed the 256 a cluster maps: refused at validation with `TooManyFailureDomains` | Negative | `TestADocumentWithMoreFailureDomainsThanTheMappingHoldsIsRefused`                            |
+| U-229    | A document with exactly 256 labels: accepted                                                              | Boundary | `TestADocumentFillingTheMappingExactlyIsAccepted`                                            |
+| U-230    | A growth document is counted against the labels its cluster has already mapped                            | Boundary | `TestAGrowthDocumentIsCountedAgainstTheClustersMapping`                                      |
 
 ### Create-Only Semantics (design §6)
 

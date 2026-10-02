@@ -986,7 +986,9 @@ type StorageClusterStatus struct {
 	// introduces, both when it creates the cluster and when it grows one, and
 	// never changes or removes an entry: the control plane has already placed
 	// data by that index. A label that is a number keeps that number as its
-	// index when the number is free.
+	// index when the number is free. A cluster holds at most 256 failure
+	// domains, and a deployment that would exceed that is refused before it is
+	// approved.
 	// +listType=map
 	// +listMapKey=name
 	// +kubebuilder:validation:MaxItems=256

@@ -19,6 +19,10 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
+// maxFailureDomains is how many entries StorageCluster.status.failureDomains
+// holds, which is the MaxItems marker on that field.
+const maxFailureDomains = 256
+
 // assignFailureDomains returns the mapping with an index for every label in
 // labels, ordered by index.
 //

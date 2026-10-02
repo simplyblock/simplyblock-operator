@@ -567,7 +567,11 @@ index in the cluster's `status.failureDomains`
 ([`design-storagecluster.md`](design-storagecluster.md) §3.3). It does this for
 a cluster the document created and for one it joined through `clusterRef`, and
 it only adds: a label already mapped keeps its index. Writing the mapping first
-means no node's add runs before the index it sends exists.
+means no node's add runs before the index it sends exists. The mapping holds at
+most 256 labels, so validation refuses a document that would take its cluster
+past that with `TooManyFailureDomains`, counting the labels the cluster already
+maps. Without it the status patch would be refused on every pass and the
+expansion would stall after approval.
 
 **The distribution flags `spec.environment` stands for land on the cluster, not on
 each node.** They configure the storage-node workload, which is one DaemonSet for
@@ -1096,6 +1100,7 @@ Both kinds are new, so both tables are new infrastructure.
 | A draft names a worker that does not exist               | `Warning` | `WorkerNotFound`            | `ClusterDeploymentConfig` |
 | A draft names a device no node advertises                | `Warning` | `DeviceNotFound`            | `ClusterDeploymentConfig` |
 | A draft's devices are not the class its cluster uses     | `Warning` | `DeviceClassMismatch`       | `ClusterDeploymentConfig` |
+| A draft would map more than 256 failure domains          | `Warning` | `TooManyFailureDomains`     | `ClusterDeploymentConfig` |
 | A draft's scheme is one the control plane refuses        | `Warning` | `StripeUnsupported`         | `ClusterDeploymentConfig` |
 | A draft has fewer nodes than its scheme requires         | `Warning` | `StripeBelowMinimumNodes`   | `ClusterDeploymentConfig` |
 | A draft's nodes sit on too few workers for its scheme    | `Warning` | `StripeBelowMinimumWorkers` | `ClusterDeploymentConfig` |

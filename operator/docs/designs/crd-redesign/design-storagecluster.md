@@ -487,7 +487,8 @@ An entry is never changed or removed once written, because the control plane has
 placed nodes under that index. New labels are indexed in name order from the
 lowest free index, except that a numeric label claims its own number when the
 number is free: before the mapping existed a numeric label was sent as that
-number, and a cluster built then already has nodes under it.
+number, and a cluster built then already has nodes under it. The list holds at
+most 256 entries, and a deployment that would exceed it is refused at validation.
 
 **Four registered status fields are removed rather than carried forward.**
 `mgmtNodes`, `storageNodes`, `lastUpdated`, and `created` are declared on the
