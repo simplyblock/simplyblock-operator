@@ -96,13 +96,24 @@ type RestartParams struct {
 	NewSsdPcie     []string `json:"new_ssd_pcie,omitempty"`
 }
 
+// TaskReading is a control-plane task as far as a node reads it.
+type TaskReading struct {
+	Status string `json:"status"`
+	Retry  int32  `json:"retry"`
+	Result string `json:"function_result"`
+}
+
 // ControlPlane is everything the two reconcilers in this package ask of the
 // simplyblock control plane.
 type ControlPlane interface {
 	// AddNode adds every storage node of one worker at once and is not
 	// idempotent, which is why the provisioning machine claims its slot in
-	// Kubernetes before calling it (§4.2).
-	AddNode(ctx context.Context, clusterID string, params utils.StorageNodeSetAddParams) error
+	// Kubernetes before calling it (§4.2). It returns the ID of the task doing the
+	// add, which is the existing task while one for the worker is still alive.
+	AddNode(ctx context.Context, clusterID string, params utils.StorageNodeSetAddParams) (string, error)
+
+	// Task reads one control-plane task by its ID.
+	Task(ctx context.Context, clusterID, taskID string) (TaskReading, error)
 
 	// StorageNodes are the cluster's nodes as the control plane reports them,
 	// which is what adoption matches against and what the fallback of every
@@ -171,8 +182,32 @@ func NewControlPlane(resolve controlplane.EndpointResolver) ControlPlane {
 
 func (c *httpControlPlane) AddNode(
 	ctx context.Context, clusterID string, params utils.StorageNodeSetAddParams,
-) error {
-	return c.post(ctx, fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterID), params)
+) (string, error) {
+	body, err := c.call(ctx, http.MethodPost,
+		fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterID), params)
+	if err != nil {
+		return "", err
+	}
+	var taskID string
+	if err := json.Unmarshal(body, &taskID); err != nil {
+		return "", fmt.Errorf("read the add's task id: %w", err)
+	}
+	return taskID, nil
+}
+
+func (c *httpControlPlane) Task(
+	ctx context.Context, clusterID, taskID string,
+) (TaskReading, error) {
+	body, err := c.call(ctx, http.MethodGet,
+		fmt.Sprintf("/api/v2/clusters/%s/tasks/%s", clusterID, taskID), nil)
+	if err != nil {
+		return TaskReading{}, err
+	}
+	var task TaskReading
+	if err := json.Unmarshal(body, &task); err != nil {
+		return TaskReading{}, fmt.Errorf("read task %s: %w", taskID, err)
+	}
+	return task, nil
 }
 
 func (c *httpControlPlane) StorageNodes(
