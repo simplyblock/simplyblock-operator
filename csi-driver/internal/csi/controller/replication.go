@@ -108,10 +108,23 @@ func volumeIDFrom(req volumeIDCarrier) string {
 func resolveToLocalReplica(
 	ctx context.Context, h *lvol.Handle, client *atlascp.Client,
 ) (*lvol.Handle, *atlascp.Client, error) {
+	h, client, _, err := resolveReplica(ctx, h, client)
+	return h, client, err
+}
+
+// resolveReplica is resolveToLocalReplica reporting also whether h has a
+// replication relationship at all (known): the member it resolves to is then
+// one of a chain the backend records, and a volume of that chain that no
+// longer exists is a superseded, reaped old primary -- nothing left to demote
+// or detach -- rather than an unknown handle.
+func resolveReplica(
+	ctx context.Context, h *lvol.Handle, client *atlascp.Client,
+) (*lvol.Handle, *atlascp.Client, bool, error) {
 	local, flagged, err := clusters.Local()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
+	known := false
 	hops := []chainHop{{h: h, client: client}}
 	for range 8 { // one hop per past fail-over; capped far above any real chain
 		rel, err := client.GetVolumeReplicationRelationship(ctx, h.Handle())
@@ -119,15 +132,16 @@ func resolveToLocalReplica(
 			if errors.Is(err, errs.ErrNotFound) {
 				break
 			}
-			return nil, nil, err
+			return nil, nil, false, err
 		}
+		known = true
 		if !rel.IsSource {
 			break
 		}
 		target := &lvol.Handle{ClusterID: rel.TargetClusterID, PoolRef: rel.TargetPoolID, VolumeID: rel.TargetLvolID}
 		targetClient, err := clusters.ReplicationClient(ctx, target.ClusterID)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 		h, client = target, targetClient
 		hops = append(hops, chainHop{h: h, client: client})
@@ -136,7 +150,16 @@ func resolveToLocalReplica(
 		}
 	}
 	pick := chooseReplica(hops, local, flagged)
-	return pick.h, pick.client, nil
+	return pick.h, pick.client, known, nil
+}
+
+// reapedChainMember is whether a Replication verb on a resolved chain member
+// found the volume gone (404): a superseded old primary the control plane
+// has reaped after its fail-over completed (deferred removal; live
+// 2026-10-02 on site A). Demoting or detaching it is a no-op that succeeds;
+// a 404 on a handle with no relationship stays NotFound.
+func reapedChainMember(known bool, ce classifiedError) bool {
+	return known && status.Code(ce) == codes.NotFound
 }
 
 // chainHop is one member of a replication chain, with the client of its
@@ -267,12 +290,14 @@ func (cs *Server) DisableVolumeReplication(
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	h, client, err = resolveToLocalReplica(ctx, h, client)
+	h, client, known, err := resolveReplica(ctx, h, client)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	if err := client.DisableVolumeReplication(ctx, h.Handle()); err != nil {
-		return nil, classifyDisableVolumeReplicationError(err)
+		if ce := classifyDisableVolumeReplicationError(err); !reapedChainMember(known, ce) {
+			return nil, ce
+		}
 	}
 	return &replication.DisableVolumeReplicationResponse{}, nil
 }
@@ -418,13 +443,17 @@ func (cs *Server) DemoteVolume(
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	h, client, err = resolveToLocalReplica(ctx, h, client)
+	h, client, known, err := resolveReplica(ctx, h, client)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	done, err := client.DemoteVolume(ctx, h.Handle())
 	if err != nil {
-		return nil, classifyDemoteVolumeError(err)
+		ce := classifyDemoteVolumeError(err)
+		if !reapedChainMember(known, ce) {
+			return nil, ce
+		}
+		done = true
 	}
 	if !done {
 		return nil, status.Error(codes.Aborted, "demote is still converging")

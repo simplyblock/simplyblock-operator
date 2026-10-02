@@ -1,8 +1,10 @@
 package controller
 
 import (
+	"context"
 	"testing"
 
+	"github.com/csi-addons/spec/lib/go/replication"
 	"github.com/simplyblock/atlas/lvol"
 )
 
@@ -54,5 +56,33 @@ func TestChooseReplicaOfAVolumeWithoutARelationshipIsTheVolume(t *testing.T) {
 	one := liveChain()[:1]
 	if got := chooseReplica(one, map[string]bool{siteB: true}, true); got.h.VolumeID != "0aea" {
 		t.Fatalf("got %s", got.h.VolumeID)
+	}
+}
+
+// The old primary of an unplanned fail-over is reaped by the control plane
+// once its fail-over completed; Ramen still demotes it (and deletes its VR)
+// when the site returns. Nothing is left to demote: success, not NotFound
+// (live 2026-10-02: the VR on site A stayed Degraded on a 404).
+func TestDemoteAndDisableOfAReapedChainMemberSucceed(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	gone := "99999999-aaaa-bbbb-cccc-dddddddddddd"
+	mock.replicationRelationship[testReplVolumeID] = map[string]any{
+		"replication_id":    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"direction":         "to_target",
+		"mode":              "failover",
+		"state":             "failed_over",
+		"is_source":         true,
+		"source_cluster_id": sanityClusterID, "source_lvol_id": testReplVolumeID,
+		"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": gone,
+		"active_lvol_id": gone,
+		"target_nqn":     "nqn.test", "target_ns_id": 1,
+	}
+	if _, err := cs.DemoteVolume(context.Background(), &replication.DemoteVolumeRequest{VolumeId: testReplVolID}); err != nil {
+		t.Fatalf("demote of a reaped chain member: %v", err)
+	}
+	if _, err := cs.DisableVolumeReplication(context.Background(), &replication.DisableVolumeReplicationRequest{VolumeId: testReplVolID}); err != nil {
+		t.Fatalf("disable of a reaped chain member: %v", err)
 	}
 }
