@@ -33,10 +33,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/simplyblock/atlas/kube"
@@ -403,6 +406,9 @@ func (r *StorageNodeOpsReconciler) drainRemove(
 // the same answer through the check every step makes first. removed_failed is the
 // control plane giving up, and it is terminal on that side, so the operation
 // fails rather than waiting out its deadline for a status that will not come.
+//
+// Anything else is the removal still running, and each pass records how far it
+// has got. A change is progress and moves the deadline out (recordRemovalProgress).
 func (r *StorageNodeOpsReconciler) drainAwaitRemoval(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, clusterID, nodeID string,
 ) (bool, error) {
@@ -417,8 +423,68 @@ func (r *StorageNodeOpsReconciler) drainAwaitRemoval(
 		return false, fatalf("the control plane gave up removing node %s and reports it %s",
 			ops.Spec.NodeRef, reading.Status)
 	default:
-		return false, nil
+		return false, r.recordRemovalProgress(ctx, ops, reading.Status)
 	}
+}
+
+// recordRemovalProgress writes the node's status and its devices' statuses into
+// status.removal and, when either changed since the last pass, moves the step's
+// deadline a whole budget out from now.
+//
+// The deadline is a bound on a removal that stopped moving rather than on one
+// that takes long. migrating_devices is a single node status for a rebuild that
+// can run for hours, and what changes during it is the devices, one at a time as
+// each one's data lands on the peers. So both count, and a removal is failed only
+// once a whole budget passes with neither changing.
+//
+// The devices are read from the StorageDevice objects this operator mirrors
+// rather than asked of the control plane, so the wait costs no request beyond the
+// node read every step already makes.
+func (r *StorageNodeOpsReconciler) recordRemovalProgress(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, nodeStatus string,
+) error {
+	var devices simplyblockv1alpha2.StorageDeviceList
+	if err := r.List(ctx, &devices, client.InNamespace(ops.Namespace),
+		client.MatchingLabels{simplyblockv1alpha2.DeviceLabelNode: ops.Spec.NodeRef}); err != nil {
+		return fmt.Errorf("list the devices of node %s: %w", ops.Spec.NodeRef, err)
+	}
+	var statuses map[string]string
+	for i := range devices.Items {
+		if statuses == nil {
+			statuses = make(map[string]string, len(devices.Items))
+		}
+		statuses[devices.Items[i].Name] = devices.Items[i].Status.DeviceStatus
+	}
+
+	if recorded := ops.Status.Removal; recorded != nil &&
+		recorded.NodeStatus == nodeStatus && maps.Equal(recorded.Devices, statuses) {
+		return nil
+	}
+
+	now := metav1.Now()
+	deadline := metav1.NewTime(now.Add(awaitingRemovalDeadline))
+	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageNodeOpsStatus) {
+		status.Removal = &simplyblockv1alpha2.RemovalStatus{
+			NodeStatus:       nodeStatus,
+			Devices:          statuses,
+			LastProgressTime: &now,
+		}
+		status.Step.Deadline = &deadline
+	})
+}
+
+// removalProgress is the waiting message of AwaitingRemoval: the node's status,
+// and how many of its devices the removal has finished with.
+func removalProgress(removal *simplyblockv1alpha2.RemovalStatus) string {
+	settled := 0
+	for _, status := range removal.Devices {
+		if status == cpDeviceFailedAndMigrated || status == cpDeviceRemoved {
+			settled++
+		}
+	}
+	return fmt.Sprintf("the control plane reports the node %s, %d of %d %s migrated off it",
+		removal.NodeStatus, settled, len(removal.Devices),
+		plural(len(removal.Devices), "device", "devices"))
 }
 
 // migrationsOf lists the fan-out of this drain.

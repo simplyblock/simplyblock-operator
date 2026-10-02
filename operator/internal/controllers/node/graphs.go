@@ -97,10 +97,12 @@ const (
 
 	// awaitingRemovalDeadline bounds the control plane's own removal, which
 	// rebuilds the node's devices onto its peers and migrates its volumes and
-	// takes as long as that data takes to move. The control plane gives up on a
-	// removal after six hours and reports removed_failed, which this operation
-	// reads as its failure, so this budget sits past that and is the backstop
-	// for a control plane that stopped reporting rather than the limit itself.
+	// takes as long as that data takes to move. It is a budget without progress
+	// rather than a total: every change of the node's status or of a device's
+	// moves it a whole budget out again (recordRemovalProgress). The control
+	// plane gives up on a removal after six hours and reports removed_failed,
+	// which this operation reads as its failure, so a budget past that is the
+	// backstop for a control plane that stopped reporting.
 	awaitingRemovalDeadline = 7 * time.Hour
 
 	preparingDeadline   = 15 * time.Minute

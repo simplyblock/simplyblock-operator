@@ -8690,6 +8690,32 @@ spec:
                 - Failed
                 - Aborted
                 type: string
+              removal:
+                description: |-
+                  Removal is the control plane's progress through the removal, written by
+                  a Remove while it waits in AwaitingRemoval.
+                properties:
+                  devices:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Devices is the control-plane status each of the node's StorageDevices
+                      last reported, keyed by the StorageDevice's name. A device moves from
+                      online through failed to failed_and_migrated, or to removed, as the
+                      removal rebuilds its data onto the peers.
+                    type: object
+                  lastProgressTime:
+                    description: LastProgressTime is when NodeStatus or any of Devices
+                      last changed.
+                    format: date-time
+                    type: string
+                  nodeStatus:
+                    description: |-
+                      NodeStatus is the node's status as the control plane last reported it,
+                      in the control plane's own spelling: pending_removal, migrating_devices,
+                      migrating_lvols, in_removal, removed, or removed_failed.
+                    type: string
+                type: object
               startedAt:
                 description: StartedAt is when the operation acquired its target's
                   lock.

@@ -33,6 +33,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -1124,6 +1125,9 @@ func equalOpsStatus(a, b simplyblockv1alpha2.StorageNodeOpsStatus) bool {
 		!equalTime(a.CompletedAt, b.CompletedAt) {
 		return false
 	}
+	if !equality.Semantic.DeepEqual(a.Removal, b.Removal) {
+		return false
+	}
 	if (a.Drain == nil) != (b.Drain == nil) {
 		return false
 	}
@@ -1163,6 +1167,9 @@ func (r *StorageNodeOpsReconciler) waitingMessage(
 ) string {
 	if d := ops.Status.Drain; d != nil && current == stepMigratingVolumes {
 		return fmt.Sprintf("%d of %d volumes migrated", d.VolumesMigrated, d.VolumesTotal)
+	}
+	if removal := ops.Status.Removal; removal != nil && current == stepAwaitingRemoval {
+		return removalProgress(removal)
 	}
 	return fmt.Sprintf("waiting on %s", current)
 }

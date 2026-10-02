@@ -211,11 +211,42 @@ type DrainStatus struct {
 	VolumesMigrated int32 `json:"volumesMigrated"`
 }
 
+// RemovalStatus is the control plane's progress through a node removal it has
+// accepted, as the operation last read it while waiting in AwaitingRemoval.
+//
+// Any change in it counts as progress. Each change moves the step's deadline out
+// by the full budget again, so a removal that keeps moving is waited on for as
+// long as it moves, and one that stops is failed once a full budget passes with
+// nothing changing.
+type RemovalStatus struct {
+	// NodeStatus is the node's status as the control plane last reported it,
+	// in the control plane's own spelling: pending_removal, migrating_devices,
+	// migrating_lvols, in_removal, removed, or removed_failed.
+	// +optional
+	NodeStatus string `json:"nodeStatus,omitempty"`
+
+	// Devices is the control-plane status each of the node's StorageDevices
+	// last reported, keyed by the StorageDevice's name. A device moves from
+	// online through failed to failed_and_migrated, or to removed, as the
+	// removal rebuilds its data onto the peers.
+	// +optional
+	Devices map[string]string `json:"devices,omitempty"`
+
+	// LastProgressTime is when NodeStatus or any of Devices last changed.
+	// +optional
+	LastProgressTime *metav1.Time `json:"lastProgressTime,omitempty"`
+}
+
 // StorageNodeOpsStatus is the observed state of one node operation.
 type StorageNodeOpsStatus struct {
 	// Phase is the operation's own progress.
 	// +optional
 	Phase StorageNodeOpsPhase `json:"phase,omitempty"`
+
+	// Removal is the control plane's progress through the removal, written by
+	// a Remove while it waits in AwaitingRemoval.
+	// +optional
+	Removal *RemovalStatus `json:"removal,omitempty"`
 
 	// Step is the position of the running action's state machine. The value is
 	// one of the steps the running action declares.

@@ -18,6 +18,7 @@ package node
 
 import (
 	"context"
+	"maps"
 	"testing"
 	"time"
 
@@ -503,5 +504,113 @@ func TestAFailureOnceTheRemovalWasAskedForResumesNothing(t *testing.T) {
 					asked)
 			}
 		})
+	}
+}
+
+// anAwaitingRemoval is a Remove waiting on the control plane's removal, with a
+// deadline a minute away and the progress it last recorded.
+func anAwaitingRemoval(recorded *simplyblockv1alpha2.RemovalStatus) *simplyblockv1alpha2.StorageNodeOps {
+	ops := anAdvancingOperation("a-drain",
+		simplyblockv1alpha2.StorageNodeOpsActionRemove, stepAwaitingRemoval)
+	soon := metav1.NewTime(time.Now().Add(time.Minute))
+	ops.Status.Step.Deadline = &soon
+	ops.Status.Removal = recorded
+	return ops
+}
+
+// aNodeDevice is one of the node's StorageDevices reporting a control-plane
+// status.
+func aNodeDevice(name, status string) *simplyblockv1alpha2.StorageDevice {
+	return &simplyblockv1alpha2.StorageDevice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: opsNamespace,
+			Labels: map[string]string{simplyblockv1alpha2.DeviceLabelNode: opsNodeName},
+		},
+		Status: simplyblockv1alpha2.StorageDeviceStatus{DeviceStatus: status},
+	}
+}
+
+// deadlineReachesPast reports whether the step's deadline lies at least the
+// step's budget past the given instant, less a minute of margin for the test's own
+// running time.
+func deadlineReachesPast(t *testing.T, got *simplyblockv1alpha2.StorageNodeOps, from time.Time) bool {
+	t.Helper()
+	deadline, ok := got.Status.Step.KubeDeadline()
+	if !ok {
+		t.Fatal("the step carries no deadline")
+	}
+	return !deadline.Before(from.Add(awaitingRemovalDeadline - time.Minute))
+}
+
+// Regression: 2026-10-02-awaiting-removal-progress: a removal moves a node's data
+// for as long as the data takes, so one fixed budget either fails a removal that
+// is still moving or waits hours on one that stopped. A change of the node's
+// status is progress, and progress moves the deadline out by a whole budget.
+func TestANodeStatusChangeMovesTheRemovalDeadlineOut(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingLvols)
+	ops := anAwaitingRemoval(&simplyblockv1alpha2.RemovalStatus{
+		NodeStatus: nodeStatusMigratingDevices,
+	})
+	r, apiClient := anOpsWorld(t, api, ops)
+	lockedBy(t, apiClient, "a-drain")
+	before := time.Now()
+
+	pass(t, r, "a-drain")
+
+	got := operationRead(t, apiClient, "a-drain")
+	if got.Status.Removal == nil || got.Status.Removal.NodeStatus != nodeStatusMigratingLvols {
+		t.Errorf("status.removal = %+v, want the node's new status recorded", got.Status.Removal)
+	}
+	if !deadlineReachesPast(t, got, before) {
+		t.Errorf("deadline = %v, want it moved a whole budget out after the node moved on",
+			got.Status.Step.Deadline)
+	}
+}
+
+// Regression: 2026-10-02-awaiting-removal-progress: migrating_devices is one node
+// status for the whole rebuild, and what moves during it is the devices, one at a
+// time. A device changing status is progress too.
+func TestADeviceStatusChangeMovesTheRemovalDeadlineOut(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingDevices)
+	ops := anAwaitingRemoval(&simplyblockv1alpha2.RemovalStatus{
+		NodeStatus: nodeStatusMigratingDevices,
+		Devices:    map[string]string{"dev-a": "failed", "dev-b": "failed"},
+	})
+	r, apiClient := anOpsWorld(t, api, ops,
+		aNodeDevice("dev-a", "failed_and_migrated"), aNodeDevice("dev-b", "failed"))
+	lockedBy(t, apiClient, "a-drain")
+	before := time.Now()
+
+	pass(t, r, "a-drain")
+
+	got := operationRead(t, apiClient, "a-drain")
+	want := map[string]string{"dev-a": "failed_and_migrated", "dev-b": "failed"}
+	if got.Status.Removal == nil || !maps.Equal(got.Status.Removal.Devices, want) {
+		t.Errorf("status.removal = %+v, want the devices' statuses %v", got.Status.Removal, want)
+	}
+	if !deadlineReachesPast(t, got, before) {
+		t.Errorf("deadline = %v, want it moved a whole budget out after a device moved on",
+			got.Status.Step.Deadline)
+	}
+}
+
+// The other half: a pass that finds nothing changed leaves the deadline where it
+// was, which is what makes a stalled removal fail at all.
+func TestARemovalThatDidNotMoveKeepsItsDeadline(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingDevices)
+	ops := anAwaitingRemoval(&simplyblockv1alpha2.RemovalStatus{
+		NodeStatus: nodeStatusMigratingDevices,
+		Devices:    map[string]string{"dev-a": "failed"},
+	})
+	recorded := *ops.Status.Step.Deadline
+	r, apiClient := anOpsWorld(t, api, ops, aNodeDevice("dev-a", "failed"))
+	lockedBy(t, apiClient, "a-drain")
+
+	pass(t, r, "a-drain")
+
+	got := operationRead(t, apiClient, "a-drain")
+	if got.Status.Step.Deadline == nil || got.Status.Step.Deadline.Unix() != recorded.Unix() {
+		t.Errorf("deadline = %v, want %v kept for a removal that did not move",
+			got.Status.Step.Deadline, recorded)
 	}
 }

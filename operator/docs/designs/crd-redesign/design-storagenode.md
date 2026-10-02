@@ -1686,8 +1686,17 @@ reads the node first: `pending_removal`, `migrating_devices`, `migrating_lvols`,
 the node's devices onto its peers and migrates its volumes before it tears the
 node down, and that takes as long as the data takes to move. The step completes
 on `removed` and fails on `removed_failed`, which is the control plane giving up
-on the removal. Its deadline is a backstop past the control plane's own six-hour
-limit, for a control plane that stopped reporting. It is not abortable.
+on the removal. It is not abortable.
+
+**The `AwaitingRemoval` deadline is a budget without progress.** Each pass
+records the node's status and the status of each of its `StorageDevice`s in
+`status.removal`, and any change moves the deadline a whole budget out from that
+moment. `migrating_devices` is one node status for a rebuild that can run for
+hours, and what changes during it is the devices, one at a time as each one's
+data lands on the peers. A removal is therefore failed only once a whole budget,
+seven hours, passes with nothing changing. The control plane's own limit is six
+hours, after which it reports `removed_failed`, so the operation's deadline is the
+backstop for a control plane that stopped reporting.
 
 ### 8.3 Resume is the failure path
 
@@ -2989,6 +2998,25 @@ type DrainStatus struct {
 	VolumesMigrated int32 `json:"volumesMigrated"`
 }
 
+// RemovalStatus is the control plane's progress through a node removal it has
+// accepted, as the operation last read it while waiting in AwaitingRemoval. Any
+// change in it counts as progress and moves the step's deadline a whole budget
+// out.
+type RemovalStatus struct {
+	// NodeStatus is the node's status as the control plane last reported it.
+	// +optional
+	NodeStatus string `json:"nodeStatus,omitempty"`
+
+	// Devices is the control-plane status each of the node's StorageDevices
+	// last reported, keyed by the StorageDevice's name.
+	// +optional
+	Devices map[string]string `json:"devices,omitempty"`
+
+	// LastProgressTime is when NodeStatus or any of Devices last changed.
+	// +optional
+	LastProgressTime *metav1.Time `json:"lastProgressTime,omitempty"`
+}
+
 // StorageNodeOpsStatus is the observed state of one node operation.
 type StorageNodeOpsStatus struct {
 	// Phase is the operation's own progress.
@@ -3011,6 +3039,11 @@ type StorageNodeOpsStatus struct {
 	// Remove.
 	// +optional
 	Drain *DrainStatus `json:"drain,omitempty"`
+
+	// Removal is the control plane's progress through the removal, written by
+	// a Remove while it waits in AwaitingRemoval.
+	// +optional
+	Removal *RemovalStatus `json:"removal,omitempty"`
 
 	// ObservedGeneration is the generation the rest of this status was computed
 	// from, so a stale status can be told from a current one.
