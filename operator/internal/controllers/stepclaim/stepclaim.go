@@ -27,6 +27,12 @@ import (
 // On success obj is what the API server returned, so a later write in the same
 // pass starts from the version the claim produced. On failure obj is restored
 // to what it was before the write.
+//
+// The claim has to be the first status write of the pass after the step was
+// chosen. A write that rereads and retries on a conflict refreshes obj to the
+// current version, so a claim taken after one is a claim on whatever step the
+// operation has since moved to, taken by a pass that chose its step from a stale
+// copy. A record that has to be written before the call travels in also.
 func Writer(
 	c client.Client, obj client.Object, step *statemachine.KubeSnapshot, also ...func(),
 ) statemachine.ClaimWriter {
