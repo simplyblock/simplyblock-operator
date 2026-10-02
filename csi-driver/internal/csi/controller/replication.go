@@ -380,29 +380,19 @@ func (cs *Server) GetVolumeReplicationInfo(
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	hops, known, err := resolveChain(ctx, h, client)
+	// The pairing's status is the ACTIVE END's: the volume that holds the
+	// data and replicates. On the primary site that is the local volume; on
+	// the secondary site the local member is the demoted or reaped old
+	// primary, whose status says nothing about the pipe back to this site.
+	hops, _, err := resolveChain(ctx, h, client)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	local, flagged, err := clusters.Local()
-	if err != nil {
-		return nil, status.Error(codes.Unavailable, err.Error())
-	}
-	pick := chooseReplica(hops, local, flagged)
-	h, client = pick.h, pick.client
+	end := hops[len(hops)-1]
+	h, client = end.h, end.client
 	info, err := client.GetVolumeReplicationInfo(ctx, h.Handle())
 	if err != nil {
-		ce := classifyGetVolumeReplicationInfoError(err)
-		if !reapedChainMember(known, ce) {
-			return nil, ce
-		}
-		// The local member is reaped: the status that matters is the active
-		// end's, replicating back to this site after a Resync.
-		end, _ := activeEndFallback(hops, "")
-		h, client = end.h, end.client
-		if info, err = client.GetVolumeReplicationInfo(ctx, h.Handle()); err != nil {
-			return nil, classifyGetVolumeReplicationInfoError(err)
-		}
+		return nil, classifyGetVolumeReplicationInfoError(err)
 	}
 	resp := &replication.GetVolumeReplicationInfoResponse{}
 	if info.LastReplicatedAt != nil {
@@ -567,28 +557,21 @@ func (cs *Server) ResyncVolume(
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	hops, known, err := resolveChain(ctx, h, client)
+	// Resync is addressed to the chain's ACTIVE END with this site as the
+	// cluster to fail back to: sbcli's replication_failback takes the volume
+	// that holds the data (the failed-over clone) and re-aims its replication
+	// at the recovered site's node, shipping only the delta. The local member
+	// is the demoted or reaped old primary; re-aiming IT configured nothing
+	// for the live clone (2026-10-02, Gitea after the unplanned fail-over:
+	// the clones on A had no replication, lastGroupSyncTime stayed empty).
+	hops, _, err := resolveChain(ctx, h, client)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	local, flagged, err := clusters.Local()
-	if err != nil {
-		return nil, status.Error(codes.Unavailable, err.Error())
-	}
-	pick := chooseReplica(hops, local, flagged)
-	h, client = pick.h, pick.client
-	sourceClusterID := req.GetParameters()[sourceClusterIDParam]
+	end, sourceClusterID := activeEndFallback(hops, req.GetParameters()[sourceClusterIDParam])
+	h, client = end.h, end.client
 	if err := client.ResyncVolume(ctx, h.Handle(), sourceClusterID); err != nil {
-		ce := classifyResyncVolumeError(err)
-		if !reapedChainMember(known, ce) {
-			return nil, ce
-		}
-		var end chainHop
-		end, sourceClusterID = activeEndFallback(hops, sourceClusterID)
-		h, client = end.h, end.client
-		if err := client.ResyncVolume(ctx, h.Handle(), sourceClusterID); err != nil {
-			return nil, classifyResyncVolumeError(err)
-		}
+		return nil, classifyResyncVolumeError(err)
 	}
 	info, err := client.GetVolumeReplicationInfo(ctx, h.Handle())
 	if err != nil {
