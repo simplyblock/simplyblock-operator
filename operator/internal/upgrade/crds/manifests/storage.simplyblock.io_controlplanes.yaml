@@ -578,6 +578,25 @@ spec:
                     rule repeats the ControlPlaneStep enum because a marker cannot reach a
                     field of the shared snapshot type.
                   properties:
+                    claim:
+                      description: |-
+                        Claim records that this state's side effect was started. Absent means
+                        no pass has started it since the state was entered.
+                      properties:
+                        attempt:
+                          description: Attempt counts the claims taken on this state, starting at 1.
+                          format: int32
+                          type: integer
+                        leaseUntil:
+                          description: |-
+                            LeaseUntil is when the claim expires and the side effect may be fired
+                            again.
+                          format: date-time
+                          type: string
+                      required:
+                        - attempt
+                        - leaseUntil
+                      type: object
                     deadline:
                       description: |-
                         Deadline is when that state expires, absent when it has none. It is an

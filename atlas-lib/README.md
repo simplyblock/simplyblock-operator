@@ -144,7 +144,8 @@ atlas/
 │   ├── statemachine.go     Config, StateDef, Machine, Snapshot, deadlines
 │   ├── multiconfig.go      MultiConfig: one graph per action over one state type
 │   ├── abort.go            StateDef.Abortable read three ways: CanAbort + the two graph queries
-│   └── kubernetes.go       KubeSnapshot + ToKube/FromKube: the CRD form of a Snapshot
+│   ├── kubernetes.go       KubeSnapshot + ToKube/FromKube: the CRD form of a Snapshot
+│   └── claim.go            KubeClaim + WithClaim: fire a state's side effect once, under a leased claim
 ├── net/                    Outbound URL validation (SSRF guard)
 ├── ptr/                    Pointer/optional-field helpers for generated + K8s types
 ├── errs/                   Sentinel errors (errors.Is across packages)
