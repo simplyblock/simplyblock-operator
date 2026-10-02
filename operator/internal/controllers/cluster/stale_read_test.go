@@ -139,3 +139,28 @@ func TestAPassReadingTheStepBeforeTheLastWriteDoesNotCallAgain(t *testing.T) {
 	}
 }
 
+// The pass that won the claim writes the next step straight afterward, and its
+// cache has not seen the claim either. That write must not depend on the cache
+// catching up: if it gave up, the step would stay claimed until the lease ran
+// out, and the call would then be made a second time.
+func TestThePassThatClaimedTheStepRecordsTheNextOneBeforeItsCacheSeesTheClaim(t *testing.T) {
+	ctx := context.Background()
+	api := clusterReadingAt(utils.ClusterStatusUnready)
+	r, cache, before := lagged(t, api,
+		newTestOps(simplyblockv1alpha2.StorageClusterOpsActionActivate, atStep(stepRequesting)))
+	cache.stale, cache.reads = before, 20
+
+	key := types.NamespacedName{Namespace: testNamespace, Name: testOpsName}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("the pass that made the call failed to record the next step: %v", err)
+	}
+	cache.reads = 0
+
+	ops, _ := reconcileOps(t, r, 0)
+	if got := ops.Status.Step.State; got != string(stepAwaiting) {
+		t.Errorf("step = %q, want Awaiting", got)
+	}
+	if api.activateCalls != 1 {
+		t.Errorf("the control plane was asked to activate %d times, want 1", api.activateCalls)
+	}
+}

@@ -742,11 +742,22 @@ func (r *StorageClusterOpsReconciler) writeStatus(
 	// cluster's lock straight afterward, so a dropped terminal status would
 	// free the cluster for the next operation while this one still reported
 	// Running.
+	//
+	// The first attempt starts from the caller's object rather than from a
+	// read. That object carries every write this pass made, including a claim
+	// on the step, which the cache may not have seen yet. Read from the cache,
+	// it would patch against the version before the claim and conflict until
+	// the cache caught up. Only a conflict means somebody else wrote, and only
+	// then does an attempt read the object again.
+	reread := false
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var fresh simplyblockv1alpha2.StorageClusterOps
-		if err := r.Get(ctx, client.ObjectKeyFromObject(ops), &fresh); err != nil {
-			return err
+		fresh := *ops.DeepCopy()
+		if reread {
+			if err := r.Get(ctx, client.ObjectKeyFromObject(ops), &fresh); err != nil {
+				return err
+			}
 		}
+		reread = true
 
 		desired := *fresh.Status.DeepCopy()
 		mutate(&desired)
