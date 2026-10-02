@@ -915,7 +915,7 @@ sufficient.
 // StorageNodePhase is where the operator has got to with this node. The first two
 // values are the operator's own provisioning path; the rest are its reading of the
 // lifecycle status.status carries in the control plane's own spelling.
-// +kubebuilder:validation:Enum=Pending;Provisioning;Online;Removing;Offline;Degraded;Failed
+// +kubebuilder:validation:Enum=Pending;Provisioning;Online;Removing;Removed;Offline;Degraded;Failed
 type StorageNodePhase string
 
 // StorageNodeStep is one step of the provisioning path. There is one graph
@@ -923,6 +923,14 @@ type StorageNodePhase string
 // +kubebuilder:validation:Enum=CheckingHost;CheckingConfig;AwaitingSlot;Posting;Resolving;Adopting;AwaitingWorker
 type StorageNodeStep string
 ```
+
+The lifecycle half of the phase reads the control plane's status. `online` and
+`active` are `Online`, or `Degraded` with devices missing. `suspended`,
+`offline`, and `in_shutdown` are `Offline`, a shutdown in progress being read as
+where it is going. `in_creation` and `in_restart` are `Provisioning`. The four
+statuses of a removal in progress (`pending_removal`, `migrating_devices`,
+`migrating_lvols`, `in_removal`) are `Removing`, and `removed` is the terminal
+`Removed`. Anything else, `unreachable` and `timeout` among it, is `Failed`.
 
 `Adopting` is reached from two states rather than one, matching the cluster's
 creation machine: an upgrade Secret diverts before the config check, and a
@@ -2346,7 +2354,7 @@ against the same conventions it audits the shipped types against.
 // StorageNodePhase is where the operator has got to with this node. The first two
 // values are the operator's own provisioning path; the rest are its reading of the
 // lifecycle status.status carries in the control plane's own spelling.
-// +kubebuilder:validation:Enum=Pending;Provisioning;Online;Removing;Offline;Degraded;Failed
+// +kubebuilder:validation:Enum=Pending;Provisioning;Online;Removing;Removed;Offline;Degraded;Failed
 type StorageNodePhase string
 
 const (
@@ -2359,8 +2367,13 @@ const (
 	// Online: the control plane reports the node online and carrying its share.
 	StorageNodePhaseOnline StorageNodePhase = "Online"
 
-	// Removing: a StorageNodeOps with action Remove is draining it (§8).
+	// Removing: the control plane is removing the node, from the removal being
+	// accepted until its devices and volumes have moved off (§8).
 	StorageNodePhaseRemoving StorageNodePhase = "Removing"
+
+	// Removed: the control plane has removed the node. It is the last phase a
+	// node reaches.
+	StorageNodePhaseRemoved StorageNodePhase = "Removed"
 
 	// Offline: out of service and reachable, which is where Shutdown, Suspend,
 	// and a host maintenance window leave it (§10).
