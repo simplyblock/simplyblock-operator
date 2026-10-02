@@ -427,9 +427,8 @@ func TestAnEmptyNodePassesVerification(t *testing.T) {
 	}
 }
 
-// The removal is the last step, and a refusal is the control plane's answer
-// about what the cluster can afford to lose. Retrying cannot change it, so the
-// operation fails and the unwind puts the node back into service.
+// A refusal of the removal is the control plane's answer about what the cluster
+// can afford to lose. Retrying cannot change it, so the operation fails.
 func TestARefusedRemovalEndsTheDrain(t *testing.T) {
 	api := aControlPlane().refusing("RemoveNode", &ControlPlaneError{
 		Status: http.StatusBadRequest, Body: `{"detail":"the cluster cannot lose this node"}`,
@@ -573,5 +572,56 @@ func TestADrainBeingDeletedWaitsForAMoveStillRunning(t *testing.T) {
 	}
 	if len(mover.deleted) != 0 {
 		t.Errorf("%d moves were reaped mid-copy", len(mover.deleted))
+	}
+}
+
+// Regression: 2026-10-02-remove-timeout-read-as-refusal: the removal ended as soon
+// as the DELETE was accepted, while the control plane went on migrating the
+// node's devices and volumes for as long as that takes. A removal that stalled or
+// gave up there was invisible to the operation, which had already succeeded.
+func TestAwaitingRemovalWaitsWhileTheControlPlaneRemovesTheNode(t *testing.T) {
+	for _, status := range []string{
+		nodeStatusPendingRemoval, nodeStatusMigratingDevices,
+		nodeStatusMigratingLvols, nodeStatusInRemoval,
+	} {
+		t.Run(status, func(t *testing.T) {
+			r, _ := aDraining(t, aControlPlane().reporting(status), &scriptedMover{})
+
+			done, err := r.perform(context.Background(), aDrain(), stepAwaitingRemoval)
+			if err != nil {
+				t.Fatalf("awaiting the removal: %v", err)
+			}
+			if done {
+				t.Errorf("the step finished while the control plane still reports %s", status)
+			}
+		})
+	}
+}
+
+// Regression: 2026-10-02-remove-timeout-read-as-refusal: removed is the outcome
+// the operation exists for.
+func TestAwaitingRemovalFinishesWhenTheNodeIsRemoved(t *testing.T) {
+	r, _ := aDraining(t, aControlPlane().reporting(nodeStatusRemoved), &scriptedMover{})
+
+	done, err := r.perform(context.Background(), aDrain(), stepAwaitingRemoval)
+	if err != nil {
+		t.Fatalf("awaiting the removal: %v", err)
+	}
+	if !done {
+		t.Error("the step did not finish although the control plane reports the node removed")
+	}
+}
+
+// Regression: 2026-10-02-remove-timeout-read-as-refusal: removed_failed is the
+// control plane giving up on the removal. It is terminal on that side, so the
+// operation fails rather than waiting for a status that will not come.
+func TestAwaitingRemovalFailsWhenTheControlPlaneGivesUp(t *testing.T) {
+	r, _ := aDraining(t, aControlPlane().reporting(nodeStatusRemovedFailed), &scriptedMover{})
+
+	_, err := r.perform(context.Background(), aDrain(), stepAwaitingRemoval)
+
+	var fatal *terminalStepError
+	if !errors.As(err, &fatal) {
+		t.Errorf("err = %v, want the terminal kind for a removal the control plane gave up on", err)
 	}
 }

@@ -475,3 +475,33 @@ func ctrlRequest(name string) ctrl.Request {
 		Namespace: opsNamespace, Name: name,
 	}}
 }
+
+// Regression: 2026-10-02-remove-timeout-read-as-refusal: a removal failed while
+// the control plane was removing the node, and the unwind tried to resume it. A
+// failure once the removal has been asked for leaves the node to the control
+// plane.
+func TestAFailureOnceTheRemovalWasAskedForResumesNothing(t *testing.T) {
+	for _, current := range []step{stepRemoving, stepAwaitingRemoval} {
+		t.Run(string(current), func(t *testing.T) {
+			api := aControlPlane().reporting(nodeStatusMigratingDevices)
+			ops := anAdvancingOperation("a-drain",
+				simplyblockv1alpha2.StorageNodeOpsActionRemove, current)
+			expired := metav1.NewTime(time.Now().Add(-time.Minute))
+			ops.Status.Step.Deadline = &expired
+			r, apiClient := anOpsWorld(t, api, ops)
+			r.Mover = &scriptedMover{}
+			lockedBy(t, apiClient, "a-drain")
+
+			pass(t, r, "a-drain")
+
+			got := operationRead(t, apiClient, "a-drain")
+			if got.Status.Phase != simplyblockv1alpha2.StorageNodeOpsPhaseFailed {
+				t.Errorf("phase = %q, want Failed", got.Status.Phase)
+			}
+			if asked := api.asked("Resume"); asked != 0 {
+				t.Errorf("Resume was issued %d time(s) against a node being removed, want none",
+					asked)
+			}
+		})
+	}
+}

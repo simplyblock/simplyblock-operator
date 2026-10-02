@@ -30,7 +30,7 @@ import (
 // derived so that the assertion below compares two independent statements of the
 // same set: deriving it from the graph would make the test agree with itself.
 var everyStep = []string{
-	"Awaiting", "AwaitingHost", "AwaitingNode", "Cleanup", "Departing", "Holding",
+	"Awaiting", "AwaitingHost", "AwaitingNode", "AwaitingRemoval", "Cleanup", "Departing", "Holding",
 	"MigratingVolumes", "Preparing", "Promoting", "Relocating", "Releasing",
 	"Removing", "Requesting", "Restarting", "ShuttingDown", "Suspending",
 	"Validating", "Verifying",
@@ -104,7 +104,7 @@ func celRuleValues(rule string) []string {
 // having.
 const opsStepCELRule = "!has(self.state) || self.state in " +
 	"['Requesting','Departing','Awaiting','Validating','Suspending','MigratingVolumes','Verifying'," +
-	"'Removing','Preparing','Relocating','AwaitingNode','Promoting','Holding'," +
+	"'Removing','AwaitingRemoval','Preparing','Relocating','AwaitingNode','Promoting','Holding'," +
 	"'ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']"
 
 const nodeStepCELRule = "!has(self.state) || self.state in " +
@@ -134,8 +134,8 @@ func TestEveryActionDeclaresAGraph(t *testing.T) {
 }
 
 // The line abortability draws is whether anything is currently down or
-// half-done. These seven are the sharpest cases and each would leave the node in
-// a state nothing else drives it out of.
+// half-done. These are the sharpest cases and each would leave the node in a
+// state nothing else drives it out of.
 func TestNoStepPastThePointOfNoReturnIsAbortable(t *testing.T) {
 	unabortable := statemachine.UnabortableMultiStates(graphs())
 	for _, state := range []step{
@@ -148,6 +148,9 @@ func TestNoStepPastThePointOfNoReturnIsAbortable(t *testing.T) {
 		stepAwaitingNode,
 		// The restart has been issued and is the control plane's to finish.
 		stepDeparting,
+		// The control plane is taking the node apart, and there is no resume
+		// that puts it back.
+		stepAwaitingRemoval,
 		// The node is down for a reboot nothing else will bring it back from.
 		stepShuttingDown,
 		stepReleasing,
@@ -188,12 +191,13 @@ func TestTheStepsAnAbortStopsCleanly(t *testing.T) {
 	}
 }
 
-// Every terminal outcome from Suspending onward owes the node a resume, because a
-// node past the suspend is not serving and an operation that stopped there would
-// take capacity out of the cluster for as long as nobody noticed (§8.3).
+// Every terminal outcome from Suspending until the removal is asked for owes the
+// node a resume, because a node past the suspend is not serving and an operation
+// that stopped there would take capacity out of the cluster for as long as nobody
+// noticed (§8.3).
 func TestTheDrainStepsPastTheSuspendUnwind(t *testing.T) {
 	for _, state := range []step{
-		stepSuspending, stepMigratingVolumes, stepVerifying, stepRemoving,
+		stepSuspending, stepMigratingVolumes, stepVerifying,
 	} {
 		if !unwinds(state) {
 			t.Errorf("step %q leaves the node suspended and owes it a resume", state)
@@ -203,6 +207,18 @@ func TestTheDrainStepsPastTheSuspendUnwind(t *testing.T) {
 	// there an Aborted directly rather than an unwind.
 	if unwinds(stepValidating) {
 		t.Error("Validating touches nothing and must not issue a resume")
+	}
+}
+
+// Regression: 2026-10-02-remove-timeout-read-as-refusal: a removal whose DELETE
+// timed out failed, and the unwind tried to resume a node the control plane was
+// in the middle of removing. Once the removal has been asked for, the control
+// plane may be taking the node apart, and no resume puts it back.
+func TestNothingUnwindsOnceTheRemovalHasBeenAskedFor(t *testing.T) {
+	for _, state := range []step{stepRemoving, stepAwaitingRemoval} {
+		if unwinds(state) {
+			t.Errorf("step %q resumes the node, which may already be being taken apart", state)
+		}
 	}
 }
 
@@ -232,6 +248,7 @@ func TestAStepOfAnotherActionIsRejected(t *testing.T) {
 func TestTheRemoveGraphValidatesBeforeItSuspends(t *testing.T) {
 	assertLine(t, simplyblockv1alpha2.StorageNodeOpsActionRemove, []step{
 		stepValidating, stepSuspending, stepMigratingVolumes, stepVerifying, stepRemoving,
+		stepAwaitingRemoval,
 	})
 }
 

@@ -62,6 +62,8 @@ var undeletableNodeSteps = map[simplyblockv1alpha2.StorageNodeOpsStep]string{
 	simplyblockv1alpha2.StorageNodeOpsStepAwaiting: "the control plane is carrying out the " +
 		"action, and it is doing so whether or not this record exists",
 	simplyblockv1alpha2.StorageNodeOpsStepRemoving: "the node is being taken out of the cluster",
+	simplyblockv1alpha2.StorageNodeOpsStepAwaitingRemoval: "the control plane is taking the " +
+		"node apart, and this operation is the only thing watching the removal finish",
 	simplyblockv1alpha2.StorageNodeOpsStepRelocating: "the node is being restarted onto its " +
 		"target host",
 	simplyblockv1alpha2.StorageNodeOpsStepAwaitingNode: "the node is part-way through that " +

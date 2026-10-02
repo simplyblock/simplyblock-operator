@@ -1340,7 +1340,7 @@ the `MultiConfig` form: one graph per action over one step type.
 ```go
 // StorageNodeOpsStep is the union of every action's steps; which steps belong to
 // which action is declared by the graph rather than by this type.
-// +kubebuilder:validation:Enum=Requesting;Departing;Awaiting;Validating;Suspending;MigratingVolumes;Verifying;Removing;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
+// +kubebuilder:validation:Enum=Requesting;Departing;Awaiting;Validating;Suspending;MigratingVolumes;Verifying;Removing;AwaitingRemoval;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
 type StorageNodeOpsStep string
 ```
 
@@ -1376,7 +1376,7 @@ Restart (§7.3)
     Requesting ──► Departing ──► Awaiting
 
 Remove (§8)
-    Validating ──► Suspending ──► MigratingVolumes ──► Verifying ──► Removing
+    Validating ──► Suspending ──► MigratingVolumes ──► Verifying ──► Removing ──► AwaitingRemoval
 
 Migrate (§9)
     Preparing ──► Relocating ──► AwaitingNode ──► Promoting
@@ -1636,16 +1636,17 @@ data nothing in Kubernetes is tracking.
 ### 8.2 The steps
 
 ```
-    Validating ──► Suspending ──► MigratingVolumes ──► Verifying ──► Removing
+    Validating ──► Suspending ──► MigratingVolumes ──► Verifying ──► Removing ──► AwaitingRemoval
 ```
 
-| Step               | Side effect on entry                                                                     | Complete when                             |
-|--------------------|------------------------------------------------------------------------------------------|-------------------------------------------|
-| `Validating`       | None                                                                                     | No pinned and no unmanaged volumes remain |
-| `Suspending`       | `POST /storage-nodes/{node}/suspend`, skipped if the node is already suspended or beyond | The node is `suspended`                   |
-| `MigratingVolumes` | One `PersistentVolumeOps` per PV-managed volume, to peers chosen round-robin             | Every migration is `Succeeded`            |
-| `Verifying`        | Deletes any remaining system volumes                                                     | The node reports no volumes at all        |
-| `Removing`         | `DELETE /storage-nodes/{node}?force_remove=false`                                        | The call returns 200, 204, or 404         |
+| Step               | Side effect on entry                                                                                                   | Complete when                                                           |
+|--------------------|------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
+| `Validating`       | None                                                                                                                   | No pinned and no unmanaged volumes remain                               |
+| `Suspending`       | `POST /storage-nodes/{node}/suspend`, skipped if the node is already suspended or beyond                               | The node is `suspended`                                                 |
+| `MigratingVolumes` | One `PersistentVolumeOps` per PV-managed volume, to peers chosen round-robin                                           | Every migration is `Succeeded`                                          |
+| `Verifying`        | Deletes any remaining system volumes                                                                                   | The node reports no volumes at all                                      |
+| `Removing`         | `DELETE /storage-nodes/{node}?force_remove=false`, skipped if the node is already in a removal status or `in_shutdown` | The call returns 200, 204, or 404, or the node reports a removal status |
+| `AwaitingRemoval`  | None                                                                                                                   | The node reports `removed`, or 404                                      |
 
 **Validation runs before the suspend, and that ordering is the design.** A
 suspended node accepts no new volume placement, so suspending one whose drain
@@ -1674,11 +1675,31 @@ would destroy.
 about is a node that has been removed, and a retry after a lost response is the
 common way to arrive there.
 
+**Only an answer is a refusal.** The DELETE shuts the node down before it
+answers, which can outlast the client's timeout while the control plane carries
+on. A 4xx fails the operation. A timeout or a 5xx is retried, and the retry
+reads the node first: `pending_removal`, `migrating_devices`, `migrating_lvols`,
+`in_removal`, `removed`, or `removed_failed` is the removal accepted, and
+`in_shutdown` is waited on. Neither gets a second DELETE.
+
+**`AwaitingRemoval` is the control plane's removal.** The control plane rebuilds
+the node's devices onto its peers and migrates its volumes before it tears the
+node down, and that takes as long as the data takes to move. The step completes
+on `removed` and fails on `removed_failed`, which is the control plane giving up
+on the removal. Its deadline is a backstop past the control plane's own six-hour
+limit, for a control plane that stopped reporting. It is not abortable.
+
 ### 8.3 Resume is the failure path
 
 A node past `Suspending` is not serving, and an operation that fails there and
-stops would leave it that way. Every terminal outcome from `Suspending` onward,
-whether a failure or an abort, resumes the node first.
+stops would leave it that way. Every terminal outcome from `Suspending` until the
+removal is asked for, whether a failure or an abort, resumes the node first.
+
+From `Removing` onward nothing resumes the node. Once the DELETE may have been
+accepted the control plane may be taking the node apart, and a resume against it
+either fails or interferes with the removal. A refused removal leaves the node
+suspended as well, which `status.status` and the failure's message show, and a
+`Resume` operation brings it back.
 
 | Condition                         | Step               | Result                                                 |
 |-----------------------------------|--------------------|--------------------------------------------------------|
@@ -1687,8 +1708,11 @@ whether a failure or an abort, resumes the node first.
 | A `PersistentVolumeOps` failed    | `MigratingVolumes` | Delete it and retry with a fresh target                |
 | Non-system volumes remain         | `Verifying`        | Hold, emit, requeue                                    |
 | A system volume cannot be deleted | `Verifying`        | Resume, then `Failed`                                  |
-| The removal call was rejected     | `Removing`         | Resume, then `Failed`                                  |
-| A step's deadline expired         | Any                | Resume, then `Failed`                                  |
+| The removal call was rejected     | `Removing`         | `Failed`, the node left suspended                      |
+| The removal call got no answer    | `Removing`         | Retry, reading the node first                          |
+| The control plane gave up         | `AwaitingRemoval`  | `Failed`, the node left to the control plane           |
+| A step's deadline expired         | Up to `Verifying`  | Resume, then `Failed`                                  |
+| A step's deadline expired         | `Removing` onward  | `Failed`, with no resume                               |
 | `spec.abort` set                  | Any post-suspend   | Abort the in-flight migrations, resume, then `Aborted` |
 | `spec.abort` set                  | `Validating`       | `Aborted` directly, since nothing has been done        |
 
@@ -2852,7 +2876,7 @@ const (
 // StorageNodeOpsStep is one step of a running node operation. The enum is the
 // union of every action's steps; which steps belong to which action is declared
 // by the graph rather than by this type.
-// +kubebuilder:validation:Enum=Requesting;Departing;Awaiting;Validating;Suspending;MigratingVolumes;Verifying;Removing;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
+// +kubebuilder:validation:Enum=Requesting;Departing;Awaiting;Validating;Suspending;MigratingVolumes;Verifying;Removing;AwaitingRemoval;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
 type StorageNodeOpsStep string
 
 const (
@@ -2866,6 +2890,7 @@ const (
 	StorageNodeOpsStepMigratingVolumes StorageNodeOpsStep = "MigratingVolumes"
 	StorageNodeOpsStepVerifying        StorageNodeOpsStep = "Verifying"
 	StorageNodeOpsStepRemoving         StorageNodeOpsStep = "Removing"
+	StorageNodeOpsStepAwaitingRemoval  StorageNodeOpsStep = "AwaitingRemoval"
 
 	// Migrate.
 	StorageNodeOpsStepPreparing    StorageNodeOpsStep = "Preparing"
@@ -2973,7 +2998,7 @@ type StorageNodeOpsStatus struct {
 	// Step is the position of the running action's state machine, as the shared
 	// statemachine.KubeSnapshot (design-crd-model.md §3.1). The rule is what an
 	// Enum marker would do if a marker could reach a field of a shared type.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Departing','Awaiting','Validating','Suspending','MigratingVolumes','Verifying','Removing','Preparing','Relocating','AwaitingNode','Promoting','Holding','ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Departing','Awaiting','Validating','Suspending','MigratingVolumes','Verifying','Removing','AwaitingRemoval','Preparing','Relocating','AwaitingNode','Promoting','Holding','ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

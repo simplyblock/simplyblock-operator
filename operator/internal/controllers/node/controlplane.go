@@ -84,6 +84,7 @@ const (
 	nodeStatusMigratingLvols   = "migrating_lvols"
 	nodeStatusInRemoval        = "in_removal"
 	nodeStatusRemoved          = "removed"
+	nodeStatusRemovedFailed    = "removed_failed"
 )
 
 // RestartParams are what the control plane's restart endpoint takes. Three

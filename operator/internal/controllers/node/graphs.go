@@ -42,6 +42,7 @@ const (
 	stepMigratingVolumes = simplyblockv1alpha2.StorageNodeOpsStepMigratingVolumes
 	stepVerifying        = simplyblockv1alpha2.StorageNodeOpsStepVerifying
 	stepRemoving         = simplyblockv1alpha2.StorageNodeOpsStepRemoving
+	stepAwaitingRemoval  = simplyblockv1alpha2.StorageNodeOpsStepAwaitingRemoval
 	stepPreparing        = simplyblockv1alpha2.StorageNodeOpsStepPreparing
 	stepRelocating       = simplyblockv1alpha2.StorageNodeOpsStepRelocating
 	stepAwaitingNode     = simplyblockv1alpha2.StorageNodeOpsStepAwaitingNode
@@ -87,12 +88,21 @@ const (
 	// the call, so a node still online minutes later is one whose restart the
 	// control plane dropped, and this is the budget that turns an invisible
 	// refusal into a failed operation with a reason.
-	departingDeadline   = 5 * time.Minute
-	validatingDeadline  = 24 * time.Hour
-	suspendingDeadline  = 15 * time.Minute
-	migratingDeadline   = 12 * time.Hour
-	verifyingDeadline   = 30 * time.Minute
-	removingDeadline    = 30 * time.Minute
+	departingDeadline  = 5 * time.Minute
+	validatingDeadline = 24 * time.Hour
+	suspendingDeadline = 15 * time.Minute
+	migratingDeadline  = 12 * time.Hour
+	verifyingDeadline  = 30 * time.Minute
+	removingDeadline   = 30 * time.Minute
+
+	// awaitingRemovalDeadline bounds the control plane's own removal, which
+	// rebuilds the node's devices onto its peers and migrates its volumes and
+	// takes as long as that data takes to move. The control plane gives up on a
+	// removal after six hours and reports removed_failed, which this operation
+	// reads as its failure, so this budget sits past that and is the backstop
+	// for a control plane that stopped reporting rather than the limit itself.
+	awaitingRemovalDeadline = 7 * time.Hour
+
 	preparingDeadline   = 15 * time.Minute
 	relocatingDeadline  = 15 * time.Minute
 	nodeRestartDeadline = 45 * time.Minute
@@ -200,8 +210,9 @@ func graphs() statemachine.MultiConfig[step] {
 				// three steps past the suspend are abortable because their
 				// unwind exists: the resume the graph already performs on every
 				// other terminal outcome from Suspending onward (§8.3).
-				// Removing is not, because the node is being taken out of the
-				// cluster and there is no resume that puts it back.
+				// Removing and AwaitingRemoval are not, because the node is being
+				// taken out of the cluster and there is no resume that puts it
+				// back.
 				stepValidating: {
 					To:        []step{stepSuspending},
 					Abortable: true,
@@ -222,7 +233,11 @@ func graphs() statemachine.MultiConfig[step] {
 					Abortable: true,
 					OnEnter:   deadline[step](verifyingDeadline),
 				},
-				stepRemoving: {OnEnter: deadline[step](removingDeadline)},
+				stepRemoving: {
+					To:      []step{stepAwaitingRemoval},
+					OnEnter: deadline[step](removingDeadline),
+				},
+				stepAwaitingRemoval: {OnEnter: deadline[step](awaitingRemovalDeadline)},
 			},
 		},
 
@@ -368,6 +383,7 @@ var stepBudgets = map[step]time.Duration{
 	stepMigratingVolumes: migratingDeadline,
 	stepVerifying:        verifyingDeadline,
 	stepRemoving:         removingDeadline,
+	stepAwaitingRemoval:  awaitingRemovalDeadline,
 	stepPreparing:        preparingDeadline,
 	stepRelocating:       relocatingDeadline,
 	stepAwaitingNode:     nodeRestartDeadline,
@@ -404,12 +420,19 @@ func UnabortableSteps() []step {
 }
 
 // unwinds reports whether an abort or a failure from this step owes the node a
-// resume before the operation ends. Everything from Suspending onward in a drain
-// does: the node is not serving, and an operation that stopped there and left it
-// that way would take capacity out of the cluster indefinitely (§8.3).
+// resume before the operation ends. The drain's steps from Suspending until the
+// removal is asked for do: the node is not serving, and an operation that stopped
+// there and left it that way would take capacity out of the cluster indefinitely
+// (§8.3).
+//
+// Removing and AwaitingRemoval do not. Once the DELETE may have been accepted the
+// control plane may be taking the node apart, and a resume against it either
+// fails or interferes with the removal. A refused removal leaves the node
+// suspended too, which status.status and the failure's message show, and a
+// Resume operation brings it back.
 func unwinds(current step) bool {
 	switch current {
-	case stepSuspending, stepMigratingVolumes, stepVerifying, stepRemoving:
+	case stepSuspending, stepMigratingVolumes, stepVerifying:
 		return true
 	default:
 		return false

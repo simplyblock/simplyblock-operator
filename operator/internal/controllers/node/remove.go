@@ -5,7 +5,7 @@
 // that makes that true, and the removal is the last step rather than the
 // operation.
 //
-//	Validating ──► Suspending ──► MigratingVolumes ──► Verifying ──► Removing
+//	Validating ──► Suspending ──► MigratingVolumes ──► Verifying ──► Removing ──► AwaitingRemoval
 //
 // Validation runs before the suspend, and that ordering is the design. A suspended
 // node accepts no new volume placement, so suspending one whose drain cannot
@@ -86,6 +86,8 @@ func (r *StorageNodeOpsReconciler) performRemoveStep(
 		return r.drainVerify(ctx, ops, clusterID, nodeID)
 	case stepRemoving:
 		return r.drainRemove(ctx, ops, clusterID, nodeID)
+	case stepAwaitingRemoval:
+		return r.drainAwaitRemoval(ctx, ops, clusterID, nodeID)
 	default:
 		return false, fatalf("step %s does not belong to the Remove action", current)
 	}
@@ -366,7 +368,8 @@ func (r *StorageNodeOpsReconciler) drainRemove(
 	}
 	switch reading.Status {
 	case nodeStatusPendingRemoval, nodeStatusMigratingDevices, nodeStatusMigratingLvols,
-		nodeStatusInRemoval, nodeStatusRemoved:
+		nodeStatusInRemoval, nodeStatusRemoved, nodeStatusRemovedFailed:
+		// The removal was accepted, and how it ends is AwaitingRemoval's to read.
 		return true, nil
 	case nodeStatusInShutdown:
 		return false, nil
@@ -376,10 +379,10 @@ func (r *StorageNodeOpsReconciler) drainRemove(
 		if err := r.API.RemoveNode(ctx, clusterID, nodeID); err != nil {
 			// Only an answer is a refusal. A 4xx is the control plane's own
 			// admission saying what the cluster can afford to lose. Retrying
-			// cannot change it, so the operation fails and the resume of §8.3
-			// puts the node back into service. A timeout or a 5xx says nothing
-			// about the removal, which may well be under way, so the step is
-			// retried and the next pass reads the node.
+			// cannot change it, so the operation fails, and the node is left
+			// suspended for a Resume operation to bring back (see unwinds). A
+			// timeout or a 5xx says nothing about the removal, which may well be
+			// under way, so the step is retried and the next pass reads the node.
 			var answer *ControlPlaneError
 			if errors.As(err, &answer) && answer.Status >= 400 && answer.Status < 500 {
 				return fatalf("the control plane refused to remove node %s: %v",
@@ -390,6 +393,32 @@ func (r *StorageNodeOpsReconciler) drainRemove(
 		return nil
 	})
 	return claimed, err
+}
+
+// drainAwaitRemoval waits for the control plane to finish the removal it
+// accepted, which moves the node's devices and volumes onto its peers first and
+// takes as long as that data does.
+//
+// removed is the outcome, and a node the control plane no longer reports reaches
+// the same answer through the check every step makes first. removed_failed is the
+// control plane giving up, and it is terminal on that side, so the operation
+// fails rather than waiting out its deadline for a status that will not come.
+func (r *StorageNodeOpsReconciler) drainAwaitRemoval(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, clusterID, nodeID string,
+) (bool, error) {
+	reading, err := r.nodeReading(ctx, clusterID, nodeID)
+	if err != nil {
+		return false, err
+	}
+	switch reading.Status {
+	case nodeStatusRemoved:
+		return true, nil
+	case nodeStatusRemovedFailed:
+		return false, fatalf("the control plane gave up removing node %s and reports it %s",
+			ops.Spec.NodeRef, reading.Status)
+	default:
+		return false, nil
+	}
 }
 
 // migrationsOf lists the fan-out of this drain.
