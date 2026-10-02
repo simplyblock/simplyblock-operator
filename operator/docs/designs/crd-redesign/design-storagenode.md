@@ -1686,6 +1686,16 @@ timeout or a 5xx is retried, and the next pass reads the node.
 rebuild runs and as a restart of it after a control-plane restart, and reads the
 rebuild's progress. A rebuild the control plane gave up on fails the operation.
 
+**A node stuck in `pending_removal` gets `prepare-removal` again.** The control
+plane marks the node `pending_removal` before it shuts the node down, and leaves
+it there when the shutdown fails, with no rebuild started. Nothing is sent while
+the shutdown may still be running. The step sends `prepare-removal` again when
+the control plane reports the step failed (a minute after the previous attempt),
+or when the node's status has not moved for longer than the 15-minute shutdown
+budget, because the control plane can fail the shutdown without saying so. The
+attempts are counted in `status.removal.prepareAttempts` before each is sent, and
+after three the operation fails with the control plane's message.
+
 **Migration targets are chosen round-robin over the online peers**, which spreads
 the drained node's volumes rather than concentrating them on whichever peer sorts
 first. A drain with no online peer to move to is a stall, not a failure, and emits
@@ -1738,23 +1748,24 @@ accepts the removal being driven again.
 `Validating` is therefore the only abortable step, and the only one whose
 operation can be deleted while it runs.
 
-| Condition                         | Step               | Result                                          |
-|-----------------------------------|--------------------|-------------------------------------------------|
-| Pinned or unmanaged volumes       | `Validating`       | Hold, emit, requeue. The node is untouched      |
-| `prepare-removal` was refused     | `ShuttingDown`     | `Failed`. Nothing was changed                   |
-| `prepare-removal` got no answer   | `ShuttingDown`     | Retry, reading the node first                   |
-| The device rebuild gave up        | `MigratingDevices` | `Failed`                                        |
-| No online peer to migrate to      | `MigratingVolumes` | Hold, emit, requeue                             |
-| A `PersistentVolumeOps` failed    | `MigratingVolumes` | Delete it and retry with a fresh target         |
-| Non-system volumes remain         | `Verifying`        | Hold, emit, requeue                             |
-| `verify-drained` sees something   | `Verifying`        | Hold, emit, requeue, naming what is left        |
-| A system volume cannot be deleted | `Verifying`        | `Failed`                                        |
-| The removal call was rejected     | `Removing`         | `Failed`                                        |
-| The removal call got no answer    | `Removing`         | Retry, reading the node first                   |
-| The control plane gave up         | `AwaitingRemoval`  | `Failed`                                        |
-| A step's deadline expired         | Any                | `Failed`                                        |
-| `spec.abort` set                  | `Validating`       | `Aborted` directly, since nothing has been done |
-| `spec.abort` set                  | Any later step     | Refused; the operation runs on                  |
+| Condition                         | Step               | Result                                              |
+|-----------------------------------|--------------------|-----------------------------------------------------|
+| Pinned or unmanaged volumes       | `Validating`       | Hold, emit, requeue. The node is untouched          |
+| `prepare-removal` was refused     | `ShuttingDown`     | `Failed`. Nothing was changed                       |
+| `prepare-removal` got no answer   | `ShuttingDown`     | Retry, reading the node first                       |
+| The shutdown failed or stalled    | `MigratingDevices` | `prepare-removal` again, three times, then `Failed` |
+| The device rebuild gave up        | `MigratingDevices` | `Failed`                                            |
+| No online peer to migrate to      | `MigratingVolumes` | Hold, emit, requeue                                 |
+| A `PersistentVolumeOps` failed    | `MigratingVolumes` | Delete it and retry with a fresh target             |
+| Non-system volumes remain         | `Verifying`        | Hold, emit, requeue                                 |
+| `verify-drained` sees something   | `Verifying`        | Hold, emit, requeue, naming what is left            |
+| A system volume cannot be deleted | `Verifying`        | `Failed`                                            |
+| The removal call was rejected     | `Removing`         | `Failed`                                            |
+| The removal call got no answer    | `Removing`         | Retry, reading the node first                       |
+| The control plane gave up         | `AwaitingRemoval`  | `Failed`                                            |
+| A step's deadline expired         | Any                | `Failed`                                            |
+| `spec.abort` set                  | `Validating`       | `Aborted` directly, since nothing has been done     |
+| `spec.abort` set                  | Any later step     | Refused; the operation runs on                      |
 
 ### 8.4 PersistentVolumeOps lifecycle
 
@@ -3044,6 +3055,16 @@ type RemovalStatus struct {
 	// LastProgressTime is when NodeStatus or any of Devices last changed.
 	// +optional
 	LastProgressTime *metav1.Time `json:"lastProgressTime,omitempty"`
+
+	// PrepareAttempts is how many times the removal's first step was sent
+	// again for a node that stayed pending_removal.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	PrepareAttempts int32 `json:"prepareAttempts,omitempty"`
+
+	// LastPrepareTime is when the removal's first step was last sent again.
+	// +optional
+	LastPrepareTime *metav1.Time `json:"lastPrepareTime,omitempty"`
 }
 
 // StorageNodeOpsStatus is the observed state of one node operation.

@@ -235,6 +235,18 @@ type RemovalStatus struct {
 	// LastProgressTime is when NodeStatus or any of Devices last changed.
 	// +optional
 	LastProgressTime *metav1.Time `json:"lastProgressTime,omitempty"`
+
+	// PrepareAttempts is how many times the removal's first step was sent
+	// again for a node that stayed pending_removal, because the control plane
+	// reported the step failed or nothing moved for longer than a shutdown
+	// takes. The operation fails once the attempts run out.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	PrepareAttempts int32 `json:"prepareAttempts,omitempty"`
+
+	// LastPrepareTime is when the removal's first step was last sent again.
+	// +optional
+	LastPrepareTime *metav1.Time `json:"lastPrepareTime,omitempty"`
 }
 
 // StorageNodeOpsStatus is the observed state of one node operation.

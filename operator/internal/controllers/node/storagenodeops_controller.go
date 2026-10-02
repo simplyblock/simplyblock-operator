@@ -1044,12 +1044,14 @@ func (r *StorageNodeOpsReconciler) emit(
 // whether this pass made it. A pass that loses the claim made no call: either
 // another pass holds a live claim on the step, or this pass read the operation
 // at a version a newer write has replaced. Either way it waits, and the next
-// pass reads again.
+// pass reads again. also edits status that has to be written before the call,
+// and travels in the claim's own patch.
 func (r *StorageNodeOpsReconciler) once(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, call func() error,
+	also ...func(),
 ) (bool, error) {
 	return statemachine.WithClaim(ctx, ops.Status.Step, claimLease,
-		stepclaim.Writer(r.Client, ops, &ops.Status.Step), call)
+		stepclaim.Writer(r.Client, ops, &ops.Status.Step, also...), call)
 }
 
 // terminalOps reports a phase the operation can never leave.

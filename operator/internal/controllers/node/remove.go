@@ -37,6 +37,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -55,6 +56,10 @@ import (
 // selects the fan-out of one node's drain and a watch maps a completion back to
 // the operation that asked for it (§8.4).
 const drainNodeLabel = "storage.simplyblock.io/drain-node"
+
+// maxPrepareAttempts is how many times MigratingDevices sends prepare-removal
+// again for a node stuck in pending_removal before the operation fails.
+const maxPrepareAttempts = 3
 
 // performRemoveStep runs one step of the drain.
 func (r *StorageNodeOpsReconciler) performRemoveStep(
@@ -211,13 +216,17 @@ func (r *StorageNodeOpsReconciler) drainShutDown(
 // drainMigrateDevices waits for the control plane to rebuild the node's devices
 // onto its peers, and finishes when the control plane reports the rebuild done.
 //
-// prepare-removal is sent again on every pass, which the control plane treats as
-// a no-op while the rebuild runs and as a restart of it when it stopped, as it
-// does across a control-plane restart. It is not sent while the node is still on
-// its way down (pending_removal or in_shutdown), because the rebuild starts only
-// once the node is down. A rebuild the control plane gave up on fails the
-// operation, and each change in the node's or its devices' statuses moves the
-// deadline out (recordRemovalProgress).
+// Once the node is down, prepare-removal is sent again on every pass, which the
+// control plane treats as a no-op while the rebuild runs and as a restart of it
+// when it stopped, as it does across a control-plane restart. A rebuild the
+// control plane gave up on fails the operation, and each change in the node's
+// or its devices' statuses moves the deadline out (recordRemovalProgress).
+//
+// A node still pending_removal is one whose shutdown has not finished, or
+// failed: prepare-removal marks the node before it shuts it down and leaves it
+// there when the shutdown fails. Nothing is sent while the shutdown may still be
+// running. It is sent again (retryPrepare) once the control plane reports the
+// step failed, or once nothing has moved for longer than a shutdown takes.
 func (r *StorageNodeOpsReconciler) drainMigrateDevices(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.StorageNodeOps,
@@ -228,23 +237,31 @@ func (r *StorageNodeOpsReconciler) drainMigrateDevices(
 	if err != nil {
 		return false, err
 	}
-	if reading.Status != nodeStatusPendingRemoval && reading.Status != nodeStatusInShutdown {
-		// Under a claim, so it is sent at most once a lease rather than by every
-		// pass that read the step from a cache.
-		if _, err := r.once(ctx, ops, func() error {
-			if err := r.API.PrepareRemoval(ctx, clusterID, nodeID); err != nil {
-				return fmt.Errorf("keep the device rebuild of node %s running: %w",
-					ops.Spec.NodeRef, err)
-			}
-			return nil
-		}); err != nil {
-			return false, err
-		}
-	}
-
 	progress, err := r.API.RemovalProgress(ctx, clusterID, nodeID)
 	if err != nil {
 		return false, fmt.Errorf("read the device rebuild of node %s: %w", ops.Spec.NodeRef, err)
+	}
+
+	switch reading.Status {
+	case nodeStatusInShutdown:
+		return false, r.recordRemovalProgress(ctx, ops, machine, reading.Status)
+	case nodeStatusPendingRemoval:
+		if retry, err := r.retryPrepare(ctx, ops, clusterID, nodeID, progress); err != nil || retry {
+			return false, err
+		}
+		return false, r.recordRemovalProgress(ctx, ops, machine, reading.Status)
+	}
+
+	// Under a claim, so it is sent at most once a lease rather than by every pass
+	// that read the step from a cache.
+	if _, err := r.once(ctx, ops, func() error {
+		if err := r.API.PrepareRemoval(ctx, clusterID, nodeID); err != nil {
+			return fmt.Errorf("keep the device rebuild of node %s running: %w",
+				ops.Spec.NodeRef, err)
+		}
+		return nil
+	}); err != nil {
+		return false, err
 	}
 	if progress.Failed > 0 {
 		return false, fatalf("the control plane gave up rebuilding the devices of node %s: %s",
@@ -254,6 +271,66 @@ func (r *StorageNodeOpsReconciler) drainMigrateDevices(
 		return true, nil
 	}
 	return false, r.recordRemovalProgress(ctx, ops, machine, reading.Status)
+}
+
+// prepareRetryAfterFailure is how long a prepare-removal sent again has to
+// answer before a failure the control plane still reports is taken as its own.
+const prepareRetryAfterFailure = time.Minute
+
+// retryPrepare sends prepare-removal again for a node stuck in pending_removal,
+// and reports whether it did.
+//
+// A failure the control plane reports is retried a minute after the last
+// attempt, which gives a retry time to clear the failure it is retrying. A node
+// whose status has not moved for longer than a shutdown takes, with no failure
+// reported, is retried too: the control plane can fail the shutdown without
+// recording it. The first case knows the shutdown has finished; the second waits
+// the shutdown's budget so that no retry is sent under a shutdown still running.
+// After maxPrepareAttempts the operation fails with the control plane's message.
+func (r *StorageNodeOpsReconciler) retryPrepare(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageNodeOps,
+	clusterID, nodeID string,
+	progress RemovalProgress,
+) (bool, error) {
+	recorded := ops.Status.Removal
+	if recorded == nil || recorded.LastProgressTime == nil {
+		return false, nil
+	}
+	lastActivity := recorded.LastProgressTime.Time
+	if last := recorded.LastPrepareTime; last != nil && last.After(lastActivity) {
+		lastActivity = last.Time
+	}
+	failed := progress.Failed > 0 && (recorded.LastPrepareTime == nil ||
+		time.Since(recorded.LastPrepareTime.Time) >= prepareRetryAfterFailure)
+	stalled := time.Since(lastActivity) >= shuttingDownDeadline
+	if !failed && !stalled {
+		return false, nil
+	}
+
+	if recorded.PrepareAttempts >= maxPrepareAttempts {
+		reason := progress.Message
+		if reason == "" {
+			reason = fmt.Sprintf("the node stayed %s", nodeStatusPendingRemoval)
+		}
+		return false, fatalf("the control plane did not shut node %s down for its removal after "+
+			"%d attempts: %s", ops.Spec.NodeRef, recorded.PrepareAttempts+1, reason)
+	}
+
+	// The attempt is counted in the claim's own patch, before the call, so a pass
+	// that dies between the two cannot send unbounded retries, and a pass that
+	// read the step from a cache loses the claim and neither counts nor sends.
+	now := metav1.Now()
+	claimed, err := r.once(ctx, ops, func() error {
+		if err := r.API.PrepareRemoval(ctx, clusterID, nodeID); err != nil && refused(err) {
+			return fatalf("the control plane refused to remove node %s: %v", ops.Spec.NodeRef, err)
+		}
+		return nil
+	}, func() {
+		ops.Status.Removal.PrepareAttempts++
+		ops.Status.Removal.LastPrepareTime = &now
+	})
+	return claimed, err
 }
 
 // refused reports whether the control plane answered with a 4xx, which is its

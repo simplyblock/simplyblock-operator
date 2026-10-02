@@ -18,7 +18,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -775,5 +777,121 @@ func TestVerifyingHoldsWhileTheControlPlaneSeesSomethingLeft(t *testing.T) {
 	}
 	if !strings.Contains(blocked.message, "snap-1") {
 		t.Errorf("the hold says %q, want it to name what is left", blocked.message)
+	}
+}
+
+// aPendingDrain is a removal in MigratingDevices whose node is still
+// pending_removal, with the progress and prepare attempts it last recorded.
+func aPendingDrain(
+	t *testing.T, api *scriptedControlPlane, recorded *simplyblockv1alpha2.RemovalStatus,
+) (*StorageNodeOpsReconciler, client.Client, *simplyblockv1alpha2.StorageNodeOps) {
+	t.Helper()
+	ops := aDrain()
+	ops.Status.Removal = recorded
+	r, apiClient := anOpsWorld(t, api, ops)
+	r.Mover = &scriptedMover{}
+	return r, apiClient, ops
+}
+
+// minutesAgo is a status timestamp the given number of minutes in the past.
+func minutesAgo(minutes int) *metav1.Time {
+	at := metav1.NewTime(time.Now().Add(-time.Duration(minutes) * time.Minute))
+	return &at
+}
+
+// Regression: 2026-10-02-prepare-removal-shutdown-failed: prepare-removal marked
+// worker-4 pending_removal and then failed to shut it down, and the operation
+// waited on a node nothing was driving. A prepare the control plane reports
+// failed is sent again, which is the retry it is idempotent for.
+func TestAFailedPrepareIsSentAgain(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusPendingRemoval)
+	api.progress = RemovalProgress{Total: 2, Failed: 1, Message: "shutdown failed",
+		NodeStatus: nodeStatusPendingRemoval}
+	r, apiClient, ops := aPendingDrain(t, api, &simplyblockv1alpha2.RemovalStatus{
+		NodeStatus: nodeStatusPendingRemoval, LastProgressTime: minutesAgo(2),
+	})
+
+	done, err := performing(t, r, ops, stepMigratingDevices)
+	if err != nil || done {
+		t.Fatalf("done, err = %t, %v; want a pass that waits after sending prepare-removal again",
+			done, err)
+	}
+	if asked := api.asked("PrepareRemoval"); asked != 1 {
+		t.Errorf("PrepareRemoval was issued %d time(s), want once to retry the failed step", asked)
+	}
+	got := operationRead(t, apiClient, ops.Name)
+	if got.Status.Removal == nil || got.Status.Removal.PrepareAttempts != 1 ||
+		got.Status.Removal.LastPrepareTime == nil {
+		t.Errorf("status.removal = %+v, want the attempt counted and timed", got.Status.Removal)
+	}
+}
+
+// Regression: 2026-10-02-prepare-removal-shutdown-failed: the control plane can
+// also fail the shutdown without saying so, which leaves the node
+// pending_removal with nothing changing. Once nothing has moved for longer than
+// a shutdown takes, prepare-removal is sent again.
+func TestAStalledPrepareIsSentAgain(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusPendingRemoval)
+	api.progress = RemovalProgress{Total: 2, NodeStatus: nodeStatusPendingRemoval}
+	r, _, ops := aPendingDrain(t, api, &simplyblockv1alpha2.RemovalStatus{
+		NodeStatus: nodeStatusPendingRemoval, LastProgressTime: minutesAgo(20),
+	})
+
+	if _, err := performing(t, r, ops, stepMigratingDevices); err != nil {
+		t.Fatalf("migrating devices: %v", err)
+	}
+	if asked := api.asked("PrepareRemoval"); asked != 1 {
+		t.Errorf("PrepareRemoval was issued %d time(s) for a node stalled 20 minutes, want once",
+			asked)
+	}
+}
+
+// The other half: a node that only just became pending_removal may be shutting
+// down under the first prepare-removal, and a second one is not sent under it.
+// A retry already sent is not sent again until it had time to answer.
+func TestAPrepareIsNotSentAgainTooSoon(t *testing.T) {
+	for name, recorded := range map[string]*simplyblockv1alpha2.RemovalStatus{
+		"recently pending": {NodeStatus: nodeStatusPendingRemoval, LastProgressTime: minutesAgo(2)},
+		"recently retried": {NodeStatus: nodeStatusPendingRemoval, LastProgressTime: minutesAgo(30),
+			PrepareAttempts: 1, LastPrepareTime: minutesAgo(0)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := aControlPlane().reporting(nodeStatusPendingRemoval)
+			api.progress = RemovalProgress{Total: 2, NodeStatus: nodeStatusPendingRemoval}
+			if name == "recently retried" {
+				api.progress.Failed = 1
+			}
+			r, _, ops := aPendingDrain(t, api, recorded)
+
+			if _, err := performing(t, r, ops, stepMigratingDevices); err != nil {
+				t.Fatalf("migrating devices: %v", err)
+			}
+			if asked := api.asked("PrepareRemoval"); asked != 0 {
+				t.Errorf("PrepareRemoval was issued %d time(s), want none yet", asked)
+			}
+		})
+	}
+}
+
+// Regression: 2026-10-02-prepare-removal-shutdown-failed: a prepare that keeps
+// failing is not retried for the rest of the step's budget. Once the attempts
+// run out the operation fails with what the control plane said.
+func TestAPrepareThatKeepsFailingEndsTheDrain(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusPendingRemoval)
+	api.progress = RemovalProgress{Total: 2, Failed: 1, Message: "Failed to kill SPDK",
+		NodeStatus: nodeStatusPendingRemoval}
+	r, _, ops := aPendingDrain(t, api, &simplyblockv1alpha2.RemovalStatus{
+		NodeStatus: nodeStatusPendingRemoval, LastProgressTime: minutesAgo(30),
+		PrepareAttempts: maxPrepareAttempts, LastPrepareTime: minutesAgo(5),
+	})
+
+	_, err := performing(t, r, ops, stepMigratingDevices)
+
+	var fatal *terminalStepError
+	if !errors.As(err, &fatal) || !strings.Contains(err.Error(), "Failed to kill SPDK") {
+		t.Errorf("err = %v, want the terminal kind carrying the control plane's message", err)
+	}
+	if asked := api.asked("PrepareRemoval"); asked != 0 {
+		t.Errorf("PrepareRemoval was issued %d time(s) after the attempts ran out", asked)
 	}
 }

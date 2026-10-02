@@ -8705,6 +8705,11 @@ spec:
                       online through failed to failed_and_migrated, or to removed, as the
                       removal rebuilds its data onto the peers.
                     type: object
+                  lastPrepareTime:
+                    description: LastPrepareTime is when the removal's first step
+                      was last sent again.
+                    format: date-time
+                    type: string
                   lastProgressTime:
                     description: LastProgressTime is when NodeStatus or any of Devices
                       last changed.
@@ -8716,6 +8721,15 @@ spec:
                       in the control plane's own spelling: pending_removal, migrating_devices,
                       migrating_lvols, in_removal, removed, or removed_failed.
                     type: string
+                  prepareAttempts:
+                    description: |-
+                      PrepareAttempts is how many times the removal's first step was sent
+                      again for a node that stayed pending_removal, because the control plane
+                      reported the step failed or nothing moved for longer than a shutdown
+                      takes. The operation fails once the attempts run out.
+                    format: int32
+                    minimum: 0
+                    type: integer
                 type: object
               startedAt:
                 description: StartedAt is when the operation acquired its target's
