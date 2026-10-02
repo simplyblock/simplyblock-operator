@@ -446,10 +446,20 @@ func (cs *Server) PromoteVolume(
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	h, client, err = resolveToLocalReplica(ctx, h, client)
+	// Promote is addressed to the chain's ACTIVE END, never to the local
+	// member: the control plane's failover endpoint takes the volume that
+	// currently holds the data (the source of the pairing) and creates the
+	// clone on the replication target -- this site. The local member here
+	// is the volume being replaced: a demoted old primary, or one the
+	// control plane already reaped (2026-10-02: promote on site A hit the
+	// reaped 80e3e748 and 404ed while the live primary e3d439ca on B held
+	// the data).
+	hops, _, err := resolveChain(ctx, h, client)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
+	end := hops[len(hops)-1]
+	h, client = end.h, end.client
 	if err := client.PromoteVolume(ctx, h.Handle(), req.GetForce()); err != nil {
 		return nil, classifyPromoteVolumeError(err)
 	}
