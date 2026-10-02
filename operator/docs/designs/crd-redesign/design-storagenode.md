@@ -2123,6 +2123,7 @@ starts and the operation's name is not something they know yet.
 | The operation finished successfully                             | `Normal`  | `OperationSucceeded`   | `StorageNodeOps` |
 | The operation failed                                            | `Warning` | `OperationFailed`      | `StorageNodeOps` |
 | The operation was canceled                                      | `Normal`  | `OperationAborted`     | `StorageNodeOps` |
+| `spec.abort` arrived at a step that cannot be stopped           | `Warning` | `AbortRefused`         | `StorageNodeOps` |
 | A step's deadline expired                                       | `Warning` | `StepDeadlineExceeded` | `StorageNodeOps` |
 | A drain is blocked by pinned volumes                            | `Warning` | `DrainBlocked`         | `StorageNodeOps` |
 | A drain is blocked by unmanaged volumes                         | `Warning` | `DrainBlocked`         | `StorageNodeOps` |

@@ -164,10 +164,12 @@ func TestAnAbortAtAnAbortableStepStopsTheOperation(t *testing.T) {
 	}
 }
 
-// An abort at a step the control plane is part-way through is refused, and
-// refusing is the point: stopping there would leave nothing driving the node
-// back to a state somebody can reason about. The operation carries on and says
-// so, which is not a failure of it.
+// Regression: 2026-10-02-late-abort-stalls (PR #612 review): an abort at a step
+// the control plane is part-way through is refused, and refusing is the point.
+// But the refusal returned before the step ran or its deadline was read, and
+// with spec.abort still set every pass refused again: the operation stopped
+// where it was and held the node's lock for good. It is refused with an event,
+// and the operation runs on.
 func TestAnAbortThatArrivedTooLateIsRefusedAndTheOperationRunsOn(t *testing.T) {
 	api := aControlPlane()
 	ops := anAdvancingOperation("a-relocation",
@@ -177,17 +179,41 @@ func TestAnAbortThatArrivedTooLateIsRefusedAndTheOperationRunsOn(t *testing.T) {
 	r, apiClient := anOpsWorld(t, api, ops)
 	lockedBy(t, apiClient, "a-relocation")
 
-	pass(t, r, "a-relocation")
+	for range 2 {
+		pass(t, r, "a-relocation")
+	}
 
 	got := operationRead(t, apiClient, "a-relocation")
-	if got.Status.Phase != simplyblockv1alpha2.StorageNodeOpsPhaseRunning {
-		t.Errorf("phase = %q, want the operation still running", got.Status.Phase)
+	if got.Status.Phase == simplyblockv1alpha2.StorageNodeOpsPhaseAborted {
+		t.Errorf("phase = %q, want the abort refused at a step that cannot be stopped",
+			got.Status.Phase)
 	}
-	if got.Status.Message == "" {
+	if !announcedReason(r, AbortRefused) {
 		t.Error("nothing says why the abort was not honored")
 	}
-	if asked := api.asked("Promote"); asked != 0 {
-		t.Errorf("Promote was issued %d time(s) on the pass that answered the abort", asked)
+	if asked := api.asked("Promote"); asked == 0 {
+		t.Error("the step never ran while the refused abort stayed set")
+	}
+}
+
+// Regression: 2026-10-02-late-abort-stalls (PR #612 review): the deadline is
+// read while a refused abort stays set, so a stuck step still fails.
+func TestARefusedAbortStillLetsTheDeadlineFail(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingDevices)
+	ops := anAdvancingOperation("a-drain",
+		simplyblockv1alpha2.StorageNodeOpsActionRemove, stepMigratingDevices)
+	ops.Spec.Abort = true
+	expired := metav1.NewTime(time.Now().Add(-time.Minute))
+	ops.Status.Step.Deadline = &expired
+	r, apiClient := anOpsWorld(t, api, ops)
+	r.Mover = &scriptedMover{}
+	lockedBy(t, apiClient, "a-drain")
+
+	pass(t, r, "a-drain")
+
+	got := operationRead(t, apiClient, "a-drain")
+	if got.Status.Phase != simplyblockv1alpha2.StorageNodeOpsPhaseFailed {
+		t.Errorf("phase = %q, want Failed for a step past its deadline", got.Status.Phase)
 	}
 }
 

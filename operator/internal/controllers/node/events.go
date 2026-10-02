@@ -64,6 +64,10 @@ const (
 	OperationFailed    = "OperationFailed"
 	OperationAborted   = "OperationAborted"
 
+	// AbortRefused says spec.abort arrived at a step that cannot be stopped,
+	// and that the operation is running on.
+	AbortRefused = "AbortRefused"
+
 	// StepDeadlineExceeded distinguishes an operation still working from one
 	// that stopped, which is the distinction status.message cannot express.
 	StepDeadlineExceeded = "StepDeadlineExceeded"
