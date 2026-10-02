@@ -37,7 +37,7 @@ func requested(
 	r, _ := anOpsWorld(t, api)
 
 	done, err := r.perform(context.Background(),
-		anOperation("an-operation", action), stepRequesting)
+		persisted(t, r.Client, anOperation("an-operation", action)), stepRequesting)
 	if err != nil {
 		t.Fatalf("the %s request: %v", action, err)
 	}
@@ -108,7 +108,7 @@ func TestARestartOfAnOnlineNodeIsRefusedUnlessForced(t *testing.T) {
 	r, _ := anOpsWorld(t, api)
 	ops := anOperation("a-restart", simplyblockv1alpha2.StorageNodeOpsActionRestart)
 
-	_, err := r.perform(context.Background(), ops, stepRequesting)
+	_, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepRequesting)
 
 	var fatal *terminalStepError
 	if !errors.As(err, &fatal) {
@@ -123,7 +123,7 @@ func TestARestartOfAnOnlineNodeIsRefusedUnlessForced(t *testing.T) {
 	ops = anOperation("a-forced-restart", simplyblockv1alpha2.StorageNodeOpsActionRestart)
 	ops.Spec.Force = ptr.To(true)
 
-	if _, err := r.perform(context.Background(), ops, stepRequesting); err != nil {
+	if _, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepRequesting); err != nil {
 		t.Fatalf("the forced restart request: %v", err)
 	}
 	if asked := forced.asked("RestartNode"); asked != 1 {
@@ -224,7 +224,7 @@ func TestOnlyTheFlagsTheOperationStatesAreSent(t *testing.T) {
 	r, _ := anOpsWorld(t, api)
 
 	ops := anOperation("a-restart", simplyblockv1alpha2.StorageNodeOpsActionRestart)
-	if _, err := r.perform(context.Background(), ops, stepRequesting); err != nil {
+	if _, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepRequesting); err != nil {
 		t.Fatalf("the restart request: %v", err)
 	}
 	if len(api.restarts) != 1 {
@@ -240,7 +240,7 @@ func TestOnlyTheFlagsTheOperationStatesAreSent(t *testing.T) {
 	ops = anOperation("a-forced-restart", simplyblockv1alpha2.StorageNodeOpsActionRestart)
 	ops.Spec.Force = ptr.To(true)
 	ops.Spec.ReattachVolume = ptr.To(true)
-	if _, err := r.perform(context.Background(), ops, stepRequesting); err != nil {
+	if _, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepRequesting); err != nil {
 		t.Fatalf("the forced restart request: %v", err)
 	}
 	if !stated.restarts[0].Force || !stated.restarts[0].ReattachVolume {
@@ -266,7 +266,7 @@ func TestTheWaitIsOverWhenTheNodeReportsWhatTheActionWasFor(t *testing.T) {
 			r, _ := anOpsWorld(t, aControlPlane().reporting(c.other))
 			ops := anOperation("an-operation", c.action)
 
-			done, err := r.perform(context.Background(), ops, stepAwaiting)
+			done, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepAwaiting)
 			if err != nil {
 				t.Fatalf("the wait: %v", err)
 			}
@@ -275,7 +275,7 @@ func TestTheWaitIsOverWhenTheNodeReportsWhatTheActionWasFor(t *testing.T) {
 			}
 
 			r, _ = anOpsWorld(t, aControlPlane().reporting(c.wanted))
-			done, err = r.perform(context.Background(), ops, stepAwaiting)
+			done, err = r.perform(context.Background(), persisted(t, r.Client, ops), stepAwaiting)
 			if err != nil {
 				t.Fatalf("the wait: %v", err)
 			}
@@ -293,7 +293,7 @@ func TestAStepThatBelongsToNoActionEndsTheOperation(t *testing.T) {
 	r, _ := anOpsWorld(t, aControlPlane())
 
 	_, err := r.perform(context.Background(),
-		anOperation("a-drain", simplyblockv1alpha2.StorageNodeOpsActionRemove), stepRequesting)
+		persisted(t, r.Client, anOperation("a-drain", simplyblockv1alpha2.StorageNodeOpsActionRemove)), stepRequesting)
 
 	var fatal *terminalStepError
 	if !errors.As(err, &fatal) {
@@ -321,7 +321,7 @@ func TestAnUnprovisionedNodeEndsTheOperation(t *testing.T) {
 	}
 
 	_, err := r.perform(context.Background(),
-		anOperation("an-operation", simplyblockv1alpha2.StorageNodeOpsActionSuspend), stepRequesting)
+		persisted(t, r.Client, anOperation("an-operation", simplyblockv1alpha2.StorageNodeOpsActionSuspend)), stepRequesting)
 
 	var fatal *terminalStepError
 	if !errors.As(err, &fatal) {

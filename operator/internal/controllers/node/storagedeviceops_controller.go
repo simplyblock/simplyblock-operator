@@ -39,6 +39,7 @@ import (
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/stepclaim"
 )
 
 const (
@@ -321,16 +322,20 @@ func (r *StorageDeviceOpsReconciler) request(
 		return false, err
 	}
 
+	// The record travels in the claim's patch rather than in a write of its
+	// own. A write that rereads and retries on a conflict lands for a pass
+	// holding a stale copy as well, and that pass would then restart the
+	// device a second time.
 	before := device.Status.DeviceStatus
-	if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageDeviceOpsStatus) {
-		status.DeviceStatusBefore = before
-	}); err != nil {
+	claimed, err := r.once(ctx, ops, func() error {
+		if err := r.API.RestartDevice(ctx, cluster, node, id); err != nil {
+			return refuseDevice(
+				"the control plane refused to restart device %s: %v", device.Name, err)
+		}
+		return nil
+	}, func() { ops.Status.DeviceStatusBefore = before })
+	if err != nil || !claimed {
 		return false, err
-	}
-
-	if err := r.API.RestartDevice(ctx, cluster, node, id); err != nil {
-		return false, refuseDevice(
-			"the control plane refused to restart device %s: %v", device.Name, err)
 	}
 	r.event(ops, corev1.EventTypeNormal, DeviceRestartRequested,
 		fmt.Sprintf("asked the control plane to restart device %s", device.Name))
@@ -390,23 +395,28 @@ func (r *StorageDeviceOpsReconciler) removeFromDataPath(
 				"already happened", device.Name, current.Status)
 	}
 
-	if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageDeviceOpsStatus) {
-		status.DeviceStatusBefore = current.Status
-	}); err != nil {
-		return false, err
-	}
-
 	if current.Status == cpDeviceRemoved {
 		// Out of the data path already, by an earlier pass of this step or by
 		// somebody's hand. Issuing the removal again is a call the control plane
 		// refuses, and the step's work is done either way.
-		return true, nil
+		return true, r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageDeviceOpsStatus) {
+			status.DeviceStatusBefore = current.Status
+		})
 	}
 
-	if err := r.API.RemoveDevice(ctx, cluster, node, id); err != nil {
-		return false, refuseDevice(
-			"the control plane refused to remove device %s from the data path: %v",
-			device.Name, err)
+	// The status before travels in the claim's patch, so that no write that
+	// rereads on a conflict runs between this pass choosing the step and
+	// claiming it.
+	claimed, err := r.once(ctx, ops, func() error {
+		if err := r.API.RemoveDevice(ctx, cluster, node, id); err != nil {
+			return refuseDevice(
+				"the control plane refused to remove device %s from the data path: %v",
+				device.Name, err)
+		}
+		return nil
+	}, func() { ops.Status.DeviceStatusBefore = current.Status })
+	if err != nil || !claimed {
+		return false, err
 	}
 	r.event(ops, corev1.EventTypeNormal, DeviceRemovalRequested,
 		fmt.Sprintf("took device %s out of the data path, before failing it", device.Name))
@@ -445,9 +455,15 @@ func (r *StorageDeviceOpsReconciler) requestFailure(
 				"holds as removed", device.Name, current.Status)
 	}
 
-	if err := r.API.FailDevice(ctx, cluster, node, id); err != nil {
-		return false, refuseDevice(
-			"the control plane refused to fail device %s: %v", device.Name, err)
+	claimed, err := r.once(ctx, ops, func() error {
+		if err := r.API.FailDevice(ctx, cluster, node, id); err != nil {
+			return refuseDevice(
+				"the control plane refused to fail device %s: %v", device.Name, err)
+		}
+		return nil
+	})
+	if err != nil || !claimed {
+		return false, err
 	}
 	r.event(ops, corev1.EventTypeNormal, DeviceFailRequested,
 		fmt.Sprintf("asked the control plane to fail device %s", device.Name))
@@ -791,11 +807,23 @@ func (r *StorageDeviceOpsReconciler) writeStatus(
 	ops *simplyblockv1alpha2.StorageDeviceOps,
 	change func(*simplyblockv1alpha2.StorageDeviceOpsStatus),
 ) error {
+	// The first attempt starts from the caller's object rather than from a
+	// read. That object carries every write this pass made, including a claim
+	// on the step, which the cache may not have seen yet. Read from the cache,
+	// it would patch against the version before the claim and conflict until
+	// the cache caught up. Only a conflict means somebody else wrote, and only
+	// then does an attempt read the object again, and so does the first one
+	// when the caller's object was never read and carries no version to patch
+	// against.
+	reread := ops.ResourceVersion == ""
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var fresh simplyblockv1alpha2.StorageDeviceOps
-		if err := r.Get(ctx, client.ObjectKeyFromObject(ops), &fresh); err != nil {
-			return err
+		fresh := *ops.DeepCopy()
+		if reread {
+			if err := r.Get(ctx, client.ObjectKeyFromObject(ops), &fresh); err != nil {
+				return err
+			}
 		}
+		reread = true
 		patch := client.MergeFromWithOptions(fresh.DeepCopy(),
 			client.MergeFromWithOptimisticLock{})
 		change(&fresh.Status)
@@ -803,13 +831,29 @@ func (r *StorageDeviceOpsReconciler) writeStatus(
 		if err := r.Status().Patch(ctx, &fresh, patch); err != nil {
 			return err
 		}
+		// The version travels back with the status, because the next write in
+		// this pass starts from ops and patches against it.
 		fresh.Status.DeepCopyInto(&ops.Status)
+		ops.ResourceVersion = fresh.ResourceVersion
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("record the operation's status: %w", err)
 	}
 	return nil
+}
+
+// once makes call under a claim on the operation's current step, applies also
+// in the claim's own patch, and reports whether this pass made the call. A pass
+// that loses the claim made no call: either another pass holds a live claim on
+// the step, or this pass read the operation at a version a newer write has
+// replaced. Either way it waits, and the next pass reads again.
+func (r *StorageDeviceOpsReconciler) once(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageDeviceOps,
+	call func() error, also ...func(),
+) (bool, error) {
+	return statemachine.WithClaim(ctx, ops.Status.Step, claimLease,
+		stepclaim.Writer(r.Client, ops, &ops.Status.Step, also...), call)
 }
 
 // event records something about the operation, on the operation.

@@ -50,6 +50,7 @@ import (
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/stepclaim"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -76,6 +77,14 @@ const (
 	// this is the backstop for the event rather than the path the next step
 	// normally arrives on.
 	opsAdvance = time.Second
+
+	// claimLease is how long a step's claimed call is trusted to be in flight
+	// before another pass may make it again. Most node steps wait in place for
+	// the node to move after their call, and the node stream reports the move
+	// some seconds later, so the lease covers that report as well as a pass
+	// that crashed after the call. A call the control plane accepted and then
+	// dropped is made again once it runs out.
+	claimLease = time.Minute
 
 	// nodeRefField is the index a node event is mapped back through. It is what
 	// makes a released lock wake the queue immediately rather than after a
@@ -986,11 +995,24 @@ func (r *StorageNodeOpsReconciler) writeStatus(
 	// take the write for done, and finish does: it releases the node's lock
 	// straight afterward, so a dropped terminal status would free the node for
 	// the next operation while this one still reported Running.
+	//
+	// The first attempt starts from the caller's object rather than from a
+	// read. That object carries every write this pass made, including a claim
+	// on the step, which the cache may not have seen yet. Read from the cache,
+	// it would patch against the version before the claim and conflict until
+	// the cache caught up. Only a conflict means somebody else wrote, and only
+	// then does an attempt read the object again, and so does the first one
+	// when the caller's object was never read and carries no version to patch
+	// against.
+	reread := ops.ResourceVersion == ""
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var fresh simplyblockv1alpha2.StorageNodeOps
-		if err := r.Get(ctx, client.ObjectKeyFromObject(ops), &fresh); err != nil {
-			return err
+		fresh := *ops.DeepCopy()
+		if reread {
+			if err := r.Get(ctx, client.ObjectKeyFromObject(ops), &fresh); err != nil {
+				return err
+			}
 		}
+		reread = true
 
 		desired := *fresh.Status.DeepCopy()
 		mutate(&desired)
@@ -1031,6 +1053,18 @@ func (r *StorageNodeOpsReconciler) emit(
 	if node, err := r.node(ctx, ops); err == nil {
 		r.Recorder.Eventf(node, nil, eventType, reason, reason, "%s", message)
 	}
+}
+
+// once makes call under a claim on the operation's current step, and reports
+// whether this pass made it. A pass that loses the claim made no call: either
+// another pass holds a live claim on the step, or this pass read the operation
+// at a version a newer write has replaced. Either way it waits, and the next
+// pass reads again.
+func (r *StorageNodeOpsReconciler) once(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, call func() error,
+) (bool, error) {
+	return statemachine.WithClaim(ctx, ops.Status.Step, claimLease,
+		stepclaim.Writer(r.Client, ops, &ops.Status.Step), call)
 }
 
 // terminalOps reports a phase the operation can never leave.

@@ -99,7 +99,7 @@ func TestARelocationWithNoTargetEndsTheOperation(t *testing.T) {
 	r, _ := anOpsWorld(t, aControlPlane())
 	ops := anOperation("a-relocation", simplyblockv1alpha2.StorageNodeOpsActionMigrate)
 
-	_, err := r.perform(context.Background(), ops, stepPreparing)
+	_, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepPreparing)
 
 	var fatal *terminalStepError
 	if !errors.As(err, &fatal) {
@@ -116,7 +116,7 @@ func TestARelocationToTheHostTheNodeIsOnIsAlreadyDone(t *testing.T) {
 	r, apiClient := anOpsWorld(t, aControlPlane())
 	replaceNode(t, apiClient, node)
 
-	done, err := r.perform(context.Background(), aRelocation(), stepPreparing)
+	done, err := r.perform(context.Background(), persisted(t, r.Client, aRelocation()), stepPreparing)
 	if err != nil {
 		t.Fatalf("preparing: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestATargetThatCannotHostTheNodeIsRefused(t *testing.T) {
 	t.Run("not a worker of this cluster", func(t *testing.T) {
 		r, _ := anOpsWorld(t, aControlPlane())
 
-		_, err := r.perform(context.Background(), aRelocation(), stepPreparing)
+		_, err := r.perform(context.Background(), persisted(t, r.Client, aRelocation()), stepPreparing)
 
 		var fatal *terminalStepError
 		if !errors.As(err, &fatal) {
@@ -143,7 +143,7 @@ func TestATargetThatCannotHostTheNodeIsRefused(t *testing.T) {
 	t.Run("not Ready", func(t *testing.T) {
 		r, _ := anOpsWorld(t, aControlPlane(), aWorker(opsTarget, false))
 
-		_, err := r.perform(context.Background(), aRelocation(), stepPreparing)
+		_, err := r.perform(context.Background(), persisted(t, r.Client, aRelocation()), stepPreparing)
 
 		var fatal *terminalStepError
 		if !errors.As(err, &fatal) {
@@ -162,7 +162,7 @@ func TestPreparingWritesTheTargetsConfigurationAndLabelsIt(t *testing.T) {
 	ops := aRelocation()
 	ops.Spec.Migrate.NewSsdPcie = []string{"0000:04:00.0"}
 
-	done, err := r.perform(context.Background(), ops, stepPreparing)
+	done, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepPreparing)
 	if err != nil {
 		t.Fatalf("preparing: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestTheRelocationRestartIsAimedAtTheTargetAndForced(t *testing.T) {
 	api := aControlPlane()
 	r, _ := anOpsWorld(t, api, aWorker(opsTarget, true))
 
-	done, err := r.perform(context.Background(), aRelocation(), stepRelocating)
+	done, err := r.perform(context.Background(), persisted(t, r.Client, aRelocation()), stepRelocating)
 	if err != nil {
 		t.Fatalf("relocating: %v", err)
 	}
@@ -254,7 +254,7 @@ func TestAStatedForceOutranksTheRelocationsDefault(t *testing.T) {
 	ops := aRelocation()
 	ops.Spec.Force = ptr.To(false)
 
-	if _, err := r.perform(context.Background(), ops, stepRelocating); err != nil {
+	if _, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepRelocating); err != nil {
 		t.Fatalf("relocating: %v", err)
 	}
 	if api.restarts[0].Force {
@@ -268,7 +268,7 @@ func TestTheRelocationIsOverWhenTheNodeHasLeftOnline(t *testing.T) {
 	api := aControlPlane().reporting(nodeStatusInRestart)
 	r, _ := anOpsWorld(t, api, aWorker(opsTarget, true))
 
-	done, err := r.perform(context.Background(), aRelocation(), stepRelocating)
+	done, err := r.perform(context.Background(), persisted(t, r.Client, aRelocation()), stepRelocating)
 	if err != nil {
 		t.Fatalf("relocating: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestAPromoteIsRefusedWhileTheNodeIsNotBack(t *testing.T) {
 	api := aControlPlane().reporting(nodeStatusInRestart)
 	r, _ := anOpsWorld(t, api, aWorker(opsTarget, true))
 
-	done, err := r.perform(context.Background(), aRelocation(), stepPromoting)
+	done, err := r.perform(context.Background(), persisted(t, r.Client, aRelocation()), stepPromoting)
 	if err != nil {
 		t.Fatalf("promoting: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestThePromoteIsFollowedByTheTopologyRepoint(t *testing.T) {
 	ops := aRelocation()
 	ops.Spec.Migrate.NewSsdPcie = []string{"0000:04:00.0"}
 
-	done, err := r.perform(context.Background(), ops, stepPromoting)
+	done, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepPromoting)
 	if err != nil {
 		t.Fatalf("promoting: %v", err)
 	}

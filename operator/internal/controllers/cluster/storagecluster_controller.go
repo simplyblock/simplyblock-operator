@@ -1348,7 +1348,7 @@ func phaseFor(status string, rebalancing bool) simplyblockv1alpha2.StorageCluste
 		return simplyblockv1alpha2.StorageClusterPhaseSuspended
 	case "":
 		return simplyblockv1alpha2.StorageClusterPhasePending
-	case "in_activation":
+	case utils.ClusterStatusInActivation:
 		// Activation is asked for, and by more than a deployment: an expansion
 		// ends in one and so does recovering from a suspension.
 		return simplyblockv1alpha2.StorageClusterPhaseActivating

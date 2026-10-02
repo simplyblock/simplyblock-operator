@@ -133,13 +133,25 @@ func (r *PersistentVolumeOpsReconciler) createMigration(
 			subject.handle.VolumeID)
 	}
 
-	migration, err := r.API.CreateMigration(ctx, subject.clusterUUID, volume.NQN, subject.targetUUID)
-	if err != nil {
-		// The request may have taken effect despite the error: a create can
-		// take longer than the client's timeout and allocates on the way, so
-		// failing here would abandon a half-created migration. Retrying is what
-		// lets a later pass find and cancel it.
-		return fmt.Errorf("create the migration of subsystem %s: %w", volume.NQN, err)
+	// Made under a claim on the step: a pass that read the operation before
+	// the previous one recorded its migration loses the claim and creates
+	// nothing.
+	var migration controlplane.Migration
+	claimed, err := r.once(ctx, ops, func() error {
+		var err error
+		migration, err = r.API.CreateMigration(ctx, subject.clusterUUID, volume.NQN, subject.targetUUID)
+		if err != nil {
+			// The request may have taken effect despite the error: a create
+			// can take longer than the client's timeout and allocates on the
+			// way, so failing here would abandon a half-created migration.
+			// Retrying once the claim expires is what lets a later pass find
+			// and cancel it.
+			return fmt.Errorf("create the migration of subsystem %s: %w", volume.NQN, err)
+		}
+		return nil
+	})
+	if err != nil || !claimed {
+		return err
 	}
 	if migration.ID == "" {
 		return fatalf("the control plane created a migration with no identifier")
@@ -245,18 +257,26 @@ func (r *PersistentVolumeOpsReconciler) copy(
 		// A repeated continue is the shape that has lost writes here, so a
 		// crash between this write and the call leaves the copy unstarted and
 		// the step to time out rather than leaving a transfer to be retried.
+		//
+		// The record travels in the claim's patch rather than in a write of its
+		// own. A write that rereads and retries on a conflict lands for a pass
+		// holding a stale copy as well, and that pass would then continue the
+		// copy a second time. The claim's patch is not retried, so only the
+		// pass that read the current version continues it.
 		now := metav1.Now()
-		if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.PersistentVolumeOpsStatus) {
-			status.Migration.ContinuedAt = &now
-		}); err != nil {
+		claimed, err := r.once(ctx, ops, func() error {
+			if err := r.API.ContinueMigration(ctx,
+				migration.ClusterUUID, migration.SubsystemNQN, migration.MigrationUUID); err != nil {
+				// Whether the copy started is what the next read says, not
+				// what this error says. A call that timed out after the
+				// transfer committed reports a failure the migration itself
+				// contradicts.
+				return fmt.Errorf("continue migration %s: %w", migration.MigrationUUID, err)
+			}
+			return nil
+		}, func() { ops.Status.Migration.ContinuedAt = &now })
+		if err != nil || !claimed {
 			return false, err
-		}
-		if err := r.API.ContinueMigration(ctx,
-			migration.ClusterUUID, migration.SubsystemNQN, migration.MigrationUUID); err != nil {
-			// Whether the copy started is what the next read says, not what
-			// this error says. A call that timed out after the transfer
-			// committed reports a failure the migration itself contradicts.
-			return false, fmt.Errorf("continue migration %s: %w", migration.MigrationUUID, err)
 		}
 		r.event(ops, corev1.EventTypeNormal, ReasonMigrationStarted,
 			"Migration %s started: volume %s to node %s",

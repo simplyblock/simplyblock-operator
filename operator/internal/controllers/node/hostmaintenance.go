@@ -211,10 +211,13 @@ func (r *StorageNodeOpsReconciler) maintenanceShutDown(
 		// Regression: 2026-09-29-maintenance-reissues-the-shutdown.
 		return false, nil
 	}
-	if err := r.API.ShutdownNode(ctx, clusterID, nodeID); err != nil {
-		return false, fmt.Errorf("shut down node %s for maintenance: %w", ops.Spec.NodeRef, err)
-	}
-	return false, nil
+	_, err = r.once(ctx, ops, func() error {
+		if err := r.API.ShutdownNode(ctx, clusterID, nodeID); err != nil {
+			return fmt.Errorf("shut down node %s for maintenance: %w", ops.Spec.NodeRef, err)
+		}
+		return nil
+	})
+	return false, err
 }
 
 // maintenanceRelease takes the budget away so the eviction the drain is waiting
@@ -362,10 +365,13 @@ func (r *StorageNodeOpsReconciler) maintenanceRestart(
 		Force:          boolValue(ops.Spec.Force),
 		ReattachVolume: boolValue(ops.Spec.ReattachVolume),
 	}
-	if err := r.API.RestartNode(ctx, clusterID, nodeID, params); err != nil {
-		return false, fmt.Errorf("restart node %s after maintenance: %w", ops.Spec.NodeRef, err)
-	}
-	return false, nil
+	_, err = r.once(ctx, ops, func() error {
+		if err := r.API.RestartNode(ctx, clusterID, nodeID, params); err != nil {
+			return fmt.Errorf("restart node %s after maintenance: %w", ops.Spec.NodeRef, err)
+		}
+		return nil
+	})
+	return false, err
 }
 
 // maintenanceCleanup removes what the window put in place, so the worker is

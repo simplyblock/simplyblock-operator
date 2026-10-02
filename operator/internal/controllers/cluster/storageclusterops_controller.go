@@ -51,6 +51,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 const (
@@ -85,6 +86,16 @@ const (
 	// watches, so this is the backstop for the event rather than the path the
 	// next step normally arrives on.
 	opsAdvance = time.Second
+
+	// claimLease is how long a step's claimed call is trusted to be in flight
+	// before another pass may make it again. The pass that made the call
+	// records the next step straight afterward, so the lease only runs out
+	// when that pass crashed or its write failed. The lease starts before the
+	// call does, so it runs a minute past the request timeout: a call that
+	// waited the whole timeout has an outcome nobody knows yet, and Expand has
+	// no state of the cluster to skip on. It stays inside requestingDeadline,
+	// so a crashed claim is retried before the step times out.
+	claimLease = webapi.RequestTimeout + time.Minute
 
 	// clusterRefField is the index a cluster event is mapped back through. It
 	// is what makes a released lock wake the queue immediately rather than
@@ -733,11 +744,24 @@ func (r *StorageClusterOpsReconciler) writeStatus(
 	// cluster's lock straight afterward, so a dropped terminal status would
 	// free the cluster for the next operation while this one still reported
 	// Running.
+	//
+	// The first attempt starts from the caller's object rather than from a
+	// read. That object carries every write this pass made, including a claim
+	// on the step, which the cache may not have seen yet. Read from the cache,
+	// it would patch against the version before the claim and conflict until
+	// the cache caught up. Only a conflict means somebody else wrote, and only
+	// then does an attempt read the object again, and so does the first one
+	// when the caller's object was never read and carries no version to patch
+	// against.
+	reread := ops.ResourceVersion == ""
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var fresh simplyblockv1alpha2.StorageClusterOps
-		if err := r.Get(ctx, client.ObjectKeyFromObject(ops), &fresh); err != nil {
-			return err
+		fresh := *ops.DeepCopy()
+		if reread {
+			if err := r.Get(ctx, client.ObjectKeyFromObject(ops), &fresh); err != nil {
+				return err
+			}
 		}
+		reread = true
 
 		desired := *fresh.Status.DeepCopy()
 		mutate(&desired)

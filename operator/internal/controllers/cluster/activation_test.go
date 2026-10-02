@@ -134,8 +134,9 @@ func TestAnActivationJustRequestedIsNotRequestedAgain(t *testing.T) {
 	}
 }
 
-// An attempt still running is waited on however long it has taken, because the
-// control plane refuses a second activate on a cluster in_activation.
+// An attempt still running is waited on however long it has taken. The control
+// plane does not refuse a second activate on a cluster in_activation: it runs
+// both side by side.
 func TestAnActivationStillRunningIsNotRequestedAgain(t *testing.T) {
 	api := clusterReadingAt("in_activation")
 	r := activationRig(t, api, &recorder{}, newTestOps(simplyblockv1alpha2.StorageClusterOpsActionActivate,
@@ -223,5 +224,29 @@ func TestAnActivationIsRequestedOnceTheNodesReportTheirDomains(t *testing.T) {
 	reconcileOps(t, r, 6)
 	if api.activateCalls != 1 {
 		t.Errorf("the control plane was asked to activate %d times, want 1", api.activateCalls)
+	}
+}
+
+// An activation the control plane is already running is not requested again.
+// A pass that made the call and crashed before recording Awaiting leaves the
+// step in Requesting, and once its claim has expired the next pass reaches the
+// call again. The control plane does not refuse a second activate on a cluster
+// in_activation: it runs both, and their secondary-node assignments overwrite
+// each other. The step is done, and Awaiting is where an attempt in flight is
+// waited on and a failed one is retried.
+//
+// Regression: lblk_outage_matrix_k8s-20261002-111746.
+func TestAnActivationAlreadyRunningIsNotRequestedFromRequesting(t *testing.T) {
+	api := clusterReadingAt("in_activation")
+	r := activationRig(t, api, &recorder{}, newTestOps(simplyblockv1alpha2.StorageClusterOpsActionActivate,
+		atStep(stepRequesting)))
+
+	ops, _ := reconcileOps(t, r, 2)
+	if api.activateCalls != 0 {
+		t.Errorf("the control plane was asked to activate %d times, want 0 while in_activation",
+			api.activateCalls)
+	}
+	if got := ops.Status.Step.State; got != string(stepAwaiting) {
+		t.Errorf("step = %q, want Awaiting", got)
 	}
 }

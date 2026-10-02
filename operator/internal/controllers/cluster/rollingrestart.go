@@ -230,12 +230,17 @@ func (r *StorageClusterOpsReconciler) shutDownNode(
 	case utils.NodeStatusInShutdown:
 		return false, nil
 	}
-	if err := r.API.ShutdownNode(ctx, clusterID, nodeID); err != nil {
-		return false, fmt.Errorf("shut down node %s: %w", nodeID, err)
+	claimed, err := r.once(ctx, ops, func() error {
+		if err := r.API.ShutdownNode(ctx, clusterID, nodeID); err != nil {
+			return fmt.Errorf("shut down node %s: %w", nodeID, err)
+		}
+		return nil
+	})
+	if claimed && err == nil {
+		logf.FromContext(ctx).Info("the node was asked to shut down",
+			"operation", ops.Name, "node", nodeID)
 	}
-	logf.FromContext(ctx).Info("the node was asked to shut down",
-		"operation", ops.Name, "node", nodeID)
-	return false, nil
+	return false, err
 }
 
 // refreshPod deletes the node's storage-node pod, which is what forces the
@@ -307,12 +312,17 @@ func (r *StorageClusterOpsReconciler) restartNode(
 	case utils.NodeStatusInRestart:
 		return false, nil
 	}
-	if err := r.API.RestartNode(ctx, clusterID, nodeID); err != nil {
-		return false, fmt.Errorf("restart node %s: %w", nodeID, err)
+	claimed, err := r.once(ctx, ops, func() error {
+		if err := r.API.RestartNode(ctx, clusterID, nodeID); err != nil {
+			return fmt.Errorf("restart node %s: %w", nodeID, err)
+		}
+		return nil
+	})
+	if claimed && err == nil {
+		logf.FromContext(ctx).Info("the node was asked to restart",
+			"operation", ops.Name, "node", nodeID)
 	}
-	logf.FromContext(ctx).Info("the node was asked to restart",
-		"operation", ops.Name, "node", nodeID)
-	return false, nil
+	return false, err
 }
 
 // awaitRebalance waits for the cluster to finish redistributing after the node

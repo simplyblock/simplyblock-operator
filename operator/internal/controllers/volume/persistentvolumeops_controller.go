@@ -52,6 +52,7 @@ import (
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/stepclaim"
 	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 )
 
@@ -74,6 +75,14 @@ const (
 	// watches, so this is the backstop for the event rather than the path the
 	// next step normally arrives on.
 	opsAdvance = time.Second
+
+	// claimLease is how long a step's claimed call is trusted to be in flight
+	// before another pass may make it again. The pass that made the call
+	// records its result straight afterward, so the lease only runs out when
+	// that pass crashed or its write failed. It covers a creation that outlives
+	// the client's timeout, and stays well inside validatingDeadline so that a
+	// crashed claim is retried before the step times out.
+	claimLease = 2 * time.Minute
 
 	// CSIDriverName is the driver whose volumes this operator can move. A
 	// deployment that renamed its driver is matched against that name instead;
@@ -579,11 +588,23 @@ func (r *PersistentVolumeOpsReconciler) writeStatus(
 	ops *simplyblockv1alpha2.PersistentVolumeOps,
 	mutate func(*simplyblockv1alpha2.PersistentVolumeOpsStatus),
 ) error {
+	// The first attempt starts from the caller's object rather than from a
+	// read. That object carries every write this pass made, including a claim
+	// on the step, which the cache may not have seen yet. Read from the cache,
+	// it would patch against the version before the claim and conflict until
+	// the cache caught up. Only a conflict means somebody else wrote, and only
+	// then does an attempt read the object again, and so does the first one
+	// when the caller's object was never read and carries no version to patch
+	// against.
+	reread := ops.ResourceVersion == ""
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var fresh simplyblockv1alpha2.PersistentVolumeOps
-		if err := r.Get(ctx, types.NamespacedName{Name: ops.Name}, &fresh); err != nil {
-			return err
+		fresh := *ops.DeepCopy()
+		if reread {
+			if err := r.Get(ctx, types.NamespacedName{Name: ops.Name}, &fresh); err != nil {
+				return err
+			}
 		}
+		reread = true
 
 		desired := *fresh.Status.DeepCopy()
 		mutate(&desired)
@@ -606,6 +627,19 @@ func (r *PersistentVolumeOpsReconciler) writeStatus(
 		ops.ResourceVersion = fresh.ResourceVersion
 		return nil
 	})
+}
+
+// once makes call under a claim on the operation's current step, applies also
+// in the claim's own patch, and reports whether this pass made the call. A pass
+// that loses the claim made no call: either another pass holds a live claim on
+// the step, or this pass read the operation at a version a newer write has
+// replaced. Either way it waits, and the next pass reads again.
+func (r *PersistentVolumeOpsReconciler) once(
+	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps,
+	call func() error, also ...func(),
+) (bool, error) {
+	return statemachine.WithClaim(ctx, ops.Status.Step, claimLease,
+		stepclaim.Writer(r.Client, ops, &ops.Status.Step, also...), call)
 }
 
 func (r *PersistentVolumeOpsReconciler) event(
