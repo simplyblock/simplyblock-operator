@@ -115,6 +115,7 @@ func TestWithClaim_LiveClaimIsNeitherRetakenNorFired(t *testing.T) {
 	rig := &claimRig{}
 	stored := requesting()
 	stored.Claim = &statemachine.KubeClaim{
+		State:      stored.State,
 		Attempt:    1,
 		LeaseUntil: metav1.NewTime(time.Now().Add(20 * time.Second)),
 	}
@@ -136,6 +137,7 @@ func TestWithClaim_ExpiredClaimIsRetakenAsTheNextAttempt(t *testing.T) {
 	rig := &claimRig{}
 	stored := requesting()
 	stored.Claim = &statemachine.KubeClaim{
+		State:      stored.State,
 		Attempt:    2,
 		LeaseUntil: metav1.NewTime(time.Now().Add(-time.Second)),
 	}
@@ -183,5 +185,34 @@ func TestKubeSnapshot_DeepCopyDoesNotShareTheClaim(t *testing.T) {
 	if original.Claim.Attempt != 1 {
 		t.Fatalf("Attempt = %d after changing the copy, want the original untouched",
 			original.Claim.Attempt)
+	}
+}
+
+// A controller that moves to the next state by editing the stored snapshot in
+// place, rather than by replacing it, carries the previous state's claim along.
+// That claim is not a claim on the new state, whose side effect has not been
+// started.
+func TestWithClaim_AClaimTakenInAnotherStateDoesNotHoldThisOne(t *testing.T) {
+	rig := &claimRig{}
+	stored := requesting()
+	stored.State = "Failing"
+	stored.Claim = &statemachine.KubeClaim{
+		State:      "Removing",
+		Attempt:    1,
+		LeaseUntil: metav1.NewTime(time.Now().Add(20 * time.Second)),
+	}
+
+	acquired, err := statemachine.WithClaim(context.Background(), stored, 30*time.Second,
+		rig.write, rig.fire)
+	if err != nil {
+		t.Fatalf("WithClaim: %v", err)
+	}
+	if !acquired || rig.fired != 1 {
+		t.Fatalf("acquired = %v, fired %d, want the new state claimed and fired once",
+			acquired, rig.fired)
+	}
+	claim := rig.written[0].Claim
+	if claim.State != "Failing" || claim.Attempt != 1 {
+		t.Errorf("claim = %+v, want the first attempt on Failing", claim)
 	}
 }

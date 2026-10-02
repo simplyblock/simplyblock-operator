@@ -1702,9 +1702,13 @@ spec:
                           again.
                         format: date-time
                         type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
                     required:
                     - attempt
                     - leaseUntil
+                    - state
                     type: object
                   deadline:
                     description: |-
@@ -1963,9 +1967,13 @@ spec:
                           again.
                         format: date-time
                         type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
                     required:
                     - attempt
                     - leaseUntil
+                    - state
                     type: object
                   deadline:
                     description: |-
@@ -2607,9 +2615,13 @@ spec:
                           again.
                         format: date-time
                         type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
                     required:
                     - attempt
                     - leaseUntil
+                    - state
                     type: object
                   deadline:
                     description: |-
@@ -3036,9 +3048,13 @@ spec:
                           again.
                         format: date-time
                         type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
                     required:
                     - attempt
                     - leaseUntil
+                    - state
                     type: object
                   deadline:
                     description: |-
@@ -3460,9 +3476,13 @@ spec:
                           again.
                         format: date-time
                         type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
                     required:
                     - attempt
                     - leaseUntil
+                    - state
                     type: object
                   deadline:
                     description: |-
@@ -4940,9 +4960,13 @@ spec:
                           again.
                         format: date-time
                         type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
                     required:
                     - attempt
                     - leaseUntil
+                    - state
                     type: object
                   deadline:
                     description: |-
@@ -6013,9 +6037,13 @@ spec:
                           again.
                         format: date-time
                         type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
                     required:
                     - attempt
                     - leaseUntil
+                    - state
                     type: object
                   deadline:
                     description: |-
@@ -7804,9 +7832,13 @@ spec:
                           again.
                         format: date-time
                         type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
                     required:
                     - attempt
                     - leaseUntil
+                    - state
                     type: object
                   deadline:
                     description: |-
@@ -8052,9 +8084,13 @@ spec:
                           again.
                         format: date-time
                         type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
                     required:
                     - attempt
                     - leaseUntil
+                    - state
                     type: object
                   deadline:
                     description: |-
@@ -8679,9 +8715,13 @@ spec:
                           again.
                         format: date-time
                         type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
                     required:
                     - attempt
                     - leaseUntil
+                    - state
                     type: object
                   deadline:
                     description: |-
@@ -9671,9 +9711,13 @@ spec:
                           again.
                         format: date-time
                         type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
                     required:
                     - attempt
                     - leaseUntil
+                    - state
                     type: object
                   deadline:
                     description: |-
@@ -10722,9 +10766,13 @@ spec:
                           again.
                         format: date-time
                         type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
                     required:
                     - attempt
                     - leaseUntil
+                    - state
                     type: object
                   deadline:
                     description: |-

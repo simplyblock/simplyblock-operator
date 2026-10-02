@@ -14,7 +14,9 @@
 //
 // The claim is a lease rather than a lock. Nothing releases it on success: the
 // write that records the next state replaces the snapshot, and the claim goes
-// with it. A process that crashes between the claim and that write leaves a
+// with it. A controller that edits the state in place rather than replacing the
+// snapshot carries the claim into the next state, so the claim records the state
+// it was taken in, and a claim taken in another state holds nothing. A process that crashes between the claim and that write leaves a
 // claim that expires, after which the state's side effect may be fired again.
 // Expiry does not prove the first call never landed, so a caller keeps the
 // guard that reads whether the target is already where the call would put it,
@@ -37,6 +39,9 @@ import (
 // KubeClaim records that the side effect of a snapshot's state was started, and
 // until when that start is trusted to still be in flight.
 type KubeClaim struct {
+	// State is the state the claim was taken in.
+	State string `json:"state"`
+
 	// Attempt counts the claims taken on this state, starting at 1.
 	Attempt int32 `json:"attempt"`
 
@@ -59,7 +64,7 @@ func WithClaim(
 ) (bool, error) {
 	now := time.Now()
 	attempt := int32(1)
-	if held := stored.Claim; held != nil {
+	if held := stored.Claim; held != nil && held.State == stored.State {
 		if now.Before(held.LeaseUntil.Time) {
 			return false, nil
 		}
@@ -67,7 +72,11 @@ func WithClaim(
 	}
 
 	claimed := *stored.DeepCopy()
-	claimed.Claim = &KubeClaim{Attempt: attempt, LeaseUntil: metav1.NewTime(now.Add(lease))}
+	claimed.Claim = &KubeClaim{
+		State:      stored.State,
+		Attempt:    attempt,
+		LeaseUntil: metav1.NewTime(now.Add(lease)),
+	}
 	if err := write(ctx, claimed); err != nil {
 		if apierrors.IsConflict(err) {
 			return false, nil
