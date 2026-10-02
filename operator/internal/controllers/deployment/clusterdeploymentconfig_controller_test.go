@@ -405,6 +405,31 @@ func TestFailureDomainsAreCheckedAgainstTheTemplate(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-02-cdc-nonnumeric-failure-domain — a group labeled
+// "domain-vm02" passed the draft check, the node add dropped the label because it
+// is not an integer, and the control plane refused every add on the cluster. The
+// data plane takes 0 to 65535 and refuses a domain above that.
+func TestAFailureDomainOutOfRangeIsRefusedInTheDraft(t *testing.T) {
+	for domain, refused := range map[string]bool{
+		"domain-vm02": true, "-1": true, "65536": true, "0": false, "65535": false,
+	} {
+		config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+			c.Spec.Approved = false
+			c.Spec.Cluster.EnableFailureDomains = ptr.To(true)
+			c.Spec.NodeSets[0].Groups[0].FailureDomain = domain
+		})
+		r := reconcilerFor(t, append(workers("worker-1", "worker-2"), config)...)
+
+		findings, err := r.validate(context.Background(), config)
+		if err != nil {
+			t.Fatalf("validate: %v", err)
+		}
+		if got := len(findings) == 1 && strings.Contains(findings[0].message, "rack-a/saturn"); got != refused {
+			t.Errorf("failureDomain %q: refused = %v (findings %+v), want %v", domain, got, findings, refused)
+		}
+	}
+}
+
 // The environment is a shorthand and the expansion is where it is spent: naming
 // OpenShift once decides the distribution flags, after which nothing reads it.
 func TestTheEnvironmentResolvesIntoTheWorkloadFlags(t *testing.T) {
