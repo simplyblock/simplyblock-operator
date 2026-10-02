@@ -357,7 +357,7 @@ func (r *StorageNodeOpsReconciler) advance(
 			fmt.Sprintf("step %s outlived its deadline", current))
 	}
 
-	done, err := r.perform(ctx, ops, current)
+	done, err := r.perform(ctx, ops, machine)
 	if err != nil {
 		var fatal *terminalStepError
 		if errors.As(err, &fatal) {
@@ -377,7 +377,7 @@ func (r *StorageNodeOpsReconciler) advance(
 		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, err.Error())
 	}
 	if !done {
-		return r.waitOn(machine), r.note(ctx, ops, r.waitingMessage(ops, current))
+		return r.waitOn(machine), r.wait(ctx, ops, machine, r.waitingMessage(ops, current))
 	}
 
 	r.observeStep(ctx, ops, current)
@@ -963,6 +963,22 @@ func (r *StorageNodeOpsReconciler) note(
 ) error {
 	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageNodeOpsStatus) {
 		status.Message = message
+	})
+}
+
+// wait records a pass that left the step unfinished: its message, and the
+// machine's position. The position is written from the machine because a step may
+// have extended its deadline (Machine.Extend), and the machine is the one place a
+// deadline is decided. A pass that changed nothing writes nothing.
+func (r *StorageNodeOpsReconciler) wait(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageNodeOps,
+	machine *statemachine.Machine[step],
+	message string,
+) error {
+	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageNodeOpsStatus) {
+		status.Message = message
+		status.Step = statemachine.ToKube(machine.Snapshot())
 	})
 }
 

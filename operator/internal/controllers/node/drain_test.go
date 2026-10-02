@@ -94,7 +94,7 @@ func TestAPinnedVolumeStopsTheDrainBeforeItSuspendsAnything(t *testing.T) {
 	r, _ := aDraining(t, api, &scriptedMover{},
 		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", true))
 
-	_, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepValidating)
+	_, err := performing(t, r, aDrain(), stepValidating)
 
 	var blocked *blockedStepError
 	if !errors.As(err, &blocked) {
@@ -115,7 +115,7 @@ func TestAnUnmanagedVolumeStopsTheDrain(t *testing.T) {
 	api := aControlPlane().holding(onNode("volume-orphan", "hand-made"))
 	r, _ := aDraining(t, api, &scriptedMover{})
 
-	_, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepValidating)
+	_, err := performing(t, r, aDrain(), stepValidating)
 
 	var blocked *blockedStepError
 	if !errors.As(err, &blocked) {
@@ -132,7 +132,7 @@ func TestValidationWritesTheTotalTheDrainIsMeasuredAgainst(t *testing.T) {
 		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false),
 		aPersistentVolume("pv-2", "volume-2"), aClaim("pv-2", false))
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepValidating)
+	done, err := performing(t, r, aDrain(), stepValidating)
 	if err != nil {
 		t.Fatalf("validating: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestAnIncompleteCensusIsRetriedRatherThanReportedAsABlocker(t *testing.T) {
 	r, _ := anOpsWorldWith(t, api, refusingClaims(),
 		aDrain(), aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false))
 
-	_, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepValidating)
+	_, err := performing(t, r, aDrain(), stepValidating)
 	if err == nil {
 		t.Fatal("the drain acted on a census it knows is incomplete")
 	}
@@ -176,7 +176,7 @@ func TestTheSuspendIsSkippedWhenTheNodeIsAlreadyOutOfService(t *testing.T) {
 			api := aControlPlane().reporting(status)
 			r, _ := aDraining(t, api, &scriptedMover{})
 
-			done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepSuspending)
+			done, err := performing(t, r, aDrain(), stepSuspending)
 			if err != nil {
 				t.Fatalf("suspending: %v", err)
 			}
@@ -196,7 +196,7 @@ func TestAnOnlineNodeIsSuspendedAndWaitedFor(t *testing.T) {
 	api := aControlPlane()
 	r, _ := aDraining(t, api, &scriptedMover{})
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepSuspending)
+	done, err := performing(t, r, aDrain(), stepSuspending)
 	if err != nil {
 		t.Fatalf("suspending: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestEveryMovableVolumeIsGivenAMove(t *testing.T) {
 		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false),
 		aPersistentVolume("pv-2", "volume-2"), aClaim("pv-2", false))
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepMigratingVolumes)
+	done, err := performing(t, r, aDrain(), stepMigratingVolumes)
 	if err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestAVolumeAlreadyMovingIsNotGivenASecondMove(t *testing.T) {
 	r, apiClient := aDraining(t, api, mover,
 		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false))
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepMigratingVolumes)
+	done, err := performing(t, r, aDrain(), stepMigratingVolumes)
 	if err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestAFailedMoveIsRetriedRatherThanFailingTheDrain(t *testing.T) {
 		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false))
 	ops := aDrain()
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepMigratingVolumes)
+	done, err := performing(t, r, ops, stepMigratingVolumes)
 	if err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestAFailedMoveIsRetriedRatherThanFailingTheDrain(t *testing.T) {
 	}
 
 	// The next pass raises it again, against a target chosen afresh.
-	if _, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepMigratingVolumes); err != nil {
+	if _, err := performing(t, r, ops, stepMigratingVolumes); err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
 	if len(mover.started) != 1 {
@@ -328,7 +328,7 @@ func TestFinishedMovesAreRecordedAndThenReaped(t *testing.T) {
 	}}
 	r, apiClient := aDraining(t, api, mover)
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepMigratingVolumes)
+	done, err := performing(t, r, aDrain(), stepMigratingVolumes)
 	if err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
@@ -352,7 +352,7 @@ func TestFinishedMovesAreRecordedAndThenReaped(t *testing.T) {
 func TestADrainIsDoneWhenTheNodeHoldsNothingMovable(t *testing.T) {
 	r, _ := aDraining(t, aControlPlane().withPeer(opsPeerID, nodeStatusOnline), &scriptedMover{})
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepMigratingVolumes)
+	done, err := performing(t, r, aDrain(), stepMigratingVolumes)
 	if err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestVerificationDeletesTheBenchmarkVolumesAndRereads(t *testing.T) {
 	api := aControlPlane().holding(onNode("volume-bench", "sb-fio-baseline-read"))
 	r, _ := aDraining(t, api, &scriptedMover{})
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepVerifying)
+	done, err := performing(t, r, aDrain(), stepVerifying)
 	if err != nil {
 		t.Fatalf("verifying: %v", err)
 	}
@@ -390,7 +390,7 @@ func TestVerificationHoldsWhileAUsersVolumeIsStillThere(t *testing.T) {
 	r, _ := aDraining(t, api, &scriptedMover{},
 		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false))
 
-	_, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepVerifying)
+	_, err := performing(t, r, aDrain(), stepVerifying)
 
 	var blocked *blockedStepError
 	if !errors.As(err, &blocked) {
@@ -406,7 +406,7 @@ func TestABenchmarkVolumeThatCannotBeDeletedEndsTheDrain(t *testing.T) {
 		refusing("DeleteVolume", errors.New("the control plane refused"))
 	r, _ := aDraining(t, api, &scriptedMover{})
 
-	_, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepVerifying)
+	_, err := performing(t, r, aDrain(), stepVerifying)
 
 	var fatal *terminalStepError
 	if !errors.As(err, &fatal) {
@@ -418,7 +418,7 @@ func TestABenchmarkVolumeThatCannotBeDeletedEndsTheDrain(t *testing.T) {
 func TestAnEmptyNodePassesVerification(t *testing.T) {
 	r, _ := aDraining(t, aControlPlane(), &scriptedMover{})
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepVerifying)
+	done, err := performing(t, r, aDrain(), stepVerifying)
 	if err != nil {
 		t.Fatalf("verifying: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestARefusedRemovalEndsTheDrain(t *testing.T) {
 	})
 	r, _ := aDraining(t, api, &scriptedMover{})
 
-	_, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepRemoving)
+	_, err := performing(t, r, aDrain(), stepRemoving)
 
 	var fatal *terminalStepError
 	if !errors.As(err, &fatal) {
@@ -458,7 +458,7 @@ func TestARemovalWithNoAnswerIsRetriedRatherThanFailed(t *testing.T) {
 			api := aControlPlane().refusing("RemoveNode", failure)
 			r, _ := aDraining(t, api, &scriptedMover{})
 
-			done, err := r.perform(context.Background(), aDrain(), stepRemoving)
+			done, err := performing(t, r, aDrain(), stepRemoving)
 
 			var fatal *terminalStepError
 			if errors.As(err, &fatal) {
@@ -483,7 +483,7 @@ func TestARemovalAlreadyUnderwayFinishesTheDrain(t *testing.T) {
 			api := aControlPlane().reporting(status)
 			r, _ := aDraining(t, api, &scriptedMover{})
 
-			done, err := r.perform(context.Background(), aDrain(), stepRemoving)
+			done, err := performing(t, r, aDrain(), stepRemoving)
 			if err != nil {
 				t.Fatalf("removing: %v", err)
 			}
@@ -503,7 +503,7 @@ func TestAnAcceptedRemovalFinishesTheDrain(t *testing.T) {
 	api := aControlPlane()
 	r, _ := aDraining(t, api, &scriptedMover{})
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepRemoving)
+	done, err := performing(t, r, aDrain(), stepRemoving)
 	if err != nil {
 		t.Fatalf("removing: %v", err)
 	}
@@ -523,7 +523,7 @@ func TestARemovalStillShuttingTheNodeDownWaits(t *testing.T) {
 	api := aControlPlane().reporting(nodeStatusInShutdown)
 	r, _ := aDraining(t, api, &scriptedMover{})
 
-	done, err := r.perform(context.Background(), aDrain(), stepRemoving)
+	done, err := performing(t, r, aDrain(), stepRemoving)
 	if err != nil {
 		t.Fatalf("removing: %v", err)
 	}
@@ -587,7 +587,7 @@ func TestAwaitingRemovalWaitsWhileTheControlPlaneRemovesTheNode(t *testing.T) {
 		t.Run(status, func(t *testing.T) {
 			r, _ := aDraining(t, aControlPlane().reporting(status), &scriptedMover{})
 
-			done, err := r.perform(context.Background(), aDrain(), stepAwaitingRemoval)
+			done, err := performing(t, r, aDrain(), stepAwaitingRemoval)
 			if err != nil {
 				t.Fatalf("awaiting the removal: %v", err)
 			}
@@ -603,7 +603,7 @@ func TestAwaitingRemovalWaitsWhileTheControlPlaneRemovesTheNode(t *testing.T) {
 func TestAwaitingRemovalFinishesWhenTheNodeIsRemoved(t *testing.T) {
 	r, _ := aDraining(t, aControlPlane().reporting(nodeStatusRemoved), &scriptedMover{})
 
-	done, err := r.perform(context.Background(), aDrain(), stepAwaitingRemoval)
+	done, err := performing(t, r, aDrain(), stepAwaitingRemoval)
 	if err != nil {
 		t.Fatalf("awaiting the removal: %v", err)
 	}
@@ -618,7 +618,7 @@ func TestAwaitingRemovalFinishesWhenTheNodeIsRemoved(t *testing.T) {
 func TestAwaitingRemovalFailsWhenTheControlPlaneGivesUp(t *testing.T) {
 	r, _ := aDraining(t, aControlPlane().reporting(nodeStatusRemovedFailed), &scriptedMover{})
 
-	_, err := r.perform(context.Background(), aDrain(), stepAwaitingRemoval)
+	_, err := performing(t, r, aDrain(), stepAwaitingRemoval)
 
 	var fatal *terminalStepError
 	if !errors.As(err, &fatal) {

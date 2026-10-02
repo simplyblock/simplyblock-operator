@@ -43,6 +43,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/simplyblock/atlas/kube"
+	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
@@ -55,8 +56,9 @@ const drainNodeLabel = "storage.simplyblock.io/drain-node"
 
 // performRemoveStep runs one step of the drain.
 func (r *StorageNodeOpsReconciler) performRemoveStep(
-	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, current step,
+	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, machine *statemachine.Machine[step],
 ) (bool, error) {
+	current := machine.CurrentState()
 	clusterID, nodeID, err := r.target(ctx, ops)
 	if err != nil {
 		return false, err
@@ -90,7 +92,7 @@ func (r *StorageNodeOpsReconciler) performRemoveStep(
 	case stepRemoving:
 		return r.drainRemove(ctx, ops, clusterID, nodeID)
 	case stepAwaitingRemoval:
-		return r.drainAwaitRemoval(ctx, ops, clusterID, nodeID)
+		return r.drainAwaitRemoval(ctx, ops, machine, clusterID, nodeID)
 	default:
 		return false, fatalf("step %s does not belong to the Remove action", current)
 	}
@@ -395,7 +397,8 @@ func (r *StorageNodeOpsReconciler) drainRemove(
 		}
 		return nil
 	})
-	return claimed, err
+	// A claimed call that failed is not a finished step.
+	return claimed && err == nil, err
 }
 
 // drainAwaitRemoval waits for the control plane to finish the removal it
@@ -410,7 +413,10 @@ func (r *StorageNodeOpsReconciler) drainRemove(
 // Anything else is the removal still running, and each pass records how far it
 // has got. A change is progress and moves the deadline out (recordRemovalProgress).
 func (r *StorageNodeOpsReconciler) drainAwaitRemoval(
-	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, clusterID, nodeID string,
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageNodeOps,
+	machine *statemachine.Machine[step],
+	clusterID, nodeID string,
 ) (bool, error) {
 	reading, err := r.nodeReading(ctx, clusterID, nodeID)
 	if err != nil {
@@ -423,13 +429,14 @@ func (r *StorageNodeOpsReconciler) drainAwaitRemoval(
 		return false, fatalf("the control plane gave up removing node %s and reports it %s",
 			ops.Spec.NodeRef, reading.Status)
 	default:
-		return false, r.recordRemovalProgress(ctx, ops, reading.Status)
+		return false, r.recordRemovalProgress(ctx, ops, machine, reading.Status)
 	}
 }
 
 // recordRemovalProgress writes the node's status and its devices' statuses into
-// status.removal and, when either changed since the last pass, moves the step's
-// deadline a whole budget out from now.
+// status.removal and, when either changed since the last pass, extends the
+// machine's deadline a whole budget out from now. The reconciler persists the
+// machine's snapshot when the pass ends, as it does for a transition.
 //
 // The deadline is a bound on a removal that stopped moving rather than on one
 // that takes long. migrating_devices is a single node status for a rebuild that
@@ -441,7 +448,10 @@ func (r *StorageNodeOpsReconciler) drainAwaitRemoval(
 // rather than asked of the control plane, so the wait costs no request beyond the
 // node read every step already makes.
 func (r *StorageNodeOpsReconciler) recordRemovalProgress(
-	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, nodeStatus string,
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageNodeOps,
+	machine *statemachine.Machine[step],
+	nodeStatus string,
 ) error {
 	var devices simplyblockv1alpha2.StorageDeviceList
 	if err := r.List(ctx, &devices, client.InNamespace(ops.Namespace),
@@ -462,14 +472,13 @@ func (r *StorageNodeOpsReconciler) recordRemovalProgress(
 	}
 
 	now := metav1.Now()
-	deadline := metav1.NewTime(now.Add(awaitingRemovalDeadline))
+	machine.Extend(awaitingRemovalDeadline)
 	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageNodeOpsStatus) {
 		status.Removal = &simplyblockv1alpha2.RemovalStatus{
 			NodeStatus:       nodeStatus,
 			Devices:          statuses,
 			LastProgressTime: &now,
 		}
-		status.Step.Deadline = &deadline
 	})
 }
 

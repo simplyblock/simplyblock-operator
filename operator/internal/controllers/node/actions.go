@@ -26,6 +26,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/simplyblock/atlas/statemachine"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -35,8 +37,9 @@ import (
 // requeues. An ordinary error is retried; a terminalStepError is not, and a
 // blockedStepError holds with an event.
 func (r *StorageNodeOpsReconciler) perform(
-	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, current step,
+	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, machine *statemachine.Machine[step],
 ) (bool, error) {
+	current := machine.CurrentState()
 	switch current {
 	case stepRequesting:
 		return r.request(ctx, ops)
@@ -47,7 +50,7 @@ func (r *StorageNodeOpsReconciler) perform(
 
 	case stepValidating, stepSuspending, stepMigratingVolumes, stepVerifying, stepRemoving,
 		stepAwaitingRemoval:
-		return r.performRemoveStep(ctx, ops, current)
+		return r.performRemoveStep(ctx, ops, machine)
 
 	case stepPreparing, stepRelocating, stepAwaitingNode, stepPromoting:
 		return r.performMigrateStep(ctx, ops, current)
