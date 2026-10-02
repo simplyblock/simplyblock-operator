@@ -50,6 +50,9 @@ const (
 	ClusterStatusActive    = "active"
 	ClusterStatusSuspended = "suspended"
 	ClusterStatusUnready   = "unready"
+	// ClusterStatusInActivation is a cluster the control plane is activating.
+	// It accepts a second activate on such a cluster and runs both.
+	ClusterStatusInActivation = "in_activation"
 	// ClusterStatusRebalancing is a cluster redistributing data across its
 	// nodes, which the control plane refuses every volume migration during.
 	ClusterStatusRebalancing = "rebalancing"

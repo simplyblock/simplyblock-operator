@@ -79,11 +79,16 @@ func (r *StorageClusterOpsReconciler) request(
 		if ready, err := r.failureDomainsReady(ctx, ops); err != nil || !ready {
 			return false, err
 		}
-		active, err := r.clusterActive(ctx, clusterID)
+		reading, err := r.clusterReading(ctx, clusterID)
 		if err != nil {
 			return false, err
 		}
-		if active {
+		// A cluster in_activation is past where the call would put it: an
+		// attempt is running, and the control plane would run a second one
+		// beside it rather than refuse it. Awaiting is where that attempt is
+		// waited on, and where a failed one is requested again.
+		if reading.Status == utils.ClusterStatusActive ||
+			reading.Status == utils.ClusterStatusInActivation {
 			return true, nil
 		}
 		// After the active check rather than before it, so that a re-activation
