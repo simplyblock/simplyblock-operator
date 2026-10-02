@@ -594,7 +594,7 @@ func (r *StorageClusterReconciler) persist(
 		// The adoption record carries no rebalancing flag: it is the creation
 		// snapshot, and the steady-state pass rewrites the phase from the
 		// stream on the pass that follows.
-		status.Phase = phaseFor(found.Status, false)
+		status.Phase = phaseFor(found.Status, false, false)
 		status.Step = statemachine.KubeSnapshot{}
 		status.Message = ""
 	})
@@ -691,7 +691,7 @@ func (r *StorageClusterReconciler) sync(
 		status.MaxFaultTolerance = &ftt
 		status.MaxConcurrentWorkerRestarts = effectiveConcurrentRestarts(
 			cluster.Spec.MaxConcurrentWorkerRestarts, &ftt)
-		status.Phase = phaseFor(reading.Status, reading.Rebalancing)
+		status.Phase = phaseFor(reading.Status, reading.Rebalancing, reading.Shrinking)
 		status.Tasks = tasks
 	})
 	if err != nil {
@@ -735,6 +735,7 @@ func (r *StorageClusterReconciler) reading(
 		NQN:               response.NQN,
 		Status:            response.Status,
 		Rebalancing:       response.Rebalancing,
+		Shrinking:         response.Shrinking,
 		NDCS:              response.NDCS,
 		NPCS:              response.NPCS,
 		MaxFaultTolerance: response.MaxFaultTolerance,
@@ -1236,6 +1237,7 @@ var allPhases = []simplyblockv1alpha2.StorageClusterPhase{
 	simplyblockv1alpha2.StorageClusterPhaseProvisioning,
 	simplyblockv1alpha2.StorageClusterPhaseActivating,
 	simplyblockv1alpha2.StorageClusterPhaseOnline,
+	simplyblockv1alpha2.StorageClusterPhaseShrinking,
 	simplyblockv1alpha2.StorageClusterPhaseRebalancing,
 	simplyblockv1alpha2.StorageClusterPhaseDegraded,
 	simplyblockv1alpha2.StorageClusterPhaseUnavailable,
@@ -1332,14 +1334,25 @@ func creationGraph() statemachine.Config[simplyblockv1alpha2.StorageClusterStep]
 // and over nothing else: a rebalance is what makes most operations unavailable,
 // so it is what a watch on the phase column should show, while a cluster that is
 // not serving is not serving whatever tasks it has queued.
-func phaseFor(status string, rebalancing bool) simplyblockv1alpha2.StorageClusterPhase {
+//
+// A removal in progress is a second flag, and it is read over the rebalance: the
+// control plane degrades the cluster for the departing node and rebalances its
+// data onto the peers, so both of those are what the removal looks like while it
+// runs, and the removal is what the phase names.
+func phaseFor(status string, rebalancing, shrinking bool) simplyblockv1alpha2.StorageClusterPhase {
 	switch lower(status) {
 	case utils.ClusterStatusActive:
+		if shrinking {
+			return simplyblockv1alpha2.StorageClusterPhaseShrinking
+		}
 		if rebalancing {
 			return simplyblockv1alpha2.StorageClusterPhaseRebalancing
 		}
 		return simplyblockv1alpha2.StorageClusterPhaseOnline
 	case "degraded", "read_only":
+		if shrinking {
+			return simplyblockv1alpha2.StorageClusterPhaseShrinking
+		}
 		if rebalancing {
 			return simplyblockv1alpha2.StorageClusterPhaseRebalancing
 		}
