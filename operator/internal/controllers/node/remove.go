@@ -531,10 +531,14 @@ func (r *StorageNodeOpsReconciler) drainVerify(
 // drainRemove deletes the backend node. A 404 is success, since a node the control
 // plane no longer knows about is a node that has been removed.
 //
-// The DELETE shuts the node down before it answers, and that can take longer
-// than the client waits. A pass after a lost answer therefore reads the node
-// first: a removal status is the removal accepted, and a node still shutting
-// down is waited on, because a second DELETE against either is not one to send.
+// The DELETE can take longer to answer than the client waits, so a pass after a
+// lost answer reads the node first. in_removal, removed, and removed_failed say
+// the teardown the DELETE starts has begun, so the DELETE is not sent again. The
+// preparation statuses (pending_removal through migrating_lvols) say nothing
+// about the DELETE: prepare-removal leaves the node migrating_lvols before it is
+// ever sent. The DELETE is sent for those, which the control plane answers with
+// the running removal when one is already in flight. A node still shutting down
+// is waited on.
 func (r *StorageNodeOpsReconciler) drainRemove(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, clusterID, nodeID string,
 ) (bool, error) {
@@ -543,9 +547,8 @@ func (r *StorageNodeOpsReconciler) drainRemove(
 		return false, err
 	}
 	switch reading.Status {
-	case nodeStatusPendingRemoval, nodeStatusMigratingDevices, nodeStatusMigratingLvols,
-		nodeStatusInRemoval, nodeStatusRemoved, nodeStatusRemovedFailed:
-		// The removal was accepted, and how it ends is AwaitingRemoval's to read.
+	case nodeStatusInRemoval, nodeStatusRemoved, nodeStatusRemovedFailed:
+		// The teardown has begun, and how it ends is AwaitingRemoval's to read.
 		return true, nil
 	case nodeStatusInShutdown:
 		return false, nil

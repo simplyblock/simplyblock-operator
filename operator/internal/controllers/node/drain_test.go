@@ -610,8 +610,7 @@ func TestARemovalWithNoAnswerIsRetriedRatherThanFailed(t *testing.T) {
 // the removal accepted, and a second DELETE against it is not one to send.
 func TestARemovalAlreadyUnderwayFinishesTheDrain(t *testing.T) {
 	for _, status := range []string{
-		nodeStatusPendingRemoval, nodeStatusMigratingDevices,
-		nodeStatusMigratingLvols, nodeStatusInRemoval, nodeStatusRemoved,
+		nodeStatusInRemoval, nodeStatusRemoved, nodeStatusRemovedFailed,
 	} {
 		t.Run(status, func(t *testing.T) {
 			api := aControlPlane().reporting(status)
@@ -626,6 +625,34 @@ func TestARemovalAlreadyUnderwayFinishesTheDrain(t *testing.T) {
 			}
 			if asked := api.asked("RemoveNode"); asked != 0 {
 				t.Errorf("RemoveNode was issued %d time(s) against a node already %s, want none",
+					asked, status)
+			}
+		})
+	}
+}
+
+// Regression: 2026-10-02-delete-skipped-after-prepare (PR #612 review): after
+// prepare-removal the node is migrating_lvols, and Removing read every removal
+// status as the DELETE already accepted. The DELETE was never sent, so the
+// teardown was never asked for and AwaitingRemoval waited out its budget. A
+// preparation status is not the DELETE, which is idempotent and is sent.
+func TestAPreparedNodeIsStillDeleted(t *testing.T) {
+	for _, status := range []string{
+		nodeStatusMigratingLvols, nodeStatusMigratingDevices, nodeStatusPendingRemoval,
+	} {
+		t.Run(status, func(t *testing.T) {
+			api := aControlPlane().reporting(status)
+			r, _ := aDraining(t, api, &scriptedMover{})
+
+			done, err := performing(t, r, aDrain(), stepRemoving)
+			if err != nil {
+				t.Fatalf("removing: %v", err)
+			}
+			if !done {
+				t.Errorf("the step did not finish after the DELETE was accepted for a node %s", status)
+			}
+			if asked := api.asked("RemoveNode"); asked != 1 {
+				t.Errorf("RemoveNode was issued %d time(s) against a node %s, want once",
 					asked, status)
 			}
 		})

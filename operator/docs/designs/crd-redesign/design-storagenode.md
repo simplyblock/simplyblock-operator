@@ -1654,15 +1654,15 @@ them in order: `prepare-removal` admits the node, shuts it down, and rebuilds it
 devices onto the peers; the operator moves the volumes, and `verify-drained`
 closes that half; the node DELETE takes the node apart.
 
-| Step               | Side effect on entry                                                                                             | Complete when                                                           |
-|--------------------|------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
-| `Validating`       | None                                                                                                             | No pinned and no unmanaged volumes remain                               |
-| `ShuttingDown`     | `POST /storage-nodes/{node}/prepare-removal`, skipped if the node is `in_shutdown` or already admitted           | The call returns 202, or the node reports `pending_removal` or later    |
-| `MigratingDevices` | `POST /storage-nodes/{node}/prepare-removal` again, skipped while the node is `pending_removal` or `in_shutdown` | `GET /storage-nodes/{node}/prepare-removal` reports `done`              |
-| `MigratingVolumes` | One `PersistentVolumeOps` per PV-managed volume, to peers chosen round-robin                                     | Every migration is `Succeeded`                                          |
-| `Verifying`        | Deletes any remaining system volumes, then `POST /storage-nodes/{node}/verify-drained`                           | The node reports no volumes, and `verify-drained` reports it drained    |
-| `Removing`         | `DELETE /storage-nodes/{node}?force_remove=false`, skipped if the node is in a removal status or `in_shutdown`   | The call returns 200, 204, or 404, or the node reports a removal status |
-| `AwaitingRemoval`  | None                                                                                                             | The node reports `removed`, or 404                                      |
+| Step               | Side effect on entry                                                                                                             | Complete when                                                                |
+|--------------------|----------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
+| `Validating`       | None                                                                                                                             | No pinned and no unmanaged volumes remain                                    |
+| `ShuttingDown`     | `POST /storage-nodes/{node}/prepare-removal`, skipped if the node is `in_shutdown` or already admitted                           | The call returns 202, or the node reports `pending_removal` or later         |
+| `MigratingDevices` | `POST /storage-nodes/{node}/prepare-removal` again, skipped while the node is `pending_removal` or `in_shutdown`                 | `GET /storage-nodes/{node}/prepare-removal` reports `done`                   |
+| `MigratingVolumes` | One `PersistentVolumeOps` per PV-managed volume, to peers chosen round-robin                                                     | Every migration is `Succeeded`                                               |
+| `Verifying`        | Deletes any remaining system volumes, then `POST /storage-nodes/{node}/verify-drained`                                           | The node reports no volumes, and `verify-drained` reports it drained         |
+| `Removing`         | `DELETE /storage-nodes/{node}?force_remove=false`, skipped once the node is `in_removal` or later, and while it is `in_shutdown` | The call returns 200, 204, or 404, or the node reports `in_removal` or later |
+| `AwaitingRemoval`  | None                                                                                                                             | The node reports `removed`, or 404                                           |
 
 **Validation runs before `prepare-removal`, and that ordering is the design.**
 From `prepare-removal` on there is no way back, so a drain that cannot complete
@@ -1718,9 +1718,12 @@ about is a node that has been removed, and a retry after a lost response is the
 common way to arrive there.
 
 **Only an answer is a refusal.** A 4xx to the DELETE fails the operation. A
-timeout or a 5xx is retried, and the retry reads the node first: a removal
-status is the removal accepted, and `in_shutdown` is waited on. Neither gets a
-second DELETE.
+timeout or a 5xx is retried, and the retry reads the node first. `in_removal`,
+`removed`, and `removed_failed` say the teardown has begun, and get no second
+DELETE. The preparation statuses do not: `prepare-removal` leaves the node
+`migrating_lvols` before the DELETE is ever sent, so a node in one of them gets
+the DELETE, which the control plane answers with the running removal when one
+is already in flight. `in_shutdown` is waited on.
 
 **`AwaitingRemoval` is the control plane's teardown.** The DELETE rewires the
 node's replicas and removes its devices before the node reports `removed`. The
