@@ -93,19 +93,36 @@ func volumeIDFrom(req volumeIDCarrier) string {
 // combining active_lvol_id with ANOTHER record's cluster is exactly the bug
 // this walk exists to avoid. An empty ActiveLvolID (backend predating the
 // field) stops after the first hop, the old single-step behavior.
+//
+// The chain behind a handle alternates between the sites: every fail-over
+// adds a hop to the other side. The volume this driver must act on is the
+// chain's last member on a LOCAL cluster (the secret marks the site's own
+// clusters, clusters.Local), not the chain's end: after an unplanned
+// fail-over A->B, Ramen makes the old primary on A secondary, and the
+// chain's end is the NEW primary on B. Resolving to the end demoted -- and
+// on VR deletion detached -- the live production volume on the other site
+// (2026-10-02, WordPress: the demote fenced the live primary's paths and
+// took demote snapshots of it; the fail-back never got PeerReady). A secret
+// that marks no cluster local (an operator predating the flag) keeps the
+// previous behaviour, the chain's active end.
 func resolveToLocalReplica(
 	ctx context.Context, h *lvol.Handle, client *atlascp.Client,
 ) (*lvol.Handle, *atlascp.Client, error) {
+	local, flagged, err := clusters.Local()
+	if err != nil {
+		return nil, nil, err
+	}
+	hops := []chainHop{{h: h, client: client}}
 	for range 8 { // one hop per past fail-over; capped far above any real chain
 		rel, err := client.GetVolumeReplicationRelationship(ctx, h.Handle())
 		if err != nil {
 			if errors.Is(err, errs.ErrNotFound) {
-				return h, client, nil
+				break
 			}
 			return nil, nil, err
 		}
 		if !rel.IsSource {
-			return h, client, nil
+			break
 		}
 		target := &lvol.Handle{ClusterID: rel.TargetClusterID, PoolRef: rel.TargetPoolID, VolumeID: rel.TargetLvolID}
 		targetClient, err := clusters.ReplicationClient(ctx, target.ClusterID)
@@ -113,11 +130,37 @@ func resolveToLocalReplica(
 			return nil, nil, err
 		}
 		h, client = target, targetClient
+		hops = append(hops, chainHop{h: h, client: client})
 		if rel.ActiveLvolID == "" || rel.ActiveLvolID == rel.TargetLvolID {
-			return h, client, nil
+			break
 		}
 	}
-	return h, client, nil
+	pick := chooseReplica(hops, local, flagged)
+	return pick.h, pick.client, nil
+}
+
+// chainHop is one member of a replication chain, with the client of its
+// cluster.
+type chainHop struct {
+	h      *lvol.Handle
+	client *atlascp.Client
+}
+
+// chooseReplica picks the chain member a Replication RPC acts on: the last
+// member on a local cluster when the secret marks local clusters (and the
+// chain's end when none of the members is local, e.g. a volume that only
+// ever lived elsewhere), else the chain's end.
+func chooseReplica(hops []chainHop, local map[string]bool, flagged bool) chainHop {
+	end := hops[len(hops)-1]
+	if !flagged {
+		return end
+	}
+	for i := len(hops) - 1; i >= 0; i-- {
+		if local[hops[i].h.ClusterID] {
+			return hops[i]
+		}
+	}
+	return end
 }
 
 // EnableVolumeReplication attaches the volume to the policy named by the
