@@ -21,10 +21,13 @@ import (
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	atlaskube "github.com/simplyblock/atlas/kube"
@@ -116,7 +119,46 @@ func (r *StorageDeviceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&simplyblockv1alpha2.StorageDevice{}).
 		Named("storagedevice").
 		WatchesRawSource(source.Channel(r.Devices.Triggers(), &handler.EnqueueRequestForObject{})).
+		Watches(&simplyblockv1alpha2.StorageNode{},
+			handler.EnqueueRequestsFromMapFunc(r.devicesOf),
+			builder.WithPredicates(nodeStatusChanged())).
 		Complete(r)
+}
+
+// devicesOf maps a StorageNode event to the node's devices, by the node label
+// every mirror object carries. A device's phase reads its node's status (an
+// unavailable device on a node that is down is Unknown rather than Degraded), so
+// a change of the node alone has to re-read them. Without it the reading
+// converges only when the device itself next changes, which for a device that
+// stays unavailable is never.
+func (r *StorageDeviceReconciler) devicesOf(
+	ctx context.Context, node client.Object,
+) []reconcile.Request {
+	var devices simplyblockv1alpha2.StorageDeviceList
+	if err := r.List(ctx, &devices, client.InNamespace(node.GetNamespace()),
+		client.MatchingLabels{simplyblockv1alpha2.DeviceLabelNode: node.GetName()}); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(devices.Items))
+	for i := range devices.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(&devices.Items[i]),
+		})
+	}
+	return requests
+}
+
+// nodeStatusChanged passes a StorageNode update only when the control plane's
+// status for it moved, which is the one part of the node a device's phase reads.
+// Every other status write of a node would otherwise wake all of its devices.
+func nodeStatusChanged() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			before, okBefore := e.ObjectOld.(*simplyblockv1alpha2.StorageNode)
+			after, okAfter := e.ObjectNew.(*simplyblockv1alpha2.StorageNode)
+			return !okBefore || !okAfter || before.Status.Status != after.Status.Status
+		},
+	}
 }
 
 // Reconcile converges one StorageDevice toward the cache's view of its

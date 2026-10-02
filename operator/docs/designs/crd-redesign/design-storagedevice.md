@@ -499,6 +499,12 @@ status in the message and a `Normal` `DeviceStateUnknown` event rather than a
 A real verdict the control plane reports for the device (`failed`, `removed`,
 `failed_and_migrated`) is kept whatever the node's status.
 
+Because the reading depends on the node, a change of the node's control-plane
+status wakes every device of that node, matched by the
+`storage.simplyblock.io/node` label. Without it a device would converge only when
+it next changed itself, which for a device that stays `unavailable` is never.
+Other status writes of the node do not wake them.
+
 **A device already in a terminal phase keeps it, and keeps its reason.** `Failed`
 does not become `Unknown` when the node goes away, because that phase records a
 judgment an unreachable node does not revoke, `Migrated` records a rebuild that has

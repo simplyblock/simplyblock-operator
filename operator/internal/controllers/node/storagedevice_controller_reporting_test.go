@@ -11,6 +11,7 @@ package node
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -19,6 +20,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -620,5 +622,52 @@ func TestALabelThatStopsBeingResolvableIsRemoved(t *testing.T) {
 	}
 	if sd.Labels["unrelated"] != "kept" {
 		t.Errorf("a label the mirror does not own was dropped: %v", sd.Labels)
+	}
+}
+
+// Regression: 2026-10-02-device-phase-misses-node-change (PR #612 review): a
+// device's phase reads its node's status, and nothing re-read the devices when
+// only the node changed. A device seen unavailable before the node's shutdown
+// reached Kubernetes stayed Degraded on a node that was offline, and one read
+// Unknown stayed so after the node came back. A node event wakes its devices.
+func TestANodeEventWakesItsDevices(t *testing.T) {
+	ofNode := func(name, node string) *simplyblockv1alpha2.StorageDevice {
+		return &simplyblockv1alpha2.StorageDevice{ObjectMeta: metav1.ObjectMeta{
+			Namespace: "sb", Name: name,
+			Labels: map[string]string{simplyblockv1alpha2.DeviceLabelNode: node},
+		}}
+	}
+	r := sdReconciler(t, sdOnlineCache(), sdNodeWithStatus(utils.NodeStatusOffline), sdNodeSet(),
+		ofNode("dev-a", sdNodeCR), ofNode("dev-b", sdNodeCR), ofNode("dev-other", "another-node"))
+
+	requests := r.devicesOf(context.Background(), sdNodeWithStatus(utils.NodeStatusOffline))
+
+	woken := make([]string, 0, len(requests))
+	for _, request := range requests {
+		woken = append(woken, request.Name)
+	}
+	slices.Sort(woken)
+	if !slices.Equal(woken, []string{"dev-a", "dev-b"}) {
+		t.Errorf("the node woke %v, want its own two devices", woken)
+	}
+}
+
+// Regression: 2026-10-02-device-phase-misses-node-change (PR #612 review): only a
+// change of the node's control-plane status wakes its devices. Every other status
+// write of a node would otherwise reconcile all of them.
+func TestOnlyANodeStatusChangeWakesItsDevices(t *testing.T) {
+	updated := func(before, after *simplyblockv1alpha2.StorageNode) bool {
+		return nodeStatusChanged().Update(event.UpdateEvent{ObjectOld: before, ObjectNew: after})
+	}
+	online := sdNodeWithStatus(utils.NodeStatusOnline)
+	offline := sdNodeWithStatus(utils.NodeStatusOffline)
+	touched := sdNodeWithStatus(utils.NodeStatusOnline)
+	touched.Status.Message = "a reading of something else moved"
+
+	if !updated(online, offline) {
+		t.Error("a node that went offline did not wake its devices")
+	}
+	if updated(online, touched) {
+		t.Error("a node whose control-plane status did not move woke its devices")
 	}
 }
