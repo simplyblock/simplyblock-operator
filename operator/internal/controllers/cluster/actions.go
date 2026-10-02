@@ -29,6 +29,7 @@ import (
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/stepclaim"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
@@ -290,23 +291,11 @@ func (r *StorageClusterOpsReconciler) startCluster(
 // another pass holds a live claim on the step, or this pass read the operation
 // at a version a newer write has replaced, and the step it read may already be
 // behind it. Either way it waits, and the next pass reads again.
-//
-// The claim is written with an optimistic lock on the version this pass read
-// and is not retried on a conflict, because the conflict is the answer.
 func (r *StorageClusterOpsReconciler) once(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps, call func() error,
 ) (bool, error) {
-	write := func(ctx context.Context, claimed statemachine.KubeSnapshot) error {
-		read := ops.DeepCopy()
-		ops.Status.Step = claimed
-		if err := r.Status().Patch(ctx, ops,
-			client.MergeFromWithOptions(read, client.MergeFromWithOptimisticLock{})); err != nil {
-			ops.Status.Step = read.Status.Step
-			return err
-		}
-		return nil
-	}
-	return statemachine.WithClaim(ctx, ops.Status.Step, claimLease, write, call)
+	return statemachine.WithClaim(ctx, ops.Status.Step, claimLease,
+		stepclaim.Writer(r.Client, ops, &ops.Status.Step), call)
 }
 
 // failureDomainsReady gates an activation on the cluster's failure domains

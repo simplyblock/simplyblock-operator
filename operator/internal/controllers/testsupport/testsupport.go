@@ -14,6 +14,8 @@
 package testsupport
 
 import (
+	"context"
+	"reflect"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -96,4 +98,31 @@ func Cluster(namespace, name, uuid string) *simplyblockv1alpha2.StorageCluster {
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: uuid},
 	}
+}
+
+// LaggingClient answers the next Reads reads of Stale's kind and key with a copy
+// of Stale, the way an informer does before the watch event of the latest write
+// arrives. Every other read, and every write, goes to the client behind it. It is
+// what a test of a write-ahead record uses to put a pass one write behind.
+type LaggingClient struct {
+	client.Client
+	Stale client.Object
+	Reads int
+}
+
+// Lag makes the next reads reads of stale's kind and key answer with stale.
+func (c *LaggingClient) Lag(stale client.Object, reads int) {
+	c.Stale, c.Reads = stale, reads
+}
+
+func (c *LaggingClient) Get(
+	ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption,
+) error {
+	if c.Reads > 0 && c.Stale != nil &&
+		reflect.TypeOf(obj) == reflect.TypeOf(c.Stale) && key == client.ObjectKeyFromObject(c.Stale) {
+		reflect.ValueOf(obj).Elem().Set(reflect.ValueOf(c.Stale.DeepCopyObject()).Elem())
+		c.Reads--
+		return nil
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
 }

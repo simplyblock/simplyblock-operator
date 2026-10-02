@@ -18,42 +18,22 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
-// lagging answers the next `reads` reads of the operation with a copy taken
-// earlier, the way an informer does before the watch event of the latest write
-// arrives. Every other read, and every write, goes to the client behind it.
-type lagging struct {
-	client.Client
-	stale *simplyblockv1alpha2.StorageClusterOps
-	reads int
-}
-
-func (c *lagging) Get(
-	ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption,
-) error {
-	if ops, ok := obj.(*simplyblockv1alpha2.StorageClusterOps); ok && c.reads > 0 {
-		c.stale.DeepCopyInto(ops)
-		c.reads--
-		return nil
-	}
-	return c.Client.Get(ctx, key, obj, opts...)
-}
-
-// lagged is a reconciler for the operation, behind a lagging client, and the
-// operation as it stands before any pass.
+// lagged is a reconciler for the operation behind a client that can answer from
+// a copy one write behind, and the operation as it stands before any pass.
 func lagged(
 	t *testing.T, api *fakeControlPlane, ops *simplyblockv1alpha2.StorageClusterOps,
-) (*StorageClusterOpsReconciler, *lagging, *simplyblockv1alpha2.StorageClusterOps) {
+) (*StorageClusterOpsReconciler, *testsupport.LaggingClient, *simplyblockv1alpha2.StorageClusterOps) {
 	t.Helper()
 	r := activationRig(t, api, &recorder{}, ops)
-	cache := &lagging{Client: r.Client}
+	cache := &testsupport.LaggingClient{Client: r.Client}
 	r.Client = cache
 
 	var before simplyblockv1alpha2.StorageClusterOps
@@ -122,7 +102,7 @@ func TestAPassReadingTheStepBeforeTheLastWriteDoesNotCallAgain(t *testing.T) {
 
 			// The second pass reads the operation as it stood before the
 			// first pass advanced it.
-			cache.stale, cache.reads = before, 1
+			cache.Lag(before, 1)
 			if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
 				t.Fatalf("second pass: %v", err)
 			}
@@ -148,13 +128,13 @@ func TestThePassThatClaimedTheStepRecordsTheNextOneBeforeItsCacheSeesTheClaim(t 
 	api := clusterReadingAt(utils.ClusterStatusUnready)
 	r, cache, before := lagged(t, api,
 		newTestOps(simplyblockv1alpha2.StorageClusterOpsActionActivate, atStep(stepRequesting)))
-	cache.stale, cache.reads = before, 20
+	cache.Lag(before, 20)
 
 	key := types.NamespacedName{Namespace: testNamespace, Name: testOpsName}
 	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
 		t.Fatalf("the pass that made the call failed to record the next step: %v", err)
 	}
-	cache.reads = 0
+	cache.Reads = 0
 
 	ops, _ := reconcileOps(t, r, 0)
 	if got := ops.Status.Step.State; got != string(stepAwaiting) {
