@@ -173,10 +173,13 @@ func (r *StorageNodeOpsReconciler) drainSuspend(
 	if reading.Status == nodeStatusOffline {
 		return true, nil
 	}
-	if err := r.API.Suspend(ctx, clusterID, nodeID); err != nil {
-		return false, fmt.Errorf("suspend node %s: %w", ops.Spec.NodeRef, err)
-	}
-	return false, nil
+	_, err = r.once(ctx, ops, func() error {
+		if err := r.API.Suspend(ctx, clusterID, nodeID); err != nil {
+			return fmt.Errorf("suspend node %s: %w", ops.Spec.NodeRef, err)
+		}
+		return nil
+	})
+	return false, err
 }
 
 // drainMigrate moves every PV-managed volume to a peer, one migration object per
@@ -314,10 +317,22 @@ func (r *StorageNodeOpsReconciler) drainVerify(
 			"a volume's claim could not be read; the verification is retried")
 	}
 
-	for _, volume := range census.System {
-		if err := r.API.DeleteVolume(ctx, clusterID, volume.PoolUUID, volume.VolumeUUID); err != nil {
-			return false, fatalf("system volume %s could not be deleted and the node still holds it: %v",
-				volume.Name, err)
+	// The deletions are one claimed call. The control plane deletes
+	// asynchronously, so the passes that follow still list the volumes, and
+	// deleting a volume already being deleted is a refusal this step reads as
+	// fatal.
+	if len(census.System) > 0 {
+		_, err := r.once(ctx, ops, func() error {
+			for _, volume := range census.System {
+				if err := r.API.DeleteVolume(ctx, clusterID, volume.PoolUUID, volume.VolumeUUID); err != nil {
+					return fatalf("system volume %s could not be deleted and the node still holds it: %v",
+						volume.Name, err)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return false, err
 		}
 	}
 
@@ -339,15 +354,18 @@ func (r *StorageNodeOpsReconciler) drainVerify(
 func (r *StorageNodeOpsReconciler) drainRemove(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, clusterID, nodeID string,
 ) (bool, error) {
-	if err := r.API.RemoveNode(ctx, clusterID, nodeID); err != nil {
-		// The control plane's own admission refused the removal, which is its
-		// answer about what the cluster can afford to lose. Retrying cannot change
-		// it, so the operation fails and the resume of §8.3 puts the node back
-		// into service.
-		return false, fatalf("the control plane refused to remove node %s: %v",
-			ops.Spec.NodeRef, err)
-	}
-	return true, nil
+	claimed, err := r.once(ctx, ops, func() error {
+		if err := r.API.RemoveNode(ctx, clusterID, nodeID); err != nil {
+			// The control plane's own admission refused the removal, which is
+			// its answer about what the cluster can afford to lose. Retrying
+			// cannot change it, so the operation fails and the resume of §8.3
+			// puts the node back into service.
+			return fatalf("the control plane refused to remove node %s: %v",
+				ops.Spec.NodeRef, err)
+		}
+		return nil
+	})
+	return claimed, err
 }
 
 // migrationsOf lists the fan-out of this drain.

@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -367,4 +368,36 @@ func refusingClaims() interceptor.Funcs {
 			return c.Get(ctx, key, object, options...)
 		},
 	}
+}
+
+// persisted stores ops as the test built it, status included, and returns the
+// stored copy. A step that claims itself before its call writes the claim to the
+// stored operation with an optimistic lock on the version it was handed, so a
+// suite that runs a step directly hands it an operation the client holds rather
+// than one it only built.
+func persisted(
+	t *testing.T, c client.Client, ops *simplyblockv1alpha2.StorageNodeOps,
+) *simplyblockv1alpha2.StorageNodeOps {
+	t.Helper()
+	ctx := context.Background()
+	want := ops.DeepCopy()
+
+	var stored simplyblockv1alpha2.StorageNodeOps
+	err := c.Get(ctx, client.ObjectKeyFromObject(want), &stored)
+	switch {
+	case apierrors.IsNotFound(err):
+		created := want.DeepCopy()
+		if err := c.Create(ctx, created); err != nil {
+			t.Fatalf("store the operation: %v", err)
+		}
+		stored = *created
+	case err != nil:
+		t.Fatalf("read the operation: %v", err)
+	}
+
+	stored.Status = want.Status
+	if err := c.Status().Update(ctx, &stored); err != nil {
+		t.Fatalf("store the operation's status: %v", err)
+	}
+	return &stored
 }

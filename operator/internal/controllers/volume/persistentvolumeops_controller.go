@@ -593,8 +593,10 @@ func (r *PersistentVolumeOpsReconciler) writeStatus(
 	// on the step, which the cache may not have seen yet. Read from the cache,
 	// it would patch against the version before the claim and conflict until
 	// the cache caught up. Only a conflict means somebody else wrote, and only
-	// then does an attempt read the object again.
-	reread := false
+	// then does an attempt read the object again, and so does the first one
+	// when the caller's object was never read and carries no version to patch
+	// against.
+	reread := ops.ResourceVersion == ""
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		fresh := *ops.DeepCopy()
 		if reread {

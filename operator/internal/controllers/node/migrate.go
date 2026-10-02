@@ -165,11 +165,14 @@ func (r *StorageNodeOpsReconciler) migrateRelocate(
 		ReattachVolume: boolValue(ops.Spec.ReattachVolume),
 		NewSsdPcie:     ops.Spec.MigrateParams().NewSsdPcie,
 	}
-	if err := r.API.RestartNode(ctx, clusterID, nodeID, params); err != nil {
-		return false, fmt.Errorf("relocate node %s onto worker %s: %w",
-			ops.Spec.NodeRef, target, err)
-	}
-	return false, nil
+	_, err = r.once(ctx, ops, func() error {
+		if err := r.API.RestartNode(ctx, clusterID, nodeID, params); err != nil {
+			return fmt.Errorf("relocate node %s onto worker %s: %w",
+				ops.Spec.NodeRef, target, err)
+		}
+		return nil
+	})
+	return false, err
 }
 
 // migrateAwaitNode waits for the node to be online again, on the host it was
@@ -217,12 +220,18 @@ func (r *StorageNodeOpsReconciler) migratePromote(
 	// A node whose object already names the target has been promoted by an
 	// earlier pass: the re-point below is the last thing this step does, so its
 	// presence is the record that the promote landed.
+	//
+	// The promote and the re-point are one claimed call, so a pass reading the
+	// node and the step from before them promotes nothing.
 	if node.Spec.WorkerNode != target {
-		if err := r.API.Promote(ctx, clusterID, nodeID); err != nil {
-			return false, fmt.Errorf("promote node %s on worker %s: %w",
-				ops.Spec.NodeRef, target, err)
-		}
-		if err := r.repointTopology(ctx, node, target, ops.Spec.MigrateParams().NewSsdPcie); err != nil {
+		claimed, err := r.once(ctx, ops, func() error {
+			if err := r.API.Promote(ctx, clusterID, nodeID); err != nil {
+				return fmt.Errorf("promote node %s on worker %s: %w",
+					ops.Spec.NodeRef, target, err)
+			}
+			return r.repointTopology(ctx, node, target, ops.Spec.MigrateParams().NewSsdPcie)
+		})
+		if err != nil || !claimed {
 			return false, err
 		}
 	}

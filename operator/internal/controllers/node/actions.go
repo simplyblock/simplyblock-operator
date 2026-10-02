@@ -62,7 +62,9 @@ func (r *StorageNodeOpsReconciler) perform(
 
 // request issues the one call the four single-step actions make. Each is skipped
 // when the node is already where the call would put it, which is what makes
-// re-entering the step after a crash harmless.
+// re-entering the step after a crash harmless, and each is made under a claim on
+// the step, which is what stops a pass reading the step from a cache that has
+// not seen the previous pass make the call from making it again.
 func (r *StorageNodeOpsReconciler) request(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps,
 ) (bool, error) {
@@ -75,6 +77,7 @@ func (r *StorageNodeOpsReconciler) request(
 		return false, err
 	}
 
+	var call func() error
 	switch ops.Spec.Action {
 	case simplyblockv1alpha2.StorageNodeOpsActionShutdown:
 		// A node in shutdown is one the call landed on: the control plane accepts
@@ -83,8 +86,11 @@ func (r *StorageNodeOpsReconciler) request(
 		if reading.Status == nodeStatusOffline || reading.Status == nodeStatusInShutdown {
 			return true, nil
 		}
-		if err := r.API.ShutdownNode(ctx, clusterID, nodeID); err != nil {
-			return false, fmt.Errorf("shut down node %s: %w", ops.Spec.NodeRef, err)
+		call = func() error {
+			if err := r.API.ShutdownNode(ctx, clusterID, nodeID); err != nil {
+				return fmt.Errorf("shut down node %s: %w", ops.Spec.NodeRef, err)
+			}
+			return nil
 		}
 
 	case simplyblockv1alpha2.StorageNodeOpsActionRestart:
@@ -111,28 +117,41 @@ func (r *StorageNodeOpsReconciler) request(
 			Force:          force,
 			ReattachVolume: boolValue(ops.Spec.ReattachVolume),
 		}
-		if err := r.API.RestartNode(ctx, clusterID, nodeID, params); err != nil {
-			return false, fmt.Errorf("restart node %s: %w", ops.Spec.NodeRef, err)
+		call = func() error {
+			if err := r.API.RestartNode(ctx, clusterID, nodeID, params); err != nil {
+				return fmt.Errorf("restart node %s: %w", ops.Spec.NodeRef, err)
+			}
+			return nil
 		}
 
 	case simplyblockv1alpha2.StorageNodeOpsActionSuspend:
 		if reading.Status == nodeStatusSuspended {
 			return true, nil
 		}
-		if err := r.API.Suspend(ctx, clusterID, nodeID); err != nil {
-			return false, fmt.Errorf("suspend node %s: %w", ops.Spec.NodeRef, err)
+		call = func() error {
+			if err := r.API.Suspend(ctx, clusterID, nodeID); err != nil {
+				return fmt.Errorf("suspend node %s: %w", ops.Spec.NodeRef, err)
+			}
+			return nil
 		}
 
 	case simplyblockv1alpha2.StorageNodeOpsActionResume:
 		if reading.Status == nodeStatusOnline {
 			return true, nil
 		}
-		if err := r.API.Resume(ctx, clusterID, nodeID); err != nil {
-			return false, fmt.Errorf("resume node %s: %w", ops.Spec.NodeRef, err)
+		call = func() error {
+			if err := r.API.Resume(ctx, clusterID, nodeID); err != nil {
+				return fmt.Errorf("resume node %s: %w", ops.Spec.NodeRef, err)
+			}
+			return nil
 		}
 
 	default:
 		return false, fatalf("action %s does not issue a single request", ops.Spec.Action)
+	}
+	claimed, err := r.once(ctx, ops, call)
+	if err != nil || !claimed {
+		return false, err
 	}
 	return true, nil
 }

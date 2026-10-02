@@ -77,7 +77,7 @@ func allowing(t *testing.T, apiClient client.Client, windows int32) {
 // held runs the gate and reports whether it held this window back.
 func held(t *testing.T, r *StorageNodeOpsReconciler, ops *simplyblockv1alpha2.StorageNodeOps) bool {
 	t.Helper()
-	done, err := r.perform(context.Background(), ops, stepHolding)
+	done, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepHolding)
 	if err == nil {
 		return !done
 	}
@@ -165,7 +165,7 @@ func TestTheEvictionIsBlockedBeforeTheNodeIsTakenDown(t *testing.T) {
 	api := aControlPlane()
 	r, apiClient := anOpsWorld(t, api, aReadyStoragePod(opsWorker))
 
-	done, err := r.perform(context.Background(), aWindow("a-window"), stepShuttingDown)
+	done, err := r.perform(context.Background(), persisted(t, r.Client, aWindow("a-window")), stepShuttingDown)
 	if err != nil {
 		t.Fatalf("shutting down: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestAnOfflineNodeNeedsNoShutdown(t *testing.T) {
 	api := aControlPlane().reporting(nodeStatusOffline)
 	r, _ := anOpsWorld(t, api, aReadyStoragePod(opsWorker))
 
-	done, err := r.perform(context.Background(), aWindow("a-window"), stepShuttingDown)
+	done, err := r.perform(context.Background(), persisted(t, r.Client, aWindow("a-window")), stepShuttingDown)
 	if err != nil {
 		t.Fatalf("shutting down: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestANodeMidRestartIsWaitedForRatherThanShutDown(t *testing.T) {
 	api := aControlPlane().reporting(nodeStatusInRestart)
 	r, _ := anOpsWorld(t, api, aReadyStoragePod(opsWorker))
 
-	done, err := r.perform(context.Background(), aWindow("a-window"), stepShuttingDown)
+	done, err := r.perform(context.Background(), persisted(t, r.Client, aWindow("a-window")), stepShuttingDown)
 	if err != nil {
 		t.Fatalf("shutting down: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestTheNodeIsRestartedOnceTheHostIsBack(t *testing.T) {
 	api := aControlPlane().reporting(nodeStatusOffline)
 	r, _ := anOpsWorld(t, api)
 
-	done, err := r.perform(context.Background(), aWindow("a-window"), stepRestarting)
+	done, err := r.perform(context.Background(), persisted(t, r.Client, aWindow("a-window")), stepRestarting)
 	if err != nil {
 		t.Fatalf("restarting: %v", err)
 	}
@@ -269,10 +269,10 @@ func TestCleanupLeavesTheWorkerDrainableAgain(t *testing.T) {
 	r, apiClient := anOpsWorld(t, aControlPlane(), aReadyStoragePod(opsWorker), spdk)
 	ops := aWindow("a-window")
 
-	if _, err := r.perform(context.Background(), ops, stepShuttingDown); err != nil {
+	if _, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepShuttingDown); err != nil {
 		t.Fatalf("shutting down: %v", err)
 	}
-	done, err := r.perform(context.Background(), ops, stepCleanup)
+	done, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepCleanup)
 	if err != nil {
 		t.Fatalf("cleaning up: %v", err)
 	}
@@ -397,7 +397,7 @@ func TestReleasingWaitsForTheSpdkPodRatherThanTheNodeAgent(t *testing.T) {
 	r, apiClient := anOpsWorld(t, aControlPlane(), aReadyStoragePod(opsWorker), spdk)
 	ops := aWindow("a-window")
 
-	done, err := r.perform(context.Background(), ops, stepReleasing)
+	done, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepReleasing)
 	if err != nil {
 		t.Fatalf("releasing: %v", err)
 	}
@@ -411,7 +411,7 @@ func TestReleasingWaitsForTheSpdkPodRatherThanTheNodeAgent(t *testing.T) {
 
 	// The node agent's pod is still there, because a drain never takes it and
 	// the step whose turn is next needs it to answer.
-	done, err = r.perform(context.Background(), ops, stepReleasing)
+	done, err = r.perform(context.Background(), persisted(t, r.Client, ops), stepReleasing)
 	if err != nil {
 		t.Fatalf("releasing: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestTheBudgetGuardsThePodsADrainCanEvict(t *testing.T) {
 		agent, spdk, aWebAPIPod(opsWorker), anFDBPod(opsWorker),
 		anSpdkPod(opsTarget, "4422"))
 
-	if _, err := r.perform(context.Background(), aWindow("a-window"), stepShuttingDown); err != nil {
+	if _, err := r.perform(context.Background(), persisted(t, r.Client, aWindow("a-window")), stepShuttingDown); err != nil {
 		t.Fatalf("shutting down: %v", err)
 	}
 
@@ -467,10 +467,10 @@ func TestReleasingTakesTheBudgetAwayRatherThanRelaxingIt(t *testing.T) {
 		aReadyStoragePod(opsWorker), anSpdkPod(opsWorker, "4420"), aWebAPIPod(opsWorker))
 	ops := aWindow("a-window")
 
-	if _, err := r.perform(context.Background(), ops, stepShuttingDown); err != nil {
+	if _, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepShuttingDown); err != nil {
 		t.Fatalf("shutting down: %v", err)
 	}
-	if _, err := r.perform(context.Background(), ops, stepReleasing); err != nil {
+	if _, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepReleasing); err != nil {
 		t.Fatalf("releasing: %v", err)
 	}
 
@@ -489,7 +489,7 @@ func TestAShutdownIsNotReissuedAgainstANodeAlreadyShuttingDown(t *testing.T) {
 	api := aControlPlane().reporting(nodeStatusInShutdown)
 	r, _ := anOpsWorld(t, api, aReadyStoragePod(opsWorker), anSpdkPod(opsWorker, "4420"))
 
-	done, err := r.perform(context.Background(), aWindow("a-window"), stepShuttingDown)
+	done, err := r.perform(context.Background(), persisted(t, r.Client, aWindow("a-window")), stepShuttingDown)
 	if err != nil {
 		t.Fatalf("shutting down: %v", err)
 	}
@@ -558,10 +558,10 @@ func TestTheWorkersBudgetOutlivesTheFirstSocketToRelease(t *testing.T) {
 		anSpdkPod(opsWorker, "4420"), anSpdkPod(opsWorker, "4422"))
 	ops := aWindow("a-window")
 
-	if _, err := r.perform(context.Background(), ops, stepShuttingDown); err != nil {
+	if _, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepShuttingDown); err != nil {
 		t.Fatalf("shutting down: %v", err)
 	}
-	if _, err := r.perform(context.Background(), ops, stepReleasing); err != nil {
+	if _, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepReleasing); err != nil {
 		t.Fatalf("releasing: %v", err)
 	}
 
@@ -579,7 +579,7 @@ func TestTheWorkersBudgetOutlivesTheFirstSocketToRelease(t *testing.T) {
 	if err := apiClient.Status().Update(context.Background(), sibling); err != nil {
 		t.Fatalf("advancing the sibling: %v", err)
 	}
-	if _, err := r.perform(context.Background(), ops, stepReleasing); err != nil {
+	if _, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepReleasing); err != nil {
 		t.Fatalf("releasing: %v", err)
 	}
 	if budget := budgetFor(t, apiClient); budget != nil {
