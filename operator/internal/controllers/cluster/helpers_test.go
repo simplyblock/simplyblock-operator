@@ -213,6 +213,7 @@ type fakeControlPlane struct {
 	create       func(utils.ClusterAddParams) (webapi.ClusterResponse, error)
 	cluster      func(string) (webapi.ClusterResponse, error)
 	byName       func(string) (utils.ClusterListEntry, bool, error)
+	clusters     func() ([]utils.ClusterListEntry, error)
 	deleteCall   func(string) error
 	activate     func(string) error
 	expand       func(string) error
@@ -275,6 +276,13 @@ func (f *fakeControlPlane) ClusterByName(
 		return utils.ClusterListEntry{}, false, nil
 	}
 	return f.byName(name)
+}
+
+func (f *fakeControlPlane) Clusters(context.Context) ([]utils.ClusterListEntry, error) {
+	if f.clusters == nil {
+		return nil, nil
+	}
+	return f.clusters()
 }
 
 func (f *fakeControlPlane) DeleteCluster(_ context.Context, clusterID string) error {
