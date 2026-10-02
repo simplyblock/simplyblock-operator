@@ -15,6 +15,8 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"testing"
 
 	"k8s.io/client-go/tools/events"
@@ -429,7 +431,9 @@ func TestAnEmptyNodePassesVerification(t *testing.T) {
 // about what the cluster can afford to lose. Retrying cannot change it, so the
 // operation fails and the unwind puts the node back into service.
 func TestARefusedRemovalEndsTheDrain(t *testing.T) {
-	api := aControlPlane().refusing("RemoveNode", errors.New("the cluster cannot lose this node"))
+	api := aControlPlane().refusing("RemoveNode", &ControlPlaneError{
+		Status: http.StatusBadRequest, Body: `{"detail":"the cluster cannot lose this node"}`,
+	})
 	r, _ := aDraining(t, api, &scriptedMover{})
 
 	_, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepRemoving)
@@ -437,6 +441,61 @@ func TestARefusedRemovalEndsTheDrain(t *testing.T) {
 	var fatal *terminalStepError
 	if !errors.As(err, &fatal) {
 		t.Errorf("err = %v, want the terminal kind for a removal the control plane refused", err)
+	}
+}
+
+// Regression: 2026-10-02-remove-timeout-read-as-refusal: the DELETE that removes
+// a node outlived the HTTP client's timeout while the control plane went on and
+// removed the node. The drain read the timeout as a refusal, failed the
+// operation, and tried to resume a node that was being removed.
+func TestARemovalWithNoAnswerIsRetriedRatherThanFailed(t *testing.T) {
+	cases := map[string]error{
+		"a timeout": fmt.Errorf("http error: Delete %q: %w",
+			"https://webappapi/storage-nodes/x", context.DeadlineExceeded),
+		"a 5xx": &ControlPlaneError{Status: http.StatusBadGateway, Body: "bad gateway"},
+	}
+	for name, failure := range cases {
+		t.Run(name, func(t *testing.T) {
+			api := aControlPlane().refusing("RemoveNode", failure)
+			r, _ := aDraining(t, api, &scriptedMover{})
+
+			done, err := r.perform(context.Background(), aDrain(), stepRemoving)
+
+			var fatal *terminalStepError
+			if errors.As(err, &fatal) {
+				t.Errorf("err = %v, want a retry for a removal the control plane never answered", err)
+			}
+			if done {
+				t.Error("the step finished although the removal was never answered")
+			}
+		})
+	}
+}
+
+// Regression: 2026-10-02-remove-timeout-read-as-refusal: the pass after a
+// removal whose answer was lost finds the node already being removed. That is
+// the removal accepted, and a second DELETE against it is not one to send.
+func TestARemovalAlreadyUnderwayFinishesTheDrain(t *testing.T) {
+	for _, status := range []string{
+		nodeStatusPendingRemoval, nodeStatusMigratingDevices,
+		nodeStatusMigratingLvols, nodeStatusInRemoval, nodeStatusRemoved,
+	} {
+		t.Run(status, func(t *testing.T) {
+			api := aControlPlane().reporting(status)
+			r, _ := aDraining(t, api, &scriptedMover{})
+
+			done, err := r.perform(context.Background(), aDrain(), stepRemoving)
+			if err != nil {
+				t.Fatalf("removing: %v", err)
+			}
+			if !done {
+				t.Errorf("the step did not finish although the node is already %s", status)
+			}
+			if asked := api.asked("RemoveNode"); asked != 0 {
+				t.Errorf("RemoveNode was issued %d time(s) against a node already %s, want none",
+					asked, status)
+			}
+		})
 	}
 }
 
@@ -454,6 +513,26 @@ func TestAnAcceptedRemovalFinishesTheDrain(t *testing.T) {
 	}
 	if asked := api.asked("RemoveNode"); asked != 1 {
 		t.Errorf("RemoveNode was issued %d time(s), want once", asked)
+	}
+}
+
+// Regression: 2026-10-02-remove-timeout-read-as-refusal: a node still shutting
+// down is not yet proof that the removal was accepted, and a second DELETE while
+// it shuts down is not one to send either. The step waits for the control plane
+// to say which it was.
+func TestARemovalStillShuttingTheNodeDownWaits(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusInShutdown)
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	done, err := r.perform(context.Background(), aDrain(), stepRemoving)
+	if err != nil {
+		t.Fatalf("removing: %v", err)
+	}
+	if done {
+		t.Error("the step finished although the node is only shutting down")
+	}
+	if asked := api.asked("RemoveNode"); asked != 0 {
+		t.Errorf("RemoveNode was issued %d time(s) against a node shutting down, want none", asked)
 	}
 }
 

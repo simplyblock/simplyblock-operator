@@ -500,6 +500,9 @@ Files: `operator/internal/controllers/node/drain_test.go`, `peertargets_test.go`
 | U-161 | The node delete returns 200, 204, or 404: the operation succeeds                         | Boundary   | `TestAnAcceptedRemovalFinishesTheDrain`                                                |
 | U-162 | The node delete returns 5xx: retried, and the operation does not fail                    | Negative   | —                                                                                      |
 | U-163 | The node delete is rejected: the node is resumed and the operation fails                 | Negative   | `TestARefusedRemovalEndsTheDrain`, `TestAStepThatOutlivedItsDeadlineFailsTheOperation` |
+| U-450 | The node delete times out or returns 5xx: the step is retried, never failed (2026-10-02) | Regression | `TestARemovalWithNoAnswerIsRetriedRatherThanFailed`                                    |
+| U-451 | A retry finds the node in a removal status: done, with no second delete (2026-10-02)     | Regression | `TestARemovalAlreadyUnderwayFinishesTheDrain`                                          |
+| U-452 | A retry finds the node still shutting down: waits, with no second delete (2026-10-02)    | Regression | `TestARemovalStillShuttingTheNodeDownWaits`                                            |
 | U-164 | A resume that itself fails: the operation still reaches `Failed`, with an event          | Negative   | —                                                                                      |
 | U-165 | `spec.abort` set during `Validating`: `Aborted` with no resume call issued               | Boundary   | —                                                                                      |
 | U-166 | `spec.abort` set during `MigratingVolumes`: migrations deleted, node resumed             | Positive   | `TestAnAbortAtAnAbortableStepStopsAndResumesTheNode`                                   |

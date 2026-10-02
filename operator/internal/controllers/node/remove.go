@@ -31,6 +31,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -351,17 +352,40 @@ func (r *StorageNodeOpsReconciler) drainVerify(
 
 // drainRemove deletes the backend node. A 404 is success, since a node the control
 // plane no longer knows about is a node that has been removed.
+//
+// The DELETE shuts the node down before it answers, and that can take longer
+// than the client waits. A pass after a lost answer therefore reads the node
+// first: a removal status is the removal accepted, and a node still shutting
+// down is waited on, because a second DELETE against either is not one to send.
 func (r *StorageNodeOpsReconciler) drainRemove(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, clusterID, nodeID string,
 ) (bool, error) {
+	reading, err := r.nodeReading(ctx, clusterID, nodeID)
+	if err != nil {
+		return false, err
+	}
+	switch reading.Status {
+	case nodeStatusPendingRemoval, nodeStatusMigratingDevices, nodeStatusMigratingLvols,
+		nodeStatusInRemoval, nodeStatusRemoved:
+		return true, nil
+	case nodeStatusInShutdown:
+		return false, nil
+	}
+
 	claimed, err := r.once(ctx, ops, func() error {
 		if err := r.API.RemoveNode(ctx, clusterID, nodeID); err != nil {
-			// The control plane's own admission refused the removal, which is
-			// its answer about what the cluster can afford to lose. Retrying
+			// Only an answer is a refusal. A 4xx is the control plane's own
+			// admission saying what the cluster can afford to lose. Retrying
 			// cannot change it, so the operation fails and the resume of §8.3
-			// puts the node back into service.
-			return fatalf("the control plane refused to remove node %s: %v",
-				ops.Spec.NodeRef, err)
+			// puts the node back into service. A timeout or a 5xx says nothing
+			// about the removal, which may well be under way, so the step is
+			// retried and the next pass reads the node.
+			var answer *ControlPlaneError
+			if errors.As(err, &answer) && answer.Status >= 400 && answer.Status < 500 {
+				return fatalf("the control plane refused to remove node %s: %v",
+					ops.Spec.NodeRef, err)
+			}
+			return fmt.Errorf("remove node %s: %w", ops.Spec.NodeRef, err)
 		}
 		return nil
 	})
