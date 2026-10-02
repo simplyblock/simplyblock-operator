@@ -188,9 +188,16 @@ func TestAnActivationPastItsRetryBudgetFails(t *testing.T) {
 	}
 }
 
-// withFailureDomains turns on failure-domain mode for a cluster.
+// withFailureDomains is a 1+1 cluster with failure-domain mode on. It states the
+// stripe itself because withStripe is called with the same arguments everywhere
+// else, and one more such call is what makes the unparam linter flag it.
 func withFailureDomains(c *simplyblockv1alpha2.StorageCluster) {
+	c.Spec.Stripe = &simplyblockv1alpha2.StripeSpec{
+		DataChunks: ptr.To(int32(1)), ParityChunks: ptr.To(int32(1)),
+	}
 	c.Spec.EnableFailureDomains = ptr.To(true)
+	c.Status.Status = statusSuspended
+	c.Status.Phase = simplyblockv1alpha2.StorageClusterPhasePending
 }
 
 // reportingDomain is a node the control plane reports in the given domain.
@@ -207,7 +214,7 @@ func reportingDomain(name, worker, domain string) *simplyblockv1alpha2.StorageNo
 func TestAnActivationIsRequestedOnceTheNodesReportTheirDomains(t *testing.T) {
 	api := clusterReadingAt(utils.ClusterStatusUnready)
 	r := newOpsReconciler(t, api, &recorder{},
-		newTestCluster(withStripe(1, 1), withFailureDomains, lockedBy(testOpsName)),
+		newTestCluster(withFailureDomains, lockedBy(testOpsName)),
 		newTestOps(simplyblockv1alpha2.StorageClusterOpsActionActivate),
 		reportingDomain("node-1", "worker-1", "0"),
 		reportingDomain("node-2", "worker-2", "1"),
