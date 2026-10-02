@@ -1152,7 +1152,8 @@ func (r *StorageNodeOpsReconciler) waitingMessage(
 	if d := ops.Status.Drain; d != nil && current == stepMigratingVolumes {
 		return fmt.Sprintf("%d of %d volumes migrated", d.VolumesMigrated, d.VolumesTotal)
 	}
-	if removal := ops.Status.Removal; removal != nil && current == stepAwaitingRemoval {
+	if removal := ops.Status.Removal; removal != nil &&
+		(current == stepMigratingDevices || current == stepAwaitingRemoval) {
 		return removalProgress(removal)
 	}
 	return fmt.Sprintf("waiting on %s", current)

@@ -19,6 +19,7 @@ package node
 import (
 	"context"
 	"maps"
+	"strings"
 	"testing"
 	"time"
 
@@ -612,5 +613,28 @@ func TestARemovalThatDidNotMoveKeepsItsDeadline(t *testing.T) {
 	if got.Status.Step.Deadline == nil || got.Status.Step.Deadline.Unix() != recorded.Unix() {
 		t.Errorf("deadline = %v, want %v kept for a removal that did not move",
 			got.Status.Step.Deadline, recorded)
+	}
+}
+
+// Regression: 2026-10-02-migrating-devices-silent: while the control plane
+// rebuilt the node's devices the operation only said it was waiting on
+// MigratingDevices, which reads the same for a rebuild halfway through and for
+// one that never started.
+func TestMigratingDevicesSaysHowFarTheRebuildHasGot(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingDevices)
+	api.progress = RemovalProgress{Total: 2, Completed: 1, NodeStatus: nodeStatusMigratingDevices}
+	ops := anAdvancingOperation("a-drain",
+		simplyblockv1alpha2.StorageNodeOpsActionRemove, stepMigratingDevices)
+	r, apiClient := anOpsWorld(t, api, ops,
+		aNodeDevice("dev-a", "failed_and_migrated"), aNodeDevice("dev-b", "failed"))
+	r.Mover = &scriptedMover{}
+	lockedBy(t, apiClient, "a-drain")
+
+	pass(t, r, "a-drain")
+
+	got := operationRead(t, apiClient, "a-drain")
+	if !strings.Contains(got.Status.Message, "1 of 2 devices") ||
+		!strings.Contains(got.Status.Message, nodeStatusMigratingDevices) {
+		t.Errorf("message = %q, want the node's status and 1 of 2 devices", got.Status.Message)
 	}
 }
