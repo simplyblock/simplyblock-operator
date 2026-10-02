@@ -90,8 +90,8 @@ func TestARemovalOfAGoneNodeIsDoneAtEveryStep(t *testing.T) {
 	r := aRemover(t)
 
 	for _, current := range []step{
-		stepValidating, stepSuspending, stepMigratingVolumes, stepVerifying, stepRemoving,
-		stepAwaitingRemoval,
+		stepValidating, stepShuttingDown, stepMigratingDevices, stepMigratingVolumes,
+		stepVerifying, stepRemoving, stepAwaitingRemoval,
 	} {
 		done, err := performingRemoveStep(t, r, aRemoveOps(), current)
 		if err != nil {

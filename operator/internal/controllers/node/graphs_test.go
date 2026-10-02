@@ -31,8 +31,8 @@ import (
 // same set: deriving it from the graph would make the test agree with itself.
 var everyStep = []string{
 	"Awaiting", "AwaitingHost", "AwaitingNode", "AwaitingRemoval", "Cleanup", "Departing", "Holding",
-	"MigratingVolumes", "Preparing", "Promoting", "Relocating", "Releasing",
-	"Removing", "Requesting", "Restarting", "ShuttingDown", "Suspending",
+	"MigratingDevices", "MigratingVolumes", "Preparing", "Promoting", "Relocating", "Releasing",
+	"Removing", "Requesting", "Restarting", "ShuttingDown",
 	"Validating", "Verifying",
 }
 
@@ -103,7 +103,7 @@ func celRuleValues(rule string) []string {
 // rule living in a struct tag; the tests above are what make the copies worth
 // having.
 const opsStepCELRule = "!has(self.state) || self.state in " +
-	"['Requesting','Departing','Awaiting','Validating','Suspending','MigratingVolumes','Verifying'," +
+	"['Requesting','Departing','Awaiting','Validating','MigratingDevices','MigratingVolumes','Verifying'," +
 	"'Removing','AwaitingRemoval','Preparing','Relocating','AwaitingNode','Promoting','Holding'," +
 	"'ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']"
 
@@ -148,8 +148,11 @@ func TestNoStepPastThePointOfNoReturnIsAbortable(t *testing.T) {
 		stepAwaitingNode,
 		// The restart has been issued and is the control plane's to finish.
 		stepDeparting,
-		// The control plane is taking the node apart, and there is no resume
-		// that puts it back.
+		// From prepare-removal on the control plane is taking the node out of
+		// the cluster, and there is no way back.
+		stepMigratingDevices,
+		stepMigratingVolumes,
+		stepVerifying,
 		stepAwaitingRemoval,
 		// The node is down for a reboot nothing else will bring it back from.
 		stepShuttingDown,
@@ -175,11 +178,6 @@ func TestTheStepsAnAbortStopsCleanly(t *testing.T) {
 		// No side effect at all, which is why an abort here is an Aborted
 		// directly rather than an unwind (§8.3).
 		stepValidating,
-		// Past the suspend, and the unwind is the resume the graph already
-		// performs on every other terminal outcome from here on.
-		stepSuspending,
-		stepMigratingVolumes,
-		stepVerifying,
 		// A target host has been labeled and nothing more.
 		stepPreparing,
 		// The window before the node is taken down for maintenance.
@@ -187,37 +185,6 @@ func TestTheStepsAnAbortStopsCleanly(t *testing.T) {
 	} {
 		if slices.Contains(unabortable, state) {
 			t.Errorf("step %q refuses an abort, and nothing it has done needs finishing", state)
-		}
-	}
-}
-
-// Every terminal outcome from Suspending until the removal is asked for owes the
-// node a resume, because a node past the suspend is not serving and an operation
-// that stopped there would take capacity out of the cluster for as long as nobody
-// noticed (§8.3).
-func TestTheDrainStepsPastTheSuspendUnwind(t *testing.T) {
-	for _, state := range []step{
-		stepSuspending, stepMigratingVolumes, stepVerifying,
-	} {
-		if !unwinds(state) {
-			t.Errorf("step %q leaves the node suspended and owes it a resume", state)
-		}
-	}
-	// Validating performs no side effect at all, which is what makes an abort
-	// there an Aborted directly rather than an unwind.
-	if unwinds(stepValidating) {
-		t.Error("Validating touches nothing and must not issue a resume")
-	}
-}
-
-// Regression: 2026-10-02-remove-timeout-read-as-refusal: a removal whose DELETE
-// timed out failed, and the unwind tried to resume a node the control plane was
-// in the middle of removing. Once the removal has been asked for, the control
-// plane may be taking the node apart, and no resume puts it back.
-func TestNothingUnwindsOnceTheRemovalHasBeenAskedFor(t *testing.T) {
-	for _, state := range []step{stepRemoving, stepAwaitingRemoval} {
-		if unwinds(state) {
-			t.Errorf("step %q resumes the node, which may already be being taken apart", state)
 		}
 	}
 }
@@ -247,8 +214,8 @@ func TestAStepOfAnotherActionIsRejected(t *testing.T) {
 // capacity out of the cluster.
 func TestTheRemoveGraphValidatesBeforeItSuspends(t *testing.T) {
 	assertLine(t, simplyblockv1alpha2.StorageNodeOpsActionRemove, []step{
-		stepValidating, stepSuspending, stepMigratingVolumes, stepVerifying, stepRemoving,
-		stepAwaitingRemoval,
+		stepValidating, stepShuttingDown, stepMigratingDevices, stepMigratingVolumes,
+		stepVerifying, stepRemoving, stepAwaitingRemoval,
 	})
 }
 

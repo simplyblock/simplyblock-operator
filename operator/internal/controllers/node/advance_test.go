@@ -137,14 +137,13 @@ func TestTheLastStepFinishingEndsTheOperation(t *testing.T) {
 	}
 }
 
-// An abort at a step the graph declares abortable stops the operation there, and
-// the node is put back into service on the way out: a node past the suspend is
-// serving nothing, and leaving it that way takes capacity out of the cluster for
-// as long as nobody notices.
-func TestAnAbortAtAnAbortableStepStopsAndResumesTheNode(t *testing.T) {
-	api := aControlPlane().reporting(nodeStatusSuspended)
+// An abort at a step the graph declares abortable stops the operation there.
+// Validating is the one such step of a removal, and it has changed nothing, so
+// nothing is put back either.
+func TestAnAbortAtAnAbortableStepStopsTheOperation(t *testing.T) {
+	api := aControlPlane()
 	ops := anAdvancingOperation("a-drain",
-		simplyblockv1alpha2.StorageNodeOpsActionRemove, stepMigratingVolumes)
+		simplyblockv1alpha2.StorageNodeOpsActionRemove, stepValidating)
 	ops.Spec.Abort = true
 	r, apiClient := anOpsWorld(t, api, ops)
 	r.Mover = &scriptedMover{}
@@ -156,8 +155,8 @@ func TestAnAbortAtAnAbortableStepStopsAndResumesTheNode(t *testing.T) {
 	if got.Status.Phase != simplyblockv1alpha2.StorageNodeOpsPhaseAborted {
 		t.Errorf("phase = %q, want Aborted", got.Status.Phase)
 	}
-	if asked := api.asked("Resume"); asked != 1 {
-		t.Errorf("Resume was issued %d time(s), want the node put back into service", asked)
+	if asked := api.asked("Resume"); asked != 0 {
+		t.Errorf("Resume was issued %d time(s) for a removal that changed nothing", asked)
 	}
 	if !announcedReason(r, OperationAborted) {
 		t.Error("nothing announced the abort")
@@ -396,15 +395,14 @@ func TestARemovalRunsAgainstARebalancingCluster(t *testing.T) {
 	pass(t, r, "a-drain")
 
 	got := operationRead(t, apiClient, "a-drain")
-	if got.Status.Step.State != string(stepSuspending) {
+	if got.Status.Step.State != string(stepShuttingDown) {
 		t.Errorf("step = %q, want the drain past validation despite the rebalance",
 			got.Status.Step.State)
 	}
 }
 
 // A step that outlived its deadline fails the operation rather than retrying
-// forever, and the node is resumed where the step it failed on left it
-// suspended.
+// forever, and nothing resumes a node the removal has taken down.
 func TestAStepThatOutlivedItsDeadlineFailsTheOperation(t *testing.T) {
 	api := aControlPlane().reporting(nodeStatusSuspended)
 	ops := anAdvancingOperation("a-drain",
@@ -424,9 +422,8 @@ func TestAStepThatOutlivedItsDeadlineFailsTheOperation(t *testing.T) {
 	if !announcedReason(r, StepDeadlineExceeded) {
 		t.Error("nothing announced the expiry, so a failed operation looks like a slow one")
 	}
-	if asked := api.asked("Resume"); asked != 1 {
-		t.Errorf("Resume was issued %d time(s); a drain that failed past the suspend owes it",
-			asked)
+	if asked := api.asked("Resume"); asked != 0 {
+		t.Errorf("Resume was issued %d time(s) against a node the removal has taken down", asked)
 	}
 	if holder := lockHolder(t, apiClient); holder != "" {
 		t.Errorf("the node is still held by %q after the operation failed", holder)
@@ -478,11 +475,14 @@ func ctrlRequest(name string) ctrl.Request {
 }
 
 // Regression: 2026-10-02-remove-timeout-read-as-refusal: a removal failed while
-// the control plane was removing the node, and the unwind tried to resume it. A
-// failure once the removal has been asked for leaves the node to the control
-// plane.
+// the control plane was removing the node, and the unwind tried to resume it.
+// From prepare-removal on there is no way back, so no failure of a removal
+// resumes the node.
 func TestAFailureOnceTheRemovalWasAskedForResumesNothing(t *testing.T) {
-	for _, current := range []step{stepRemoving, stepAwaitingRemoval} {
+	for _, current := range []step{
+		stepShuttingDown, stepMigratingDevices, stepMigratingVolumes, stepVerifying,
+		stepRemoving, stepAwaitingRemoval,
+	} {
 		t.Run(string(current), func(t *testing.T) {
 			api := aControlPlane().reporting(nodeStatusMigratingDevices)
 			ops := anAdvancingOperation("a-drain",

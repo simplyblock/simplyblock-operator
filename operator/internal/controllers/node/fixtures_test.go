@@ -94,6 +94,11 @@ type scriptedControlPlane struct {
 	// restarts carries the parameters of each restart, because three actions
 	// issue one and they differ precisely in what they fill in.
 	restarts []RestartParams
+
+	// progress and verification are what the removal's progress read and its
+	// drain verification answer.
+	progress     RemovalProgress
+	verification DrainVerification
 }
 
 // aControlPlane reports one online node and nothing else.
@@ -205,6 +210,28 @@ func (c *scriptedControlPlane) RestartNode(
 
 func (c *scriptedControlPlane) Promote(_ context.Context, _, nodeID string) error {
 	return c.record("Promote", nodeID)
+}
+
+func (c *scriptedControlPlane) PrepareRemoval(_ context.Context, _, nodeID string) error {
+	return c.record("PrepareRemoval", nodeID)
+}
+
+func (c *scriptedControlPlane) RemovalProgress(
+	_ context.Context, _, nodeID string,
+) (RemovalProgress, error) {
+	if err := c.record("RemovalProgress", nodeID); err != nil {
+		return RemovalProgress{}, err
+	}
+	return c.progress, nil
+}
+
+func (c *scriptedControlPlane) VerifyDrained(
+	_ context.Context, _, nodeID string,
+) (DrainVerification, error) {
+	if err := c.record("VerifyDrained", nodeID); err != nil {
+		return DrainVerification{}, err
+	}
+	return c.verification, nil
 }
 
 func (c *scriptedControlPlane) RemoveNode(_ context.Context, _, nodeID string) error {

@@ -36,10 +36,23 @@ import (
 // A step that has not finished is waiting on the control plane, and the caller
 // requeues. An ordinary error is retried; a terminalStepError is not, and a
 // blockedStepError holds with an event.
+//
+// It dispatches on the action rather than on the step, because two actions can
+// share a step's name: Remove and HostMaintenance both run ShuttingDown, and
+// each means its own thing by it.
 func (r *StorageNodeOpsReconciler) perform(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, machine *statemachine.Machine[step],
 ) (bool, error) {
 	current := machine.CurrentState()
+	switch ops.Spec.Action {
+	case simplyblockv1alpha2.StorageNodeOpsActionRemove:
+		return r.performRemoveStep(ctx, ops, machine)
+	case simplyblockv1alpha2.StorageNodeOpsActionMigrate:
+		return r.performMigrateStep(ctx, ops, current)
+	case simplyblockv1alpha2.StorageNodeOpsActionHostMaintenance:
+		return r.performMaintenanceStep(ctx, ops, current)
+	}
+
 	switch current {
 	case stepRequesting:
 		return r.request(ctx, ops)
@@ -47,18 +60,6 @@ func (r *StorageNodeOpsReconciler) perform(
 		return r.awaitDeparture(ctx, ops)
 	case stepAwaiting:
 		return r.await(ctx, ops)
-
-	case stepValidating, stepSuspending, stepMigratingVolumes, stepVerifying, stepRemoving,
-		stepAwaitingRemoval:
-		return r.performRemoveStep(ctx, ops, machine)
-
-	case stepPreparing, stepRelocating, stepAwaitingNode, stepPromoting:
-		return r.performMigrateStep(ctx, ops, current)
-
-	case stepHolding, stepShuttingDown, stepReleasing, stepAwaitingHost,
-		stepRestarting, stepCleanup:
-		return r.performMaintenanceStep(ctx, ops, current)
-
 	default:
 		return false, fatalf("step %s belongs to no action this operator runs", current)
 	}

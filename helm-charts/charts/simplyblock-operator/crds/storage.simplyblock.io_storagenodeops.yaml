@@ -430,7 +430,7 @@ spec:
                   type: object
                   x-kubernetes-validations:
                     - message: unknown step
-                      rule: '!has(self.state) || self.state in [''Requesting'',''Departing'',''Awaiting'',''Validating'',''Suspending'',''MigratingVolumes'',''Verifying'',''Removing'',''AwaitingRemoval'',''Preparing'',''Relocating'',''AwaitingNode'',''Promoting'',''Holding'',''ShuttingDown'',''Releasing'',''AwaitingHost'',''Restarting'',''Cleanup'']'
+                      rule: '!has(self.state) || self.state in [''Requesting'',''Departing'',''Awaiting'',''Validating'',''MigratingDevices'',''MigratingVolumes'',''Verifying'',''Removing'',''AwaitingRemoval'',''Preparing'',''Relocating'',''AwaitingNode'',''Promoting'',''Holding'',''ShuttingDown'',''Releasing'',''AwaitingHost'',''Restarting'',''Cleanup'']'
               type: object
           type: object
       served: true

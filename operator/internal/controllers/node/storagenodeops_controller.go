@@ -353,7 +353,7 @@ func (r *StorageNodeOpsReconciler) advance(
 			WithLabelValues(r.clusterLabel(ctx, ops), string(ops.Spec.Action), string(current)).Inc()
 		r.emit(ctx, ops, corev1.EventTypeWarning, StepDeadlineExceeded,
 			fmt.Sprintf("Step %s outlived its deadline", current))
-		return r.fail(ctx, ops, current,
+		return r.fail(ctx, ops,
 			fmt.Sprintf("step %s outlived its deadline", current))
 	}
 
@@ -361,7 +361,7 @@ func (r *StorageNodeOpsReconciler) advance(
 	if err != nil {
 		var fatal *terminalStepError
 		if errors.As(err, &fatal) {
-			return r.fail(ctx, ops, current, fatal.Error())
+			return r.fail(ctx, ops, fatal.Error())
 		}
 		var blocked *blockedStepError
 		if errors.As(err, &blocked) {
@@ -389,7 +389,7 @@ func (r *StorageNodeOpsReconciler) advance(
 
 	next, err := r.nextStep(machine)
 	if err != nil {
-		return r.fail(ctx, ops, current, err.Error())
+		return r.fail(ctx, ops, err.Error())
 	}
 	return r.enterStep(ctx, ops, machine, next)
 }
@@ -478,12 +478,6 @@ func (r *StorageNodeOpsReconciler) unwind(
 				"and cannot be stopped; the operation is running on", current))
 	}
 
-	// Every terminal outcome from Suspending onward resumes the node first. A
-	// node past the suspend is not serving, and an operation that stopped there
-	// and left it that way would take capacity out of the cluster for as long as
-	// nobody noticed (§8.3).
-	r.resumeNode(ctx, ops, current)
-	r.abortMigrations(ctx, ops, current)
 	r.clearMaintenanceMarkers(ctx, ops)
 
 	r.emit(ctx, ops, corev1.EventTypeNormal, OperationAborted,
@@ -492,40 +486,14 @@ func (r *StorageNodeOpsReconciler) unwind(
 		fmt.Sprintf("aborted at step %s", current))
 }
 
-// fail ends the operation, resuming the node first where the step it failed on
-// left it suspended and taking down what a maintenance window holds a worker
-// with.
+// fail ends the operation, taking down what a maintenance window holds a worker
+// with. Nothing is resumed: a removal's only step before the point of no return
+// changes nothing, and every later one leaves the node to the control plane.
 func (r *StorageNodeOpsReconciler) fail(
-	ctx context.Context,
-	ops *simplyblockv1alpha2.StorageNodeOps,
-	current step,
-	message string,
+	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, message string,
 ) (ctrl.Result, error) {
-	r.resumeNode(ctx, ops, current)
 	r.clearMaintenanceMarkers(ctx, ops)
 	return r.finish(ctx, ops, simplyblockv1alpha2.StorageNodeOpsPhaseFailed, message)
-}
-
-// resumeNode is the unwind of §8.3, and it is best-effort on purpose.
-//
-// A resume that itself fails leaves the node suspended, which is visible in
-// status.status and in the NodeResumeFailed event. Retrying it forever would mean
-// an operation that can never reach a terminal phase and a lock that is never
-// released, and §16 Q3 is whether that is the right trade.
-func (r *StorageNodeOpsReconciler) resumeNode(
-	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, current step,
-) {
-	if !unwinds(current) {
-		return
-	}
-	clusterID, nodeID, err := r.target(ctx, ops)
-	if err != nil || nodeID == "" {
-		return
-	}
-	if err := r.API.Resume(ctx, clusterID, nodeID); err != nil {
-		r.emit(ctx, ops, corev1.EventTypeWarning, NodeResumeFailed, fmt.Sprintf(
-			"Node %s could not be resumed and is left suspended: %v", ops.Spec.NodeRef, err))
-	}
 }
 
 // waitOn requeues for whatever is left of the current step's deadline, so that a

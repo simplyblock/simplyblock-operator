@@ -1,12 +1,11 @@
 // Draining a node before it leaves.
 //
 // Removing a storage node destroys it, so every logical volume whose data lives
-// on it has to be somewhere else first. The five steps are ordered around that
-// one fact: validation runs before the suspend, because suspending a node whose
-// drain cannot complete takes capacity out of the cluster and leaves it out for
-// as long as the blocker goes unnoticed; verification runs after the migration,
-// because the census is the authority on what is left rather than the counter of
-// what moved; and the removal is the last step rather than the operation.
+// on it has to be somewhere else first. The steps are ordered around that one
+// fact. Validation runs before prepare-removal, because there is no way back from
+// it. Verification runs after the migration, because the census is the authority
+// on what is left rather than the counter of what moved. The removal is the last
+// step rather than the operation.
 //
 // design-storagenode.md §8.
 
@@ -89,7 +88,7 @@ func aDraining(
 // A pinned claim stops the drain where nothing has been done yet, and says which
 // annotation to remove from which volume. Blocking here rather than later is
 // what leaves the node fully operational while somebody decides.
-func TestAPinnedVolumeStopsTheDrainBeforeItSuspendsAnything(t *testing.T) {
+func TestAPinnedVolumeStopsTheDrainBeforeItTouchesTheNode(t *testing.T) {
 	api := aControlPlane().holding(onNode("volume-1", "pvc-abc"))
 	r, _ := aDraining(t, api, &scriptedMover{},
 		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", true))
@@ -103,8 +102,8 @@ func TestAPinnedVolumeStopsTheDrainBeforeItSuspendsAnything(t *testing.T) {
 	if blocked.reason != DrainBlocked {
 		t.Errorf("the hold is announced as %q, want %q", blocked.reason, DrainBlocked)
 	}
-	if asked := api.asked("Suspend"); asked != 0 {
-		t.Errorf("the node was suspended %d time(s) by a drain that cannot finish", asked)
+	if asked := api.asked("PrepareRemoval"); asked != 0 {
+		t.Errorf("prepare-removal was sent %d time(s) for a drain that cannot finish", asked)
 	}
 }
 
@@ -168,43 +167,175 @@ func TestAnIncompleteCensusIsRetriedRatherThanReportedAsABlocker(t *testing.T) {
 	}
 }
 
-// The suspend is skipped against a node already at or past where it would put
-// it, which is what makes re-entering the step after a lost response harmless.
-func TestTheSuspendIsSkippedWhenTheNodeIsAlreadyOutOfService(t *testing.T) {
-	for _, status := range []string{nodeStatusSuspended, nodeStatusOffline} {
+// Regression: 2026-10-02-removal-three-steps: the drain suspended the node and
+// left it serving, while the control plane's removal expects it shut down and
+// its devices rebuilt before the volumes move. The first step is prepare-removal,
+// which admits the node and shuts it down if it is still running, and the
+// operator issues no shutdown of its own.
+func TestShuttingDownAsksTheControlPlaneToPrepareTheRemoval(t *testing.T) {
+	for _, status := range []string{nodeStatusOnline, nodeStatusSuspended, nodeStatusOffline} {
 		t.Run(status, func(t *testing.T) {
 			api := aControlPlane().reporting(status)
 			r, _ := aDraining(t, api, &scriptedMover{})
 
-			done, err := performing(t, r, aDrain(), stepSuspending)
+			done, err := performing(t, r, aDrain(), stepShuttingDown)
 			if err != nil {
-				t.Fatalf("suspending: %v", err)
+				t.Fatalf("shutting down: %v", err)
 			}
 			if !done {
-				t.Errorf("the step did not finish against a node already %s", status)
+				t.Errorf("the step did not finish although prepare-removal was accepted for a node %s",
+					status)
 			}
-			if asked := api.asked("Suspend"); asked != 0 {
-				t.Errorf("Suspend was issued %d time(s) against a node already %s", asked, status)
+			if asked := api.asked("PrepareRemoval"); asked != 1 {
+				t.Errorf("PrepareRemoval was issued %d time(s) against a node %s, want once",
+					asked, status)
+			}
+			for _, call := range []string{"ShutdownNode", "Suspend"} {
+				if asked := api.asked(call); asked != 0 {
+					t.Errorf("%s was issued %d time(s); the control plane shuts the node down itself",
+						call, asked)
+				}
 			}
 		})
 	}
 }
 
-// An online node is suspended, and the step does not finish on the call: it
-// finishes when the control plane reports the node suspended.
-func TestAnOnlineNodeIsSuspendedAndWaitedFor(t *testing.T) {
-	api := aControlPlane()
+// Regression: 2026-10-02-removal-three-steps: a node already shutting down is
+// somebody else's shutdown, which prepare-removal refuses to run under, and a
+// node already admitted needs no second admission.
+func TestShuttingDownSendsNothingToANodeAlreadyOnItsWay(t *testing.T) {
+	for status, wantDone := range map[string]bool{
+		nodeStatusInShutdown:       false,
+		nodeStatusPendingRemoval:   true,
+		nodeStatusMigratingDevices: true,
+		nodeStatusMigratingLvols:   true,
+	} {
+		t.Run(status, func(t *testing.T) {
+			api := aControlPlane().reporting(status)
+			r, _ := aDraining(t, api, &scriptedMover{})
+
+			done, err := performing(t, r, aDrain(), stepShuttingDown)
+			if err != nil {
+				t.Fatalf("shutting down: %v", err)
+			}
+			if done != wantDone {
+				t.Errorf("done = %t against a node %s, want %t", done, status, wantDone)
+			}
+			if asked := api.asked("PrepareRemoval"); asked != 0 {
+				t.Errorf("PrepareRemoval was issued %d time(s) against a node %s, want none",
+					asked, status)
+			}
+		})
+	}
+}
+
+// Regression: 2026-10-02-removal-three-steps: a refused admission is the control
+// plane saying the cluster cannot lose this node, and it changed nothing.
+func TestARefusedPrepareRemovalEndsTheDrain(t *testing.T) {
+	api := aControlPlane().refusing("PrepareRemoval", &ControlPlaneError{
+		Status: http.StatusBadRequest, Body: `{"detail":"Can not remove node: FTT"}`,
+	})
 	r, _ := aDraining(t, api, &scriptedMover{})
 
-	done, err := performing(t, r, aDrain(), stepSuspending)
+	_, err := performing(t, r, aDrain(), stepShuttingDown)
+
+	var fatal *terminalStepError
+	if !errors.As(err, &fatal) {
+		t.Errorf("err = %v, want the terminal kind for a refused admission", err)
+	}
+}
+
+// Regression: 2026-10-02-removal-three-steps: prepare-removal shuts the node down
+// before it answers, which can outlast the client's timeout. No answer is not a
+// refusal, and the next pass reads the node.
+func TestAPrepareRemovalWithNoAnswerIsRetried(t *testing.T) {
+	api := aControlPlane().refusing("PrepareRemoval",
+		fmt.Errorf("http error: %w", context.DeadlineExceeded))
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	done, err := performing(t, r, aDrain(), stepShuttingDown)
+
+	var fatal *terminalStepError
+	if errors.As(err, &fatal) || done {
+		t.Errorf("done, err = %t, %v; want a retry for a call the control plane never answered",
+			done, err)
+	}
+}
+
+// Regression: 2026-10-02-removal-three-steps: the device rebuild is the control
+// plane's, and the step finishes when the control plane says it has.
+func TestMigratingDevicesFinishesWhenTheRebuildIsDone(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingLvols)
+	api.progress = RemovalProgress{Done: true, Total: 2, Completed: 2,
+		NodeStatus: nodeStatusMigratingLvols}
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	done, err := performing(t, r, aDrain(), stepMigratingDevices)
 	if err != nil {
-		t.Fatalf("suspending: %v", err)
+		t.Fatalf("migrating devices: %v", err)
+	}
+	if !done {
+		t.Error("the step did not finish although the control plane reports the rebuild done")
+	}
+}
+
+// Regression: 2026-10-02-removal-three-steps: a rebuild still running is waited
+// on, and prepare-removal is sent again, which the control plane treats as a
+// no-op while the rebuild runs and as a restart of it when it has stopped.
+func TestMigratingDevicesWaitsAndKeepsTheRebuildRunning(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingDevices)
+	api.progress = RemovalProgress{Total: 2, Completed: 1, NodeStatus: nodeStatusMigratingDevices}
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	done, err := performing(t, r, aDrain(), stepMigratingDevices)
+	if err != nil {
+		t.Fatalf("migrating devices: %v", err)
 	}
 	if done {
-		t.Error("the step finished on the call rather than on the node reporting suspended")
+		t.Error("the step finished while the rebuild is still running")
 	}
-	if asked := api.asked("Suspend"); asked != 1 {
-		t.Errorf("Suspend was issued %d time(s), want once", asked)
+	if asked := api.asked("PrepareRemoval"); asked != 1 {
+		t.Errorf("PrepareRemoval was issued %d time(s), want once to keep the rebuild running", asked)
+	}
+}
+
+// Regression: 2026-10-02-removal-three-steps: the node is still on its way down,
+// and prepare-removal refuses to start the rebuild under a running shutdown.
+func TestMigratingDevicesSendsNothingWhileTheNodeShutsDown(t *testing.T) {
+	for _, status := range []string{nodeStatusPendingRemoval, nodeStatusInShutdown} {
+		t.Run(status, func(t *testing.T) {
+			api := aControlPlane().reporting(status)
+			api.progress = RemovalProgress{Total: 2, NodeStatus: status}
+			r, _ := aDraining(t, api, &scriptedMover{})
+
+			done, err := performing(t, r, aDrain(), stepMigratingDevices)
+			if err != nil {
+				t.Fatalf("migrating devices: %v", err)
+			}
+			if done {
+				t.Errorf("the step finished against a node %s", status)
+			}
+			if asked := api.asked("PrepareRemoval"); asked != 0 {
+				t.Errorf("PrepareRemoval was issued %d time(s) against a node %s, want none",
+					asked, status)
+			}
+		})
+	}
+}
+
+// Regression: 2026-10-02-removal-three-steps: a rebuild the control plane gave
+// up on is reported as a failure, and waiting longer cannot change it.
+func TestMigratingDevicesFailsWhenTheRebuildGivesUp(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingDevices)
+	api.progress = RemovalProgress{Total: 2, Completed: 1, Failed: 1,
+		Message: "device 2 stalled", NodeStatus: nodeStatusMigratingDevices}
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	_, err := performing(t, r, aDrain(), stepMigratingDevices)
+
+	var fatal *terminalStepError
+	if !errors.As(err, &fatal) {
+		t.Errorf("err = %v, want the terminal kind for a rebuild the control plane gave up on", err)
 	}
 }
 

@@ -61,6 +61,12 @@ var undeletableNodeSteps = map[simplyblockv1alpha2.StorageNodeOpsStep]string{
 		"restart and is carrying it out whether or not this record exists",
 	simplyblockv1alpha2.StorageNodeOpsStepAwaiting: "the control plane is carrying out the " +
 		"action, and it is doing so whether or not this record exists",
+	simplyblockv1alpha2.StorageNodeOpsStepMigratingDevices: "the control plane is rebuilding the " +
+		"node's devices onto its peers, and there is no way back from the removal",
+	simplyblockv1alpha2.StorageNodeOpsStepMigratingVolumes: "the node is shut down and its " +
+		"volumes are moving off it, and there is no way back from the removal",
+	simplyblockv1alpha2.StorageNodeOpsStepVerifying: "the node is shut down and being " +
+		"emptied, and there is no way back from the removal",
 	simplyblockv1alpha2.StorageNodeOpsStepRemoving: "the node is being taken out of the cluster",
 	simplyblockv1alpha2.StorageNodeOpsStepAwaitingRemoval: "the control plane is taking the " +
 		"node apart, and this operation is the only thing watching the removal finish",
@@ -71,8 +77,8 @@ var undeletableNodeSteps = map[simplyblockv1alpha2.StorageNodeOpsStep]string{
 	simplyblockv1alpha2.StorageNodeOpsStepPromoting: "the promote has activated the target " +
 		"host's devices, failed the origin's, and re-homed the logical volumes, so the topology " +
 		"re-point is all that is left and this record is what carries it",
-	simplyblockv1alpha2.StorageNodeOpsStepShuttingDown: "the node is being taken down for host " +
-		"maintenance",
+	simplyblockv1alpha2.StorageNodeOpsStepShuttingDown: "the node is being taken down, for host " +
+		"maintenance or for its removal",
 	simplyblockv1alpha2.StorageNodeOpsStepReleasing: "the host is being handed over for " +
 		"maintenance",
 	simplyblockv1alpha2.StorageNodeOpsStepAwaitingHost: "the host is away, and this operation " +

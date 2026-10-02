@@ -91,7 +91,9 @@ var storageNodeOpsActionFromHub = invertStringMap(storageNodeOpsActionToHub)
 var subPhaseToStep = map[v1alpha2.StorageNodeOpsAction]map[string]string{
 	v1alpha2.StorageNodeOpsActionRemove: {
 		string(StorageNodeOpsSubPhaseValidating): string(v1alpha2.StorageNodeOpsStepValidating),
-		string(StorageNodeOpsSubPhaseSuspending): string(v1alpha2.StorageNodeOpsStepSuspending),
+		// This version suspended the node here. The hub's next step is
+		// ShuttingDown, which sends prepare-removal and accepts a suspended node.
+		string(StorageNodeOpsSubPhaseSuspending): string(v1alpha2.StorageNodeOpsStepShuttingDown),
 		string(StorageNodeOpsSubPhaseMigrating):  string(v1alpha2.StorageNodeOpsStepMigratingVolumes),
 		string(StorageNodeOpsSubPhaseVerifying):  string(v1alpha2.StorageNodeOpsStepVerifying),
 		string(StorageNodeOpsSubPhaseRemoving):   string(v1alpha2.StorageNodeOpsStepRemoving),
@@ -110,15 +112,16 @@ var subPhaseToStep = map[v1alpha2.StorageNodeOpsAction]map[string]string{
 // accepts, so that a v1alpha1 reader sees where the operation is rather than an
 // empty field.
 //
-// It is not the inverse of subPhaseToStep and cannot be. Four of the hub's steps
-// have no v1alpha1 spelling at all: Requesting and Awaiting, because the four
-// single-step actions never had a sub-phase here, and Relocating and AwaitingNode,
-// which are the two halves this version wrote as one Restarting. Every step of
-// HostMaintenance is likewise absent, since the action is. Those read as an empty
-// sub-phase, and the stash carries the real step.
+// It is not the inverse of subPhaseToStep and cannot be. Several of the hub's
+// steps have no v1alpha1 spelling at all. Requesting and Awaiting have none
+// because the four single-step actions never had a sub-phase here. Relocating and
+// AwaitingNode are the two halves this version wrote as one Restarting.
+// ShuttingDown, MigratingDevices, and AwaitingRemoval are removal steps this
+// version does not have. Every step of HostMaintenance is likewise absent, since
+// the action is. Those read as an empty sub-phase, and the stash carries the real
+// step.
 var stepToSubPhase = map[string]StorageNodeOpsSubPhase{
 	string(v1alpha2.StorageNodeOpsStepValidating):       StorageNodeOpsSubPhaseValidating,
-	string(v1alpha2.StorageNodeOpsStepSuspending):       StorageNodeOpsSubPhaseSuspending,
 	string(v1alpha2.StorageNodeOpsStepMigratingVolumes): StorageNodeOpsSubPhaseMigrating,
 	string(v1alpha2.StorageNodeOpsStepVerifying):        StorageNodeOpsSubPhaseVerifying,
 	string(v1alpha2.StorageNodeOpsStepRemoving):         StorageNodeOpsSubPhaseRemoving,
