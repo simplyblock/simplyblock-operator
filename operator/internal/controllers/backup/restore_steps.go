@@ -176,13 +176,25 @@ func (r *StorageBackupOpsReconciler) startRestore(
 			"A volume this operation had already asked for was adopted rather than restored again")
 	}
 
-	lvolID, err := r.API.RestoreBackup(ctx, ops.Status.ClusterID, controlplane.RestoreBackupParams{
-		BackupID: ops.Status.BackupID,
-		LvolName: restoredVolumeName(ops),
-		Pool:     ops.Spec.Restore.TargetPool,
+	// The lookup above finds a volume only once the control plane lists it,
+	// which is some time after it accepted the restore. The claim is what stops
+	// a pass that read the operation before the previous one recorded its
+	// volume from asking for a second one in that window.
+	var lvolID string
+	claimed, err := r.once(ctx, ops, func() error {
+		var err error
+		lvolID, err = r.API.RestoreBackup(ctx, ops.Status.ClusterID, controlplane.RestoreBackupParams{
+			BackupID: ops.Status.BackupID,
+			LvolName: restoredVolumeName(ops),
+			Pool:     ops.Spec.Restore.TargetPool,
+		})
+		if err != nil {
+			return fmt.Errorf("ask the control plane to restore backup %s: %w", ops.Status.BackupID, err)
+		}
+		return nil
 	})
-	if err != nil {
-		return false, fmt.Errorf("ask the control plane to restore backup %s: %w", ops.Status.BackupID, err)
+	if err != nil || !claimed {
+		return false, err
 	}
 
 	return true, r.recordRestoredVolume(ctx, ops, lvolID,
