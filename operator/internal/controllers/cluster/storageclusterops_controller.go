@@ -51,6 +51,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 const (
@@ -89,11 +90,12 @@ const (
 	// claimLease is how long a step's claimed call is trusted to be in flight
 	// before another pass may make it again. The pass that made the call
 	// records the next step straight afterward, so the lease only runs out
-	// when that pass crashed or its write failed. It is longer than opsRetry,
-	// so a call that failed is not repeated by the very next retry, and well
-	// inside requestingDeadline, so a crashed claim is retried before the step
-	// times out.
-	claimLease = 30 * time.Second
+	// when that pass crashed or its write failed. The lease starts before the
+	// call does, so it runs a minute past the request timeout: a call that
+	// waited the whole timeout has an outcome nobody knows yet, and Expand has
+	// no state of the cluster to skip on. It stays inside requestingDeadline,
+	// so a crashed claim is retried before the step times out.
+	claimLease = webapi.RequestTimeout + time.Minute
 
 	// clusterRefField is the index a cluster event is mapped back through. It
 	// is what makes a released lock wake the queue immediately rather than

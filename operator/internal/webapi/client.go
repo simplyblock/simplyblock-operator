@@ -17,7 +17,7 @@ var ServiceAccountTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/tok
 type Client struct {
 	BaseURL    string
 	HttpClient *http.Client
-	// initErr captures any setup error (e.g. failure to load the TLS CA
+	// initErr captures any setup error (for example, failure to load the TLS CA
 	// bundle when TLS is enabled). It is surfaced from request methods so
 	// callers see a real error instead of silently dropping back to a
 	// non-functional client.
@@ -50,15 +50,25 @@ func cachedTLSClient() (*http.Client, error) {
 			keyPath = tlsutil.ServiceClientKeyPath
 		}
 		tlsClient, tlsClientErr = tlsutil.BuildWebAPIClient(ns, tlsutil.ServiceCABundlePath, certPath, keyPath)
+		if tlsClientErr == nil {
+			// Both transports wait as long, so a step's claim lease measured
+			// against RequestTimeout covers a call made over either.
+			tlsClient.Timeout = RequestTimeout
+		}
 	})
 	return tlsClient, tlsClientErr
 }
+
+// RequestTimeout bounds one request to the control plane. A claim's lease on a
+// step is measured against it: a lease no longer than this can expire while
+// the call it covers is still waiting for an answer.
+const RequestTimeout = 30 * time.Second
 
 func NewClient(baseURL ...string) *Client {
 	tlsEnabled := os.Getenv("SB_TLS_SERVE") == "1"
 
 	defaultURL := "http://simplyblock-webappapi:5000"
-	httpClient := &http.Client{Timeout: 30 * time.Second}
+	httpClient := &http.Client{Timeout: RequestTimeout}
 	var initErr error
 
 	if tlsEnabled {
