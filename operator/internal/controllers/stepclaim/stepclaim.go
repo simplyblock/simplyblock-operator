@@ -11,6 +11,8 @@ package stepclaim
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"reflect"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -49,7 +51,35 @@ func Writer(
 			client.MergeFromWithOptions(read, client.MergeFromWithOptimisticLock{}))
 		if err != nil {
 			reflect.ValueOf(obj).Elem().Set(reflect.ValueOf(read).Elem())
+			return err
 		}
-		return err
+		// obj is now what the API server answered with. A schema that predates
+		// the claim prunes it and accepts the rest of the patch, and a claim
+		// that was not stored is no claim: firing on it would leave nothing to
+		// stop the next pass firing again.
+		if !stored(*step, claimed) {
+			return fmt.Errorf("%w: %s %s", ErrClaimNotStored,
+				reflect.TypeOf(obj).Elem().Name(), client.ObjectKeyFromObject(obj))
+		}
+		return nil
 	}
+}
+
+// ErrClaimNotStored is a claim the API server accepted the patch for and did
+// not keep, which is what a CRD installed before the claim field does. The
+// step's call is not made until the CRDs are upgraded.
+var ErrClaimNotStored = errors.New(
+	"the API server did not store the step's claim; the installed CRD predates it, " +
+		"and the call is held until the CRDs are upgraded")
+
+// stored reports whether the snapshot the API server answered with carries the
+// claim that was written. The lease is compared in whole seconds, because that
+// is the precision a status timestamp is stored at.
+func stored(answered, claimed statemachine.KubeSnapshot) bool {
+	got, want := answered.Claim, claimed.Claim
+	if got == nil || want == nil {
+		return got == want
+	}
+	return got.State == want.State && got.Attempt == want.Attempt &&
+		got.LeaseUntil.Unix() == want.LeaseUntil.Unix()
 }
