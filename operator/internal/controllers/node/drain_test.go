@@ -26,6 +26,7 @@ import (
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 // scriptedMover is the fan-out as a drain sees it: whatever moves the test says
@@ -407,6 +408,66 @@ func TestMigratingDevicesFailsWhenTheRebuildGivesUp(t *testing.T) {
 	var fatal *terminalStepError
 	if !errors.As(err, &fatal) {
 		t.Errorf("err = %v, want the terminal kind for a rebuild the control plane gave up on", err)
+	}
+}
+
+// replicatedOn is a volume on the node under operation whose replicas the control
+// plane reports on the given nodes as well, written as the control plane's URLs.
+func replicatedOn(uuid, name string, replicas ...string) webapi.VolumeInfo {
+	volume := onNode(uuid, name)
+	for _, node := range append([]string{opsNodeID}, replicas...) {
+		volume.Nodes = append(volume.Nodes,
+			"https://cp/api/v2/clusters/"+opsClusterID+"/storage-nodes/"+node+"/")
+	}
+	return volume
+}
+
+// Regression: 2026-10-02-migration-target-is-secondary: on ocp-simplyblock-ai the
+// drain chose worker-0 for LVOL_19, which was the volume's own secondary. The
+// control plane refused it with a 409 for as long as the drain retried, because
+// the peer chosen was the lowest UUID online with no regard to where the
+// volume's replicas are. A volume is never moved onto a node already holding
+// one of its replicas.
+func TestAVolumeIsNotMovedOntoItsOwnReplica(t *testing.T) {
+	api := aControlPlane().
+		withPeer(opsPeerID, nodeStatusOnline).
+		withPeer("node-3333", nodeStatusOnline).
+		holding(replicatedOn("volume-1", "pvc-abc", opsPeerID))
+	mover := &scriptedMover{}
+	r, _ := aDraining(t, api, mover,
+		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false))
+
+	if _, err := performing(t, r, aDrain(), stepMigratingVolumes); err != nil {
+		t.Fatalf("migrating: %v", err)
+	}
+	if len(mover.started) != 1 {
+		t.Fatalf("%d moves were raised for one movable volume", len(mover.started))
+	}
+	if target := mover.started[0].TargetNodeUUID; target != "node-3333" {
+		t.Errorf("the volume is being moved to %q, want node-3333, the one peer holding "+
+			"none of its replicas", target)
+	}
+}
+
+// Regression: 2026-10-02-migration-target-is-secondary: a volume whose replicas
+// cover every online peer has nowhere to go, which holds the drain as having no
+// target rather than raising a move the control plane refuses.
+func TestAVolumeWhoseReplicasCoverEveryPeerHolds(t *testing.T) {
+	api := aControlPlane().
+		withPeer(opsPeerID, nodeStatusOnline).
+		holding(replicatedOn("volume-1", "pvc-abc", opsPeerID))
+	mover := &scriptedMover{}
+	r, _ := aDraining(t, api, mover,
+		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false))
+
+	_, err := performing(t, r, aDrain(), stepMigratingVolumes)
+
+	var blocked *blockedStepError
+	if !errors.As(err, &blocked) || blocked.reason != NoMigrationTarget {
+		t.Errorf("err = %v, want the drain held for having no target", err)
+	}
+	if len(mover.started) != 0 {
+		t.Errorf("%d moves were raised onto the volume's own replica", len(mover.started))
 	}
 }
 

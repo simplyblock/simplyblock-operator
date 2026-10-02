@@ -1708,11 +1708,16 @@ budget, because the control plane can fail the shutdown without saying so. The
 attempts are counted in `status.removal.prepareAttempts` before each is sent, and
 after three the operation fails with the control plane's message.
 
-**Migration targets are chosen round-robin over the online peers**, which spreads
-the drained node's volumes rather than concentrating them on whichever peer sorts
-first. A drain with no online peer to move to is a stall, not a failure, and emits
-`NoMigrationTarget`: the condition is resolved by another node coming back, and
-failing the operation would only mean starting it again afterward.
+**Migration targets are chosen round-robin over the online peers that hold none
+of the volume's replicas.** The control plane lists a volume's replica nodes, and
+a node already holding one is never a target: the control plane refuses the
+move, and while the volume's primary is shut down for its removal that replica is
+what serves the volume. Round-robin over the rest spreads the drained node's
+volumes rather than concentrating them on whichever peer sorts first. A drain
+with no online peer to move to, or a volume whose replicas cover every online
+peer, is a stall, not a failure, and emits `NoMigrationTarget`: the condition is
+resolved by another node coming back, and failing the operation would only mean
+starting it again afterward.
 
 **`Verifying` closes on the control plane's word.** The census walks the pools
 for volumes and does not see snapshots, and the node DELETE refuses a node that

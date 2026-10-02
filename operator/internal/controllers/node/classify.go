@@ -13,7 +13,9 @@ package node
 import (
 	"context"
 	"fmt"
+	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -76,6 +78,11 @@ type volumeCensus struct {
 type managedVolume struct {
 	VolumeUUID string
 	PVName     string
+
+	// ReplicaNodes are the nodes holding the volume's replicas, the node being
+	// drained included. None of them is a target: the control plane refuses a
+	// move onto a node already holding a replica of the volume.
+	ReplicaNodes []string
 }
 
 // systemVolume is one benchmark volume, carried with its pool because deleting a
@@ -157,7 +164,7 @@ func (r *StorageNodeOpsReconciler) sortVolume(
 	// lives on the claim. It is movable.
 	if pv.Spec.ClaimRef == nil {
 		census.Managed = append(census.Managed,
-			managedVolume{VolumeUUID: volume.UUID, PVName: pv.Name})
+			managedVolume{VolumeUUID: volume.UUID, PVName: pv.Name, ReplicaNodes: replicaNodes(volume)})
 		return
 	}
 
@@ -183,7 +190,7 @@ func (r *StorageNodeOpsReconciler) sortVolume(
 		return
 	}
 	census.Managed = append(census.Managed,
-		managedVolume{VolumeUUID: volume.UUID, PVName: pv.Name})
+		managedVolume{VolumeUUID: volume.UUID, PVName: pv.Name, ReplicaNodes: replicaNodes(volume)})
 }
 
 // persistentVolumesByVolumeUUID indexes every simplyblock PersistentVolume in the
@@ -242,18 +249,35 @@ func systemVolumeFilter(ops *simplyblockv1alpha2.StorageNodeOps) (*regexp.Regexp
 // applied at creation should replace it.
 const defaultSystemVolumePattern = `^sb-fio-baseline-.*`
 
-// peerTargets assigns each movable volume an online peer to move to, round-robin.
+// replicaNodes reads the UUIDs of the nodes holding a volume's replicas out of the
+// control plane's list, which names each node by its URL. The UUID is the URL's
+// last path segment.
+func replicaNodes(volume webapi.VolumeInfo) []string {
+	nodes := make([]string, 0, len(volume.Nodes))
+	for _, url := range volume.Nodes {
+		if id := path.Base(strings.TrimRight(url, "/")); id != "" && id != "." && id != "/" {
+			nodes = append(nodes, id)
+		}
+	}
+	return nodes
+}
+
+// peerTargets assigns each movable volume an online peer to move to, round-robin
+// over the peers that hold none of the volume's replicas.
 //
-// Round-robin spreads the drained node's volumes rather than concentrating them on
-// whichever peer sorts first. The order is the peers' own UUIDs sorted, so the
-// assignment is stable across passes: a volume that was assigned to one peer and
-// whose migration then failed is reassigned by the caller deliberately rather than
-// by the list having reshuffled.
+// A node already holding one of the volume's replicas is never a target: the
+// control plane refuses the move, and while the volume's primary is shut down
+// for its removal that replica is what serves it. Round-robin over the rest
+// spreads the drained node's volumes rather than concentrating them on whichever
+// peer sorts first. The order is the peers' own UUIDs sorted, so the assignment
+// is stable across passes: a volume that was assigned to one peer and whose
+// migration then failed is reassigned by the caller deliberately rather than by
+// the list having reshuffled.
 //
-// A drain with no online peer is a stall rather than a failure, which is why this
-// reports a blockedStepError: the condition is resolved by another node coming
-// back, and failing the operation would only mean starting it again afterward
-// (§8.2).
+// A drain with no online peer, or a volume whose replicas cover every online
+// peer, is a stall rather than a failure, which is why this reports a
+// blockedStepError: the condition is resolved by another node coming back, and
+// failing the operation would only mean starting it again afterward (§8.2).
 func (r *StorageNodeOpsReconciler) peerTargets(
 	ctx context.Context, clusterID, nodeID string, volumes []managedVolume,
 ) (map[string]string, error) {
@@ -276,8 +300,26 @@ func (r *StorageNodeOpsReconciler) peerTargets(
 	sort.Strings(peers)
 
 	targets := make(map[string]string, len(volumes))
-	for i, volume := range volumes {
-		targets[volume.PVName] = peers[i%len(peers)]
+	var stranded []string
+	next := 0
+	for _, volume := range volumes {
+		eligible := make([]string, 0, len(peers))
+		for _, peer := range peers {
+			if !slices.Contains(volume.ReplicaNodes, peer) {
+				eligible = append(eligible, peer)
+			}
+		}
+		if len(eligible) == 0 {
+			stranded = append(stranded, volume.PVName)
+			continue
+		}
+		targets[volume.PVName] = eligible[next%len(eligible)]
+		next++
+	}
+	if len(stranded) > 0 {
+		return nil, blockedf(NoMigrationTarget,
+			"no online peer holds none of the replicas of %s; the drain resumes when one returns",
+			strings.Join(stranded, ", "))
 	}
 	return targets, nil
 }
