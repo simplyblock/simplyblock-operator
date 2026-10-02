@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"k8s.io/client-go/tools/events"
@@ -754,5 +755,25 @@ func TestAwaitingRemovalFailsWhenTheControlPlaneGivesUp(t *testing.T) {
 	var fatal *terminalStepError
 	if !errors.As(err, &fatal) {
 		t.Errorf("err = %v, want the terminal kind for a removal the control plane gave up on", err)
+	}
+}
+
+// Regression: 2026-10-02-removal-three-steps: the census walks the pools for
+// volumes, and a snapshot is not one of them, so a node that still held a
+// snapshot passed verification and the DELETE refused it. The control plane's
+// verify-drained sees both, and the step finishes only when it says drained.
+func TestVerifyingHoldsWhileTheControlPlaneSeesSomethingLeft(t *testing.T) {
+	api := aControlPlane()
+	api.verification = DrainVerification{Snapshots: []string{"snap-1"}}
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	done, err := performing(t, r, aDrain(), stepVerifying)
+
+	var blocked *blockedStepError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("done, err = %t, %v; want the step held while the node holds a snapshot", done, err)
+	}
+	if !strings.Contains(blocked.message, "snap-1") {
+		t.Errorf("the hold says %q, want it to name what is left", blocked.message)
 	}
 }

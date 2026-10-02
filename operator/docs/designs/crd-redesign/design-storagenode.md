@@ -1660,7 +1660,7 @@ closes that half; the node DELETE takes the node apart.
 | `ShuttingDown`     | `POST /storage-nodes/{node}/prepare-removal`, skipped if the node is `in_shutdown` or already admitted           | The call returns 202, or the node reports `pending_removal` or later    |
 | `MigratingDevices` | `POST /storage-nodes/{node}/prepare-removal` again, skipped while the node is `pending_removal` or `in_shutdown` | `GET /storage-nodes/{node}/prepare-removal` reports `done`              |
 | `MigratingVolumes` | One `PersistentVolumeOps` per PV-managed volume, to peers chosen round-robin                                     | Every migration is `Succeeded`                                          |
-| `Verifying`        | Deletes any remaining system volumes                                                                             | The node reports no volumes at all                                      |
+| `Verifying`        | Deletes any remaining system volumes, then `POST /storage-nodes/{node}/verify-drained`                           | The node reports no volumes, and `verify-drained` reports it drained    |
 | `Removing`         | `DELETE /storage-nodes/{node}?force_remove=false`, skipped if the node is in a removal status or `in_shutdown`   | The call returns 200, 204, or 404, or the node reports a removal status |
 | `AwaitingRemoval`  | None                                                                                                             | The node reports `removed`, or 404                                      |
 
@@ -1691,6 +1691,11 @@ the drained node's volumes rather than concentrating them on whichever peer sort
 first. A drain with no online peer to move to is a stall, not a failure, and emits
 `NoMigrationTarget`: the condition is resolved by another node coming back, and
 failing the operation would only mean starting it again afterward.
+
+**`Verifying` closes on the control plane's word.** The census walks the pools
+for volumes and does not see snapshots, and the node DELETE refuses a node that
+still holds either, so the step finishes only when `verify-drained` reports the
+node drained, and holds naming what is left otherwise.
 
 **`Verifying` deletes system volumes rather than migrating them.** They are
 per-node benchmark artifacts, so moving one to a peer would produce a benchmark
@@ -1742,6 +1747,7 @@ operation can be deleted while it runs.
 | No online peer to migrate to      | `MigratingVolumes` | Hold, emit, requeue                             |
 | A `PersistentVolumeOps` failed    | `MigratingVolumes` | Delete it and retry with a fresh target         |
 | Non-system volumes remain         | `Verifying`        | Hold, emit, requeue                             |
+| `verify-drained` sees something   | `Verifying`        | Hold, emit, requeue, naming what is left        |
 | A system volume cannot be deleted | `Verifying`        | `Failed`                                        |
 | The removal call was rejected     | `Removing`         | `Failed`                                        |
 | The removal call got no answer    | `Removing`         | Retry, reading the node first                   |
@@ -2037,6 +2043,7 @@ block node operations directly is §16, Q5.
 | `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/resume`             | Used by `Resume`                                                                                 |
 | `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/prepare-removal`    | The removal's first step: admits, shuts down a running node, rebuilds its devices (§8.2)         |
 | `GET`    | `/api/v2/clusters/{cluster}/storage-nodes/{node}/prepare-removal`    | The device rebuild's progress, read by `MigratingDevices`                                        |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/verify-drained`     | Whether the node still holds a volume or a snapshot, which closes `Verifying` (§8.2)             |
 | `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/shutdown`           | Used by `Shutdown` and by `HostMaintenance`                                                      |
 | `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/restart`            | Takes `node_address`, `force`, `reattach_volume`, and `new_ssd_pcie`. Used by three actions      |
 | `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/promote`            | The migration's last control-plane call, and the one that cannot be undone (§9)                  |

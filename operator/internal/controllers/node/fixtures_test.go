@@ -109,6 +109,9 @@ func aControlPlane() *scriptedControlPlane {
 		},
 		volumes: map[string][]webapi.VolumeInfo{},
 		refuse:  map[string]error{},
+		// A node the census finds empty is one the control plane agrees is
+		// drained, unless a test says otherwise.
+		verification: DrainVerification{Drained: true},
 	}
 }
 

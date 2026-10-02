@@ -35,6 +35,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -379,7 +380,8 @@ func (r *StorageNodeOpsReconciler) recordDrainProgress(
 }
 
 // drainVerify deletes the system volumes the migration skipped and completes when
-// the node reports no volumes at all.
+// the node reports no volumes at all and the control plane's verify-drained
+// agrees, which also covers snapshots.
 //
 // They are deleted rather than migrated because they are per-node benchmark
 // artifacts: moving one to a peer would produce a benchmark volume measuring the
@@ -427,7 +429,26 @@ func (r *StorageNodeOpsReconciler) drainVerify(
 	// deletion is asynchronous, so the node is not empty until a later pass says
 	// so. Reporting unfinished is what makes the next pass re-read rather than
 	// trust this one's arithmetic.
-	return len(census.System) == 0, nil
+	if len(census.System) > 0 {
+		return false, nil
+	}
+
+	// The census walks the pools for volumes and sees no snapshots, and the
+	// node DELETE refuses a node that still holds either. verify-drained is the
+	// control plane's own answer over both, so it is the one that closes the
+	// step.
+	verification, err := r.API.VerifyDrained(ctx, clusterID, nodeID)
+	if err != nil {
+		return false, fmt.Errorf("verify that node %s is drained: %w", ops.Spec.NodeRef, err)
+	}
+	if !verification.Drained {
+		left := append(slices.Clone(verification.Lvols), verification.Snapshots...)
+		return false, blockedf(DrainBlocked,
+			"the control plane still sees %d %s on the node (%s); the removal is held",
+			len(left), plural(len(left), "volume or snapshot", "volumes or snapshots"),
+			strings.Join(left, ", "))
+	}
+	return true, nil
 }
 
 // drainRemove deletes the backend node. A 404 is success, since a node the control
