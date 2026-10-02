@@ -23,7 +23,9 @@ import (
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 // lagged is a reconciler for the operation behind a client that can answer from
@@ -142,5 +144,93 @@ func TestThePassThatClaimedTheStepRecordsTheNextOneBeforeItsCacheSeesTheClaim(t 
 	}
 	if api.activateCalls != 1 {
 		t.Errorf("the control plane was asked to activate %d times, want 1", api.activateCalls)
+	}
+}
+
+// The same read against the calls a pass makes and then waits on in the same
+// step: a cancel the control plane has not finished, and a rolling restart's
+// node that has not moved yet. Each is driven fresh until its call is made, and
+// the pass after that reads the operation from before it.
+func TestAPassReadingTheStepBeforeAWaitedOnCallDoesNotCallAgain(t *testing.T) {
+	cancelTask := func(o *simplyblockv1alpha2.StorageClusterOps) {
+		o.Spec.CancelTask = &simplyblockv1alpha2.CancelTaskSpec{TaskID: "task-1"}
+	}
+	stillRunning := func(string) ([]subscriptions.TaskDTO, error) {
+		return []subscriptions.TaskDTO{{ID: "task-1", Type: "balancing_on_restart", Status: "running"}}, nil
+	}
+	// A fleet whose shutdown lands and whose restart has not been published.
+	stuckRestart := func() *fakeControlPlane {
+		fleet := newRollingFleet(nodeA)
+		api := rollingAPI(fleet)
+		api.restartNode = func(string, string) error { return nil }
+		return api
+	}
+	// A fleet whose shutdown has not been published.
+	stuckShutdown := func() *fakeControlPlane {
+		api := rollingAPI(newRollingFleet(nodeA))
+		api.shutdownNode = func(string, string) error { return nil }
+		return api
+	}
+
+	cases := []struct {
+		name   string
+		action simplyblockv1alpha2.StorageClusterOpsAction
+		mutate func(*simplyblockv1alpha2.StorageClusterOps)
+		api    func() *fakeControlPlane
+		calls  func(*fakeControlPlane) int
+	}{
+		{"CancelTask", simplyblockv1alpha2.StorageClusterOpsActionCancelTask, cancelTask,
+			func() *fakeControlPlane {
+				return &fakeControlPlane{
+					cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+					tasks:   stillRunning,
+				}
+			},
+			func(f *fakeControlPlane) int { return f.cancelTaskCalls }},
+		{"RollingRestart shutting a node down", simplyblockv1alpha2.StorageClusterOpsActionRollingRestart,
+			nil, stuckShutdown, func(f *fakeControlPlane) int { return f.shutdownNodeCalls }},
+		{"RollingRestart restarting a node", simplyblockv1alpha2.StorageClusterOpsActionRollingRestart,
+			nil, stuckRestart, func(f *fakeControlPlane) int { return f.restartNodeCalls }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			api := tc.api()
+			var mutate []func(*simplyblockv1alpha2.StorageClusterOps)
+			if tc.mutate != nil {
+				mutate = append(mutate, tc.mutate)
+			}
+			r := newOpsReconciler(t, api, &recorder{}, newTestCluster(), newTestOps(tc.action, mutate...))
+			cache := &testsupport.LaggingClient{Client: r.Client}
+			r.Client = cache
+
+			key := types.NamespacedName{Namespace: testNamespace, Name: testOpsName}
+			var before simplyblockv1alpha2.StorageClusterOps
+			for range 12 {
+				if err := r.Get(ctx, key, &before); err != nil {
+					t.Fatalf("read the operation: %v", err)
+				}
+				if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+					t.Fatalf("pass: %v", err)
+				}
+				if tc.calls(api) > 0 {
+					break
+				}
+			}
+			if got := tc.calls(api); got != 1 {
+				t.Fatalf("the call was made %d times on the way to it, want 1", got)
+			}
+
+			cache.Lag(&before, 1)
+			if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+				t.Fatalf("second pass: %v", err)
+			}
+			cache.CatchUp()
+
+			if got := tc.calls(api); got != 1 {
+				t.Errorf("the call was made %d times, want 1: the second pass read the step "+
+					"from before the first one made it", got)
+			}
+		})
 	}
 }

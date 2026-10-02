@@ -176,10 +176,12 @@ func (r *StorageClusterOpsReconciler) requestCancel(
 	if !running {
 		return true, nil
 	}
-	if err := r.API.CancelTask(ctx, clusterID, taskID); err != nil {
-		return false, fmt.Errorf("cancel task %s: %w", taskID, err)
-	}
-	return true, nil
+	return r.once(ctx, ops, func() error {
+		if err := r.API.CancelTask(ctx, clusterID, taskID); err != nil {
+			return fmt.Errorf("cancel task %s: %w", taskID, err)
+		}
+		return nil
+	})
 }
 
 // await is the second half of the five single-call actions: the completion
