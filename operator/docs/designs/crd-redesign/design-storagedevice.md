@@ -488,6 +488,17 @@ does not know, is an absence of information, the same way an unrecognized device
 status maps to `Unknown` rather than to a verdict. The restart is the case that
 makes the rule worth having, because it is the one that happens on purpose.
 
+**An `unavailable` device on a node that is down is `Unknown` too.** The control
+plane reports a device `unavailable` when it cannot reach it, and on a serving node
+that is a device serving and not as it should, which is `Degraded`. On a node that
+is shut down, on its way there, restarting, unreachable, or in any step of a
+removal, every device reports `unavailable` for that reason alone. Its state is not
+observable until the node is back or gone, so it reads `Unknown`, with the node's
+status in the message and a `Normal` `DeviceStateUnknown` event rather than a
+`DeviceDegraded` warning for each device of a node somebody took down on purpose.
+A real verdict the control plane reports for the device (`failed`, `removed`,
+`failed_and_migrated`) is kept whatever the node's status.
+
 **A device already in a terminal phase keeps it, and keeps its reason.** `Failed`
 does not become `Unknown` when the node goes away, because that phase records a
 judgment an unreachable node does not revoke, `Migrated` records a rebuild that has

@@ -346,6 +346,69 @@ func TestARebuiltDeviceIsAnnouncedAsMigrated(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-02-unavailable-device-on-a-down-node: while a node was
+// shut down for its removal, each of its devices reported unavailable and was
+// read as Degraded (serving and should not be) with a DeviceDegraded warning.
+// A device of a node that is down serves nothing, and its state is not
+// observable until the node is back or gone, which is what Unknown says.
+func TestAnUnavailableDeviceOnADownNodeIsUnknownRatherThanDegraded(t *testing.T) {
+	for _, nodeStatus := range []string{
+		nodeStatusInShutdown, nodeStatusOffline, nodeStatusMigratingDevices, nodeStatusInRemoval,
+	} {
+		t.Run(nodeStatus, func(t *testing.T) {
+			cache := sdOnlineCache()
+			dto := cache.devices[sdName()]
+			dto.Status = cpDeviceUnavailable
+			cache.devices[sdName()] = dto
+
+			r := sdReconciler(t, cache,
+				sdNodeWithStatus(nodeStatus), sdNodeSet(),
+				existingDevice(simplyblockv1alpha2.StorageDevicePhaseOnline, cpDeviceOnline))
+
+			if _, err := r.Reconcile(context.Background(), sdReq()); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			sd, err := getSD(t, r.Client)
+			if err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if sd.Status.Phase != simplyblockv1alpha2.StorageDevicePhaseUnknown {
+				t.Errorf("phase = %q on a node %s, want Unknown", sd.Status.Phase, nodeStatus)
+			}
+			if !strings.Contains(sd.Status.Message, nodeStatus) {
+				t.Errorf("message = %q, want it to say the node is %s", sd.Status.Message, nodeStatus)
+			}
+			if reasons := strings.Join(drainReasons(r.Recorder.(*events.FakeRecorder)), "\n"); strings.Contains(reasons, "DeviceDegraded") {
+				t.Errorf("announced %q; a device of a node that is down is not degraded", reasons)
+			}
+		})
+	}
+}
+
+// The other half: on a node that is serving, an unavailable device is serving
+// and should not be, which is Degraded.
+func TestAnUnavailableDeviceOnAnOnlineNodeIsDegraded(t *testing.T) {
+	cache := sdOnlineCache()
+	dto := cache.devices[sdName()]
+	dto.Status = cpDeviceUnavailable
+	cache.devices[sdName()] = dto
+
+	r := sdReconciler(t, cache,
+		sdNodeWithStatus(utils.NodeStatusOnline), sdNodeSet(),
+		existingDevice(simplyblockv1alpha2.StorageDevicePhaseOnline, cpDeviceOnline))
+
+	if _, err := r.Reconcile(context.Background(), sdReq()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	sd, err := getSD(t, r.Client)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if sd.Status.Phase != simplyblockv1alpha2.StorageDevicePhaseDegraded {
+		t.Errorf("phase = %q on an online node, want Degraded", sd.Status.Phase)
+	}
+}
+
 // Migrated is terminal like Failed, and an unreachable node does not revoke it.
 func TestUnknownDoesNotOverwriteMigrated(t *testing.T) {
 	migrated := existingDevice(simplyblockv1alpha2.StorageDevicePhaseMigrated, cpDeviceFailedAndMigrated)

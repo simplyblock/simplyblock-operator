@@ -77,6 +77,7 @@ const (
 	nodeStatusInCreation = "in_creation"
 	nodeStatusInRestart  = "in_restart"
 	nodeStatusInShutdown = "in_shutdown"
+	nodeStatusDown       = "down"
 	nodeStatusActive     = "active"
 
 	nodeStatusPendingRemoval   = "pending_removal"

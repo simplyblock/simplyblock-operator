@@ -299,6 +299,21 @@ func nodeSeesItsDevices(node *simplyblockv1alpha2.StorageNode) bool {
 	}
 }
 
+// nodeIsDown reports whether the node's control-plane status is one in which it
+// serves nothing: shut down or on its way there, restarting, unreachable, or in
+// any step of a removal.
+func nodeIsDown(node *simplyblockv1alpha2.StorageNode) bool {
+	switch nodeState(node) {
+	case nodeStatusOffline, nodeStatusInShutdown, nodeStatusInRestart,
+		utils.NodeStatusUnreachable, nodeStatusDown,
+		nodeStatusPendingRemoval, nodeStatusMigratingDevices, nodeStatusMigratingLvols,
+		nodeStatusInRemoval, nodeStatusRemoved, nodeStatusRemovedFailed:
+		return true
+	default:
+		return false
+	}
+}
+
 // nodeState is the node's control-plane status folded to lower case, or
 // "unknown" when it has none yet.
 func nodeState(node *simplyblockv1alpha2.StorageNode) string {
@@ -338,6 +353,18 @@ func (r *StorageDeviceReconciler) upsert(
 		ClusterID:    scope[0],
 		NodeID:       scope[1],
 		Message:      deviceMessage(dto),
+	}
+	// unavailable means serving-and-should-not-be only on a node that serves. A
+	// node that is shut down, restarting, or being removed serves nothing, and
+	// its devices report unavailable for that reason alone, so their state is not
+	// observable until the node is back or gone. That is Unknown, the same
+	// reading an unreachable node's silence gets, rather than Degraded and its
+	// warning. A real verdict (failed, removed, failed_and_migrated) is kept.
+	if dto.Status == cpDeviceUnavailable && nodeIsDown(node) {
+		status.Phase = simplyblockv1alpha2.StorageDevicePhaseUnknown
+		status.Message = fmt.Sprintf(
+			"storage node %s is %s, so the device reports unavailable and its state is not observable",
+			node.Name, nodeState(node))
 	}
 
 	// The mirror is enqueued by its own writes and, independently, by the
