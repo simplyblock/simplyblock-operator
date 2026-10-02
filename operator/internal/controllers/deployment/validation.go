@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -296,6 +297,9 @@ func (r *ClusterDeploymentConfigReconciler) deviceClassMismatch(
 		stated, cluster.Name, held), nil
 }
 
+// maxFailureDomain is the largest fault group the data plane takes.
+const maxFailureDomain = 65535
+
 // missingFailureDomains reports a document whose cluster requires fault groups and
 // whose groups do not all declare one.
 //
@@ -309,13 +313,23 @@ func (r *ClusterDeploymentConfigReconciler) missingFailureDomains(
 		return ""
 	}
 
-	var found []string
+	var found, nonIntegerDomains []string
 	for _, set := range config.Spec.NodeSets {
 		for _, group := range set.Groups {
 			if group.FailureDomain == "" {
 				found = append(found, set.Name+"/"+group.Name)
+			} else if index, err := strconv.Atoi(group.FailureDomain); err != nil || index < 0 || index > maxFailureDomain {
+				nonIntegerDomains = append(nonIntegerDomains, set.Name+"/"+group.Name)
 			}
 		}
+	}
+	// The control plane's fault group is an integer from 0 to maxFailureDomain and
+	// a node add sends the label only if it parses as one, so any other label
+	// fails every add.
+	if len(nonIntegerDomains) > 0 {
+		return fmt.Sprintf(
+			"group %s: the failureDomain must be an integer from 0 to 65535, which is what the control plane takes",
+			strings.Join(nonIntegerDomains, ", "))
 	}
 	if len(found) == 0 {
 		return ""

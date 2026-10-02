@@ -102,6 +102,7 @@ File: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_t
 | U-182 | A run naming workers inspects those and no others                               | Positive   | `TestOnlyTheNamedWorkersAreInspected`               |
 | U-183 | A named worker that does not exist is announced, not silently dropped           | Regression | `TestANamedWorkerThatDoesNotExistIsAnnounced`       |
 | U-184 | Naming no worker keeps nothing, and the caller skips the filter                 | Boundary   | `TestNamingNoWorkerKeepsNothing`                    |
+| U-223 | A `failureDomain` that is not an integer from 0 to 65535: refused as a draft    | Regression | `TestAFailureDomainOutOfRangeIsRefusedInTheDraft`   |
 
 ### Deletion (design §4.3)
 
