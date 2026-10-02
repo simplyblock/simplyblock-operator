@@ -188,8 +188,12 @@ func (c *scriptedControlPlane) StorageNodes(
 
 func (c *scriptedControlPlane) AddNode(
 	_ context.Context, clusterID string, _ utils.StorageNodeSetAddParams,
-) error {
-	return c.record("AddNode", clusterID)
+) (string, error) {
+	return theAddTask, c.record("AddNode", clusterID)
+}
+
+func (c *scriptedControlPlane) Task(_ context.Context, _, taskID string) (TaskReading, error) {
+	return TaskReading{}, c.record("Task", taskID)
 }
 
 func (c *scriptedControlPlane) Suspend(_ context.Context, _, nodeID string) error {

@@ -697,6 +697,9 @@ CRD carries.
 | U-387 | A held node emits `WorkerAway` rather than holding silently                        | Positive   | `TestTheHeldNodeStaysAndSaysSo`                          |
 | U-388 | A node that never claimed its worker takes no slot while the worker is away        | Negative   | `TestAnUnclaimedNodeTakesNoSlotWhileItsWorkerIsAway`     |
 | U-389 | A held node keeps its claim, so the node-add cap stays closed                      | Regression | `TestAHeldNodeKeepsItsClaim`                             |
+| U-449 | The add's task is recorded on the node, so a later pass reads that task            | Positive   | `TestThePostedAddsTaskIsRecordedOnTheNode`               |
+| U-450 | A suspended, retried add: `Resolving` holds, quoting its task's result             | Regression | `TestAFailingAddIsReportedOnTheNodeThatPostedIt`         |
+| U-451 | A task result past an event note's 1 KiB is clipped on a character boundary        | Regression | `TestALongTaskResultIsClippedToWhatAnEventTakes`         |
 | U-390 | A sibling posts no add while another worker is held at `AwaitingWorker`            | Negative   | `TestASiblingWaitsWhileAnotherWorkerIsHeld`              |
 
 `U-384` to `U-390` are the reboot. The storage pool's MachineConfig is applied by
