@@ -70,6 +70,11 @@ File: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_t
 | U-26     | A step's deadline expires: `StepDeadlineExceeded`, phase does not advance                                | Boundary | —                                                   |
 | U-185    | The template's `nodeProvisioningBudget` reaches the cluster the expansion creates                        | Positive | `TestTheProvisioningBudgetReachesTheCreatedCluster` |
 | U-186    | A template stating no budget leaves the field unset, so the cluster's default decides it                 | Negative | `TestAnUnstatedProvisioningBudgetIsNotInvented`     |
+| U-223    | `CreatingNodes` maps every group's `failureDomain` into the cluster's `status.failureDomains`            | Positive | `TestCreatingNodesMapsTheDocumentsFailureDomains`   |
+| U-224    | A growth document adds its new labels and keeps every index already assigned                             | Positive | `TestAGrowthDocumentExtendsTheClustersMapping`      |
+| U-225    | New labels are indexed in name order, from the lowest free index                                         | Positive | `TestFailureDomainLabelsAreIndexedInNameOrder`      |
+| U-226    | A numeric label claims its own index when it is free, and the next free one when it is not               | Boundary | `TestANumericLabelClaimsItsOwnIndex`                |
+| U-227    | A document declaring no failure domain writes no mapping                                                 | Negative | `TestADocumentWithoutFailureDomainsMapsNothing`     |
 
 ### Create-Only Semantics (design §6)
 

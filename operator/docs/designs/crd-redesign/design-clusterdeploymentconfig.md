@@ -537,7 +537,8 @@ another slot — is the one stated.
   AwaitingCluster   ← wait for status.uuid
     │
     ▼
-  CreatingNodes     ← one StorageNode per worker per slot
+  CreatingNodes     ← map the failure domains, then one StorageNode per
+                      worker per slot
     │
     ▼
   Activating        ← wait for this document's own nodes, then ask for the
@@ -558,6 +559,15 @@ whose groups disagree with it was rejected at approval (§5.1).
 gets the cluster's sizing and its group's devices as one `config.deviceNames`
 list (§3.1). Nothing on the node refers back to the config, which is what §4.3
 means by the document owning no part of the deployment.
+
+**`CreatingNodes` maps the document's failure domains before it creates a node.**
+A group's `failureDomain` is a label, and the control plane indexes a failure
+domain by integer, so the step gives every label the document introduces an
+index in the cluster's `status.failureDomains`
+([`design-storagecluster.md`](design-storagecluster.md) §3.3). It does this for
+a cluster the document created and for one it joined through `clusterRef`, and
+it only adds: a label already mapped keeps its index. Writing the mapping first
+means no node's add runs before the index it sends exists.
 
 **The distribution flags `spec.environment` stands for land on the cluster, not on
 each node.** They configure the storage-node workload, which is one DaemonSet for

@@ -568,6 +568,11 @@ latency controller and specified in
 [`design-auto-rebalancing.md`](../design-auto-rebalancing.md).
 `status.failureDomain` is the failure-domain label the control plane actually
 assigned, which is not necessarily the one `spec.config.failureDomain` requested.
+The control plane indexes a failure domain by integer, so the add sends the index
+the cluster's `status.failureDomains` maps the label to
+([`design-storagecluster.md`](design-storagecluster.md) §3.3). A label the
+mapping does not hold is sent as its number when it is one, and is otherwise left
+for the control plane to assign.
 
 `status.observedGeneration` is the generation the rest of `status` was computed
 from, so a stale status can be told from a current one.

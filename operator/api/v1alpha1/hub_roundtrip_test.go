@@ -413,6 +413,10 @@ func TestStorageClusterRoundTripsFromTheHub(t *testing.T) {
 			Tasks: []v1alpha2.ClusterTask{
 				{ID: "task-1", Type: "node_restart", Status: "running", Retry: 2},
 			},
+			FailureDomains: []v1alpha2.FailureDomainIndex{
+				{Name: "rack-a", Index: 0},
+				{Name: "rack-b", Index: 1},
+			},
 			Message:            "creating the backend cluster",
 			ObservedGeneration: 7,
 		},
