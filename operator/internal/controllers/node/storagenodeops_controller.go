@@ -953,8 +953,28 @@ func (r *StorageNodeOpsReconciler) wait(
 ) error {
 	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageNodeOpsStatus) {
 		status.Message = message
-		status.Step = statemachine.ToKube(machine.Snapshot())
+		status.Step = snapshotOf(status.Step, machine)
 	})
+}
+
+// snapshotOf is the machine's position as the operation stores it, keeping the
+// claim the stored step carries.
+//
+// The machine knows its state and deadline and nothing of claims, which are taken
+// on the stored step by the calls a pass makes (once). Writing the machine's
+// snapshot alone would drop the claim a call of this very pass took, and the
+// next pass, finding no claim, would make the call again. A claim taken in
+// another state holds nothing in this one, so only a claim on the same state is
+// kept.
+func snapshotOf(
+	stored statemachine.KubeSnapshot, machine *statemachine.Machine[step],
+) statemachine.KubeSnapshot {
+	snapshot := statemachine.ToKube(machine.Snapshot())
+	if claim := stored.Claim; claim != nil && claim.State == snapshot.State {
+		kept := *claim
+		snapshot.Claim = &kept
+	}
+	return snapshot
 }
 
 // recordStep persists the step the operation is about to be in, with the instant

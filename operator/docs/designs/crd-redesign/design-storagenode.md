@@ -1739,6 +1739,14 @@ is the devices, one at a time as each one's data lands on the peers. Either step
 is therefore failed only once a whole budget, seven hours, passes with nothing
 changing.
 
+**Each call is made under a claim on the step.** A pass that read the operation
+from a cache one write behind would otherwise send the shutdown,
+`prepare-removal`, or the DELETE a second time. The claim is a one-minute lease on
+the stored step, so `prepare-removal`, sent again on every pass of
+`MigratingDevices`, goes out at most once a minute. Every write of the step from
+the machine keeps the claim the stored step carries, because the machine's
+snapshot has none, and dropping it would let the next pass send the call again.
+
 ### 8.3 There is no way back
 
 Nothing in a removal resumes the node. `Validating` changes nothing, and from

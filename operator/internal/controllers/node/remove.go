@@ -608,8 +608,14 @@ func (r *StorageNodeOpsReconciler) drainAwaitRemoval(
 
 // recordRemovalProgress writes the node's status and its devices' statuses into
 // status.removal and, when either changed since the last pass, extends the
-// machine's deadline a whole budget out from now. The reconciler persists the
-// machine's snapshot when the pass ends, as it does for a transition.
+// machine's deadline a whole budget out from now.
+//
+// The record and the machine's position go in one patch, so progress is never
+// persisted without the deadline it extended: a pass that lost a second patch
+// would keep the new progress with the old deadline, and the next pass, seeing
+// nothing new, would extend nothing. The deadline itself is the machine's
+// (Machine.Extend); this only persists where the machine now is, keeping the
+// claim the step carries (snapshotOf).
 //
 // The deadline is a bound on a removal that stopped moving rather than on one
 // that takes long. migrating_devices is a single node status for a rebuild that
@@ -645,13 +651,19 @@ func (r *StorageNodeOpsReconciler) recordRemovalProgress(
 	}
 
 	now := metav1.Now()
-	machine.Extend(awaitingRemovalDeadline)
+	machine.Extend(stepBudgets[machine.CurrentState()])
+	staged := &simplyblockv1alpha2.RemovalStatus{
+		NodeStatus:       nodeStatus,
+		Devices:          statuses,
+		LastProgressTime: &now,
+	}
+	if recorded := ops.Status.Removal; recorded != nil {
+		staged.PrepareAttempts = recorded.PrepareAttempts
+		staged.LastPrepareTime = recorded.LastPrepareTime
+	}
 	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageNodeOpsStatus) {
-		status.Removal = &simplyblockv1alpha2.RemovalStatus{
-			NodeStatus:       nodeStatus,
-			Devices:          statuses,
-			LastProgressTime: &now,
-		}
+		status.Removal = staged
+		status.Step = snapshotOf(status.Step, machine)
 	})
 }
 

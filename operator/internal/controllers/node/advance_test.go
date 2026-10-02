@@ -18,6 +18,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"strings"
 	"testing"
@@ -26,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/simplyblock/atlas/statemachine"
 
@@ -662,5 +664,70 @@ func TestMigratingDevicesSaysHowFarTheRebuildHasGot(t *testing.T) {
 	if !strings.Contains(got.Status.Message, "1 of 2 devices") ||
 		!strings.Contains(got.Status.Message, nodeStatusMigratingDevices) {
 		t.Errorf("message = %q, want the node's status and 1 of 2 devices", got.Status.Message)
+	}
+}
+
+// Regression: 2026-10-02-progress-and-deadline-split (PR #612 review): the
+// progress record and the deadline it extends were two status patches. A pass
+// that lost the second one kept the new progress with the old deadline, so the
+// next pass saw nothing new, extended nothing, and a moving removal expired. A
+// pass that writes progress writes the deadline in the same patch, so losing a
+// write loses both or neither.
+func TestProgressAndItsDeadlineAreWrittenTogether(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingLvols)
+	ops := anAwaitingRemoval(&simplyblockv1alpha2.RemovalStatus{
+		NodeStatus: nodeStatusMigratingDevices,
+	})
+	recordedDeadline := ops.Status.Step.Deadline.Unix()
+	patches := 0
+	r, apiClient := anOpsWorldWith(t, api, interceptor.Funcs{
+		SubResourcePatch: func(
+			ctx context.Context, c client.Client, sub string, obj client.Object,
+			patch client.Patch, opts ...client.SubResourcePatchOption,
+		) error {
+			if _, isOps := obj.(*simplyblockv1alpha2.StorageNodeOps); isOps {
+				patches++
+				if patches > 1 {
+					return errors.New("the API server went away")
+				}
+			}
+			return c.Status().Patch(ctx, obj, patch, opts...)
+		},
+	}, ops)
+	lockedBy(t, apiClient, "a-drain")
+
+	_, _ = r.Reconcile(context.Background(), ctrlRequest("a-drain"))
+
+	got := operationRead(t, apiClient, "a-drain")
+	progressed := got.Status.Removal != nil && got.Status.Removal.NodeStatus == nodeStatusMigratingLvols
+	extended := got.Status.Step.Deadline != nil && got.Status.Step.Deadline.Unix() != recordedDeadline
+	if progressed != extended {
+		t.Errorf("progress recorded = %t but deadline extended = %t; the two were written apart",
+			progressed, extended)
+	}
+}
+
+// Regression: 2026-10-02-wait-drops-the-claim: a pass that made a claimed call
+// and then waited wrote the step from the machine, whose snapshot carries no
+// claim, so the claim was gone by the next pass and the call was made again on
+// every pass. The waiting pass keeps the claim the call took.
+func TestAWaitingPassKeepsTheClaimItsCallTook(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusOffline)
+	api.progress = RemovalProgress{Total: 2, NodeStatus: nodeStatusOffline}
+	ops := anAdvancingOperation("a-drain",
+		simplyblockv1alpha2.StorageNodeOpsActionRemove, stepMigratingDevices)
+	r, apiClient := anOpsWorld(t, api, ops)
+	r.Mover = &scriptedMover{}
+	lockedBy(t, apiClient, "a-drain")
+
+	pass(t, r, "a-drain")
+	pass(t, r, "a-drain")
+
+	if asked := api.asked("PrepareRemoval"); asked != 1 {
+		t.Errorf("PrepareRemoval was issued %d time(s) in two passes within its lease, want once",
+			asked)
+	}
+	if got := operationRead(t, apiClient, "a-drain"); got.Status.Step.Claim == nil {
+		t.Error("the stored step lost the claim its call took")
 	}
 }
