@@ -170,13 +170,13 @@ func TestAnIncompleteCensusIsRetriedRatherThanReportedAsABlocker(t *testing.T) {
 	}
 }
 
-// Regression: 2026-10-02-removal-three-steps: the drain suspended the node and
-// left it serving, while the control plane's removal expects it shut down and
-// its devices rebuilt before the volumes move. The first step is prepare-removal,
-// which admits the node and shuts it down if it is still running, and the
-// operator issues no shutdown of its own.
-func TestShuttingDownAsksTheControlPlaneToPrepareTheRemoval(t *testing.T) {
-	for _, status := range []string{nodeStatusOnline, nodeStatusSuspended, nodeStatusOffline} {
+// Regression: 2026-10-02-prepare-removal-shutdown-failed: prepare-removal shut
+// the node down inside its own request, timed out on the SPDK kill, reported the
+// shutdown failed although SPDK was gone, and left the node pending_removal with
+// no rebuild. The removal shuts the node down first through the node's own
+// shutdown, which runs in the background, and only a node still running gets it.
+func TestShuttingDownShutsARunningNodeDown(t *testing.T) {
+	for _, status := range []string{nodeStatusOnline, nodeStatusSuspended} {
 		t.Run(status, func(t *testing.T) {
 			api := aControlPlane().reporting(status)
 			r, _ := aDraining(t, api, &scriptedMover{})
@@ -186,32 +186,26 @@ func TestShuttingDownAsksTheControlPlaneToPrepareTheRemoval(t *testing.T) {
 				t.Fatalf("shutting down: %v", err)
 			}
 			if !done {
-				t.Errorf("the step did not finish although prepare-removal was accepted for a node %s",
+				t.Errorf("the step did not finish although the shutdown of a node %s was accepted",
 					status)
 			}
-			if asked := api.asked("PrepareRemoval"); asked != 1 {
-				t.Errorf("PrepareRemoval was issued %d time(s) against a node %s, want once",
-					asked, status)
+			if asked := api.asked("ShutdownNode"); asked != 1 {
+				t.Errorf("ShutdownNode was issued %d time(s) against a node %s, want once", asked, status)
 			}
-			for _, call := range []string{"ShutdownNode", "Suspend"} {
-				if asked := api.asked(call); asked != 0 {
-					t.Errorf("%s was issued %d time(s); the control plane shuts the node down itself",
-						call, asked)
-				}
+			if asked := api.asked("PrepareRemoval"); asked != 0 {
+				t.Errorf("PrepareRemoval was issued %d time(s) before the node was down", asked)
 			}
 		})
 	}
 }
 
-// Regression: 2026-10-02-removal-three-steps: a node already shutting down is
-// somebody else's shutdown, which prepare-removal refuses to run under, and a
-// node already admitted needs no second admission.
+// The shutdown is sent only to a node that is still running: one already
+// offline is not shut down again, one in_shutdown is under somebody else's
+// shutdown, and one in a removal status is past this step.
 func TestShuttingDownSendsNothingToANodeAlreadyOnItsWay(t *testing.T) {
-	for status, wantDone := range map[string]bool{
-		nodeStatusInShutdown:       false,
-		nodeStatusPendingRemoval:   true,
-		nodeStatusMigratingDevices: true,
-		nodeStatusMigratingLvols:   true,
+	for _, status := range []string{
+		nodeStatusOffline, nodeStatusInShutdown, nodeStatusPendingRemoval,
+		nodeStatusMigratingDevices, nodeStatusMigratingLvols,
 	} {
 		t.Run(status, func(t *testing.T) {
 			api := aControlPlane().reporting(status)
@@ -221,22 +215,21 @@ func TestShuttingDownSendsNothingToANodeAlreadyOnItsWay(t *testing.T) {
 			if err != nil {
 				t.Fatalf("shutting down: %v", err)
 			}
-			if done != wantDone {
-				t.Errorf("done = %t against a node %s, want %t", done, status, wantDone)
+			if !done {
+				t.Errorf("the step did not finish against a node %s", status)
 			}
-			if asked := api.asked("PrepareRemoval"); asked != 0 {
-				t.Errorf("PrepareRemoval was issued %d time(s) against a node %s, want none",
+			if asked := api.asked("ShutdownNode"); asked != 0 {
+				t.Errorf("ShutdownNode was issued %d time(s) against a node %s, want none",
 					asked, status)
 			}
 		})
 	}
 }
 
-// Regression: 2026-10-02-removal-three-steps: a refused admission is the control
-// plane saying the cluster cannot lose this node, and it changed nothing.
-func TestARefusedPrepareRemovalEndsTheDrain(t *testing.T) {
-	api := aControlPlane().refusing("PrepareRemoval", &ControlPlaneError{
-		Status: http.StatusBadRequest, Body: `{"detail":"Can not remove node: FTT"}`,
+// A refused shutdown changed nothing, and the node is still serving.
+func TestARefusedShutdownEndsTheDrain(t *testing.T) {
+	api := aControlPlane().refusing("ShutdownNode", &ControlPlaneError{
+		Status: http.StatusBadRequest, Body: `{"detail":"node is busy"}`,
 	})
 	r, _ := aDraining(t, api, &scriptedMover{})
 
@@ -244,15 +237,13 @@ func TestARefusedPrepareRemovalEndsTheDrain(t *testing.T) {
 
 	var fatal *terminalStepError
 	if !errors.As(err, &fatal) {
-		t.Errorf("err = %v, want the terminal kind for a refused admission", err)
+		t.Errorf("err = %v, want the terminal kind for a refused shutdown", err)
 	}
 }
 
-// Regression: 2026-10-02-removal-three-steps: prepare-removal shuts the node down
-// before it answers, which can outlast the client's timeout. No answer is not a
-// refusal, and the next pass reads the node.
-func TestAPrepareRemovalWithNoAnswerIsRetried(t *testing.T) {
-	api := aControlPlane().refusing("PrepareRemoval",
+// No answer is not a refusal, and the next pass reads the node.
+func TestAShutdownWithNoAnswerIsRetried(t *testing.T) {
+	api := aControlPlane().refusing("ShutdownNode",
 		fmt.Errorf("http error: %w", context.DeadlineExceeded))
 	r, _ := aDraining(t, api, &scriptedMover{})
 
@@ -262,6 +253,83 @@ func TestAPrepareRemovalWithNoAnswerIsRetried(t *testing.T) {
 	if errors.As(err, &fatal) || done {
 		t.Errorf("done, err = %t, %v; want a retry for a call the control plane never answered",
 			done, err)
+	}
+}
+
+// Regression: 2026-10-02-prepare-removal-shutdown-failed: once the node is down,
+// prepare-removal admits it and starts the rebuild, with no shutdown of its own
+// to run and nothing to block on.
+func TestMigratingDevicesPreparesTheRemovalOfAnOfflineNode(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusOffline)
+	api.progress = RemovalProgress{Total: 2, NodeStatus: nodeStatusOffline}
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	done, err := performing(t, r, aDrain(), stepMigratingDevices)
+	if err != nil {
+		t.Fatalf("migrating devices: %v", err)
+	}
+	if done {
+		t.Error("the step finished before the rebuild was done")
+	}
+	if asked := api.asked("PrepareRemoval"); asked != 1 {
+		t.Errorf("PrepareRemoval was issued %d time(s) for an offline node, want once", asked)
+	}
+}
+
+// A refused admission ends the removal. The node is left offline, which the
+// failure says, because nothing in a removal brings a node back.
+func TestARefusedAdmissionEndsTheDrainAndSaysTheNodeIsOffline(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusOffline).refusing("PrepareRemoval",
+		&ControlPlaneError{Status: http.StatusBadRequest, Body: `{"detail":"Can not remove node: FTT"}`})
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	_, err := performing(t, r, aDrain(), stepMigratingDevices)
+
+	var fatal *terminalStepError
+	if !errors.As(err, &fatal) {
+		t.Fatalf("err = %v, want the terminal kind for a refused admission", err)
+	}
+	for _, said := range []string{"FTT", "offline", "Restart"} {
+		if !strings.Contains(err.Error(), said) {
+			t.Errorf("err = %q, want it to say %q", err, said)
+		}
+	}
+}
+
+// A node still on its way down is waited on, and nothing is sent to it.
+func TestMigratingDevicesWaitsForTheShutdownToLand(t *testing.T) {
+	for _, status := range []string{nodeStatusOnline, nodeStatusSuspended, nodeStatusInShutdown} {
+		t.Run(status, func(t *testing.T) {
+			api := aControlPlane().reporting(status)
+			api.progress = RemovalProgress{Total: 2, NodeStatus: status}
+			r, _ := aDraining(t, api, &scriptedMover{})
+
+			done, err := performing(t, r, aDrain(), stepMigratingDevices)
+			if err != nil || done {
+				t.Fatalf("done, err = %t, %v; want a wait for the shutdown", done, err)
+			}
+			if asked := api.asked("PrepareRemoval") + api.asked("ShutdownNode"); asked != 0 {
+				t.Errorf("%d call(s) were sent to a node %s, want none", asked, status)
+			}
+		})
+	}
+}
+
+// A node still running long after its shutdown was accepted is one whose
+// shutdown the control plane dropped. Nothing has changed on the control plane's
+// side, so the removal fails with the node still serving.
+func TestANodeThatNeverWentDownEndsTheDrain(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusOnline)
+	api.progress = RemovalProgress{Total: 2, NodeStatus: nodeStatusOnline}
+	r, _, ops := aPendingDrain(t, api, &simplyblockv1alpha2.RemovalStatus{
+		NodeStatus: nodeStatusOnline, LastProgressTime: minutesAgo(20),
+	})
+
+	_, err := performing(t, r, ops, stepMigratingDevices)
+
+	var fatal *terminalStepError
+	if !errors.As(err, &fatal) {
+		t.Errorf("err = %v, want the terminal kind for a node that never went down", err)
 	}
 }
 

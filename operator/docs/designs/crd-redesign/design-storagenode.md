@@ -1649,40 +1649,52 @@ data nothing in Kubernetes is tracking.
                ──► Verifying ──► Removing ──► AwaitingRemoval
 ```
 
-The control plane carries out a removal in three calls, and the operator drives
-them in order: `prepare-removal` admits the node, shuts it down, and rebuilds its
-devices onto the peers; the operator moves the volumes, and `verify-drained`
-closes that half; the node DELETE takes the node apart.
+The operator shuts the node down first, and the control plane then carries out
+the removal in three calls, which the operator drives in order.
+`prepare-removal` admits the node and rebuilds its devices onto the peers. The
+operator moves the volumes, and `verify-drained` closes that half. The node
+DELETE takes the node apart.
 
 | Step               | Side effect on entry                                                                                                             | Complete when                                                                |
 |--------------------|----------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
 | `Validating`       | None                                                                                                                             | No pinned and no unmanaged volumes remain                                    |
-| `ShuttingDown`     | `POST /storage-nodes/{node}/prepare-removal`, skipped if the node is `in_shutdown` or already admitted                           | The call returns 202, or the node reports `pending_removal` or later         |
-| `MigratingDevices` | `POST /storage-nodes/{node}/prepare-removal` again, skipped while the node is `pending_removal` or `in_shutdown`                 | `GET /storage-nodes/{node}/prepare-removal` reports `done`                   |
+| `ShuttingDown`     | `POST /storage-nodes/{node}/shutdown`, sent only to a node that is `online` or `suspended`                                       | The call returns 202, or the node is not running                             |
+| `MigratingDevices` | `POST /storage-nodes/{node}/prepare-removal` once the node is `offline`, and again on every pass from `migrating_devices` on     | `GET /storage-nodes/{node}/prepare-removal` reports `done`                   |
 | `MigratingVolumes` | One `PersistentVolumeOps` per PV-managed volume, to peers chosen round-robin                                                     | Every migration is `Succeeded`                                               |
 | `Verifying`        | Deletes any remaining system volumes, then `POST /storage-nodes/{node}/verify-drained`                                           | The node reports no volumes, and `verify-drained` reports it drained         |
 | `Removing`         | `DELETE /storage-nodes/{node}?force_remove=false`, skipped once the node is `in_removal` or later, and while it is `in_shutdown` | The call returns 200, 204, or 404, or the node reports `in_removal` or later |
 | `AwaitingRemoval`  | None                                                                                                                             | The node reports `removed`, or 404                                           |
 
-**Validation runs before `prepare-removal`, and that ordering is the design.**
-From `prepare-removal` on there is no way back, so a drain that cannot complete
-is held while the node is still fully operational, and somebody decides what to
-do about the pinned claim.
+**Validation runs before the shutdown, and that ordering is the design.** From
+the shutdown on there is no way back, so a drain that cannot complete is held
+while the node is still fully operational, and somebody decides what to do about
+the pinned claim.
 
 **`Validating` holds rather than fails.** It has a deadline like every other step,
 but a blocked drain is a correct outcome waiting on a human, so the deadline is
 long and expiry is reported rather than treated as an error (§16, Q2).
 
-**The operator issues no shutdown of its own.** `prepare-removal` shuts the node
-down only if it is still running, so a node already offline is admitted and
-rebuilt without being shut down again. Nothing is sent to a node `in_shutdown`,
-which is somebody else's shutdown that `prepare-removal` refuses to run under.
-A 4xx is a refused admission and changed nothing, so the operation fails. The
-call shuts the node down before it answers and can outlast the client, so a
-timeout or a 5xx is retried, and the next pass reads the node.
+**The shutdown is the node's own, and comes first.** `prepare-removal` would shut
+a running node down itself, but inside its request: it blocked for longer than
+the client waits, and on a slow SPDK kill reported the shutdown failed although
+SPDK was gone, which left the node `pending_removal` with no rebuild. The node's
+`shutdown` answers at once and runs in the background, and with the node down
+`prepare-removal` has no shutdown of its own to run. Only a node still running
+is shut down: one already `offline` is not shut down again, one `in_shutdown` is
+under a shutdown already, and one in a removal status is past the step. A 4xx is
+a refusal with the node still serving, so the operation fails. A timeout or a
+5xx is retried, and the next pass reads the node.
 
-**`MigratingDevices` is the control plane's rebuild.** Every pass sends
-`prepare-removal` again, which the control plane treats as a no-op while the
+**Admission follows the shutdown.** `MigratingDevices` waits for the node to be
+`offline`, and a node still running a whole shutdown budget after its shutdown
+was accepted fails the operation with nothing changed. `prepare-removal` on the
+`offline` node is the control plane's admission (fault-tolerance headroom,
+failure-domain balance, replica relocation). A refusal fails the operation and
+leaves the node offline, because nothing in a removal brings a node back, and
+the failure says so: a `Restart` operation returns it to service.
+
+**`MigratingDevices` is the control plane's rebuild.** From `migrating_devices`
+on, every pass sends `prepare-removal` again, which the control plane treats as a no-op while the
 rebuild runs and as a restart of it after a control-plane restart, and reads the
 rebuild's progress. A rebuild the control plane gave up on fails the operation.
 
@@ -1750,9 +1762,8 @@ snapshot has none, and dropping it would let the next pass send the call again.
 ### 8.3 There is no way back
 
 Nothing in a removal resumes the node. `Validating` changes nothing, and from
-`prepare-removal` on the control plane is taking the node out of the cluster:
-the node is shut down, its devices are rebuilt onto the peers, and every later
-status only moves forward. A removal that fails from there leaves the node to
+the shutdown on the node is being taken out of the cluster: it is shut down, its
+devices are rebuilt onto the peers, and every later status only moves forward. A removal that fails from there leaves the node to
 the control plane, which reports it `removed_failed` when it gives up and
 accepts the removal being driven again.
 
@@ -1762,8 +1773,10 @@ operation can be deleted while it runs.
 | Condition                         | Step               | Result                                              |
 |-----------------------------------|--------------------|-----------------------------------------------------|
 | Pinned or unmanaged volumes       | `Validating`       | Hold, emit, requeue. The node is untouched          |
-| `prepare-removal` was refused     | `ShuttingDown`     | `Failed`. Nothing was changed                       |
-| `prepare-removal` got no answer   | `ShuttingDown`     | Retry, reading the node first                       |
+| The shutdown was refused          | `ShuttingDown`     | `Failed`, the node still serving                    |
+| The shutdown got no answer        | `ShuttingDown`     | Retry, reading the node first                       |
+| The shutdown never landed         | `MigratingDevices` | `Failed` after 15 minutes, the node still serving   |
+| `prepare-removal` was refused     | `MigratingDevices` | `Failed`, the node left offline                     |
 | The shutdown failed or stalled    | `MigratingDevices` | `prepare-removal` again, three times, then `Failed` |
 | The device rebuild gave up        | `MigratingDevices` | `Failed`                                            |
 | No online peer to migrate to      | `MigratingVolumes` | Hold, emit, requeue                                 |
@@ -2063,10 +2076,10 @@ block node operations directly is §16, Q5.
 | `DELETE` | `/api/v2/clusters/{cluster}/storage-nodes/{node}?force_remove=false` | The drain's last step. 404 is success, since a node already gone is a node removed               |
 | `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/suspend`            | Used by `Suspend`. Must tolerate a repeat, because a step recorded without its call re-issues it |
 | `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/resume`             | Used by `Resume`                                                                                 |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/prepare-removal`    | The removal's first step: admits, shuts down a running node, rebuilds its devices (§8.2)         |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/prepare-removal`    | The removal's first step on a node already down: admits it and rebuilds its devices (§8.2)       |
 | `GET`    | `/api/v2/clusters/{cluster}/storage-nodes/{node}/prepare-removal`    | The device rebuild's progress, read by `MigratingDevices`                                        |
 | `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/verify-drained`     | Whether the node still holds a volume or a snapshot, which closes `Verifying` (§8.2)             |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/shutdown`           | Used by `Shutdown` and by `HostMaintenance`                                                      |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/shutdown`           | Used by `Shutdown`, `HostMaintenance`, and `Remove`                                              |
 | `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/restart`            | Takes `node_address`, `force`, `reattach_volume`, and `new_ssd_pcie`. Used by three actions      |
 | `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/promote`            | The migration's last control-plane call, and the one that cannot be undone (§9)                  |
 | `GET`    | `/api/v2/clusters/{cluster}/storage-pools/{pool}/volumes/`           | Lists a node's volumes for the drain's classification and verification (§8)                      |

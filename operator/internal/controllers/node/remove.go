@@ -172,19 +172,21 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 	return err == nil, err
 }
 
-// drainShutDown sends prepare-removal, the control plane's first step of the
-// removal: it admits the node, marks it pending_removal, shuts it down if it is
-// still running, and starts rebuilding its devices onto the peers. The operator
-// issues no shutdown of its own, so a node already offline is not shut down
-// again.
+// drainShutDown takes the node down before anything is moved off it, through the
+// node's own shutdown, and finishes once the control plane has accepted it.
 //
-// Nothing is sent to a node in_shutdown, which is somebody else's shutdown that
-// prepare-removal refuses to run under, and nothing to a node already admitted
-// (pending_removal or later), which is past this step. A 4xx is a refused
-// admission and changed nothing, so the operation fails. A timeout or a 5xx is
-// retried, because the call shuts the node down before it answers and can
-// outlast the client while the control plane carries on, and the next pass reads
-// the node.
+// The shutdown is the node action rather than the one prepare-removal runs. The
+// node action answers at once and shuts the node down in the background, while
+// prepare-removal ran it inside its own request, blocked for longer than the
+// client waits, and on a slow SPDK kill reported the shutdown failed although
+// SPDK was gone, leaving the node pending_removal with no rebuild. With the node
+// already down, prepare-removal has no shutdown of its own to run.
+//
+// Only a node still running is shut down: one already offline is not shut down
+// again, one in_shutdown is under a shutdown already, and one in a removal status
+// is past this step. A 4xx is a refusal that changed nothing, with the node still
+// serving, so the operation fails. A timeout or a 5xx is retried, and the next
+// pass reads the node.
 func (r *StorageNodeOpsReconciler) drainShutDown(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, clusterID, nodeID string,
 ) (bool, error) {
@@ -192,35 +194,40 @@ func (r *StorageNodeOpsReconciler) drainShutDown(
 	if err != nil {
 		return false, err
 	}
-	switch reading.Status {
-	case nodeStatusInShutdown:
-		return false, nil
-	case nodeStatusPendingRemoval, nodeStatusMigratingDevices, nodeStatusMigratingLvols,
-		nodeStatusInRemoval, nodeStatusRemoved, nodeStatusRemovedFailed:
+	if reading.Status != nodeStatusOnline && reading.Status != nodeStatusSuspended {
 		return true, nil
 	}
 
 	claimed, err := r.once(ctx, ops, func() error {
-		if err := r.API.PrepareRemoval(ctx, clusterID, nodeID); err != nil {
+		if err := r.API.ShutdownNode(ctx, clusterID, nodeID); err != nil {
 			if refused(err) {
-				return fatalf("the control plane refused to remove node %s: %v",
+				return fatalf("the control plane refused to shut node %s down for its removal: %v",
 					ops.Spec.NodeRef, err)
 			}
-			return fmt.Errorf("prepare the removal of node %s: %w", ops.Spec.NodeRef, err)
+			return fmt.Errorf("shut node %s down: %w", ops.Spec.NodeRef, err)
 		}
 		return nil
 	})
 	return claimed && err == nil, err
 }
 
-// drainMigrateDevices waits for the control plane to rebuild the node's devices
-// onto its peers, and finishes when the control plane reports the rebuild done.
+// drainMigrateDevices sends prepare-removal once the node is down, waits for the
+// control plane to rebuild the node's devices onto its peers, and finishes when
+// the control plane reports the rebuild done.
 //
-// Once the node is down, prepare-removal is sent again on every pass, which the
-// control plane treats as a no-op while the rebuild runs and as a restart of it
-// when it stopped, as it does across a control-plane restart. A rebuild the
-// control plane gave up on fails the operation, and each change in the node's
-// or its devices' statuses moves the deadline out (recordRemovalProgress).
+// A node still online, suspended, or in_shutdown is waited on with nothing sent,
+// because the shutdown ShuttingDown asked for has not landed. One still running a
+// whole shutdown budget after that is one whose shutdown the control plane
+// dropped, and the operation fails with the node untouched.
+//
+// For an offline node, prepare-removal is the control plane's admission: a 4xx
+// is a refusal, and the operation fails with the node left offline, because
+// nothing in a removal brings a node back. From then on prepare-removal is sent
+// again on every pass, which the control plane treats as a no-op while the
+// rebuild runs and as a restart of it when it stopped, as it does across a
+// control-plane restart. A rebuild the control plane gave up on fails the
+// operation, and each change in the node's or its devices' statuses moves the
+// deadline out (recordRemovalProgress).
 //
 // A node still pending_removal is one whose shutdown has not finished, or
 // failed: prepare-removal marks the node before it shuts it down and leaves it
@@ -243,7 +250,30 @@ func (r *StorageNodeOpsReconciler) drainMigrateDevices(
 	}
 
 	switch reading.Status {
+	case nodeStatusOnline, nodeStatusSuspended:
+		if recorded := ops.Status.Removal; recorded != nil && recorded.LastProgressTime != nil &&
+			recorded.NodeStatus == reading.Status &&
+			time.Since(recorded.LastProgressTime.Time) >= shuttingDownDeadline {
+			return false, fatalf("node %s is still %s %s after its shutdown was accepted; the "+
+				"control plane dropped the shutdown, and nothing has been changed",
+				ops.Spec.NodeRef, reading.Status, shuttingDownDeadline)
+		}
+		return false, r.recordRemovalProgress(ctx, ops, machine, reading.Status)
 	case nodeStatusInShutdown:
+		return false, r.recordRemovalProgress(ctx, ops, machine, reading.Status)
+	case nodeStatusOffline:
+		if _, err := r.once(ctx, ops, func() error {
+			if err := r.API.PrepareRemoval(ctx, clusterID, nodeID); err != nil {
+				if refused(err) {
+					return fatalf("the control plane refused to remove node %s: %v; the node is "+
+						"left offline, and a Restart operation brings it back", ops.Spec.NodeRef, err)
+				}
+				return fmt.Errorf("prepare the removal of node %s: %w", ops.Spec.NodeRef, err)
+			}
+			return nil
+		}); err != nil {
+			return false, err
+		}
 		return false, r.recordRemovalProgress(ctx, ops, machine, reading.Status)
 	case nodeStatusPendingRemoval:
 		if retry, err := r.retryPrepare(ctx, ops, clusterID, nodeID, progress); err != nil || retry {
