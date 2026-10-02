@@ -9,6 +9,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"sort"
 
 	"github.com/csi-addons/spec/lib/go/replication"
 	"google.golang.org/grpc/codes"
@@ -120,10 +121,22 @@ func resolveToLocalReplica(
 func resolveReplica(
 	ctx context.Context, h *lvol.Handle, client *atlascp.Client,
 ) (*lvol.Handle, *atlascp.Client, bool, error) {
+	hops, known, err := resolveChain(ctx, h, client)
+	if err != nil {
+		return nil, nil, false, err
+	}
 	local, flagged, err := clusters.Local()
 	if err != nil {
 		return nil, nil, false, err
 	}
+	pick := chooseReplica(hops, local, flagged)
+	return pick.h, pick.client, known, nil
+}
+
+// resolveChain walks the replication chain behind h: h itself, then every
+// IsSource->target hop to the active end. known is whether h has a
+// relationship at all.
+func resolveChain(ctx context.Context, h *lvol.Handle, client *atlascp.Client) ([]chainHop, bool, error) {
 	known := false
 	hops := []chainHop{{h: h, client: client}}
 	for range 8 { // one hop per past fail-over; capped far above any real chain
@@ -132,7 +145,7 @@ func resolveReplica(
 			if errors.Is(err, errs.ErrNotFound) {
 				break
 			}
-			return nil, nil, false, err
+			return nil, false, err
 		}
 		known = true
 		if !rel.IsSource {
@@ -141,7 +154,7 @@ func resolveReplica(
 		target := &lvol.Handle{ClusterID: rel.TargetClusterID, PoolRef: rel.TargetPoolID, VolumeID: rel.TargetLvolID}
 		targetClient, err := clusters.ReplicationClient(ctx, target.ClusterID)
 		if err != nil {
-			return nil, nil, false, err
+			return nil, false, err
 		}
 		h, client = target, targetClient
 		hops = append(hops, chainHop{h: h, client: client})
@@ -149,8 +162,36 @@ func resolveReplica(
 			break
 		}
 	}
-	pick := chooseReplica(hops, local, flagged)
-	return pick.h, pick.client, known, nil
+	return hops, known, nil
+}
+
+// activeEndFallback is where a Resync or a status read goes when the local
+// member of the chain is reaped: the chain's active end -- the live primary
+// on the other site -- and, as the cluster to fail back to, the local one.
+// sbcli's replication_failback is addressed to the failed-over clone and
+// re-aims its replication at the original site's node (the recovered-source
+// case: only the delta ships), which is exactly the fail-back of a site that
+// lost its primary (live 2026-10-02, site A after the unplanned fail-over of
+// WordPress: the old primary 80e3e748 was reaped, the clone e3d439ca on B
+// holds the data).
+func activeEndFallback(hops []chainHop, sourceClusterID string) (chainHop, string) {
+	end := hops[len(hops)-1]
+	if local, flagged, err := clusters.Local(); err == nil && flagged {
+		ids := make([]string, 0, len(local))
+		for id := range local {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, hop := range hops {
+			if local[hop.h.ClusterID] {
+				return end, hop.h.ClusterID
+			}
+		}
+		if len(ids) > 0 {
+			return end, ids[0]
+		}
+	}
+	return end, sourceClusterID
 }
 
 // reapedChainMember is whether a Replication verb on a resolved chain member
@@ -339,13 +380,29 @@ func (cs *Server) GetVolumeReplicationInfo(
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	h, client, err = resolveToLocalReplica(ctx, h, client)
+	hops, known, err := resolveChain(ctx, h, client)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
+	local, flagged, err := clusters.Local()
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	pick := chooseReplica(hops, local, flagged)
+	h, client = pick.h, pick.client
 	info, err := client.GetVolumeReplicationInfo(ctx, h.Handle())
 	if err != nil {
-		return nil, classifyGetVolumeReplicationInfoError(err)
+		ce := classifyGetVolumeReplicationInfoError(err)
+		if !reapedChainMember(known, ce) {
+			return nil, ce
+		}
+		// The local member is reaped: the status that matters is the active
+		// end's, replicating back to this site after a Resync.
+		end, _ := activeEndFallback(hops, "")
+		h, client = end.h, end.client
+		if info, err = client.GetVolumeReplicationInfo(ctx, h.Handle()); err != nil {
+			return nil, classifyGetVolumeReplicationInfoError(err)
+		}
 	}
 	resp := &replication.GetVolumeReplicationInfoResponse{}
 	if info.LastReplicatedAt != nil {
@@ -500,13 +557,28 @@ func (cs *Server) ResyncVolume(
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	h, client, err = resolveToLocalReplica(ctx, h, client)
+	hops, known, err := resolveChain(ctx, h, client)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
+	local, flagged, err := clusters.Local()
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	pick := chooseReplica(hops, local, flagged)
+	h, client = pick.h, pick.client
 	sourceClusterID := req.GetParameters()[sourceClusterIDParam]
 	if err := client.ResyncVolume(ctx, h.Handle(), sourceClusterID); err != nil {
-		return nil, classifyResyncVolumeError(err)
+		ce := classifyResyncVolumeError(err)
+		if !reapedChainMember(known, ce) {
+			return nil, ce
+		}
+		var end chainHop
+		end, sourceClusterID = activeEndFallback(hops, sourceClusterID)
+		h, client = end.h, end.client
+		if err := client.ResyncVolume(ctx, h.Handle(), sourceClusterID); err != nil {
+			return nil, classifyResyncVolumeError(err)
+		}
 	}
 	info, err := client.GetVolumeReplicationInfo(ctx, h.Handle())
 	if err != nil {

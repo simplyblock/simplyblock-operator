@@ -79,10 +79,20 @@ func TestDemoteAndDisableOfAReapedChainMemberSucceed(t *testing.T) {
 		"active_lvol_id": gone,
 		"target_nqn":     "nqn.test", "target_ns_id": 1,
 	}
-	if _, err := cs.DemoteVolume(context.Background(), &replication.DemoteVolumeRequest{VolumeId: testReplVolID}); err != nil {
+	ctx := context.Background()
+	if _, err := cs.DemoteVolume(ctx, &replication.DemoteVolumeRequest{VolumeId: testReplVolID}); err != nil {
 		t.Fatalf("demote of a reaped chain member: %v", err)
 	}
-	if _, err := cs.DisableVolumeReplication(context.Background(), &replication.DisableVolumeReplicationRequest{VolumeId: testReplVolID}); err != nil {
+	disable := &replication.DisableVolumeReplicationRequest{VolumeId: testReplVolID}
+	if _, err := cs.DisableVolumeReplication(ctx, disable); err != nil {
 		t.Fatalf("disable of a reaped chain member: %v", err)
+	}
+}
+
+func TestActiveEndFallbackAimsAtTheChainsEndFromTheLocalSite(t *testing.T) {
+	// Not flagged in the test secret: the class parameter stays.
+	end, src := activeEndFallback(liveChain(), "param")
+	if end.h.VolumeID != livePrimaryOnB || src != "param" {
+		t.Fatalf("end %s source %s", end.h.VolumeID, src)
 	}
 }
