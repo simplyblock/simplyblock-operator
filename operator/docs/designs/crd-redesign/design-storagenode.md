@@ -2527,10 +2527,12 @@ type StorageNodeConfig struct {
 	// present. Immutable once set, which is what makes it fillable later and then
 	// frozen: chunk placement was computed from it.
 	//
-	// The value takes the shape of a Kubernetes label value, because that is what
-	// it is seeded from where a cluster carries topology labels at all.
+	// The value is up to 63 lowercase letters, digits, hyphens, and underscores,
+	// starting and ending with a letter or digit. Lowercase only, so that two
+	// spellings of one rack cannot become two failure domains. A value of only
+	// digits is accepted.
 	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-_a-z0-9]*[a-z0-9])?$`
 	// +optional
 	// +k8s:immutable
 	FailureDomain string `json:"failureDomain,omitempty"`

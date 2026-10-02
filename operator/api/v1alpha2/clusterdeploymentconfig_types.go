@@ -259,9 +259,11 @@ type NodeGroup struct {
 	// power feed they share. Discovery seeds it from topology.kubernetes.io/zone
 	// and leaves it unset where the Kubernetes API carries no topology, which
 	// holds provisioning with a clear reason rather than guessing. It expands
-	// into StorageNode.spec.config.failureDomain, whose shape it shares.
+	// into StorageNode.spec.config.failureDomain, whose shape it shares: up to
+	// 63 lowercase letters, digits, hyphens, and underscores, starting and
+	// ending with a letter or digit.
 	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-_a-z0-9]*[a-z0-9])?$`
 	// +optional
 	FailureDomain string `json:"failureDomain,omitempty"`
 

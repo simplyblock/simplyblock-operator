@@ -132,7 +132,7 @@ File: `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-49     | One worker: one group of one                                                                                 | Boundary | —    |
 | U-50     | A `nodeSelector` that matches a subset: only those workers are inspected                                     | Positive | —    |
 | U-51     | A worker whose devices cannot be read: `DeviceInspectionFailed`, the run continues                           | Negative | —    |
-| U-52     | Nodes carrying `topology.kubernetes.io/zone`: its value seeds `failureDomain` verbatim                       | Positive | —    |
+| U-52     | Nodes carrying `topology.kubernetes.io/zone`: its value, lowercased, seeds `failureDomain`                   | Positive | —    |
 | U-53     | Nodes carrying no topology label: `failureDomain` is left unset, not guessed                                 | Negative | —    |
 | U-54     | An OpenShift cluster: `spec.environment` is `OpenShift`                                                      | Positive | —    |
 | U-55     | An unrecognized distribution: `spec.environment` is `Vanilla`                                                | Boundary | —    |
@@ -485,67 +485,67 @@ approve.
 Full reconcile loop against a real Kubernetes API server via `envtest`. The
 immutability rules are CEL and cannot be exercised any other way.
 
-| #        | Scenario                                                                                                               | Type     | Test                                               |
-|----------|------------------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------|
-| I-01     | An approved config edited: rejected by the immutability rule                                                           | Negative | —                                                  |
-| I-02     | An unapproved config edited: accepted                                                                                  | Positive | —                                                  |
-| I-03     | `spec.approved` set true, then false: the withdrawal is rejected                                                       | Negative | —                                                  |
-| I-04     | `spec.approved` false, then true: accepted                                                                             | Positive | —                                                  |
-| I-05     | An approved config edited only in `metadata`: accepted, since the rule is on spec                                      | Boundary | —                                                  |
-| I-06     | `spec.nodeSets` omitted: rejected as `Required`                                                                        | Negative | —                                                  |
-| I-07     | `spec.nodeSets` empty: rejected by `MinItems`                                                                          | Boundary | —                                                  |
-| I-08     | `spec.environment` outside the enum: rejected                                                                          | Negative | —                                                  |
-| I-09     | A group with 201 workers: rejected by `MaxItems`                                                                       | Boundary | —                                                  |
-| I-10     | A group with duplicate workers: rejected by `listType=set`                                                             | Negative | —                                                  |
-| ~~I-11~~ | `spec.nodeSets[].sizing` omitted: rejected as `Required`. Withdrawn: the field is gone, and `I-52` is what replaces it | —        | —                                                  |
-| I-12     | `OperatorOps.spec.action` outside the enum: rejected                                                                   | Negative | —                                                  |
-| I-13     | `OperatorOps.spec.action` changed after creation: rejected as immutable                                                | Negative | —                                                  |
-| I-14     | Short names `cdc` and `oops` resolve to the same lists as the full kinds                                               | Positive | —                                                  |
-| I-15     | A full expansion against a real API server: cluster and nodes exist afterward                                          | Positive | —                                                  |
-| I-16     | Deleting the config afterward: the cluster and nodes survive                                                           | Positive | —                                                  |
-| I-17     | Two configs in two namespaces with the same name: neither reads the other                                              | Negative | —                                                  |
-| I-18     | Two configs in one namespace naming one cluster: the second is refused                                                 | Negative | —                                                  |
-| I-19     | The controller's role covers every object the expansion creates                                                        | Positive | —                                                  |
-| I-20     | A `devices` block with neither `nvme` nor `block`: rejected by the CEL rule                                            | Negative | —                                                  |
-| I-21     | A `devices` block with only `nvme`: accepted                                                                           | Boundary | —                                                  |
-| I-22     | A `devices` block with duplicate `nvme` entries: rejected by `listType=set`                                            | Negative | —                                                  |
-| I-23     | A `devices` block carrying a filter field such as `pcieDenyList`: rejected                                             | Negative | —                                                  |
-| I-34     | `devices.nvme` holding a well-formed PCI address: accepted                                                             | Positive | —                                                  |
-| I-35     | `devices.nvme` holding a device path: rejected by the item pattern                                                     | Negative | —                                                  |
-| I-36     | `devices.nvme` holding a truncated PCI address: rejected by the item pattern                                           | Negative | —                                                  |
-| I-37     | `devices.block` holding a path under `/dev`: accepted                                                                  | Positive | —                                                  |
-| I-38     | `devices.block` holding a bare device name: rejected by the item pattern                                               | Negative | —                                                  |
-| I-39     | `devices.block` holding a path outside `/dev`: rejected by the item pattern                                            | Negative | —                                                  |
-| I-24     | The webhook is registered for `create` and `update` on the kind                                                        | Positive | —                                                  |
-| I-25     | An approving apply naming a missing worker: rejected by the API server                                                 | Negative | —                                                  |
-| I-26     | The same document with the worker created first: accepted                                                              | Positive | —                                                  |
-| I-27     | An invalid draft applied unapproved: accepted, and `status.message` reports it                                         | Positive | —                                                  |
-| I-28     | An edit to an approved document: rejected, and the stored object is unchanged                                          | Negative | —                                                  |
-| I-29     | `enableLogicalBlockDevices` outside a boolean: rejected by the schema                                                  | Negative | —                                                  |
-| I-30     | A group whose `devices.block` names a path: accepted                                                                   | Positive | —                                                  |
-| I-31     | `enablePartitionedDevices` outside a boolean: rejected by the schema                                                   | Negative | —                                                  |
-| I-32     | Approving a config naming a mounted device: accepted by the API server, then `Failed` at `Validating`                  | Negative | —                                                  |
-| I-33     | Approving a config naming a partitioned device: accepted and expanded                                                  | Positive | —                                                  |
-| I-40     | A group naming both `nvme` and `block`: rejected by the selection's CEL rule                                           | Negative | —                                                  |
-| I-41     | Two groups of one node set naming different classes: rejected by the spec's CEL rule                                   | Negative | —                                                  |
-| I-42     | Two node sets naming different classes: rejected by the same rule                                                      | Negative | —                                                  |
-| I-43     | Every group of every node set naming `block`: accepted                                                                 | Positive | —                                                  |
-| I-44     | `enableLogicalBlockDevices` with a `pcieDenyList`: rejected by the discover block's CEL rule                           | Negative | `TestTheFiltersOfTheClassNotScannedAreRefused`     |
-| I-45     | `blockDenyList` with `enableLogicalBlockDevices` unset: rejected by the same rule                                      | Negative | `TestTheFiltersOfTheClassNotScannedAreRefused`     |
-| I-46     | `enableLogicalBlockDevices` with a `blockAllowList`: accepted                                                          | Positive | `TestABlockRunStatesItsClassOnTheDiscoverBlock`    |
-| I-47     | The PCI filters with `enableLogicalBlockDevices` unset: accepted                                                       | Positive | —                                                  |
-| I-48     | A group's `failureDomain` of `rack-b`: accepted                                                                        | Positive | —                                                  |
-| I-49     | A `failureDomain` holding a slash, and one of 64 characters: both rejected by the schema                               | Boundary | —                                                  |
-| I-50     | `spec.cluster.maxSubsystemCount` omitted on a creating document: rejected as `Required`                                | Negative | —                                                  |
-| I-51     | A node set's `sizing` carrying `maxSubsystemCount`: pruned rather than stored                                          | Boundary | —                                                  |
-| I-52     | A node set carrying a `sizing` block at all: pruned rather than stored                                                 | Boundary | —                                                  |
-| I-53     | `spec.cluster.vcpuCount` omitted on a creating document: rejected as `Required`                                        | Negative | —                                                  |
-| I-54     | `spec.cluster.minHugePagesSize` omitted: accepted, and each node uses the computed minimum                             | Boundary | —                                                  |
-| I-55     | A document whose cluster template states a scheme outside the supported seven: rejected by the schema                  | Negative | `TestTheDocumentsSchemaRefusesAnUnsupportedScheme` |
-| I-56     | An image slot stating no `imagePullPolicy`: the stored document reads `Always`                                         | Boundary | `TestTheApiserverStampsAndPolicesTheImageSlots`    |
-| I-57     | An `imagePullPolicy` outside the enum: rejected                                                                        | Negative | `TestTheApiserverStampsAndPolicesTheImageSlots`    |
-| I-58     | An image from a registry outside the trusted set: rejected by the pattern                                              | Negative | `TestTheApiserverStampsAndPolicesTheImageSlots`    |
-| I-59     | `deviceFilter.enableLogicalBlockDevices`, the class inside the filter: rejected as an unknown field                    | Negative | `TestTheDeviceFilterNoLongerCarriesTheClass`       |
+| #        | Scenario                                                                                                               | Type     | Test                                                                   |
+|----------|------------------------------------------------------------------------------------------------------------------------|----------|------------------------------------------------------------------------|
+| I-01     | An approved config edited: rejected by the immutability rule                                                           | Negative | —                                                                      |
+| I-02     | An unapproved config edited: accepted                                                                                  | Positive | —                                                                      |
+| I-03     | `spec.approved` set true, then false: the withdrawal is rejected                                                       | Negative | —                                                                      |
+| I-04     | `spec.approved` false, then true: accepted                                                                             | Positive | —                                                                      |
+| I-05     | An approved config edited only in `metadata`: accepted, since the rule is on spec                                      | Boundary | —                                                                      |
+| I-06     | `spec.nodeSets` omitted: rejected as `Required`                                                                        | Negative | —                                                                      |
+| I-07     | `spec.nodeSets` empty: rejected by `MinItems`                                                                          | Boundary | —                                                                      |
+| I-08     | `spec.environment` outside the enum: rejected                                                                          | Negative | —                                                                      |
+| I-09     | A group with 201 workers: rejected by `MaxItems`                                                                       | Boundary | —                                                                      |
+| I-10     | A group with duplicate workers: rejected by `listType=set`                                                             | Negative | —                                                                      |
+| ~~I-11~~ | `spec.nodeSets[].sizing` omitted: rejected as `Required`. Withdrawn: the field is gone, and `I-52` is what replaces it | —        | —                                                                      |
+| I-12     | `OperatorOps.spec.action` outside the enum: rejected                                                                   | Negative | —                                                                      |
+| I-13     | `OperatorOps.spec.action` changed after creation: rejected as immutable                                                | Negative | —                                                                      |
+| I-14     | Short names `cdc` and `oops` resolve to the same lists as the full kinds                                               | Positive | —                                                                      |
+| I-15     | A full expansion against a real API server: cluster and nodes exist afterward                                          | Positive | —                                                                      |
+| I-16     | Deleting the config afterward: the cluster and nodes survive                                                           | Positive | —                                                                      |
+| I-17     | Two configs in two namespaces with the same name: neither reads the other                                              | Negative | —                                                                      |
+| I-18     | Two configs in one namespace naming one cluster: the second is refused                                                 | Negative | —                                                                      |
+| I-19     | The controller's role covers every object the expansion creates                                                        | Positive | —                                                                      |
+| I-20     | A `devices` block with neither `nvme` nor `block`: rejected by the CEL rule                                            | Negative | —                                                                      |
+| I-21     | A `devices` block with only `nvme`: accepted                                                                           | Boundary | —                                                                      |
+| I-22     | A `devices` block with duplicate `nvme` entries: rejected by `listType=set`                                            | Negative | —                                                                      |
+| I-23     | A `devices` block carrying a filter field such as `pcieDenyList`: rejected                                             | Negative | —                                                                      |
+| I-34     | `devices.nvme` holding a well-formed PCI address: accepted                                                             | Positive | —                                                                      |
+| I-35     | `devices.nvme` holding a device path: rejected by the item pattern                                                     | Negative | —                                                                      |
+| I-36     | `devices.nvme` holding a truncated PCI address: rejected by the item pattern                                           | Negative | —                                                                      |
+| I-37     | `devices.block` holding a path under `/dev`: accepted                                                                  | Positive | —                                                                      |
+| I-38     | `devices.block` holding a bare device name: rejected by the item pattern                                               | Negative | —                                                                      |
+| I-39     | `devices.block` holding a path outside `/dev`: rejected by the item pattern                                            | Negative | —                                                                      |
+| I-24     | The webhook is registered for `create` and `update` on the kind                                                        | Positive | —                                                                      |
+| I-25     | An approving apply naming a missing worker: rejected by the API server                                                 | Negative | —                                                                      |
+| I-26     | The same document with the worker created first: accepted                                                              | Positive | —                                                                      |
+| I-27     | An invalid draft applied unapproved: accepted, and `status.message` reports it                                         | Positive | —                                                                      |
+| I-28     | An edit to an approved document: rejected, and the stored object is unchanged                                          | Negative | —                                                                      |
+| I-29     | `enableLogicalBlockDevices` outside a boolean: rejected by the schema                                                  | Negative | —                                                                      |
+| I-30     | A group whose `devices.block` names a path: accepted                                                                   | Positive | —                                                                      |
+| I-31     | `enablePartitionedDevices` outside a boolean: rejected by the schema                                                   | Negative | —                                                                      |
+| I-32     | Approving a config naming a mounted device: accepted by the API server, then `Failed` at `Validating`                  | Negative | —                                                                      |
+| I-33     | Approving a config naming a partitioned device: accepted and expanded                                                  | Positive | —                                                                      |
+| I-40     | A group naming both `nvme` and `block`: rejected by the selection's CEL rule                                           | Negative | —                                                                      |
+| I-41     | Two groups of one node set naming different classes: rejected by the spec's CEL rule                                   | Negative | —                                                                      |
+| I-42     | Two node sets naming different classes: rejected by the same rule                                                      | Negative | —                                                                      |
+| I-43     | Every group of every node set naming `block`: accepted                                                                 | Positive | —                                                                      |
+| I-44     | `enableLogicalBlockDevices` with a `pcieDenyList`: rejected by the discover block's CEL rule                           | Negative | `TestTheFiltersOfTheClassNotScannedAreRefused`                         |
+| I-45     | `blockDenyList` with `enableLogicalBlockDevices` unset: rejected by the same rule                                      | Negative | `TestTheFiltersOfTheClassNotScannedAreRefused`                         |
+| I-46     | `enableLogicalBlockDevices` with a `blockAllowList`: accepted                                                          | Positive | `TestABlockRunStatesItsClassOnTheDiscoverBlock`                        |
+| I-47     | The PCI filters with `enableLogicalBlockDevices` unset: accepted                                                       | Positive | —                                                                      |
+| I-48     | A group's `failureDomain` of `rack-b`: accepted                                                                        | Positive | `TestAFailureDomainLabelIsLowercaseLettersDigitsHyphensAndUnderscores` |
+| I-49     | A `failureDomain` with an uppercase letter, a dot, a slash, or 64 characters: rejected by the schema                   | Boundary | `TestAFailureDomainLabelIsLowercaseLettersDigitsHyphensAndUnderscores` |
+| I-50     | `spec.cluster.maxSubsystemCount` omitted on a creating document: rejected as `Required`                                | Negative | —                                                                      |
+| I-51     | A node set's `sizing` carrying `maxSubsystemCount`: pruned rather than stored                                          | Boundary | —                                                                      |
+| I-52     | A node set carrying a `sizing` block at all: pruned rather than stored                                                 | Boundary | —                                                                      |
+| I-53     | `spec.cluster.vcpuCount` omitted on a creating document: rejected as `Required`                                        | Negative | —                                                                      |
+| I-54     | `spec.cluster.minHugePagesSize` omitted: accepted, and each node uses the computed minimum                             | Boundary | —                                                                      |
+| I-55     | A document whose cluster template states a scheme outside the supported seven: rejected by the schema                  | Negative | `TestTheDocumentsSchemaRefusesAnUnsupportedScheme`                     |
+| I-56     | An image slot stating no `imagePullPolicy`: the stored document reads `Always`                                         | Boundary | `TestTheApiserverStampsAndPolicesTheImageSlots`                        |
+| I-57     | An `imagePullPolicy` outside the enum: rejected                                                                        | Negative | `TestTheApiserverStampsAndPolicesTheImageSlots`                        |
+| I-58     | An image from a registry outside the trusted set: rejected by the pattern                                              | Negative | `TestTheApiserverStampsAndPolicesTheImageSlots`                        |
+| I-59     | `deviceFilter.enableLogicalBlockDevices`, the class inside the filter: rejected as an unknown field                    | Negative | `TestTheDeviceFilterNoLongerCarriesTheClass`                           |
 
 ---
 

@@ -1038,10 +1038,12 @@ kernel names repeat.
 
 **What the failure domains are.** Rack and power topology is not in the
 Kubernetes API. Where nodes carry `topology.kubernetes.io/zone` discovery copies
-its value into `failureDomain` verbatim, which the field's label shape is what
-makes possible: a zone is called `eu-central-1a` and a rack is called `rack-b`,
-and both survive into the document as themselves
-([`design-storagenode.md`](design-storagenode.md) §3.1). Where nodes carry no
+its value into `failureDomain`, lowercased: a zone is called `eu-central-1a` and
+a rack is called `rack-b`, and both survive into the document as themselves
+([`design-storagenode.md`](design-storagenode.md) §3.1). The field takes
+lowercase letters, digits, hyphens, and underscores only, so that `Rack-B` and
+`rack-b` cannot become two failure domains; a zone holding any other character
+is left unset rather than rewritten. Where nodes carry no
 topology label it leaves the field unset, which holds provisioning with a clear
 reason when the cluster requires one
 ([`design-storagenode.md`](design-storagenode.md) §4.2) rather than guessing.
@@ -1445,7 +1447,7 @@ type NodeGroup struct {
 	// holds provisioning with a clear reason rather than guessing. It expands
 	// into StorageNode.spec.config.failureDomain, whose shape it shares.
 	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-_a-z0-9]*[a-z0-9])?$`
 	// +optional
 	FailureDomain string `json:"failureDomain,omitempty"`
 

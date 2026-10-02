@@ -721,49 +721,49 @@ rather than as thirty.
 
 ### Admission and Validation (design §3.1, §3.2, §3.4, §6.1)
 
-| #    | Scenario                                                                                                                       | Type     | Test |
-|------|--------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| I-01 | `spec.clusterRef` omitted at creation: rejected as `Required`                                                                  | Negative | —    |
-| I-02 | `spec.clusterRef` changed after creation: rejected as immutable                                                                | Negative | —    |
-| I-46 | `spec.clusterRef` naming no `StorageCluster`: the create is rejected                                                           | Negative | —    |
-| I-47 | `spec.clusterRef` naming a cluster with no `status.uuid`: admitted, holds with `ClusterNotReady`                               | Boundary | —    |
-| I-48 | `spec.clusterRef` naming a cluster in another namespace: the create is rejected                                                | Negative | —    |
-| I-49 | `config.sizing.vcpuCount` differing from the cluster's: the create is rejected                                                 | Negative | —    |
-| I-50 | A node manifest setting `config.sizing.maxSubsystemCount`: pruned rather than stored                                           | Boundary | —    |
-| I-51 | `config.sizing` matching the cluster's exactly: admitted                                                                       | Positive | —    |
-| I-52 | The operator re-sizing one node mid-roll: admitted, since the identity is exempt                                               | Positive | —    |
-| I-53 | `spec.config.failureDomain` of `rack-b`: accepted                                                                              | Positive | —    |
-| I-54 | A `failureDomain` of 64 characters, and one holding a slash: both rejected                                                     | Boundary | —    |
-| I-03 | `spec.socketId` omitted at creation, set later: accepted, then frozen                                                          | Boundary | —    |
-| I-04 | `spec.socketId` set at creation, cleared later: rejected                                                                       | Boundary | —    |
-| I-05 | `spec.config.failureDomain` of `-rack`: rejected by the label pattern                                                          | Boundary | —    |
-| I-06 | `spec.config.failureDomain` of `0`: accepted, since a digit is a valid label                                                   | Boundary | —    |
-| I-07 | `spec.config.spdkSystemMemory` of `"4X"`: rejected by the pattern                                                              | Negative | —    |
-| I-08 | `spec.workerNode` changed by a non-operator identity: rejected by the webhook                                                  | Negative | —    |
-| I-09 | The webhook is unavailable: the update is rejected rather than admitted                                                        | Negative | —    |
-| I-10 | `spec.action` outside the enum: rejected by admission before the controller sees it                                            | Negative | —    |
-| I-11 | `spec.nodeRef` changed after creation: rejected as immutable                                                                   | Negative | —    |
-| I-12 | `spec.migrate.targetWorkerNode` changed after creation: rejected as immutable                                                  | Negative | —    |
-| I-13 | `spec.abort` set on a `Running` operation: accepted, since it is the mutable field                                             | Positive | —    |
-| I-14 | `spec.remove.systemVolumeFilterRegex` unset: defaulted by the API server                                                       | Boundary | —    |
-| I-15 | Short names `sn` and `snops` resolve to the same lists as the full kinds                                                       | Positive | —    |
-| I-29 | `spec.slot` of -1: rejected by the minimum                                                                                     | Boundary | —    |
-| I-30 | `spec.config` omitted at creation: rejected as `Required`                                                                      | Negative | —    |
-| I-31 | `spec.config.sizing` omitted at creation: rejected as `Required`                                                               | Negative | —    |
-| I-32 | `spec.config.deviceNames` changed after creation: rejected as immutable                                                        | Negative | —    |
-| I-33 | `spec.config.journalManager` changed after creation: rejected as immutable                                                     | Negative | —    |
-| I-34 | `spec.config.failureDomain` unset at creation, set later: accepted, then frozen                                                | Boundary | —    |
-| I-35 | `spec.config.expand` changed after creation: rejected as immutable                                                             | Negative | —    |
-| I-36 | `spec.config.spdkImage` changed: accepted, since a phased rollout is why it is per node                                        | Positive | —    |
-| I-37 | The deployment config is deleted: every node reconciles unchanged                                                              | Positive | —    |
-| I-38 | The deployment config's device filter is edited: existing nodes are untouched                                                  | Negative | —    |
-| I-39 | A node created after that edit carries the new filter                                                                          | Positive | —    |
-| I-40 | `spec.config.deviceNames` holding a PCI address: accepted                                                                      | Positive | —    |
-| I-41 | `spec.config.deviceNames` holding a device path: accepted                                                                      | Positive | —    |
-| I-42 | `spec.config.deviceNames` holding a bare device name: accepted, as a path under `/dev`                                         | Boundary | —    |
-| I-43 | `spec.config.deviceNames` holding both a PCI address and a path: accepted by the schema, then refused by the webhook (`U-258`) | Boundary | —    |
-| I-44 | `spec.config.deviceNames` holding a malformed PCI address: rejected by the item pattern                                        | Negative | —    |
-| I-45 | `spec.config.deviceNames` holding a path with a space: rejected by the item pattern                                            | Negative | —    |
+| #    | Scenario                                                                                                                       | Type     | Test                                                                   |
+|------|--------------------------------------------------------------------------------------------------------------------------------|----------|------------------------------------------------------------------------|
+| I-01 | `spec.clusterRef` omitted at creation: rejected as `Required`                                                                  | Negative | —                                                                      |
+| I-02 | `spec.clusterRef` changed after creation: rejected as immutable                                                                | Negative | —                                                                      |
+| I-46 | `spec.clusterRef` naming no `StorageCluster`: the create is rejected                                                           | Negative | —                                                                      |
+| I-47 | `spec.clusterRef` naming a cluster with no `status.uuid`: admitted, holds with `ClusterNotReady`                               | Boundary | —                                                                      |
+| I-48 | `spec.clusterRef` naming a cluster in another namespace: the create is rejected                                                | Negative | —                                                                      |
+| I-49 | `config.sizing.vcpuCount` differing from the cluster's: the create is rejected                                                 | Negative | —                                                                      |
+| I-50 | A node manifest setting `config.sizing.maxSubsystemCount`: pruned rather than stored                                           | Boundary | —                                                                      |
+| I-51 | `config.sizing` matching the cluster's exactly: admitted                                                                       | Positive | —                                                                      |
+| I-52 | The operator re-sizing one node mid-roll: admitted, since the identity is exempt                                               | Positive | —                                                                      |
+| I-53 | `spec.config.failureDomain` of `rack-b`: accepted                                                                              | Positive | `TestAFailureDomainLabelIsLowercaseLettersDigitsHyphensAndUnderscores` |
+| I-54 | A `failureDomain` of 64 characters, one holding a slash, an uppercase letter, or a dot: all rejected                           | Boundary | `TestAFailureDomainLabelIsLowercaseLettersDigitsHyphensAndUnderscores` |
+| I-03 | `spec.socketId` omitted at creation, set later: accepted, then frozen                                                          | Boundary | —                                                                      |
+| I-04 | `spec.socketId` set at creation, cleared later: rejected                                                                       | Boundary | —                                                                      |
+| I-05 | `spec.config.failureDomain` of `-rack`: rejected by the label pattern                                                          | Boundary | `TestAFailureDomainLabelIsLowercaseLettersDigitsHyphensAndUnderscores` |
+| I-06 | `spec.config.failureDomain` of `0`: accepted, since a digit is a valid label                                                   | Boundary | —                                                                      |
+| I-07 | `spec.config.spdkSystemMemory` of `"4X"`: rejected by the pattern                                                              | Negative | —                                                                      |
+| I-08 | `spec.workerNode` changed by a non-operator identity: rejected by the webhook                                                  | Negative | —                                                                      |
+| I-09 | The webhook is unavailable: the update is rejected rather than admitted                                                        | Negative | —                                                                      |
+| I-10 | `spec.action` outside the enum: rejected by admission before the controller sees it                                            | Negative | —                                                                      |
+| I-11 | `spec.nodeRef` changed after creation: rejected as immutable                                                                   | Negative | —                                                                      |
+| I-12 | `spec.migrate.targetWorkerNode` changed after creation: rejected as immutable                                                  | Negative | —                                                                      |
+| I-13 | `spec.abort` set on a `Running` operation: accepted, since it is the mutable field                                             | Positive | —                                                                      |
+| I-14 | `spec.remove.systemVolumeFilterRegex` unset: defaulted by the API server                                                       | Boundary | —                                                                      |
+| I-15 | Short names `sn` and `snops` resolve to the same lists as the full kinds                                                       | Positive | —                                                                      |
+| I-29 | `spec.slot` of -1: rejected by the minimum                                                                                     | Boundary | —                                                                      |
+| I-30 | `spec.config` omitted at creation: rejected as `Required`                                                                      | Negative | —                                                                      |
+| I-31 | `spec.config.sizing` omitted at creation: rejected as `Required`                                                               | Negative | —                                                                      |
+| I-32 | `spec.config.deviceNames` changed after creation: rejected as immutable                                                        | Negative | —                                                                      |
+| I-33 | `spec.config.journalManager` changed after creation: rejected as immutable                                                     | Negative | —                                                                      |
+| I-34 | `spec.config.failureDomain` unset at creation, set later: accepted, then frozen                                                | Boundary | —                                                                      |
+| I-35 | `spec.config.expand` changed after creation: rejected as immutable                                                             | Negative | —                                                                      |
+| I-36 | `spec.config.spdkImage` changed: accepted, since a phased rollout is why it is per node                                        | Positive | —                                                                      |
+| I-37 | The deployment config is deleted: every node reconciles unchanged                                                              | Positive | —                                                                      |
+| I-38 | The deployment config's device filter is edited: existing nodes are untouched                                                  | Negative | —                                                                      |
+| I-39 | A node created after that edit carries the new filter                                                                          | Positive | —                                                                      |
+| I-40 | `spec.config.deviceNames` holding a PCI address: accepted                                                                      | Positive | —                                                                      |
+| I-41 | `spec.config.deviceNames` holding a device path: accepted                                                                      | Positive | —                                                                      |
+| I-42 | `spec.config.deviceNames` holding a bare device name: accepted, as a path under `/dev`                                         | Boundary | —                                                                      |
+| I-43 | `spec.config.deviceNames` holding both a PCI address and a path: accepted by the schema, then refused by the webhook (`U-258`) | Boundary | —                                                                      |
+| I-44 | `spec.config.deviceNames` holding a malformed PCI address: rejected by the item pattern                                        | Negative | —                                                                      |
+| I-45 | `spec.config.deviceNames` holding a path with a space: rejected by the item pattern                                            | Negative | —                                                                      |
 
 ### Controller Behavior Under a Real API Server (design §4, §7, §11)
 

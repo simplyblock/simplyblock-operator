@@ -853,9 +853,11 @@ spec:
                               power feed they share. Discovery seeds it from topology.kubernetes.io/zone
                               and leaves it unset where the Kubernetes API carries no topology, which
                               holds provisioning with a clear reason rather than guessing. It expands
-                              into StorageNode.spec.config.failureDomain, whose shape it shares.
+                              into StorageNode.spec.config.failureDomain, whose shape it shares: up to
+                              63 lowercase letters, digits, hyphens, and underscores, starting and
+                              ending with a letter or digit.
                             maxLength: 63
-                            pattern: ^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$
+                            pattern: ^[a-z0-9]([-_a-z0-9]*[a-z0-9])?$
                             type: string
                           journalManager:
                             description: JournalManager tunes the journal managers

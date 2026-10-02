@@ -1526,9 +1526,11 @@ spec:
                               power feed they share. Discovery seeds it from topology.kubernetes.io/zone
                               and leaves it unset where the Kubernetes API carries no topology, which
                               holds provisioning with a clear reason rather than guessing. It expands
-                              into StorageNode.spec.config.failureDomain, whose shape it shares.
+                              into StorageNode.spec.config.failureDomain, whose shape it shares: up to
+                              63 lowercase letters, digits, hyphens, and underscores, starting and
+                              ending with a letter or digit.
                             maxLength: 63
-                            pattern: ^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$
+                            pattern: ^[a-z0-9]([-_a-z0-9]*[a-z0-9])?$
                             type: string
                           journalManager:
                             description: JournalManager tunes the journal managers
@@ -7466,6 +7468,7 @@ spec:
                         spells it ("rack-b").
                       maxLength: 63
                       minLength: 1
+                      pattern: ^[a-z0-9]([-_a-z0-9]*[a-z0-9])?$
                       type: string
                   required:
                   - index
@@ -9056,10 +9059,12 @@ spec:
                       present. Immutable once set, which is what makes it fillable later and then
                       frozen: chunk placement was computed from it.
 
-                      The value takes the shape of a Kubernetes label value, because that is what
-                      it is seeded from where a cluster carries topology labels at all.
+                      The value is up to 63 lowercase letters, digits, hyphens, and underscores,
+                      starting and ending with a letter or digit. Lowercase only, so that two
+                      spellings of one rack cannot become two failure domains. A value of only
+                      digits is accepted.
                     maxLength: 63
-                    pattern: ^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$
+                    pattern: ^[a-z0-9]([-_a-z0-9]*[a-z0-9])?$
                     type: string
                     x-kubernetes-validations:
                     - message: field is immutable

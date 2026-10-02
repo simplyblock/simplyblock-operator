@@ -1023,6 +1023,7 @@ type FailureDomainIndex struct {
 	// spells it ("rack-b").
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-_a-z0-9]*[a-z0-9])?$`
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
 
