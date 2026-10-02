@@ -206,6 +206,57 @@ func TestTheDocumentsSchemaRefusesAnUnsupportedScheme(t *testing.T) {
 	}
 }
 
+// A group cannot ask for fewer journal managers than the control plane will accept:
+// it requires at least three, and refuses a smaller count inside the node-add task,
+// which runs after approval has made the document immutable.
+//
+// Regression: 2026-09-30-journal-count-below-three.
+func TestAJournalCountBelowThreeIsRefusedBySchema(t *testing.T) {
+	apiClient := apiServer(t)
+
+	for _, tc := range []struct {
+		name       string
+		count      *int32
+		wantDenied bool
+	}{
+		{name: "not stated"},
+		{name: "three", count: ptr.To(int32(3))},
+		{name: "five", count: ptr.To(int32(5))},
+		{name: "two", count: ptr.To(int32(2)), wantDenied: true},
+		{name: "one", count: ptr.To(int32(1)), wantDenied: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			group := simplyblockv1alpha2.NodeGroup{Name: "group-1", Workers: []string{"worker-1"}}
+			if tc.count != nil {
+				group.JournalManager = &simplyblockv1alpha2.JournalManagerSpec{Count: tc.count}
+			}
+			config := &simplyblockv1alpha2.ClusterDeploymentConfig{
+				ObjectMeta: metav1.ObjectMeta{GenerateName: "journal-", Namespace: "default"},
+				Spec: simplyblockv1alpha2.ClusterDeploymentConfigSpec{
+					Cluster: &simplyblockv1alpha2.ClusterTemplate{
+						Name:              "a-cluster",
+						VCPUCount:         ptr.To(int32(4)),
+						MaxSubsystemCount: ptr.To(int32(30)),
+					},
+					NodeSets: []simplyblockv1alpha2.NodeSet{{
+						Name: "discovered", Groups: []simplyblockv1alpha2.NodeGroup{group},
+					}},
+				},
+			}
+
+			err := apiClient.Create(context.Background(), config)
+			switch {
+			case tc.wantDenied && err == nil:
+				t.Fatal("the apiserver stored a journal count below three")
+			case tc.wantDenied && !strings.Contains(err.Error(), "count"):
+				t.Fatalf("refused for the wrong reason: %v", err)
+			case !tc.wantDenied && err != nil:
+				t.Fatalf("the apiserver refused a valid count: %v", err)
+			}
+		})
+	}
+}
+
 // A document that names the ports block gets the control plane's own numbers
 // filled in for whatever it leaves out, which is what makes the block worth
 // naming: a reviewer sees the three a cluster will run with rather than the one
