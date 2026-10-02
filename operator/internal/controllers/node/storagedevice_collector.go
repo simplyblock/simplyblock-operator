@@ -188,6 +188,7 @@ func (c *StorageDeviceCollector) publishPhase(
 		simplyblockv1alpha2.StorageDevicePhaseUnknown,
 		simplyblockv1alpha2.StorageDevicePhaseRemoved,
 		simplyblockv1alpha2.StorageDevicePhaseFailed,
+		simplyblockv1alpha2.StorageDevicePhaseMigrated,
 	} {
 		value := 0.0
 		if device.Status.Phase == phase {

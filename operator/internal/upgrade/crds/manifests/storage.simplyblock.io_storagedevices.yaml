@@ -176,6 +176,7 @@ spec:
                 - Unknown
                 - Removed
                 - Failed
+                - Migrated
                 type: string
               role:
                 description: Role is what the device carries.

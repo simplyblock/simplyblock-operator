@@ -44,6 +44,7 @@ type ClusterDTO struct {
 	NQN               string `json:"nqn"`
 	Status            string `json:"status"`
 	Rebalancing       bool   `json:"is_re_balancing"`
+	Shrinking         bool   `json:"is_shrinking"`
 	NDCS              int    `json:"distr_ndcs"`
 	NPCS              int    `json:"distr_npcs"`
 	MaxFaultTolerance int    `json:"max_fault_tolerance"`

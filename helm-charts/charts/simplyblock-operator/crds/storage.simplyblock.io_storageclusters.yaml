@@ -1553,6 +1553,7 @@ spec:
                     - Provisioning
                     - Activating
                     - Online
+                    - Shrinking
                     - Rebalancing
                     - Degraded
                     - Unavailable

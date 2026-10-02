@@ -37,8 +37,12 @@ type VolumeInfo struct {
 	// NQN is the volume's NVMe subsystem NQN. Namespaced volumes share it with
 	// their siblings, and it is the identity a batch migration is addressed by
 	// (see MigrationRef).
-	NQN                   string       `json:"nqn"`
-	PrimaryNodeUUID       string       `json:"storage_node_id"`
+	NQN             string `json:"nqn"`
+	PrimaryNodeUUID string `json:"storage_node_id"`
+	// Nodes are the storage nodes holding the volume's replicas, primary
+	// included, each as the control plane's URL of that node, which ends in the
+	// node's UUID.
+	Nodes                 []string     `json:"nodes"`
 	Status                string       `json:"status"`
 	Migrating             bool         `json:"migrating"`
 	Capacity              CapacityStat `json:"capacity"`
