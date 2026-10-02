@@ -56,6 +56,7 @@ const (
 	annoNodeOpsPhase    = "storage.simplyblock.io/conversion-status.phase"
 	annoNodeOpsObserved = "storage.simplyblock.io/conversion-status.observedGeneration"
 	annoNodeOpsAbort    = "storage.simplyblock.io/conversion-spec.abort"
+	annoNodeOpsRemoval  = "storage.simplyblock.io/conversion-status.removal"
 )
 
 // storageNodeOpsActionToHub maps this version's lowercase actions onto the hub's
@@ -238,6 +239,12 @@ func stashNodeOpsHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageNodeOps) 
 	if err := stash(meta, annoNodeOpsObserved, src.Status.ObservedGeneration); err != nil {
 		return err
 	}
+	// The removal's progress record is what its deadline is measured against,
+	// so losing it on a v1alpha1 write would grant a stalled removal a new
+	// budget.
+	if err := stash(meta, annoNodeOpsRemoval, src.Status.Removal); err != nil {
+		return err
+	}
 
 	// Only the phase this version cannot spell is recorded. Every other value
 	// survives the narrowing, and an annotation for each would be noise on every
@@ -295,6 +302,9 @@ func restoreNodeOpsHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageNodeOps
 	}
 
 	if err := unstash(meta, annoNodeOpsObserved, &dst.Status.ObservedGeneration); err != nil {
+		return err
+	}
+	if err := unstash(meta, annoNodeOpsRemoval, &dst.Status.Removal); err != nil {
 		return err
 	}
 

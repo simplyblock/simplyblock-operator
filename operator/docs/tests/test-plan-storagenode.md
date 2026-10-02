@@ -223,41 +223,42 @@ with a UUID always gets its drain, whatever the control plane reports about it.
 
 File: `operator/internal/webhook/storagenode_validator_test.go`
 
-| #     | Scenario                                                                                            | Type     | Test                                                                                                       |
-|-------|-----------------------------------------------------------------------------------------------------|----------|------------------------------------------------------------------------------------------------------------|
-| U-60  | A user changing `spec.workerNode`: denied with the migration hint                                   | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
-| U-61  | The operator's service account changing `spec.workerNode`: allowed                                  | Positive | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
-| U-62  | An update that does not touch `spec.workerNode`: allowed without inspection                         | Negative | `TestAnUpdateTouchingNoGuardedFieldIsAdmitted`                                                             |
-| U-418 | A user changing `spec.socketId` or `spec.nodeIndex`: denied, with the field named                   | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
-| U-419 | The operator changing either: allowed, because a relocation moves where a node sits                 | Positive | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
-| U-420 | `spec.nodeIndex` stated where it was absent: a change, not a zero equal to nothing                  | Boundary | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
-| U-421 | A restart moving a node's ports: the status records the ones it came back on                        | Positive | `TestAPortThatMovedOnARestartIsRecorded`                                                                   |
-| U-422 | A reading carrying no ports: the recorded ones stay, because zero is not a port                     | Negative | `TestAReadingCarryingNoPortsLeavesTheOnesAlreadyRecorded`                                                  |
-| U-423 | The first reading of a node not yet listening: what it carries is recorded, and no port is invented | Boundary | `TestTheFirstReadingRecordsWhateverItCarries`                                                              |
-| U-424 | A user changing any member of `spec.config`: denied, with every member the update touched named     | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`, `TestTheRefusalNamesEveryConfigFieldTheUpdateTouched` |
-| U-425 | The operator changing one: allowed, because the block is its record of the node                     | Positive | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
-| U-426 | A member added to the block later: guarded without being named anywhere                             | Boundary | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
-| U-427 | A user changing a label alone: admitted, because the guard is the spec's and not the object's       | Positive | `TestAnUpdateTouchingNoGuardedFieldIsAdmitted`                                                             |
-| U-428 | A cluster carrying the OpenShift block: the agent is told the distribution and the pool             | Positive | `TestTheOpenShiftBlockReachesTheAgent`                                                                     |
-| U-429 | A cluster carrying none: the agent is told it is not OpenShift, and no pool is named                | Boundary | `TestNoOpenShiftBlockIsNotOpenShift`                                                                       |
-| U-63  | A create rather than an update: allowed, since there is no old value                                | Boundary | `TestTheOperatorMayCreateANodeSizedAgainstTheFleet`                                                        |
-| U-64  | A service account in another namespace named like the operator's: denied                            | Negative | —                                                                                                          |
-| U-239 | A user changing `spec.config.pcieAllowList`: denied                                                 | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
-| U-240 | The operator merging `newSsdPcie` into `spec.config.pcieAllowList`: allowed                         | Positive | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
-| U-241 | A user changing `spec.config.sizing.vcpuCount`: denied                                              | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
-| U-242 | The operator re-sizing `spec.config.sizing`: allowed                                                | Positive | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
-| U-243 | An update touching none of the guarded fields: admitted without inspection                          | Negative | `TestAnUpdateTouchingNoGuardedFieldIsAdmitted`                                                             |
-| U-255 | A `config.deviceNames` entry that is a path on an `NVMe` cluster: denied                            | Negative | `TestDeviceNamesMustBeOfTheClusterSClass`                                                                  |
-| U-256 | A `config.deviceNames` of PCI addresses on an `NVMe` cluster: admitted                              | Positive | `TestDeviceNamesOfTheClusterSClassAreAdmitted`                                                             |
-| U-257 | A `config.deviceNames` entry that is an address on a `LogicalBlock` cluster: denied                 | Negative | `TestDeviceNamesMustBeOfTheClusterSClass`                                                                  |
-| U-258 | A list holding an address and a path: denied whichever class the cluster is                         | Negative | `TestDeviceNamesMustBeOfTheClusterSClass`                                                                  |
-| U-259 | A bare device name: read as a path and classed as block, not as unknown                             | Boundary | `TestDeviceNamesOfTheClusterSClassAreAdmitted`                                                             |
-| U-260 | `config.pcieDenyList` set on a `LogicalBlock` cluster: denied                                       | Negative | `TestThePCIFiltersAreRefusedOnALogicalBlockCluster`                                                        |
-| U-261 | `config.pcieDenyList` set on an `NVMe` cluster: admitted                                            | Positive | `TestThePCIFiltersAreRefusedOnALogicalBlockCluster`                                                        |
-| U-286 | A cluster stating no device class is read as `NVMe`                                                 | Boundary | `TestAClusterWithNoStatedClassIsNVMe`                                                                      |
-| U-287 | A node naming no `StorageCluster`: refused at admission                                             | Negative | `TestANodeNamingNoClusterIsRefused`                                                                        |
-| U-305 | A user's node whose sizing differs from the fleet's: refused at create                              | Negative | `TestAUserSNodeMustAgreeWithTheFleetSSizing`                                                               |
-| U-306 | The operator's node sized against the fleet mid-roll: admitted                                      | Positive | `TestTheOperatorMayCreateANodeSizedAgainstTheFleet`                                                        |
+| #     | Scenario                                                                                              | Type       | Test                                                                                                       |
+|-------|-------------------------------------------------------------------------------------------------------|------------|------------------------------------------------------------------------------------------------------------|
+| U-60  | A user changing `spec.workerNode`: denied with the migration hint                                     | Negative   | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-61  | The operator's service account changing `spec.workerNode`: allowed                                    | Positive   | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-62  | An update that does not touch `spec.workerNode`: allowed without inspection                           | Negative   | `TestAnUpdateTouchingNoGuardedFieldIsAdmitted`                                                             |
+| U-418 | A user changing `spec.socketId` or `spec.nodeIndex`: denied, with the field named                     | Negative   | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-419 | The operator changing either: allowed, because a relocation moves where a node sits                   | Positive   | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-420 | `spec.nodeIndex` stated where it was absent: a change, not a zero equal to nothing                    | Boundary   | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-421 | A restart moving a node's ports: the status records the ones it came back on                          | Positive   | `TestAPortThatMovedOnARestartIsRecorded`                                                                   |
+| U-422 | A reading carrying no ports: the recorded ones stay, because zero is not a port                       | Negative   | `TestAReadingCarryingNoPortsLeavesTheOnesAlreadyRecorded`                                                  |
+| U-423 | The first reading of a node not yet listening: what it carries is recorded, and no port is invented   | Boundary   | `TestTheFirstReadingRecordsWhateverItCarries`                                                              |
+| U-424 | A user changing any member of `spec.config`: denied, with every member the update touched named       | Negative   | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`, `TestTheRefusalNamesEveryConfigFieldTheUpdateTouched` |
+| U-425 | The operator changing one: allowed, because the block is its record of the node                       | Positive   | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-426 | A member added to the block later: guarded without being named anywhere                               | Boundary   | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-427 | A user changing a label alone: admitted, because the guard is the spec's and not the object's         | Positive   | `TestAnUpdateTouchingNoGuardedFieldIsAdmitted`                                                             |
+| U-428 | A cluster carrying the OpenShift block: the agent is told the distribution and the pool               | Positive   | `TestTheOpenShiftBlockReachesTheAgent`                                                                     |
+| U-429 | A cluster carrying none: the agent is told it is not OpenShift, and no pool is named                  | Boundary   | `TestNoOpenShiftBlockIsNotOpenShift`                                                                       |
+| U-63  | A create rather than an update: allowed, since there is no old value                                  | Boundary   | `TestTheOperatorMayCreateANodeSizedAgainstTheFleet`                                                        |
+| U-64  | A service account in another namespace named like the operator's: denied                              | Negative   | —                                                                                                          |
+| U-239 | A user changing `spec.config.pcieAllowList`: denied                                                   | Negative   | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-240 | The operator merging `newSsdPcie` into `spec.config.pcieAllowList`: allowed                           | Positive   | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-241 | A user changing `spec.config.sizing.vcpuCount`: denied                                                | Negative   | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-242 | The operator re-sizing `spec.config.sizing`: allowed                                                  | Positive   | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-243 | An update touching none of the guarded fields: admitted without inspection                            | Negative   | `TestAnUpdateTouchingNoGuardedFieldIsAdmitted`                                                             |
+| U-255 | A `config.deviceNames` entry that is a path on an `NVMe` cluster: denied                              | Negative   | `TestDeviceNamesMustBeOfTheClusterSClass`                                                                  |
+| U-256 | A `config.deviceNames` of PCI addresses on an `NVMe` cluster: admitted                                | Positive   | `TestDeviceNamesOfTheClusterSClassAreAdmitted`                                                             |
+| U-257 | A `config.deviceNames` entry that is an address on a `LogicalBlock` cluster: denied                   | Negative   | `TestDeviceNamesMustBeOfTheClusterSClass`                                                                  |
+| U-258 | A list holding an address and a path: denied whichever class the cluster is                           | Negative   | `TestDeviceNamesMustBeOfTheClusterSClass`                                                                  |
+| U-259 | A bare device name: read as a path and classed as block, not as unknown                               | Boundary   | `TestDeviceNamesOfTheClusterSClassAreAdmitted`                                                             |
+| U-260 | `config.pcieDenyList` set on a `LogicalBlock` cluster: denied                                         | Negative   | `TestThePCIFiltersAreRefusedOnALogicalBlockCluster`                                                        |
+| U-261 | `config.pcieDenyList` set on an `NVMe` cluster: admitted                                              | Positive   | `TestThePCIFiltersAreRefusedOnALogicalBlockCluster`                                                        |
+| U-286 | A cluster stating no device class is read as `NVMe`                                                   | Boundary   | `TestAClusterWithNoStatedClassIsNVMe`                                                                      |
+| U-287 | A node naming no `StorageCluster`: refused at admission                                               | Negative   | `TestANodeNamingNoClusterIsRefused`                                                                        |
+| U-305 | A user's node whose sizing differs from the fleet's: refused at create                                | Negative   | `TestAUserSNodeMustAgreeWithTheFleetSSizing`                                                               |
+| U-306 | The operator's node sized against the fleet mid-roll: admitted                                        | Positive   | `TestTheOperatorMayCreateANodeSizedAgainstTheFleet`                                                        |
+| U-471 | A `StorageNodeOps` keeps `status.removal` through a trip down to `v1alpha1` and back (PR #612 review) | Regression | `TestStorageNodeOpsKeepsTheRemovalRecordThroughV1Alpha1`                                                   |
 
 ### Operation: The Deletion Guard (design §7.4)
 
@@ -277,7 +278,8 @@ File: `operator/internal/webhook/storagenodeops_validator_test.go`
 
 ### Entity: Conversion to and from `v1alpha1` (design §15.1)
 
-File: `operator/api/v1alpha1/storagenode_conversion_test.go`
+Files: `operator/api/v1alpha1/storagenode_conversion_test.go`,
+`storagenodeops_conversion_test.go`
 
 | #     | Scenario                                                                        | Type       | Test                                                       |
 |-------|---------------------------------------------------------------------------------|------------|------------------------------------------------------------|
