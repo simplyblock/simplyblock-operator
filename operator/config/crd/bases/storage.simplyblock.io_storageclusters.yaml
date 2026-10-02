@@ -1474,6 +1474,45 @@ spec:
                     ErasureCodingScheme is the active layout, rendered as ndcs, an x, and
                     npcs: a two-plus-one cluster reads 2x1.
                   type: string
+                failureDomains:
+                  description: |-
+                    FailureDomains maps each failure-domain label the cluster's nodes declare
+                    (StorageNode.spec.config.failureDomain) to the integer the control plane
+                    identifies that domain by. A deployment adds an entry for every label it
+                    introduces, both when it creates the cluster and when it grows one, and
+                    never changes or removes an entry: the control plane has already placed
+                    data by that index. A label that is a number keeps that number as its
+                    index when the number is free. A cluster holds at most 256 failure
+                    domains, and a deployment that would exceed that is refused before it is
+                    approved.
+                  items:
+                    description: |-
+                      FailureDomainIndex is one failure-domain label and the control plane's index
+                      for it.
+                    properties:
+                      index:
+                        description: |-
+                          Index is the integer sent to the control plane for every node in the
+                          domain.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      name:
+                        description: |-
+                          Name is the failure-domain label, as StorageNode.spec.config.failureDomain
+                          spells it ("rack-b").
+                        maxLength: 63
+                        minLength: 1
+                        type: string
+                    required:
+                      - index
+                      - name
+                    type: object
+                  maxItems: 256
+                  type: array
+                  x-kubernetes-list-map-keys:
+                    - name
+                  x-kubernetes-list-type: map
                 lastDataRealignmentAt:
                   description: |-
                     LastDataRealignmentAt is when a realignment was last requested, and it is

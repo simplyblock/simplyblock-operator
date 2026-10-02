@@ -78,6 +78,7 @@ Files: `operator/internal/controllers/node/provisioning_test.go`,
 | U-11  | `enableFailureDomains` unset: the fault group is not required                           | Negative   | `TestANodeThatDeclaresItsFaultGroupPasses`          |
 | U-12  | A `failureDomain` label of `0`: a label like any other, not read as unset               | Boundary   | —                                                   |
 | U-13  | Held provisioning emits `FailureDomainMissing` and issues no `POST`                     | Negative   | `TestANodeWithNoFaultGroupIsHeldRatherThanRefused`  |
+| U-449 | The add sends the label's index from the cluster's `status.failureDomains`              | Positive   | `TestAFaultGroupIsSentAsTheIndexTheClusterMapsItTo` |
 | U-14  | The worker's storage-node API answers: the host check passes                            | Positive   | —                                                   |
 | U-15  | The worker's storage-node API is unreachable: held, no `POST`                           | Negative   | —                                                   |
 | U-16  | TLS is enabled and the CA is missing: the host check fails informatively                | Negative   | —                                                   |

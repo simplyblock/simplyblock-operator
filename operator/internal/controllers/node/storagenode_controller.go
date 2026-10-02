@@ -1538,27 +1538,33 @@ func (r *StorageNodeReconciler) addParams(
 	}
 
 	// The control plane's failure domain is an integer, and this API's is a label.
-	// Only a label that is a number can be sent, which is what a domain seeded
-	// from an index looks like; anything else is a name the control plane has no
-	// field for and is left to it to assign.
-	if index := domainIndex(config.FailureDomain); index != nil {
+	// The cluster's status.failureDomains translates one into the other.
+	if index := domainIndex(config.FailureDomain, cluster.Status.FailureDomains); index != nil {
 		params.FailureDomain = index
 	}
 	return params
 }
 
-// domainIndex reads a failure-domain label as the integer the control plane's own
-// field takes, and reports nil for a label that is not one.
+// domainIndex is the integer the control plane's own field takes for a
+// failure-domain label, and nil for a label it has none for.
 //
 // The two vocabularies genuinely differ: this API names a fault group after the
 // rack, the zone, or the power feed somebody would say out loud, and the control
-// plane indexes one. A label seeded from an index sends its number, and a name
-// the control plane has no field for is left to it to assign — which is why
+// plane indexes one. The deployment that introduced a label recorded its index
+// in the cluster's status.failureDomains. A label it did not record (a node
+// written by hand, or a cluster deployed before the mapping existed) is sent as
+// its number when it is one, which is what every label was before, and is
+// otherwise left to the control plane to assign — which is why
 // status.failureDomain reports what was assigned rather than what was asked for
 // (§3.3).
-func domainIndex(domain string) *int {
+func domainIndex(domain string, mapping []simplyblockv1alpha2.FailureDomainIndex) *int {
 	if domain == "" {
 		return nil
+	}
+	for _, entry := range mapping {
+		if entry.Name == domain {
+			return ptr.To(int(entry.Index))
+		}
 	}
 	index, err := strconv.Atoi(domain)
 	if err != nil {

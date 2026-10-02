@@ -95,6 +95,11 @@ const (
 	annoClusterStatusMessage  = "storage.simplyblock.io/conversion-status.message"
 	annoClusterStatusObserved = "storage.simplyblock.io/conversion-status.observedGeneration"
 
+	// The failure-domain mapping has no v1alpha1 field, and losing it would
+	// let a later deployment give a label another index than its nodes run
+	// under.
+	annoClusterStatusFailureDomains = "storage.simplyblock.io/conversion-status.failureDomains"
+
 	// The thresholds widen from int32 to int64 on the way up, so a hub value
 	// beyond int32 has nowhere to go on the way down. It is stashed whole
 	// rather than clamped: a clamped threshold is a number the cluster would
@@ -405,6 +410,7 @@ func stashClusterHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageCluster) 
 		{annoClusterDeviceClass, deviceClass},
 		{annoClusterStatusPhase, string(src.Status.Phase)},
 		{annoClusterStatusTasks, src.Status.Tasks},
+		{annoClusterStatusFailureDomains, src.Status.FailureDomains},
 		{annoClusterStatusMessage, src.Status.Message},
 		{annoClusterStatusObserved, src.Status.ObservedGeneration},
 	} {
@@ -478,6 +484,7 @@ func restoreClusterHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageCluster
 		target any
 	}{
 		{annoClusterStatusTasks, &dst.Status.Tasks},
+		{annoClusterStatusFailureDomains, &dst.Status.FailureDomains},
 		{annoClusterStatusMessage, &dst.Status.Message},
 		{annoClusterStatusObserved, &dst.Status.ObservedGeneration},
 	} {

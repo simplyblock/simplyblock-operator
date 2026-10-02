@@ -477,6 +477,19 @@ machine's position, both specified with the creation lock in §4.2.
 
 `status.tasks` is what the backend is currently busy with, specified in §3.4.
 
+`status.failureDomains` maps each failure-domain label the cluster's nodes declare
+to the integer the control plane identifies that domain by. The labels are this
+API's (`rack-b`), and the control plane's field is an index. A
+`ClusterDeploymentConfig` writes the mapping in `CreatingNodes`, for the cluster it
+creates and for the one it grows
+([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §4.2).
+An entry is never changed or removed once written, because the control plane has
+placed nodes under that index. New labels are indexed in name order from the
+lowest free index, except that a numeric label claims its own number when the
+number is free: before the mapping existed a numeric label was sent as that
+number, and a cluster built then already has nodes under it. The list holds at
+most 256 entries, and a deployment that would exceed it is refused at validation.
+
 **Four registered status fields are removed rather than carried forward.**
 `mgmtNodes`, `storageNodes`, `lastUpdated`, and `created` are declared on the
 registered kind, carry `FIXME` comments naming a possible API dependency, and are never
@@ -2134,6 +2147,23 @@ type ClusterTask struct {
 	Retry int32 `json:"retry,omitempty"`
 }
 
+// FailureDomainIndex is one failure-domain label and the control plane's index
+// for it.
+type FailureDomainIndex struct {
+	// Name is the failure-domain label, as StorageNode.spec.config.failureDomain
+	// spells it ("rack-b").
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Index is the integer sent to the control plane for every node in the
+	// domain.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Required
+	Index int32 `json:"index"`
+}
+
 // StorageClusterStatus is the observed state of one backend cluster.
 type StorageClusterStatus struct {
 	// Phase is the operator's own view of this cluster, and the field its
@@ -2223,6 +2253,14 @@ type StorageClusterStatus struct {
 	// +kubebuilder:validation:MaxItems=64
 	// +optional
 	ProvisioningSlots []ProvisioningSlot `json:"provisioningSlots,omitempty"`
+
+	// FailureDomains maps each failure-domain label the cluster's nodes declare
+	// to the integer the control plane identifies that domain by (§3.3).
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=256
+	// +optional
+	FailureDomains []FailureDomainIndex `json:"failureDomains,omitempty"`
 
 	// ActiveOpsRef names the StorageClusterOps currently allowed to operate on
 	// this cluster. Empty when none is running.

@@ -16,41 +16,43 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
-// FailureDomainHosts aggregates each host's failure domain, by management IP,
-// across every StorageNodeSet belonging to clusterName in namespace.
+// FailureDomainHosts aggregates each host's failure domain, by worker name,
+// across every StorageNode belonging to clusterName in namespace.
 //
 // A host with no domain reported yet is skipped rather than counted as domain
 // zero, and a node already removed is skipped too. Both mirror
 // simplyblock_core's failure_domain_host_map, which excludes
 // StorageNode.STATUS_REMOVED for the same reason: a removed node's stale domain
 // assignment must not inflate that domain's apparent host count for either the
-// activation gate below or the removal gate beside it.
+// activation gate below or the removal gate beside it. The worker is the host,
+// so a multi-socket worker's nodes count once.
 func FailureDomainHosts(
 	ctx context.Context, c client.Client, namespace, clusterName string,
 ) (map[string]int32, error) {
-	var sets simplyblockv1alpha1.StorageNodeSetList
-	if err := c.List(ctx, &sets, client.InNamespace(namespace)); err != nil {
+	var nodes simplyblockv1alpha2.StorageNodeList
+	if err := c.List(ctx, &nodes, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
 	hostDomains := map[string]int32{}
-	for _, set := range sets.Items {
-		if set.Spec.ClusterName != clusterName {
+	for _, node := range nodes.Items {
+		if node.Spec.ClusterRef != clusterName ||
+			node.Status.Status == utils.NodeStatusRemoved {
 			continue
 		}
-		for _, node := range set.Status.Nodes {
-			if node.FailureDomain == nil || node.MgmtIp == "" ||
-				node.Status == utils.NodeStatusRemoved {
-				continue
-			}
-			hostDomains[node.MgmtIp] = *node.FailureDomain
+		domain, err := strconv.ParseInt(node.Status.FailureDomain, 10, 32)
+		if err != nil {
+			continue
 		}
+		hostDomains[node.Spec.WorkerNode] = int32(domain)
 	}
 	return hostDomains, nil
 }

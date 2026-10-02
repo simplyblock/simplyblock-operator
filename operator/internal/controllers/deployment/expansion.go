@@ -6,6 +6,9 @@
 // It is a Config rather than a MultiConfig, because a document has no action to
 // key one on: there is one expansion and it runs once.
 //
+// CreatingNodes also records an index for every failure-domain label the document
+// introduces (failuredomains.go), since the control plane takes an integer.
+//
 // CreatingNodes is the step that must be idempotent, and it is by construction. A
 // StorageNode is identified by its cluster, its worker, and its slot, so the step
 // lists what exists for the cluster and creates only the slots that do not. A
@@ -463,6 +466,12 @@ func (r *ClusterDeploymentConfigReconciler) createNodes(
 	key := client.ObjectKey{Namespace: config.Namespace, Name: config.Status.ClusterRef}
 	if err := r.Get(ctx, key, &cluster); err != nil {
 		return false, fmt.Errorf("reading StorageCluster %s: %w", config.Status.ClusterRef, err)
+	}
+
+	// The mapping is written before any node exists, so a node's add never runs
+	// ahead of the index it is to be sent.
+	if err := r.mapFailureDomains(ctx, config, &cluster); err != nil {
+		return false, err
 	}
 
 	existing, err := r.nodesOfCluster(ctx, config.Namespace, cluster.Name)

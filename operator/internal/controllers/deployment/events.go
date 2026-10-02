@@ -23,6 +23,10 @@ const (
 	// nodes to bind their management address to.
 	NoManagementInterface = "NoManagementInterface"
 
+	// TooManyFailureDomains is a document whose failure-domain labels, added to
+	// the ones its cluster has already mapped, exceed what the mapping holds.
+	TooManyFailureDomains = "TooManyFailureDomains"
+
 	// What the document says about erasure coding, which is the one part of a
 	// deployment nothing below the operator checks: the control plane validates
 	// the scheme on the cluster create and counts devices at activation, never
