@@ -206,6 +206,7 @@ func (r *StorageDeviceReconciler) markUnobservable(
 		}
 		switch current.Status.Phase {
 		case simplyblockv1alpha2.StorageDevicePhaseFailed,
+			simplyblockv1alpha2.StorageDevicePhaseMigrated,
 			simplyblockv1alpha2.StorageDevicePhaseRemoved,
 			simplyblockv1alpha2.StorageDevicePhaseUnknown:
 			previous = current.Status.Phase
@@ -263,6 +264,9 @@ func (r *StorageDeviceReconciler) announcePhase(
 	switch sd.Status.Phase {
 	case simplyblockv1alpha2.StorageDevicePhaseFailed:
 		r.Recorder.Eventf(sd, nil, corev1.EventTypeWarning, "DeviceFailed", "DeviceFailed",
+			"%s", sd.Status.Message)
+	case simplyblockv1alpha2.StorageDevicePhaseMigrated:
+		r.Recorder.Eventf(sd, nil, corev1.EventTypeNormal, "DeviceMigrated", "DeviceMigrated",
 			"%s", sd.Status.Message)
 	case simplyblockv1alpha2.StorageDevicePhaseDegraded:
 		r.Recorder.Eventf(sd, nil, corev1.EventTypeWarning, "DeviceDegraded", "DeviceDegraded",
@@ -541,10 +545,13 @@ func deviceMessage(dto subscriptions.DeviceDTO) string {
 			"the control plane reports status %q, which is serving and should not be", dto.Status)
 	case cpDeviceRemoved:
 		return "the control plane reports the device removed from the node"
-	case cpDeviceFailed, cpDeviceFailedAndMigrated:
+	case cpDeviceFailed:
 		return fmt.Sprintf(
 			"the control plane reports status %q, so the cluster is running with less redundancy "+
 				"than it thinks until the device is replaced", dto.Status)
+	case cpDeviceFailedAndMigrated:
+		return "the control plane reports the device out of service and its data rebuilt onto " +
+			"the node's peers, so the cluster's redundancy is whole and the device needs nothing"
 	default:
 		return fmt.Sprintf(
 			"the control plane reports status %q, which this operator does not recognize", dto.Status)
@@ -624,8 +631,10 @@ func devicePhase(dto subscriptions.DeviceDTO) simplyblockv1alpha2.StorageDeviceP
 		return simplyblockv1alpha2.StorageDevicePhaseDegraded
 	case cpDeviceRemoved:
 		return simplyblockv1alpha2.StorageDevicePhaseRemoved
-	case cpDeviceFailed, cpDeviceFailedAndMigrated:
+	case cpDeviceFailed:
 		return simplyblockv1alpha2.StorageDevicePhaseFailed
+	case cpDeviceFailedAndMigrated:
+		return simplyblockv1alpha2.StorageDevicePhaseMigrated
 	default:
 		return simplyblockv1alpha2.StorageDevicePhaseUnknown
 	}

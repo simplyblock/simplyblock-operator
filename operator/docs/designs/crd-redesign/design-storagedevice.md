@@ -191,7 +191,7 @@ whose spec is pure identity, which is unusual in the group and correct here.
 ### 4.2 Status
 
 `status.phase` is the operator's own view: `Online`, `Degraded`, `Unknown`, `Removed`,
-or `Failed`. `status.deviceStatus` is the control plane's own string, kept in its
+`Failed`, or `Migrated`. `status.deviceStatus` is the control plane's own string, kept in its
 spelling for the reason
 [`design-crd-model.md`](design-crd-model.md) §7.8 gives.
 
@@ -206,6 +206,14 @@ operator latching anything: `devicePhase` is a function of the current report, a
 the report does not go back. `Degraded` is the phase a device recovers from and
 `Failed` is the phase it is replaced from, and the two stay distinct because the
 control plane distinguishes them.
+
+**`Migrated` is a failed device whose data has been rebuilt.** The control plane
+reports it as `failed_and_migrated` once the device's data is back to full
+redundancy on the node's peers, which is where every device of a removed node ends
+up and where a device taken out with `Fail` lands once its rebuild finishes. The
+cluster carries no loss for it, so it is not `Failed`: it is announced with a
+`Normal` `DeviceMigrated` event, and it is not counted among a node's failed
+devices. It is terminal like `Failed`.
 
 `status.capacity` carries the device's size and nothing else.
 
@@ -482,9 +490,10 @@ makes the rule worth having, because it is the one that happens on purpose.
 
 **A device already in a terminal phase keeps it, and keeps its reason.** `Failed`
 does not become `Unknown` when the node goes away, because that phase records a
-judgment an unreachable node does not revoke, and `Removed` records a departure
-that has already happened. Neither the phase nor the `status.message` explaining it
-is rewritten, so nothing is written at all for those two. `Unknown` replaces
+judgment an unreachable node does not revoke, `Migrated` records a rebuild that has
+already finished, and `Removed` records a departure that has already happened.
+Neither the phase nor the `status.message` explaining it is rewritten, so nothing
+is written at all for those three. `Unknown` replaces
 `Online` and `Degraded`, which are observations of a device that was serving.
 
 ### 5.3 Deletion is the operator's
@@ -1152,7 +1161,7 @@ const (
 // are deliberately distinct: a degraded device is serving and should not be,
 // while a failed one is not serving and the cluster is running with less
 // redundancy than it thinks until it is replaced.
-// +kubebuilder:validation:Enum=Online;Degraded;Unknown;Removed;Failed
+// +kubebuilder:validation:Enum=Online;Degraded;Unknown;Removed;Failed;Migrated
 type StorageDevicePhase string
 
 const (
@@ -1164,6 +1173,9 @@ const (
 	StorageDevicePhaseUnknown StorageDevicePhase = "Unknown"
 	StorageDevicePhaseRemoved StorageDevicePhase = "Removed"
 	StorageDevicePhaseFailed  StorageDevicePhase = "Failed"
+	// StorageDevicePhaseMigrated is a device taken out of service whose data the
+	// control plane has rebuilt onto the node's peers. It is terminal.
+	StorageDevicePhaseMigrated StorageDevicePhase = "Migrated"
 )
 
 // StorageDeviceRole is what the device carries. It is decided when the node is

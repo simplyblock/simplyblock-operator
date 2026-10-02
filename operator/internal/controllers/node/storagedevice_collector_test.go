@@ -145,6 +145,27 @@ func TestTheCollectorCountsANodesDevicesAndItsFailedOnes(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-02-migrated-device-reads-failed: a migrated device carries
+// no redundancy loss, so it is not a failed one, and its phase has a series of
+// its own.
+func TestTheCollectorDoesNotCountAMigratedDeviceAsFailed(t *testing.T) {
+	c := newCollector(t, nil,
+		collectorDevice("production-7f3a9c-5e0000a1", simplyblockv1alpha2.StorageDevicePhaseMigrated, sdDevice, 4096),
+	)
+
+	if err := c.collect(context.Background()); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+
+	if got := testutil.ToFloat64(nodeDeviceFailedCount.WithLabelValues("production", sdNodeCR)); got != 0 {
+		t.Errorf("failed count = %v, want 0 for a device whose data was rebuilt", got)
+	}
+	if got := testutil.ToFloat64(devicePhaseState.WithLabelValues(
+		"production", sdNodeCR, "production-7f3a9c-5e0000a1", "Migrated")); got != 1 {
+		t.Errorf("the Migrated series = %v, want 1", got)
+	}
+}
+
 // A cluster at seventy per cent with one device at ninety-eight is a cluster
 // about to have a problem its own thresholds cannot see, which is the metric
 // this kind adds that nothing else can.

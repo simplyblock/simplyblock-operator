@@ -312,6 +312,59 @@ func TestUnknownDoesNotOverwriteATerminalPhase(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-02-migrated-device-reads-failed: every device of a node
+// removed exactly to plan ended Failed, announced with a DeviceFailed warning
+// and a message saying the cluster ran with less redundancy until the device was
+// replaced. Its data was rebuilt on the peers, which is the opposite.
+func TestARebuiltDeviceIsAnnouncedAsMigrated(t *testing.T) {
+	cache := sdOnlineCache()
+	dto := cache.devices[sdName()]
+	dto.Status = cpDeviceFailedAndMigrated
+	cache.devices[sdName()] = dto
+
+	r := sdReconciler(t, cache,
+		sdNodeWithStatus(utils.NodeStatusOnline), sdNodeSet(),
+		existingDevice(simplyblockv1alpha2.StorageDevicePhaseFailed, cpDeviceFailed))
+
+	if _, err := r.Reconcile(context.Background(), sdReq()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	sd, err := getSD(t, r.Client)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if sd.Status.Phase != simplyblockv1alpha2.StorageDevicePhaseMigrated {
+		t.Errorf("phase = %q, want Migrated for a device whose data was rebuilt", sd.Status.Phase)
+	}
+	if strings.Contains(sd.Status.Message, "less redundancy") {
+		t.Errorf("message = %q, which tells a reader to replace a device that needs nothing",
+			sd.Status.Message)
+	}
+	reasons := strings.Join(drainReasons(r.Recorder.(*events.FakeRecorder)), "\n")
+	if !strings.Contains(reasons, "Normal DeviceMigrated") || strings.Contains(reasons, "DeviceFailed") {
+		t.Errorf("announced %q, want a Normal DeviceMigrated and no DeviceFailed", reasons)
+	}
+}
+
+// Migrated is terminal like Failed, and an unreachable node does not revoke it.
+func TestUnknownDoesNotOverwriteMigrated(t *testing.T) {
+	migrated := existingDevice(simplyblockv1alpha2.StorageDevicePhaseMigrated, cpDeviceFailedAndMigrated)
+
+	r := sdReconciler(t, &fakeDeviceCache{synced: true, devices: map[string]subscriptions.DeviceDTO{}},
+		sdNodeWithStatus(utils.NodeStatusUnreachable), sdNodeSet(), migrated)
+
+	if _, err := r.Reconcile(context.Background(), sdReq()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	sd, err := getSD(t, r.Client)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if sd.Status.Phase != simplyblockv1alpha2.StorageDevicePhaseMigrated {
+		t.Errorf("phase = %q, want the terminal Migrated kept", sd.Status.Phase)
+	}
+}
+
 // An online node that stops reporting a device is information: the drive is
 // gone. Which of the two events it gets is what says whether anybody asked for
 // it.

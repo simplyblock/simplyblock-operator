@@ -63,31 +63,34 @@ subscription performs.
 
 ### Status Mapping (design §4.2)
 
-| #               | Scenario                                                                              | Type     | Test                                                                                                           |
-|-----------------|---------------------------------------------------------------------------------------|----------|----------------------------------------------------------------------------------------------------------------|
-| U-11            | An online device maps to phase `Online`                                               | Positive | `TestDevicePhaseFromStatus`                                                                                    |
-| U-12            | A failed device maps to `Failed`                                                      | Positive | `TestDevicePhaseFromStatus`                                                                                    |
-| U-13            | A device under test maps to `Degraded`, not `Failed`                                  | Boundary | `TestDevicePhaseFromStatus`                                                                                    |
-| U-14            | A new device not yet in the layout maps to `Degraded`                                 | Boundary | `TestDevicePhaseFromStatus`                                                                                    |
-| U-15            | A removed device maps to `Removed`                                                    | Positive | `TestDevicePhaseFromStatus`                                                                                    |
-| U-16            | An unrecognized device status: preserved verbatim in `status.deviceStatus`            | Positive | `TestStorageDeviceReconcileCreatesAndUpdates`                                                                  |
-| U-18            | The control plane reports no size: `capacity` stays absent, not zero                  | Boundary | `TestADeviceWithNoReportedSizeCarriesNoCapacity`                                                               |
-| U-20            | The control plane reports no hardware fields: the block stays absent                  | Boundary | `TestADeviceWithNoHardwareFieldsCarriesNoHardware`                                                             |
-| U-60            | A `Failed` device on an unreachable node: the phase and its reason are kept           | Boundary | `TestUnknownDoesNotOverwriteATerminalPhase`                                                                    |
-| U-67            | `status.capacity` carries the device's size and nothing else                          | Positive | `TestStorageDeviceReconcileCreatesAndUpdates`                                                                  |
-| U-68            | `status.hardware` carries the PCI address, serial, model, and NVMe controller         | Positive | `TestStorageDeviceReconcileCreatesAndUpdates`                                                                  |
-| U-71            | `status.role` is `Journal` for a `JM_DEV` device and `Storage` for every other        | Positive | `TestDeviceRoleFromStatus`                                                                                     |
-| U-72            | An online device with a failing health signal is `Degraded`, and the message names it | Positive | `TestTheMirrorSaysWhyTheDeviceIsDegraded`                                                                      |
-| U-73            | An unrecognized status is `Unknown`, and the message quotes the status back           | Positive | `TestTheMirrorSaysWhyTheDeviceIsUnrecognized`                                                                  |
-| U-76            | The mirror's own status rewrite does not clear `status.activeOpsRef`                  | Negative | `TestTheMirrorDoesNotClearTheOperationLock`                                                                    |
-| ~~U-17~~        | ~~`status.capacity` carries the total and used bytes~~                                | —        | Superseded by U-67 and U-93: the used size left the status (design §4.2)                                       |
-| ~~U-19~~        | ~~`status.hardware` carries the PCI address, serial, model, and namespace path~~      | —        | Superseded by U-68: the control plane reports no host path (design §4.2)                                       |
-| ~~U-21~~        | ~~`status.role` reflects whether the device carries a journal, storage, or both~~     | —        | Superseded by U-71: the control plane reports one or the other, never both                                     |
-| ~~U-22~~        | ~~A used-bytes value above the total: reported as given, not clamped~~                | —        | Superseded by U-96: the figure is served rather than stored                                                    |
-| ~~U-58~~        | ~~An NVMe device: a PCI address and an `/dev/nvme*` path~~                            | —        | Superseded by U-68                                                                                             |
-| ~~U-59~~        | ~~A logical block device: no PCI address, a `/dev/sd*` path~~                         | —        | Superseded by U-20                                                                                             |
-| ~~U-63 … U-65~~ | ~~`sampledAt`, and the one-percent write threshold~~                                  | —        | Superseded by U-93 … U-102: a device cannot be resized, so there is no stream of samples to damp (design §4.2) |
-| ~~U-66~~        | ~~No reachable metrics source: `capacity` absent, the rest of the status written~~    | —        | Superseded by U-95: the size comes from the stream, so no source costs the readings alone                      |
+| #               | Scenario                                                                                                             | Type       | Test                                                                                                           |
+|-----------------|----------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------------------------------------------------------------|
+| U-11            | An online device maps to phase `Online`                                                                              | Positive   | `TestDevicePhaseFromStatus`                                                                                    |
+| U-12            | A failed device maps to `Failed`                                                                                     | Positive   | `TestDevicePhaseFromStatus`                                                                                    |
+| U-13            | A device under test maps to `Degraded`, not `Failed`                                                                 | Boundary   | `TestDevicePhaseFromStatus`                                                                                    |
+| U-14            | A new device not yet in the layout maps to `Degraded`                                                                | Boundary   | `TestDevicePhaseFromStatus`                                                                                    |
+| U-15            | A removed device maps to `Removed`                                                                                   | Positive   | `TestDevicePhaseFromStatus`                                                                                    |
+| U-144           | A `failed_and_migrated` device maps to `Migrated`, not `Failed` (2026-10-02)                                         | Regression | `TestDevicePhaseFromStatus`                                                                                    |
+| U-145           | A device whose rebuild finished is announced with a Normal `DeviceMigrated`, with no replace-me message (2026-10-02) | Regression | `TestARebuiltDeviceIsAnnouncedAsMigrated`                                                                      |
+| U-16            | An unrecognized device status: preserved verbatim in `status.deviceStatus`                                           | Positive   | `TestStorageDeviceReconcileCreatesAndUpdates`                                                                  |
+| U-18            | The control plane reports no size: `capacity` stays absent, not zero                                                 | Boundary   | `TestADeviceWithNoReportedSizeCarriesNoCapacity`                                                               |
+| U-20            | The control plane reports no hardware fields: the block stays absent                                                 | Boundary   | `TestADeviceWithNoHardwareFieldsCarriesNoHardware`                                                             |
+| U-60            | A `Failed` device on an unreachable node: the phase and its reason are kept                                          | Boundary   | `TestUnknownDoesNotOverwriteATerminalPhase`                                                                    |
+| U-146           | A `Migrated` device on an unreachable node keeps its phase                                                           | Boundary   | `TestUnknownDoesNotOverwriteMigrated`                                                                          |
+| U-67            | `status.capacity` carries the device's size and nothing else                                                         | Positive   | `TestStorageDeviceReconcileCreatesAndUpdates`                                                                  |
+| U-68            | `status.hardware` carries the PCI address, serial, model, and NVMe controller                                        | Positive   | `TestStorageDeviceReconcileCreatesAndUpdates`                                                                  |
+| U-71            | `status.role` is `Journal` for a `JM_DEV` device and `Storage` for every other                                       | Positive   | `TestDeviceRoleFromStatus`                                                                                     |
+| U-72            | An online device with a failing health signal is `Degraded`, and the message names it                                | Positive   | `TestTheMirrorSaysWhyTheDeviceIsDegraded`                                                                      |
+| U-73            | An unrecognized status is `Unknown`, and the message quotes the status back                                          | Positive   | `TestTheMirrorSaysWhyTheDeviceIsUnrecognized`                                                                  |
+| U-76            | The mirror's own status rewrite does not clear `status.activeOpsRef`                                                 | Negative   | `TestTheMirrorDoesNotClearTheOperationLock`                                                                    |
+| ~~U-17~~        | ~~`status.capacity` carries the total and used bytes~~                                                               | —          | Superseded by U-67 and U-93: the used size left the status (design §4.2)                                       |
+| ~~U-19~~        | ~~`status.hardware` carries the PCI address, serial, model, and namespace path~~                                     | —          | Superseded by U-68: the control plane reports no host path (design §4.2)                                       |
+| ~~U-21~~        | ~~`status.role` reflects whether the device carries a journal, storage, or both~~                                    | —          | Superseded by U-71: the control plane reports one or the other, never both                                     |
+| ~~U-22~~        | ~~A used-bytes value above the total: reported as given, not clamped~~                                               | —          | Superseded by U-96: the figure is served rather than stored                                                    |
+| ~~U-58~~        | ~~An NVMe device: a PCI address and an `/dev/nvme*` path~~                                                           | —          | Superseded by U-68                                                                                             |
+| ~~U-59~~        | ~~A logical block device: no PCI address, a `/dev/sd*` path~~                                                        | —          | Superseded by U-20                                                                                             |
+| ~~U-63 … U-65~~ | ~~`sampledAt`, and the one-percent write threshold~~                                                                 | —          | Superseded by U-93 … U-102: a device cannot be resized, so there is no stream of samples to damp (design §4.2) |
+| ~~U-66~~        | ~~No reachable metrics source: `capacity` absent, the rest of the status written~~                                   | —          | Superseded by U-95: the size comes from the stream, so no source costs the readings alone                      |
 
 ### A Device That Stops Being Reported (design §5.2)
 
@@ -130,23 +133,24 @@ File: `operator/internal/webhook/storagedevice_validator_test.go`
 File: `operator/internal/controller/storagedevice_collector_test.go`, and the
 mirror's own file for the events it emits.
 
-| #     | Scenario                                                                                             | Type     | Test                                                   |
-|-------|------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------------|
-| U-89  | A device found for the first time: `DeviceDiscovered`, on the node                                   | Positive | `TestDiscoveryIsAnnouncedOnTheNode`                    |
-| U-74  | A phase change is announced once, and a settled device announces nothing                             | Positive | `TestAPhaseChangeIsAnnouncedOnceOnTheDevice`           |
-| U-75  | A device that was `Online` when first seen is not announced as recovered                             | Negative | `TestRecoveryIsAnnouncedButDiscoveryIsNot`             |
-| U-90  | The size and the phase of each device are published as gauges                                        | Positive | `TestTheCollectorPublishesEachDevicesSizeAndPhase`     |
-| U-91  | A device's phase gauge is 1 for its phase and 0 for every other                                      | Boundary | `TestTheCollectorPublishesEachDevicesSizeAndPhase`     |
-| U-92  | The per-node device count and failed count match the objects                                         | Positive | `TestTheCollectorCountsANodesDevicesAndItsFailedOnes`  |
-| U-93  | What a device holds is published from Prometheus, one query per cluster                              | Positive | `TestTheCollectorPublishesUsedBytesFromPrometheus`     |
-| U-94  | No Prometheus: no used-bytes series, and every other gauge still published                           | Negative | `TestWithoutPrometheusTheRestIsStillPublished`         |
-| U-95  | A Prometheus that errors: the gauges that do not come from it are unaffected                         | Negative | `TestABrokenPrometheusDoesNotStopTheOtherGauges`       |
-| U-96  | A device that went away leaves no series behind                                                      | Boundary | `TestTheCollectorDropsTheSeriesOfADeviceThatIsGone`    |
-| U-120 | A device that went away leaves no crossing behind, so a replacement of the same name is warned about | Boundary | `TestTheCollectorForgetsADeviceThatWentAway`           |
-| U-97  | A device over its cluster's warning threshold: `DeviceNearlyFull`, once                              | Positive | `TestADeviceOverItsClustersThresholdIsWarnedAboutOnce` |
-| U-98  | A device that empties and fills again: a second crossing and a second event                          | Boundary | `TestADeviceOverItsClustersThresholdIsWarnedAboutOnce` |
-| U-99  | A device under the threshold: nothing is announced                                                   | Negative | `TestADeviceUnderTheThresholdIsNotWarnedAbout`         |
-| U-100 | A cluster declaring no threshold: the default applies rather than no warning                         | Boundary | `TestAClusterWithNoThresholdFallsBackToTheDefault`     |
+| #     | Scenario                                                                                             | Type       | Test                                                   |
+|-------|------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------|
+| U-89  | A device found for the first time: `DeviceDiscovered`, on the node                                   | Positive   | `TestDiscoveryIsAnnouncedOnTheNode`                    |
+| U-74  | A phase change is announced once, and a settled device announces nothing                             | Positive   | `TestAPhaseChangeIsAnnouncedOnceOnTheDevice`           |
+| U-75  | A device that was `Online` when first seen is not announced as recovered                             | Negative   | `TestRecoveryIsAnnouncedButDiscoveryIsNot`             |
+| U-90  | The size and the phase of each device are published as gauges                                        | Positive   | `TestTheCollectorPublishesEachDevicesSizeAndPhase`     |
+| U-91  | A device's phase gauge is 1 for its phase and 0 for every other                                      | Boundary   | `TestTheCollectorPublishesEachDevicesSizeAndPhase`     |
+| U-92  | The per-node device count and failed count match the objects                                         | Positive   | `TestTheCollectorCountsANodesDevicesAndItsFailedOnes`  |
+| U-147 | A `Migrated` device is not counted as failed, and has its own phase series (2026-10-02)              | Regression | `TestTheCollectorDoesNotCountAMigratedDeviceAsFailed`  |
+| U-93  | What a device holds is published from Prometheus, one query per cluster                              | Positive   | `TestTheCollectorPublishesUsedBytesFromPrometheus`     |
+| U-94  | No Prometheus: no used-bytes series, and every other gauge still published                           | Negative   | `TestWithoutPrometheusTheRestIsStillPublished`         |
+| U-95  | A Prometheus that errors: the gauges that do not come from it are unaffected                         | Negative   | `TestABrokenPrometheusDoesNotStopTheOtherGauges`       |
+| U-96  | A device that went away leaves no series behind                                                      | Boundary   | `TestTheCollectorDropsTheSeriesOfADeviceThatIsGone`    |
+| U-120 | A device that went away leaves no crossing behind, so a replacement of the same name is warned about | Boundary   | `TestTheCollectorForgetsADeviceThatWentAway`           |
+| U-97  | A device over its cluster's warning threshold: `DeviceNearlyFull`, once                              | Positive   | `TestADeviceOverItsClustersThresholdIsWarnedAboutOnce` |
+| U-98  | A device that empties and fills again: a second crossing and a second event                          | Boundary   | `TestADeviceOverItsClustersThresholdIsWarnedAboutOnce` |
+| U-99  | A device under the threshold: nothing is announced                                                   | Negative   | `TestADeviceUnderTheThresholdIsNotWarnedAbout`         |
+| U-100 | A cluster declaring no threshold: the default applies rather than no warning                         | Boundary   | `TestAClusterWithNoThresholdFallsBackToTheDefault`     |
 
 ### The Readings (design §4.4)
 
