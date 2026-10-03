@@ -53,6 +53,9 @@ type ControlPlane interface {
 	// reports false rather than an error when there is none, because "no such
 	// cluster" is the ordinary answer on the creation path.
 	ClusterByName(ctx context.Context, name string) (utils.ClusterListEntry, bool, error)
+	// Clusters lists every cluster of the control plane, as ClusterByName
+	// reads them.
+	Clusters(ctx context.Context) ([]utils.ClusterListEntry, error)
 
 	// DeleteCluster is retried until it succeeds, and the finalizer is not
 	// removed before it does.
@@ -151,16 +154,24 @@ func (c *httpControlPlane) Cluster(
 	return webapi.ParseClusterResponse(body)
 }
 
-func (c *httpControlPlane) ClusterByName(
-	ctx context.Context, name string,
-) (utils.ClusterListEntry, bool, error) {
+func (c *httpControlPlane) Clusters(ctx context.Context) ([]utils.ClusterListEntry, error) {
 	body, err := c.call(c.adminContext(ctx), http.MethodGet, "/api/v2/clusters/", nil)
 	if err != nil {
-		return utils.ClusterListEntry{}, false, err
+		return nil, err
 	}
 	var entries []utils.ClusterListEntry
 	if err := json.Unmarshal(body, &entries); err != nil {
-		return utils.ClusterListEntry{}, false, fmt.Errorf("read the cluster list: %w", err)
+		return nil, fmt.Errorf("read the cluster list: %w", err)
+	}
+	return entries, nil
+}
+
+func (c *httpControlPlane) ClusterByName(
+	ctx context.Context, name string,
+) (utils.ClusterListEntry, bool, error) {
+	entries, err := c.Clusters(ctx)
+	if err != nil {
+		return utils.ClusterListEntry{}, false, err
 	}
 	for _, entry := range entries {
 		if entry.Name == name {
