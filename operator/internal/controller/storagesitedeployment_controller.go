@@ -543,7 +543,7 @@ func (r *StorageSiteDeploymentReconciler) reconcileDeletion(ctx context.Context,
 	}
 	views := &unstructured.UnstructuredList{}
 	listGVK := managedClusterViewGVK
-	listGVK.Kind += "List"
+	listGVK.Kind += listKindSuffix
 	views.SetGroupVersionKind(listGVK)
 	if err := r.List(ctx, views, client.InNamespace(sd.Spec.Cluster), client.MatchingLabels{storageSiteDeploymentIDLabel: string(sd.UID)}); err != nil && !meta.IsNoMatchError(err) {
 		return ctrl.Result{}, err
@@ -717,3 +717,7 @@ func (r *StorageSiteDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) err
 		Named("storagesitedeployment").
 		Complete(r)
 }
+
+// listKindSuffix turns a kind into its list kind (StorageCluster ->
+// StorageClusterList) for an unstructured list read.
+const listKindSuffix = "List"

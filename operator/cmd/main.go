@@ -973,7 +973,8 @@ func main() {
 			os.Exit(1)
 		}
 	} else {
-		setupLog.Info("OCM ManifestWork resource not served; skipping the TestFailover and StorageSiteDeployment controllers (hub-only)",
+		setupLog.Info("OCM ManifestWork resource not served; skipping the TestFailover and "+
+			"StorageSiteDeployment controllers (hub-only)",
 			"groupVersion", ocmWorkGroupVersion, "resource", ocmManifestWorkResource)
 	}
 	// +kubebuilder:scaffold:builder

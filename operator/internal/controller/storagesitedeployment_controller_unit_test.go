@@ -29,7 +29,7 @@ func newStorageSiteDeploymentReconciler(t *testing.T, objects ...client.Object) 
 	scheme := newTestScheme(t)
 	scheme.AddKnownTypeWithName(managedClusterViewGVK, &unstructured.Unstructured{})
 	listGVK := managedClusterViewGVK
-	listGVK.Kind += "List"
+	listGVK.Kind += listKindSuffix
 	scheme.AddKnownTypeWithName(listGVK, &unstructured.UnstructuredList{})
 	if err := workv1.Install(scheme); err != nil {
 		t.Fatalf("register work/v1 scheme: %v", err)
@@ -312,7 +312,7 @@ func TestStorageSiteDeploymentDeletionOrphansTheSitesStorage(t *testing.T) {
 	}
 	views := &unstructured.UnstructuredList{}
 	listGVK := managedClusterViewGVK
-	listGVK.Kind += "List"
+	listGVK.Kind += listKindSuffix
 	views.SetGroupVersionKind(listGVK)
 	if err := cl.List(context.Background(), views, client.InNamespace(testSDCluster)); err != nil {
 		t.Fatalf("list views: %v", err)
