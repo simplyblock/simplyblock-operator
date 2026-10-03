@@ -634,8 +634,8 @@ function PAppTile({o: a, nav}) {
         {a.siteMapping === "Resolved" && <span className="lab"><i>site mapping</i>resolved</span>}
       </div>
       <div className="mlist">
-        {a.paths.map(p => <div className={"mrow" + (p.verdict === "NotReady" ? " bad" : "")} key={p.name}>
-          <VerdictBadge v={p.verdict} sm /><b>{p.name}</b><span className="spacer"></span>
+        {a.paths.map(p => <div className={"mrow" + (p.active && p.verdict === "NotReady" ? " bad" : "")} key={p.name}>
+          {p.active ? <VerdictBadge v={p.verdict} sm /> : <span className="chip">inactive</span>}<b>{p.name}</b><span className="spacer"></span>
           <span className="mono">{p.actions.join(" · ")}</span>
         </div>)}
         {!a.paths.length && <div className="nolim" style={{padding: "6px 9px"}}>No declared path covers this application yet.</div>}
@@ -1001,7 +1001,7 @@ function PAppDetail({o: a, nav}) {
         badge={<><span className="badge">{a.appKind}</span>{a.method && <span className="badge">{a.method}</span>}{a.protected === false && <span className="badge" style={{color: "var(--bad)"}}>not protected</span>}</>} />
       {!!running.length && <div className="banner" style={{color: "var(--info)", borderColor: "color-mix(in srgb,var(--info) 35%,transparent)", background: "color-mix(in srgb,var(--info) 8%,var(--panel))"}}><Icon n="refresh" s={15} />
         <span><b>{running.length} run{running.length === 1 ? "" : "s"} in progress:</b> {running.map(r => <Ref key={r.id} label={`${r.action || "Test"} ${r.name}`} onClick={() => nav.detail(r)} />)}</span></div>}
-      {a.verdict === "NotReady" && <div className="banner"><Icon n="alert" s={15} /><span><b>Not ready on at least one path.</b> The run-action controls need an override with a reason on that path; the failing checks are listed under Readiness.</span></div>}
+      {a.verdict === "NotReady" && <div className="banner"><Icon n="alert" s={15} /><span><b>Not ready on the path it can move along.</b> The run-action controls need an override with a reason on that path; the failing checks are listed under Readiness.</span></div>}
       {a.awaitingRestore && <div className="banner" style={{color: "var(--warn)", borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)", background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"}}><Icon n="cloud" s={15} /><span><b>Awaiting restore.</b> The DR state was restored onto a rebuilt site; the volumes come back from the newest S3 capture when a dr-admin creates a RestoreAction.</span></div>}
       {a.siteMapping === "Open" && tab !== "mapping" && <div className="banner" style={{color: "var(--warn)", borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)", background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"}}><Icon n="link" s={15} /><span><b>Site mapping open: {a.counts.openFindings} VM network or guest address cannot be carried to a target.</b> <Ref label="See the findings" onClick={() => setTab("mapping")} /></span></div>}
       <div className="stats">
@@ -1017,9 +1017,12 @@ function PAppDetail({o: a, nav}) {
         {k: "binding", label: "Binding & recipe", icon: "link"}, {k: "schedules", label: "Schedules & restores", icon: "camera", n: scheds.length + restores.length}]} active={tab} onChange={setTab} />
       {tab === "mapping" && <MappingPanel a={a} />}
       {tab === "readiness" && <>
-        {a.paths.map(p => <div className="card" key={p.name} style={{marginTop: 10}}>
-          <h3 style={{display: "flex", alignItems: "center", gap: 10}}><span>{p.name}</span><PathArrow from={p.from} to={p.to} /><VerdictBadge v={p.verdict} sm /><span className="spacer" style={{flex: 1}}></span><span style={{textTransform: "none", letterSpacing: 0}}>{p.actions.join(" · ")}{p.since ? ` · since ${fmtAgo(p.since)}` : ""}</span></h3>
-          <div className="bd"><CheckTable checks={p.checks} /></div>
+        {a.paths.map(p => <div className="card" key={p.name} style={{marginTop: 10, opacity: p.active ? 1 : 0.7}}>
+          <h3 style={{display: "flex", alignItems: "center", gap: 10}}><span>{p.name}</span><PathArrow from={p.from} to={p.to} />
+            {p.active ? <VerdictBadge v={p.verdict} sm /> : <span className="chip" title="Readiness of this path counts once the application runs on its source site">inactive · runs on {a.currentCluster}</span>}
+            <span className="spacer" style={{flex: 1}}></span><span style={{textTransform: "none", letterSpacing: 0}}>{p.actions.join(" · ")}{p.since ? ` · since ${fmtAgo(p.since)}` : ""}</span></h3>
+          <div className="bd">{p.active ? <CheckTable checks={p.checks} />
+            : <span style={{color: "var(--dim2)"}}>The application runs on {a.currentCluster}; this path starts at {p.from}. It becomes the path to act on after a move to {p.from} — its checks are evaluated then.</span>}</div>
         </div>)}
         {!a.paths.length && <div className="empty"><Icon n="swap" s={22} /><b>No declared path</b><span>Declare a DRPath between {a.source} and {a.target} on plan {a.planName}. Readiness is computed per declared path.</span></div>}
       </>}

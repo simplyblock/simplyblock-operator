@@ -139,10 +139,22 @@ function normDRPath(o) {
 
 function normPApp(o) {
   const sp = o.spec || {}, st = o.status || {};
+  // A path is active when it starts where the application runs: only along it
+  // can an action move the application now. The other path (the way back) is
+  // evaluated by the hub too and fails at-path-source, which is not a problem
+  // of the application -- it must not make the application "not ready". The
+  // hub's own at-path-source check decides it: a path's from is a site name,
+  // currentCluster a cluster name, and they only coincide when sites are named
+  // after their clusters.
+  const atSource = p => !(((p.readiness || {}).checks) || []).some(c => c.name === "at-path-source" && c.status === "Fail");
   const paths = (st.paths || []).map(p => ({name: p.name, from: p.from, to: p.to, actions: p.actions || [],
-    verdict: ((p.readiness || {}).verdict) || "Unknown", checks: ((p.readiness || {}).checks) || [], since: (p.readiness || {}).lastTransitionTime}));
+    active: atSource(p),
+    verdict: ((p.readiness || {}).verdict) || "Unknown", checks: ((p.readiness || {}).checks) || [], since: (p.readiness || {}).lastTransitionTime}))
+    .sort((x, y) => (y.active ? 1 : 0) - (x.active ? 1 : 0));
   const protectedOK = drCondOK(o, "Protected");
-  const verdict = paths.length ? worstVerdict(paths.map(p => p.verdict)) : (protectedOK === false ? "NotReady" : "Unknown");
+  const activePaths = paths.filter(p => p.active);
+  const verdict = activePaths.length ? worstVerdict(activePaths.map(p => p.verdict))
+    : paths.length ? "Unknown" : (protectedOK === false ? "NotReady" : "Unknown");
   const anns = drMeta(o).annotations || {};
   return reg(Object.assign(base(o, "papp"), {
     status: verdict, verdict, protected: protectedOK, bound: drCondOK(o, "Bound"),

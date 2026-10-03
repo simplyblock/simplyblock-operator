@@ -3742,17 +3742,27 @@ function normDRPath(o) {
 function normPApp(o) {
   const sp = o.spec || {},
     st = o.status || {};
+  // A path is active when it starts where the application runs: only along it
+  // can an action move the application now. The other path (the way back) is
+  // evaluated by the hub too and fails at-path-source, which is not a problem
+  // of the application -- it must not make the application "not ready". The
+  // hub's own at-path-source check decides it: a path's from is a site name,
+  // currentCluster a cluster name, and they only coincide when sites are named
+  // after their clusters.
+  const atSource = p => !((p.readiness || {}).checks || []).some(c => c.name === "at-path-source" && c.status === "Fail");
   const paths = (st.paths || []).map(p => ({
     name: p.name,
     from: p.from,
     to: p.to,
     actions: p.actions || [],
+    active: atSource(p),
     verdict: (p.readiness || {}).verdict || "Unknown",
     checks: (p.readiness || {}).checks || [],
     since: (p.readiness || {}).lastTransitionTime
-  }));
+  })).sort((x, y) => (y.active ? 1 : 0) - (x.active ? 1 : 0));
   const protectedOK = drCondOK(o, "Protected");
-  const verdict = paths.length ? worstVerdict(paths.map(p => p.verdict)) : protectedOK === false ? "NotReady" : "Unknown";
+  const activePaths = paths.filter(p => p.active);
+  const verdict = activePaths.length ? worstVerdict(activePaths.map(p => p.verdict)) : paths.length ? "Unknown" : protectedOK === false ? "NotReady" : "Unknown";
   const anns = drMeta(o).annotations || {};
   return reg(Object.assign(base(o, "papp"), {
     status: verdict,
@@ -25276,12 +25286,14 @@ function PAppTile({
   }, /*#__PURE__*/React.createElement("i", null, "site mapping"), "resolved")), /*#__PURE__*/React.createElement("div", {
     className: "mlist"
   }, a.paths.map(p => /*#__PURE__*/React.createElement("div", {
-    className: "mrow" + (p.verdict === "NotReady" ? " bad" : ""),
+    className: "mrow" + (p.active && p.verdict === "NotReady" ? " bad" : ""),
     key: p.name
-  }, /*#__PURE__*/React.createElement(VerdictBadge, {
+  }, p.active ? /*#__PURE__*/React.createElement(VerdictBadge, {
     v: p.verdict,
     sm: true
-  }), /*#__PURE__*/React.createElement("b", null, p.name), /*#__PURE__*/React.createElement("span", {
+  }) : /*#__PURE__*/React.createElement("span", {
+    className: "chip"
+  }, "inactive"), /*#__PURE__*/React.createElement("b", null, p.name), /*#__PURE__*/React.createElement("span", {
     className: "spacer"
   }), /*#__PURE__*/React.createElement("span", {
     className: "mono"
@@ -26303,7 +26315,7 @@ function PAppDetail({
   }, /*#__PURE__*/React.createElement(Icon, {
     n: "alert",
     s: 15
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Not ready on at least one path."), " The run-action controls need an override with a reason on that path; the failing checks are listed under Readiness.")), a.awaitingRestore && /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Not ready on the path it can move along."), " The run-action controls need an override with a reason on that path; the failing checks are listed under Readiness.")), a.awaitingRestore && /*#__PURE__*/React.createElement("div", {
     className: "banner",
     style: {
       color: "var(--warn)",
@@ -26389,7 +26401,8 @@ function PAppDetail({
     className: "card",
     key: p.name,
     style: {
-      marginTop: 10
+      marginTop: 10,
+      opacity: p.active ? 1 : 0.7
     }
   }, /*#__PURE__*/React.createElement("h3", {
     style: {
@@ -26400,10 +26413,13 @@ function PAppDetail({
   }, /*#__PURE__*/React.createElement("span", null, p.name), /*#__PURE__*/React.createElement(PathArrow, {
     from: p.from,
     to: p.to
-  }), /*#__PURE__*/React.createElement(VerdictBadge, {
+  }), p.active ? /*#__PURE__*/React.createElement(VerdictBadge, {
     v: p.verdict,
     sm: true
-  }), /*#__PURE__*/React.createElement("span", {
+  }) : /*#__PURE__*/React.createElement("span", {
+    className: "chip",
+    title: "Readiness of this path counts once the application runs on its source site"
+  }, "inactive \xB7 runs on ", a.currentCluster), /*#__PURE__*/React.createElement("span", {
     className: "spacer",
     style: {
       flex: 1
@@ -26415,9 +26431,13 @@ function PAppDetail({
     }
   }, p.actions.join(" · "), p.since ? ` · since ${fmtAgo(p.since)}` : "")), /*#__PURE__*/React.createElement("div", {
     className: "bd"
-  }, /*#__PURE__*/React.createElement(CheckTable, {
+  }, p.active ? /*#__PURE__*/React.createElement(CheckTable, {
     checks: p.checks
-  })))), !a.paths.length && /*#__PURE__*/React.createElement("div", {
+  }) : /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "var(--dim2)"
+    }
+  }, "The application runs on ", a.currentCluster, "; this path starts at ", p.from, ". It becomes the path to act on after a move to ", p.from, " \u2014 its checks are evaluated then.")))), !a.paths.length && /*#__PURE__*/React.createElement("div", {
     className: "empty"
   }, /*#__PURE__*/React.createElement(Icon, {
     n: "swap",
