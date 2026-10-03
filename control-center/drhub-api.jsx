@@ -85,7 +85,9 @@ const drCondOK = (o, type) => { const c = drCond(o, type); return c ? (c.status 
 const drConds = o => (((o.status || {}).conditions) || []).map(c => ({type: c.type, status: c.status, reason: c.reason, message: c.message, since: c.lastTransitionTime}));
 const nsName = (ns, name) => ns ? `${ns}/${name}` : name;
 const splitRef = s => { const i = String(s || "").indexOf("/"); return i < 0 ? {namespace: "", name: s || ""} : {namespace: s.slice(0, i), name: s.slice(i + 1)}; };
-const refName = r => (r && r.name) || "";
+// A reference is a plain name (DRPath/ProtectedApplication planRef, every
+// pathRef) or a LocalRef object ({name}): both read as the name.
+const refName = r => typeof r === "string" ? r : (r && r.name) || "";
 const worstVerdict = vs => vs.reduce((w, v) => (VERDICT_RANK[v] || 0) > (VERDICT_RANK[w] || 0) ? v : w, vs[0] || "Unknown");
 const isSyncType = t => /^sync/.test(t || "");
 const durMs = (a, b) => a && b ? Math.max(0, Date.parse(b) - Date.parse(a)) : a ? Math.max(0, Date.now() - Date.parse(a)) : null;
@@ -371,14 +373,14 @@ const drhub = {
   runAction: ({kind, target, path, override, timeout}) => k8s.create("RecoveryAction", {
     apiVersion: DR_API_GROUP, kind: "RecoveryAction",
     metadata: {name: dns63(`${kind}-${target.name}-${stamp()}`), namespace: target.namespace},
-    spec: Object.assign({kind}, kind !== "Restart" && path ? {pathRef: {name: path}} : {},
+    spec: Object.assign({kind}, kind !== "Restart" && path ? {pathRef: path} : {},
       target.kind === "rplan" ? {planRef: {name: target.name}} : {applicationRef: {name: target.name}},
       override ? {override: {reason: override}} : {}, timeout ? {timeout} : {})
   }, {namespace: target.namespace}),
   runTest: ({target, path, cloneSource, holdFor, maxLifetime}) => k8s.create("TestBubble", {
     apiVersion: DR_API_GROUP, kind: "TestBubble",
     metadata: {name: dns63(`test-${target.name}-${stamp()}`), namespace: target.namespace},
-    spec: Object.assign({pathRef: {name: path}}, target.kind === "rplan" ? {planRef: {name: target.name}} : {applicationRef: {name: target.name}},
+    spec: Object.assign({pathRef: path}, target.kind === "rplan" ? {planRef: {name: target.name}} : {applicationRef: {name: target.name}},
       cloneSource ? {cloneSource} : {}, holdFor ? {holdFor} : {}, maxLifetime ? {maxLifetime} : {})
   }, {namespace: target.namespace}),
   abortTest: t => k8s.patch("TestBubble", t.name, {spec: {abort: true}}, {namespace: t.namespace}),
@@ -390,7 +392,7 @@ const drhub = {
   }, {namespace: app.namespace}),
   createSchedule: ({name, namespace, schedule, target, path, cloneSource, keepLast, keepFor, suspend}) => k8s.create("TestSchedule", {
     apiVersion: DR_API_GROUP, kind: "TestSchedule", metadata: {name: dns63(name), namespace},
-    spec: Object.assign({schedule, template: Object.assign({pathRef: {name: path}}, target.kind === "rplan" ? {planRef: {name: target.name}} : {applicationRef: {name: target.name}},
+    spec: Object.assign({schedule, template: Object.assign({pathRef: path}, target.kind === "rplan" ? {planRef: {name: target.name}} : {applicationRef: {name: target.name}},
       cloneSource ? {cloneSource} : {})}, {retention: Object.assign({}, keepLast ? {keepLast: Number(keepLast)} : {}, keepFor ? {keepFor} : {})}, suspend ? {suspend: true} : {})
   }, {namespace}),
   suspendSchedule: (s, suspend) => k8s.patch("TestSchedule", s.name, {spec: {suspend: !!suspend}}, {namespace: s.namespace}),

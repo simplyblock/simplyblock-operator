@@ -332,7 +332,7 @@ const newPathDialog = plans => ({
       {k: "handover", label: "Announcement hand-over on move", type: "checkbox", def: false}
     ].filter(Boolean);
   },
-  run: v => drhub.createPath({name: v.name.trim(), spec: Object.assign({from: v.from, to: v.to, planRef: {name: v.plan}, actions: v.actions, announcementHandover: !!v.handover},
+  run: v => drhub.createPath({name: v.name.trim(), spec: Object.assign({from: v.from, to: v.to, planRef: v.plan, actions: v.actions, announcementHandover: !!v.handover},
     v.actions.includes("Test") ? {test: Object.assign({mode: "bubble", isolatedNad: v.nad.trim()}, v.cap ? {quotas: {maxCloneCapacity: v.cap.trim()}} : {}, v.recent ? {recentWithin: v.recent.trim()} : {})} : {})})
 });
 const protectAppDialogDR = (plans, cfg) => ({
@@ -366,7 +366,7 @@ const protectAppDialogDR = (plans, cfg) => ({
     const pvc = kvToObj(v.pvc);
     const sel = Object.keys(pvc).length ? {matchLabels: pvc} : {};
     const tiers = tiersSpec(v.tiers), probes = probesSpec(v.probes);
-    const spec = Object.assign({planRef: {name: v.plan}, source: v.source, target: v.target, kind: v.appKind},
+    const spec = Object.assign({planRef: v.plan, source: v.source, target: v.target, kind: v.appKind},
       v.method ? {method: v.method} : {}, tiers.length ? {tiers} : {}, probes.length ? {health: {probes}} : {},
       v.appKind === "managed" ? {managed: {placementRef: {name: v.placement.trim()}, pvcSelector: sel}}
         : {discovered: Object.assign({protectedNamespaces: csv(v.namespaces), pvcSelector: sel}, v.recipe && v.recipe.trim() ? {recipeRef: {name: v.recipe.trim()}} : {})});
@@ -404,7 +404,7 @@ const newRPlanDialog = (paths, apps) => ({
   },
   run: v => {
     const prio = Object.fromEntries(csv(v.priorities).map(x => x.split("=")).filter(x => x.length === 2).map(([k, p]) => [k, Number(p) || 1]));
-    return drhub.createRPlan({name: v.name.trim(), namespace: v.namespace, spec: {pathRef: {name: v.path}, applications: v.apps.map(a => ({name: a, priority: prio[a] || 1})),
+    return drhub.createRPlan({name: v.name.trim(), namespace: v.namespace, spec: {pathRef: v.path, applications: v.apps.map(a => ({name: a, priority: prio[a] || 1})),
       gates: {betweenPriorities: v.gate || "allHealthy"}, continueOnFailure: !!v.cont}});
   }
 });

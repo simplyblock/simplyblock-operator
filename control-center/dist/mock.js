@@ -10787,9 +10787,7 @@ window.SB_DR = {
     spec: Object.assign({
       from,
       to,
-      planRef: {
-        name: plan
-      },
+      planRef: plan,
       actions,
       announcementHandover: false
     }, extra || {}),
@@ -10845,9 +10843,7 @@ window.SB_DR = {
   const app = (name, ns, plan, source, target, kind, extra, paths, status) => Object.assign(api("ProtectedApplication"), {
     metadata: meta(name, ns, (extra || {}).meta),
     spec: Object.assign({
-      planRef: {
-        name: plan
-      },
+      planRef: plan,
       source,
       target,
       kind
@@ -11276,9 +11272,7 @@ window.SB_DR = {
   store.RecoveryPlan.push(Object.assign(api("RecoveryPlan"), {
     metadata: meta("tier-1", OPS),
     spec: {
-      pathRef: {
-        name: "fra-a-to-fra-b"
-      },
+      pathRef: "fra-a-to-fra-b",
       applications: [{
         name: "ledger",
         priority: 1
@@ -11319,9 +11313,7 @@ window.SB_DR = {
     }),
     spec: {
       kind: "Relocate",
-      pathRef: {
-        name: "fra-b-to-fra-a"
-      },
+      pathRef: "fra-b-to-fra-a",
       applicationRef: {
         name: "ledger"
       },
@@ -11369,9 +11361,7 @@ window.SB_DR = {
     }),
     spec: {
       kind: "Failover",
-      pathRef: {
-        name: "fra-a-to-fra-b"
-      },
+      pathRef: "fra-a-to-fra-b",
       applicationRef: {
         name: "payments"
       },
@@ -11426,9 +11416,7 @@ window.SB_DR = {
     }),
     spec: {
       kind: "Relocate",
-      pathRef: {
-        name: "fra-a-to-fra-b"
-      },
+      pathRef: "fra-a-to-fra-b",
       applicationRef: {
         name: "shop"
       },
@@ -11454,9 +11442,7 @@ window.SB_DR = {
       creationTimestamp: agoIso(60 * 30 + 25)
     }),
     spec: {
-      pathRef: {
-        name: "fra-a-to-fra-b"
-      },
+      pathRef: "fra-a-to-fra-b",
       applicationRef: {
         name: "shop"
       },
@@ -11528,9 +11514,7 @@ window.SB_DR = {
       creationTimestamp: agoIso(40)
     }),
     spec: {
-      pathRef: {
-        name: "fra-a-to-fra-b"
-      },
+      pathRef: "fra-a-to-fra-b",
       applicationRef: {
         name: "payments"
       },
@@ -11572,9 +11556,7 @@ window.SB_DR = {
     spec: {
       schedule: "0 3 * * 0",
       template: {
-        pathRef: {
-          name: "fra-a-to-fra-b"
-        },
+        pathRef: "fra-a-to-fra-b",
         applicationRef: {
           name: "shop"
         },
@@ -12031,6 +12013,21 @@ window.SB_DR = {
       err: "metadata.name is required",
       reason: "Invalid"
     };
+    // The API server's schema: these references are plain names, not {name}
+    // objects. Rejected the way the real server rejects them, so a form that
+    // sends the wrong shape fails here too (2026-10-03, DRPath planRef).
+    const sp = body.spec || {};
+    const mustBeName = {
+      DRPath: ["planRef"],
+      ProtectedApplication: ["planRef"],
+      RecoveryPlan: ["pathRef"],
+      RecoveryAction: ["pathRef"],
+      TestBubble: ["pathRef"]
+    }[kind] || [];
+    for (const f of mustBeName) if (sp[f] !== undefined && typeof sp[f] !== "string") return {
+      err: `${kind}.dr.simplyblock.io "${m.name}" is invalid: spec.${f}: Invalid value: "object": spec.${f} in body must be of type string: "object"`,
+      reason: "Invalid"
+    };
     if (findRef(kind, m.namespace, m.name)) return {
       err: `${kind.toLowerCase()}s "${m.name}" already exists`,
       reason: "AlreadyExists"
@@ -12053,9 +12050,9 @@ window.SB_DR = {
       };
       const app = body.spec.applicationRef && findRef("ProtectedApplication", m.namespace, body.spec.applicationRef.name);
       if (app && body.spec.kind !== "Restart") {
-        const p = (app.status.paths || []).find(x => x.name === (body.spec.pathRef || {}).name);
+        const p = (app.status.paths || []).find(x => x.name === body.spec.pathRef);
         if (!p) return {
-          err: `application ${app.metadata.name} is not on path ${(body.spec.pathRef || {}).name}`,
+          err: `application ${app.metadata.name} is not on path ${body.spec.pathRef}`,
           reason: "Invalid"
         };
         if (p.readiness.verdict === "NotReady" && !body.spec.override) return {
@@ -12181,7 +12178,7 @@ window.SB_DR = {
       err: `${kind.toLowerCase()}s "${name}" not found`,
       reason: "NotFound"
     };
-    const inUse = kind === "ProtectionPlan" ? store.DRPath.some(p => p.spec.planRef.name === name) : kind === "DRPath" ? store.ProtectedApplication.some(a => (a.status.paths || []).some(p => p.name === name)) : false;
+    const inUse = kind === "ProtectionPlan" ? store.DRPath.some(p => p.spec.planRef === name) : kind === "DRPath" ? store.ProtectedApplication.some(a => (a.status.paths || []).some(p => p.name === name)) : false;
     if (inUse && (o.metadata.annotations || {})["dr.simplyblock.io/confirm-delete"] !== "true") return {
       err: `admission webhook denied the request: ${kind} ${name} is still in use; annotate dr.simplyblock.io/confirm-delete=true to confirm`,
       reason: "Forbidden"

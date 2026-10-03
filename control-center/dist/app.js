@@ -3629,7 +3629,9 @@ const splitRef = s => {
     name: s.slice(i + 1)
   };
 };
-const refName = r => r && r.name || "";
+// A reference is a plain name (DRPath/ProtectedApplication planRef, every
+// pathRef) or a LocalRef object ({name}): both read as the name.
+const refName = r => typeof r === "string" ? r : r && r.name || "";
 const worstVerdict = vs => vs.reduce((w, v) => (VERDICT_RANK[v] || 0) > (VERDICT_RANK[w] || 0) ? v : w, vs[0] || "Unknown");
 const isSyncType = t => /^sync/.test(t || "");
 const durMs = (a, b) => a && b ? Math.max(0, Date.parse(b) - Date.parse(a)) : a ? Math.max(0, Date.now() - Date.parse(a)) : null;
@@ -4255,9 +4257,7 @@ const drhub = {
     spec: Object.assign({
       kind
     }, kind !== "Restart" && path ? {
-      pathRef: {
-        name: path
-      }
+      pathRef: path
     } : {}, target.kind === "rplan" ? {
       planRef: {
         name: target.name
@@ -4290,9 +4290,7 @@ const drhub = {
       namespace: target.namespace
     },
     spec: Object.assign({
-      pathRef: {
-        name: path
-      }
+      pathRef: path
     }, target.kind === "rplan" ? {
       planRef: {
         name: target.name
@@ -4365,9 +4363,7 @@ const drhub = {
     spec: Object.assign({
       schedule,
       template: Object.assign({
-        pathRef: {
-          name: path
-        }
+        pathRef: path
       }, target.kind === "rplan" ? {
         planRef: {
           name: target.name
@@ -24274,9 +24270,7 @@ const newPathDialog = plans => ({
     spec: Object.assign({
       from: v.from,
       to: v.to,
-      planRef: {
-        name: v.plan
-      },
+      planRef: v.plan,
       actions: v.actions,
       announcementHandover: !!v.handover
     }, v.actions.includes("Test") ? {
@@ -24425,9 +24419,7 @@ const protectAppDialogDR = (plans, cfg) => ({
     const tiers = tiersSpec(v.tiers),
       probes = probesSpec(v.probes);
     const spec = Object.assign({
-      planRef: {
-        name: v.plan
-      },
+      planRef: v.plan,
       source: v.source,
       target: v.target,
       kind: v.appKind
@@ -24578,9 +24570,7 @@ const newRPlanDialog = (paths, apps) => ({
       name: v.name.trim(),
       namespace: v.namespace,
       spec: {
-        pathRef: {
-          name: v.path
-        },
+        pathRef: v.path,
         applications: v.apps.map(a => ({
           name: a,
           priority: prio[a] || 1
