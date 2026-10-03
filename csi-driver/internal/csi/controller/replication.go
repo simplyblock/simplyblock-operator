@@ -172,7 +172,8 @@ func resolveChain(ctx context.Context, h *lvol.Handle, client *atlascp.Client) (
 		}
 	}
 	if len(hops) > maxChainHops {
-		return nil, false, fmt.Errorf("replication chain of %s did not converge within %d hops", hops[0].h.Handle(), maxChainHops)
+		return nil, false, fmt.Errorf("replication chain of %s did not converge within %d hops",
+			hops[0].h.Handle(), maxChainHops)
 	}
 	return hops, known, nil
 }
