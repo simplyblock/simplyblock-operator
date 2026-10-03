@@ -962,8 +962,18 @@ func main() {
 			setupLog.Error(err, "unable to create controller", "controller", "TestFailover")
 			os.Exit(1)
 		}
+		// A managed site's storage deployment is requested from the hub through
+		// the same work API, so the controller is hub-only too.
+		if err := (&controller.StorageSiteDeploymentReconciler{
+			Client:   mgr.GetClient(),
+			Scheme:   mgr.GetScheme(),
+			Recorder: mgr.GetEventRecorder("storagesitedeployment-controller"),
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "StorageSiteDeployment")
+			os.Exit(1)
+		}
 	} else {
-		setupLog.Info("OCM ManifestWork resource not served; skipping TestFailover controller (hub-only)",
+		setupLog.Info("OCM ManifestWork resource not served; skipping the TestFailover and StorageSiteDeployment controllers (hub-only)",
 			"groupVersion", ocmWorkGroupVersion, "resource", ocmManifestWorkResource)
 	}
 	// +kubebuilder:scaffold:builder
