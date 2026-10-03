@@ -255,6 +255,14 @@ const RESOURCES = {
     core: OCM_CLUSTER_API_GROUP,
     namespaced: false
   },
+  // a managed site's storage deployment, requested from the hub (operator,
+  // storage.simplyblock.io/v1alpha2); the operator carries it to the site
+  StorageSiteDeployment: {
+    plural: "storagesitedeployments",
+    short: "sbsd",
+    core: "storage.simplyblock.io/v1alpha2",
+    namespaced: true
+  },
   // access reviews: the API server answers what the caller may do
   SelfSubjectAccessReview: {
     plural: "selfsubjectaccessreviews",
@@ -3347,7 +3355,8 @@ const DR_KINDS = {
   restore: "RestoreAction",
   siteprofile: "SiteProfile",
   drconfig: "DRConfig",
-  dhcpserver: "DHCPServer"
+  dhcpserver: "DHCPServer",
+  sitedeploy: "StorageSiteDeployment"
 };
 const DR_ANN = {
   createdBy: "dr.simplyblock.io/created-by",
@@ -4003,6 +4012,75 @@ function normDHCPServer(o) {
     }
   }));
 }
+
+// A managed site's storage deployment (StorageSiteDeployment): the hub-side
+// request the operator carries to the site through OCM. The status projects
+// the site's draft (the discovered nodes, for review) and, once approved, the
+// StorageCluster it expanded into.
+const SITE_DEPLOY_STATUS = {
+  Pending: {
+    c: "var(--idle)",
+    rank: 2,
+    label: "pending"
+  },
+  Discovering: {
+    c: "var(--info)",
+    rank: 1,
+    label: "discovering",
+    blink: true
+  },
+  Drafted: {
+    c: "var(--accent)",
+    rank: 3,
+    label: "awaiting approval"
+  },
+  Deploying: {
+    c: "var(--info)",
+    rank: 1,
+    label: "deploying",
+    blink: true
+  },
+  Online: {
+    c: "var(--ok)",
+    rank: 0,
+    label: "online"
+  },
+  Failed: {
+    c: "var(--bad)",
+    rank: 4,
+    label: "failed"
+  }
+};
+Object.entries(SITE_DEPLOY_STATUS).forEach(([k, v]) => {
+  if (!STATUS_META[k]) STATUS_META[k] = v;
+});
+function normSiteDeploy(o) {
+  const sp = o.spec || {},
+    st = o.status || {};
+  const draft = st.draft || null,
+    sc = st.storageCluster || null;
+  const nodeSets = draft && draft.nodeSets || [];
+  const workers = nodeSets.flatMap(s => (s.groups || []).flatMap(g => g.workers || []));
+  return reg(Object.assign(base(o, "sitedeploy"), {
+    status: st.phase || "Pending",
+    message: st.message || "",
+    site: sp.cluster || "",
+    siteNamespace: sp.siteNamespace || "simplyblock",
+    draftName: sp.draftName || "site-draft",
+    discover: sp.discover || {},
+    sizing: sp.sizing || null,
+    approved: !!sp.approved,
+    draft,
+    nodeSets,
+    workers,
+    storageCluster: sc,
+    workName: st.workName || "",
+    counts: {
+      nodes: workers.length,
+      storageNodes: sc && sc.nodes ? sc.nodes.length : 0
+    }
+  }));
+}
 const NORM = {
   pplan: normPPlan,
   drpath: normDRPath,
@@ -4014,7 +4092,8 @@ const NORM = {
   restore: normRestore,
   siteprofile: normSiteProfile,
   drconfig: normDRConfig,
-  dhcpserver: normDHCPServer
+  dhcpserver: normDHCPServer,
+  sitedeploy: normSiteDeploy
 };
 
 // The resolution inbox (design 13.1): open findings of every application,
@@ -4112,6 +4191,11 @@ const drhub = {
   dhcpServers: () => drList("dhcpserver"),
   dhcpServer: drById("dhcpserver"),
   siteDHCPServers: id => Promise.all([drhub.siteProfile(id), drhub.dhcpServers()]).then(([sp, ds]) => ds.filter(d => d.site === sp.name)),
+  siteDeploys: () => drList("sitedeploy").catch(e => {
+    if (e && e.status === 404) return [];
+    throw e;
+  }),
+  siteDeploy: drById("sitedeploy"),
   configs: () => drList("drconfig"),
   config: () => drList("drconfig").then(cs => cs.find(c => c.name === "default") || cs[0] || null),
   // derived Ramen objects, read-only
@@ -4313,6 +4397,22 @@ const drhub = {
     },
     spec: spec.spec
   }),
+  // Mutable parts of a plan's spec: the per-site S3 stores and the Velero
+  // namespace (Ramen keys on sites and methods, which stay).
+  patchPlan: (p, spec) => k8s.patch("ProtectionPlan", p.name, {
+    spec
+  }),
+  // Tiers (boot order) and health probes of an application; a merge patch
+  // replaces the lists wholesale.
+  patchApp: (a, spec) => k8s.patch("ProtectedApplication", a.name, {
+    spec
+  }, {
+    namespace: a.namespace
+  }),
+  // A site profile's bindings: logical networks, guest networks, DHCP server.
+  patchSiteProfile: (s, spec) => k8s.patch("SiteProfile", s.name, {
+    spec
+  }),
   createPath: spec => k8s.create("DRPath", {
     apiVersion: DR_API_GROUP,
     kind: "DRPath",
@@ -4373,6 +4473,50 @@ const drhub = {
       }
     }
   }),
+  // A managed site's storage (StorageSiteDeployment): the operator runs the
+  // discovery on the site, writes the sizing onto the draft it produced and
+  // delivers the approval -- all through OCM; the console writes this object
+  // only. Approval is one-way.
+  createSiteDeploy: ({
+    site,
+    namespace,
+    enableControlPlaneNodes,
+    workers,
+    sizing
+  }) => k8s.create("StorageSiteDeployment", {
+    apiVersion: "storage.simplyblock.io/v1alpha2",
+    kind: "StorageSiteDeployment",
+    metadata: {
+      name: dns63(site),
+      namespace
+    },
+    spec: Object.assign({
+      cluster: site,
+      discover: Object.assign({
+        enableControlPlaneNodes: !!enableControlPlaneNodes
+      }, workers && workers.length ? {
+        workers
+      } : {})
+    }, sizing && Object.keys(sizing).length ? {
+      sizing
+    } : {})
+  }, {
+    namespace
+  }),
+  patchSiteDeploySizing: (d, sizing) => k8s.patch("StorageSiteDeployment", d.name, {
+    spec: {
+      sizing
+    }
+  }, {
+    namespace: d.namespace
+  }),
+  approveSiteDeploy: d => k8s.patch("StorageSiteDeployment", d.name, {
+    spec: {
+      approved: true
+    }
+  }, {
+    namespace: d.namespace
+  }),
   // Optional per-application knob: opt out of the automatic restart after a
   // storage recovery (ADR 0017).
   setAutoRestart: (a, on) => k8s.patch("ProtectedApplication", a.name, {
@@ -4415,7 +4559,8 @@ Object.assign(GETTER, {
   restore: drhub.restoreAction,
   siteprofile: drhub.siteProfile,
   drconfig: drhub.config,
-  dhcpserver: drhub.dhcpServer
+  dhcpserver: drhub.dhcpServer,
+  sitedeploy: drhub.siteDeploy
 });
 Object.assign(window, {
   drhub,
@@ -4443,7 +4588,8 @@ Object.assign(window, {
   normRestore,
   normSiteProfile,
   normDRConfig,
-  normDHCPServer
+  normDHCPServer,
+  normSiteDeploy
 });
 })();
 // ---- agent.jsx ----
@@ -4992,7 +5138,8 @@ const KIND_ENTITY = {
   restore: "drhub",
   drconfig: "drhub",
   siteprofile: "drhub",
-  dhcpserver: "drhub"
+  dhcpserver: "drhub",
+  sitedeploy: "drhub"
 };
 // UI kind -> the CRD resource the API server checks (§3.5, the console's column)
 const KIND_RESOURCE = {
@@ -5039,7 +5186,8 @@ const KIND_RESOURCE = {
   restore: "restoreactions",
   drconfig: "drconfigs",
   siteprofile: "siteprofiles",
-  dhcpserver: "dhcpservers"
+  dhcpserver: "dhcpservers",
+  sitedeploy: "storagesitedeployments"
 };
 // UI kind -> API group, where it is not the default simplyblock group
 const KIND_GROUP = {
@@ -5053,7 +5201,8 @@ const KIND_GROUP = {
   restore: "dr.simplyblock.io",
   drconfig: "dr.simplyblock.io",
   siteprofile: "sitemap.simplyblock.io",
-  dhcpserver: "sitemap.simplyblock.io"
+  dhcpserver: "sitemap.simplyblock.io",
+  sitedeploy: "storage.simplyblock.io"
 };
 const ENTITY_GROUP = {
   drhub: "dr.simplyblock.io"
@@ -9152,6 +9301,77 @@ function Field({
       n: "plus",
       s: 11
     }), "Add tag")), f.hint && /*#__PURE__*/React.createElement("span", {
+      className: "fhint"
+    }, f.hint));
+  }
+  if (f.type === "rows") {
+    const rows = val || [];
+    const set = (i, k, x) => setVal(rows.map((r, j) => j === i ? Object.assign({}, r, {
+      [k]: x
+    }) : r));
+    const cell = (r, i, c) => {
+      const w = {
+        flex: c.flex || 1,
+        minWidth: 0
+      };
+      if (c.type === "select") return /*#__PURE__*/React.createElement("select", {
+        key: c.k,
+        className: "finput sm",
+        style: w,
+        value: r[c.k] || "",
+        onChange: e => set(i, c.k, e.target.value)
+      }, (c.options || []).map(o => /*#__PURE__*/React.createElement("option", {
+        key: o.v,
+        value: o.v
+      }, o.l)));
+      return /*#__PURE__*/React.createElement("input", {
+        key: c.k,
+        className: "finput sm",
+        style: w,
+        type: c.type === "number" ? "number" : "text",
+        placeholder: c.placeholder || "",
+        value: r[c.k] == null ? "" : r[c.k],
+        onChange: e => set(i, c.k, e.target.value)
+      });
+    };
+    return /*#__PURE__*/React.createElement("label", {
+      className: "field"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "flabel"
+    }, f.label, " ", /*#__PURE__*/React.createElement("em", null, "(", rows.length, f.max ? ` of ${f.max}` : "", ")")), /*#__PURE__*/React.createElement("div", {
+      className: "schedbox"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "schedrow head"
+    }, f.cols.map(c => /*#__PURE__*/React.createElement("span", {
+      key: c.k,
+      className: "sl",
+      style: {
+        flex: c.flex || 1
+      }
+    }, c.label)), /*#__PURE__*/React.createElement("span", {
+      style: {
+        width: 24
+      }
+    })), rows.map((r, i) => /*#__PURE__*/React.createElement("div", {
+      className: "schedrow",
+      key: i
+    }, f.cols.map(c => cell(r, i, c)), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      className: "kebab",
+      title: "Remove",
+      onClick: () => setVal(rows.filter((_, j) => j !== i))
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "x",
+      s: 11
+    })))), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      className: "schedadd",
+      disabled: f.max && rows.length >= f.max,
+      onClick: () => setVal(rows.concat(f.add ? f.add(rows) : {}))
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "plus",
+      s: 11
+    }), f.addLabel || "Add")), f.hint && /*#__PURE__*/React.createElement("span", {
       className: "fhint"
     }, f.hint));
   }
@@ -23471,7 +23691,8 @@ const KIND_LABEL_DR = {
   restore: "restore",
   siteprofile: "site profile",
   drconfig: "DR configuration",
-  dhcpserver: "DHCP server"
+  dhcpserver: "DHCP server",
+  sitedeploy: "site storage deployment"
 };
 const METHOD_TYPES = [{
   v: "async",
@@ -23502,6 +23723,242 @@ const parseSites = txt => String(txt || "").split(/[\n;]+/).map(l => l.trim()).f
   } : {}, region ? {
     region
   } : {});
+});
+// ---- form <-> spec helpers for the editable parts of the DR objects --------
+const S3_COLS = [{
+  k: "site",
+  label: "Site",
+  placeholder: "site-a",
+  flex: 1
+}, {
+  k: "bucket",
+  label: "Bucket",
+  placeholder: "dr-site-a",
+  flex: 1.4
+}, {
+  k: "endpoint",
+  label: "Endpoint",
+  placeholder: "https://s3.eu-central-1.amazonaws.com",
+  flex: 2
+}, {
+  k: "region",
+  label: "Region",
+  placeholder: "eu-central-1",
+  flex: 1
+}, {
+  k: "secretRef",
+  label: "Secret",
+  placeholder: "ramen-s3-secret",
+  flex: 1
+}];
+const s3Rows = profiles => (profiles || []).map(p => ({
+  site: p.site || "",
+  bucket: p.bucket || "",
+  endpoint: p.endpoint || "",
+  region: p.region || "",
+  secretRef: typeof p.secretRef === "string" ? p.secretRef : (p.secretRef || {}).name || ""
+}));
+const s3Profiles = rows => (rows || []).filter(r => (r.site || "").trim() && (r.bucket || "").trim()).map(r => Object.assign({
+  site: r.site.trim(),
+  bucket: r.bucket.trim()
+}, r.endpoint && r.endpoint.trim() ? {
+  endpoint: r.endpoint.trim()
+} : {}, r.region && r.region.trim() ? {
+  region: r.region.trim()
+} : {}, r.secretRef && r.secretRef.trim() ? {
+  secretRef: r.secretRef.trim()
+} : {}));
+
+// Tiers: one row per tier. The selector is either labels (k=v, k2=v2) or
+// resource types (configmaps, secrets); the ready gates are a short list:
+//   vmRunning | deploymentsReady | podsReady | exec(app=shop-tools; nc -z -w 3 db 3306; 900)
+const READY_RE = /^exec\((.*)\)$/;
+const tierRows = tiers => (tiers || []).map(t => {
+  const sel = t.selector || {};
+  const byLabels = sel.matchLabels && Object.keys(sel.matchLabels).length;
+  return {
+    name: t.name || "",
+    by: byLabels ? "labels" : "resources",
+    selector: byLabels ? Object.entries(sel.matchLabels).map(([k, v]) => `${k}=${v}`).join(", ") : (sel.resourceTypes || []).join(", "),
+    ready: (t.ready || []).map(r => r.type === "exec" ? `exec(${Object.entries(r.selector || {}).map(([k, v]) => `${k}=${v}`).join(",")}; ${(r.command || []).join(" ")}${r.timeoutSeconds ? `; ${r.timeoutSeconds}` : ""})` : r.type).join(", ")
+  };
+});
+const parseReady = s => (s || "").split(/,(?![^(]*\))/).map(x => x.trim()).filter(Boolean).map(x => {
+  const m = READY_RE.exec(x);
+  if (!m) return {
+    type: x
+  };
+  const parts = m[1].split(";").map(p => p.trim());
+  const sel = {};
+  (parts[0] || "").split(",").map(p => p.trim()).filter(Boolean).forEach(kv => {
+    const [k, v] = kv.split("=");
+    if (k) sel[k.trim()] = (v || "").trim();
+  });
+  const out = {
+    type: "exec",
+    selector: sel,
+    command: (parts[1] || "").split(/\s+/).filter(Boolean)
+  };
+  if (parts[2] && Number(parts[2])) out.timeoutSeconds = Number(parts[2]);
+  return out;
+});
+const tiersSpec = rows => (rows || []).filter(r => (r.name || "").trim()).map(r => {
+  const selector = r.by === "resources" ? {
+    resourceTypes: csv(r.selector)
+  } : {
+    matchLabels: Object.fromEntries(csv(r.selector).map(kv => {
+      const [k, v] = kv.split("=");
+      return [k.trim(), (v || "").trim()];
+    }).filter(([k]) => k))
+  };
+  const ready = parseReady(r.ready);
+  return Object.assign({
+    name: r.name.trim(),
+    selector
+  }, ready.length ? {
+    ready
+  } : {});
+});
+const TIER_COLS = [{
+  k: "name",
+  label: "Tier",
+  placeholder: "db",
+  flex: 0.8
+}, {
+  k: "by",
+  label: "Select by",
+  type: "select",
+  options: [{
+    v: "labels",
+    l: "labels"
+  }, {
+    v: "resources",
+    l: "resource types"
+  }],
+  flex: 0.9
+}, {
+  k: "selector",
+  label: "Selector",
+  placeholder: "dr.simplyblock.io/tier=db  |  configmaps, secrets",
+  flex: 2
+}, {
+  k: "ready",
+  label: "Ready when",
+  placeholder: "vmRunning, exec(app=shop-tools; nc -z -w 3 db 3306; 900)",
+  flex: 2.4
+}];
+const probeRows = probes => (probes || []).map(p => ({
+  name: p.name || "",
+  type: p.type || "http",
+  target: p.target || "",
+  timeout: p.timeout || "",
+  expectStatus: p.expectStatus || ""
+}));
+const probesSpec = rows => (rows || []).filter(r => (r.target || "").trim() || r.type === "vmRunning").map(r => Object.assign({
+  name: (r.name || "").trim() || r.type,
+  type: r.type || "http"
+}, r.target && r.target.trim() ? {
+  target: r.target.trim()
+} : {}, r.timeout && String(r.timeout).trim() ? {
+  timeout: String(r.timeout).trim()
+} : {}, Number(r.expectStatus) ? {
+  expectStatus: Number(r.expectStatus)
+} : {}));
+const PROBE_COLS = [{
+  k: "name",
+  label: "Probe",
+  placeholder: "web",
+  flex: 0.8
+}, {
+  k: "type",
+  label: "Type",
+  type: "select",
+  options: [{
+    v: "http",
+    l: "http"
+  }, {
+    v: "tcp",
+    l: "tcp"
+  }],
+  flex: 0.7
+}, {
+  k: "target",
+  label: "Target (URL / host:port)",
+  placeholder: "http://web.shop.svc.cluster.local/",
+  flex: 2.4
+}, {
+  k: "timeout",
+  label: "Timeout",
+  placeholder: "15s",
+  flex: 0.7
+}, {
+  k: "expectStatus",
+  label: "HTTP status",
+  type: "number",
+  placeholder: "any 2xx",
+  flex: 0.8
+}];
+const TIER_HINT = "Ready gates: vmRunning, deploymentsReady, podsReady, or exec(<pod labels k=v>; <command>; <timeout seconds>) run in a pod of the tier's namespace. Tiers restore in order; the next starts when every gate of the previous holds.";
+
+// Site profile bindings (ADR 0020)
+const LNET_COLS = [{
+  k: "role",
+  label: "Role",
+  placeholder: "app",
+  flex: 0.8
+}, {
+  k: "nad",
+  label: "NetworkAttachmentDefinition (namespace/name)",
+  placeholder: "app-net/vlan110",
+  flex: 2.4
+}];
+const GNET_COLS = [{
+  k: "role",
+  label: "Role",
+  placeholder: "app",
+  flex: 0.7
+}, {
+  k: "cidr",
+  label: "Guest subnet",
+  placeholder: "192.168.110.0/24",
+  flex: 1.3
+}, {
+  k: "reservedHostIDs",
+  label: "Reserved host ids",
+  placeholder: "1, 2",
+  flex: 0.9
+}, {
+  k: "dhcpServerRef",
+  label: "DHCP server (name)",
+  placeholder: "site-a",
+  flex: 1.1
+}];
+// The DHCP servers a profile already refers to, offered as the defaults.
+const knownServers = sp => Array.from(new Set([sp.dhcpServerRef].concat((sp.guestNetworks || []).map(g => g.dhcpServerRef)).filter(Boolean)));
+const lnetRows = sp => (sp.logicalNetworks || []).map(l => ({
+  role: l.role || "",
+  nad: l.nad || ""
+}));
+const gnetRows = sp => (sp.guestNetworks || []).map(g => ({
+  role: g.role || "",
+  cidr: g.cidr || "",
+  reservedHostIDs: (g.reservedHostIDs || []).join(", "),
+  dhcpServerRef: g.dhcpServerRef || ""
+}));
+const bindingsSpec = v => ({
+  logicalNetworks: (v.lnets || []).filter(r => (r.role || "").trim() && (r.nad || "").trim()).map(r => ({
+    role: r.role.trim(),
+    nad: r.nad.trim()
+  })),
+  guestNetworks: (v.gnets || []).filter(r => (r.role || "").trim() && (r.cidr || "").trim()).map(r => Object.assign({
+    role: r.role.trim(),
+    cidr: r.cidr.trim()
+  }, csv(r.reservedHostIDs).length ? {
+    reservedHostIDs: csv(r.reservedHostIDs).map(Number).filter(n => !Number.isNaN(n))
+  } : {}, r.dhcpServerRef ? {
+    dhcpServerRef: r.dhcpServerRef
+  } : {})),
+  dhcpServerRef: v.dhcp || null
 });
 const newPlanDialog = () => ({
   title: "New protection plan",
@@ -23567,10 +24024,47 @@ const newPlanDialog = () => ({
     type: "checkbox",
     def: false
   }, {
-    k: "s3Profile",
-    label: "Ramen S3 profile (single store)",
+    k: "scName",
+    label: "Create the replicated StorageClass on every site, named (empty: the classes exist already)",
     type: "text",
-    placeholder: "existing profile name; leave empty when using per-site stores"
+    placeholder: "simplyblock-dr",
+    hint: "dr-hub writes it on each site with the selector's labels, the site's storage cluster and pool; the selector needs at least one matchLabel."
+  }, {
+    k: "scPool",
+    label: "…from the pool (empty: the storage cluster's default pool)",
+    type: "text",
+    placeholder: ""
+  }, {
+    k: "scFs",
+    label: "…with the filesystem",
+    type: "text",
+    def: "xfs"
+  }, {
+    k: "s3",
+    label: "S3 stores — one per site (Ramen's metadata store and Velero's backups)",
+    type: "rows",
+    cols: S3_COLS,
+    max: 8,
+    addLabel: "Add store",
+    add: rows => ({
+      site: "",
+      bucket: "",
+      endpoint: rows.length ? rows[rows.length - 1].endpoint : "",
+      region: rows.length ? rows[rows.length - 1].region : "",
+      secretRef: rows.length ? rows[rows.length - 1].secretRef : "ramen-s3-secret"
+    }),
+    hint: "The secret (access key id / secret access key) must exist in Ramen's namespace on the hub. Leave empty to name one existing profile below instead."
+  }, {
+    k: "velero",
+    label: "Velero namespace on the sites",
+    type: "text",
+    def: "velero",
+    placeholder: "velero"
+  }, {
+    k: "s3Profile",
+    label: "Ramen S3 profile (single store, instead of per-site stores)",
+    type: "text",
+    placeholder: "existing profile name"
   }, {
     k: "autoRestart",
     label: "Restart applications in place after a storage recovery",
@@ -23579,7 +24073,7 @@ const newPlanDialog = () => ({
   }, {
     k: "n2",
     type: "note",
-    label: "Per-site S3 stores, snapshot class selectors and replication parameters are written with kubectl for now: the plan's spec is editable afterwards except for the immutable fields Ramen keys on."
+    label: "Snapshot class selectors and replication parameters are taken from the storage class and the method; the spec stays editable afterwards except for the fields Ramen keys on (sites, methods)."
   }].filter(Boolean),
   run: v => {
     const type = v.type;
@@ -23595,6 +24089,7 @@ const newPlanDialog = () => ({
       }
     } : {});
     const sc = kvToObj(v.sc);
+    const stores = s3Profiles(v.s3);
     const spec = Object.assign({
       sites: parseSites(v.sites),
       methods: [method],
@@ -23604,8 +24099,20 @@ const newPlanDialog = () => ({
         } : {}
       }, {
         consistencyGroups: v.cg ? "Enabled" : "Disabled"
-      })
-    }, v.s3Profile && v.s3Profile.trim() ? {
+      }, v.scName && v.scName.trim() ? {
+        provision: Object.assign({
+          name: v.scName.trim()
+        }, v.scPool && v.scPool.trim() ? {
+          pool: v.scPool.trim()
+        } : {}, v.scFs && v.scFs.trim() ? {
+          fsType: v.scFs.trim()
+        } : {})
+      } : {})
+    }, stores.length ? {
+      s3Profiles: stores
+    } : {}, v.velero && v.velero.trim() ? {
+      veleroNamespace: v.velero.trim()
+    } : {}, v.s3Profile && v.s3Profile.trim() ? {
       s3Profile: {
         name: v.s3Profile.trim()
       }
@@ -23619,6 +24126,37 @@ const newPlanDialog = () => ({
       spec
     });
   }
+});
+const editPlanS3Dialog = p => ({
+  title: `S3 stores of ${p.name}`,
+  confirm: "Save",
+  done: "ProtectionPlan updated",
+  desc: "Ramen keeps its metadata and Velero its backups in one S3 store per site. Changing a store re-derives the DRClusters; applications keep their protection.",
+  fields: [{
+    k: "s3",
+    label: "S3 stores — one per site",
+    type: "rows",
+    cols: S3_COLS,
+    max: 8,
+    addLabel: "Add store",
+    def: s3Rows(p.s3Profiles),
+    add: rows => ({
+      site: "",
+      bucket: "",
+      endpoint: rows.length ? rows[rows.length - 1].endpoint : "",
+      region: rows.length ? rows[rows.length - 1].region : "",
+      secretRef: rows.length ? rows[rows.length - 1].secretRef : "ramen-s3-secret"
+    })
+  }, {
+    k: "velero",
+    label: "Velero namespace on the sites",
+    type: "text",
+    def: p.veleroNamespace || "velero"
+  }],
+  run: v => drhub.patchPlan(p, {
+    s3Profiles: s3Profiles(v.s3),
+    veleroNamespace: v.velero && v.velero.trim() ? v.velero.trim() : null
+  })
 });
 const newPathDialog = plans => ({
   title: "Declare a DR path",
@@ -23813,9 +24351,37 @@ const protectAppDialogDR = (plans, cfg) => ({
       type: "text",
       placeholder: "leave empty to let the hub generate one from tiers"
     }, {
+      k: "tiers",
+      label: "Tiers — the boot order the hub generates the Recipe from",
+      type: "rows",
+      cols: TIER_COLS,
+      max: 12,
+      addLabel: "Add tier",
+      hint: TIER_HINT,
+      add: () => ({
+        name: "",
+        by: "labels",
+        selector: "",
+        ready: ""
+      })
+    }, {
+      k: "probes",
+      label: "Health probes — what a move waits for on the target",
+      type: "rows",
+      cols: PROBE_COLS,
+      max: 8,
+      addLabel: "Add probe",
+      add: () => ({
+        name: "",
+        type: "http",
+        target: "",
+        timeout: "15s",
+        expectStatus: ""
+      })
+    }, {
       k: "n1",
       type: "note",
-      label: "Both directions between source and target must exist as DR paths for readiness to become Ready. Tiers, probes and hooks are edited on the object afterwards."
+      label: "Both directions between source and target must exist as DR paths for readiness to become Ready. External hooks are edited on the object."
     }].filter(Boolean);
   },
   run: v => {
@@ -23823,6 +24389,8 @@ const protectAppDialogDR = (plans, cfg) => ({
     const sel = Object.keys(pvc).length ? {
       matchLabels: pvc
     } : {};
+    const tiers = tiersSpec(v.tiers),
+      probes = probesSpec(v.probes);
     const spec = Object.assign({
       planRef: {
         name: v.plan
@@ -23832,6 +24400,12 @@ const protectAppDialogDR = (plans, cfg) => ({
       kind: v.appKind
     }, v.method ? {
       method: v.method
+    } : {}, tiers.length ? {
+      tiers
+    } : {}, probes.length ? {
+      health: {
+        probes
+      }
     } : {}, v.appKind === "managed" ? {
       managed: {
         placementRef: {
@@ -23855,6 +24429,49 @@ const protectAppDialogDR = (plans, cfg) => ({
       spec
     });
   }
+});
+const editTiersDialog = a => ({
+  title: `Tiers & probes of ${a.name}`,
+  confirm: "Save",
+  done: "ProtectedApplication updated",
+  desc: "The tiers are the boot order: the hub generates the Recipe Ramen restores by from them. The probes are what a Failover or Relocate waits for before it reports the application up on the target.",
+  fields: [{
+    k: "tiers",
+    label: "Tiers (boot order)",
+    type: "rows",
+    cols: TIER_COLS,
+    max: 12,
+    addLabel: "Add tier",
+    hint: TIER_HINT,
+    def: tierRows(a.tiers),
+    add: () => ({
+      name: "",
+      by: "labels",
+      selector: "",
+      ready: ""
+    })
+  }, {
+    k: "probes",
+    label: "Health probes",
+    type: "rows",
+    cols: PROBE_COLS,
+    max: 8,
+    addLabel: "Add probe",
+    def: probeRows(a.probes),
+    add: () => ({
+      name: "",
+      type: "http",
+      target: "",
+      timeout: "15s",
+      expectStatus: ""
+    })
+  }],
+  run: v => drhub.patchApp(a, {
+    tiers: tiersSpec(v.tiers),
+    health: {
+      probes: probesSpec(v.probes)
+    }
+  })
 });
 const newRPlanDialog = (paths, apps) => ({
   title: "New recovery plan",
@@ -24002,7 +24619,51 @@ const newScheduleDialog = (target, nsHint) => ({
     suspend: v.suspend
   })
 });
-const newDHCPServerDialog = sites => ({
+const editBindingsDialog = s => ({
+  title: `Bindings of ${s.name}`,
+  confirm: "Save",
+  done: "SiteProfile updated",
+  desc: "How this site's networks map for recovered VMs (ADR 0020): the NAD each logical role is on here, the guest subnet of each role with the host ids never handed out, and the DHCP server the reservations are rendered to.",
+  fields: [{
+    k: "lnets",
+    label: "Logical networks — role → NAD on this site",
+    type: "rows",
+    cols: LNET_COLS,
+    max: 8,
+    addLabel: "Add network",
+    def: lnetRows(s.spec || {}),
+    add: () => ({
+      role: "app",
+      nad: ""
+    }),
+    hint: s.nads && s.nads.length ? `NADs reported here: ${s.nads.map(n => n.namespace ? `${n.namespace}/${n.name}` : n.name || n).slice(0, 8).join(", ")}` : ""
+  }, {
+    k: "gnets",
+    label: "Guest networks — the subnet of each role here",
+    type: "rows",
+    cols: GNET_COLS,
+    max: 8,
+    addLabel: "Add subnet",
+    def: gnetRows(s.spec || {}),
+    add: () => ({
+      role: "app",
+      cidr: "",
+      reservedHostIDs: "1, 2",
+      dhcpServerRef: knownServers(s.spec || {})[0] || ""
+    }),
+    hint: "The DHCP server is the name of a registered DHCPServer of this site (Disaster recovery → DHCP servers)."
+  }, {
+    k: "dhcp",
+    label: "DHCP server of the site (default for every guest network)",
+    type: "text",
+    def: (s.spec || {}).dhcpServerRef || "",
+    placeholder: knownServers(s.spec || {}).join(", ") || "name of a registered DHCPServer"
+  }],
+  run: v => drhub.patchSiteProfile(s, bindingsSpec(Object.assign({}, v, {
+    dhcp: v.dhcp && v.dhcp.trim() ? v.dhcp.trim() : ""
+  })))
+});
+const newDHCPServerDialog = (sites, profiles) => ({
   title: "Register a DHCP server",
   confirm: "Create",
   done: "DHCPServer created",
@@ -24044,16 +24705,165 @@ const newDHCPServerDialog = sites => ({
     required: true,
     placeholder: "sitemap-hosts"
   }, {
+    k: "bind",
+    label: "Bind it as the site's DHCP server (the site profile's default and every guest network without one)",
+    type: "checkbox",
+    def: true
+  }, {
     k: "n1",
     type: "note",
-    label: "Then bind it on the site profile: spec.guestNetworks[].dhcpServerRef or spec.dhcpServerRef (kubectl in this phase). Guests need a pinned MAC and an address inside the role's CIDR to get a reservation."
+    label: "Guests need a pinned MAC and an address inside the role's guest subnet to get a reservation; the subnets are the site profile's bindings."
   }],
   run: v => drhub.createDHCPServer({
     name: v.name.trim(),
     site: v.site,
     namespace: v.namespace.trim(),
     configMap: v.configMap.trim()
+  }).then(r => {
+    const prof = (profiles || []).find(p => p.name === v.site);
+    if (!v.bind || !prof) return r;
+    const sp = prof.spec || {},
+      name = dns63(v.name.trim());
+    return drhub.patchSiteProfile(prof, {
+      dhcpServerRef: name,
+      guestNetworks: (sp.guestNetworks || []).map(g => Object.assign({}, g, g.dhcpServerRef ? {} : {
+        dhcpServerRef: name
+      }))
+    }).then(() => r);
   })
+});
+
+// ---- a managed site's storage (StorageSiteDeployment) ----------------------
+// The hub console cannot reach a site's API server; the operator on the hub
+// carries the request there through OCM. The console writes the request, the
+// sizing and the approval, and reads back the projected draft and cluster.
+const sizingFields = z => [{
+  k: "name",
+  label: "Storage cluster name",
+  type: "text",
+  def: z && z.name || "",
+  placeholder: "sb-site-a"
+}, {
+  k: "vcpuCount",
+  label: "vCPUs per storage node",
+  type: "number",
+  def: z && z.vcpuCount != null ? z.vcpuCount : "",
+  min: 1,
+  placeholder: "8"
+}, {
+  k: "minHugePagesSize",
+  label: "Hugepages per storage node",
+  type: "text",
+  def: z && z.minHugePagesSize || "",
+  placeholder: "8G"
+}, {
+  k: "maxSubsystemCount",
+  label: "NVMe-oF subsystems per node",
+  type: "number",
+  def: z && z.maxSubsystemCount != null ? z.maxSubsystemCount : "",
+  min: 1,
+  placeholder: "30"
+}, {
+  k: "dataChunks",
+  label: "Erasure coding: data chunks",
+  type: "number",
+  def: z && z.stripe && z.stripe.dataChunks != null ? z.stripe.dataChunks : "",
+  min: 1,
+  placeholder: "1"
+}, {
+  k: "parityChunks",
+  label: "Erasure coding: parity chunks",
+  type: "number",
+  def: z && z.stripe && z.stripe.parityChunks != null ? z.stripe.parityChunks : "",
+  min: 0,
+  placeholder: "1"
+}, {
+  k: "enableDriveFormat",
+  label: "Format the devices it takes (data on them is lost)",
+  type: "checkbox",
+  def: !!(z && z.enableDriveFormat)
+}];
+const num = v => v === "" || v == null ? null : Number(v);
+const sizingOf = v => {
+  const z = {};
+  if (v.name && v.name.trim()) z.name = dns63(v.name.trim());
+  if (num(v.vcpuCount) != null) z.vcpuCount = num(v.vcpuCount);
+  if (v.minHugePagesSize && v.minHugePagesSize.trim()) z.minHugePagesSize = v.minHugePagesSize.trim();
+  if (num(v.maxSubsystemCount) != null) z.maxSubsystemCount = num(v.maxSubsystemCount);
+  if (num(v.dataChunks) != null || num(v.parityChunks) != null) z.stripe = Object.assign({}, num(v.dataChunks) != null ? {
+    dataChunks: num(v.dataChunks)
+  } : {}, num(v.parityChunks) != null ? {
+    parityChunks: num(v.parityChunks)
+  } : {});
+  if (v.enableDriveFormat) z.enableDriveFormat = true;
+  return z;
+};
+const deploySiteDialog = (sites, taken) => ({
+  title: "Deploy storage on a managed site",
+  confirm: "Discover",
+  done: "StorageSiteDeployment created — discovery requested on the site",
+  desc: "The operator on this hub runs a discovery on the site through Open Cluster Management and writes a draft deployment document there. You review the draft here, with the sizing below applied, and approve it; nothing is configured on any node before the approval.",
+  fields: [{
+    k: "site",
+    label: "Site (managed cluster)",
+    type: "select",
+    required: true,
+    options: sites.filter(s => !taken.includes(s)).map(s => ({
+      v: s,
+      l: s
+    })),
+    empty: "Every managed cluster has a storage deployment already, or none has joined the hub."
+  }, {
+    k: "namespace",
+    label: "Namespace of the request on the hub",
+    type: "text",
+    required: true,
+    def: (window.SB_CONFIG || {}).namespace || "simplyblock"
+  }, {
+    k: "enableControlPlaneNodes",
+    label: "Include control-plane nodes in the discovery (every node of a small site is one)",
+    type: "checkbox",
+    def: true
+  }, {
+    k: "workers",
+    label: "Limit to these nodes (comma-separated; empty = every node)",
+    type: "text",
+    placeholder: ""
+  }, ...sizingFields(null), {
+    k: "n1",
+    type: "note",
+    label: "Approval is one-way and reboots the site's storage nodes to set hugepages and core isolation."
+  }],
+  run: v => drhub.createSiteDeploy({
+    site: v.site,
+    namespace: v.namespace.trim(),
+    enableControlPlaneNodes: v.enableControlPlaneNodes,
+    workers: csv(v.workers),
+    sizing: sizingOf(v)
+  })
+});
+const resizeSiteDialog = d => ({
+  title: `Size the draft of ${d.site}`,
+  confirm: "Apply sizing",
+  done: "Sizing sent to the site's draft",
+  desc: "Written onto the draft's cluster template on the site. Fields left empty keep what the discovery wrote.",
+  fields: sizingFields(d.sizing),
+  run: v => drhub.patchSiteDeploySizing(d, sizingOf(v))
+});
+const approveSiteDialog = d => ({
+  title: `Approve the storage deployment of ${d.site}?`,
+  confirm: "Approve and deploy",
+  danger: true,
+  done: "Approved — the site's draft is expanding",
+  desc: `Approval is one-way. The site's ${d.counts.nodes} node(s) are configured (hugepages, core isolation; this reboots them), the storage nodes are added and the cluster ${((d.draft || {}).cluster || {}).name || (d.sizing || {}).name || ""} is activated in the control plane.`,
+  fields: [{
+    k: "confirm",
+    label: `Type ${d.site} to confirm`,
+    type: "text",
+    required: true,
+    match: d.site
+  }],
+  run: () => drhub.approveSiteDeploy(d)
 });
 
 // ---- command registry (kebab menus) ----------------------------------------
@@ -24061,6 +24871,11 @@ const newDHCPServerDialog = sites => ({
 // create on the run kinds, override to the override verb, delete to delete.
 Object.assign(ACTIONS, {
   pplan: p => [{
+    label: "Edit S3 stores",
+    icon: "cloud",
+    op: "update",
+    dialog: editPlanS3Dialog(p)
+  }, {
     label: "Delete plan",
     icon: "trash",
     danger: true,
@@ -24115,6 +24930,11 @@ Object.assign(ACTIONS, {
     icon: "cloud",
     op: "drrestore",
     dialog: restoreDialog(a)
+  }, {
+    label: "Edit tiers & probes",
+    icon: "list",
+    op: "update",
+    dialog: editTiersDialog(a)
   }, {
     label: a.autoRestartOptOut ? "Enable automatic restart" : "Disable automatic restart",
     icon: "power",
@@ -24218,7 +25038,12 @@ Object.assign(ACTIONS, {
     hint: "A running restore cannot be deleted",
     dialog: deleteDialog(r, "")
   }],
-  siteprofile: () => [],
+  siteprofile: s => [{
+    label: "Edit bindings",
+    icon: "link",
+    op: "update",
+    dialog: editBindingsDialog(s)
+  }],
   dhcpserver: d => [{
     label: "Delete server",
     icon: "trash",
@@ -24227,7 +25052,29 @@ Object.assign(ACTIONS, {
     removes: true,
     dialog: deleteDialog(d, "Reservations rendered for this server stay in its ConfigMap until the hub re-renders the site; guests whose role names it become Open.")
   }],
-  drconfig: () => []
+  drconfig: () => [],
+  sitedeploy: d => [{
+    label: "Size the draft",
+    icon: "gauge",
+    op: "update",
+    dialog: resizeSiteDialog(d),
+    disabled: d.approved,
+    hint: "The deployment is approved"
+  }, {
+    label: "Approve and deploy",
+    icon: "check",
+    op: "update",
+    dialog: approveSiteDialog(d),
+    disabled: d.approved || d.status !== "Drafted",
+    hint: d.approved ? "Already approved" : "No draft with nodes to approve yet"
+  }, {
+    label: "Delete request",
+    icon: "trash",
+    danger: true,
+    op: "delete",
+    removes: true,
+    dialog: deleteDialog(d, "Deleting the request withdraws nothing on the site: the discovery, the draft and any storage cluster it produced stay.")
+  }]
 });
 
 // ---- tiles ------------------------------------------------------------------
@@ -24711,6 +25558,139 @@ function DHCPServerTile({
       right: true,
       onClick: () => nav.detail(d)
     }]
+  }));
+}
+function SiteDeployTile({
+  o: d,
+  nav
+}) {
+  const sc = d.storageCluster;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "tile",
+    style: {
+      "--sc": STATUS_META[d.status].c
+    },
+    onDoubleClick: () => nav.detail(d)
+  }, /*#__PURE__*/React.createElement(TileHead, {
+    obj: d,
+    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TrafficLight, {
+      status: d.status
+    }), /*#__PURE__*/React.createElement(Name, null, d.site)),
+    right: /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, d.approved ? "approved" : "draft")
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "tsub",
+    style: {
+      marginTop: 2
+    }
+  }, d.message || "—"), /*#__PURE__*/React.createElement(Uuid, {
+    value: d.id
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "kv"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "nodes found"), /*#__PURE__*/React.createElement("b", null, d.counts.nodes)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "storage cluster"), /*#__PURE__*/React.createElement("b", null, sc ? sc.name : "—")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "storage nodes"), /*#__PURE__*/React.createElement("b", null, sc ? d.counts.storageNodes : "—")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "cluster id"), /*#__PURE__*/React.createElement("b", {
+    className: "mono"
+  }, sc && sc.uuid ? sc.uuid.slice(0, 8) : "—"))), d.status === "Drafted" && !d.approved && /*#__PURE__*/React.createElement("div", {
+    className: "prepbox"
+  }, "Review the draft and approve it. Nothing has been applied to any node yet."), /*#__PURE__*/React.createElement(Foot, {
+    items: [d.status === "Drafted" && !d.approved ? {
+      label: "Approve",
+      icon: "check",
+      onClick: () => window.__ui.dialog(approveSiteDialog(d), d)
+    } : null, {
+      label: "Details",
+      right: true,
+      onClick: () => nav.detail(d)
+    }]
+  }));
+}
+function SiteDeployDetail({
+  o: d,
+  nav
+}) {
+  const t = d.draft && d.draft.cluster || {};
+  const z = d.sizing || {};
+  const sc = d.storageCluster;
+  const str = v => v == null ? "" : String(v);
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
+    obj: d,
+    title: `Storage of ${d.site}`,
+    sub: /*#__PURE__*/React.createElement("span", {
+      className: "mono",
+      style: {
+        color: "var(--dim)"
+      }
+    }, "StorageSiteDeployment ", d.namespace, "/", d.name, " \xB7 draft ", d.siteNamespace, "/", d.draftName, " on the site"),
+    badge: /*#__PURE__*/React.createElement("span", {
+      className: "badge"
+    }, d.approved ? "approved" : "not approved")
+  }), d.status === "Failed" && /*#__PURE__*/React.createElement("div", {
+    className: "banner"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "The deployment failed."), " ", d.message)), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "State",
+    v: /*#__PURE__*/React.createElement(TrafficLight, {
+      status: d.status
+    }),
+    s: d.message
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Nodes in the draft",
+    v: d.counts.nodes,
+    s: d.discover.enableControlPlaneNodes ? "control-plane nodes included" : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Draft",
+    v: d.draft && d.draft.phase || "—",
+    s: d.draft && d.draft.message ? d.draft.message : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Storage cluster",
+    v: sc ? sc.name : "—",
+    s: sc ? `${sc.phase || "not reported"}${sc.uuid ? " · " + sc.uuid : ""}` : "after the approval"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "dcols"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Draft \u2014 what the discovery found"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      overflowX: "auto"
+    }
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Node set", "Group", "Nodes"],
+    empty: "The site has not written a draft with nodes yet.",
+    rows: d.nodeSets.flatMap(s => (s.groups || []).map((g, i) => [/*#__PURE__*/React.createElement(Mono, null, s.name), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, g.name || `#${i + 1}`), /*#__PURE__*/React.createElement(Mono, null, (g.workers || []).join(", "))]))
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Cluster template on the site"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Field", "On the site", "Requested"],
+    empty: "No draft yet.",
+    rows: d.draft ? [["name", t.name, z.name], ["vCPUs per node", t.vcpuCount, z.vcpuCount], ["hugepages per node", t.minHugePagesSize, z.minHugePagesSize], ["subsystems per node", t.maxSubsystemCount, z.maxSubsystemCount], ["stripe", t.stripe ? `${str(t.stripe.dataChunks)}+${str(t.stripe.parityChunks)}` : "", z.stripe ? `${str(z.stripe.dataChunks)}+${str(z.stripe.parityChunks)}` : ""], ["format devices", t.enableDriveFormat, z.enableDriveFormat]].map(r => [/*#__PURE__*/React.createElement("b", null, r[0]), /*#__PURE__*/React.createElement(Mono, null, str(r[1])), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, str(r[2]))]) : []
+  })))), sc && /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Storage nodes"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(Table, {
+    cols: ["Storage node", "Kubernetes node", "Phase"],
+    empty: "No storage node reported yet.",
+    rows: (sc.nodes || []).map(n => [/*#__PURE__*/React.createElement(Mono, null, n.name), /*#__PURE__*/React.createElement(Mono, {
+      dim: true
+    }, n.hostname), /*#__PURE__*/React.createElement(Mono, null, n.phase || "—")])
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: "9px 0 0"
+    }
+  }, "A StorageClass on the site names this cluster as cluster_id ", sc.uuid || "(not assigned yet)", " and pool ", sc.pool || "—", "."))), /*#__PURE__*/React.createElement(Conditions, {
+    o: d
   }));
 }
 
@@ -26888,6 +27868,12 @@ function DrHubHome({
     count: "\u2192",
     onClick: () => nav.drLayer("dhcpservers")
   }), /*#__PURE__*/React.createElement(NavCard, {
+    icon: "cluster",
+    title: "Site storage",
+    sub: "discover, size and deploy a managed site's storage cluster",
+    count: "\u2192",
+    onClick: () => nav.drLayer("sitedeploys")
+  }), /*#__PURE__*/React.createElement(NavCard, {
     icon: "gauge",
     title: "DR configuration",
     sub: "agents, Ramen, archive, executor",
@@ -26908,6 +27894,9 @@ Object.assign(window, {
   RestoreTile,
   SiteProfileTile,
   DHCPServerTile,
+  SiteDeployTile,
+  SiteDeployDetail,
+  deploySiteDialog,
   PPlanDetail,
   DRPathDetail,
   PAppDetail,
@@ -27730,6 +28719,7 @@ const DETAIL_KIND = {
   restore: "RestoreDetail",
   siteprofile: "SiteProfileDetail",
   dhcpserver: "DHCPServerDetail",
+  sitedeploy: "SiteDeployDetail",
   deployconfig: "DeployConfigDetail",
   mpath: "MPathDetail",
   appgroup: "AppGroupDetail"
@@ -27912,6 +28902,13 @@ const LAYER_META = {
   },
   dhcpserver: {
     icon: "link"
+  },
+  sitedeploys: {
+    label: "Site storage",
+    icon: "cluster"
+  },
+  sitedeploy: {
+    icon: "cluster"
   },
   drconfig: {
     label: "DR configuration",
@@ -28147,6 +29144,14 @@ const pDhcp = id => [{
   t: "dhcpserver",
   id
 }];
+const pSiteDeploy = id => [{
+  t: "dr"
+}, {
+  t: "sitedeploys"
+}, {
+  t: "sitedeploy",
+  id
+}];
 const pPair = id => [{
   t: "dr"
 }, {
@@ -28243,7 +29248,7 @@ const pAg = (pid, id) => [...pMp(pid), {
   t: "appgroup",
   id
 }];
-const detailPath = o => o.kind === "cluster" ? pC(o.id) : o.kind === "deployconfig" ? pDep(o.k8sClusterId, o.id) : o.kind === "host" ? pH(o.clusterId, o.id) : o.kind === "node" ? pN(o.clusterId, o.id) : o.kind === "device" ? pD(o.clusterId, o.nodeId, o.id) : o.kind === "pool" ? pP(o.clusterId, o.id) : o.kind === "volume" ? pV(o.clusterId, o.poolId, o.id) : o.kind === "pplan" ? pPPlan(o.id) : o.kind === "drpath" ? pDRPath(o.id) : o.kind === "papp" ? pPApp(o.id) : o.kind === "rplan" ? pRPlan(o.id) : o.kind === "raction" ? pRAction(o.id) : o.kind === "tbubble" ? pTBubble(o.id) : o.kind === "tsched" ? pTSched(o.id) : o.kind === "restore" ? pRestore(o.id) : o.kind === "siteprofile" ? pSProf(o.id) : o.kind === "dhcpserver" ? pDhcp(o.id) : o.kind === "pair" ? pPair(o.id) : o.kind === "slot" ? pSlot(o.id) : o.kind === "replops" ? pReplOp(o.id) : o.kind === "rpolicy" ? pRPol(o.id) : o.kind === "zone" ? pZone(o.id) : o.kind === "mpath" ? pMp(o.id) : o.kind === "appgroup" ? pAg(o.pathId, o.id) : o.kind === "bucket" ? pBucket(o.clusterId, o.id) : o.kind === "k8sc" ? pK(o.id) : o.kind === "storageclass" ? pSc(o.k8sClusterId, o.id) : o.kind === "pvc" ? pPvc(o.k8sClusterId, o.id) : o.kind === "migration" ? pMig(o.sourceClusterId || o.clusterId, o.id) : o.kind === "cgroup" ? pCg(o.clusterId, o.id) : o.kind === "cgsnapshot" ? [...pCg(o.clusterId, o.cgId), {
+const detailPath = o => o.kind === "cluster" ? pC(o.id) : o.kind === "deployconfig" ? pDep(o.k8sClusterId, o.id) : o.kind === "host" ? pH(o.clusterId, o.id) : o.kind === "node" ? pN(o.clusterId, o.id) : o.kind === "device" ? pD(o.clusterId, o.nodeId, o.id) : o.kind === "pool" ? pP(o.clusterId, o.id) : o.kind === "volume" ? pV(o.clusterId, o.poolId, o.id) : o.kind === "pplan" ? pPPlan(o.id) : o.kind === "drpath" ? pDRPath(o.id) : o.kind === "papp" ? pPApp(o.id) : o.kind === "rplan" ? pRPlan(o.id) : o.kind === "raction" ? pRAction(o.id) : o.kind === "tbubble" ? pTBubble(o.id) : o.kind === "tsched" ? pTSched(o.id) : o.kind === "restore" ? pRestore(o.id) : o.kind === "siteprofile" ? pSProf(o.id) : o.kind === "dhcpserver" ? pDhcp(o.id) : o.kind === "sitedeploy" ? pSiteDeploy(o.id) : o.kind === "pair" ? pPair(o.id) : o.kind === "slot" ? pSlot(o.id) : o.kind === "replops" ? pReplOp(o.id) : o.kind === "rpolicy" ? pRPol(o.id) : o.kind === "zone" ? pZone(o.id) : o.kind === "mpath" ? pMp(o.id) : o.kind === "appgroup" ? pAg(o.pathId, o.id) : o.kind === "bucket" ? pBucket(o.clusterId, o.id) : o.kind === "k8sc" ? pK(o.id) : o.kind === "storageclass" ? pSc(o.k8sClusterId, o.id) : o.kind === "pvc" ? pPvc(o.k8sClusterId, o.id) : o.kind === "migration" ? pMig(o.sourceClusterId || o.clusterId, o.id) : o.kind === "cgroup" ? pCg(o.clusterId, o.id) : o.kind === "cgsnapshot" ? [...pCg(o.clusterId, o.cgId), {
   t: "cgsnapshots"
 }, {
   t: "cgsnapshot",
@@ -28355,6 +29360,7 @@ const SORT_KEYS = {
   restore: ["newest", "health", "name"],
   siteprofile: ["health", "name"],
   dhcpserver: ["health", "name"],
+  sitedeploy: ["health", "name", "newest"],
   pair: ["health", "name", "slots", "newest"],
   slot: ["health", "name", "newest"],
   replops: ["newest", "health", "name"],
@@ -28481,6 +29487,11 @@ const VIEWS = {
     load: p => p.t === "siteprofile" ? drhub.siteDHCPServers(p.id) : drhub.dhcpServers(),
     api: () => "GET /apis/sitemap.simplyblock.io/v1alpha1/dhcpservers"
   },
+  sitedeploys: {
+    kind: "sitedeploy",
+    load: () => drhub.siteDeploys(),
+    api: () => "GET /apis/storage.simplyblock.io/v1alpha2/storagesitedeployments"
+  },
   storageclasses: {
     kind: "storageclass",
     load: p => p.t === "pool" ? api.poolStorageClasses(p.id) : api.k8sStorageClasses(p.id),
@@ -28576,6 +29587,7 @@ const DETAIL_API = {
   restore: drcrd("restoreactions/{name}", true),
   siteprofile: "GET /apis/sitemap.simplyblock.io/v1alpha1/siteprofiles/{name}",
   dhcpserver: "GET /apis/sitemap.simplyblock.io/v1alpha1/dhcpservers/{name}",
+  sitedeploy: "GET /apis/storage.simplyblock.io/v1alpha2/namespaces/{ns}/storagesitedeployments/{name}",
   pair: crd1("replicationpairs"),
   rpolicy: crd1("replicationpolicies"),
   slot: crd1("replicationslots"),
@@ -28610,6 +29622,7 @@ const KIND_LABEL = {
   restore: "restore",
   siteprofile: "site profile",
   dhcpserver: "DHCP server",
+  sitedeploy: "site storage deployment",
   pair: "replication pair",
   rpolicy: "replication policy",
   slot: "replication slot",
@@ -28911,6 +29924,7 @@ const TILE = {
   restore: RestoreTile,
   siteprofile: SiteProfileTile,
   dhcpserver: DHCPServerTile,
+  sitedeploy: SiteDeployTile,
   pair: PairTile,
   rpolicy: RPolicyTile,
   slot: SlotTile,
@@ -28946,6 +29960,7 @@ const TKEY = {
   restore: "o",
   siteprofile: "o",
   dhcpserver: "o",
+  sitedeploy: "o",
   policy: "p",
   pair: "p",
   rpolicy: "p",
@@ -29186,9 +30201,18 @@ function OverviewView({
     }, /*#__PURE__*/React.createElement(Icon, {
       n: "plus",
       s: 12
-    }), "New recovery plan") : seg.t === "dhcpservers" ? /*#__PURE__*/React.createElement("button", {
+    }), "New recovery plan") : seg.t === "sitedeploys" ? /*#__PURE__*/React.createElement("button", {
       className: "btn primary",
-      onClick: () => drhub.siteProfiles().then(ss => window.__ui.dialog(newDHCPServerDialog(parent && parent.t === "siteprofile" && REG[parent.id] ? [REG[parent.id].name] : ss.map(s => s.name)), {
+      onClick: () => Promise.all([drhub.managedClusters(), drhub.siteProfiles().catch(() => []), drhub.siteDeploys()]).then(([mcs, sps, sds]) => window.__ui.dialog(deploySiteDialog(mcs.length ? mcs.map(m => m.metadata.name) : sps.map(s => s.name), sds.map(d => d.site)), {
+        kind: "sitedeploy",
+        id: "new"
+      }))
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "plus",
+      s: 12
+    }), "Deploy storage") : seg.t === "dhcpservers" ? /*#__PURE__*/React.createElement("button", {
+      className: "btn primary",
+      onClick: () => drhub.siteProfiles().then(ss => window.__ui.dialog(newDHCPServerDialog(parent && parent.t === "siteprofile" && REG[parent.id] ? [REG[parent.id].name] : ss.map(s => s.name), ss), {
         kind: "dhcpserver",
         id: "new"
       }))

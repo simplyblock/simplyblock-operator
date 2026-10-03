@@ -1455,6 +1455,33 @@ function Field({f, val, setVal}) {
       </label>
     );
   }
+  if (f.type === "rows") {
+    const rows = val || [];
+    const set = (i, k, x) => setVal(rows.map((r, j) => j === i ? Object.assign({}, r, {[k]: x}) : r));
+    const cell = (r, i, c) => {
+      const w = {flex: c.flex || 1, minWidth: 0};
+      if (c.type === "select") return <select key={c.k} className="finput sm" style={w} value={r[c.k] || ""} onChange={e => set(i, c.k, e.target.value)}>
+        {(c.options || []).map(o => <option key={o.v} value={o.v}>{o.l}</option>)}</select>;
+      return <input key={c.k} className="finput sm" style={w} type={c.type === "number" ? "number" : "text"} placeholder={c.placeholder || ""} value={r[c.k] == null ? "" : r[c.k]} onChange={e => set(i, c.k, e.target.value)} />;
+    };
+    return (
+      <label className="field">
+        <span className="flabel">{f.label} <em>({rows.length}{f.max ? ` of ${f.max}` : ""})</em></span>
+        <div className="schedbox">
+          <div className="schedrow head">{f.cols.map(c => <span key={c.k} className="sl" style={{flex: c.flex || 1}}>{c.label}</span>)}<span style={{width: 24}}></span></div>
+          {rows.map((r, i) => (
+            <div className="schedrow" key={i}>
+              {f.cols.map(c => cell(r, i, c))}
+              <button type="button" className="kebab" title="Remove" onClick={() => setVal(rows.filter((_, j) => j !== i))}><Icon n="x" s={11} /></button>
+            </div>
+          ))}
+          <button type="button" className="schedadd" disabled={f.max && rows.length >= f.max} onClick={() => setVal(rows.concat(f.add ? f.add(rows) : {}))}>
+            <Icon n="plus" s={11} />{f.addLabel || "Add"}</button>
+        </div>
+        {f.hint && <span className="fhint">{f.hint}</span>}
+      </label>
+    );
+  }
   if (f.type === "bschedule") {
     const rows = val || [];
     const set = (i, k, x) => setVal(rows.map((r, j) => j === i ? Object.assign({}, r, {[k]: x}) : r));

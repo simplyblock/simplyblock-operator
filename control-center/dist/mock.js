@@ -5601,6 +5601,14 @@ const RESOURCES = {
     core: OCM_CLUSTER_API_GROUP,
     namespaced: false
   },
+  // a managed site's storage deployment, requested from the hub (operator,
+  // storage.simplyblock.io/v1alpha2); the operator carries it to the site
+  StorageSiteDeployment: {
+    plural: "storagesitedeployments",
+    short: "sbsd",
+    core: "storage.simplyblock.io/v1alpha2",
+    namespaced: true
+  },
   // access reviews: the API server answers what the caller may do
   SelfSubjectAccessReview: {
     plural: "selfsubjectaccessreviews",
@@ -10561,7 +10569,8 @@ window.SB_DR = {
     RestoreAction: [],
     SiteProfile: [],
     DRConfig: [],
-    DHCPServer: []
+    DHCPServer: [],
+    StorageSiteDeployment: []
   };
   const api = (kind, group) => ({
     apiVersion: group || "dr.simplyblock.io/v1alpha1",
@@ -11698,6 +11707,82 @@ window.SB_DR = {
   });
   store.DHCPServer.push(dhcp("dhcp-cluster-a", "cluster-a", "dhcp", "sitemap-hosts", 3, "5e5e5e"));
   store.DHCPServer.push(dhcp("dhcp-cluster-b", "cluster-b", "dhcp", "sitemap-hosts", 3, "91ab00"));
+
+  // ---- site storage (StorageSiteDeployment, storage.simplyblock.io/v1alpha2) ----
+  const nodeSets = hosts => [{
+    name: "default",
+    groups: [{
+      name: "all",
+      workers: hosts
+    }]
+  }];
+  const tpl = name => ({
+    name,
+    vcpuCount: 8,
+    minHugePagesSize: "8G",
+    maxSubsystemCount: 30,
+    stripe: {
+      dataChunks: 1,
+      parityChunks: 1
+    },
+    enableDriveFormat: true
+  });
+  const ssd = (site, spec, status) => Object.assign(api("StorageSiteDeployment", "storage.simplyblock.io/v1alpha2"), {
+    metadata: meta(site, "simplyblock"),
+    spec: Object.assign({
+      cluster: site,
+      siteNamespace: "simplyblock",
+      draftName: "site-draft",
+      discover: {
+        enableControlPlaneNodes: true
+      },
+      approved: false
+    }, spec),
+    status
+  });
+  store.StorageSiteDeployment.push(ssd("cluster-a", {
+    sizing: tpl("sb-cluster-a"),
+    approved: true
+  }, {
+    phase: "Online",
+    message: "StorageCluster sb-cluster-a is Online (3 node(s))",
+    workName: "sbsd-1a2b3c",
+    draft: {
+      name: "site-draft",
+      phase: "Expanded",
+      approved: true,
+      cluster: tpl("sb-cluster-a"),
+      nodeSets: nodeSets(["a-1", "a-2", "a-3"]),
+      nodeRefs: ["sn-a-1", "sn-a-2", "sn-a-3"]
+    },
+    storageCluster: {
+      name: "sb-cluster-a",
+      uuid: uid(),
+      phase: "Online",
+      pool: "sb-cluster-a-pool",
+      nodes: ["a-1", "a-2", "a-3"].map(h => ({
+        name: "sn-" + h,
+        phase: "Online",
+        hostname: h
+      }))
+    },
+    conditions: [cond("Delivered", true, "Applied", "the work is applied on the site"), cond("Discovered", true, "Nodes", "3 node(s) in the draft"), cond("Approved", true, "SiteDraft", "the site's draft approved=true"), cond("Ready", true, "Online", "the StorageCluster is Online")]
+  }));
+  store.StorageSiteDeployment.push(ssd("cluster-b", {
+    sizing: tpl("sb-cluster-b")
+  }, {
+    phase: "Drafted",
+    message: "the draft awaits approval",
+    workName: "sbsd-4d5e6f",
+    draft: {
+      name: "site-draft",
+      phase: "Draft",
+      approved: false,
+      cluster: tpl("sb-cluster-b"),
+      nodeSets: nodeSets(["b-1", "b-2", "b-3"])
+    },
+    conditions: [cond("Delivered", true, "Applied", "the work is applied on the site"), cond("Discovered", true, "Nodes", "3 node(s) in the draft"), cond("Approved", false, "SiteDraft", "the site's draft approved=false")]
+  }));
   store.SiteProfile.push(sprof("stretch", ["eu-central-1a", "eu-central-1c"]));
   store.DRConfig.push(Object.assign(api("DRConfig"), {
     metadata: meta("default"),
@@ -11968,6 +12053,11 @@ window.SB_DR = {
       reservations: 0,
       conditions: []
     };
+    if (kind === "StorageSiteDeployment") obj.status = {
+      phase: "Discovering",
+      message: `waiting for site ${body.spec.cluster} to write draft simplyblock/site-draft`,
+      conditions: [cond("Delivered", false, "Pending", "the work is not applied on the site yet", 0)]
+    };
     store[kind].push(obj);
     return {
       obj: strip(obj)
@@ -11989,6 +12079,10 @@ window.SB_DR = {
         reason: "Invalid"
       };
       Object.assign(o.spec, body.spec);
+      if (kind === "StorageSiteDeployment" && body.spec.approved && o.status.phase === "Drafted") {
+        o.status.phase = "Deploying";
+        o.status.message = `draft Expanding, StorageCluster ${(o.spec.sizing || {}).name || o.spec.cluster} not reported yet`;
+      }
     }
     if (body.metadata && body.metadata.annotations) {
       o.metadata.annotations = o.metadata.annotations || {};
@@ -13526,6 +13620,8 @@ const RB_ROLES = [{
       apiGroups: ["dr.simplyblock.io"]
     }), rbRule(["siteprofiles", "dhcpservers"], RB_RW, {
       apiGroups: ["sitemap.simplyblock.io"]
+    }), rbRule(["storagesitedeployments"], RB_RW, {
+      apiGroups: ["storage.simplyblock.io"]
     })]
   }]
 }, {
@@ -13587,6 +13683,8 @@ const RB_ROLES = [{
       apiGroups: ["dr.simplyblock.io"]
     }), rbRule(["siteprofiles", "dhcpservers"], RB_RW, {
       apiGroups: ["sitemap.simplyblock.io"]
+    }), rbRule(["storagesitedeployments"], RB_RO, {
+      apiGroups: ["storage.simplyblock.io"]
     })]
   }]
 }, {

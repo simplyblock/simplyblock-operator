@@ -138,7 +138,7 @@ const deleteDialog = (o, note, needsConfirm) => ({
   run: () => drhub.remove(o, needsConfirm)
 });
 const KIND_LABEL_DR = {pplan: "protection plan", drpath: "DR path", papp: "protected application", rplan: "recovery plan", raction: "recovery action",
-  tbubble: "test", tsched: "test schedule", restore: "restore", siteprofile: "site profile", drconfig: "DR configuration", dhcpserver: "DHCP server"};
+  tbubble: "test", tsched: "test schedule", restore: "restore", siteprofile: "site profile", drconfig: "DR configuration", dhcpserver: "DHCP server", sitedeploy: "site storage deployment"};
 
 const METHOD_TYPES = [{v: "async", l: "async — block replication per interval"}, {v: "sync", l: "sync — stretch cluster, RPO 0"},
   {v: "s3-backup", l: "s3-backup — snapshot backups to S3 only"}, {v: "async-s3-backup", l: "async + s3-backup"}, {v: "sync-s3-backup", l: "sync + s3-backup"}];
@@ -149,6 +149,91 @@ const parseSites = txt => String(txt || "").split(/[\n;]+/).map(l => l.trim()).f
   const [cluster, zone] = (clusterZone || "").split("/");
   return Object.assign({name, cluster: cluster || name}, zone ? {zone} : {}, region ? {region} : {});
 });
+// ---- form <-> spec helpers for the editable parts of the DR objects --------
+const S3_COLS = [
+  {k: "site", label: "Site", placeholder: "site-a", flex: 1},
+  {k: "bucket", label: "Bucket", placeholder: "dr-site-a", flex: 1.4},
+  {k: "endpoint", label: "Endpoint", placeholder: "https://s3.eu-central-1.amazonaws.com", flex: 2},
+  {k: "region", label: "Region", placeholder: "eu-central-1", flex: 1},
+  {k: "secretRef", label: "Secret", placeholder: "ramen-s3-secret", flex: 1}
+];
+const s3Rows = profiles => (profiles || []).map(p => ({site: p.site || "", bucket: p.bucket || "", endpoint: p.endpoint || "", region: p.region || "", secretRef: typeof p.secretRef === "string" ? p.secretRef : (p.secretRef || {}).name || ""}));
+const s3Profiles = rows => (rows || []).filter(r => (r.site || "").trim() && (r.bucket || "").trim()).map(r => Object.assign(
+  {site: r.site.trim(), bucket: r.bucket.trim()}, r.endpoint && r.endpoint.trim() ? {endpoint: r.endpoint.trim()} : {},
+  r.region && r.region.trim() ? {region: r.region.trim()} : {}, r.secretRef && r.secretRef.trim() ? {secretRef: r.secretRef.trim()} : {}));
+
+// Tiers: one row per tier. The selector is either labels (k=v, k2=v2) or
+// resource types (configmaps, secrets); the ready gates are a short list:
+//   vmRunning | deploymentsReady | podsReady | exec(app=shop-tools; nc -z -w 3 db 3306; 900)
+const READY_RE = /^exec\((.*)\)$/;
+const tierRows = tiers => (tiers || []).map(t => {
+  const sel = t.selector || {};
+  const byLabels = sel.matchLabels && Object.keys(sel.matchLabels).length;
+  return {name: t.name || "", by: byLabels ? "labels" : "resources",
+    selector: byLabels ? Object.entries(sel.matchLabels).map(([k, v]) => `${k}=${v}`).join(", ") : (sel.resourceTypes || []).join(", "),
+    ready: (t.ready || []).map(r => r.type === "exec"
+      ? `exec(${Object.entries(r.selector || {}).map(([k, v]) => `${k}=${v}`).join(",")}; ${(r.command || []).join(" ")}${r.timeoutSeconds ? `; ${r.timeoutSeconds}` : ""})`
+      : r.type).join(", ")};
+});
+const parseReady = s => (s || "").split(/,(?![^(]*\))/).map(x => x.trim()).filter(Boolean).map(x => {
+  const m = READY_RE.exec(x);
+  if (!m) return {type: x};
+  const parts = m[1].split(";").map(p => p.trim());
+  const sel = {};
+  (parts[0] || "").split(",").map(p => p.trim()).filter(Boolean).forEach(kv => { const [k, v] = kv.split("="); if (k) sel[k.trim()] = (v || "").trim(); });
+  const out = {type: "exec", selector: sel, command: (parts[1] || "").split(/\s+/).filter(Boolean)};
+  if (parts[2] && Number(parts[2])) out.timeoutSeconds = Number(parts[2]);
+  return out;
+});
+const tiersSpec = rows => (rows || []).filter(r => (r.name || "").trim()).map(r => {
+  const selector = r.by === "resources"
+    ? {resourceTypes: csv(r.selector)}
+    : {matchLabels: Object.fromEntries(csv(r.selector).map(kv => { const [k, v] = kv.split("="); return [k.trim(), (v || "").trim()]; }).filter(([k]) => k))};
+  const ready = parseReady(r.ready);
+  return Object.assign({name: r.name.trim(), selector}, ready.length ? {ready} : {});
+});
+const TIER_COLS = [
+  {k: "name", label: "Tier", placeholder: "db", flex: 0.8},
+  {k: "by", label: "Select by", type: "select", options: [{v: "labels", l: "labels"}, {v: "resources", l: "resource types"}], flex: 0.9},
+  {k: "selector", label: "Selector", placeholder: "dr.simplyblock.io/tier=db  |  configmaps, secrets", flex: 2},
+  {k: "ready", label: "Ready when", placeholder: "vmRunning, exec(app=shop-tools; nc -z -w 3 db 3306; 900)", flex: 2.4}
+];
+const probeRows = probes => (probes || []).map(p => ({name: p.name || "", type: p.type || "http", target: p.target || "", timeout: p.timeout || "", expectStatus: p.expectStatus || ""}));
+const probesSpec = rows => (rows || []).filter(r => (r.target || "").trim() || r.type === "vmRunning").map(r => Object.assign(
+  {name: (r.name || "").trim() || r.type, type: r.type || "http"}, r.target && r.target.trim() ? {target: r.target.trim()} : {},
+  r.timeout && String(r.timeout).trim() ? {timeout: String(r.timeout).trim()} : {}, Number(r.expectStatus) ? {expectStatus: Number(r.expectStatus)} : {}));
+const PROBE_COLS = [
+  {k: "name", label: "Probe", placeholder: "web", flex: 0.8},
+  {k: "type", label: "Type", type: "select", options: [{v: "http", l: "http"}, {v: "tcp", l: "tcp"}], flex: 0.7},
+  {k: "target", label: "Target (URL / host:port)", placeholder: "http://web.shop.svc.cluster.local/", flex: 2.4},
+  {k: "timeout", label: "Timeout", placeholder: "15s", flex: 0.7},
+  {k: "expectStatus", label: "HTTP status", type: "number", placeholder: "any 2xx", flex: 0.8}
+];
+const TIER_HINT = "Ready gates: vmRunning, deploymentsReady, podsReady, or exec(<pod labels k=v>; <command>; <timeout seconds>) run in a pod of the tier's namespace. Tiers restore in order; the next starts when every gate of the previous holds.";
+
+// Site profile bindings (ADR 0020)
+const LNET_COLS = [
+  {k: "role", label: "Role", placeholder: "app", flex: 0.8},
+  {k: "nad", label: "NetworkAttachmentDefinition (namespace/name)", placeholder: "app-net/vlan110", flex: 2.4}
+];
+const GNET_COLS = [
+  {k: "role", label: "Role", placeholder: "app", flex: 0.7},
+  {k: "cidr", label: "Guest subnet", placeholder: "192.168.110.0/24", flex: 1.3},
+  {k: "reservedHostIDs", label: "Reserved host ids", placeholder: "1, 2", flex: 0.9},
+  {k: "dhcpServerRef", label: "DHCP server (name)", placeholder: "site-a", flex: 1.1}
+];
+// The DHCP servers a profile already refers to, offered as the defaults.
+const knownServers = sp => Array.from(new Set([sp.dhcpServerRef].concat((sp.guestNetworks || []).map(g => g.dhcpServerRef)).filter(Boolean)));
+const lnetRows = sp => (sp.logicalNetworks || []).map(l => ({role: l.role || "", nad: l.nad || ""}));
+const gnetRows = sp => (sp.guestNetworks || []).map(g => ({role: g.role || "", cidr: g.cidr || "", reservedHostIDs: (g.reservedHostIDs || []).join(", "), dhcpServerRef: g.dhcpServerRef || ""}));
+const bindingsSpec = v => ({
+  logicalNetworks: (v.lnets || []).filter(r => (r.role || "").trim() && (r.nad || "").trim()).map(r => ({role: r.role.trim(), nad: r.nad.trim()})),
+  guestNetworks: (v.gnets || []).filter(r => (r.role || "").trim() && (r.cidr || "").trim()).map(r => Object.assign({role: r.role.trim(), cidr: r.cidr.trim()},
+    csv(r.reservedHostIDs).length ? {reservedHostIDs: csv(r.reservedHostIDs).map(Number).filter(n => !Number.isNaN(n))} : {},
+    r.dhcpServerRef ? {dhcpServerRef: r.dhcpServerRef} : {})),
+  dhcpServerRef: v.dhcp || null
+});
+
 const newPlanDialog = () => ({
   title: "New protection plan", confirm: "Create plan", done: "ProtectionPlan created",
   desc: "A plan names the sites that take part in DR, the storage it protects and how it replicates. Ramen's DRCluster and DRPolicy objects and the replication classes are derived from it; directions are declared afterwards as DR paths.",
@@ -163,21 +248,43 @@ const newPlanDialog = () => ({
     /backup/.test(v.type || "") && {k: "bRetention", label: "Backups retained", type: "number", min: 1, def: 24},
     {k: "sc", label: "Storage class selector (matchLabels)", type: "kv", max: 8},
     {k: "cg", label: "Consistency groups", type: "checkbox", def: false},
-    {k: "s3Profile", label: "Ramen S3 profile (single store)", type: "text", placeholder: "existing profile name; leave empty when using per-site stores"},
+    {k: "scName", label: "Create the replicated StorageClass on every site, named (empty: the classes exist already)", type: "text", placeholder: "simplyblock-dr",
+      hint: "dr-hub writes it on each site with the selector's labels, the site's storage cluster and pool; the selector needs at least one matchLabel."},
+    {k: "scPool", label: "…from the pool (empty: the storage cluster's default pool)", type: "text", placeholder: ""},
+    {k: "scFs", label: "…with the filesystem", type: "text", def: "xfs"},
+    {k: "s3", label: "S3 stores — one per site (Ramen's metadata store and Velero's backups)", type: "rows", cols: S3_COLS, max: 8, addLabel: "Add store",
+      add: rows => ({site: "", bucket: "", endpoint: rows.length ? rows[rows.length - 1].endpoint : "", region: rows.length ? rows[rows.length - 1].region : "", secretRef: rows.length ? rows[rows.length - 1].secretRef : "ramen-s3-secret"}),
+      hint: "The secret (access key id / secret access key) must exist in Ramen's namespace on the hub. Leave empty to name one existing profile below instead."},
+    {k: "velero", label: "Velero namespace on the sites", type: "text", def: "velero", placeholder: "velero"},
+    {k: "s3Profile", label: "Ramen S3 profile (single store, instead of per-site stores)", type: "text", placeholder: "existing profile name"},
     {k: "autoRestart", label: "Restart applications in place after a storage recovery", type: "checkbox", def: false},
-    {k: "n2", type: "note", label: "Per-site S3 stores, snapshot class selectors and replication parameters are written with kubectl for now: the plan's spec is editable afterwards except for the immutable fields Ramen keys on."}
+    {k: "n2", type: "note", label: "Snapshot class selectors and replication parameters are taken from the storage class and the method; the spec stays editable afterwards except for the fields Ramen keys on (sites, methods)."}
   ].filter(Boolean),
   run: v => {
     const type = v.type;
     const method = Object.assign({name: v.method.trim(), type}, /^async/.test(type) ? {schedulingInterval: v.interval.trim()} : {},
       /backup/.test(type) ? {s3Backup: {interval: v.bInterval.trim(), retention: Number(v.bRetention) || 24}} : {});
     const sc = kvToObj(v.sc);
+    const stores = s3Profiles(v.s3);
     const spec = Object.assign({sites: parseSites(v.sites), methods: [method],
-      storageProfile: Object.assign({storageClassSelector: Object.keys(sc).length ? {matchLabels: sc} : {}}, {consistencyGroups: v.cg ? "Enabled" : "Disabled"})},
+      storageProfile: Object.assign({storageClassSelector: Object.keys(sc).length ? {matchLabels: sc} : {}}, {consistencyGroups: v.cg ? "Enabled" : "Disabled"},
+        v.scName && v.scName.trim() ? {provision: Object.assign({name: v.scName.trim()}, v.scPool && v.scPool.trim() ? {pool: v.scPool.trim()} : {}, v.scFs && v.scFs.trim() ? {fsType: v.scFs.trim()} : {})} : {})},
+      stores.length ? {s3Profiles: stores} : {}, v.velero && v.velero.trim() ? {veleroNamespace: v.velero.trim()} : {},
       v.s3Profile && v.s3Profile.trim() ? {s3Profile: {name: v.s3Profile.trim()}} : {}, v.autoRestart ? {autoRestart: {enabled: true}} : {});
     return drhub.createPlan({name: v.name.trim(), spec});
   }
 });
+const editPlanS3Dialog = p => ({
+  title: `S3 stores of ${p.name}`, confirm: "Save", done: "ProtectionPlan updated",
+  desc: "Ramen keeps its metadata and Velero its backups in one S3 store per site. Changing a store re-derives the DRClusters; applications keep their protection.",
+  fields: [
+    {k: "s3", label: "S3 stores — one per site", type: "rows", cols: S3_COLS, max: 8, addLabel: "Add store", def: s3Rows(p.s3Profiles),
+      add: rows => ({site: "", bucket: "", endpoint: rows.length ? rows[rows.length - 1].endpoint : "", region: rows.length ? rows[rows.length - 1].region : "", secretRef: rows.length ? rows[rows.length - 1].secretRef : "ramen-s3-secret"})},
+    {k: "velero", label: "Velero namespace on the sites", type: "text", def: p.veleroNamespace || "velero"}
+  ],
+  run: v => drhub.patchPlan(p, {s3Profiles: s3Profiles(v.s3), veleroNamespace: v.velero && v.velero.trim() ? v.velero.trim() : null})
+});
+
 const newPathDialog = plans => ({
   title: "Declare a DR path", confirm: "Create path", done: "DRPath created",
   desc: "A DR path is a declared direction between two sites of a plan, and the set of actions allowed along it. Nothing in the console offers a target cluster: it offers a path.",
@@ -219,19 +326,36 @@ const protectAppDialogDR = (plans, cfg) => ({
       v.appKind !== "managed" && {k: "namespaces", label: "Protected namespaces (comma-separated)", type: "text", required: true, placeholder: "shop"},
       {k: "pvc", label: "PVC selector (matchLabels)", type: "kv", max: 8},
       v.appKind !== "managed" && {k: "recipe", label: "Hand-written Recipe (name, optional)", type: "text", placeholder: "leave empty to let the hub generate one from tiers"},
-      {k: "n1", type: "note", label: "Both directions between source and target must exist as DR paths for readiness to become Ready. Tiers, probes and hooks are edited on the object afterwards."}
+      {k: "tiers", label: "Tiers — the boot order the hub generates the Recipe from", type: "rows", cols: TIER_COLS, max: 12, addLabel: "Add tier", hint: TIER_HINT,
+        add: () => ({name: "", by: "labels", selector: "", ready: ""})},
+      {k: "probes", label: "Health probes — what a move waits for on the target", type: "rows", cols: PROBE_COLS, max: 8, addLabel: "Add probe",
+        add: () => ({name: "", type: "http", target: "", timeout: "15s", expectStatus: ""})},
+      {k: "n1", type: "note", label: "Both directions between source and target must exist as DR paths for readiness to become Ready. External hooks are edited on the object."}
     ].filter(Boolean);
   },
   run: v => {
     const pvc = kvToObj(v.pvc);
     const sel = Object.keys(pvc).length ? {matchLabels: pvc} : {};
+    const tiers = tiersSpec(v.tiers), probes = probesSpec(v.probes);
     const spec = Object.assign({planRef: {name: v.plan}, source: v.source, target: v.target, kind: v.appKind},
-      v.method ? {method: v.method} : {},
+      v.method ? {method: v.method} : {}, tiers.length ? {tiers} : {}, probes.length ? {health: {probes}} : {},
       v.appKind === "managed" ? {managed: {placementRef: {name: v.placement.trim()}, pvcSelector: sel}}
         : {discovered: Object.assign({protectedNamespaces: csv(v.namespaces), pvcSelector: sel}, v.recipe && v.recipe.trim() ? {recipeRef: {name: v.recipe.trim()}} : {})});
     return drhub.createApp({name: v.name.trim(), namespace: v.namespace.trim(), spec});
   }
 });
+const editTiersDialog = a => ({
+  title: `Tiers & probes of ${a.name}`, confirm: "Save", done: "ProtectedApplication updated",
+  desc: "The tiers are the boot order: the hub generates the Recipe Ramen restores by from them. The probes are what a Failover or Relocate waits for before it reports the application up on the target.",
+  fields: [
+    {k: "tiers", label: "Tiers (boot order)", type: "rows", cols: TIER_COLS, max: 12, addLabel: "Add tier", hint: TIER_HINT, def: tierRows(a.tiers),
+      add: () => ({name: "", by: "labels", selector: "", ready: ""})},
+    {k: "probes", label: "Health probes", type: "rows", cols: PROBE_COLS, max: 8, addLabel: "Add probe", def: probeRows(a.probes),
+      add: () => ({name: "", type: "http", target: "", timeout: "15s", expectStatus: ""})}
+  ],
+  run: v => drhub.patchApp(a, {tiers: tiersSpec(v.tiers), health: {probes: probesSpec(v.probes)}})
+});
+
 const newRPlanDialog = (paths, apps) => ({
   title: "New recovery plan", confirm: "Create plan", done: "RecoveryPlan created",
   desc: "An ordered set of applications moved together along one DR path: priorities run in sequence, applications of one priority in parallel. A plan action fans out one RecoveryAction per application.",
@@ -270,7 +394,21 @@ const newScheduleDialog = (target, nsHint) => ({
   run: v => drhub.createSchedule({name: v.name, namespace: target ? target.namespace : nsHint, schedule: v.schedule.trim(), target, path: v.path, keepLast: v.keepLast, keepFor: v.keepFor && v.keepFor.trim(), suspend: v.suspend})
 });
 
-const newDHCPServerDialog = sites => ({
+const editBindingsDialog = s => ({
+  title: `Bindings of ${s.name}`, confirm: "Save", done: "SiteProfile updated",
+  desc: "How this site's networks map for recovered VMs (ADR 0020): the NAD each logical role is on here, the guest subnet of each role with the host ids never handed out, and the DHCP server the reservations are rendered to.",
+  fields: [
+    {k: "lnets", label: "Logical networks — role → NAD on this site", type: "rows", cols: LNET_COLS, max: 8, addLabel: "Add network", def: lnetRows(s.spec || {}),
+      add: () => ({role: "app", nad: ""}), hint: s.nads && s.nads.length ? `NADs reported here: ${s.nads.map(n => n.namespace ? `${n.namespace}/${n.name}` : n.name || n).slice(0, 8).join(", ")}` : ""},
+    {k: "gnets", label: "Guest networks — the subnet of each role here", type: "rows", cols: GNET_COLS, max: 8, addLabel: "Add subnet", def: gnetRows(s.spec || {}),
+      add: () => ({role: "app", cidr: "", reservedHostIDs: "1, 2", dhcpServerRef: knownServers(s.spec || {})[0] || ""}),
+      hint: "The DHCP server is the name of a registered DHCPServer of this site (Disaster recovery → DHCP servers)."},
+    {k: "dhcp", label: "DHCP server of the site (default for every guest network)", type: "text", def: (s.spec || {}).dhcpServerRef || "", placeholder: knownServers(s.spec || {}).join(", ") || "name of a registered DHCPServer"}
+  ],
+  run: v => drhub.patchSiteProfile(s, bindingsSpec(Object.assign({}, v, {dhcp: v.dhcp && v.dhcp.trim() ? v.dhcp.trim() : ""})))
+});
+
+const newDHCPServerDialog = (sites, profiles) => ({
   title: "Register a DHCP server", confirm: "Create", done: "DHCPServer created",
   desc: "A DHCP server of one site that guest addresses are reserved on. dr-hub never talks to it: it renders the reservations (<mac>,<ip>,<vm>) into the server's ConfigMap on the site, and dnsmasq reads them from its --dhcp-hostsdir. A SiteProfile's guestNetworks[role].dhcpServerRef (or spec.dhcpServerRef) names it.",
   fields: [
@@ -279,9 +417,67 @@ const newDHCPServerDialog = sites => ({
     {k: "type", label: "Type", type: "select", options: [{v: "dnsmasq", l: "dnsmasq — reservations ConfigMap mounted as --dhcp-hostsdir"}]},
     {k: "namespace", label: "ConfigMap namespace (on the site)", type: "text", required: true, placeholder: "dhcp"},
     {k: "configMap", label: "ConfigMap name", type: "text", required: true, placeholder: "sitemap-hosts"},
-    {k: "n1", type: "note", label: "Then bind it on the site profile: spec.guestNetworks[].dhcpServerRef or spec.dhcpServerRef (kubectl in this phase). Guests need a pinned MAC and an address inside the role's CIDR to get a reservation."}
+    {k: "bind", label: "Bind it as the site's DHCP server (the site profile's default and every guest network without one)", type: "checkbox", def: true},
+    {k: "n1", type: "note", label: "Guests need a pinned MAC and an address inside the role's guest subnet to get a reservation; the subnets are the site profile's bindings."}
   ],
-  run: v => drhub.createDHCPServer({name: v.name.trim(), site: v.site, namespace: v.namespace.trim(), configMap: v.configMap.trim()})
+  run: v => drhub.createDHCPServer({name: v.name.trim(), site: v.site, namespace: v.namespace.trim(), configMap: v.configMap.trim()}).then(r => {
+    const prof = (profiles || []).find(p => p.name === v.site);
+    if (!v.bind || !prof) return r;
+    const sp = prof.spec || {}, name = dns63(v.name.trim());
+    return drhub.patchSiteProfile(prof, {dhcpServerRef: name,
+      guestNetworks: (sp.guestNetworks || []).map(g => Object.assign({}, g, g.dhcpServerRef ? {} : {dhcpServerRef: name}))}).then(() => r);
+  })
+});
+
+// ---- a managed site's storage (StorageSiteDeployment) ----------------------
+// The hub console cannot reach a site's API server; the operator on the hub
+// carries the request there through OCM. The console writes the request, the
+// sizing and the approval, and reads back the projected draft and cluster.
+const sizingFields = z => [
+  {k: "name", label: "Storage cluster name", type: "text", def: (z && z.name) || "", placeholder: "sb-site-a"},
+  {k: "vcpuCount", label: "vCPUs per storage node", type: "number", def: z && z.vcpuCount != null ? z.vcpuCount : "", min: 1, placeholder: "8"},
+  {k: "minHugePagesSize", label: "Hugepages per storage node", type: "text", def: (z && z.minHugePagesSize) || "", placeholder: "8G"},
+  {k: "maxSubsystemCount", label: "NVMe-oF subsystems per node", type: "number", def: z && z.maxSubsystemCount != null ? z.maxSubsystemCount : "", min: 1, placeholder: "30"},
+  {k: "dataChunks", label: "Erasure coding: data chunks", type: "number", def: z && z.stripe && z.stripe.dataChunks != null ? z.stripe.dataChunks : "", min: 1, placeholder: "1"},
+  {k: "parityChunks", label: "Erasure coding: parity chunks", type: "number", def: z && z.stripe && z.stripe.parityChunks != null ? z.stripe.parityChunks : "", min: 0, placeholder: "1"},
+  {k: "enableDriveFormat", label: "Format the devices it takes (data on them is lost)", type: "checkbox", def: !!(z && z.enableDriveFormat)}
+];
+const num = v => v === "" || v == null ? null : Number(v);
+const sizingOf = v => {
+  const z = {};
+  if (v.name && v.name.trim()) z.name = dns63(v.name.trim());
+  if (num(v.vcpuCount) != null) z.vcpuCount = num(v.vcpuCount);
+  if (v.minHugePagesSize && v.minHugePagesSize.trim()) z.minHugePagesSize = v.minHugePagesSize.trim();
+  if (num(v.maxSubsystemCount) != null) z.maxSubsystemCount = num(v.maxSubsystemCount);
+  if (num(v.dataChunks) != null || num(v.parityChunks) != null)
+    z.stripe = Object.assign({}, num(v.dataChunks) != null ? {dataChunks: num(v.dataChunks)} : {}, num(v.parityChunks) != null ? {parityChunks: num(v.parityChunks)} : {});
+  if (v.enableDriveFormat) z.enableDriveFormat = true;
+  return z;
+};
+const deploySiteDialog = (sites, taken) => ({
+  title: "Deploy storage on a managed site", confirm: "Discover", done: "StorageSiteDeployment created — discovery requested on the site",
+  desc: "The operator on this hub runs a discovery on the site through Open Cluster Management and writes a draft deployment document there. You review the draft here, with the sizing below applied, and approve it; nothing is configured on any node before the approval.",
+  fields: [
+    {k: "site", label: "Site (managed cluster)", type: "select", required: true, options: sites.filter(s => !taken.includes(s)).map(s => ({v: s, l: s})), empty: "Every managed cluster has a storage deployment already, or none has joined the hub."},
+    {k: "namespace", label: "Namespace of the request on the hub", type: "text", required: true, def: (window.SB_CONFIG || {}).namespace || "simplyblock"},
+    {k: "enableControlPlaneNodes", label: "Include control-plane nodes in the discovery (every node of a small site is one)", type: "checkbox", def: true},
+    {k: "workers", label: "Limit to these nodes (comma-separated; empty = every node)", type: "text", placeholder: ""},
+    ...sizingFields(null),
+    {k: "n1", type: "note", label: "Approval is one-way and reboots the site's storage nodes to set hugepages and core isolation."}
+  ],
+  run: v => drhub.createSiteDeploy({site: v.site, namespace: v.namespace.trim(), enableControlPlaneNodes: v.enableControlPlaneNodes, workers: csv(v.workers), sizing: sizingOf(v)})
+});
+const resizeSiteDialog = d => ({
+  title: `Size the draft of ${d.site}`, confirm: "Apply sizing", done: "Sizing sent to the site's draft",
+  desc: "Written onto the draft's cluster template on the site. Fields left empty keep what the discovery wrote.",
+  fields: sizingFields(d.sizing),
+  run: v => drhub.patchSiteDeploySizing(d, sizingOf(v))
+});
+const approveSiteDialog = d => ({
+  title: `Approve the storage deployment of ${d.site}?`, confirm: "Approve and deploy", danger: true, done: "Approved — the site's draft is expanding",
+  desc: `Approval is one-way. The site's ${d.counts.nodes} node(s) are configured (hugepages, core isolation; this reboots them), the storage nodes are added and the cluster ${((d.draft || {}).cluster || {}).name || (d.sizing || {}).name || ""} is activated in the control plane.`,
+  fields: [{k: "confirm", label: `Type ${d.site} to confirm`, type: "text", required: true, match: d.site}],
+  run: () => drhub.approveSiteDeploy(d)
 });
 
 // ---- command registry (kebab menus) ----------------------------------------
@@ -289,6 +485,7 @@ const newDHCPServerDialog = sites => ({
 // create on the run kinds, override to the override verb, delete to delete.
 Object.assign(ACTIONS, {
   pplan: p => [
+    {label: "Edit S3 stores", icon: "cloud", op: "update", dialog: editPlanS3Dialog(p)},
     {label: "Delete plan", icon: "trash", danger: true, op: "delete", removes: true, dialog: deleteDialog(p, "Deleting a plan removes the derived DRClusters, DRPolicies and classes. Applications bound to it lose their protection.", true)}
   ],
   drpath: p => [
@@ -301,6 +498,7 @@ Object.assign(ACTIONS, {
     {label: "Test", icon: "camera", op: "test", dialog: runTestDialog(a), disabled: !a.paths.some(p => p.actions.includes("Test")), hint: "No declared path allows Test"},
     {label: "Schedule tests", icon: "clock", op: "create", dialog: newScheduleDialog(a), disabled: !a.paths.some(p => p.actions.includes("Test")), hint: "No declared path allows Test"},
     {label: "Restore from backup", icon: "cloud", op: "drrestore", dialog: restoreDialog(a)},
+    {label: "Edit tiers & probes", icon: "list", op: "update", dialog: editTiersDialog(a)},
     {label: a.autoRestartOptOut ? "Enable automatic restart" : "Disable automatic restart", icon: "power", op: "update", run: () => drhub.setAutoRestart(a, a.autoRestartOptOut), toast: "Auto-restart preference saved"},
     {label: "Unprotect (delete)", icon: "trash", danger: true, op: "delete", removes: true, dialog: deleteDialog(a, "Removes the ProtectedApplication and the derived DRPlacementControl. The workload keeps running where it is; its volumes stop being replicated.")}
   ],
@@ -326,11 +524,18 @@ Object.assign(ACTIONS, {
   restore: r => [
     {label: "Delete record", icon: "trash", danger: true, op: "delete", removes: true, disabled: !r.terminal, hint: "A running restore cannot be deleted", dialog: deleteDialog(r, "")}
   ],
-  siteprofile: () => [],
+  siteprofile: s => [
+    {label: "Edit bindings", icon: "link", op: "update", dialog: editBindingsDialog(s)}
+  ],
   dhcpserver: d => [
     {label: "Delete server", icon: "trash", danger: true, op: "delete", removes: true, dialog: deleteDialog(d, "Reservations rendered for this server stay in its ConfigMap until the hub re-renders the site; guests whose role names it become Open.")}
   ],
-  drconfig: () => []
+  drconfig: () => [],
+  sitedeploy: d => [
+    {label: "Size the draft", icon: "gauge", op: "update", dialog: resizeSiteDialog(d), disabled: d.approved, hint: "The deployment is approved"},
+    {label: "Approve and deploy", icon: "check", op: "update", dialog: approveSiteDialog(d), disabled: d.approved || d.status !== "Drafted", hint: d.approved ? "Already approved" : "No draft with nodes to approve yet"},
+    {label: "Delete request", icon: "trash", danger: true, op: "delete", removes: true, dialog: deleteDialog(d, "Deleting the request withdraws nothing on the site: the discovery, the draft and any storage cluster it produced stay.")}
+  ]
 });
 
 // ---- tiles ------------------------------------------------------------------
@@ -529,6 +734,64 @@ function DHCPServerTile({o: d, nav}) {
         <div><span>generation</span><b>{d.generation || "—"}</b></div>
       </div>
       <Foot items={[{label: "Details", right: true, onClick: () => nav.detail(d)}]} />
+    </div>
+  );
+}
+
+function SiteDeployTile({o: d, nav}) {
+  const sc = d.storageCluster;
+  return (
+    <div className="tile" style={{"--sc": STATUS_META[d.status].c}} onDoubleClick={() => nav.detail(d)}>
+      <TileHead obj={d} left={<><TrafficLight status={d.status} /><Name>{d.site}</Name></>} right={<span className="badge">{d.approved ? "approved" : "draft"}</span>} />
+      <div className="tsub" style={{marginTop: 2}}>{d.message || "—"}</div>
+      <Uuid value={d.id} />
+      <div className="kv">
+        <div><span>nodes found</span><b>{d.counts.nodes}</b></div>
+        <div><span>storage cluster</span><b>{sc ? sc.name : "—"}</b></div>
+        <div><span>storage nodes</span><b>{sc ? d.counts.storageNodes : "—"}</b></div>
+        <div><span>cluster id</span><b className="mono">{sc && sc.uuid ? sc.uuid.slice(0, 8) : "—"}</b></div>
+      </div>
+      {d.status === "Drafted" && !d.approved && <div className="prepbox">Review the draft and approve it. Nothing has been applied to any node yet.</div>}
+      <Foot items={[
+        d.status === "Drafted" && !d.approved ? {label: "Approve", icon: "check", onClick: () => window.__ui.dialog(approveSiteDialog(d), d)} : null,
+        {label: "Details", right: true, onClick: () => nav.detail(d)}
+      ]} />
+    </div>
+  );
+}
+function SiteDeployDetail({o: d, nav}) {
+  const t = (d.draft && d.draft.cluster) || {};
+  const z = d.sizing || {};
+  const sc = d.storageCluster;
+  const str = v => v == null ? "" : String(v);
+  return (
+    <div>
+      <DetailHead obj={d} title={`Storage of ${d.site}`} sub={<span className="mono" style={{color: "var(--dim)"}}>StorageSiteDeployment {d.namespace}/{d.name} · draft {d.siteNamespace}/{d.draftName} on the site</span>} badge={<span className="badge">{d.approved ? "approved" : "not approved"}</span>} />
+      {d.status === "Failed" && <div className="banner"><Icon n="alert" s={15} /><span><b>The deployment failed.</b> {d.message}</span></div>}
+      <div className="stats">
+        <Stat k="State" v={<TrafficLight status={d.status} />} s={d.message} />
+        <Stat k="Nodes in the draft" v={d.counts.nodes} s={d.discover.enableControlPlaneNodes ? "control-plane nodes included" : ""} />
+        <Stat k="Draft" v={(d.draft && d.draft.phase) || "—"} s={d.draft && d.draft.message ? d.draft.message : ""} />
+        <Stat k="Storage cluster" v={sc ? sc.name : "—"} s={sc ? `${sc.phase || "not reported"}${sc.uuid ? " · " + sc.uuid : ""}` : "after the approval"} />
+      </div>
+      <div className="dcols">
+        <div className="card"><h3>Draft — what the discovery found</h3><div className="bd" style={{overflowX: "auto"}}>
+          <Table cols={["Node set", "Group", "Nodes"]} empty="The site has not written a draft with nodes yet." rows={d.nodeSets.flatMap(s => (s.groups || []).map((g, i) => [<Mono>{s.name}</Mono>, <Mono dim>{g.name || `#${i + 1}`}</Mono>, <Mono>{(g.workers || []).join(", ")}</Mono>]))} />
+        </div></div>
+        <div className="card"><h3>Cluster template on the site</h3><div className="bd">
+          <Table cols={["Field", "On the site", "Requested"]} empty="No draft yet." rows={d.draft ? [
+            ["name", t.name, z.name], ["vCPUs per node", t.vcpuCount, z.vcpuCount],
+            ["hugepages per node", t.minHugePagesSize, z.minHugePagesSize], ["subsystems per node", t.maxSubsystemCount, z.maxSubsystemCount],
+            ["stripe", t.stripe ? `${str(t.stripe.dataChunks)}+${str(t.stripe.parityChunks)}` : "", z.stripe ? `${str(z.stripe.dataChunks)}+${str(z.stripe.parityChunks)}` : ""],
+            ["format devices", t.enableDriveFormat, z.enableDriveFormat]
+          ].map(r => [<b>{r[0]}</b>, <Mono>{str(r[1])}</Mono>, <Mono dim>{str(r[2])}</Mono>]) : []} />
+        </div></div>
+      </div>
+      {sc && <div className="card"><h3>Storage nodes</h3><div className="bd">
+        <Table cols={["Storage node", "Kubernetes node", "Phase"]} empty="No storage node reported yet." rows={(sc.nodes || []).map(n => [<Mono>{n.name}</Mono>, <Mono dim>{n.hostname}</Mono>, <Mono>{n.phase || "—"}</Mono>])} />
+        <p className="mdesc" style={{margin: "9px 0 0"}}>A StorageClass on the site names this cluster as cluster_id {sc.uuid || "(not assigned yet)"} and pool {sc.pool || "—"}.</p>
+      </div></div>}
+      <Conditions o={d} />
     </div>
   );
 }
@@ -1148,12 +1411,13 @@ function DrHubHome({nav}) {
         <NavCard icon="cloud" title="Restores" sub="from S3 backups onto rebuilt sites" count="→" onClick={() => nav.drLayer("restores")} />
         <NavCard icon="k8s" title="Site profiles" sub="per-cluster inventory and bindings" count="→" onClick={() => nav.drLayer("siteprofiles")} />
         <NavCard icon="link" title="DHCP servers" sub="guest address reservations per site" count="→" onClick={() => nav.drLayer("dhcpservers")} />
+        <NavCard icon="cluster" title="Site storage" sub="discover, size and deploy a managed site's storage cluster" count="→" onClick={() => nav.drLayer("sitedeploys")} />
         <NavCard icon="gauge" title="DR configuration" sub="agents, Ramen, archive, executor" count="→" onClick={() => nav.drLayer("drconfig")} />
       </div>
     </div>
   );
 }
 
-Object.assign(window, {DrHubHome, DRConfigView, PPlanTile, DRPathTile, PAppTile, RPlanTile, RActionTile, TBubbleTile, TSchedTile, RestoreTile, SiteProfileTile, DHCPServerTile,
+Object.assign(window, {DrHubHome, DRConfigView, PPlanTile, DRPathTile, PAppTile, RPlanTile, RActionTile, TBubbleTile, TSchedTile, RestoreTile, SiteProfileTile, DHCPServerTile, SiteDeployTile, SiteDeployDetail, deploySiteDialog,
   PPlanDetail, DRPathDetail, PAppDetail, RPlanDetail, RActionDetail, TBubbleDetail, TSchedDetail, RestoreDetail, SiteProfileDetail, DHCPServerDetail, MappingPanel,
   runActionDialog, runTestDialog, restoreDialog, newPPlanDialog: newPlanDialog, newPathDialog, protectAppDialogDR, newRPlanDialog, newScheduleDialog, newDHCPServerDialog, ACTION_KIND_META, KIND_LABEL_DR});

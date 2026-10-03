@@ -32,6 +32,7 @@ const LAYER_META = {
   restores: {label: "Restores", icon: "cloud"}, restore: {icon: "cloud"},
   siteprofiles: {label: "Site profiles", icon: "k8s"}, siteprofile: {icon: "k8s"},
   dhcpservers: {label: "DHCP servers", icon: "link"}, dhcpserver: {icon: "link"},
+  sitedeploys: {label: "Site storage", icon: "cluster"}, sitedeploy: {icon: "cluster"},
   drconfig: {label: "DR configuration", icon: "gauge"},
   slots: {label: "Replication slots", icon: "volume"}, slot: {icon: "volume"},
   replops: {label: "Operations", icon: "clock"}, replop: {icon: "clock"},
@@ -67,6 +68,7 @@ const pTSched = id => [{t: "dr"}, {t: "tschedules"}, {t: "tsched", id}];
 const pRestore = id => [{t: "dr"}, {t: "restores"}, {t: "restore", id}];
 const pSProf = id => [{t: "dr"}, {t: "siteprofiles"}, {t: "siteprofile", id}];
 const pDhcp = id => [{t: "dr"}, {t: "dhcpservers"}, {t: "dhcpserver", id}];
+const pSiteDeploy = id => [{t: "dr"}, {t: "sitedeploys"}, {t: "sitedeploy", id}];
 const pPair = id => [{t: "dr"}, {t: "pairs"}, {t: "pair", id}];
 const pSlot = id => [{t: "dr"}, {t: "slots"}, {t: "slot", id}];
 const pReplOp = id => [{t: "dr"}, {t: "replops"}, {t: "replop", id}];
@@ -98,6 +100,7 @@ const detailPath = o => o.kind === "cluster" ? pC(o.id)
   : o.kind === "restore" ? pRestore(o.id)
   : o.kind === "siteprofile" ? pSProf(o.id)
   : o.kind === "dhcpserver" ? pDhcp(o.id)
+  : o.kind === "sitedeploy" ? pSiteDeploy(o.id)
   : o.kind === "pair" ? pPair(o.id)
   : o.kind === "slot" ? pSlot(o.id)
   : o.kind === "replops" ? pReplOp(o.id)
@@ -160,7 +163,7 @@ const SORT_KEYS = {
   policy: ["name", "members"],
   pplan: ["health", "name", "newest"], drpath: ["health", "name", "newest"], papp: ["health", "name", "newest"],
   rplan: ["health", "name", "newest"], raction: ["newest", "health", "name", "oldest"], tbubble: ["newest", "health", "name", "oldest"],
-  tsched: ["health", "name", "newest"], restore: ["newest", "health", "name"], siteprofile: ["health", "name"], dhcpserver: ["health", "name"],
+  tsched: ["health", "name", "newest"], restore: ["newest", "health", "name"], siteprofile: ["health", "name"], dhcpserver: ["health", "name"], sitedeploy: ["health", "name", "newest"],
   pair: ["health", "name", "slots", "newest"],
   slot: ["health", "name", "newest"],
   replops: ["newest", "health", "name"],
@@ -227,6 +230,7 @@ const VIEWS = {
   restores: {kind: "restore", load: p => p.t === "papp" ? drhub.appRestores(p.id) : drhub.restores(), api: () => drcrd("restoreactions", true)},
   siteprofiles: {kind: "siteprofile", load: () => drhub.siteProfiles(), api: () => "GET /apis/sitemap.simplyblock.io/v1alpha1/siteprofiles"},
   dhcpservers: {kind: "dhcpserver", load: p => p.t === "siteprofile" ? drhub.siteDHCPServers(p.id) : drhub.dhcpServers(), api: () => "GET /apis/sitemap.simplyblock.io/v1alpha1/dhcpservers"},
+  sitedeploys: {kind: "sitedeploy", load: () => drhub.siteDeploys(), api: () => "GET /apis/storage.simplyblock.io/v1alpha2/storagesitedeployments"},
   storageclasses: {kind: "storageclass",
     load: p => p.t === "pool" ? api.poolStorageClasses(p.id) : api.k8sStorageClasses(p.id),
     api: () => "GET /apis/storage.k8s.io/v1/storageclasses"},
@@ -276,6 +280,7 @@ const DETAIL_API = {
   rplan: drcrd("recoveryplans/{name}", true), raction: drcrd("recoveryactions/{name}", true), tbubble: drcrd("testbubbles/{name}", true),
   tsched: drcrd("testschedules/{name}", true), restore: drcrd("restoreactions/{name}", true), siteprofile: "GET /apis/sitemap.simplyblock.io/v1alpha1/siteprofiles/{name}",
   dhcpserver: "GET /apis/sitemap.simplyblock.io/v1alpha1/dhcpservers/{name}",
+  sitedeploy: "GET /apis/storage.simplyblock.io/v1alpha2/namespaces/{ns}/storagesitedeployments/{name}",
   pair: crd1("replicationpairs"), rpolicy: crd1("replicationpolicies"),
   slot: crd1("replicationslots"), replops: crd1("replicationops"),
   zone: prop("zones/{uuid}"), cgroup: prop("consistency-groups/{uuid}"),
@@ -287,7 +292,7 @@ const DETAIL_API = {
 const KIND_LABEL = {cluster: "cluster", host: "host", node: "storage node", device: "device", pool: "storage pool",
   volume: "logical volume", snapshot: "snapshot", backup: "backup", policy: "backup policy",
   pplan: "protection plan", drpath: "DR path", papp: "protected application", rplan: "recovery plan", raction: "recovery action",
-  tbubble: "test", tsched: "test schedule", restore: "restore", siteprofile: "site profile", dhcpserver: "DHCP server",
+  tbubble: "test", tsched: "test schedule", restore: "restore", siteprofile: "site profile", dhcpserver: "DHCP server", sitedeploy: "site storage deployment",
   pair: "replication pair", rpolicy: "replication policy",
   slot: "replication slot", replops: "replication operation", zone: "zone",
   cgroup: "consistency group", cgsnapshot: "group snapshot", migration: "migration",
@@ -394,12 +399,12 @@ function DiscoveryView({kid, nav}) {
 const TILE = {cluster: ClusterTile, host: HostTile, node: NodeTile, device: DeviceTile, pool: PoolTile,
   volume: VolumeTile, snapshot: SnapshotTile, backup: BackupTile, policy: PolicyTile,
   pplan: PPlanTile, drpath: DRPathTile, papp: PAppTile, rplan: RPlanTile, raction: RActionTile, tbubble: TBubbleTile,
-  tsched: TSchedTile, restore: RestoreTile, siteprofile: SiteProfileTile, dhcpserver: DHCPServerTile, pair: PairTile, rpolicy: RPolicyTile,
+  tsched: TSchedTile, restore: RestoreTile, siteprofile: SiteProfileTile, dhcpserver: DHCPServerTile, sitedeploy: SiteDeployTile, pair: PairTile, rpolicy: RPolicyTile,
   slot: SlotTile, replops: ReplOpsTile, zone: ZoneTile, cgroup: CgroupTile, cgsnapshot: CgSnapshotTile,
   migration: MigrationTile, k8sc: K8sTile, storageclass: StorageClassTile, pvc: PvcTile, bucket: BucketTile,
   deployconfig: DeployConfigTile, mpath: MPathTile, appgroup: AppGroupTile};
 const TKEY = {cluster: "c", host: "h", node: "n", device: "d", pool: "p", volume: "v", snapshot: "s",
-  backup: "b", pplan: "o", drpath: "o", papp: "o", rplan: "o", raction: "o", tbubble: "o", tsched: "o", restore: "o", siteprofile: "o", dhcpserver: "o", policy: "p", pair: "p", rpolicy: "p",
+  backup: "b", pplan: "o", drpath: "o", papp: "o", rplan: "o", raction: "o", tbubble: "o", tsched: "o", restore: "o", siteprofile: "o", dhcpserver: "o", sitedeploy: "o", policy: "p", pair: "p", rpolicy: "p",
   slot: "s", replops: "o", zone: "s", cgroup: "g", cgsnapshot: "s", migration: "m", k8sc: "k", storageclass: "s", pvc: "p", bucket: "b",
   deployconfig: "d", mpath: "m", appgroup: "g"};
 
@@ -490,7 +495,8 @@ function OverviewView({seg, parent, nav, prefs, rev, up, upLabel}) {
           : seg.t === "paths" ? <button className="btn primary" onClick={() => drhub.plans().then(ps => window.__ui.dialog(newPathDialog(ps), {kind: "drpath", id: "new"}))}><Icon n="plus" s={12} />Declare path</button>
           : seg.t === "protectedapps" ? <button className="btn primary" onClick={() => Promise.all([drhub.plans(), drhub.config().catch(() => null)]).then(([ps, c]) => window.__ui.dialog(protectAppDialogDR(ps, c), {kind: "papp", id: "new"}))}><Icon n="shield" s={12} />Protect application</button>
           : seg.t === "rplans" ? <button className="btn primary" onClick={() => Promise.all([drhub.paths(), drhub.apps()]).then(([ps, as]) => window.__ui.dialog(newRPlanDialog(ps, as), {kind: "rplan", id: "new"}))}><Icon n="plus" s={12} />New recovery plan</button>
-          : seg.t === "dhcpservers" ? <button className="btn primary" onClick={() => drhub.siteProfiles().then(ss => window.__ui.dialog(newDHCPServerDialog(parent && parent.t === "siteprofile" && REG[parent.id] ? [REG[parent.id].name] : ss.map(s => s.name)), {kind: "dhcpserver", id: "new"}))}><Icon n="plus" s={12} />Register DHCP server</button>
+          : seg.t === "sitedeploys" ? <button className="btn primary" onClick={() => Promise.all([drhub.managedClusters(), drhub.siteProfiles().catch(() => []), drhub.siteDeploys()]).then(([mcs, sps, sds]) => window.__ui.dialog(deploySiteDialog(mcs.length ? mcs.map(m => m.metadata.name) : sps.map(s => s.name), sds.map(d => d.site)), {kind: "sitedeploy", id: "new"}))}><Icon n="plus" s={12} />Deploy storage</button>
+          : seg.t === "dhcpservers" ? <button className="btn primary" onClick={() => drhub.siteProfiles().then(ss => window.__ui.dialog(newDHCPServerDialog(parent && parent.t === "siteprofile" && REG[parent.id] ? [REG[parent.id].name] : ss.map(s => s.name), ss), {kind: "dhcpserver", id: "new"}))}><Icon n="plus" s={12} />Register DHCP server</button>
           : seg.t === "pairs" ? <button className="btn primary" onClick={() => window.__ui.dialog(newPairDialog(), {kind: "pair", id: "new"})}><Icon n="plus" s={12} />New pair</button>
           : seg.t === "rpolicies" ? <button className="btn primary" onClick={() => window.__ui.dialog(newReplPolicyDialog(parent && parent.t === "pair" ? REG[parent.id] : null), {kind: "rpolicy", id: "new"})}><Icon n="plus" s={12} />New policy</button>
           : seg.t === "__pairs_old" ? <button className="btn primary" onClick={() => window.__ui.dialog(newPairDialog(), {kind: "cluster pair", id: "new"})}><Icon n="plus" s={12} />Pair clusters</button>
