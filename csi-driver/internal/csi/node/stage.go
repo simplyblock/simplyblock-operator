@@ -102,7 +102,7 @@ func (ns *Server) NodeStageVolume(
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	ns.rememberStagedVolume(ctx, volumeID, vc, artifact, req.GetVolumeCapability())
+	ns.rememberStagedVolume(ctx, volumeID, vc, artifact, plan, req.GetVolumeCapability())
 
 	// The CSI spec passes VolumeContext to this RPC and to nothing after it, so
 	// what the later RPCs need is written beside the staging path.
@@ -619,6 +619,7 @@ func (ns *Server) rememberStagedVolume(
 	volumeID string,
 	vc map[string]string,
 	artifact volstack.Artifact,
+	plan volstack.Plan,
 	volCap *csi.VolumeCapability,
 ) {
 	if device, ok := artifact.Device(); ok {
@@ -636,8 +637,31 @@ func (ns *Server) rememberStagedVolume(
 	// The device carries this filesystem, because the layer either put it there
 	// or refused to stage a device carrying another.
 	fsType := stagedFsType(vc, volCap)
+	if fsType == "" {
+		// Nobody named it: the layer mounted what the device carries, or
+		// formatted a blank device as its default, and knows which.
+		fsType = planFsType(plan)
+	}
+	if fsType == "" {
+		return
+	}
 	vc[stagedFsTypeKey] = fsType
 	ns.recordOnDiskFilesystem(ctx, volumeID, vc, fsType)
+}
+
+// planFsType is the filesystem the plan's filesystem layer stands for after
+// it acted (layers.FilesystemParams), "" when the plan has none.
+func planFsType(plan volstack.Plan) string {
+	for _, l := range plan {
+		recorded, ok := l.(interface{ Params() any })
+		if !ok {
+			continue
+		}
+		if p, ok := recorded.Params().(layers.FilesystemParams); ok {
+			return p.FsType
+		}
+	}
+	return ""
 }
 
 // priorFormat is what the volume is recorded as carrying, for the layer that
@@ -704,13 +728,15 @@ func (ns *Server) volumeIsBeingDeleted(ctx context.Context, volumeID string) boo
 }
 
 // stagedFsType returns the filesystem a volume was staged with: the one
-// recorded at stage time when it is there, and otherwise the one the volume
-// capability asks for, which is all a volume staged by an older driver has.
+// recorded at stage time when it is there, else the one the volume capability
+// asks for, else "" -- no opinion, which lets the filesystem layer mount what
+// the device carries instead of refusing an XFS volume for not being the ext4
+// nobody asked for (a static PV without fsType, 2026-10-03).
 func stagedFsType(volumeContext map[string]string, volCap *csi.VolumeCapability) string {
 	if fsType := strings.TrimSpace(volumeContext[stagedFsTypeKey]); fsType != "" {
 		return fsType
 	}
-	return fsTypeOrDefault(volCap)
+	return volCap.GetMount().GetFsType()
 }
 
 // fsTypeOrDefault returns the requested filesystem type, defaulting to ext4.
