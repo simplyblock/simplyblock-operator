@@ -184,8 +184,14 @@ func TestRedirectToActiveVolumeFollowsALongChain(t *testing.T) {
 	}
 	active := member(moves)
 	clients := map[string]*fakeRelationshipAPI{
-		clusterA + "/" + poolA: {rels: map[string]*controlplane.ReplicationRelationship{}, conn: map[string]map[string]string{}},
-		clusterB + "/" + poolB: {rels: map[string]*controlplane.ReplicationRelationship{}, conn: map[string]map[string]string{}},
+		clusterA + "/" + poolA: {
+			rels: map[string]*controlplane.ReplicationRelationship{},
+			conn: map[string]map[string]string{},
+		},
+		clusterB + "/" + poolB: {
+			rels: map[string]*controlplane.ReplicationRelationship{},
+			conn: map[string]map[string]string{},
+		},
 	}
 	for i := 0; i < moves; i++ {
 		srcC, srcP := cluster(i)
@@ -231,13 +237,20 @@ func TestRedirectToActiveVolumeStopsOnALoop(t *testing.T) {
 		y        = "22222222-2222-2222-2222-222222222222"
 	)
 	client := &fakeRelationshipAPI{rels: map[string]*controlplane.ReplicationRelationship{
-		x: {SourceLvolID: x, TargetLvolID: y, SourceClusterID: clusterA, TargetClusterID: clusterA, TargetPoolID: poolA, ActiveLvolID: "zz"},
-		y: {SourceLvolID: y, TargetLvolID: x, SourceClusterID: clusterA, TargetClusterID: clusterA, TargetPoolID: poolA, ActiveLvolID: "zz"},
+		x: {
+			SourceLvolID: x, TargetLvolID: y, SourceClusterID: clusterA,
+			TargetClusterID: clusterA, TargetPoolID: poolA, ActiveLvolID: "zz",
+		},
+		y: {
+			SourceLvolID: y, TargetLvolID: x, SourceClusterID: clusterA,
+			TargetClusterID: clusterA, TargetPoolID: poolA, ActiveLvolID: "zz",
+		},
 	}}
 	orig := clusterClientFor
 	defer func() { clusterClientFor = orig }()
 	clusterClientFor = func(context.Context, string, string) (controlplane.ClusterAPI, error) { return client, nil }
-	if got := redirectToActiveVolume(context.Background(), client, x, clusterA+":"+poolA+":"+x, map[string]string{}); got != nil {
+	got := redirectToActiveVolume(context.Background(), client, x, clusterA+":"+poolA+":"+x, map[string]string{})
+	if got != nil {
 		t.Fatalf("a looping chain returned %v, want nil", got)
 	}
 }
