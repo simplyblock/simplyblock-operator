@@ -111,6 +111,10 @@ function normPPlan(o) {
     status: ready === true ? "Ready" : ready === false ? "NotReady" : "Unknown",
     sites, siteNames: sites.map(s => s.name), methods, sync: methods.length > 0 && methods.every(m => isSyncType(m.type)),
     storageProfile: sp.storageProfile || {}, s3Profile: refName(sp.s3Profile), s3Profiles: sp.s3Profiles || [],
+    // dr-hub's probe of each site store (list, write, delete): ok, or the
+    // S3 service's own error code and message.
+    s3Stores: Object.fromEntries((st.s3Stores || []).map(x => [x.site, {ok: !!x.ok, step: x.step || "", code: x.code || "",
+      message: x.message || "", checkedAt: x.checkedAt || ""}])),
     autoRestart: sp.autoRestart || null, veleroNamespace: sp.veleroNamespace || "", pairs,
     pathNames: pairs.flatMap(p => p.paths), drPolicies: pairs.flatMap(p => p.drPolicies),
     counts: {sites: sites.length, methods: methods.length, paths: pairs.reduce((n, p) => n + p.paths.length, 0),

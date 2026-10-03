@@ -878,6 +878,8 @@ function PPlanDetail({o: p, nav}) {
     <div>
       <DetailHead obj={p} title={p.name} sub={<span className="mono" style={{color: "var(--dim)"}}>ProtectionPlan · {p.sync ? "stretch cluster (sync)" : "cross-cluster"}</span>} badge={<span className="badge">plan</span>} />
       {p.status === "NotReady" && <div className="banner"><Icon n="alert" s={15} /><span><b>The plan is not ready.</b> {(p.conditions.find(c => c.type === "Ready") || {}).message || "See the conditions below."}</span></div>}
+      {(() => { const s3c = p.conditions.find(c => c.type === "S3ProfileResolved"); return s3c && s3c.status === "False" &&
+        <div className="banner"><Icon n="alert" s={15} /><span><b>{s3c.reason === "S3StoreRejected" ? "An S3 store refused dr-hub's probe." : "The S3 stores are not ready."}</b> {s3c.message}</span></div>; })()}
       <div className="stats">
         <Stat k="Sites" v={p.counts.sites} s={`${p.counts.agentsAvailable} with dr-agent available`} c={p.counts.agentsAvailable < p.counts.sites ? "var(--warn)" : null} />
         <Stat k="Methods" v={p.counts.methods} s={p.methods.map(m => m.type).join(", ")} />
@@ -917,7 +919,13 @@ function PPlanDetail({o: p, nav}) {
       <div className="dcols">
         <div className="card"><h3>S3 stores</h3><div className="bd">
           {p.s3Profile ? <Props rows={[["Ramen S3 profile", <Mono>{p.s3Profile}</Mono>]]} />
-            : <Table cols={["Site", "Bucket", "Endpoint", "Region", "Secret"]} empty="No S3 store declared — backup methods need one per site." rows={p.s3Profiles.map(s => [<b>{s.site}</b>, <Mono>{s.bucket}</Mono>, <Mono>{s.endpoint}</Mono>, <Mono>{s.region}</Mono>, <Mono dim>{refName2(s.secretRef)}</Mono>])} />}
+            : <Table cols={["Site", "Bucket", "Endpoint", "Region", "Secret", "Probe"]} empty="No S3 store declared — backup methods need one per site." rows={p.s3Profiles.map(s => {
+                const pr = p.s3Stores[s.site];
+                const probe = !pr ? <span style={{color: "var(--dim2)"}}>not probed yet</span>
+                  : pr.ok ? <span style={{color: "var(--ok)"}} title={pr.checkedAt ? "checked " + pr.checkedAt : ""}>accepts list, write, delete</span>
+                  : <span style={{color: "var(--bad)"}} title={pr.checkedAt ? "checked " + pr.checkedAt : ""}><b>{pr.code}</b>{pr.step ? ` on ${pr.step}` : ""}{pr.message ? ": " + pr.message : ""}</span>;
+                return [<b>{s.site}</b>, <Mono>{s.bucket}</Mono>, <Mono>{s.endpoint}</Mono>, <Mono>{s.region}</Mono>, <Mono dim>{refName2(s.secretRef)}</Mono>, probe];
+              })} />}
         </div></div>
         <div className="card"><h3>Derived pairs</h3><div className="bd">
           <Table cols={["Sites", "Paths", "DRPolicies", "peerClasses"]} empty="No pair derived yet — a pair exists once a DR path uses it." rows={p.pairs.map((x, i) => [<Mono>{x.sites.join(" ↔ ")}</Mono>, <Mono>{x.paths.join(", ")}</Mono>, <Mono dim>{x.drPolicies.join(", ")}</Mono>,

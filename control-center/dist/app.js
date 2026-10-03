@@ -3691,6 +3691,15 @@ function normPPlan(o) {
     storageProfile: sp.storageProfile || {},
     s3Profile: refName(sp.s3Profile),
     s3Profiles: sp.s3Profiles || [],
+    // dr-hub's probe of each site store (list, write, delete): ok, or the
+    // S3 service's own error code and message.
+    s3Stores: Object.fromEntries((st.s3Stores || []).map(x => [x.site, {
+      ok: !!x.ok,
+      step: x.step || "",
+      code: x.code || "",
+      message: x.message || "",
+      checkedAt: x.checkedAt || ""
+    }])),
     autoRestart: sp.autoRestart || null,
     veleroNamespace: sp.veleroNamespace || "",
     pairs,
@@ -25922,7 +25931,15 @@ function PPlanDetail({
   }, /*#__PURE__*/React.createElement(Icon, {
     n: "alert",
     s: 15
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "The plan is not ready."), " ", (p.conditions.find(c => c.type === "Ready") || {}).message || "See the conditions below.")), /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "The plan is not ready."), " ", (p.conditions.find(c => c.type === "Ready") || {}).message || "See the conditions below.")), (() => {
+    const s3c = p.conditions.find(c => c.type === "S3ProfileResolved");
+    return s3c && s3c.status === "False" && /*#__PURE__*/React.createElement("div", {
+      className: "banner"
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "alert",
+      s: 15
+    }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, s3c.reason === "S3StoreRejected" ? "An S3 store refused dr-hub's probe." : "The S3 stores are not ready."), " ", s3c.message));
+  })(), /*#__PURE__*/React.createElement("div", {
     className: "stats"
   }, /*#__PURE__*/React.createElement(Stat, {
     k: "Sites",
@@ -26035,11 +26052,29 @@ function PPlanDetail({
   }, p.s3Profile ? /*#__PURE__*/React.createElement(Props, {
     rows: [["Ramen S3 profile", /*#__PURE__*/React.createElement(Mono, null, p.s3Profile)]]
   }) : /*#__PURE__*/React.createElement(Table, {
-    cols: ["Site", "Bucket", "Endpoint", "Region", "Secret"],
+    cols: ["Site", "Bucket", "Endpoint", "Region", "Secret", "Probe"],
     empty: "No S3 store declared \u2014 backup methods need one per site.",
-    rows: p.s3Profiles.map(s => [/*#__PURE__*/React.createElement("b", null, s.site), /*#__PURE__*/React.createElement(Mono, null, s.bucket), /*#__PURE__*/React.createElement(Mono, null, s.endpoint), /*#__PURE__*/React.createElement(Mono, null, s.region), /*#__PURE__*/React.createElement(Mono, {
-      dim: true
-    }, refName2(s.secretRef))])
+    rows: p.s3Profiles.map(s => {
+      const pr = p.s3Stores[s.site];
+      const probe = !pr ? /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: "var(--dim2)"
+        }
+      }, "not probed yet") : pr.ok ? /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: "var(--ok)"
+        },
+        title: pr.checkedAt ? "checked " + pr.checkedAt : ""
+      }, "accepts list, write, delete") : /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: "var(--bad)"
+        },
+        title: pr.checkedAt ? "checked " + pr.checkedAt : ""
+      }, /*#__PURE__*/React.createElement("b", null, pr.code), pr.step ? ` on ${pr.step}` : "", pr.message ? ": " + pr.message : "");
+      return [/*#__PURE__*/React.createElement("b", null, s.site), /*#__PURE__*/React.createElement(Mono, null, s.bucket), /*#__PURE__*/React.createElement(Mono, null, s.endpoint), /*#__PURE__*/React.createElement(Mono, null, s.region), /*#__PURE__*/React.createElement(Mono, {
+        dim: true
+      }, refName2(s.secretRef)), probe];
+    })
   }))), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("h3", null, "Derived pairs"), /*#__PURE__*/React.createElement("div", {

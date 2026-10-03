@@ -10652,6 +10652,17 @@ window.SB_DR = {
         drPolicies: ["fra-primary-5m", "fra-vault-15m"],
         peerClassesResolved: true
       }],
+      s3Stores: [{
+        site: "fra-a",
+        bucket: "dr-fra-a",
+        ok: true,
+        checkedAt: new Date(Date.now() - 120000).toISOString()
+      }, {
+        site: "fra-b",
+        bucket: "dr-fra-b",
+        ok: true,
+        checkedAt: new Date(Date.now() - 120000).toISOString()
+      }],
       conditions: [cond("Derived", true, "Derived", "DRClusters, DRPolicies and classes applied"), cond("InventoryReady", true, "Reported", "both sites reported"), cond("S3ProfileResolved", true, "Resolved", "profiles sb-3f9a, sb-71c0"), cond("Ready", true, "Ready", "")]
     }
   }));
@@ -10698,6 +10709,75 @@ window.SB_DR = {
         peerClassesResolved: true
       }],
       conditions: [cond("Derived", true, "Derived", "stretch plan: no Ramen objects derived"), cond("InventoryReady", true, "Reported", ""), cond("Ready", false, "AgentUnavailable", "dr-agent on stretch/eu-central-1c has not reported for 12m", 12)]
+    }
+  }));
+
+  // A plan whose store on lab-b the S3 service refuses: dr-hub's probe keeps
+  // the service's own answer, per site.
+  store.ProtectionPlan.push(Object.assign(api("ProtectionPlan"), {
+    metadata: meta("lab"),
+    spec: {
+      sites: [{
+        name: "lab-a",
+        cluster: "cluster-a"
+      }, {
+        name: "lab-b",
+        cluster: "cluster-b"
+      }],
+      storageProfile: {
+        storageClassSelector: {
+          matchLabels: {
+            "simplyblock.io/dr": "true"
+          }
+        },
+        consistencyGroups: "Disabled"
+      },
+      methods: [{
+        name: "primary",
+        type: "async",
+        schedulingInterval: "5m"
+      }],
+      s3Profiles: [{
+        site: "lab-a",
+        bucket: "dr-lab-a",
+        endpoint: "https://s3.eu-central-1.amazonaws.com",
+        region: "eu-central-1",
+        secretRef: "ramen-s3-secret"
+      }, {
+        site: "lab-b",
+        bucket: "dr-lab-b",
+        endpoint: "https://s3.eu-central-1.amazonaws.com",
+        region: "eu-central-1",
+        secretRef: "ramen-s3-secret"
+      }]
+    },
+    status: {
+      observedGeneration: 1,
+      sites: [{
+        name: "lab-a",
+        classesApplied: false,
+        agentAvailable: true
+      }, {
+        name: "lab-b",
+        classesApplied: false,
+        agentAvailable: true
+      }],
+      pairs: [],
+      s3Stores: [{
+        site: "lab-a",
+        bucket: "dr-lab-a",
+        ok: true,
+        checkedAt: new Date(Date.now() - 60000).toISOString()
+      }, {
+        site: "lab-b",
+        bucket: "dr-lab-b",
+        ok: false,
+        step: "list",
+        code: "NoSuchBucket",
+        message: "The specified bucket does not exist (HTTP 404, request id 7Q2X9K1M)",
+        checkedAt: new Date(Date.now() - 60000).toISOString()
+      }],
+      conditions: [cond("Derived", false, "NoPaths", "no valid DRPath connects two sites of the plan"), cond("InventoryReady", true, "Reported", ""), cond("S3ProfileResolved", false, "S3StoreRejected", "the S3 store refused: lab-b (bucket dr-lab-b, eu-central-1): NoSuchBucket: The specified bucket does not exist (HTTP 404, request id 7Q2X9K1M) (list)"), cond("Ready", false, "Waiting", "waiting for Derived, S3ProfileResolved")]
     }
   }));
 
