@@ -23710,9 +23710,13 @@ const METHOD_TYPES = [{
   v: "sync-s3-backup",
   l: "sync + s3-backup"
 }];
-const parseSites = txt => String(txt || "").split(/[\n;]+/).map(l => l.trim()).filter(Boolean).map(l => {
-  // name=cluster[/zone][@region]
-  const [name, rest] = l.split("=").map(x => x.trim());
+// name=cluster[/zone][@region] entries. Blanks are insignificant anywhere:
+// around "=", "/", "@" and between entries, which may be separated by ";",
+// "," or newlines -- or by blanks alone ("site-a=a site-b=b"). Site, cluster,
+// zone and region names never contain blanks, so all of them are dropped
+// (a blank kept in a name made the plan's S3 stores never match its sites).
+const parseSites = txt => String(txt || "").replace(/\s*([=/@])\s*/g, "$1").split(/[\s;,]+/).filter(Boolean).map(l => {
+  const [name, rest] = l.split("=");
   const [clusterZone, region] = (rest || "").split("@");
   const [cluster, zone] = (clusterZone || "").split("/");
   return Object.assign({
@@ -23724,7 +23728,21 @@ const parseSites = txt => String(txt || "").split(/[\n;]+/).map(l => l.trim()).f
     region
   } : {});
 });
+// The plan's per-site S3 stores must name every site of the plan: said here
+// with the site that is missing, rather than as the API server's generic
+// "s3Profiles needs a store for every site".
+const checkStores = (sites, stores) => {
+  if (!stores.length) return;
+  const have = new Set(stores.map(s => s.site));
+  const missing = sites.map(s => s.name).filter(n => !have.has(n));
+  const unknown = stores.map(s => s.site).filter(n => !sites.some(x => x.name === n));
+  if (missing.length || unknown.length) throw new Error([missing.length && `No S3 store for site ${missing.join(", ")}`, unknown.length && `S3 store for ${unknown.join(", ")}, which is not a site of the plan`].filter(Boolean).join("; ") + `. Sites: ${sites.map(s => s.name).join(", ")}.`);
+};
 // ---- form <-> spec helpers for the editable parts of the DR objects --------
+// The secret a store names when the row leaves it empty: the one the DR hub
+// chart creates in Ramen's namespace. Pre-filling it in the row looked like a
+// placeholder and was typed a second time ("ramen-s3-secretramen-s3-secret").
+const DEFAULT_S3_SECRET = "ramen-s3-secret";
 const S3_COLS = [{
   k: "site",
   label: "Site",
@@ -23747,7 +23765,7 @@ const S3_COLS = [{
   flex: 1
 }, {
   k: "secretRef",
-  label: "Secret",
+  label: "Secret (empty: ramen-s3-secret)",
   placeholder: "ramen-s3-secret",
   flex: 1
 }];
@@ -23759,15 +23777,15 @@ const s3Rows = profiles => (profiles || []).map(p => ({
   secretRef: typeof p.secretRef === "string" ? p.secretRef : (p.secretRef || {}).name || ""
 }));
 const s3Profiles = rows => (rows || []).filter(r => (r.site || "").trim() && (r.bucket || "").trim()).map(r => Object.assign({
-  site: r.site.trim(),
+  site: r.site.replace(/\s+/g, ""),
   bucket: r.bucket.trim()
 }, r.endpoint && r.endpoint.trim() ? {
   endpoint: r.endpoint.trim()
 } : {}, r.region && r.region.trim() ? {
   region: r.region.trim()
-} : {}, r.secretRef && r.secretRef.trim() ? {
-  secretRef: r.secretRef.trim()
-} : {}));
+} : {}, {
+  secretRef: (r.secretRef || "").trim() || DEFAULT_S3_SECRET
+}));
 
 // Tiers: one row per tier. The selector is either labels (k=v, k2=v2) or
 // resource types (configmaps, secrets); the ready gates are a short list:
@@ -24051,7 +24069,7 @@ const newPlanDialog = () => ({
       bucket: "",
       endpoint: rows.length ? rows[rows.length - 1].endpoint : "",
       region: rows.length ? rows[rows.length - 1].region : "",
-      secretRef: rows.length ? rows[rows.length - 1].secretRef : "ramen-s3-secret"
+      secretRef: rows.length ? rows[rows.length - 1].secretRef : ""
     }),
     hint: "The secret (access key id / secret access key) must exist in Ramen's namespace on the hub. Leave empty to name one existing profile below instead."
   }, {
@@ -24090,8 +24108,10 @@ const newPlanDialog = () => ({
     } : {});
     const sc = kvToObj(v.sc);
     const stores = s3Profiles(v.s3);
+    const sites = parseSites(v.sites);
+    checkStores(sites, stores);
     const spec = Object.assign({
-      sites: parseSites(v.sites),
+      sites,
       methods: [method],
       storageProfile: Object.assign({
         storageClassSelector: Object.keys(sc).length ? {
@@ -24145,7 +24165,7 @@ const editPlanS3Dialog = p => ({
       bucket: "",
       endpoint: rows.length ? rows[rows.length - 1].endpoint : "",
       region: rows.length ? rows[rows.length - 1].region : "",
-      secretRef: rows.length ? rows[rows.length - 1].secretRef : "ramen-s3-secret"
+      secretRef: rows.length ? rows[rows.length - 1].secretRef : ""
     })
   }, {
     k: "velero",
@@ -24153,10 +24173,14 @@ const editPlanS3Dialog = p => ({
     type: "text",
     def: p.veleroNamespace || "velero"
   }],
-  run: v => drhub.patchPlan(p, {
-    s3Profiles: s3Profiles(v.s3),
-    veleroNamespace: v.velero && v.velero.trim() ? v.velero.trim() : null
-  })
+  run: v => {
+    const stores = s3Profiles(v.s3);
+    checkStores(p.sites, stores);
+    return drhub.patchPlan(p, {
+      s3Profiles: stores,
+      veleroNamespace: v.velero && v.velero.trim() ? v.velero.trim() : null
+    });
+  }
 });
 const newPathDialog = plans => ({
   title: "Declare a DR path",

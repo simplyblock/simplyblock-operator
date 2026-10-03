@@ -142,25 +142,48 @@ const KIND_LABEL_DR = {pplan: "protection plan", drpath: "DR path", papp: "prote
 
 const METHOD_TYPES = [{v: "async", l: "async — block replication per interval"}, {v: "sync", l: "sync — stretch cluster, RPO 0"},
   {v: "s3-backup", l: "s3-backup — snapshot backups to S3 only"}, {v: "async-s3-backup", l: "async + s3-backup"}, {v: "sync-s3-backup", l: "sync + s3-backup"}];
-const parseSites = txt => String(txt || "").split(/[\n;]+/).map(l => l.trim()).filter(Boolean).map(l => {
-  // name=cluster[/zone][@region]
-  const [name, rest] = l.split("=").map(x => x.trim());
-  const [clusterZone, region] = (rest || "").split("@");
-  const [cluster, zone] = (clusterZone || "").split("/");
-  return Object.assign({name, cluster: cluster || name}, zone ? {zone} : {}, region ? {region} : {});
-});
+// name=cluster[/zone][@region] entries. Blanks are insignificant anywhere:
+// around "=", "/", "@" and between entries, which may be separated by ";",
+// "," or newlines -- or by blanks alone ("site-a=a site-b=b"). Site, cluster,
+// zone and region names never contain blanks, so all of them are dropped
+// (a blank kept in a name made the plan's S3 stores never match its sites).
+const parseSites = txt => String(txt || "")
+  .replace(/\s*([=/@])\s*/g, "$1")
+  .split(/[\s;,]+/).filter(Boolean).map(l => {
+    const [name, rest] = l.split("=");
+    const [clusterZone, region] = (rest || "").split("@");
+    const [cluster, zone] = (clusterZone || "").split("/");
+    return Object.assign({name, cluster: cluster || name}, zone ? {zone} : {}, region ? {region} : {});
+  });
+// The plan's per-site S3 stores must name every site of the plan: said here
+// with the site that is missing, rather than as the API server's generic
+// "s3Profiles needs a store for every site".
+const checkStores = (sites, stores) => {
+  if (!stores.length) return;
+  const have = new Set(stores.map(s => s.site));
+  const missing = sites.map(s => s.name).filter(n => !have.has(n));
+  const unknown = stores.map(s => s.site).filter(n => !sites.some(x => x.name === n));
+  if (missing.length || unknown.length)
+    throw new Error([missing.length && `No S3 store for site ${missing.join(", ")}`,
+      unknown.length && `S3 store for ${unknown.join(", ")}, which is not a site of the plan`].filter(Boolean).join("; ") +
+      `. Sites: ${sites.map(s => s.name).join(", ")}.`);
+};
 // ---- form <-> spec helpers for the editable parts of the DR objects --------
+// The secret a store names when the row leaves it empty: the one the DR hub
+// chart creates in Ramen's namespace. Pre-filling it in the row looked like a
+// placeholder and was typed a second time ("ramen-s3-secretramen-s3-secret").
+const DEFAULT_S3_SECRET = "ramen-s3-secret";
 const S3_COLS = [
   {k: "site", label: "Site", placeholder: "site-a", flex: 1},
   {k: "bucket", label: "Bucket", placeholder: "dr-site-a", flex: 1.4},
   {k: "endpoint", label: "Endpoint", placeholder: "https://s3.eu-central-1.amazonaws.com", flex: 2},
   {k: "region", label: "Region", placeholder: "eu-central-1", flex: 1},
-  {k: "secretRef", label: "Secret", placeholder: "ramen-s3-secret", flex: 1}
+  {k: "secretRef", label: "Secret (empty: ramen-s3-secret)", placeholder: "ramen-s3-secret", flex: 1}
 ];
 const s3Rows = profiles => (profiles || []).map(p => ({site: p.site || "", bucket: p.bucket || "", endpoint: p.endpoint || "", region: p.region || "", secretRef: typeof p.secretRef === "string" ? p.secretRef : (p.secretRef || {}).name || ""}));
 const s3Profiles = rows => (rows || []).filter(r => (r.site || "").trim() && (r.bucket || "").trim()).map(r => Object.assign(
-  {site: r.site.trim(), bucket: r.bucket.trim()}, r.endpoint && r.endpoint.trim() ? {endpoint: r.endpoint.trim()} : {},
-  r.region && r.region.trim() ? {region: r.region.trim()} : {}, r.secretRef && r.secretRef.trim() ? {secretRef: r.secretRef.trim()} : {}));
+  {site: r.site.replace(/\s+/g, ""), bucket: r.bucket.trim()}, r.endpoint && r.endpoint.trim() ? {endpoint: r.endpoint.trim()} : {},
+  r.region && r.region.trim() ? {region: r.region.trim()} : {}, {secretRef: (r.secretRef || "").trim() || DEFAULT_S3_SECRET}));
 
 // Tiers: one row per tier. The selector is either labels (k=v, k2=v2) or
 // resource types (configmaps, secrets); the ready gates are a short list:
@@ -253,7 +276,7 @@ const newPlanDialog = () => ({
     {k: "scPool", label: "…from the pool (empty: the storage cluster's default pool)", type: "text", placeholder: ""},
     {k: "scFs", label: "…with the filesystem", type: "text", def: "xfs"},
     {k: "s3", label: "S3 stores — one per site (Ramen's metadata store and Velero's backups)", type: "rows", cols: S3_COLS, max: 8, addLabel: "Add store",
-      add: rows => ({site: "", bucket: "", endpoint: rows.length ? rows[rows.length - 1].endpoint : "", region: rows.length ? rows[rows.length - 1].region : "", secretRef: rows.length ? rows[rows.length - 1].secretRef : "ramen-s3-secret"}),
+      add: rows => ({site: "", bucket: "", endpoint: rows.length ? rows[rows.length - 1].endpoint : "", region: rows.length ? rows[rows.length - 1].region : "", secretRef: rows.length ? rows[rows.length - 1].secretRef : ""}),
       hint: "The secret (access key id / secret access key) must exist in Ramen's namespace on the hub. Leave empty to name one existing profile below instead."},
     {k: "velero", label: "Velero namespace on the sites", type: "text", def: "velero", placeholder: "velero"},
     {k: "s3Profile", label: "Ramen S3 profile (single store, instead of per-site stores)", type: "text", placeholder: "existing profile name"},
@@ -266,7 +289,9 @@ const newPlanDialog = () => ({
       /backup/.test(type) ? {s3Backup: {interval: v.bInterval.trim(), retention: Number(v.bRetention) || 24}} : {});
     const sc = kvToObj(v.sc);
     const stores = s3Profiles(v.s3);
-    const spec = Object.assign({sites: parseSites(v.sites), methods: [method],
+    const sites = parseSites(v.sites);
+    checkStores(sites, stores);
+    const spec = Object.assign({sites, methods: [method],
       storageProfile: Object.assign({storageClassSelector: Object.keys(sc).length ? {matchLabels: sc} : {}}, {consistencyGroups: v.cg ? "Enabled" : "Disabled"},
         v.scName && v.scName.trim() ? {provision: Object.assign({name: v.scName.trim()}, v.scPool && v.scPool.trim() ? {pool: v.scPool.trim()} : {}, v.scFs && v.scFs.trim() ? {fsType: v.scFs.trim()} : {})} : {})},
       stores.length ? {s3Profiles: stores} : {}, v.velero && v.velero.trim() ? {veleroNamespace: v.velero.trim()} : {},
@@ -279,10 +304,14 @@ const editPlanS3Dialog = p => ({
   desc: "Ramen keeps its metadata and Velero its backups in one S3 store per site. Changing a store re-derives the DRClusters; applications keep their protection.",
   fields: [
     {k: "s3", label: "S3 stores — one per site", type: "rows", cols: S3_COLS, max: 8, addLabel: "Add store", def: s3Rows(p.s3Profiles),
-      add: rows => ({site: "", bucket: "", endpoint: rows.length ? rows[rows.length - 1].endpoint : "", region: rows.length ? rows[rows.length - 1].region : "", secretRef: rows.length ? rows[rows.length - 1].secretRef : "ramen-s3-secret"})},
+      add: rows => ({site: "", bucket: "", endpoint: rows.length ? rows[rows.length - 1].endpoint : "", region: rows.length ? rows[rows.length - 1].region : "", secretRef: rows.length ? rows[rows.length - 1].secretRef : ""})},
     {k: "velero", label: "Velero namespace on the sites", type: "text", def: p.veleroNamespace || "velero"}
   ],
-  run: v => drhub.patchPlan(p, {s3Profiles: s3Profiles(v.s3), veleroNamespace: v.velero && v.velero.trim() ? v.velero.trim() : null})
+  run: v => {
+    const stores = s3Profiles(v.s3);
+    checkStores(p.sites, stores);
+    return drhub.patchPlan(p, {s3Profiles: stores, veleroNamespace: v.velero && v.velero.trim() ? v.velero.trim() : null});
+  }
 });
 
 const newPathDialog = plans => ({
