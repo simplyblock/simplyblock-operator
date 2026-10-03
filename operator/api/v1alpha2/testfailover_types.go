@@ -175,6 +175,12 @@ type TestFailoverClone struct {
 	// volume.
 	// +optional
 	SourceFSType string `json:"sourceFSType,omitempty"`
+	// SourceVolumeMode is the source PV's volumeMode (Filesystem or Block),
+	// carried onto the bubble PV and PVC. A VM's disk is a Block claim; a bubble
+	// claim that omitted the mode defaulted to Filesystem and the kubelet asked
+	// the node plugin to mount a raw guest disk (2026-10-03).
+	// +optional
+	SourceVolumeMode string `json:"sourceVolumeMode,omitempty"`
 }
 
 // TestFailoverReport is the evidence a drill produces.
