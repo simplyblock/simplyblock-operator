@@ -208,6 +208,17 @@ A group lives exactly as long as its members. Removing the last member deletes t
 
 ### 4.5 Membership after provisioning (Phase 4 — Planned)
 
+> **Update 2026-10-03 (co-location).** Group-wide migration, the pre-join
+> live migration of a late joiner, create-time subsystem forcing and namespace
+> moves between subsystems are specified in sbcli
+> `docs/consistency-group-colocation.md`. In short: the control plane refuses a
+> migration that would split a group and migrates a group's whole scope (every
+> subsystem holding a member) through `.../consistency-groups/{g}/migration`;
+> the CSI watcher turns a join refused for placement into a VolumeMigration to
+> the pin and joins afterwards; the rebalancer skips group members; namespace
+> moves and the node's dm-linear indirection are behind flags.
+
+
 Phase 4 makes the membership label live for the volume's whole life rather than read once at creation. Adding `storage.simplyblock.io/consistency-group` to an existing PVC joins its volume to the named group, and removing the label detaches the volume in §8.2's sense: the epoch closes and every generation that contains the member stays restorable.
 
 **What made this safe.** The group's subsystem-scoped operations reach every volume that shares a member's NVMe subsystem: a migration moves the whole subsystem (§9.5), and the frozen cut stalls a shared subsystem's I/O path as one unit. While a subsystem could hold volumes of more than one storage pool, only the create path could guarantee that a member's subsystem held nothing those operations must not touch, which is why membership was fixed at creation. The control plane now enforces subsystem and pool alignment as an invariant (P0-5): a shared subsystem belongs to exactly one pool, checked at lvol placement and again inside the transactional namespace-slot claim, so any volume in the group's pool sits in a subsystem wholly owned by that pool. A late join can therefore no longer entangle another pool's volumes in the group's freeze or migration scope, and the join reduces to the epoch bookkeeping the backend already has.
@@ -357,6 +368,17 @@ The one action that can invalidate a prior generation is deleting the member's s
 If a member's snapshot in some generation is gone (pruned, or its volume hard-deleted under a policy that did not preserve it), that generation is incomplete: restoring it produces fewer volumes than the membership at that `group_seq` calls for. The group-scoped listing (§6.3) reports the present count against the expected count, and a restore of an incomplete generation warns rather than silently returning a partial set. The membership epochs are what make "expected" computable: the listing knows exactly which members a generation should have.
 
 ### 8.4 Members are excluded from migration
+
+> **Update 2026-10-03: superseded for whole groups.** Group-wide migration, the pre-join
+> live migration of a late joiner, create-time subsystem forcing and namespace
+> moves between subsystems are specified in sbcli
+> `docs/consistency-group-colocation.md`. In short: the control plane refuses a
+> migration that would split a group and migrates a group's whole scope (every
+> subsystem holding a member) through `.../consistency-groups/{g}/migration`;
+> the CSI watcher turns a join refused for placement into a VolumeMigration to
+> the pin and joins afterwards; the rebalancer skips group members; namespace
+> moves and the node's dm-linear indirection are behind flags.
+
 
 A group's members are pinned to one logical volume store (§4.2), so a member that moved off the store would break the frozen group snapshot. For now, the design excludes consistency-group members from volume migration entirely, and it does so at two layers. The operator's validating webhook on `VolumeMigration` (§9.5) declines the request at `kubectl apply` when the target PV's backing volume is a group member, so the operator never even starts the migration. The backend refusing to migrate a group member is the last line of defense behind it, catching any migration reached by a path the webhook does not cover. Between the two, a group's placement stays fixed for its life and the frozen-snapshot invariant holds by construction rather than being checked after the fact. This is the conservative first cut, and it keeps the feature simple while the group model settles.
 
