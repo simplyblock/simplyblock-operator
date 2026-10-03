@@ -47,8 +47,18 @@ helm.sh/chart: {{ printf "%s-%s" .Name .Version | replace "+" "_" | trunc 63 | t
 {{/* Default upstream URLs. This chart names its objects statically
      (simplyblock-operator, simplyblock-prometheus, …) rather than deriving
      them from the release, so the fallbacks here are static too. */}}
+{{/* The operator's HTTP API, when this release serves one. Unset, it is the
+     simplyblock-operator Service if that exists in the release namespace, and
+     empty otherwise: nginx refuses to start on an upstream host it cannot
+     resolve ("host not found in upstream"), and an empty upstream makes the
+     console answer 503 "not part of this deployment" on the operator-backed
+     screens instead (2026-10-03, a release without the operator API). */}}
 {{- define "sbcc.operatorUrl" -}}
-{{- .Values.controlCenter.operatorUrl | default "http://simplyblock-operator:8080" -}}
+{{- if .Values.controlCenter.operatorUrl -}}
+{{- .Values.controlCenter.operatorUrl -}}
+{{- else if (lookup "v1" "Service" .Release.Namespace "simplyblock-operator") -}}
+http://simplyblock-operator:8080
+{{- end -}}
 {{- end -}}
 
 {{- define "sbcc.prometheusUrl" -}}
