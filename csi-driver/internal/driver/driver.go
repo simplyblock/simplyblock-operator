@@ -32,6 +32,7 @@ import (
 	csiaddonsreplication "github.com/csi-addons/spec/lib/go/replication"
 	csiaddonsvolumegroup "github.com/csi-addons/spec/lib/go/volumegroup"
 	"google.golang.org/grpc"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog"
@@ -94,12 +95,20 @@ func Run(conf *config.Config) {
 	// its own in-cluster config + clientset. A missing in-cluster config is
 	// non-fatal, and the features that need it degrade to no-ops.
 	var kubeClient kubernetes.Interface
+	var dynClient dynamic.Interface
 	if k8sConfig, err := rest.InClusterConfig(); err != nil {
 		klog.Warningf("no in-cluster config; Kubernetes API features disabled: %v", err)
 	} else if clientset, err := kubernetes.NewForConfig(k8sConfig); err != nil {
 		klog.Warningf("failed to create kubernetes client; Kubernetes API features disabled: %v", err)
 	} else {
 		kubeClient = clientset
+		// The consistency-group watcher requests VolumeMigrations (the
+		// pre-join live migration) without importing the operator's types.
+		if d, err := dynamic.NewForConfig(k8sConfig); err != nil {
+			klog.Warningf("failed to create dynamic client; pre-join migrations disabled: %v", err)
+		} else {
+			dynClient = d
+		}
 	}
 
 	if conf.IsNodeServer {
@@ -122,7 +131,7 @@ func Run(conf *config.Config) {
 		// without a Kubernetes client, like the other kube-backed features.
 		watcherCtx, watcherCancel := context.WithCancel(context.Background())
 		defer watcherCancel()
-		controller.StartConsistencyGroupLabelWatcher(watcherCtx, kubeClient, conf.DriverName)
+		controller.StartConsistencyGroupLabelWatcher(watcherCtx, kubeClient, dynClient, conf.DriverName)
 	}
 
 	// The link to the operator, when enabled. It is independent of the CSI
