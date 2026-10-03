@@ -53,7 +53,7 @@ func newTestFailoverReconciler(t *testing.T, objects ...client.Object) (*TestFai
 	// GVK (and list GVK) registered to create and read it.
 	scheme.AddKnownTypeWithName(managedClusterViewGVK, &unstructured.Unstructured{})
 	listGVK := managedClusterViewGVK
-	listGVK.Kind += "List"
+	listGVK.Kind += listKindSuffix
 	scheme.AddKnownTypeWithName(listGVK, &unstructured.UnstructuredList{})
 	if err := workv1.Install(scheme); err != nil {
 		t.Fatalf("register work/v1 scheme: %v", err)
@@ -443,7 +443,7 @@ func TestFailoverResolvingSourceReuseViewOnRestart(t *testing.T) {
 
 	list := &unstructured.UnstructuredList{}
 	gvk := managedClusterViewGVK
-	gvk.Kind += "List"
+	gvk.Kind += listKindSuffix
 	list.SetGroupVersionKind(gvk)
 	if err := cl.List(ctx, list, client.InNamespace(tf.Spec.SourceCluster)); err != nil {
 		t.Fatalf("list views: %v", err)

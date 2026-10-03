@@ -177,6 +177,14 @@ rules:
   - update
   - watch
 - apiGroups:
+  - cluster.open-cluster-management.io
+  resources:
+  - managedclusters
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - coordination.k8s.io
   resources:
   - leases
@@ -325,6 +333,7 @@ rules:
   - storagenodes
   - storagepoolops
   - storagepools
+  - storagesitedeployments
   - tasks
   - testfailovers
   - volumemigrations
@@ -361,6 +370,7 @@ rules:
   - storagenodes/finalizers
   - storagepoolops/finalizers
   - storagepools/finalizers
+  - storagesitedeployments/finalizers
   - tasks/finalizers
   - testfailovers/finalizers
   - volumemigrations/finalizers
@@ -394,6 +404,7 @@ rules:
   - storagenodesets/status
   - storagepoolops/status
   - storagepools/status
+  - storagesitedeployments/status
   - tasks/status
   - testfailovers/status
   - volumegroupsnapshotops/status
