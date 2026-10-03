@@ -183,6 +183,20 @@ func (n *Node) Plain(connection lvol.Connection, volume Volume) volstack.Plan {
 	return volstack.Plan{n.fabric(connection), n.filesystem(volume)}
 }
 
+// IndirectRawBlock is `fabric` → `dmLinear`: a raw block volume behind the
+// device-mapper indirection, so the device the pod holds survives a move of
+// the volume's namespace to another subsystem (the indirection's Heal re-points
+// it at the namespace the fabric brought up).
+func (n *Node) IndirectRawBlock(connection lvol.Connection, volume Volume) volstack.Plan {
+	return volstack.Plan{n.fabric(connection), n.dmLinear(volume)}
+}
+
+// IndirectPlain is `fabric` → `dmLinear` → `filesystem`: Plain with the
+// indirection under the filesystem, so a namespace move does not unmount it.
+func (n *Node) IndirectPlain(connection lvol.Connection, volume Volume) volstack.Plan {
+	return volstack.Plan{n.fabric(connection), n.dmLinear(volume), n.filesystem(volume)}
+}
+
 // LVM is `fabric` → `lvmPhysicalVolume` → `lvmVolumeGroup` → `lvmLogicalVolume`
 // → `filesystem`, the shape a volume with client-side deduplication or
 // compression takes. What the logical volume is to be lives in options, so this

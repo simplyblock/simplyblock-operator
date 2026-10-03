@@ -14,6 +14,7 @@ package node
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -43,6 +44,7 @@ const (
 	layerLVMPhysicalVolume = "lvmPhysicalVolume"
 	layerLVMVolumeGroup    = "lvmVolumeGroup"
 	layerLVMLogicalVolume  = "lvmLogicalVolume"
+	layerDMLinear          = "dmLinear"
 )
 
 // vdoPoolName is the pool `lvcreate --type vdo` creates alongside the logical
@@ -76,6 +78,15 @@ const (
 	// asked for client-side compression or deduplication and is opened as a
 	// block device.
 	shapeLVMRawBlock
+
+	// shapeIndirectRawBlock and shapeIndirectPlain are shapeRawBlock and
+	// shapePlain with the dmLinear indirection above the fabric, so a volume's
+	// namespace can move to another subsystem under a live consumer
+	// (consistency-group co-location). Chosen for a fresh stage when the node
+	// runs with SPDKCSI_DM_INDIRECTION, and afterwards by the stack record:
+	// a volume never gains or loses the layer under a staged consumer.
+	shapeIndirectRawBlock
+	shapeIndirectPlain
 )
 
 // planFor is the layer list one of the shapes means, built with the seams the
@@ -94,6 +105,10 @@ func planFor(
 	switch shape {
 	case shapeRawBlock:
 		return node.RawBlock(connection)
+	case shapeIndirectRawBlock:
+		return node.IndirectRawBlock(connection, volume)
+	case shapeIndirectPlain:
+		return node.IndirectPlain(connection, volume)
 	case shapeLVM:
 		return node.LVM(connection, volume, options)
 	case shapeLVMRawBlock:
@@ -107,6 +122,29 @@ func planFor(
 // capability decides whether there is a filesystem, and the class parameters
 // decide whether the LVM layers that provide client-side compression and
 // deduplication sit between it and the fabric.
+// indirect turns a raw block or plain shape into its dmLinear variant. Only
+// those two have one: an LVM stack already re-points through its own device
+// mapper nodes, and is left as it is.
+func indirect(shape stackShape) stackShape {
+	switch shape {
+	case shapeRawBlock:
+		return shapeIndirectRawBlock
+	case shapePlain:
+		return shapeIndirectPlain
+	}
+	return shape
+}
+
+// dmIndirectionEnabled is SPDKCSI_DM_INDIRECTION: stage new raw block and
+// plain volumes behind the dmLinear indirection. Off by default.
+func dmIndirectionEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SPDKCSI_DM_INDIRECTION"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
 func shapeFor(vc map[string]string, volCap *csi.VolumeCapability) stackShape {
 	block := volCap.GetBlock() != nil
 	switch {
@@ -402,6 +440,8 @@ var recordedShapes = []struct {
 }{
 	{[]string{layerFabric}, shapeRawBlock},
 	{[]string{layerFabric, layerFilesystem}, shapePlain},
+	{[]string{layerFabric, layerDMLinear}, shapeIndirectRawBlock},
+	{[]string{layerFabric, layerDMLinear, layerFilesystem}, shapeIndirectPlain},
 	{
 		[]string{layerFabric, layerLVMPhysicalVolume, layerLVMVolumeGroup, layerLVMLogicalVolume},
 		shapeLVMRawBlock,
@@ -421,6 +461,7 @@ var knownLayers = map[string]bool{
 	layerLVMPhysicalVolume: true,
 	layerLVMVolumeGroup:    true,
 	layerLVMLogicalVolume:  true,
+	layerDMLinear:          true,
 }
 
 // shapeFromRecord is the plan shape a recorded layer list describes.
