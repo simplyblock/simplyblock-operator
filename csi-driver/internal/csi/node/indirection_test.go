@@ -28,6 +28,10 @@ func TestTeardownPlanOfAnIndirectVolumeWalksTheMapping(t *testing.T) {
 // A fresh stage follows SPDKCSI_DM_INDIRECTION; a staged volume follows its
 // record, so the layer is never inserted under (or pulled from under) a live
 // consumer by a later heal.
+// indirectHandle is a second volume, so the record of one never answers for
+// another.
+const indirectHandle = "0c5b4c4e-6f1d-4b8e-9d2a-3a1f2b7c9e10:pool-1:7d1e0f5a-2b3c-4d5e-8f90-a1b2c3d4e5f6"
+
 func TestAttachShapeFollowsTheFlagOnlyForAFreshStage(t *testing.T) {
 	ns, _ := newStackedServer(t, newRecordingRunner())
 
@@ -46,14 +50,14 @@ func TestAttachShapeFollowsTheFlagOnlyForAFreshStage(t *testing.T) {
 		t.Errorf("an LVM stack has no indirect variant, got %v", got)
 	}
 
-	writeRecord(t, ns.stack, pvcTestHandle, []string{"fabric", "filesystem"})
-	if got := ns.attachShape(pvcTestHandle, shapePlain); got != shapePlain {
+	writeRecord(t, ns.stack, indirectHandle, []string{"fabric", "filesystem"})
+	if got := ns.attachShape(indirectHandle, shapePlain); got != shapePlain {
 		t.Errorf("flag on, staged without the layer: shape %v, want plain", got)
 	}
 
 	t.Setenv("SPDKCSI_DM_INDIRECTION", "")
-	writeRecord(t, ns.stack, pvcTestHandle, []string{"fabric", "dmLinear", "filesystem"})
-	if got := ns.attachShape(pvcTestHandle, shapePlain); got != shapeIndirectPlain {
+	writeRecord(t, ns.stack, indirectHandle, []string{"fabric", "dmLinear", "filesystem"})
+	if got := ns.attachShape(indirectHandle, shapePlain); got != shapeIndirectPlain {
 		t.Errorf("flag off, staged with the layer: shape %v, want indirect plain", got)
 	}
 }
