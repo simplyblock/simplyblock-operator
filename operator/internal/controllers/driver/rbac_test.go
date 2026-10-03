@@ -105,6 +105,7 @@ func TestRulesMatchTheChart(t *testing.T) {
 		{nodeComponent, "", "events", []string{"create", "patch"}},
 		{"provisioner", "snapshot.storage.k8s.io", "volumesnapshotcontents/status", []string{"get", "update", "patch"}},
 		{"provisioner", "", "persistentvolumes", []string{"get", "list", "watch", "create", "delete", "patch"}},
+		{"provisioner", "storage.simplyblock.io", "volumemigrations", []string{"get", "create"}},
 		{"attacher", "storage.k8s.io", "volumeattachments/status", []string{"patch"}},
 		{"resizer", "", "persistentvolumeclaims/status", []string{"patch"}},
 		{"health-monitor", "", "events", []string{"get", "list", "watch", "create", "patch"}},

@@ -33,6 +33,7 @@ var (
 	snapshot      = []string{"snapshot.storage.k8s.io"}
 	groupsnapshot = []string{"groupsnapshot.storage.k8s.io"}
 	csiaddons     = []string{"csiaddons.openshift.io"}
+	simplyblock   = []string{"storage.simplyblock.io"}
 	coordination  = []string{"coordination.k8s.io"}
 )
 
@@ -72,6 +73,12 @@ var clusterRoleRules = map[string][]rbacv1.PolicyRule{
 		rule(storage, []string{"csinodes"}, "get", "list", "watch"),
 		rule(core, []string{"nodes"}, "get", "list", "watch"),
 		rule(storage, []string{"volumeattachments"}, "get", "list", "watch"),
+		// The consistency-group watcher's pre-join live migration: a volume
+		// labeled into a group while it lives off the group's pinned node is
+		// moved there first through a VolumeMigration, which the operator
+		// runs (co-location design §5). It creates and reads its own
+		// requests; it never updates or deletes one.
+		rule(simplyblock, []string{"volumemigrations"}, "get", "create"),
 	},
 	"attacher": {
 		rule(core, []string{"persistentvolumes"}, "get", "list", "watch", "update", "patch"),

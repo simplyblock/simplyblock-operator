@@ -61,9 +61,14 @@ func (v *VolumeMigrationValidator) Handle(ctx context.Context, req admission.Req
 		return admission.Allowed("consistency-group membership undeterminable; deferring to the backend")
 	}
 	if member {
+		// A group moves only as a whole: every member, and every subsystem
+		// holding one, in one group migration (sbcli co-location design §3).
+		// A VolumeMigration moves one subsystem, so it would split the group.
 		return admission.Denied(fmt.Sprintf(
-			"volume %s is a member of consistency group %s and cannot be migrated; "+
-				"a group's members are pinned to one logical volume store (§8.4)", volumeUUID, groupID))
+			"volume %s is a member of consistency group %s and cannot be migrated alone: "+
+				"a group's members live on one logical volume store, so the group moves as a whole "+
+				"through the control plane's group migration "+
+				"(POST /api/v2/clusters/<cluster>/consistency-groups/<group>/migration)", volumeUUID, groupID))
 	}
 	return admission.Allowed("target volume is not a consistency-group member")
 }
