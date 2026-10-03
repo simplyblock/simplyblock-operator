@@ -9,6 +9,8 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sort"
 
 	"github.com/csi-addons/spec/lib/go/replication"
 	"google.golang.org/grpc/codes"
@@ -93,31 +95,153 @@ func volumeIDFrom(req volumeIDCarrier) string {
 // combining active_lvol_id with ANOTHER record's cluster is exactly the bug
 // this walk exists to avoid. An empty ActiveLvolID (backend predating the
 // field) stops after the first hop, the old single-step behavior.
+//
+// The chain behind a handle alternates between the sites: every fail-over
+// adds a hop to the other side. The volume this driver must act on is the
+// chain's last member on a LOCAL cluster (the secret marks the site's own
+// clusters, clusters.Local), not the chain's end: after an unplanned
+// fail-over A->B, Ramen makes the old primary on A secondary, and the
+// chain's end is the NEW primary on B. Resolving to the end demoted -- and
+// on VR deletion detached -- the live production volume on the other site
+// (2026-10-02, WordPress: the demote fenced the live primary's paths and
+// took demote snapshots of it; the fail-back never got PeerReady). A secret
+// that marks no cluster local (an operator predating the flag) keeps the
+// previous behaviour, the chain's active end.
 func resolveToLocalReplica(
 	ctx context.Context, h *lvol.Handle, client *atlascp.Client,
 ) (*lvol.Handle, *atlascp.Client, error) {
-	for range 8 { // one hop per past fail-over; capped far above any real chain
+	h, client, _, err := resolveReplica(ctx, h, client)
+	return h, client, err
+}
+
+// resolveReplica is resolveToLocalReplica reporting also whether h has a
+// replication relationship at all (known): the member it resolves to is then
+// one of a chain the backend records, and a volume of that chain that no
+// longer exists is a superseded, reaped old primary -- nothing left to demote
+// or detach -- rather than an unknown handle.
+func resolveReplica(
+	ctx context.Context, h *lvol.Handle, client *atlascp.Client,
+) (*lvol.Handle, *atlascp.Client, bool, error) {
+	hops, known, err := resolveChain(ctx, h, client)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	local, flagged, err := clusters.Local()
+	if err != nil {
+		return nil, nil, false, err
+	}
+	pick := chooseReplica(hops, local, flagged)
+	return pick.h, pick.client, known, nil
+}
+
+// resolveChain walks the replication chain behind h: h itself, then every
+// IsSource->target hop to the active end. known is whether h has a
+// relationship at all.
+func resolveChain(ctx context.Context, h *lvol.Handle, client *atlascp.Client) ([]chainHop, bool, error) {
+	known := false
+	hops := []chainHop{{h: h, client: client}}
+	// One hop per past fail-over, never compacted (the PV keeps the original
+	// handle): a cap of 8 ended the walk one hop short of a ninth move's
+	// clone (2026-10-03). The bound is a cycle guard, not a length estimate.
+	visited := map[lvol.VolumeHandle]bool{}
+	for range maxChainHops {
+		if visited[h.Handle()] {
+			return nil, false, fmt.Errorf("replication chain of %s loops at %s", hops[0].h.Handle(), h.Handle())
+		}
+		visited[h.Handle()] = true
 		rel, err := client.GetVolumeReplicationRelationship(ctx, h.Handle())
 		if err != nil {
 			if errors.Is(err, errs.ErrNotFound) {
-				return h, client, nil
+				break
 			}
-			return nil, nil, err
+			return nil, false, err
 		}
+		known = true
 		if !rel.IsSource {
-			return h, client, nil
+			break
 		}
 		target := &lvol.Handle{ClusterID: rel.TargetClusterID, PoolRef: rel.TargetPoolID, VolumeID: rel.TargetLvolID}
 		targetClient, err := clusters.ReplicationClient(ctx, target.ClusterID)
 		if err != nil {
-			return nil, nil, err
+			return nil, false, err
 		}
 		h, client = target, targetClient
+		hops = append(hops, chainHop{h: h, client: client})
 		if rel.ActiveLvolID == "" || rel.ActiveLvolID == rel.TargetLvolID {
-			return h, client, nil
+			break
 		}
 	}
-	return h, client, nil
+	if len(hops) > maxChainHops {
+		return nil, false, fmt.Errorf("replication chain of %s did not converge within %d hops",
+			hops[0].h.Handle(), maxChainHops)
+	}
+	return hops, known, nil
+}
+
+// maxChainHops bounds a replication-chain walk: a guard against a looping
+// record, far above any chain a volume accumulates in its lifetime.
+const maxChainHops = 256
+
+// activeEndFallback is where a Resync or a status read goes when the local
+// member of the chain is reaped: the chain's active end -- the live primary
+// on the other site -- and, as the cluster to fail back to, the local one.
+// sbcli's replication_failback is addressed to the failed-over clone and
+// re-aims its replication at the original site's node (the recovered-source
+// case: only the delta ships), which is exactly the fail-back of a site that
+// lost its primary (live 2026-10-02, site A after the unplanned fail-over of
+// WordPress: the old primary 80e3e748 was reaped, the clone e3d439ca on B
+// holds the data).
+func activeEndFallback(hops []chainHop, sourceClusterID string) (chainHop, string) {
+	end := hops[len(hops)-1]
+	if local, flagged, err := clusters.Local(); err == nil && flagged {
+		ids := make([]string, 0, len(local))
+		for id := range local {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, hop := range hops {
+			if local[hop.h.ClusterID] {
+				return end, hop.h.ClusterID
+			}
+		}
+		if len(ids) > 0 {
+			return end, ids[0]
+		}
+	}
+	return end, sourceClusterID
+}
+
+// reapedChainMember is whether a Replication verb on a resolved chain member
+// found the volume gone (404): a superseded old primary the control plane
+// has reaped after its fail-over completed (deferred removal; live
+// 2026-10-02 on site A). Demoting or detaching it is a no-op that succeeds;
+// a 404 on a handle with no relationship stays NotFound.
+func reapedChainMember(known bool, ce classifiedError) bool {
+	return known && status.Code(ce) == codes.NotFound
+}
+
+// chainHop is one member of a replication chain, with the client of its
+// cluster.
+type chainHop struct {
+	h      *lvol.Handle
+	client *atlascp.Client
+}
+
+// chooseReplica picks the chain member a Replication RPC acts on: the last
+// member on a local cluster when the secret marks local clusters (and the
+// chain's end when none of the members is local, e.g. a volume that only
+// ever lived elsewhere), else the chain's end.
+func chooseReplica(hops []chainHop, local map[string]bool, flagged bool) chainHop {
+	end := hops[len(hops)-1]
+	if !flagged {
+		return end
+	}
+	for i := len(hops) - 1; i >= 0; i-- {
+		if local[hops[i].h.ClusterID] {
+			return hops[i]
+		}
+	}
+	return end
 }
 
 // EnableVolumeReplication attaches the volume to the policy named by the
@@ -224,12 +348,14 @@ func (cs *Server) DisableVolumeReplication(
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	h, client, err = resolveToLocalReplica(ctx, h, client)
+	h, client, known, err := resolveReplica(ctx, h, client)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	if err := client.DisableVolumeReplication(ctx, h.Handle()); err != nil {
-		return nil, classifyDisableVolumeReplicationError(err)
+		if ce := classifyDisableVolumeReplicationError(err); !reapedChainMember(known, ce) {
+			return nil, ce
+		}
 	}
 	return &replication.DisableVolumeReplicationResponse{}, nil
 }
@@ -271,10 +397,16 @@ func (cs *Server) GetVolumeReplicationInfo(
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	h, client, err = resolveToLocalReplica(ctx, h, client)
+	// The pairing's status is the ACTIVE END's: the volume that holds the
+	// data and replicates. On the primary site that is the local volume; on
+	// the secondary site the local member is the demoted or reaped old
+	// primary, whose status says nothing about the pipe back to this site.
+	hops, _, err := resolveChain(ctx, h, client)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
+	end := hops[len(hops)-1]
+	h, client = end.h, end.client
 	info, err := client.GetVolumeReplicationInfo(ctx, h.Handle())
 	if err != nil {
 		return nil, classifyGetVolumeReplicationInfoError(err)
@@ -321,10 +453,20 @@ func (cs *Server) PromoteVolume(
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	h, client, err = resolveToLocalReplica(ctx, h, client)
+	// Promote is addressed to the chain's ACTIVE END, never to the local
+	// member: the control plane's failover endpoint takes the volume that
+	// currently holds the data (the source of the pairing) and creates the
+	// clone on the replication target -- this site. The local member here
+	// is the volume being replaced: a demoted old primary, or one the
+	// control plane already reaped (2026-10-02: promote on site A hit the
+	// reaped 80e3e748 and 404ed while the live primary e3d439ca on B held
+	// the data).
+	hops, _, err := resolveChain(ctx, h, client)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
+	end := hops[len(hops)-1]
+	h, client = end.h, end.client
 	if err := client.PromoteVolume(ctx, h.Handle(), req.GetForce()); err != nil {
 		return nil, classifyPromoteVolumeError(err)
 	}
@@ -375,13 +517,17 @@ func (cs *Server) DemoteVolume(
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	h, client, err = resolveToLocalReplica(ctx, h, client)
+	h, client, known, err := resolveReplica(ctx, h, client)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	done, err := client.DemoteVolume(ctx, h.Handle())
 	if err != nil {
-		return nil, classifyDemoteVolumeError(err)
+		ce := classifyDemoteVolumeError(err)
+		if !reapedChainMember(known, ce) {
+			return nil, ce
+		}
+		done = true
 	}
 	if !done {
 		return nil, status.Error(codes.Aborted, "demote is still converging")
@@ -428,11 +574,19 @@ func (cs *Server) ResyncVolume(
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	h, client, err = resolveToLocalReplica(ctx, h, client)
+	// Resync is addressed to the chain's ACTIVE END with this site as the
+	// cluster to fail back to: sbcli's replication_failback takes the volume
+	// that holds the data (the failed-over clone) and re-aims its replication
+	// at the recovered site's node, shipping only the delta. The local member
+	// is the demoted or reaped old primary; re-aiming IT configured nothing
+	// for the live clone (2026-10-02, Gitea after the unplanned fail-over:
+	// the clones on A had no replication, lastGroupSyncTime stayed empty).
+	hops, _, err := resolveChain(ctx, h, client)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	sourceClusterID := req.GetParameters()[sourceClusterIDParam]
+	end, sourceClusterID := activeEndFallback(hops, req.GetParameters()[sourceClusterIDParam])
+	h, client = end.h, end.client
 	if err := client.ResyncVolume(ctx, h.Handle(), sourceClusterID); err != nil {
 		return nil, classifyResyncVolumeError(err)
 	}

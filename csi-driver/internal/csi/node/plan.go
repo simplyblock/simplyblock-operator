@@ -159,6 +159,10 @@ func stackVolume(
 	vc map[string]string,
 	volCap *csi.VolumeCapability,
 ) plans.Volume {
+	// Named by the record or the capability; empty otherwise, so the layer
+	// mounts what the device carries (a static PV without fsType: a test
+	// fail-over's clone, a PV Ramen restored without the field) and formats
+	// a blank device as ext4.
 	fsType := stagedFsType(vc, volCap)
 	return plans.Volume{
 		UUID:                  deviceLvolID(vc),
@@ -167,8 +171,9 @@ func stackVolume(
 		PVCName:               vc[csicommon.CSIStorageNameKey],
 		StagingPath:           stagingPath,
 		FsType:                fsType,
+		DefaultFsType:         "ext4",
 		MountFlags:            volumeMountFlags(volCap),
-		FormatOptions:         mount.FormatOptions(fsType, vc, wantsVDO(vc)),
+		FormatOptions:         mount.FormatOptions(fsTypeOrDefault(volCap), vc, wantsVDO(vc)),
 		ReservedBlocksPercent: vc["tune2fs_reserved_blocks"],
 		Encrypted:             boolFromContext(vc[csicommon.ParamEncryption]),
 	}

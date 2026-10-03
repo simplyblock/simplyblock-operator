@@ -39,6 +39,10 @@ type Config struct {
 	ClusterID       string `json:"cluster_id"`
 	ClusterEndpoint string `json:"cluster_endpoint"`
 	ClusterSecret   string `json:"cluster_secret"`
+	// Local marks a cluster of the site this driver runs on (written by the
+	// site's operator); an entry without it belongs to another site, kept so
+	// that a failed-over volume's handle still resolves.
+	Local bool `json:"local,omitempty"`
 }
 
 // Info is the secret file as a whole.
@@ -84,6 +88,24 @@ func Load() (Info, error) {
 		return Info{}, fmt.Errorf("failed to parse secret file: %w", err)
 	}
 	return clusters, nil
+}
+
+// Local returns the ids of the clusters the secret marks local, and whether
+// the secret marks any: a secret written by an operator that predates the
+// flag marks none, and callers then fall back to treating every cluster as
+// local.
+func Local() (map[string]bool, bool, error) {
+	clusters, err := Load()
+	if err != nil {
+		return nil, false, err
+	}
+	local := map[string]bool{}
+	for _, cluster := range clusters.Clusters {
+		if cluster.Local {
+			local[cluster.ClusterID] = true
+		}
+	}
+	return local, len(local) > 0, nil
 }
 
 // List returns the ID of every cluster in the secret.

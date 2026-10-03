@@ -592,3 +592,41 @@ func TestReleaseForcesWhenAPlainUnmountRefuses(t *testing.T) {
 		t.Fatal("a plain unmount refused and the release did not fall back to its force path")
 	}
 }
+
+// A plan that names no filesystem -- a static PV without fsType, such as a
+// test fail-over's clone or a PV Ramen restored without the field -- mounts
+// what the device carries instead of refusing it for not being ext4
+// (2026-10-03), and formats a blank device as the default.
+func TestAPlanNamingNoFilesystemMountsWhatTheDeviceCarries(t *testing.T) {
+	fs := newFakeFS()
+	l := newFSAsking(t, fs, "", blockdev.Reading{Content: blockdev.ContentFilesystem, Type: "xfs"}, nil)
+	if _, err := l.Ensure(context.Background(), belowArtifact()); err != nil {
+		t.Fatal(err)
+	}
+	if len(fs.formatted) != 0 {
+		t.Fatalf("formatted a device that carries a filesystem: %+v", fs.formatted)
+	}
+	if len(fs.mounted) != 1 || fs.mounted[0].fsType != "xfs" {
+		t.Fatalf("mounted %+v, want once as xfs", fs.mounted)
+	}
+	if p, _ := l.Params().(FilesystemParams); p.FsType != "xfs" {
+		t.Fatalf("params %+v, want the detected xfs recorded", p)
+	}
+}
+
+func TestAPlanNamingNoFilesystemFormatsABlankDeviceAsTheDefault(t *testing.T) {
+	fs := newFakeFS()
+	l := NewFilesystem(FilesystemConfig{
+		FsType: "", DefaultFsType: "ext4", StagingPath: stagingPath, Ops: fs,
+		Content: fakeReader{reading: blockdev.Reading{Content: blockdev.ContentBlank}},
+	})
+	if _, err := l.Ensure(context.Background(), belowArtifact()); err != nil {
+		t.Fatal(err)
+	}
+	if len(fs.formatted) != 1 || fs.formatted[0].fsType != "ext4" {
+		t.Fatalf("formatted %+v, want once as ext4", fs.formatted)
+	}
+	if len(fs.mounted) != 1 || fs.mounted[0].fsType != "ext4" {
+		t.Fatalf("mounted %+v, want once as ext4", fs.mounted)
+	}
+}

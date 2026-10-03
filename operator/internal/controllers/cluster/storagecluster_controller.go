@@ -201,6 +201,14 @@ type CSIClusterEntry struct {
 	ClusterID       string `json:"cluster_id"`
 	ClusterEndpoint string `json:"cluster_endpoint"`
 	ClusterSecret   string `json:"cluster_secret"`
+	// Local marks a cluster this operator manages, i.e. the storage of the
+	// Kubernetes cluster the driver runs on, as opposed to an entry another
+	// site registered so that a failed-over volume's handle still resolves.
+	// The driver's csi-addons Replication RPCs act on the LOCAL member of a
+	// replication chain: a volume's PV keeps the handle it was created with
+	// across fail-overs, and the chain of relationships behind it alternates
+	// between the sites.
+	Local bool `json:"local,omitempty"`
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch;create;update;patch;delete
@@ -1126,6 +1134,7 @@ func (r *StorageClusterReconciler) upsertCSICredentials(
 			ClusterID:       clusterID,
 			ClusterEndpoint: r.API.Endpoint(ctx),
 			ClusterSecret:   clusterSecret,
+			Local:           true,
 		}
 		for i := range creds.Clusters {
 			if creds.Clusters[i].ClusterID == clusterID {

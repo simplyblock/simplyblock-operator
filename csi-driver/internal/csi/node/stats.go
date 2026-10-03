@@ -129,7 +129,19 @@ func redirectToActiveVolume(
 	vc map[string]string,
 ) map[string]string {
 	client, lvolID := srcClient, srcLvolID
-	for range 8 { // one hop per past fail-over; capped far above any real chain
+	// One hop per past fail-over, and the chain never shrinks: the PV keeps
+	// the original handle while every relocate and fail-over appends a clone,
+	// so a volume moved nine times is nine hops out. A cap of 8 stranded a
+	// fail-over's clone behind the ninth hop and the node attached the
+	// partitioned original instead (2026-10-03, WordPress's fifth move of
+	// the day). The bound is a cycle guard now, not a length estimate.
+	visited := map[string]bool{}
+	for range maxChainHops {
+		if visited[lvolID] {
+			klog.Warningf("replication chain for deleted volume %s loops at %s", volumeID, lvolID)
+			return nil
+		}
+		visited[lvolID] = true
 		rel, err := client.GetRelationship(ctx, lvolID)
 		if err != nil || rel == nil {
 			klog.Warningf("replication relationship lookup failed for deleted volume %s (at hop %s): %v",
@@ -169,6 +181,11 @@ func redirectToActiveVolume(
 		connInfo["poolID"] = rel.TargetPoolID
 		return connInfo
 	}
-	klog.Warningf("replication chain for deleted volume %s did not converge within 8 hops", volumeID)
+	klog.Warningf("replication chain for deleted volume %s did not converge within %d hops", volumeID, maxChainHops)
 	return nil
 }
+
+// maxChainHops bounds a replication-chain walk. A chain grows by one member
+// per move and is never compacted, so this is a guard against a looping
+// record, far above any chain a volume accumulates in its lifetime.
+const maxChainHops = 256

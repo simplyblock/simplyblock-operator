@@ -206,6 +206,13 @@ spec:
                         identity keys are dropped so a failed clone lookup can never point the mount
                         back at the source.
                       type: object
+                    sourceVolumeMode:
+                      description: |-
+                        SourceVolumeMode is the source PV's volumeMode (Filesystem or Block),
+                        carried onto the bubble PV and PVC. A VM's disk is a Block claim; a bubble
+                        claim that omitted the mode defaulted to Filesystem and the kubelet asked
+                        the node plugin to mount a raw guest disk (2026-10-03).
+                      type: string
                   required:
                   - sourceRef
                   type: object

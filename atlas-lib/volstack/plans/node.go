@@ -109,6 +109,7 @@ func (n *Node) fabric(connection lvol.Connection) volstack.Layer {
 func (n *Node) filesystem(volume Volume) volstack.Layer {
 	return layers.NewFilesystem(layers.FilesystemConfig{
 		FsType:                volume.FsType,
+		DefaultFsType:         volume.DefaultFsType,
 		StagingPath:           volume.StagingPath,
 		MountFlags:            volume.MountFlags,
 		FormatOptions:         volume.FormatOptions,
