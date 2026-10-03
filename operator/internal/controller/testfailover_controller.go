@@ -241,6 +241,7 @@ func (r *TestFailoverReconciler) resolveSource(ctx context.Context, tf *simplybl
 	srcAttrs, _, _ := unstructured.NestedStringMap(pv, "spec", "csi", "volumeAttributes")
 	bubbleVC := bubbleVolumeContext(srcAttrs)
 	fsType, _, _ := unstructured.NestedString(pv, "spec", "csi", "fsType")
+	volumeMode, _, _ := unstructured.NestedString(pv, "spec", "volumeMode")
 
 	if err := r.transitionTo(ctx, tf, simplyblockv1alpha2.TestFailoverStepResolvingPoint, func(s *simplyblockv1alpha2.TestFailoverStatus) {
 		s.Clones = []simplyblockv1alpha2.TestFailoverClone{{
@@ -248,6 +249,7 @@ func (r *TestFailoverReconciler) resolveSource(ctx context.Context, tf *simplybl
 			SourceHandle:        handle,
 			SourceVolumeContext: bubbleVC,
 			SourceFSType:        fsType,
+			SourceVolumeMode:    volumeMode,
 		}}
 		s.Message = "resolved the source volume; resolving the recovery point"
 	}); err != nil {
@@ -322,6 +324,7 @@ func (r *TestFailoverReconciler) resolveSourceGroup(ctx context.Context, tf *sim
 	srcAttrs, _, _ := unstructured.NestedStringMap(pv, "spec", "csi", "volumeAttributes")
 	bubbleVC := bubbleVolumeContext(srcAttrs)
 	fsType, _, _ := unstructured.NestedString(pv, "spec", "csi", "fsType")
+	volumeMode, _, _ := unstructured.NestedString(pv, "spec", "volumeMode")
 
 	clones := make([]simplyblockv1alpha2.TestFailoverClone, 0, len(memberIDs))
 	for _, id := range memberIDs {
@@ -330,6 +333,7 @@ func (r *TestFailoverReconciler) resolveSourceGroup(ctx context.Context, tf *sim
 			SourceRef:           v.PVCName,
 			SourceHandle:        srcUUID + ":" + v.PoolID + ":" + v.LvolID,
 			SourceFSType:        fsType,
+			SourceVolumeMode:    volumeMode,
 			SourceVolumeContext: bubbleVC,
 			SizeBytes:           v.Size,
 		})
@@ -998,6 +1002,17 @@ func (r *TestFailoverReconciler) placeBubble(ctx context.Context, tf *simplybloc
 	return ctrl.Result{}, nil
 }
 
+// volumeModeOf is the bubble PV's and PVC's volumeMode: the source's, so a
+// VM's Block disk stays a block device instead of being mounted as a
+// filesystem; nil (the default, Filesystem) when the source did not say.
+func volumeModeOf(clone simplyblockv1alpha2.TestFailoverClone) *corev1.PersistentVolumeMode {
+	if clone.SourceVolumeMode == "" {
+		return nil
+	}
+	mode := corev1.PersistentVolumeMode(clone.SourceVolumeMode)
+	return &mode
+}
+
 // bubbleVolumeContextStripKeys are the source PV volumeAttributes that must NOT
 // be carried onto the bubble PV: they identify the SOURCE volume and its NVMe-oF
 // target. The node plugin re-resolves the clone's own identity from the clone
@@ -1078,6 +1093,7 @@ func (r *TestFailoverReconciler) bubbleManifestWork(tf *simplyblockv1alpha2.Test
 				AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 				PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
 				StorageClassName:              scName,
+				VolumeMode:                    volumeModeOf(clone),
 				ClaimRef: &corev1.ObjectReference{
 					Kind: "PersistentVolumeClaim", APIVersion: "v1", Namespace: ns, Name: pvcName,
 				},
@@ -1099,6 +1115,7 @@ func (r *TestFailoverReconciler) bubbleManifestWork(tf *simplyblockv1alpha2.Test
 				Resources:        corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: capacity}},
 				StorageClassName: &scName,
 				VolumeName:       pvName,
+				VolumeMode:       volumeModeOf(clone),
 			},
 		}
 		for _, obj := range []client.Object{pv, pvc} {

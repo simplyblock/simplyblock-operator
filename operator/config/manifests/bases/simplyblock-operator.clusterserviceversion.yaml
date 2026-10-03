@@ -601,6 +601,14 @@ spec:
       kind: TestFailover
       name: testfailovers.storage.simplyblock.io
       version: v1alpha2
+    - description: Deploys a managed site's storage from the hub, through OCM.
+        Discovers the site's nodes, applies the requested sizing to the draft and,
+        once approved, deploys the storage cluster; status projects the draft and
+        the resulting storage cluster.
+      displayName: Storage Site Deployment
+      kind: StorageSiteDeployment
+      name: storagesitedeployments.storage.simplyblock.io
+      version: v1alpha2
   description: The Simplyblock Operator helps with installation, operation, and management
     of Simplyblock Control Planes, Storage Planes, and the CSI Driver.
   displayName: Simplyblock Operator

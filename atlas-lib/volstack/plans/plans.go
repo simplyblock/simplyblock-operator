@@ -52,8 +52,13 @@ type Volume struct {
 
 	// FsType is the filesystem this volume is. It decides what a blank device is
 	// formatted as, and it is also the only filesystem that will be mounted: a
-	// device carrying another is refused.
+	// device carrying another is refused. Empty: whatever the device carries,
+	// and DefaultFsType for a blank one.
 	FsType string
+
+	// DefaultFsType is what a blank device is formatted as when FsType names
+	// nothing.
+	DefaultFsType string
 
 	// MountFlags are the flags the volume asked for, ahead of the ones the
 	// filesystem layer derives from the filesystem itself.
