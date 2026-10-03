@@ -138,7 +138,7 @@ const deleteDialog = (o, note, needsConfirm) => ({
   run: () => drhub.remove(o, needsConfirm)
 });
 const KIND_LABEL_DR = {pplan: "protection plan", drpath: "DR path", papp: "protected application", rplan: "recovery plan", raction: "recovery action",
-  tbubble: "test", tsched: "test schedule", restore: "restore", siteprofile: "site profile", drconfig: "DR configuration", dhcpserver: "DHCP server"};
+  tbubble: "test", tsched: "test schedule", restore: "restore", siteprofile: "site profile", drconfig: "DR configuration", dhcpserver: "DHCP server", sitedeploy: "site storage deployment"};
 
 const METHOD_TYPES = [{v: "async", l: "async — block replication per interval"}, {v: "sync", l: "sync — stretch cluster, RPO 0"},
   {v: "s3-backup", l: "s3-backup — snapshot backups to S3 only"}, {v: "async-s3-backup", l: "async + s3-backup"}, {v: "sync-s3-backup", l: "sync + s3-backup"}];
@@ -424,6 +424,57 @@ const newDHCPServerDialog = (sites, profiles) => ({
   })
 });
 
+// ---- a managed site's storage (StorageSiteDeployment) ----------------------
+// The hub console cannot reach a site's API server; the operator on the hub
+// carries the request there through OCM. The console writes the request, the
+// sizing and the approval, and reads back the projected draft and cluster.
+const sizingFields = z => [
+  {k: "name", label: "Storage cluster name", type: "text", def: (z && z.name) || "", placeholder: "sb-site-a"},
+  {k: "vcpuCount", label: "vCPUs per storage node", type: "number", def: z && z.vcpuCount != null ? z.vcpuCount : "", min: 1, placeholder: "8"},
+  {k: "minHugePagesSize", label: "Hugepages per storage node", type: "text", def: (z && z.minHugePagesSize) || "", placeholder: "8G"},
+  {k: "maxSubsystemCount", label: "NVMe-oF subsystems per node", type: "number", def: z && z.maxSubsystemCount != null ? z.maxSubsystemCount : "", min: 1, placeholder: "30"},
+  {k: "dataChunks", label: "Erasure coding: data chunks", type: "number", def: z && z.stripe && z.stripe.dataChunks != null ? z.stripe.dataChunks : "", min: 1, placeholder: "1"},
+  {k: "parityChunks", label: "Erasure coding: parity chunks", type: "number", def: z && z.stripe && z.stripe.parityChunks != null ? z.stripe.parityChunks : "", min: 0, placeholder: "1"},
+  {k: "enableDriveFormat", label: "Format the devices it takes (data on them is lost)", type: "checkbox", def: !!(z && z.enableDriveFormat)}
+];
+const num = v => v === "" || v == null ? null : Number(v);
+const sizingOf = v => {
+  const z = {};
+  if (v.name && v.name.trim()) z.name = dns63(v.name.trim());
+  if (num(v.vcpuCount) != null) z.vcpuCount = num(v.vcpuCount);
+  if (v.minHugePagesSize && v.minHugePagesSize.trim()) z.minHugePagesSize = v.minHugePagesSize.trim();
+  if (num(v.maxSubsystemCount) != null) z.maxSubsystemCount = num(v.maxSubsystemCount);
+  if (num(v.dataChunks) != null || num(v.parityChunks) != null)
+    z.stripe = Object.assign({}, num(v.dataChunks) != null ? {dataChunks: num(v.dataChunks)} : {}, num(v.parityChunks) != null ? {parityChunks: num(v.parityChunks)} : {});
+  if (v.enableDriveFormat) z.enableDriveFormat = true;
+  return z;
+};
+const deploySiteDialog = (sites, taken) => ({
+  title: "Deploy storage on a managed site", confirm: "Discover", done: "StorageSiteDeployment created — discovery requested on the site",
+  desc: "The operator on this hub runs a discovery on the site through Open Cluster Management and writes a draft deployment document there. You review the draft here, with the sizing below applied, and approve it; nothing is configured on any node before the approval.",
+  fields: [
+    {k: "site", label: "Site (managed cluster)", type: "select", required: true, options: sites.filter(s => !taken.includes(s)).map(s => ({v: s, l: s})), empty: "Every managed cluster has a storage deployment already, or none has joined the hub."},
+    {k: "namespace", label: "Namespace of the request on the hub", type: "text", required: true, def: (window.SB_CONFIG || {}).namespace || "simplyblock"},
+    {k: "enableControlPlaneNodes", label: "Include control-plane nodes in the discovery (every node of a small site is one)", type: "checkbox", def: true},
+    {k: "workers", label: "Limit to these nodes (comma-separated; empty = every node)", type: "text", placeholder: ""},
+    ...sizingFields(null),
+    {k: "n1", type: "note", label: "Approval is one-way and reboots the site's storage nodes to set hugepages and core isolation."}
+  ],
+  run: v => drhub.createSiteDeploy({site: v.site, namespace: v.namespace.trim(), enableControlPlaneNodes: v.enableControlPlaneNodes, workers: csv(v.workers), sizing: sizingOf(v)})
+});
+const resizeSiteDialog = d => ({
+  title: `Size the draft of ${d.site}`, confirm: "Apply sizing", done: "Sizing sent to the site's draft",
+  desc: "Written onto the draft's cluster template on the site. Fields left empty keep what the discovery wrote.",
+  fields: sizingFields(d.sizing),
+  run: v => drhub.patchSiteDeploySizing(d, sizingOf(v))
+});
+const approveSiteDialog = d => ({
+  title: `Approve the storage deployment of ${d.site}?`, confirm: "Approve and deploy", danger: true, done: "Approved — the site's draft is expanding",
+  desc: `Approval is one-way. The site's ${d.counts.nodes} node(s) are configured (hugepages, core isolation; this reboots them), the storage nodes are added and the cluster ${((d.draft || {}).cluster || {}).name || (d.sizing || {}).name || ""} is activated in the control plane.`,
+  fields: [{k: "confirm", label: `Type ${d.site} to confirm`, type: "text", required: true, match: d.site}],
+  run: () => drhub.approveSiteDeploy(d)
+});
+
 // ---- command registry (kebab menus) ----------------------------------------
 // `op` is what access.can() checks: failover/relocate/restart/test map to
 // create on the run kinds, override to the override verb, delete to delete.
@@ -474,7 +525,12 @@ Object.assign(ACTIONS, {
   dhcpserver: d => [
     {label: "Delete server", icon: "trash", danger: true, op: "delete", removes: true, dialog: deleteDialog(d, "Reservations rendered for this server stay in its ConfigMap until the hub re-renders the site; guests whose role names it become Open.")}
   ],
-  drconfig: () => []
+  drconfig: () => [],
+  sitedeploy: d => [
+    {label: "Size the draft", icon: "gauge", op: "update", dialog: resizeSiteDialog(d), disabled: d.approved, hint: "The deployment is approved"},
+    {label: "Approve and deploy", icon: "check", op: "update", dialog: approveSiteDialog(d), disabled: d.approved || d.status !== "Drafted", hint: d.approved ? "Already approved" : "No draft with nodes to approve yet"},
+    {label: "Delete request", icon: "trash", danger: true, op: "delete", removes: true, dialog: deleteDialog(d, "Deleting the request withdraws nothing on the site: the discovery, the draft and any storage cluster it produced stay.")}
+  ]
 });
 
 // ---- tiles ------------------------------------------------------------------
@@ -673,6 +729,64 @@ function DHCPServerTile({o: d, nav}) {
         <div><span>generation</span><b>{d.generation || "—"}</b></div>
       </div>
       <Foot items={[{label: "Details", right: true, onClick: () => nav.detail(d)}]} />
+    </div>
+  );
+}
+
+function SiteDeployTile({o: d, nav}) {
+  const sc = d.storageCluster;
+  return (
+    <div className="tile" style={{"--sc": STATUS_META[d.status].c}} onDoubleClick={() => nav.detail(d)}>
+      <TileHead obj={d} left={<><TrafficLight status={d.status} /><Name>{d.site}</Name></>} right={<span className="badge">{d.approved ? "approved" : "draft"}</span>} />
+      <div className="tsub" style={{marginTop: 2}}>{d.message || "—"}</div>
+      <Uuid value={d.id} />
+      <div className="kv">
+        <div><span>nodes found</span><b>{d.counts.nodes}</b></div>
+        <div><span>storage cluster</span><b>{sc ? sc.name : "—"}</b></div>
+        <div><span>storage nodes</span><b>{sc ? d.counts.storageNodes : "—"}</b></div>
+        <div><span>cluster id</span><b className="mono">{sc && sc.uuid ? sc.uuid.slice(0, 8) : "—"}</b></div>
+      </div>
+      {d.status === "Drafted" && !d.approved && <div className="prepbox">Review the draft and approve it. Nothing has been applied to any node yet.</div>}
+      <Foot items={[
+        d.status === "Drafted" && !d.approved ? {label: "Approve", icon: "check", onClick: () => window.__ui.dialog(approveSiteDialog(d), d)} : null,
+        {label: "Details", right: true, onClick: () => nav.detail(d)}
+      ]} />
+    </div>
+  );
+}
+function SiteDeployDetail({o: d, nav}) {
+  const t = (d.draft && d.draft.cluster) || {};
+  const z = d.sizing || {};
+  const sc = d.storageCluster;
+  const str = v => v == null ? "" : String(v);
+  return (
+    <div>
+      <DetailHead obj={d} title={`Storage of ${d.site}`} sub={<span className="mono" style={{color: "var(--dim)"}}>StorageSiteDeployment {d.namespace}/{d.name} · draft {d.siteNamespace}/{d.draftName} on the site</span>} badge={<span className="badge">{d.approved ? "approved" : "not approved"}</span>} />
+      {d.status === "Failed" && <div className="banner"><Icon n="alert" s={15} /><span><b>The deployment failed.</b> {d.message}</span></div>}
+      <div className="stats">
+        <Stat k="State" v={<TrafficLight status={d.status} />} s={d.message} />
+        <Stat k="Nodes in the draft" v={d.counts.nodes} s={d.discover.enableControlPlaneNodes ? "control-plane nodes included" : ""} />
+        <Stat k="Draft" v={(d.draft && d.draft.phase) || "—"} s={d.draft && d.draft.message ? d.draft.message : ""} />
+        <Stat k="Storage cluster" v={sc ? sc.name : "—"} s={sc ? `${sc.phase || "not reported"}${sc.uuid ? " · " + sc.uuid : ""}` : "after the approval"} />
+      </div>
+      <div className="dcols">
+        <div className="card"><h3>Draft — what the discovery found</h3><div className="bd" style={{overflowX: "auto"}}>
+          <Table cols={["Node set", "Group", "Nodes"]} empty="The site has not written a draft with nodes yet." rows={d.nodeSets.flatMap(s => (s.groups || []).map((g, i) => [<Mono>{s.name}</Mono>, <Mono dim>{g.name || `#${i + 1}`}</Mono>, <Mono>{(g.workers || []).join(", ")}</Mono>]))} />
+        </div></div>
+        <div className="card"><h3>Cluster template on the site</h3><div className="bd">
+          <Table cols={["Field", "On the site", "Requested"]} empty="No draft yet." rows={d.draft ? [
+            ["name", t.name, z.name], ["vCPUs per node", t.vcpuCount, z.vcpuCount],
+            ["hugepages per node", t.minHugePagesSize, z.minHugePagesSize], ["subsystems per node", t.maxSubsystemCount, z.maxSubsystemCount],
+            ["stripe", t.stripe ? `${str(t.stripe.dataChunks)}+${str(t.stripe.parityChunks)}` : "", z.stripe ? `${str(z.stripe.dataChunks)}+${str(z.stripe.parityChunks)}` : ""],
+            ["format devices", t.enableDriveFormat, z.enableDriveFormat]
+          ].map(r => [<b>{r[0]}</b>, <Mono>{str(r[1])}</Mono>, <Mono dim>{str(r[2])}</Mono>]) : []} />
+        </div></div>
+      </div>
+      {sc && <div className="card"><h3>Storage nodes</h3><div className="bd">
+        <Table cols={["Storage node", "Kubernetes node", "Phase"]} empty="No storage node reported yet." rows={(sc.nodes || []).map(n => [<Mono>{n.name}</Mono>, <Mono dim>{n.hostname}</Mono>, <Mono>{n.phase || "—"}</Mono>])} />
+        <p className="mdesc" style={{margin: "9px 0 0"}}>A StorageClass on the site names this cluster as cluster_id {sc.uuid || "(not assigned yet)"} and pool {sc.pool || "—"}.</p>
+      </div></div>}
+      <Conditions o={d} />
     </div>
   );
 }
@@ -1292,12 +1406,13 @@ function DrHubHome({nav}) {
         <NavCard icon="cloud" title="Restores" sub="from S3 backups onto rebuilt sites" count="→" onClick={() => nav.drLayer("restores")} />
         <NavCard icon="k8s" title="Site profiles" sub="per-cluster inventory and bindings" count="→" onClick={() => nav.drLayer("siteprofiles")} />
         <NavCard icon="link" title="DHCP servers" sub="guest address reservations per site" count="→" onClick={() => nav.drLayer("dhcpservers")} />
+        <NavCard icon="cluster" title="Site storage" sub="discover, size and deploy a managed site's storage cluster" count="→" onClick={() => nav.drLayer("sitedeploys")} />
         <NavCard icon="gauge" title="DR configuration" sub="agents, Ramen, archive, executor" count="→" onClick={() => nav.drLayer("drconfig")} />
       </div>
     </div>
   );
 }
 
-Object.assign(window, {DrHubHome, DRConfigView, PPlanTile, DRPathTile, PAppTile, RPlanTile, RActionTile, TBubbleTile, TSchedTile, RestoreTile, SiteProfileTile, DHCPServerTile,
+Object.assign(window, {DrHubHome, DRConfigView, PPlanTile, DRPathTile, PAppTile, RPlanTile, RActionTile, TBubbleTile, TSchedTile, RestoreTile, SiteProfileTile, DHCPServerTile, SiteDeployTile, SiteDeployDetail, deploySiteDialog,
   PPlanDetail, DRPathDetail, PAppDetail, RPlanDetail, RActionDetail, TBubbleDetail, TSchedDetail, RestoreDetail, SiteProfileDetail, DHCPServerDetail, MappingPanel,
   runActionDialog, runTestDialog, restoreDialog, newPPlanDialog: newPlanDialog, newPathDialog, protectAppDialogDR, newRPlanDialog, newScheduleDialog, newDHCPServerDialog, ACTION_KIND_META, KIND_LABEL_DR});

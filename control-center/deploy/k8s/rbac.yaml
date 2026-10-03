@@ -156,6 +156,14 @@ rules:
   - apiGroups: ["sitemap.simplyblock.io"]
     resources: ["dhcpservers"]
     verbs: ["create", "update", "patch", "delete"]
+  # a managed site's storage deployment is requested, sized and approved
+  # from the hub console (StorageSiteDeployment, carried to the site by OCM)
+  - apiGroups: ["storage.simplyblock.io"]
+    resources: ["storagesitedeployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["managedclusters"]
+    verbs: ["get", "list", "watch"]
   # the console asks the API server what its identity may do, to disable controls
   - apiGroups: ["authorization.k8s.io"]
     resources: ["selfsubjectaccessreviews", "selfsubjectrulesreviews"]

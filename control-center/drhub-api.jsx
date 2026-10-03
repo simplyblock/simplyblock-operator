@@ -16,7 +16,7 @@
 // ---------------------------------------------------------------------------
 const DR_KINDS = {pplan: "ProtectionPlan", drpath: "DRPath", papp: "ProtectedApplication", rplan: "RecoveryPlan",
   raction: "RecoveryAction", tbubble: "TestBubble", tsched: "TestSchedule", restore: "RestoreAction",
-  siteprofile: "SiteProfile", drconfig: "DRConfig", dhcpserver: "DHCPServer"};
+  siteprofile: "SiteProfile", drconfig: "DRConfig", dhcpserver: "DHCPServer", sitedeploy: "StorageSiteDeployment"};
 const DR_ANN = {
   createdBy: "dr.simplyblock.io/created-by",
   confirmDelete: "dr.simplyblock.io/confirm-delete",
@@ -259,8 +259,31 @@ function normDHCPServer(o) {
   }));
 }
 
+// A managed site's storage deployment (StorageSiteDeployment): the hub-side
+// request the operator carries to the site through OCM. The status projects
+// the site's draft (the discovered nodes, for review) and, once approved, the
+// StorageCluster it expanded into.
+const SITE_DEPLOY_STATUS = {Pending: {c: "var(--idle)", rank: 2, label: "pending"}, Discovering: {c: "var(--info)", rank: 1, label: "discovering", blink: true},
+  Drafted: {c: "var(--accent)", rank: 3, label: "awaiting approval"}, Deploying: {c: "var(--info)", rank: 1, label: "deploying", blink: true},
+  Online: {c: "var(--ok)", rank: 0, label: "online"}, Failed: {c: "var(--bad)", rank: 4, label: "failed"}};
+Object.entries(SITE_DEPLOY_STATUS).forEach(([k, v]) => { if (!STATUS_META[k]) STATUS_META[k] = v; });
+function normSiteDeploy(o) {
+  const sp = o.spec || {}, st = o.status || {};
+  const draft = st.draft || null, sc = st.storageCluster || null;
+  const nodeSets = (draft && draft.nodeSets) || [];
+  const workers = nodeSets.flatMap(s => (s.groups || []).flatMap(g => g.workers || []));
+  return reg(Object.assign(base(o, "sitedeploy"), {
+    status: st.phase || "Pending", message: st.message || "",
+    site: sp.cluster || "", siteNamespace: sp.siteNamespace || "simplyblock", draftName: sp.draftName || "site-draft",
+    discover: sp.discover || {}, sizing: sp.sizing || null, approved: !!sp.approved,
+    draft, nodeSets, workers, storageCluster: sc, workName: st.workName || "",
+    counts: {nodes: workers.length, storageNodes: sc && sc.nodes ? sc.nodes.length : 0}
+  }));
+}
+
 const NORM = {pplan: normPPlan, drpath: normDRPath, papp: normPApp, rplan: normRPlan, raction: normRAction, tbubble: normTBubble,
-  tsched: normTSched, restore: normRestore, siteprofile: normSiteProfile, drconfig: normDRConfig, dhcpserver: normDHCPServer};
+  tsched: normTSched, restore: normRestore, siteprofile: normSiteProfile, drconfig: normDRConfig, dhcpserver: normDHCPServer,
+  sitedeploy: normSiteDeploy};
 
 // The resolution inbox (design 13.1): open findings of every application,
 // grouped by (path, category, source value) so one decision clears every
@@ -310,6 +333,7 @@ const drhub = {
   siteProfiles: () => drList("siteprofile"), siteProfile: drById("siteprofile"),
   dhcpServers: () => drList("dhcpserver"), dhcpServer: drById("dhcpserver"),
   siteDHCPServers: id => Promise.all([drhub.siteProfile(id), drhub.dhcpServers()]).then(([sp, ds]) => ds.filter(d => d.site === sp.name)),
+  siteDeploys: () => drList("sitedeploy").catch(e => { if (e && e.status === 404) return []; throw e; }), siteDeploy: drById("sitedeploy"),
   configs: () => drList("drconfig"), config: () => drList("drconfig").then(cs => cs.find(c => c.name === "default") || cs[0] || null),
   // derived Ramen objects, read-only
   drpcs: () => k8s.list("DRPlacementControl", {allNamespaces: true}).catch(() => []),
@@ -382,6 +406,17 @@ const drhub = {
   // into its ConfigMap on the site; the hub never talks to the server.
   createDHCPServer: ({name, site, namespace, configMap}) => k8s.create("DHCPServer", {apiVersion: "sitemap.simplyblock.io/v1alpha1", kind: "DHCPServer", metadata: {name: dns63(name)},
     spec: {site, type: "dnsmasq", dnsmasq: {namespace, configMap}}}),
+  // A managed site's storage (StorageSiteDeployment): the operator runs the
+  // discovery on the site, writes the sizing onto the draft it produced and
+  // delivers the approval -- all through OCM; the console writes this object
+  // only. Approval is one-way.
+  createSiteDeploy: ({site, namespace, enableControlPlaneNodes, workers, sizing}) => k8s.create("StorageSiteDeployment", {
+    apiVersion: "storage.simplyblock.io/v1alpha2", kind: "StorageSiteDeployment", metadata: {name: dns63(site), namespace},
+    spec: Object.assign({cluster: site, discover: Object.assign({enableControlPlaneNodes: !!enableControlPlaneNodes}, workers && workers.length ? {workers} : {})},
+      sizing && Object.keys(sizing).length ? {sizing} : {})
+  }, {namespace}),
+  patchSiteDeploySizing: (d, sizing) => k8s.patch("StorageSiteDeployment", d.name, {spec: {sizing}}, {namespace: d.namespace}),
+  approveSiteDeploy: d => k8s.patch("StorageSiteDeployment", d.name, {spec: {approved: true}}, {namespace: d.namespace}),
   // Optional per-application knob: opt out of the automatic restart after a
   // storage recovery (ADR 0017).
   setAutoRestart: (a, on) => k8s.patch("ProtectedApplication", a.name, {metadata: {annotations: {[DR_ANN.autoRestart]: on ? null : "false"}}}, {namespace: a.namespace}),
@@ -397,7 +432,8 @@ const drhub = {
 
 // The generic detail loader keys on the breadcrumb's layer name.
 Object.assign(GETTER, {pplan: drhub.plan, drpath: drhub.path, papp: drhub.app, rplan: drhub.rplan, raction: drhub.action,
-  tbubble: drhub.test, tsched: drhub.schedule, restore: drhub.restoreAction, siteprofile: drhub.siteProfile, drconfig: drhub.config, dhcpserver: drhub.dhcpServer});
+  tbubble: drhub.test, tsched: drhub.schedule, restore: drhub.restoreAction, siteprofile: drhub.siteProfile, drconfig: drhub.config, dhcpserver: drhub.dhcpServer,
+  sitedeploy: drhub.siteDeploy});
 
 Object.assign(window, {drhub, DR_KINDS, DR_ANN, VERDICT_RANK, ACTION_TERMINAL, TEST_TERMINAL, worstVerdict, fmtSecs, drCond, drCondOK, splitRef, kvToObj, csv, dns63, openFindings,
-  normPPlan, normDRPath, normPApp, normRPlan, normRAction, normTBubble, normTSched, normRestore, normSiteProfile, normDRConfig, normDHCPServer});
+  normPPlan, normDRPath, normPApp, normRPlan, normRAction, normTBubble, normTSched, normRestore, normSiteProfile, normDRConfig, normDHCPServer, normSiteDeploy});

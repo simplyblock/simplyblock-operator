@@ -77,6 +77,9 @@ const RESOURCES = {
   DRCluster:             {plural: "drclusters",             core: RAMEN_API_GROUP, namespaced: false},
   DRPlacementControl:    {plural: "drplacementcontrols",    core: RAMEN_API_GROUP, namespaced: true},
   ManagedCluster:        {plural: "managedclusters",        core: OCM_CLUSTER_API_GROUP, namespaced: false},
+  // a managed site's storage deployment, requested from the hub (operator,
+  // storage.simplyblock.io/v1alpha2); the operator carries it to the site
+  StorageSiteDeployment: {plural: "storagesitedeployments", short: "sbsd", core: "storage.simplyblock.io/v1alpha2", namespaced: true},
   // access reviews: the API server answers what the caller may do
   SelfSubjectAccessReview: {plural: "selfsubjectaccessreviews", core: "authorization.k8s.io/v1", namespaced: false},
   SelfSubjectRulesReview:  {plural: "selfsubjectrulesreviews",  core: "authorization.k8s.io/v1", namespaced: false},
