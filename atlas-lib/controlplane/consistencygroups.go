@@ -6,11 +6,14 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 
+	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/internal/cpapi"
+	"github.com/simplyblock/atlas/lvol"
 )
 
 // ConsistencyGroupForLvols returns the id of the backend consistency group in
@@ -92,4 +95,58 @@ func sameStringSet(ids []string, want map[string]bool) bool {
 		}
 	}
 	return true
+}
+
+// ConsistencyGroupMemberHandles returns the volume handles
+// ("<cluster>:<pool>:<lvol>") of a consistency group's current (open-epoch)
+// members, in the order the control plane lists them.
+//
+// The member listing carries bare lvol ids. Every member of one group lives in
+// one storage pool (the backend refuses a cross-pool join), so the pool is
+// resolved once, from the first member, by probing the cluster's pools. An
+// empty group is an error: a caller mapping members (csi-addons destination
+// info) must never return an empty map as if it were complete.
+func (c *Client) ConsistencyGroupMemberHandles(
+	ctx context.Context, gh lvol.GroupHandle,
+) ([]lvol.VolumeHandle, error) {
+	cluster, err := parseUUID("cluster id", gh.ClusterID)
+	if err != nil {
+		return nil, err
+	}
+	group, err := parseUUID("consistency group id", gh.GroupID)
+	if err != nil {
+		return nil, err
+	}
+	members, err := c.consistencyGroupMembers(ctx, cluster, group)
+	if err != nil {
+		return nil, err
+	}
+	if len(members) == 0 {
+		return nil, fmt.Errorf("consistency group %s has no current members", gh)
+	}
+	pools, err := c.ListStoragePools(ctx, gh.ClusterID)
+	if err != nil {
+		return nil, err
+	}
+	poolID := ""
+	for _, p := range pools {
+		h := lvol.Handle{ClusterID: gh.ClusterID, PoolRef: p.ID, VolumeID: members[0]}
+		_, err := c.Volume(ctx, h.Handle())
+		if err == nil {
+			poolID = p.ID
+			break
+		}
+		if !errors.Is(err, errs.ErrNotFound) {
+			return nil, err
+		}
+	}
+	if poolID == "" {
+		return nil, fmt.Errorf("member %s of consistency group %s is in none of the %d pools of cluster %s: %w",
+			members[0], gh, len(pools), gh.ClusterID, errs.ErrNotFound)
+	}
+	out := make([]lvol.VolumeHandle, 0, len(members))
+	for _, m := range members {
+		out = append(out, lvol.Handle{ClusterID: gh.ClusterID, PoolRef: poolID, VolumeID: m}.Handle())
+	}
+	return out, nil
 }

@@ -82,3 +82,22 @@ func TestProbeReportsReady(t *testing.T) {
 		t.Errorf("Ready = %v, want nil (assume ready)", resp.Ready)
 	}
 }
+
+// Without GET_REPLICATION_DESTINATION_INFO the csi-addons v0.15 controller never
+// asks for destinations, a group's VolumeGroupReplicationContent keeps empty
+// destination handles, and Ramen cannot restore the group on the target
+// (2026-10-03).
+func TestGetCapabilitiesAdvertisesReplicationDestinationInfo(t *testing.T) {
+	s := New("test.csi.simplyblock.io", "v1.2.3")
+	resp, err := s.GetCapabilities(context.Background(), &identity.GetCapabilitiesRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range resp.Capabilities {
+		if vr := c.GetVolumeReplication(); vr != nil &&
+			vr.Type == identity.Capability_VolumeReplication_GET_REPLICATION_DESTINATION_INFO {
+			return
+		}
+	}
+	t.Error("capabilities do not advertise GET_REPLICATION_DESTINATION_INFO")
+}

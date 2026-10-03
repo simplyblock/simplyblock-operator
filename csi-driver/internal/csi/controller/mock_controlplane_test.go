@@ -328,9 +328,11 @@ func (m *mockSBCLI) lookupSnapshot(w http.ResponseWriter, snapshotID string) *mo
 }
 
 func (m *mockSBCLI) handleListPools(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, []map[string]string{
-		{"name": sanityPoolName, "id": sanityPoolUUID},
-	})
+	writeJSON(w, http.StatusOK, []map[string]any{{
+		"name": sanityPoolName, "id": sanityPoolUUID, "cluster_id": sanityClusterID,
+		"max_size": 0, "capacity": map[string]any{}, "max_r_mbytes": 0, "max_rw_iops": 0,
+		"max_rw_mbytes": 0, "max_w_mbytes": 0, "volume_max_size": 0, "status": "active",
+	}})
 }
 
 func (m *mockSBCLI) handleListVolumes(w http.ResponseWriter, _ *http.Request) {
@@ -354,7 +356,8 @@ func (m *mockSBCLI) handleGetVolume(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": volume.UUID, "name": volume.Name, "size": volume.Size, "status": volume.status(),
-		"group_id": volume.GroupID,
+		"group_id": volume.GroupID, "pool_name": sanityPoolName, "ns_id": 1,
+		"nqn": "nqn.2023-02.io.simplyblock:" + sanityClusterID + ":lvol:" + volume.UUID,
 	})
 }
 

@@ -49,6 +49,17 @@ func (s *Server) GetCapabilities(
 					},
 				},
 			},
+			// GetReplicationDestinationInfo (kubernetes-csi-addons >= v0.15.0):
+			// without it the VolumeGroupReplicationContent's per-volume
+			// destinations stay empty and Ramen cannot restore a consistency
+			// group on the target (2026-10-03).
+			{
+				Type: &identity.Capability_VolumeReplication_{
+					VolumeReplication: &identity.Capability_VolumeReplication{
+						Type: identity.Capability_VolumeReplication_GET_REPLICATION_DESTINATION_INFO,
+					},
+				},
+			},
 			// The VolumeGroup service (design §14.3), which the stock
 			// kubernetes-csi-addons controller-manager dials to form a backend
 			// consistency group before replicating it as one unit.
