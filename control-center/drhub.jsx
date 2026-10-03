@@ -248,6 +248,10 @@ const newPlanDialog = () => ({
     /backup/.test(v.type || "") && {k: "bRetention", label: "Backups retained", type: "number", min: 1, def: 24},
     {k: "sc", label: "Storage class selector (matchLabels)", type: "kv", max: 8},
     {k: "cg", label: "Consistency groups", type: "checkbox", def: false},
+    {k: "scName", label: "Create the replicated StorageClass on every site, named (empty: the classes exist already)", type: "text", placeholder: "simplyblock-dr",
+      hint: "dr-hub writes it on each site with the selector's labels, the site's storage cluster and pool; the selector needs at least one matchLabel."},
+    {k: "scPool", label: "…from the pool (empty: the storage cluster's default pool)", type: "text", placeholder: ""},
+    {k: "scFs", label: "…with the filesystem", type: "text", def: "xfs"},
     {k: "s3", label: "S3 stores — one per site (Ramen's metadata store and Velero's backups)", type: "rows", cols: S3_COLS, max: 8, addLabel: "Add store",
       add: rows => ({site: "", bucket: "", endpoint: rows.length ? rows[rows.length - 1].endpoint : "", region: rows.length ? rows[rows.length - 1].region : "", secretRef: rows.length ? rows[rows.length - 1].secretRef : "ramen-s3-secret"}),
       hint: "The secret (access key id / secret access key) must exist in Ramen's namespace on the hub. Leave empty to name one existing profile below instead."},
@@ -263,7 +267,8 @@ const newPlanDialog = () => ({
     const sc = kvToObj(v.sc);
     const stores = s3Profiles(v.s3);
     const spec = Object.assign({sites: parseSites(v.sites), methods: [method],
-      storageProfile: Object.assign({storageClassSelector: Object.keys(sc).length ? {matchLabels: sc} : {}}, {consistencyGroups: v.cg ? "Enabled" : "Disabled"})},
+      storageProfile: Object.assign({storageClassSelector: Object.keys(sc).length ? {matchLabels: sc} : {}}, {consistencyGroups: v.cg ? "Enabled" : "Disabled"},
+        v.scName && v.scName.trim() ? {provision: Object.assign({name: v.scName.trim()}, v.scPool && v.scPool.trim() ? {pool: v.scPool.trim()} : {}, v.scFs && v.scFs.trim() ? {fsType: v.scFs.trim()} : {})} : {})},
       stores.length ? {s3Profiles: stores} : {}, v.velero && v.velero.trim() ? {veleroNamespace: v.velero.trim()} : {},
       v.s3Profile && v.s3Profile.trim() ? {s3Profile: {name: v.s3Profile.trim()}} : {}, v.autoRestart ? {autoRestart: {enabled: true}} : {});
     return drhub.createPlan({name: v.name.trim(), spec});
