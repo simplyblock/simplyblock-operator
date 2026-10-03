@@ -7,6 +7,7 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/simplyblock/csi-driver/internal/controlplane"
@@ -157,5 +158,86 @@ func TestRedirectToActiveVolumeSinglePairingIsUnchanged(t *testing.T) {
 	}
 	if got := connInfo[csicommon.ParamClusterID]; got != clusterB {
 		t.Errorf("cluster_id = %q, want %q", got, clusterB)
+	}
+}
+
+// A volume moved many times: the PV keeps the original handle while every
+// relocate and fail-over appends a clone, alternating between the two
+// clusters, so the live copy sits one hop further out after each move. The
+// walk must reach it however long the chain has grown; a cap of 8 stranded
+// the ninth move's clone and the node attached the original on the
+// partitioned site instead (2026-10-03).
+func TestRedirectToActiveVolumeFollowsALongChain(t *testing.T) {
+	const (
+		clusterA = "aaaaaaaa-0000-0000-0000-000000000001"
+		clusterB = "bbbbbbbb-0000-0000-0000-000000000001"
+		poolA    = "aaaaaaaa-0000-0000-0000-00000000000a"
+		poolB    = "bbbbbbbb-0000-0000-0000-00000000000b"
+		moves    = 12
+	)
+	member := func(i int) string { return fmt.Sprintf("%08d-0000-0000-0000-000000000000", i) }
+	cluster := func(i int) (string, string) {
+		if i%2 == 0 {
+			return clusterA, poolA
+		}
+		return clusterB, poolB
+	}
+	active := member(moves)
+	clients := map[string]*fakeRelationshipAPI{
+		clusterA + "/" + poolA: {rels: map[string]*controlplane.ReplicationRelationship{}, conn: map[string]map[string]string{}},
+		clusterB + "/" + poolB: {rels: map[string]*controlplane.ReplicationRelationship{}, conn: map[string]map[string]string{}},
+	}
+	for i := 0; i < moves; i++ {
+		srcC, srcP := cluster(i)
+		tgtC, tgtP := cluster(i + 1)
+		clients[srcC+"/"+srcP].rels[member(i)] = &controlplane.ReplicationRelationship{
+			SourceLvolID: member(i), TargetLvolID: member(i + 1),
+			SourceClusterID: srcC, TargetClusterID: tgtC, TargetPoolID: tgtP,
+			ActiveLvolID: active,
+		}
+	}
+	activeC, activeP := cluster(moves)
+	clients[activeC+"/"+activeP].conn[active] = map[string]string{"nqn": "nqn.test:" + active}
+
+	orig := clusterClientFor
+	defer func() { clusterClientFor = orig }()
+	clusterClientFor = func(_ context.Context, clusterID, poolID string) (controlplane.ClusterAPI, error) {
+		if c, ok := clients[clusterID+"/"+poolID]; ok {
+			return c, nil
+		}
+		return nil, errors.New("unexpected cluster " + clusterID + "/" + poolID)
+	}
+
+	connInfo := redirectToActiveVolume(context.Background(), clients[clusterA+"/"+poolA], member(0),
+		clusterA+":"+poolA+":"+member(0), map[string]string{"hostNQN": "nqn.host"})
+	if connInfo == nil {
+		t.Fatalf("redirect returned nil: the walk gave up before the %d-hop chain's active volume", moves)
+	}
+	if got := connInfo["nqn"]; got != "nqn.test:"+active {
+		t.Errorf("connection nqn = %q, want the active volume's %q", got, "nqn.test:"+active)
+	}
+	if got := connInfo[csicommon.ParamClusterID]; got != activeC {
+		t.Errorf("cluster_id = %q, want the active volume's cluster %q", got, activeC)
+	}
+}
+
+// A relationship that points back at a member already walked must end the
+// walk instead of spinning to the bound.
+func TestRedirectToActiveVolumeStopsOnALoop(t *testing.T) {
+	const (
+		clusterA = "aaaaaaaa-0000-0000-0000-000000000001"
+		poolA    = "aaaaaaaa-0000-0000-0000-00000000000a"
+		x        = "11111111-1111-1111-1111-111111111111"
+		y        = "22222222-2222-2222-2222-222222222222"
+	)
+	client := &fakeRelationshipAPI{rels: map[string]*controlplane.ReplicationRelationship{
+		x: {SourceLvolID: x, TargetLvolID: y, SourceClusterID: clusterA, TargetClusterID: clusterA, TargetPoolID: poolA, ActiveLvolID: "zz"},
+		y: {SourceLvolID: y, TargetLvolID: x, SourceClusterID: clusterA, TargetClusterID: clusterA, TargetPoolID: poolA, ActiveLvolID: "zz"},
+	}}
+	orig := clusterClientFor
+	defer func() { clusterClientFor = orig }()
+	clusterClientFor = func(context.Context, string, string) (controlplane.ClusterAPI, error) { return client, nil }
+	if got := redirectToActiveVolume(context.Background(), client, x, clusterA+":"+poolA+":"+x, map[string]string{}); got != nil {
+		t.Fatalf("a looping chain returned %v, want nil", got)
 	}
 }

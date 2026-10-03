@@ -9,6 +9,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 
 	"github.com/csi-addons/spec/lib/go/replication"
@@ -139,7 +140,15 @@ func resolveReplica(
 func resolveChain(ctx context.Context, h *lvol.Handle, client *atlascp.Client) ([]chainHop, bool, error) {
 	known := false
 	hops := []chainHop{{h: h, client: client}}
-	for range 8 { // one hop per past fail-over; capped far above any real chain
+	// One hop per past fail-over, never compacted (the PV keeps the original
+	// handle): a cap of 8 ended the walk one hop short of a ninth move's
+	// clone (2026-10-03). The bound is a cycle guard, not a length estimate.
+	visited := map[lvol.VolumeHandle]bool{}
+	for range maxChainHops {
+		if visited[h.Handle()] {
+			return nil, false, fmt.Errorf("replication chain of %s loops at %s", hops[0].h.Handle(), h.Handle())
+		}
+		visited[h.Handle()] = true
 		rel, err := client.GetVolumeReplicationRelationship(ctx, h.Handle())
 		if err != nil {
 			if errors.Is(err, errs.ErrNotFound) {
@@ -162,8 +171,15 @@ func resolveChain(ctx context.Context, h *lvol.Handle, client *atlascp.Client) (
 			break
 		}
 	}
+	if len(hops) > maxChainHops {
+		return nil, false, fmt.Errorf("replication chain of %s did not converge within %d hops", hops[0].h.Handle(), maxChainHops)
+	}
 	return hops, known, nil
 }
+
+// maxChainHops bounds a replication-chain walk: a guard against a looping
+// record, far above any chain a volume accumulates in its lifetime.
+const maxChainHops = 256
 
 // activeEndFallback is where a Resync or a status read goes when the local
 // member of the chain is reaped: the chain's active end -- the live primary
