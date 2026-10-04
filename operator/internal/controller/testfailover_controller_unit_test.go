@@ -560,9 +560,13 @@ func TestFailoverResolvingPointGroupResolvesGeneration(t *testing.T) {
 		case strings.HasSuffix(p, "/consistency-groups/") && req.URL.Query().Get("name") == "cg":
 			_, _ = w.Write([]byte(`[{"id":"g1","name":"cg","lvs_name":"lvs-a","node_id":"node-a","policy_id":"p1"}]`))
 		case strings.HasSuffix(p, "/replication/policies/p1/latest-generation"):
+			// Listed in the reverse order of the drill's PVCs: the pairing must be
+			// by source volume, not by position.
 			_, _ = w.Write([]byte(`{"group_seq":7,"members":[` +
-				`{"snapshot_id":"s1","cluster_id":"B","pool_id":"pb","lvol_id":"t1","size":1073741824,"group_seq":7},` +
-				`{"snapshot_id":"s2","cluster_id":"B","pool_id":"pb","lvol_id":"t2","size":1073741824,"group_seq":7}]}`))
+				`{"snapshot_id":"s2","cluster_id":"B","pool_id":"pb","lvol_id":"t2","source_lvol_id":"lvol-b",` +
+				`"size":1073741824,"group_seq":7},` +
+				`{"snapshot_id":"s1","cluster_id":"B","pool_id":"pb","lvol_id":"t1","source_lvol_id":"lvol-a",` +
+				`"size":1073741824,"group_seq":7}]}`))
 		default:
 			t.Errorf("unexpected request %s %s", req.Method, p)
 			w.WriteHeader(http.StatusInternalServerError)
@@ -585,6 +589,116 @@ func TestFailoverResolvingPointGroupResolvesGeneration(t *testing.T) {
 	}
 	if got.Status.Report == nil || got.Status.Report.RecoveryPoint != "generation 7" {
 		t.Errorf("report.recoveryPoint = %+v, want 'generation 7'", got.Status.Report)
+	}
+}
+
+// groupAtResolvingPoint returns a two-member group drill seeded at
+// ResolvingPoint, and the StorageCluster that resolves its source UUID.
+func groupAtResolvingPoint() (*simplyblockv1alpha2.TestFailover, *simplyblockv1alpha2.StorageCluster) {
+	tf := sampleTestFailover()
+	tf.Finalizers = []string{finalizerTestFailover}
+	tf.Spec.Scope = simplyblockv1alpha2.TestFailoverScopeGroup
+	tf.Spec.SourceRef = "cg"
+	tf.Spec.SourceCluster = testSourceCluster
+	tf.Status.Phase = simplyblockv1alpha2.TestFailoverPhaseProvisioning
+	tf.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.TestFailoverStepResolvingPoint)}
+	tf.Status.Clones = []simplyblockv1alpha2.TestFailoverClone{
+		{SourceRef: "data-1", SourceHandle: "C:pool-1:lvol-a", SourceFSType: testFSTypeXFS, SizeBytes: 1073741824},
+		{SourceRef: "data-2", SourceHandle: "C:pool-1:lvol-b", SourceFSType: testFSTypeXFS, SizeBytes: 1073741824},
+	}
+	sc := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "local-sc", Namespace: tf.Namespace},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: "C"},
+	}
+	return tf, sc
+}
+
+// TestFailoverResolvingPointGroupPairsByReplicaVolume covers a control plane
+// whose generation names only the target replica volume: the drill reads each
+// member's replica volume from its per-volume latest snapshot and pairs on it.
+func TestFailoverResolvingPointGroupPairsByReplicaVolume(t *testing.T) {
+	tf, sc := groupAtResolvingPoint()
+	r, cl := newTestFailoverReconciler(t, tf, sc)
+	ctx := context.Background()
+
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		p := req.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/consistency-groups/") && req.URL.Query().Get("name") == "cg":
+			_, _ = w.Write([]byte(`[{"id":"g1","name":"cg","policy_id":"p1"}]`))
+		case strings.HasSuffix(p, "/replication/policies/p1/latest-generation"):
+			_, _ = w.Write([]byte(`{"group_seq":7,"members":[` +
+				`{"snapshot_id":"s2","cluster_id":"B","pool_id":"pb","lvol_id":"t2","group_seq":7},` +
+				`{"snapshot_id":"s1","cluster_id":"B","pool_id":"pb","lvol_id":"t1","group_seq":7}]}`))
+		case strings.HasSuffix(p, "/relationships/lvol-a/latest-snapshot"):
+			_, _ = w.Write([]byte(`{"snapshot_id":"s1","cluster_id":"B","pool_id":"pb","lvol_id":"t1"}`))
+		case strings.HasSuffix(p, "/relationships/lvol-b/latest-snapshot"):
+			_, _ = w.Write([]byte(`{"snapshot_id":"s2","cluster_id":"B","pool_id":"pb","lvol_id":"t2"}`))
+		default:
+			t.Errorf("unexpected request %s %s", req.Method, p)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got simplyblockv1alpha2.TestFailover
+	if err := cl.Get(ctx, testFailoverRequest(tf).NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Step.State != string(simplyblockv1alpha2.TestFailoverStepCloning) {
+		t.Fatalf("step = %q, want Cloning; message=%q", got.Status.Step.State, got.Status.Message)
+	}
+	if got.Status.Clones[0].SnapshotID != "B:pb:s1" || got.Status.Clones[1].SnapshotID != "B:pb:s2" {
+		t.Errorf("clone snapshot handles = %+v, want data-1=B:pb:s1, data-2=B:pb:s2", got.Status.Clones)
+	}
+}
+
+// TestFailoverResolvingPointGroupMissingMemberFails covers a generation that
+// lacks one PVC's member: the drill fails naming the PVC, never assigning
+// another member's snapshot by position.
+func TestFailoverResolvingPointGroupMissingMemberFails(t *testing.T) {
+	tf, sc := groupAtResolvingPoint()
+	r, cl := newTestFailoverReconciler(t, tf, sc)
+	ctx := context.Background()
+
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		p := req.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/consistency-groups/") && req.URL.Query().Get("name") == "cg":
+			_, _ = w.Write([]byte(`[{"id":"g1","name":"cg","policy_id":"p1"}]`))
+		case strings.HasSuffix(p, "/replication/policies/p1/latest-generation"):
+			_, _ = w.Write([]byte(`{"group_seq":7,"members":[` +
+				`{"snapshot_id":"s1","cluster_id":"B","pool_id":"pb","lvol_id":"t1","source_lvol_id":"lvol-a"},` +
+				`{"snapshot_id":"s9","cluster_id":"B","pool_id":"pb","lvol_id":"t9","source_lvol_id":"lvol-z"}]}`))
+		default:
+			t.Errorf("unexpected request %s %s", req.Method, p)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got simplyblockv1alpha2.TestFailover
+	if err := cl.Get(ctx, testFailoverRequest(tf).NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Phase != simplyblockv1alpha2.TestFailoverPhaseFailed {
+		t.Fatalf("phase = %q, want Failed; message=%q", got.Status.Phase, got.Status.Message)
+	}
+	if !strings.Contains(got.Status.Message, "no snapshot for data-2") {
+		t.Errorf("message = %q, want it to name data-2", got.Status.Message)
+	}
+	for _, c := range got.Status.Clones {
+		if c.SnapshotID != "" {
+			t.Errorf("clone %s got snapshot %q despite the failed pairing", c.SourceRef, c.SnapshotID)
+		}
 	}
 }
 

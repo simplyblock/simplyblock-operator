@@ -692,10 +692,12 @@ func (r *TestFailoverReconciler) patchStatus(ctx context.Context, tf *simplybloc
 
 // replicatedSnapshotResult is the control plane's ReplicatedSnapshotDTO for the
 // latest replicated snapshot on a DR-target backend.
+// LvolID is the replica volume on the target the snapshot belongs to.
 type replicatedSnapshotResult struct {
 	SnapshotID string    `json:"snapshot_id"`
 	ClusterID  string    `json:"cluster_id"`
 	PoolID     string    `json:"pool_id"`
+	LvolID     string    `json:"lvol_id"`
 	CreatedAt  time.Time `json:"created_at"`
 }
 
@@ -801,12 +803,29 @@ func (r *TestFailoverReconciler) resolvePointGroup(ctx context.Context, tf *simp
 		return r.fail(ctx, tf, fmt.Sprintf("the group generation has %d members but %d were resolved; group membership changed mid-drill", len(members), len(tf.Status.Clones)))
 	}
 
+	// Each slot gets the snapshot of ITS member, matched by volume identity:
+	// one generation makes the set crash-consistent, but only the identity
+	// keeps one member's disk off another's PVC.
+	slots := make([]groupMemberSource, len(tf.Status.Clones))
+	for i, c := range tf.Status.Clones {
+		_, _, lvol, ok := splitHandle(c.SourceHandle)
+		if !ok {
+			return r.fail(ctx, tf, "group member "+c.SourceRef+" has a malformed source handle: "+c.SourceHandle)
+		}
+		slots[i] = groupMemberSource{PVC: c.SourceRef, LvolID: lvol}
+	}
+	targetOf, err := r.replicaVolumes(ctx, api, srcUUID, slots, members)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	assigned, err := assignGenerationMembers(slots, members, targetOf)
+	if err != nil {
+		return r.fail(ctx, tf, fmt.Sprintf("cannot pair generation %d with the group's PVCs: %v", groupSeq, err))
+	}
+
 	if err := r.transitionTo(ctx, tf, simplyblockv1alpha2.TestFailoverStepCloning, func(s *simplyblockv1alpha2.TestFailoverStatus) {
-		// Every member is at one generation, so any one-to-one assignment of the
-		// generation's snapshots to the clone slots yields a crash-consistent set;
-		// a precise source-to-target mapping is a later refinement.
-		for i := range members {
-			s.Clones[i].SnapshotID = members[i].ClusterID + ":" + members[i].PoolID + ":" + members[i].SnapshotID
+		for i, m := range assigned {
+			s.Clones[i].SnapshotID = members[m].ClusterID + ":" + members[m].PoolID + ":" + members[m].SnapshotID
 		}
 		if s.Report == nil {
 			s.Report = &simplyblockv1alpha2.TestFailoverReport{}
@@ -820,6 +839,39 @@ func (r *TestFailoverReconciler) resolvePointGroup(ctx context.Context, tf *simp
 	r.Recorder.Eventf(tf, nil, corev1.EventTypeNormal, "RecoveryPointResolved", "RecoveryPointResolved",
 		"group-consistent generation %d on cluster %s (%d members)", groupSeq, tf.Spec.BubbleCluster, len(members))
 	return ctrl.Result{Requeue: true}, nil
+}
+
+// replicaVolumes maps each slot's source lvol to its replica volume on the
+// target, for a control plane whose generation members do not name their source
+// volume. It returns nil, and reads nothing, when every member names it.
+func (r *TestFailoverReconciler) replicaVolumes(
+	ctx context.Context,
+	api *webapi.Client,
+	sourceClusterUUID string,
+	slots []groupMemberSource,
+	members []webapi.ReplicatedGroupSnapshot,
+) (map[string]string, error) {
+	complete := true
+	for i := range members {
+		if members[i].SourceLvolID == "" {
+			complete = false
+			break
+		}
+	}
+	if complete {
+		return nil, nil
+	}
+	targetOf := make(map[string]string, len(slots))
+	for _, slot := range slots {
+		dto, found, err := r.latestReplicatedSnapshot(ctx, api, sourceClusterUUID, slot.LvolID)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			targetOf[slot.LvolID] = dto.LvolID
+		}
+	}
+	return targetOf, nil
 }
 
 // latestReplicatedSnapshot reads the latest replicated snapshot for a source
