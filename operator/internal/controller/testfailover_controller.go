@@ -557,6 +557,10 @@ func (r *TestFailoverReconciler) reconcileDeletion(ctx context.Context, tf *simp
 	if err := r.deleteManifestWork(ctx, tf); err != nil {
 		return r.reclaimPending(ctx, tf, "remove the bubble placement", err)
 	}
+	// The namespace goes with the last drill placing into it.
+	if err := r.deleteBubbleNamespaceWork(ctx, tf); err != nil {
+		return r.reclaimPending(ctx, tf, "remove the bubble namespace", err)
+	}
 
 	// Reclaim every clone slot (one for a volume drill, one per member for a
 	// group drill). Each reclaim tolerates a not-found, so a re-run after a
@@ -946,6 +950,9 @@ func (r *TestFailoverReconciler) placeBubble(ctx context.Context, tf *simplybloc
 		return r.fail(ctx, tf, "internal: the clone was not built before Placing")
 	}
 
+	if err := r.ensureBubbleNamespaceWork(ctx, tf); err != nil {
+		return ctrl.Result{}, err
+	}
 	var mw workv1.ManifestWork
 	err := r.Get(ctx, client.ObjectKey{Namespace: tf.Spec.BubbleCluster, Name: testFailoverManifestWorkName(tf)}, &mw)
 	if apierrors.IsNotFound(err) {
@@ -1059,17 +1066,10 @@ func (r *TestFailoverReconciler) bubbleManifestWork(tf *simplyblockv1alpha2.Test
 	scName := ""
 	group := tf.Spec.Scope == simplyblockv1alpha2.TestFailoverScopeGroup
 
-	namespace := &corev1.Namespace{
-		TypeMeta:   metav1.TypeMeta{Kind: "Namespace", APIVersion: "v1"},
-		ObjectMeta: metav1.ObjectMeta{Name: ns, Labels: labels},
-	}
-	// One namespace manifest plus a PV+PVC pair per clone slot.
-	manifests := make([]workv1.Manifest, 0, 1+2*len(tf.Status.Clones))
-	raw, err := json.Marshal(namespace)
-	if err != nil {
-		return nil, fmt.Errorf("marshal bubble namespace: %w", err)
-	}
-	manifests = append(manifests, workv1.Manifest{RawExtension: runtime.RawExtension{Raw: raw}})
+	// A PV+PVC pair per clone slot. The bubble namespace is not in this work:
+	// every drill of one test shares it, so it has one owner, the bubble's
+	// namespace work (bubbleNamespaceWork).
+	manifests := make([]workv1.Manifest, 0, 2*len(tf.Status.Clones))
 
 	// One PV+PVC pair per clone slot, each reporting its own bind phase back to the
 	// hub. A volume drill has one; a group drill has one per member, all in the one
@@ -1133,6 +1133,10 @@ func (r *TestFailoverReconciler) bubbleManifestWork(tf *simplyblockv1alpha2.Test
 				Type:      workv1.JSONPathsType,
 				JsonPaths: []workv1.JsonPath{{Name: "phase", Path: ".status.phase"}},
 			}},
+			UpdateStrategy: createOnly(),
+		}, workv1.ManifestConfigOption{
+			ResourceIdentifier: workv1.ResourceIdentifier{Group: "", Resource: "persistentvolumes", Name: pvName},
+			UpdateStrategy:     createOnly(),
 		})
 	}
 
@@ -1179,6 +1183,115 @@ func testFailoverPVName(tf *simplyblockv1alpha2.TestFailover) string {
 func testFailoverManifestWorkName(tf *simplyblockv1alpha2.TestFailover) string {
 	h := sha256.Sum256([]byte(tf.Namespace + "/" + tf.Name))
 	return fmt.Sprintf("tfo-%x-bubble", h[:6])
+}
+
+// createOnly is the update strategy of every object a drill places: created once,
+// never re-applied. The default (Update) re-applied the whole PersistentVolume and
+// wiped spec.claimRef.uid, which the PV controller sets on binding; the PV fell
+// back to Available and the PVC became Lost ("ClaimMisbound: Two claims are bound
+// to the same volume", 2026-10-04). ServerSideApply does not help: claimRef is an
+// atomic struct, so the work agent would still own all of it. Nothing a drill
+// places changes after creation.
+func createOnly() *workv1.UpdateStrategy {
+	return &workv1.UpdateStrategy{Type: workv1.UpdateStrategyTypeCreateOnly}
+}
+
+// bubbleNamespaceWorkName is the name of the one ManifestWork that owns a bubble
+// namespace on its recovery cluster, shared by every drill placing into it.
+func bubbleNamespaceWorkName(cluster, namespace string) string {
+	h := sha256.Sum256([]byte(cluster + "/" + namespace))
+	return fmt.Sprintf("tfo-ns-%x", h[:6])
+}
+
+// bubbleNamespaceWork is the ManifestWork holding only the bubble namespace. One
+// test fail-over creates a drill per protected PVC, all in the same bubble
+// namespace; with the namespace in each drill's own work, the works fought over
+// its labels and the first drill torn down deleted the namespace under the
+// others' PVCs.
+func bubbleNamespaceWork(tf *simplyblockv1alpha2.TestFailover) (*workv1.ManifestWork, error) {
+	labels := map[string]string{testFailoverIDLabel: string(tf.UID)}
+	namespace := &corev1.Namespace{
+		TypeMeta:   metav1.TypeMeta{Kind: "Namespace", APIVersion: "v1"},
+		ObjectMeta: metav1.ObjectMeta{Name: tf.Spec.BubbleNamespace, Labels: labels},
+	}
+	raw, err := json.Marshal(namespace)
+	if err != nil {
+		return nil, fmt.Errorf("marshal bubble namespace: %w", err)
+	}
+	return &workv1.ManifestWork{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bubbleNamespaceWorkName(tf.Spec.BubbleCluster, tf.Spec.BubbleNamespace),
+			Namespace: tf.Spec.BubbleCluster,
+			Labels:    labels,
+		},
+		Spec: workv1.ManifestWorkSpec{
+			Workload: workv1.ManifestsTemplate{
+				Manifests: []workv1.Manifest{{RawExtension: runtime.RawExtension{Raw: raw}}},
+			},
+			ManifestConfigs: []workv1.ManifestConfigOption{{
+				ResourceIdentifier: workv1.ResourceIdentifier{
+					Group: "", Resource: "namespaces", Name: tf.Spec.BubbleNamespace,
+				},
+				UpdateStrategy: createOnly(),
+			}},
+		},
+	}, nil
+}
+
+// ensureBubbleNamespaceWork creates the bubble's namespace work unless another
+// drill of the same bubble already did.
+func (r *TestFailoverReconciler) ensureBubbleNamespaceWork(
+	ctx context.Context, tf *simplyblockv1alpha2.TestFailover,
+) error {
+	desired, err := bubbleNamespaceWork(tf)
+	if err != nil {
+		return err
+	}
+	if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	return nil
+}
+
+// liveDrillOnBubble reports whether a drill other than tf, not itself being
+// deleted, places into the same bubble namespace on the same cluster.
+func liveDrillOnBubble(items []simplyblockv1alpha2.TestFailover, tf *simplyblockv1alpha2.TestFailover) bool {
+	for i := range items {
+		o := &items[i]
+		if o.UID == tf.UID || !o.DeletionTimestamp.IsZero() {
+			continue
+		}
+		if o.Spec.BubbleCluster == tf.Spec.BubbleCluster && o.Spec.BubbleNamespace == tf.Spec.BubbleNamespace {
+			return true
+		}
+	}
+	return false
+}
+
+// deleteBubbleNamespaceWork removes the bubble's namespace work once no other live
+// drill places into it; the last drill torn down takes the namespace with it.
+func (r *TestFailoverReconciler) deleteBubbleNamespaceWork(
+	ctx context.Context, tf *simplyblockv1alpha2.TestFailover,
+) error {
+	var list simplyblockv1alpha2.TestFailoverList
+	if err := r.List(ctx, &list); err != nil {
+		return err
+	}
+	if liveDrillOnBubble(list.Items, tf) {
+		return nil
+	}
+	var mw workv1.ManifestWork
+	key := client.ObjectKey{
+		Namespace: tf.Spec.BubbleCluster,
+		Name:      bubbleNamespaceWorkName(tf.Spec.BubbleCluster, tf.Spec.BubbleNamespace),
+	}
+	if err := r.Get(ctx, key, &mw); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if !mw.DeletionTimestamp.IsZero() {
+		return nil
+	}
+	return client.IgnoreNotFound(r.Delete(ctx, &mw))
 }
 
 // clusterSecret returns the cluster secret the control plane authenticates a
