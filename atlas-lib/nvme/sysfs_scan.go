@@ -1,6 +1,7 @@
 package nvme
 
 import (
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -101,7 +102,11 @@ func scanSubsystems(sysRoot, devRoot string) ([]Subsystem, error) {
 		// A namespace can also be owned by a controller rather than by a
 		// subsystem head, which is how a stale controller surfaces, so
 		// collect those too.
-		s.Namespaces = append(s.Namespaces, controllerNamespaces(s, devRoot)...)
+		owned, err := controllerNamespaces(s, devRoot)
+		if err != nil {
+			return nil, err
+		}
+		s.Namespaces = append(s.Namespaces, owned...)
 
 		subs = append(subs, s)
 	}
@@ -149,7 +154,13 @@ func subsystemControllers(s Subsystem, entries []string, ctrls []Controller) []C
 // reached over several paths becomes several devices sharing a namespace UUID
 // (see Device.Siblings). Names already claimed by a head are skipped, so a
 // kernel that links a head under its controller too is not counted twice.
-func controllerNamespaces(s Subsystem, devRoot string) []Namespace {
+//
+// A controller directory that vanished mid-scan lists as empty, which is the
+// truth about a controller that is gone. Any other failure, a timeout included,
+// fails the scan: dropping the controller's namespaces silently would hand the
+// caller a partial answer it cannot tell from a complete one, and a caller
+// diffing scans reads every dropped namespace as a removed device.
+func controllerNamespaces(s Subsystem, devRoot string) ([]Namespace, error) {
 	heads := make(map[string]bool, len(s.Namespaces))
 	for _, ns := range s.Namespaces {
 		heads[ns.Name] = true
@@ -159,7 +170,7 @@ func controllerNamespaces(s Subsystem, devRoot string) []Namespace {
 	for _, c := range s.Controllers {
 		entries, err := sysfs.List(c.SysfsPath)
 		if err != nil {
-			continue // a controller removed mid-scan is not this scan's problem
+			return nil, fmt.Errorf("listing the namespaces of controller %s: %w", c.ID, err)
 		}
 		for _, e := range entries {
 			if !nsNameRE.MatchString(e) || heads[e] {
@@ -171,7 +182,7 @@ func controllerNamespaces(s Subsystem, devRoot string) []Namespace {
 			heads[e] = true
 		}
 	}
-	return out
+	return out, nil
 }
 
 // scanDevices flattens the subsystems into attachable namespace devices.

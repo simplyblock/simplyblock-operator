@@ -109,14 +109,22 @@ func TestCombinedOutputReturnsWhenAChildHoldsTheOutput(t *testing.T) {
 	if string(out) != "started\n" {
 		t.Fatalf("CombinedOutput = %q, %v, want the output written before the parent exited", out, err)
 	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CombinedOutput with a child holding the output = %v, want an error wrapping context.DeadlineExceeded", err)
+	}
 }
 
+// Regression: 2026-10-04-unbounded-nvme-io — the Copilot review of #628 found
+// both command timeouts returned errors that did not match
+// context.DeadlineExceeded.
 func TestCombinedOutputKillsAProcessAtTheDeadline(t *testing.T) {
 	start := time.Now()
 	_, err := CombinedOutput(context.Background(), 200*time.Millisecond, "never-exits",
 		"/bin/sh", "-c", "exec sleep 30")
-	if err == nil {
-		t.Fatal("CombinedOutput returned no error for a process killed at its deadline")
+	// The kill surfaces from exec as a killed-by-signal error, which errs/class
+	// would call an internal fault. A command that ran out of time has to read as a timeout.
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CombinedOutput on a process killed at its deadline = %v, want an error wrapping context.DeadlineExceeded", err)
 	}
 	if took := time.Since(start); took > 2*time.Second {
 		t.Fatalf("CombinedOutput took %s on a 200ms deadline", took)

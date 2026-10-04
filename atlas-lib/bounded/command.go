@@ -12,6 +12,8 @@ package bounded
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os/exec"
 	"time"
 )
@@ -54,7 +56,7 @@ func run(ctx context.Context, timeout time.Duration, key string, combined bool, 
 	if deadline, ok := ctx.Deadline(); ok {
 		limit = time.Until(deadline)
 	}
-	return Call(key, limit+waitDelay+reapGrace, func() ([]byte, error) {
+	out, err := Call(key, limit+waitDelay+reapGrace, func() ([]byte, error) {
 		cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // callers pass fixed binaries and structured args
 		cmd.WaitDelay = waitDelay
 		if combined {
@@ -62,4 +64,24 @@ func run(ctx context.Context, timeout time.Duration, key string, combined bool, 
 		}
 		return cmd.Output()
 	})
+	return out, asTimeout(ctx, key, limit, err)
+}
+
+// asTimeout reports a command that ran out of time as an *Error, whichever way
+// it ran out. A kill on the deadline surfaces from exec as "signal: killed" and
+// a child left holding the output as exec.ErrWaitDelay, and neither matches
+// context.DeadlineExceeded, so errs/class would call a timeout an internal
+// fault. The output gathered before the deadline is returned beside it.
+func asTimeout(ctx context.Context, key string, limit time.Duration, err error) error {
+	if err == nil {
+		return nil
+	}
+	var timedOut *Error
+	if errors.As(err, &timedOut) {
+		return err
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, exec.ErrWaitDelay) {
+		return fmt.Errorf("%w: %w", &Error{Key: key, After: limit}, err)
+	}
+	return err
 }
