@@ -21,14 +21,18 @@ const storagePoolsListPathFmt = "/api/v2/clusters/%s/storage-pools/"
 // ReplicatedGroupSnapshot is one member's replicated snapshot on the target
 // cluster, at one group-consistent generation. It is the cloneable point for
 // that member: cluster and pool address the target backend, snapshot is the
-// snapshot to clone, and size sizes the recovered PVC.
+// snapshot to clone, and size sizes the recovered PVC. LvolID is the replica
+// volume on the TARGET the snapshot belongs to, not the source member;
+// SourceLvolID is the source member whose data it holds, empty on a control
+// plane that does not report it yet.
 type ReplicatedGroupSnapshot struct {
-	SnapshotID string `json:"snapshot_id"`
-	ClusterID  string `json:"cluster_id"`
-	PoolID     string `json:"pool_id"`
-	LvolID     string `json:"lvol_id"`
-	Size       int64  `json:"size"`
-	GroupSeq   int    `json:"group_seq"`
+	SnapshotID   string `json:"snapshot_id"`
+	ClusterID    string `json:"cluster_id"`
+	PoolID       string `json:"pool_id"`
+	LvolID       string `json:"lvol_id"`
+	SourceLvolID string `json:"source_lvol_id"`
+	Size         int64  `json:"size"`
+	GroupSeq     int    `json:"group_seq"`
 }
 
 // latestGenerationResponse is the group form of latest-snapshot: one generation
