@@ -46,6 +46,14 @@ func (cs *Server) CreateVolumeGroup(
 	}
 	groupID, err := client.ConsistencyGroupForLvols(ctx, clusterID, lvolIDs)
 	if err != nil {
+		// The PVs may keep the handles of volumes a relocate replaced: their
+		// data lives at the end of each relationship chain, in the group the
+		// move formed there. Group that live set instead.
+		if gh, ok := liveGroupForMembers(ctx, req.GetVolumeIds()); ok {
+			return &volumegroup.CreateVolumeGroupResponse{
+				VolumeGroup: &volumegroup.VolumeGroup{VolumeGroupId: string(gh.Handle())},
+			}, nil
+		}
 		// No backend group matches the selection exactly: the members are not
 		// one whole consistency group (design §14.3, the admission webhook's
 		// invariant), so refuse rather than group a partial set.
@@ -94,6 +102,46 @@ func (cs *Server) DeleteVolumeGroup(
 // parseGroupMembers parses the member volume handles of a CreateVolumeGroup
 // request into a shared cluster id and the member lvol ids, rejecting a
 // malformed handle or members that span clusters.
+// liveGroupForMembers resolves each PV handle through its relationship chain to
+// the volume serving it now and returns the consistency group that holds
+// exactly those volumes, when they all live in one cluster and form one group.
+func liveGroupForMembers(ctx context.Context, volumeIDs []string) (lvol.GroupHandle, bool) {
+	cluster := ""
+	ids := make([]string, 0, len(volumeIDs))
+	for _, vid := range volumeIDs {
+		h, ok := lvol.ParseHandle(lvol.VolumeHandle(vid))
+		if !ok {
+			return lvol.GroupHandle{}, false
+		}
+		client, err := clusters.ReplicationClient(ctx, h.ClusterID)
+		if err != nil {
+			return lvol.GroupHandle{}, false
+		}
+		hops, _, err := resolveChain(ctx, &h, client)
+		if err != nil || len(hops) == 0 {
+			return lvol.GroupHandle{}, false
+		}
+		end := hops[len(hops)-1].h
+		if cluster != "" && end.ClusterID != cluster {
+			return lvol.GroupHandle{}, false
+		}
+		cluster = end.ClusterID
+		ids = append(ids, end.VolumeID)
+	}
+	if cluster == "" {
+		return lvol.GroupHandle{}, false
+	}
+	client, err := clusters.ReplicationClient(ctx, cluster)
+	if err != nil {
+		return lvol.GroupHandle{}, false
+	}
+	groupID, err := client.ConsistencyGroupForLvols(ctx, cluster, ids)
+	if err != nil {
+		return lvol.GroupHandle{}, false
+	}
+	return lvol.GroupHandle{ClusterID: cluster, GroupID: groupID}, true
+}
+
 func parseGroupMembers(volumeIDs []string) (clusterID string, lvolIDs []string, err error) {
 	if len(volumeIDs) == 0 {
 		return "", nil, status.Error(codes.InvalidArgument,

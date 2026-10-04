@@ -280,9 +280,11 @@ func (cs *Server) EnableVolumeReplication(
 	// group-replication endpoints (design §14.4); a per-volume handle takes the
 	// §5 path below unchanged.
 	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
-		client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
+		// The live group: after a relocate the named group is empty and the
+		// re-protection attaches the group serving the data.
+		gh, client, err := resolveGroupTarget(ctx, gh, groupActiveEnd)
 		if err != nil {
-			return nil, status.Error(codes.Unavailable, err.Error())
+			return nil, err
 		}
 		if err := client.EnableGroupReplication(ctx, gh, policyID); err != nil {
 			return nil, classifyEnableVolumeReplicationError(err)
@@ -331,9 +333,11 @@ func (cs *Server) DisableVolumeReplication(
 	req *replication.DisableVolumeReplicationRequest,
 ) (*replication.DisableVolumeReplicationResponse, error) {
 	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
-		client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
+		// The local group: this site detaches what it holds, never the live
+		// group on the other site.
+		gh, client, err := resolveGroupTarget(ctx, gh, groupLocalSite)
 		if err != nil {
-			return nil, status.Error(codes.Unavailable, err.Error())
+			return nil, err
 		}
 		if err := client.DisableGroupReplication(ctx, gh); err != nil {
 			return nil, classifyDisableVolumeReplicationError(err)
@@ -375,9 +379,9 @@ func (cs *Server) GetVolumeReplicationInfo(
 	req *replication.GetVolumeReplicationInfoRequest,
 ) (*replication.GetVolumeReplicationInfoResponse, error) {
 	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
-		client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
+		gh, client, err := resolveGroupTarget(ctx, gh, groupActiveEnd)
 		if err != nil {
-			return nil, status.Error(codes.Unavailable, err.Error())
+			return nil, err
 		}
 		info, err := client.GetGroupReplicationInfo(ctx, gh)
 		if err != nil {
@@ -435,6 +439,12 @@ func (cs *Server) PromoteVolume(
 	// §14.4): every member is cloned from the same group generation. The
 	// planned/forced split is the backend group failover's own concern, so
 	// force is not forwarded here.
+	//
+	// The named group, unresolved: the control plane's group fail-over resolves
+	// the peer itself and tells apart "already promoted there" (a no-op), a
+	// fail-back (clone the peer's members home) and a fail-over from the newest
+	// replicated generation (sbcli failover_group). Promoting the live group
+	// instead would turn a fail-back into a no-op on the group being left.
 	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
 		client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
 		if err != nil {
@@ -496,9 +506,11 @@ func (cs *Server) DemoteVolume(
 	req *replication.DemoteVolumeRequest,
 ) (*replication.DemoteVolumeResponse, error) {
 	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
-		client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
+		// The local group: a relocate back demotes the group this site serves,
+		// which after the first move is the peer of the group the VGR names.
+		gh, client, err := resolveGroupTarget(ctx, gh, groupLocalSite)
 		if err != nil {
-			return nil, status.Error(codes.Unavailable, err.Error())
+			return nil, err
 		}
 		done, err := client.DemoteGroup(ctx, gh)
 		if err != nil {
@@ -552,9 +564,9 @@ func (cs *Server) ResyncVolume(
 	req *replication.ResyncVolumeRequest,
 ) (*replication.ResyncVolumeResponse, error) {
 	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
-		client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
+		gh, client, err := resolveGroupTarget(ctx, gh, groupActiveEnd)
 		if err != nil {
-			return nil, status.Error(codes.Unavailable, err.Error())
+			return nil, err
 		}
 		if err := client.ResyncGroup(ctx, gh, req.GetParameters()[sourceClusterIDParam]); err != nil {
 			return nil, classifyResyncVolumeError(err)

@@ -1037,6 +1037,13 @@ type ConsistencyGroupGenerationMemberDTO struct {
 	SnapshotId string `json:"snapshot_id"`
 }
 
+// ConsistencyGroupLineageMemberDTO One protected volume of a consistency group: the handle its
+// PersistentVolume carries and the volume serving its data now.
+type ConsistencyGroupLineageMemberDTO struct {
+	ActiveHandle string `json:"active_handle"`
+	OriginHandle string `json:"origin_handle"`
+}
+
 // ConsistencyGroupMemberDTO One current member of a consistency group (design §10 /members).
 type ConsistencyGroupMemberDTO struct {
 	JoinedSeq  int    `json:"joined_seq"`
@@ -1085,6 +1092,16 @@ type ConsistencyGroupReplicationStatusDTORole string
 
 // ConsistencyGroupReplicationStatusDTOState defines model for ConsistencyGroupReplicationStatusDTO.State.
 type ConsistencyGroupReplicationStatusDTOState string
+
+// ConsistencyGroupResolutionDTO Where a consistency group's data lives now (replication_policy_controller.
+// resolve_group). “active_*“ are empty when no group holds a live member.
+type ConsistencyGroupResolutionDTO struct {
+	ActiveClusterId *string                             `json:"active_cluster_id,omitempty"`
+	ActiveGroupId   *string                             `json:"active_group_id,omitempty"`
+	ClusterId       string                              `json:"cluster_id"`
+	GroupId         string                              `json:"group_id"`
+	Members         *[]ConsistencyGroupLineageMemberDTO `json:"members,omitempty"`
+}
 
 // DeviceDTO defines model for DeviceDTO.
 type DeviceDTO struct {
@@ -2823,6 +2840,21 @@ type ClientInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failover (the `ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost` operationId).
 	ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGet Clusters:Consistency-Groups:Replication:Resolution
+	//
+	// Where the group's data lives now, keyed by the handles its PVs keep.
+	//
+	// After a relocate the group a VGR names is empty -- its demoted members were
+	// deleted so the way back stays open -- and its data lives in the peer group of
+	// the same name. The CSI driver resolves the VGR's original group handle here:
+	// the group holding live members, and each protected volume's original handle
+	// with the volume serving it now (2026-10-04: WordPress's VRG waited for
+	// destination info for ever against the emptied source group). Never a 404
+	// for an existing group: ``active_group_id`` is empty when nothing serves it.
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/resolution (the `ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGet` operationId).
+	ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGet(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGet Clusters:Consistency-Groups:Replication:Status
 	//
 	// The group's replication status as one unit: oldest recovery point, worst
@@ -4446,6 +4478,31 @@ func (c *Client) ClustersConsistencyGroupsReplicationFailbackApiV2ClustersCluste
 // Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failover (the `ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost` operationId).
 func (c *Client) ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostRequest(c.Server, clusterId, groupId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGet Clusters:Consistency-Groups:Replication:Resolution
+//
+// Where the group's data lives now, keyed by the handles its PVs keep.
+//
+// After a relocate the group a VGR names is empty -- its demoted members were
+// deleted so the way back stays open -- and its data lives in the peer group of
+// the same name. The CSI driver resolves the VGR's original group handle here:
+// the group holding live members, and each protected volume's original handle
+// with the volume serving it now (2026-10-04: WordPress's VRG waited for
+// destination info for ever against the emptied source group). Never a 404
+// for an existing group: “active_group_id“ is empty when nothing serves it.
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/resolution (the `ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGet` operationId).
+func (c *Client) ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGet(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetRequest(c.Server, clusterId, groupId)
 	if err != nil {
 		return nil, err
 	}
@@ -8104,6 +8161,47 @@ func NewClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsis
 	}
 
 	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetRequest constructs an http.Request for the ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGet method
+func NewClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetRequest(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "group_id", groupId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/consistency-groups/%s/replication/resolution", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -14041,6 +14139,23 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failover (the `ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost` operationId).
 	ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostResponse, error)
 
+	// ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetWithResponse Clusters:Consistency-Groups:Replication:Resolution
+	//
+	// Where the group's data lives now, keyed by the handles its PVs keep.
+	//
+	// After a relocate the group a VGR names is empty -- its demoted members were
+	// deleted so the way back stays open -- and its data lives in the peer group of
+	// the same name. The CSI driver resolves the VGR's original group handle here:
+	// the group holding live members, and each protected volume's original handle
+	// with the volume serving it now (2026-10-04: WordPress's VRG waited for
+	// destination info for ever against the emptied source group). Never a 404
+	// for an existing group: ``active_group_id`` is empty when nothing serves it.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/resolution (the `ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGet` operationId).
+	ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetResponse, error)
+
 	// ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetWithResponse Clusters:Consistency-Groups:Replication:Status
 	//
 	// The group's replication status as one unit: oldest recovery point, worst
@@ -16505,6 +16620,54 @@ func (r ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsis
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ConsistencyGroupResolutionDTO
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetResponse) GetJSON200() *ConsistencyGroupResolutionDTO {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -21544,6 +21707,29 @@ func (c *ClientWithResponses) ClustersConsistencyGroupsReplicationFailoverApiV2C
 	return ParseClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostResponse(rsp)
 }
 
+// ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetWithResponse Clusters:Consistency-Groups:Replication:Resolution
+//
+// Where the group's data lives now, keyed by the handles its PVs keep.
+//
+// After a relocate the group a VGR names is empty -- its demoted members were
+// deleted so the way back stays open -- and its data lives in the peer group of
+// the same name. The CSI driver resolves the VGR's original group handle here:
+// the group holding live members, and each protected volume's original handle
+// with the volume serving it now (2026-10-04: WordPress's VRG waited for
+// destination info for ever against the emptied source group). Never a 404
+// for an existing group: “active_group_id“ is empty when nothing serves it.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/resolution (the `ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGet` operationId).
+func (c *ClientWithResponses) ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGet(ctx, clusterId, groupId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetResponse(rsp)
+}
+
 // ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetWithResponse Clusters:Consistency-Groups:Replication:Status
 //
 // The group's replication status as one unit: oldest recovery point, worst
@@ -24230,6 +24416,39 @@ func ParseClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdCons
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest map[string]interface{}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetResponse parses an HTTP response from a ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetWithResponse call
+func ParseClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetResponse(rsp *http.Response) (*ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ConsistencyGroupResolutionDTO
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
