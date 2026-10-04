@@ -953,20 +953,17 @@ func (g *Guardian) setLastRestart(podUID string) {
 // The block shape carries the pod UID in its last segment and no /pods/ segment
 // at all, which is how every raw device went untracked: its break was reported
 // and discarded, and the pod holding the dead device node was never restarted.
+//
+// The block shape is read first, and a /pods/ segment only counts when the
+// segment after the UID is volumes. A /pods/ segment can appear anywhere else:
+// in a PersistentVolume named pods, or in kubelet's --root-dir, where matching
+// it returned an empty string or another directory's name as the pod UID.
 func podUIDFromTargetPath(p string) string {
 	const (
 		podsMarker    = "/pods/"
+		volumesMarker = "/volumes/"
 		publishMarker = "/volumeDevices/publish/"
 	)
-
-	if i := strings.Index(p, podsMarker); i >= 0 {
-		rest := p[i+len(podsMarker):]
-		j := strings.Index(rest, "/")
-		if j < 0 {
-			return ""
-		}
-		return rest[:j]
-	}
 
 	if i := strings.Index(p, publishMarker); i >= 0 {
 		// Everything after the marker is <pv>/<podUID>. A path that stops at the
@@ -976,9 +973,23 @@ func podUIDFromTargetPath(p string) string {
 		if j := strings.LastIndex(rest, "/"); j >= 0 {
 			return rest[j+1:]
 		}
+		return ""
 	}
 
-	return ""
+	for rest := p; ; {
+		i := strings.Index(rest, podsMarker)
+		if i < 0 {
+			return ""
+		}
+		rest = rest[i+len(podsMarker):]
+		j := strings.Index(rest, "/")
+		if j < 0 {
+			return ""
+		}
+		if j > 0 && strings.HasPrefix(rest[j:], volumesMarker) {
+			return rest[:j]
+		}
+	}
 }
 
 func (g *Guardian) persistLocked() {

@@ -521,6 +521,22 @@ func TestPodUIDFromTargetPath(t *testing.T) {
 		path: "/var/lib/kubelet/plugins/kubernetes.io/csi/volumeDevices/publish/pvc-7a60be59/" + podUID + "/",
 		want: podUID,
 	}, {
+		// A PersistentVolume may be named pods, which puts a /pods/ segment
+		// into the block shape. It is still the block shape.
+		name: "block publish of a volume named pods",
+		path: "/var/lib/kubelet/plugins/kubernetes.io/csi/volumeDevices/publish/pods/" + podUID,
+		want: podUID,
+	}, {
+		// kubelet's --root-dir is configurable, and a /pods/ segment in it
+		// precedes the block shape the same way.
+		name: "block publish under a root dir containing pods",
+		path: "/data/pods/kubelet/plugins/kubernetes.io/csi/volumeDevices/publish/pvc-7a60be59/" + podUID,
+		want: podUID,
+	}, {
+		name: "filesystem publish under a root dir containing pods",
+		path: "/data/pods/kubelet/pods/" + podUID + "/volumes/kubernetes.io~csi/pvc-7a60be59/mount",
+		want: podUID,
+	}, {
 		// The staging shape, which names no pod and must not be mistaken for one.
 		name: "block staging path",
 		path: "/var/lib/kubelet/plugins/kubernetes.io/csi/volumeDevices/pvc-7a60be59/dev/" + podUID,
