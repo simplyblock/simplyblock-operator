@@ -953,14 +953,13 @@ func main() {
 		setupLog.Error(err, "unable to determine whether the OCM ManifestWork resource is served")
 		os.Exit(1)
 	}
-	if hasManifestWork {
+	registerOCMControllers := func() error {
 		if err := (&controller.TestFailoverReconciler{
 			Client:   mgr.GetClient(),
 			Scheme:   mgr.GetScheme(),
 			Recorder: mgr.GetEventRecorder("testfailover-controller"),
 		}).SetupWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create controller", "controller", "TestFailover")
-			os.Exit(1)
+			return fmt.Errorf("controller TestFailover: %w", err)
 		}
 		// A managed site's storage deployment is requested from the hub through
 		// the same work API, so the controller is hub-only too.
@@ -969,13 +968,25 @@ func main() {
 			Scheme:   mgr.GetScheme(),
 			Recorder: mgr.GetEventRecorder("storagesitedeployment-controller"),
 		}).SetupWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create controller", "controller", "StorageSiteDeployment")
+			return fmt.Errorf("controller StorageSiteDeployment: %w", err)
+		}
+		return nil
+	}
+	if hasManifestWork {
+		if err := registerOCMControllers(); err != nil {
+			setupLog.Error(err, "unable to create controller")
 			os.Exit(1)
 		}
 	} else {
-		setupLog.Info("OCM ManifestWork resource not served; skipping the TestFailover and "+
-			"StorageSiteDeployment controllers (hub-only)",
+		// OCM may be installed after the operator (the DR stack brings it): keep
+		// looking, and start the controllers once ManifestWork is served.
+		setupLog.Info("OCM ManifestWork resource not served yet; the TestFailover and "+
+			"StorageSiteDeployment controllers start once it is (hub-only)",
 			"groupVersion", ocmWorkGroupVersion, "resource", ocmManifestWorkResource)
+		if err := mgr.Add(&ocmLateStart{log: setupLog, disc: workDiscovery, register: registerOCMControllers}); err != nil {
+			setupLog.Error(err, "unable to add the OCM ManifestWork watcher")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 
