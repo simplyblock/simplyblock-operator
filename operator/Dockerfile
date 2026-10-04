@@ -36,7 +36,7 @@ COPY operator/ .
 RUN CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "gcc") \
     CGO_ENABLED=1 GOEXPERIMENT=boringcrypto \
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -a -o manager cmd/main.go
+    go build -a -o manager ./cmd
 
 # The worker probe ships in this image rather than in one of its own, so that
 # the Job a discovery run creates cannot be a version out of step with the
