@@ -782,7 +782,7 @@ func markManifestWorkPVCBound(t *testing.T, cl client.Client, mw *workv1.Manifes
 }
 
 // TestFailoverPlacingDeliversManifestWorkThenReady covers the placement step: a
-// ManifestWork carrying the bubble namespace, PV, and PVC is delivered to the
+// ManifestWork carrying the bubble PV and PVC (the namespace has its own work) is delivered to the
 // recovery cluster, and the drill reaches Ready once the PVC binds.
 func TestFailoverPlacingDeliversManifestWorkThenReady(t *testing.T) {
 	tf := atPlacing()
@@ -799,10 +799,10 @@ func TestFailoverPlacingDeliversManifestWorkThenReady(t *testing.T) {
 		t.Errorf("expected a requeue while waiting for the bubble PVC to bind")
 	}
 	mw := getManifestWork(t, cl, tf.Spec.BubbleCluster, testFailoverManifestWorkName(tf))
-	if len(mw.Spec.Workload.Manifests) != 3 {
-		t.Errorf("ManifestWork carries %d manifests, want 3 (namespace, PV, PVC)", len(mw.Spec.Workload.Manifests))
+	if len(mw.Spec.Workload.Manifests) != 2 {
+		t.Errorf("ManifestWork carries %d manifests, want 2 (PV, PVC)", len(mw.Spec.Workload.Manifests))
 	}
-	if len(mw.Spec.ManifestConfigs) != 1 || mw.Spec.ManifestConfigs[0].ResourceIdentifier.Name != tf.Spec.SourceRef {
+	if len(mw.Spec.ManifestConfigs) != 2 || mw.Spec.ManifestConfigs[0].ResourceIdentifier.Name != tf.Spec.SourceRef {
 		t.Errorf("feedback rule not set on the bubble PVC %q: %+v", tf.Spec.SourceRef, mw.Spec.ManifestConfigs)
 	}
 	var got simplyblockv1alpha2.TestFailover
@@ -848,12 +848,12 @@ func TestFailoverPlacingPVCarriesSourceVolumeContext(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 	mw := getManifestWork(t, cl, tf.Spec.BubbleCluster, testFailoverManifestWorkName(tf))
-	// manifests are [namespace, PV, PVC]; decode the PV.
-	if len(mw.Spec.Workload.Manifests) != 3 {
-		t.Fatalf("ManifestWork carries %d manifests, want 3", len(mw.Spec.Workload.Manifests))
+	// manifests are [PV, PVC]; decode the PV.
+	if len(mw.Spec.Workload.Manifests) != 2 {
+		t.Fatalf("ManifestWork carries %d manifests, want 2", len(mw.Spec.Workload.Manifests))
 	}
 	var pv corev1.PersistentVolume
-	if err := json.Unmarshal(mw.Spec.Workload.Manifests[1].Raw, &pv); err != nil {
+	if err := json.Unmarshal(mw.Spec.Workload.Manifests[0].Raw, &pv); err != nil {
 		t.Fatalf("decode bubble PV manifest: %v", err)
 	}
 	if pv.Spec.CSI == nil {
@@ -890,17 +890,17 @@ func TestFailoverPlacingGroupDeliversAllMembersThenReady(t *testing.T) {
 	ctx := context.Background()
 	key := testFailoverRequest(tf).NamespacedName
 
-	// Pass 1: the ManifestWork is created carrying ns + 2*(PV,PVC) = 5 manifests
-	// and one feedback config per member PVC; the drill holds until both bind.
+	// Pass 1: the ManifestWork is created carrying 2*(PV,PVC) = 4 manifests and
+	// two configs per member (PVC feedback, PV strategy); the drill holds until both bind.
 	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
 		t.Fatalf("pass 1: %v", err)
 	}
 	mw := getManifestWork(t, cl, tf.Spec.BubbleCluster, testFailoverManifestWorkName(tf))
-	if len(mw.Spec.Workload.Manifests) != 5 {
-		t.Errorf("ManifestWork carries %d manifests, want 5 (namespace + 2*(PV,PVC))", len(mw.Spec.Workload.Manifests))
+	if len(mw.Spec.Workload.Manifests) != 4 {
+		t.Errorf("ManifestWork carries %d manifests, want 4 (2*(PV,PVC))", len(mw.Spec.Workload.Manifests))
 	}
-	if len(mw.Spec.ManifestConfigs) != 2 {
-		t.Errorf("ManifestWork has %d feedback configs, want one per member (2)", len(mw.Spec.ManifestConfigs))
+	if len(mw.Spec.ManifestConfigs) != 4 {
+		t.Errorf("ManifestWork has %d configs, want two per member (4)", len(mw.Spec.ManifestConfigs))
 	}
 	var got simplyblockv1alpha2.TestFailover
 	if err := cl.Get(ctx, key, &got); err != nil {
@@ -965,8 +965,9 @@ func TestFailoverPlacingReuseManifestWorkOnRestart(t *testing.T) {
 	if err := cl.List(ctx, &list, client.InNamespace(tf.Spec.BubbleCluster)); err != nil {
 		t.Fatalf("list ManifestWorks: %v", err)
 	}
-	if len(list.Items) != 1 {
-		t.Errorf("got %d ManifestWorks, want exactly 1 (no duplicate on restart)", len(list.Items))
+	// The drill's own work plus the bubble's namespace work; neither duplicated.
+	if len(list.Items) != 2 {
+		t.Errorf("got %d ManifestWorks, want exactly 2 (drill + namespace, no duplicate on restart)", len(list.Items))
 	}
 }
 
@@ -1193,3 +1194,162 @@ func TestFailoverStepDeadlineFailsTheDrill(t *testing.T) {
 		t.Errorf("message = %q, want it to mention the deadline", got.Status.Message)
 	}
 }
+
+// Regression: 2026-10-04 bubble PVC Lost. The work agent re-applied the whole PV
+// under the default update strategy and wiped spec.claimRef.uid; every object a
+// drill places is CreateOnly now, and the namespace is in its own work.
+func TestFailoverPlacingPlacesEverythingCreateOnly(t *testing.T) {
+	tf := atPlacing()
+	tf.Spec.BubbleNamespace = bubbleNS
+	r, cl := newTestFailoverReconciler(t, tf)
+	if _, err := r.Reconcile(context.Background(), testFailoverRequest(tf)); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	mw := getManifestWork(t, cl, tf.Spec.BubbleCluster, testFailoverManifestWorkName(tf))
+	seen := map[string]bool{}
+	for _, c := range mw.Spec.ManifestConfigs {
+		if c.UpdateStrategy == nil || c.UpdateStrategy.Type != workv1.UpdateStrategyTypeCreateOnly {
+			t.Errorf("%s/%s: update strategy %+v, want CreateOnly",
+				c.ResourceIdentifier.Resource, c.ResourceIdentifier.Name, c.UpdateStrategy)
+		}
+		seen[c.ResourceIdentifier.Resource] = true
+	}
+	if !seen["persistentvolumes"] || !seen["persistentvolumeclaims"] {
+		t.Errorf("configs cover %v, want both the PV and the PVC", seen)
+	}
+	for _, m := range mw.Spec.Workload.Manifests {
+		var obj metav1.TypeMeta
+		if err := json.Unmarshal(m.Raw, &obj); err != nil {
+			t.Fatal(err)
+		}
+		if obj.Kind == "Namespace" {
+			t.Errorf("the drill's work carries the bubble namespace; it belongs to the namespace work")
+		}
+	}
+	nsw := getManifestWork(t, cl, tf.Spec.BubbleCluster,
+		bubbleNamespaceWorkName(tf.Spec.BubbleCluster, tf.Spec.BubbleNamespace))
+	if len(nsw.Spec.Workload.Manifests) != 1 || len(nsw.Spec.ManifestConfigs) != 1 ||
+		nsw.Spec.ManifestConfigs[0].UpdateStrategy.Type != workv1.UpdateStrategyTypeCreateOnly {
+		t.Errorf("namespace work = %+v, want the one namespace, CreateOnly", nsw.Spec)
+	}
+}
+
+// Two drills of one test share the bubble namespace: the second finds the
+// namespace work and does not fail; one work owns the namespace.
+func TestFailoverPlacingSharesOneNamespaceWork(t *testing.T) {
+	a := atPlacing()
+	a.Spec.BubbleNamespace = bubbleNS
+	b := atPlacing()
+	b.Name, b.UID = "drill-2", "uid-2"
+	b.Spec.BubbleNamespace = bubbleNS
+	b.Spec.SourceRef = "other-data"
+	r, cl := newTestFailoverReconciler(t, a, b)
+	for _, tf := range []*simplyblockv1alpha2.TestFailover{a, b} {
+		if _, err := r.Reconcile(context.Background(), testFailoverRequest(tf)); err != nil {
+			t.Fatalf("reconcile %s: %v", tf.Name, err)
+		}
+	}
+	var works workv1.ManifestWorkList
+	if err := cl.List(context.Background(), &works, client.InNamespace(a.Spec.BubbleCluster)); err != nil {
+		t.Fatal(err)
+	}
+	owners := 0
+	for i := range works.Items {
+		for _, m := range works.Items[i].Spec.Workload.Manifests {
+			var obj metav1.TypeMeta
+			if err := json.Unmarshal(m.Raw, &obj); err != nil {
+				t.Fatal(err)
+			}
+			if obj.Kind == "Namespace" {
+				owners++
+			}
+		}
+	}
+	if owners != 1 {
+		t.Errorf("%d works carry the bubble namespace, want exactly one", owners)
+	}
+}
+
+func TestLiveDrillOnBubble(t *testing.T) {
+	self := sampleTestFailover()
+	self.UID = "self"
+	self.Spec.BubbleNamespace = "ns-1"
+	other := func(uid, cluster, ns string, deleting bool) simplyblockv1alpha2.TestFailover {
+		o := *sampleTestFailover()
+		o.UID = types.UID(uid)
+		o.Spec.BubbleCluster, o.Spec.BubbleNamespace = cluster, ns
+		if deleting {
+			now := metav1.Now()
+			o.DeletionTimestamp = &now
+		}
+		return o
+	}
+	cases := []struct {
+		name  string
+		items []simplyblockv1alpha2.TestFailover
+		want  bool
+	}{
+		{"only itself", []simplyblockv1alpha2.TestFailover{*self}, false},
+		{"another live drill on the bubble", []simplyblockv1alpha2.TestFailover{*self,
+			other("o1", self.Spec.BubbleCluster, "ns-1", false)}, true},
+		{"the other is being deleted", []simplyblockv1alpha2.TestFailover{*self,
+			other("o1", self.Spec.BubbleCluster, "ns-1", true)}, false},
+		{"another bubble namespace", []simplyblockv1alpha2.TestFailover{*self,
+			other("o1", self.Spec.BubbleCluster, "ns-2", false)}, false},
+		{"another cluster", []simplyblockv1alpha2.TestFailover{*self,
+			other("o1", "elsewhere", "ns-1", false)}, false},
+	}
+	for _, c := range cases {
+		if got := liveDrillOnBubble(c.items, self); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// Teardown keeps the namespace work while another live drill places into it, and
+// removes it with the last one.
+func TestFailoverDeletionRemovesTheNamespaceWorkWithTheLastDrill(t *testing.T) {
+	mk := func(name, uid string, deleting bool) *simplyblockv1alpha2.TestFailover {
+		tf := sampleTestFailover()
+		tf.Name, tf.UID = name, types.UID(uid)
+		tf.Spec.BubbleNamespace = bubbleNS
+		tf.Finalizers = []string{finalizerTestFailover}
+		if deleting {
+			now := metav1.Now()
+			tf.DeletionTimestamp = &now
+		}
+		return tf
+	}
+	first, second := mk("drill-1", "u1", true), mk("drill-2", "u2", false)
+	nsw, err := bubbleNamespaceWork(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, cl := newTestFailoverReconciler(t, first, second, nsw)
+	ctx := context.Background()
+	key := client.ObjectKey{Namespace: nsw.Namespace, Name: nsw.Name}
+
+	if _, err := r.Reconcile(ctx, testFailoverRequest(first)); err != nil {
+		t.Fatalf("teardown of drill-1: %v", err)
+	}
+	if err := cl.Get(ctx, key, &workv1.ManifestWork{}); err != nil {
+		t.Fatalf("namespace work removed while drill-2 still places into it: %v", err)
+	}
+
+	var live simplyblockv1alpha2.TestFailover
+	if err := cl.Get(ctx, testFailoverRequest(second).NamespacedName, &live); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Delete(ctx, &live); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, testFailoverRequest(second)); err != nil {
+		t.Fatalf("teardown of drill-2: %v", err)
+	}
+	if err := cl.Get(ctx, key, &workv1.ManifestWork{}); !apierrors.IsNotFound(err) {
+		t.Errorf("namespace work still present after the last drill: %v", err)
+	}
+}
+
+// bubbleNS is the bubble namespace the binding tests place their clones in.
+const bubbleNS = "app-drtest-1"
