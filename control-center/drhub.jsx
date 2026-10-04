@@ -91,14 +91,30 @@ const runActionDialog = (target, kind, ctx) => {
           options: paths.map(p => { const pp = target.kind === "papp" ? target.paths.find(x => x.name === p) : null; return {v: p, l: pp ? `${p}  (${pp.from} → ${pp.to}, ${pp.verdict})` : p}; }),
           empty: `No declared DRPath offers ${m.label} for this ${target.kind === "rplan" ? "plan" : "application"}. Declaring a direction is a dr-admin decision, not an override.`},
         !pathless && verdict === "NotReady" && {k: "n1", type: "note", label: `Readiness on this path is NotReady: ${blockingChecks(target, v.path).join(", ") || "blocking checks failed"}. Running anyway needs a reason and the "override" verb on recoveryactions (dr-admin). The run is audited with the reason.`},
-        !pathless && verdict === "NotReady" && {k: "override", label: "Override reason (10–1024 characters)", type: "text", required: true, placeholder: "why this action must run despite the verdict"},
+        !pathless && verdict === "NotReady" && {k: "override", label: "Override reason (10–1024 characters)", type: "text", required: true, maxLen: OVERRIDE_MAX,
+          placeholder: "why this action must run despite the verdict", validate: overrideError,
+          hint: x => `${(x || "").trim().length} characters; 10 to ${OVERRIDE_MAX}. Kept with the run in the audit record.`},
         !pathless && verdict === "Degraded" && {k: "n2", type: "note", label: "Readiness is Degraded: only advisory checks failed. The action runs without an override."},
+        kind === "Restart" && target.kind === "papp" && (target.probes.length
+          ? {k: "ptest", type: "check", label: `Health probes of ${target.name} (${target.probes.map(p => p.name || p.type).join(", ")})`, button: "Test probes now",
+            hint: `dr-agent evaluates them on ${target.currentCluster || "the application's site"} now; the restart waits for the same probes.`,
+            run: () => drhub.probeHealth({app: target}).then(healthAnswer)}
+          : {k: "pnone", type: "note", label: "The application has no health probes: the restart reports it up once its tiers are ready. Add probes under Edit tiers & probes."}),
         {k: "timeout", label: "Timeout", type: "text", def: "30m", placeholder: "30m"},
         opposite && {k: "n3", type: "note", label: `The application currently runs on ${target.currentCluster}. A Relocate along a path whose target is the current cluster is refused by the hub.`}
       ].filter(Boolean);
     },
     run: v => drhub.runAction({kind, target, path: v.path, override: v.override && v.override.trim(), timeout: v.timeout && v.timeout.trim()})
   };
+};
+const OVERRIDE_MAX = 1024;
+// The API server refuses a reason under 10 characters ("should be at least 10
+// chars long"); said here while typing instead.
+const overrideError = x => {
+  const n = (x || "").trim().length;
+  if (n > 0 && n < 10) return `The reason needs at least 10 characters (${n} so far).`;
+  if (n > OVERRIDE_MAX) return `The reason may have at most ${OVERRIDE_MAX} characters (${n}).`;
+  return null;
 };
 const blockingChecks = (target, path) => {
   const p = target.kind === "rplan" ? {checks: target.checks} : target.paths.find(x => x.name === path);
@@ -149,7 +165,9 @@ const KIND_LABEL_DR = {pplan: "protection plan", drpath: "DR path", papp: "prote
 
 const METHOD_TYPES = [{v: "async", l: "async — block replication per interval"}, {v: "sync", l: "sync — stretch cluster, RPO 0"},
   {v: "s3-backup", l: "s3-backup — snapshot backups to S3 only"}, {v: "async-s3-backup", l: "async + s3-backup"}, {v: "sync-s3-backup", l: "sync + s3-backup"}];
-// name=cluster[/zone][@region] entries. Blanks are insignificant anywhere:
+// Sites are entered as rows (site → cluster, zone, region). The one-line
+// form below, name=cluster[/zone][@region]; ..., is still read for a value
+// that arrives as text. Blanks are insignificant anywhere:
 // around "=", "/", "@" and between entries, which may be separated by ";",
 // "," or newlines -- or by blanks alone ("site-a=a site-b=b"). Site, cluster,
 // zone and region names never contain blanks, so all of them are dropped
@@ -162,6 +180,63 @@ const parseSites = txt => String(txt || "")
     const [cluster, zone] = (clusterZone || "").split("/");
     return Object.assign({name, cluster: cluster || name}, zone ? {zone} : {}, region ? {region} : {});
   });
+const SITE_COLS = [
+  {k: "name", label: "Site", placeholder: "site-a", flex: 1},
+  {k: "cluster", label: "Cluster (managed cluster)", placeholder: "same as the site", flex: 1.2},
+  {k: "zone", label: "Zone (sync)", placeholder: "", flex: 0.8},
+  {k: "region", label: "Region", placeholder: "eu-central", flex: 0.8}
+];
+const SITE_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
+const emptySite = () => ({name: "", cluster: "", zone: "", region: ""});
+const nb = s => String(s || "").replace(/\s+/g, "");
+const sitesSpec = rows => typeof rows === "string" ? parseSites(rows)
+  : (rows || []).filter(r => nb(r.name) || nb(r.cluster)).map(r => Object.assign({name: nb(r.name), cluster: nb(r.cluster) || nb(r.name)},
+    nb(r.zone) ? {zone: nb(r.zone)} : {}, nb(r.region) ? {region: nb(r.region)} : {}));
+// Why the declared sites cannot be saved, or null.
+const sitesError = rows => {
+  const sites = sitesSpec(rows);
+  if (!sites.length) return "Declare the plan's sites: one row per site.";
+  const unnamed = sites.filter(s => !s.name).length;
+  if (unnamed) return `${unnamed} row${unnamed > 1 ? "s have" : " has"} a cluster but no site name.`;
+  const bad = sites.filter(s => s.name.length > 63 || !SITE_RE.test(s.name)).map(s => s.name);
+  if (bad.length) return `Not a site name: ${bad.join(", ")}. A site name is a DNS label: lower-case letters, digits and "-", at most 63 characters.`;
+  const dup = sites.map(s => s.name).filter((n, i, a) => a.indexOf(n) !== i);
+  if (dup.length) return `Site ${[...new Set(dup)].join(", ")} is declared twice.`;
+  return null;
+};
+// The S3 store rows name a declared site from a list.
+const s3Cols = siteNames => S3_COLS.map(c => c.k !== "site" ? c : Object.assign({}, c, {type: "select", blank: siteNames.length ? "— site —" : "— declare sites first —",
+  options: siteNames.map(n => ({v: n, l: n})), unknown: v => `${v} (not a site of the plan)`}));
+const nextSite = (siteNames, rows) => siteNames.find(n => !(rows || []).some(r => r.site === n)) || "";
+// "Test" on an S3 store row: dr-hub probes the store (list, write, delete)
+// with the row's Secret and answers with the S3 service's own error.
+const s3Answer = st => {
+  const r = st.result || {};
+  if (st.phase === "Passed") return {status: "ok", text: `${r.bucket || "The bucket"} accepts a list, a write and a delete (checked from the DR hub${r.region ? `, region ${r.region}` : ""}).`};
+  if (r.code === "SecretNotFound") return {status: "bad", text: `SecretNotFound: ${r.message}`};
+  if (r.code) return {status: "bad", text: `${r.code}${r.step ? ` on ${r.step}` : ""}: ${r.message || "no message"}`};
+  return {status: "bad", text: st.message || "the probe could not run"};
+};
+const testStoreRow = row => {
+  if (!nb(row.bucket)) throw new Error("Fill in the bucket first.");
+  if (!nb(row.endpoint)) throw new Error("Fill in the endpoint first.");
+  const s = s3Profiles([Object.assign({}, row, {site: nb(row.site) || "probe"})])[0];
+  return drhub.probeS3(Object.assign(s, {site: nb(row.site)})).then(s3Answer);
+};
+const S3_ROW_TEST = {label: "Test", title: "Probe this store from the DR hub: list, write and delete with its Secret", run: testStoreRow};
+// "Test probe": dr-agent evaluates health probes on the site, now.
+const healthAnswer = st => {
+  const lines = (st.probes || []).map(p => ({status: p.passed ? "ok" : "bad", text: `${p.name}: ${p.message || (p.passed ? "passed" : "failed")}`}));
+  const where = st.site ? `${st.site} (cluster ${st.cluster})` : st.cluster;
+  if (st.phase === "Error") return {status: "bad", text: st.message || "the probes could not run", lines};
+  const failed = lines.filter(l => l.status === "bad").length;
+  return {status: failed ? "bad" : "ok", text: failed ? `${failed} of ${lines.length} probes fail${where ? ` on ${where}` : ""}` : `${lines.length === 1 ? "The probe passes" : `All ${lines.length} probes pass`}${where ? ` on ${where}` : ""}`, lines};
+};
+const probeRowSpec = row => {
+  const pr = probesSpec([row]);
+  if (!pr.length) throw new Error("Fill in the probe's target first.");
+  return pr;
+};
 // The plan's per-site S3 stores must name every site of the plan: said here
 // with the site that is missing, rather than as the API server's generic
 // "s3Profiles needs a store for every site".
@@ -250,10 +325,18 @@ const GNET_COLS = [
   {k: "role", label: "Role", placeholder: "app", flex: 0.7},
   {k: "cidr", label: "Guest subnet", placeholder: "192.168.110.0/24", flex: 1.3},
   {k: "reservedHostIDs", label: "Reserved host ids", placeholder: "1, 2", flex: 0.9},
-  {k: "dhcpServerRef", label: "DHCP server (name)", placeholder: "site-a", flex: 1.1}
+  {k: "dhcpServerRef", label: "DHCP server", flex: 1.1}
 ];
-// The DHCP servers a profile already refers to, offered as the defaults.
-const knownServers = sp => Array.from(new Set([sp.dhcpServerRef].concat((sp.guestNetworks || []).map(g => g.dhcpServerRef)).filter(Boolean)));
+// The guest-network DHCP server is one of the site's registered DHCPServers;
+// a name that is not registered (typed before, or the server was deleted) is
+// kept and flagged: guests on that network get no reservation.
+const gnetCols = servers => GNET_COLS.map(c => c.k !== "dhcpServerRef" ? c : Object.assign({}, c, {type: "select", blank: "— the site's default —",
+  options: servers.map(d => ({v: d.name, l: d.name})), unknown: v => `${v} (not registered)`}));
+const srvRef = r => typeof r === "string" ? r : refName2(r);
+// The DHCP servers a profile refers to (site default and per guest network).
+const knownServers = sp => Array.from(new Set([srvRef(sp.dhcpServerRef)].concat((sp.guestNetworks || []).map(g => srvRef(g.dhcpServerRef))).filter(Boolean)));
+// The ones of them no DHCPServer of the site answers to.
+const missingServers = (sp, servers) => knownServers(sp || {}).filter(n => !(servers || []).some(d => d.name === n));
 const lnetRows = sp => (sp.logicalNetworks || []).map(l => ({role: l.role || "", nad: l.nad || ""}));
 const gnetRows = sp => (sp.guestNetworks || []).map(g => ({role: g.role || "", cidr: g.cidr || "", reservedHostIDs: (g.reservedHostIDs || []).join(", "), dhcpServerRef: g.dhcpServerRef || ""}));
 const bindingsSpec = v => ({
@@ -269,7 +352,9 @@ const newPlanDialog = () => ({
   desc: "A plan names the sites that take part in DR, the storage it protects and how it replicates. Ramen's DRCluster and DRPolicy objects and the replication classes are derived from it; directions are declared afterwards as DR paths.",
   fields: v => [
     {k: "name", label: "Name", type: "text", required: true, placeholder: "fra"},
-    {k: "sites", label: "Sites — one per entry: name=cluster[/zone][@region], separated by ;", type: "text", required: true, placeholder: "fra-a=cluster-a@eu-central; fra-b=cluster-b@eu-central"},
+    {k: "sites", label: "Sites — the site's name and the managed cluster it is", type: "rows", cols: SITE_COLS, max: 8, addLabel: "Add site", required: true,
+      def: [emptySite(), emptySite()], add: () => emptySite(), validate: sitesError,
+      hint: "A cross-cluster plan names one cluster per site; a sync plan (stretch cluster) names the same cluster on every site, each with its own zone."},
     {k: "type", label: "Replication method", type: "select", required: true, options: METHOD_TYPES},
     {k: "method", label: "Method name", type: "text", required: true, def: "primary", placeholder: "primary"},
     /^async/.test(v.type || "") && {k: "interval", label: "Scheduling interval", type: "text", required: true, def: "5m", placeholder: "5m"},
@@ -282,9 +367,10 @@ const newPlanDialog = () => ({
       hint: "dr-hub writes it on each site with the selector's labels, the site's storage cluster and pool; the selector needs at least one matchLabel."},
     {k: "scPool", label: "…from the pool (empty: the storage cluster's default pool)", type: "text", placeholder: ""},
     {k: "scFs", label: "…with the filesystem", type: "text", def: "xfs"},
-    {k: "s3", label: "S3 stores — one per site (Ramen's metadata store and Velero's backups)", type: "rows", cols: S3_COLS, max: 8, addLabel: "Add store",
-      add: rows => ({site: "", bucket: "", endpoint: rows.length ? rows[rows.length - 1].endpoint : "", region: rows.length ? rows[rows.length - 1].region : "", secretRef: rows.length ? rows[rows.length - 1].secretRef : ""}),
-      hint: "The secret (access key id / secret access key) must exist in Ramen's namespace on the hub. Leave empty to name one existing profile below instead."},
+    {k: "s3", label: "S3 stores — one per site (Ramen's metadata store and Velero's backups)", type: "rows", cols: s3Cols(sitesSpec(v.sites).map(s => s.name).filter(Boolean)), max: 8, addLabel: "Add store",
+      rowAction: S3_ROW_TEST,
+      add: rows => ({site: nextSite(sitesSpec(v.sites).map(s => s.name).filter(Boolean), rows), bucket: "", endpoint: rows.length ? rows[rows.length - 1].endpoint : "", region: rows.length ? rows[rows.length - 1].region : "", secretRef: rows.length ? rows[rows.length - 1].secretRef : ""}),
+      hint: "The secret (access key id / secret access key) must exist in Ramen's namespace on the hub. Test probes a store from the hub before the plan is saved. Leave empty to name one existing profile below instead."},
     {k: "velero", label: "Velero namespace on the sites", type: "text", def: "velero", placeholder: "velero"},
     {k: "s3Profile", label: "Ramen S3 profile (single store, instead of per-site stores)", type: "text", placeholder: "existing profile name"},
     {k: "autoRestart", label: "Restart applications in place after a storage recovery", type: "checkbox", def: false},
@@ -296,7 +382,9 @@ const newPlanDialog = () => ({
       /backup/.test(type) ? {s3Backup: {interval: v.bInterval.trim(), retention: Number(v.bRetention) || 24}} : {});
     const sc = kvToObj(v.sc);
     const stores = s3Profiles(v.s3);
-    const sites = parseSites(v.sites);
+    const err = sitesError(v.sites);
+    if (err) throw new Error(err);
+    const sites = sitesSpec(v.sites);
     checkStores(sites, stores);
     const spec = Object.assign({sites, methods: [method],
       storageProfile: Object.assign({storageClassSelector: Object.keys(sc).length ? {matchLabels: sc} : {}}, {consistencyGroups: v.cg ? "Enabled" : "Disabled"},
@@ -310,8 +398,9 @@ const editPlanS3Dialog = p => ({
   title: `S3 stores of ${p.name}`, confirm: "Save", done: "ProtectionPlan updated",
   desc: "Ramen keeps its metadata and Velero its backups in one S3 store per site. Changing a store re-derives the DRClusters; applications keep their protection.",
   fields: [
-    {k: "s3", label: "S3 stores — one per site", type: "rows", cols: S3_COLS, max: 8, addLabel: "Add store", def: s3Rows(p.s3Profiles),
-      add: rows => ({site: "", bucket: "", endpoint: rows.length ? rows[rows.length - 1].endpoint : "", region: rows.length ? rows[rows.length - 1].region : "", secretRef: rows.length ? rows[rows.length - 1].secretRef : ""})},
+    {k: "s3", label: "S3 stores — one per site", type: "rows", cols: s3Cols(p.sites.map(s => s.name)), max: 8, addLabel: "Add store", def: s3Rows(p.s3Profiles),
+      rowAction: S3_ROW_TEST, hint: "Test probes a store from the DR hub (list, write, delete) with its Secret, before saving.",
+      add: rows => ({site: nextSite(p.sites.map(s => s.name), rows), bucket: "", endpoint: rows.length ? rows[rows.length - 1].endpoint : "", region: rows.length ? rows[rows.length - 1].region : "", secretRef: rows.length ? rows[rows.length - 1].secretRef : ""})},
     {k: "velero", label: "Velero namespace on the sites", type: "text", def: p.veleroNamespace || "velero"}
   ],
   run: v => {
@@ -365,7 +454,12 @@ const protectAppDialogDR = (plans, cfg) => ({
       {k: "tiers", label: "Tiers — the boot order the hub generates the Recipe from", type: "rows", cols: TIER_COLS, max: 12, addLabel: "Add tier", hint: TIER_HINT,
         add: () => ({name: "", by: "labels", selector: "", ready: ""})},
       {k: "probes", label: "Health probes — what a move waits for on the target", type: "rows", cols: PROBE_COLS, max: 8, addLabel: "Add probe",
-        add: () => ({name: "", type: "http", target: "", timeout: "15s", expectStatus: ""})},
+        add: () => ({name: "", type: "http", target: "", timeout: "15s", expectStatus: ""}),
+        hint: "Test runs a probe now, by dr-agent on the source site, against the running application.",
+        rowAction: {label: "Test", title: "dr-agent runs this probe on the source site now", run: (row, fv) => {
+          if (!fv.plan || !fv.source) throw new Error("Choose the plan and the source site first.");
+          return drhub.probeHealth({plan: fv.plan, site: fv.source, namespaces: fv.appKind === "managed" ? [] : csv(fv.namespaces), probes: probeRowSpec(row)}).then(healthAnswer);
+        }}},
       {k: "n1", type: "note", label: "Both directions between source and target must exist as DR paths for readiness to become Ready. External hooks are edited on the object."}
     ].filter(Boolean);
   },
@@ -387,7 +481,11 @@ const editTiersDialog = a => ({
     {k: "tiers", label: "Tiers (boot order)", type: "rows", cols: TIER_COLS, max: 12, addLabel: "Add tier", hint: TIER_HINT, def: tierRows(a.tiers),
       add: () => ({name: "", by: "labels", selector: "", ready: ""})},
     {k: "probes", label: "Health probes", type: "rows", cols: PROBE_COLS, max: 8, addLabel: "Add probe", def: probeRows(a.probes),
-      add: () => ({name: "", type: "http", target: "", timeout: "15s", expectStatus: ""})}
+      add: () => ({name: "", type: "http", target: "", timeout: "15s", expectStatus: ""}),
+      rowAction: {label: "Test", title: "dr-agent runs this probe where the application runs, now", run: row => drhub.probeHealth({app: a, probes: probeRowSpec(row)}).then(healthAnswer)}},
+    {k: "ptest", type: "check", label: "All probes as edited", button: "Test all probes",
+      hint: `dr-agent evaluates them on ${a.currentCluster || "the application's site"} now; nothing is saved.`,
+      run: v => { const pr = probesSpec(v.probes); if (!pr.length) throw new Error("No probe to test."); return drhub.probeHealth({app: a, probes: pr}).then(healthAnswer); }}
   ],
   run: v => drhub.patchApp(a, {tiers: tiersSpec(v.tiers), health: {probes: probesSpec(v.probes)}})
 });
@@ -433,14 +531,24 @@ const newScheduleDialog = (target, nsHint) => ({
 const editBindingsDialog = s => ({
   title: `Bindings of ${s.name}`, confirm: "Save", done: "SiteProfile updated",
   desc: "How this site's networks map for recovered VMs (ADR 0020): the NAD each logical role is on here, the guest subnet of each role with the host ids never handed out, and the DHCP server the reservations are rendered to.",
-  fields: [
+  prepare: () => drhub.dhcpServers().then(ds => ({servers: ds.filter(d => d.site === s.name)})),
+  fields: (v, prep) => {
+    const servers = (prep && prep.servers) || [];
+    const cur = srvRef((s.spec || {}).dhcpServerRef);
+    const unregistered = n => n && !servers.some(d => d.name === n);
+    return [
+    !servers.length && {k: "n0", type: "note", label: `No DHCP server is registered for ${s.name} yet. Register one under Disaster recovery → DHCP servers; until then guest addresses are not reserved on this site.`},
     {k: "lnets", label: "Logical networks — role → NAD on this site", type: "rows", cols: LNET_COLS, max: 8, addLabel: "Add network", def: lnetRows(s.spec || {}),
       add: () => ({role: "app", nad: ""}), hint: s.nads && s.nads.length ? `NADs reported here: ${s.nads.map(n => n.namespace ? `${n.namespace}/${n.name}` : n.name || n).slice(0, 8).join(", ")}` : ""},
-    {k: "gnets", label: "Guest networks — the subnet of each role here", type: "rows", cols: GNET_COLS, max: 8, addLabel: "Add subnet", def: gnetRows(s.spec || {}),
-      add: () => ({role: "app", cidr: "", reservedHostIDs: "1, 2", dhcpServerRef: knownServers(s.spec || {})[0] || ""}),
-      hint: "The DHCP server is the name of a registered DHCPServer of this site (Disaster recovery → DHCP servers)."},
-    {k: "dhcp", label: "DHCP server of the site (default for every guest network)", type: "text", def: (s.spec || {}).dhcpServerRef || "", placeholder: knownServers(s.spec || {}).join(", ") || "name of a registered DHCPServer"}
-  ],
+    {k: "gnets", label: "Guest networks — the subnet of each role here", type: "rows", cols: gnetCols(servers), max: 8, addLabel: "Add subnet", def: gnetRows(s.spec || {}),
+      add: () => ({role: "app", cidr: "", reservedHostIDs: "1, 2", dhcpServerRef: ""}),
+      rowError: r => unregistered(r.dhcpServerRef) ? `DHCP server ${r.dhcpServerRef} is not registered for ${s.name}: guests on ${r.role || "this network"} get no reservation.` : null,
+      hint: `The DHCP servers registered for ${s.name}: ${servers.map(d => d.name).join(", ") || "none"}. Empty uses the site's default below.`},
+    {k: "dhcp", label: "DHCP server of the site (default for every guest network)", type: "select", def: cur,
+      options: [{v: "", l: "— none —"}].concat(servers.map(d => ({v: d.name, l: `${d.name} (${d.target || d.type})`})), unregistered(cur) ? [{v: cur, l: `${cur} (not registered)`}] : []),
+      validate: x => unregistered(x) ? `DHCP server ${x} is not registered for ${s.name}.` : null}
+    ].filter(Boolean);
+  },
   run: v => drhub.patchSiteProfile(s, bindingsSpec(Object.assign({}, v, {dhcp: v.dhcp && v.dhcp.trim() ? v.dhcp.trim() : ""})))
 });
 
@@ -1270,7 +1378,8 @@ function SiteProfileDetail({o: s, nav}) {
   return (
     <div>
       <DetailHead obj={s} title={s.name} sub={<span className="mono" style={{color: "var(--dim)"}}>SiteProfile · cluster {inv.clusterID || s.name}</span>} badge={<span className="badge k8s">managed cluster</span>} />
-      <div className="banner" style={{color: "var(--dim)", borderColor: "var(--line)", background: "var(--panel2)"}}><Icon n="refresh" s={15} /><span><b>Inventory is rewritten on every scan{s.reportedAt ? `, last ${fmtAgo(s.reportedAt)}` : ""}.</b> It is never edited; the bindings in the spec are what a dr-admin sets, and they are written with kubectl in this phase.</span></div>
+      <div className="banner" style={{color: "var(--dim)", borderColor: "var(--line)", background: "var(--panel2)"}}><Icon n="refresh" s={15} /><span><b>Inventory is rewritten on every scan{s.reportedAt ? `, last ${fmtAgo(s.reportedAt)}` : ""}.</b> It is never edited; the bindings in the spec are what a dr-admin sets (Actions → Edit bindings).</span></div>
+      {dhcp.data && missingServers(sp, dhcp.data).length > 0 && <div className="banner"><Icon n="alert" s={15} /><span><b>DHCP server {missingServers(sp, dhcp.data).join(", ")} is not registered for {s.name}.</b> The bindings name it, so no reservation is rendered for guests on those networks and a move here fails its guest-address check. Choose a registered server under Edit bindings, or register one with that name.</span></div>}
       <div className="stats">
         <Stat k="Nodes ready" v={`${s.counts.nodesReady}/${s.counts.nodes}`} c={s.counts.nodesReady < s.counts.nodes ? "var(--warn)" : null} />
         <Stat k="Zones" v={s.zones.length} s={s.zones.join(", ")} />
@@ -1475,4 +1584,5 @@ function DrHubHome({nav}) {
 
 Object.assign(window, {DrHubHome, DRConfigView, PPlanTile, DRPathTile, PAppTile, RPlanTile, RActionTile, TBubbleTile, TSchedTile, RestoreTile, SiteProfileTile, DHCPServerTile, SiteDeployTile, SiteDeployDetail, deploySiteDialog,
   PPlanDetail, DRPathDetail, PAppDetail, RPlanDetail, RActionDetail, TBubbleDetail, TSchedDetail, RestoreDetail, SiteProfileDetail, DHCPServerDetail, MappingPanel,
-  runActionDialog, runTestDialog, restoreDialog, newPPlanDialog: newPlanDialog, newPathDialog, protectAppDialogDR, newRPlanDialog, newScheduleDialog, newDHCPServerDialog, ACTION_KIND_META, KIND_LABEL_DR});
+  runActionDialog, runTestDialog, restoreDialog, newPPlanDialog: newPlanDialog, newPathDialog, protectAppDialogDR, newRPlanDialog, newScheduleDialog, newDHCPServerDialog, ACTION_KIND_META, KIND_LABEL_DR,
+  editPlanS3Dialog, editTiersDialog, editBindingsDialog, sitesSpec, sitesError, overrideError, missingServers});

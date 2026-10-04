@@ -19,7 +19,8 @@
   const check = (name, status, blocking, reason, message) => ({name, status, blocking, reason, message});
   const OPS = "ramen-ops";
 
-  const store = {ProtectionPlan: [], DRPath: [], ProtectedApplication: [], RecoveryPlan: [], RecoveryAction: [], TestBubble: [], TestSchedule: [], RestoreAction: [], SiteProfile: [], DRConfig: [], DHCPServer: [], StorageSiteDeployment: []};
+  const store = {ProtectionPlan: [], DRPath: [], ProtectedApplication: [], RecoveryPlan: [], RecoveryAction: [], TestBubble: [], TestSchedule: [], RestoreAction: [], SiteProfile: [], DRConfig: [], DHCPServer: [], StorageSiteDeployment: [],
+    S3ProbeRequest: [], HealthProbeRequest: []};
   const api = (kind, group) => ({apiVersion: group || "dr.simplyblock.io/v1alpha1", kind});
 
   // ---- plans ---------------------------------------------------------------
@@ -218,7 +219,9 @@
   store.StorageSiteDeployment.push(ssd("cluster-b", {sizing: tpl("sb-cluster-b")}, {phase: "Drafted", message: "the draft awaits approval", workName: "sbsd-4d5e6f",
     draft: {name: "site-draft", phase: "Draft", approved: false, cluster: tpl("sb-cluster-b"), nodeSets: nodeSets(["b-1", "b-2", "b-3"])},
     conditions: [cond("Delivered", true, "Applied", "the work is applied on the site"), cond("Discovered", true, "Nodes", "3 node(s) in the draft"), cond("Approved", false, "SiteDraft", "the site's draft approved=false")]}));
-  store.SiteProfile.push(sprof("stretch", ["eu-central-1a", "eu-central-1c"]));
+  store.SiteProfile.push(sprof("stretch", ["eu-central-1a", "eu-central-1c"], {spec: {dhcpServerRef: "stretch",
+    guestNetworks: [{role: "backend", cidr: "192.168.130.0/24", reservedHostIDs: [1, 2]}]}}));
+  store.DHCPServer.push(dhcp("dnsmasq", "stretch", "dhcp", "sitemap-hosts", 0, ""));
   store.DRConfig.push(Object.assign(api("DRConfig"), {metadata: meta("default"),
     spec: {executor: {default: "inCluster"}, agent: {namespace: "simplyblock-dr-agent", statusInterval: "15s", hookImageAllowList: ["quay.io/simplyblock-io/*"]}, ramen: {namespace: "ramen-system", configMapName: "ramen-hub-operator-config", managed: true, veleroNamespace: "velero", opsNamespace: OPS},
       archive: {endpoint: "https://s3.eu-central-1.amazonaws.com", bucket: "dr-fra-a", region: "eu-central-1", prefix: "dr/", credentialsSecretRef: {name: "dr-archive"}, bundle: {interval: "5m", retainDays: 30, signingKeySecretRef: {name: "dr-bundle-key"}}, reportRetainDays: 365},
@@ -246,11 +249,60 @@
     });
   };
 
+  // ---- on-demand probes (dr-hub ADR 0021) ----------------------------------
+  // The mock's S3: the Secrets in Ramen's namespace, and buckets/endpoints
+  // whose names pick the S3 service's answer.
+  const S3_SECRETS = ["ramen-s3-secret", "s3-fra"];
+  const s3Answer = sp => {
+    if (!S3_SECRETS.includes(sp.secretRef)) return {ok: false, code: "SecretNotFound", message: `Secret ramen-system/${sp.secretRef} not found: the store's credentials must be a Secret in Ramen's namespace on the hub`};
+    if (/nowhere/.test(sp.endpoint)) return {ok: false, step: "list", code: "DNSError", message: `lookup ${sp.endpoint.replace(/^\w+:\/\//, "")}: no such host`};
+    if (/missing/.test(sp.bucket)) return {ok: false, step: "list", code: "NoSuchBucket", message: "The specified bucket does not exist (HTTP 404, request id 17F2A0C3D)"};
+    if (/readonly/.test(sp.bucket)) return {ok: false, step: "write", code: "AccessDenied", message: "Access Denied (HTTP 403, request id 9C1B77E2)"};
+    return {ok: true};
+  };
+  const probeOne = p => {
+    const name = p.name || p.type;
+    if (/down|refused/.test(p.target || "")) return {name, passed: false, message: `dial tcp 10.43.0.12:${p.type === "http" ? 80 : 3306}: connect: connection refused`, time: iso(Date.now())};
+    if (p.type === "http") return p.expectStatus && p.expectStatus !== 200 ? {name, passed: false, message: `${p.target} answered 200`, time: iso(Date.now())}
+      : {name, passed: true, message: `${p.target} answered 200`, time: iso(Date.now())};
+    if (p.type === "tcp") return {name, passed: true, message: `connected to ${p.target}`, time: iso(Date.now())};
+    return {name, passed: true, message: "all 2 Running", time: iso(Date.now())};
+  };
+  const answerProbes = t => {
+    store.S3ProbeRequest.filter(o => !o.status.completedAt && t - Date.parse(o.metadata.creationTimestamp) > 800).forEach(o => {
+      const a = s3Answer(o.spec), at = iso(t);
+      o.status = {phase: a.ok ? "Passed" : "Failed", message: a.ok ? "the store accepts a list, a write and a delete" : `${a.code}: ${a.message}${a.step ? ` (${a.step})` : ""}`, completedAt: at,
+        secretNamespace: "ramen-system", result: Object.assign({site: o.spec.site || "", bucket: o.spec.bucket, endpoint: o.spec.endpoint, region: o.spec.region || "", checkedAt: at}, a)};
+    });
+    store.HealthProbeRequest.filter(o => !o.status.completedAt && t - Date.parse(o.metadata.creationTimestamp) > 1200).forEach(o => {
+      const sp = o.spec, at = iso(t);
+      const done = (phase, message, extra) => { o.status = Object.assign({}, o.status, {phase, message, completedAt: at}, extra || {}); };
+      const app = sp.applicationRef ? findRef("ProtectedApplication", o.metadata.namespace, sp.applicationRef.name) : null;
+      if (sp.applicationRef && !app) return done("Error", `ProtectedApplication ${o.metadata.namespace}/${sp.applicationRef.name} not found`);
+      const plan = findRef("ProtectionPlan", "", sp.planRef || (app && app.spec.planRef));
+      if (!plan) return done("Error", `ProtectionPlan ${sp.planRef || (app && app.spec.planRef)} not found`);
+      let site = sp.site, cluster;
+      if (site) {
+        const s = plan.spec.sites.find(x => x.name === site);
+        if (!s) return done("Error", `site ${site} is not a site of ProtectionPlan ${plan.metadata.name}`);
+        cluster = s.cluster;
+      } else {
+        cluster = app.status.currentCluster;
+        if (!cluster) return done("Error", "the application does not run anywhere yet (no current cluster); name the site to probe");
+        site = (plan.spec.sites.find(x => x.cluster === cluster) || {}).name || "";
+      }
+      const probes = (sp.probes && sp.probes.length ? sp.probes : app ? ((app.spec.health || {}).probes || []) : []);
+      if (!probes.length) return done("Error", "the application has no health probes", {site, cluster});
+      const res = probes.map(probeOne), failed = res.filter(r => !r.passed).length;
+      done(failed ? "Failed" : "Passed", failed ? `${failed} of ${res.length} probes failed on ${cluster}` : `${res.length} probes passed on ${cluster}`, {site, cluster, probes: res});
+    });
+  };
+
   const KINDS = Object.keys(store);
   const strip = o => { const c = JSON.parse(JSON.stringify(o)); delete c.__sim; return c; };
   window.DR_MOCK = {
     has: kind => KINDS.includes(kind),
-    list: kind => { advance(); return store[kind].map(strip); }
+    list: kind => { advance(); answerProbes(Date.now()); return store[kind].map(strip); }
   };
   const viewer = () => (localStorage.getItem("sb.viewas") || "").includes("reader") ? "viewer" : "admin";
   const findRef = (kind, ns, name) => store[kind].find(o => o.metadata.name === name && (!ns || o.metadata.namespace === ns));
@@ -268,6 +320,11 @@
       if (sp[f] !== undefined && typeof sp[f] !== "string")
         return {err: `${kind}.dr.simplyblock.io "${m.name}" is invalid: spec.${f}: Invalid value: "object": spec.${f} in body must be of type string: "object"`, reason: "Invalid"};
     if (findRef(kind, m.namespace, m.name)) return {err: `${kind.toLowerCase()}s "${m.name}" already exists`, reason: "AlreadyExists"};
+    if (kind === "S3ProbeRequest" || kind === "HealthProbeRequest") {
+      if (viewer() !== "admin") return {err: `${kind.toLowerCase()}s.dr.simplyblock.io is forbidden: User "reader@example.com" cannot create resource "${kind.toLowerCase()}s"`, reason: "Forbidden"};
+      if (kind === "S3ProbeRequest" && (!sp.bucket || !sp.endpoint || !sp.secretRef)) return {err: `S3ProbeRequest.dr.simplyblock.io "${m.name}" is invalid: spec.bucket, spec.endpoint and spec.secretRef are required`, reason: "Invalid"};
+      if (kind === "HealthProbeRequest" && !sp.applicationRef && !(sp.planRef && sp.site)) return {err: `HealthProbeRequest.dr.simplyblock.io "${m.name}" is invalid: spec: Invalid value: "object": name an applicationRef, or a planRef and a site`, reason: "Invalid"};
+    }
     const obj = Object.assign({}, body, {metadata: Object.assign({}, m, {uid: uid(), creationTimestamp: iso(Date.now()), generation: 1,
       annotations: Object.assign({}, m.annotations || {}, ["RecoveryAction", "TestBubble"].includes(kind) ? {"dr.simplyblock.io/created-by": "you@example.com"} : {})}), status: {}});
     if (kind === "RecoveryAction") {
@@ -293,6 +350,7 @@
     if (kind === "ProtectedApplication") obj.status = {paths: [], conditions: [cond("Bound", false, "Binding", "waiting for the DRPC", 0), cond("Protected", false, "Binding", "", 0)]};
     if (kind === "RecoveryPlan") obj.status = {readiness: {verdict: "Unknown", checks: []}, conditions: [cond("Valid", true, "Valid", "", 0)]};
     if (kind === "DHCPServer") obj.status = {reservations: 0, conditions: []};
+    if (kind === "S3ProbeRequest" || kind === "HealthProbeRequest") obj.status = {phase: "Running"};
     if (kind === "StorageSiteDeployment") obj.status = {phase: "Discovering", message: `waiting for site ${body.spec.cluster} to write draft simplyblock/site-draft`, conditions: [cond("Delivered", false, "Pending", "the work is not applied on the site yet", 0)]};
     store[kind].push(obj);
     return {obj: strip(obj)};

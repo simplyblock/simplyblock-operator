@@ -234,6 +234,22 @@ const RESOURCES = {
     namespaced: false,
     dr: true
   },
+  // on-demand probes behind the forms' Test buttons (dr-hub ADR 0021): created,
+  // read until answered, deleted; never listed in a view
+  S3ProbeRequest: {
+    plural: "s3proberequests",
+    short: "s3probe",
+    core: DR_API_GROUP,
+    namespaced: true,
+    dr: true
+  },
+  HealthProbeRequest: {
+    plural: "healthproberequests",
+    short: "hprobe",
+    core: DR_API_GROUP,
+    namespaced: true,
+    dr: true
+  },
   // Ramen and OCM objects the hub derives — instances only, read-only here
   DRPolicy: {
     plural: "drpolicies",
@@ -4206,7 +4222,92 @@ const stamp = () => Date.now().toString(36);
 const dns63 = s => String(s).toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 63).replace(/-+$/, "");
 const kvToObj = rows => Object.fromEntries((rows || []).filter(r => r.k).map(r => [r.k.trim(), (r.v || "").trim()]));
 const csv = s => String(s || "").split(/[,\s]+/).map(x => x.trim()).filter(Boolean);
+
+// ---- on-demand probes (dr-hub ADR 0021) -------------------------------------
+// The console never reaches S3 or a managed cluster: a Test button creates a
+// request the hub answers in its status, reads it until it is answered and
+// deletes it. A hub without the request kinds answers 404 on the create.
+const PROBE_POLL_MS = 1000,
+  PROBE_WAIT_MS = 150000;
+const probeErr = (e, what, role) => {
+  if (e && e.status === 404) return new Error(`This DR hub cannot ${what} on demand yet (dr-hub before on-demand probes); the result shows on the saved object instead.`);
+  if (e && e.status === 403) return new Error(`Testing needs ${role}: create on ${what === "probe an S3 store" ? "s3proberequests" : "healthproberequests"} in dr.simplyblock.io.`);
+  return e;
+};
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function runProbe(kind, namespace, spec, what, role) {
+  const name = `console-${stamp()}-${Math.random().toString(36).slice(2, 6)}`;
+  try {
+    await k8s.create(kind, {
+      apiVersion: DR_API_GROUP,
+      kind,
+      metadata: {
+        name,
+        namespace,
+        labels: {
+          "app.kubernetes.io/created-by": "console"
+        }
+      },
+      spec
+    }, {
+      namespace
+    });
+  } catch (e) {
+    throw probeErr(e, what, role);
+  }
+  const until = Date.now() + PROBE_WAIT_MS;
+  try {
+    for (;;) {
+      await sleep(PROBE_POLL_MS);
+      const o = await k8s.get(kind, name, {
+        namespace
+      });
+      const st = o && o.status || {};
+      if (["Passed", "Failed", "Error"].includes(st.phase)) return st;
+      if (Date.now() > until) throw new Error(`dr-hub did not answer within ${PROBE_WAIT_MS / 1000}s${st.message ? ` (${st.message})` : ""}. Is dr-hub running?`);
+    }
+  } finally {
+    // dr-hub deletes an answered request after a while anyway
+    await k8s.remove(kind, name, {
+      namespace
+    }).catch(() => {});
+  }
+}
+// One S3 store as a plan row names it: {site, bucket, endpoint, region, secretRef}.
+const probeS3 = store => runProbe("S3ProbeRequest", DR_NS(), Object.assign({
+  bucket: store.bucket,
+  endpoint: store.endpoint,
+  secretRef: store.secretRef
+}, store.site ? {
+  site: store.site
+} : {}, store.region ? {
+  region: store.region
+} : {}), "probe an S3 store", "the dr-admin role");
+// Health probes: of an application where it runs ({app}), or on a plan's site
+// for one not protected yet ({plan, site, namespaces}); probes default to the
+// application's own.
+const probeHealth = ({
+  app,
+  plan,
+  site,
+  namespaces,
+  probes
+}) => runProbe("HealthProbeRequest", app ? app.namespace : DR_NS(), Object.assign({}, app ? {
+  applicationRef: {
+    name: app.name
+  }
+} : {}, plan ? {
+  planRef: plan
+} : {}, site ? {
+  site
+} : {}, namespaces && namespaces.length ? {
+  namespaces
+} : {}, probes && probes.length ? {
+  probes
+} : {}), "run health probes", "the dr-operator role");
 const drhub = {
+  probeS3,
+  probeHealth,
   plans: () => drList("pplan"),
   plan: drById("pplan"),
   paths: () => drList("drpath"),
@@ -9251,13 +9352,51 @@ function ActionBtn({
     s: 14
   }));
 }
+
+// The answer of a "Test" button in a form: busy while the server works on it,
+// then ok / bad / warn with a line, and optionally one line per checked item.
+function CheckResult({
+  r
+}) {
+  if (!r) return null;
+  const col = s => s === "ok" ? "var(--ok)" : s === "bad" ? "var(--bad)" : s === "warn" ? "var(--warn)" : "var(--dim)";
+  const mark = s => s === "ok" ? "✓" : s === "bad" ? "✗" : s === "warn" ? "!" : "…";
+  return /*#__PURE__*/React.createElement("div", {
+    className: "checkres",
+    style: {
+      fontSize: 11,
+      marginTop: 4,
+      color: col(r.status),
+      overflowWrap: "anywhere"
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("b", null, mark(r.status)), " ", r.text), (r.lines || []).map((l, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      color: col(l.status),
+      paddingLeft: 12
+    }
+  }, /*#__PURE__*/React.createElement("b", null, mark(l.status)), " ", l.text)));
+}
+// Runs a check and turns a thrown error into a "bad" answer.
+const runCheck = (fn, set) => {
+  set({
+    status: "busy",
+    text: "checking…"
+  });
+  Promise.resolve().then(fn).then(set, e => set({
+    status: "bad",
+    text: e && e.message || "the check failed"
+  }));
+};
 function Field({
   f,
   val,
-  setVal
+  setVal,
+  vals
 }) {
   const [opts, setOpts] = useState(f.options || null);
   const [loading, setLoading] = useState(!!f.load);
+  const [checks, setChecks] = useState({});
   useEffect(() => {
     if (f.load) f.load().then(o => {
       setOpts(o);
@@ -9277,6 +9416,39 @@ function Field({
     n: "alert",
     s: 12
   }), f.label);
+  if (f.type === "check") {
+    const r = checks.all;
+    return /*#__PURE__*/React.createElement("div", {
+      className: "field"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "flabel"
+    }, f.label), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 8,
+        alignItems: "center",
+        flexWrap: "wrap"
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      className: "btn",
+      disabled: !!(r && r.status === "busy") || f.disabled && f.disabled(vals || {}),
+      onClick: () => runCheck(() => f.run(vals || {}), x => setChecks(c => Object.assign({}, c, {
+        all: x
+      })))
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "play",
+      s: 11
+    }), f.button || "Test"), f.hint && /*#__PURE__*/React.createElement("span", {
+      className: "fhint",
+      style: {
+        marginTop: 0,
+        color: "var(--dim)"
+      }
+    }, f.hint)), /*#__PURE__*/React.createElement(CheckResult, {
+      r: r
+    }));
+  }
   if (f.type === "recipe") return /*#__PURE__*/React.createElement(RecipeField, {
     f: f,
     val: val,
@@ -9338,24 +9510,42 @@ function Field({
   }
   if (f.type === "rows") {
     const rows = val || [];
-    const set = (i, k, x) => setVal(rows.map((r, j) => j === i ? Object.assign({}, r, {
-      [k]: x
-    }) : r));
+    const set = (i, k, x) => {
+      setVal(rows.map((r, j) => j === i ? Object.assign({}, r, {
+        [k]: x
+      }) : r));
+      // an edited row's last answer no longer says anything about it
+      setChecks(c => {
+        const n = Object.assign({}, c);
+        delete n[i];
+        return n;
+      });
+    };
+    const ra = f.rowAction;
     const cell = (r, i, c) => {
       const w = {
         flex: c.flex || 1,
         minWidth: 0
       };
-      if (c.type === "select") return /*#__PURE__*/React.createElement("select", {
-        key: c.k,
-        className: "finput sm",
-        style: w,
-        value: r[c.k] || "",
-        onChange: e => set(i, c.k, e.target.value)
-      }, (c.options || []).map(o => /*#__PURE__*/React.createElement("option", {
-        key: o.v,
-        value: o.v
-      }, o.l)));
+      if (c.type === "select") {
+        const opts = c.options || [];
+        const cur = r[c.k] || "";
+        const known = opts.some(o => o.v === cur);
+        return /*#__PURE__*/React.createElement("select", {
+          key: c.k,
+          className: "finput sm",
+          style: w,
+          value: cur,
+          onChange: e => set(i, c.k, e.target.value)
+        }, c.blank !== undefined && /*#__PURE__*/React.createElement("option", {
+          value: ""
+        }, c.blank), !known && cur && /*#__PURE__*/React.createElement("option", {
+          value: cur
+        }, c.unknown ? c.unknown(cur) : cur), opts.map(o => /*#__PURE__*/React.createElement("option", {
+          key: o.v,
+          value: o.v
+        }, o.l)));
+      }
       return /*#__PURE__*/React.createElement("input", {
         key: c.k,
         className: "finput sm",
@@ -9380,22 +9570,54 @@ function Field({
       style: {
         flex: c.flex || 1
       }
-    }, c.label)), /*#__PURE__*/React.createElement("span", {
+    }, c.label)), ra && /*#__PURE__*/React.createElement("span", {
+      style: {
+        width: 52
+      }
+    }), /*#__PURE__*/React.createElement("span", {
       style: {
         width: 24
       }
-    })), rows.map((r, i) => /*#__PURE__*/React.createElement("div", {
-      className: "schedrow",
+    })), rows.map((r, i) => /*#__PURE__*/React.createElement(React.Fragment, {
       key: i
-    }, f.cols.map(c => cell(r, i, c)), /*#__PURE__*/React.createElement("button", {
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "schedrow"
+    }, f.cols.map(c => cell(r, i, c)), ra && /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      className: "chip rowact",
+      style: {
+        width: 52,
+        justifyContent: "center"
+      },
+      title: ra.title || ra.label,
+      disabled: !!(checks[i] && checks[i].status === "busy"),
+      onClick: () => runCheck(() => ra.run(r, vals || {}), x => setChecks(c => Object.assign({}, c, {
+        [i]: x
+      })))
+    }, ra.label || "Test"), /*#__PURE__*/React.createElement("button", {
       type: "button",
       className: "kebab",
       title: "Remove",
-      onClick: () => setVal(rows.filter((_, j) => j !== i))
+      onClick: () => {
+        setVal(rows.filter((_, j) => j !== i));
+        setChecks({});
+      }
     }, /*#__PURE__*/React.createElement(Icon, {
       n: "x",
       s: 11
-    })))), /*#__PURE__*/React.createElement("button", {
+    }))), checks[i] && /*#__PURE__*/React.createElement("div", {
+      style: {
+        padding: "0 0 4px 2px"
+      }
+    }, /*#__PURE__*/React.createElement(CheckResult, {
+      r: checks[i]
+    })), f.rowError && f.rowError(r, i, rows) && /*#__PURE__*/React.createElement("div", {
+      className: "fhint",
+      style: {
+        color: "var(--bad)",
+        margin: "0 0 4px 2px"
+      }
+    }, f.rowError(r, i, rows)))), /*#__PURE__*/React.createElement("button", {
       type: "button",
       className: "schedadd",
       disabled: f.max && rows.length >= f.max,
@@ -9403,7 +9625,12 @@ function Field({
     }, /*#__PURE__*/React.createElement(Icon, {
       n: "plus",
       s: 11
-    }), f.addLabel || "Add")), f.hint && /*#__PURE__*/React.createElement("span", {
+    }), f.addLabel || "Add")), f.validate && f.validate(val, vals || {}) && /*#__PURE__*/React.createElement("span", {
+      className: "fhint",
+      style: {
+        color: "var(--bad)"
+      }
+    }, f.validate(val, vals || {})), f.hint && /*#__PURE__*/React.createElement("span", {
       className: "fhint"
     }, f.hint));
   }
@@ -9578,6 +9805,7 @@ function Field({
     className: "finput",
     type: f.type === "number" ? "number" : "text",
     min: f.min,
+    maxLength: f.maxLen,
     value: val === undefined ? "" : val,
     placeholder: f.placeholder,
     onChange: e => setVal(e.target.value)
@@ -9586,28 +9814,53 @@ function Field({
     style: {
       color: "var(--bad)"
     }
-  }, "must match \u201C", f.match, "\u201D"));
+  }, "must match \u201C", f.match, "\u201D"), f.validate && f.validate(val, vals || {}) ? /*#__PURE__*/React.createElement("span", {
+    className: "fhint",
+    style: {
+      color: "var(--bad)"
+    }
+  }, f.validate(val, vals || {})) : f.hint && /*#__PURE__*/React.createElement("span", {
+    className: "fhint",
+    style: {
+      color: "var(--dim)"
+    }
+  }, typeof f.hint === "function" ? f.hint(val) : f.hint));
 }
+
+// spec.prepare, when set, loads what the fields need first (the DHCP servers
+// a binding may name, say); the fields are then fields(values, prepared).
 function Dialog({
   spec,
   obj,
   removes,
   onClose
 }) {
-  const resolve = v => typeof spec.fields === "function" ? spec.fields(v) : spec.fields || [];
-  const [vals, setVals] = useState(() => {
+  const [prep, setPrep] = useState(spec.prepare ? null : {});
+  const resolve = (v, p) => typeof spec.fields === "function" ? spec.fields(v, p) : spec.fields || [];
+  const defaults = p => {
     const v = {};
-    resolve({}).forEach(f => {
+    resolve({}, p).forEach(f => {
       if (f.def !== undefined) v[f.k] = f.def;
       if (f.type === "checkbox") v[f.k] = !!f.def;
     });
     return v;
-  });
+  };
+  const [vals, setVals] = useState(() => spec.prepare ? {} : defaults({}));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
-  const allFields = resolve(vals);
+  useEffect(() => {
+    if (!spec.prepare) return;
+    Promise.resolve().then(spec.prepare).then(p => p || {}, e => {
+      setErr(`Could not load the form's choices: ${e && e.message || e}`);
+      return {};
+    }).then(p => {
+      setVals(defaults(p));
+      setPrep(p);
+    });
+  }, []);
+  const allFields = prep ? resolve(vals, prep) : [];
   const fields = allFields.filter(f => f.type !== "note");
-  const invalid = fields.some(f => f.required && (vals[f.k] === undefined || vals[f.k] === "" || Array.isArray(vals[f.k]) && !vals[f.k].length) || f.match && vals[f.k] !== f.match);
+  const invalid = !prep || fields.some(f => f.required && (vals[f.k] === undefined || vals[f.k] === "" || Array.isArray(vals[f.k]) && !vals[f.k].length) || f.match && vals[f.k] !== f.match || f.validate && f.validate(vals[f.k], vals));
   const submit = async () => {
     setBusy(true);
     setErr(null);
@@ -9649,13 +9902,16 @@ function Dialog({
     className: "mbody"
   }, spec.desc && /*#__PURE__*/React.createElement("p", {
     className: "mdesc"
-  }, spec.desc), allFields.map(f => f.type === "note" ? /*#__PURE__*/React.createElement(Field, {
+  }, spec.desc), !prep && /*#__PURE__*/React.createElement("div", {
+    className: "fskel"
+  }), allFields.map(f => f.type === "note" ? /*#__PURE__*/React.createElement(Field, {
     key: f.k || f.label,
     f: f
   }) : /*#__PURE__*/React.createElement(Field, {
     key: f.k,
     f: f,
     val: vals[f.k],
+    vals: vals,
     setVal: v => setVals(s => Object.assign({}, s, {
       [f.k]: v
     }))
@@ -23595,12 +23851,28 @@ const runActionDialog = (target, kind, ctx) => {
         label: "Override reason (10–1024 characters)",
         type: "text",
         required: true,
-        placeholder: "why this action must run despite the verdict"
+        maxLen: OVERRIDE_MAX,
+        placeholder: "why this action must run despite the verdict",
+        validate: overrideError,
+        hint: x => `${(x || "").trim().length} characters; 10 to ${OVERRIDE_MAX}. Kept with the run in the audit record.`
       }, !pathless && verdict === "Degraded" && {
         k: "n2",
         type: "note",
         label: "Readiness is Degraded: only advisory checks failed. The action runs without an override."
-      }, {
+      }, kind === "Restart" && target.kind === "papp" && (target.probes.length ? {
+        k: "ptest",
+        type: "check",
+        label: `Health probes of ${target.name} (${target.probes.map(p => p.name || p.type).join(", ")})`,
+        button: "Test probes now",
+        hint: `dr-agent evaluates them on ${target.currentCluster || "the application's site"} now; the restart waits for the same probes.`,
+        run: () => drhub.probeHealth({
+          app: target
+        }).then(healthAnswer)
+      } : {
+        k: "pnone",
+        type: "note",
+        label: "The application has no health probes: the restart reports it up once its tiers are ready. Add probes under Edit tiers & probes."
+      }), {
         k: "timeout",
         label: "Timeout",
         type: "text",
@@ -23620,6 +23892,15 @@ const runActionDialog = (target, kind, ctx) => {
       timeout: v.timeout && v.timeout.trim()
     })
   };
+};
+const OVERRIDE_MAX = 1024;
+// The API server refuses a reason under 10 characters ("should be at least 10
+// chars long"); said here while typing instead.
+const overrideError = x => {
+  const n = (x || "").trim().length;
+  if (n > 0 && n < 10) return `The reason needs at least 10 characters (${n} so far).`;
+  if (n > OVERRIDE_MAX) return `The reason may have at most ${OVERRIDE_MAX} characters (${n}).`;
+  return null;
 };
 const blockingChecks = (target, path) => {
   const p = target.kind === "rplan" ? {
@@ -23768,7 +24049,9 @@ const METHOD_TYPES = [{
   v: "sync-s3-backup",
   l: "sync + s3-backup"
 }];
-// name=cluster[/zone][@region] entries. Blanks are insignificant anywhere:
+// Sites are entered as rows (site → cluster, zone, region). The one-line
+// form below, name=cluster[/zone][@region]; ..., is still read for a value
+// that arrives as text. Blanks are insignificant anywhere:
 // around "=", "/", "@" and between entries, which may be separated by ";",
 // "," or newlines -- or by blanks alone ("site-a=a site-b=b"). Site, cluster,
 // zone and region names never contain blanks, so all of them are dropped
@@ -23786,6 +24069,126 @@ const parseSites = txt => String(txt || "").replace(/\s*([=/@])\s*/g, "$1").spli
     region
   } : {});
 });
+const SITE_COLS = [{
+  k: "name",
+  label: "Site",
+  placeholder: "site-a",
+  flex: 1
+}, {
+  k: "cluster",
+  label: "Cluster (managed cluster)",
+  placeholder: "same as the site",
+  flex: 1.2
+}, {
+  k: "zone",
+  label: "Zone (sync)",
+  placeholder: "",
+  flex: 0.8
+}, {
+  k: "region",
+  label: "Region",
+  placeholder: "eu-central",
+  flex: 0.8
+}];
+const SITE_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
+const emptySite = () => ({
+  name: "",
+  cluster: "",
+  zone: "",
+  region: ""
+});
+const nb = s => String(s || "").replace(/\s+/g, "");
+const sitesSpec = rows => typeof rows === "string" ? parseSites(rows) : (rows || []).filter(r => nb(r.name) || nb(r.cluster)).map(r => Object.assign({
+  name: nb(r.name),
+  cluster: nb(r.cluster) || nb(r.name)
+}, nb(r.zone) ? {
+  zone: nb(r.zone)
+} : {}, nb(r.region) ? {
+  region: nb(r.region)
+} : {}));
+// Why the declared sites cannot be saved, or null.
+const sitesError = rows => {
+  const sites = sitesSpec(rows);
+  if (!sites.length) return "Declare the plan's sites: one row per site.";
+  const unnamed = sites.filter(s => !s.name).length;
+  if (unnamed) return `${unnamed} row${unnamed > 1 ? "s have" : " has"} a cluster but no site name.`;
+  const bad = sites.filter(s => s.name.length > 63 || !SITE_RE.test(s.name)).map(s => s.name);
+  if (bad.length) return `Not a site name: ${bad.join(", ")}. A site name is a DNS label: lower-case letters, digits and "-", at most 63 characters.`;
+  const dup = sites.map(s => s.name).filter((n, i, a) => a.indexOf(n) !== i);
+  if (dup.length) return `Site ${[...new Set(dup)].join(", ")} is declared twice.`;
+  return null;
+};
+// The S3 store rows name a declared site from a list.
+const s3Cols = siteNames => S3_COLS.map(c => c.k !== "site" ? c : Object.assign({}, c, {
+  type: "select",
+  blank: siteNames.length ? "— site —" : "— declare sites first —",
+  options: siteNames.map(n => ({
+    v: n,
+    l: n
+  })),
+  unknown: v => `${v} (not a site of the plan)`
+}));
+const nextSite = (siteNames, rows) => siteNames.find(n => !(rows || []).some(r => r.site === n)) || "";
+// "Test" on an S3 store row: dr-hub probes the store (list, write, delete)
+// with the row's Secret and answers with the S3 service's own error.
+const s3Answer = st => {
+  const r = st.result || {};
+  if (st.phase === "Passed") return {
+    status: "ok",
+    text: `${r.bucket || "The bucket"} accepts a list, a write and a delete (checked from the DR hub${r.region ? `, region ${r.region}` : ""}).`
+  };
+  if (r.code === "SecretNotFound") return {
+    status: "bad",
+    text: `SecretNotFound: ${r.message}`
+  };
+  if (r.code) return {
+    status: "bad",
+    text: `${r.code}${r.step ? ` on ${r.step}` : ""}: ${r.message || "no message"}`
+  };
+  return {
+    status: "bad",
+    text: st.message || "the probe could not run"
+  };
+};
+const testStoreRow = row => {
+  if (!nb(row.bucket)) throw new Error("Fill in the bucket first.");
+  if (!nb(row.endpoint)) throw new Error("Fill in the endpoint first.");
+  const s = s3Profiles([Object.assign({}, row, {
+    site: nb(row.site) || "probe"
+  })])[0];
+  return drhub.probeS3(Object.assign(s, {
+    site: nb(row.site)
+  })).then(s3Answer);
+};
+const S3_ROW_TEST = {
+  label: "Test",
+  title: "Probe this store from the DR hub: list, write and delete with its Secret",
+  run: testStoreRow
+};
+// "Test probe": dr-agent evaluates health probes on the site, now.
+const healthAnswer = st => {
+  const lines = (st.probes || []).map(p => ({
+    status: p.passed ? "ok" : "bad",
+    text: `${p.name}: ${p.message || (p.passed ? "passed" : "failed")}`
+  }));
+  const where = st.site ? `${st.site} (cluster ${st.cluster})` : st.cluster;
+  if (st.phase === "Error") return {
+    status: "bad",
+    text: st.message || "the probes could not run",
+    lines
+  };
+  const failed = lines.filter(l => l.status === "bad").length;
+  return {
+    status: failed ? "bad" : "ok",
+    text: failed ? `${failed} of ${lines.length} probes fail${where ? ` on ${where}` : ""}` : `${lines.length === 1 ? "The probe passes" : `All ${lines.length} probes pass`}${where ? ` on ${where}` : ""}`,
+    lines
+  };
+};
+const probeRowSpec = row => {
+  const pr = probesSpec([row]);
+  if (!pr.length) throw new Error("Fill in the probe's target first.");
+  return pr;
+};
 // The plan's per-site S3 stores must name every site of the plan: said here
 // with the site that is missing, rather than as the API server's generic
 // "s3Profiles needs a store for every site".
@@ -24005,12 +24408,26 @@ const GNET_COLS = [{
   flex: 0.9
 }, {
   k: "dhcpServerRef",
-  label: "DHCP server (name)",
-  placeholder: "site-a",
+  label: "DHCP server",
   flex: 1.1
 }];
-// The DHCP servers a profile already refers to, offered as the defaults.
-const knownServers = sp => Array.from(new Set([sp.dhcpServerRef].concat((sp.guestNetworks || []).map(g => g.dhcpServerRef)).filter(Boolean)));
+// The guest-network DHCP server is one of the site's registered DHCPServers;
+// a name that is not registered (typed before, or the server was deleted) is
+// kept and flagged: guests on that network get no reservation.
+const gnetCols = servers => GNET_COLS.map(c => c.k !== "dhcpServerRef" ? c : Object.assign({}, c, {
+  type: "select",
+  blank: "— the site's default —",
+  options: servers.map(d => ({
+    v: d.name,
+    l: d.name
+  })),
+  unknown: v => `${v} (not registered)`
+}));
+const srvRef = r => typeof r === "string" ? r : refName2(r);
+// The DHCP servers a profile refers to (site default and per guest network).
+const knownServers = sp => Array.from(new Set([srvRef(sp.dhcpServerRef)].concat((sp.guestNetworks || []).map(g => srvRef(g.dhcpServerRef))).filter(Boolean)));
+// The ones of them no DHCPServer of the site answers to.
+const missingServers = (sp, servers) => knownServers(sp || {}).filter(n => !(servers || []).some(d => d.name === n));
 const lnetRows = sp => (sp.logicalNetworks || []).map(l => ({
   role: l.role || "",
   nad: l.nad || ""
@@ -24049,10 +24466,16 @@ const newPlanDialog = () => ({
     placeholder: "fra"
   }, {
     k: "sites",
-    label: "Sites — one per entry: name=cluster[/zone][@region], separated by ;",
-    type: "text",
+    label: "Sites — the site's name and the managed cluster it is",
+    type: "rows",
+    cols: SITE_COLS,
+    max: 8,
+    addLabel: "Add site",
     required: true,
-    placeholder: "fra-a=cluster-a@eu-central; fra-b=cluster-b@eu-central"
+    def: [emptySite(), emptySite()],
+    add: () => emptySite(),
+    validate: sitesError,
+    hint: "A cross-cluster plan names one cluster per site; a sync plan (stretch cluster) names the same cluster on every site, each with its own zone."
   }, {
     k: "type",
     label: "Replication method",
@@ -24119,17 +24542,18 @@ const newPlanDialog = () => ({
     k: "s3",
     label: "S3 stores — one per site (Ramen's metadata store and Velero's backups)",
     type: "rows",
-    cols: S3_COLS,
+    cols: s3Cols(sitesSpec(v.sites).map(s => s.name).filter(Boolean)),
     max: 8,
     addLabel: "Add store",
+    rowAction: S3_ROW_TEST,
     add: rows => ({
-      site: "",
+      site: nextSite(sitesSpec(v.sites).map(s => s.name).filter(Boolean), rows),
       bucket: "",
       endpoint: rows.length ? rows[rows.length - 1].endpoint : "",
       region: rows.length ? rows[rows.length - 1].region : "",
       secretRef: rows.length ? rows[rows.length - 1].secretRef : ""
     }),
-    hint: "The secret (access key id / secret access key) must exist in Ramen's namespace on the hub. Leave empty to name one existing profile below instead."
+    hint: "The secret (access key id / secret access key) must exist in Ramen's namespace on the hub. Test probes a store from the hub before the plan is saved. Leave empty to name one existing profile below instead."
   }, {
     k: "velero",
     label: "Velero namespace on the sites",
@@ -24166,7 +24590,9 @@ const newPlanDialog = () => ({
     } : {});
     const sc = kvToObj(v.sc);
     const stores = s3Profiles(v.s3);
-    const sites = parseSites(v.sites);
+    const err = sitesError(v.sites);
+    if (err) throw new Error(err);
+    const sites = sitesSpec(v.sites);
     checkStores(sites, stores);
     const spec = Object.assign({
       sites,
@@ -24214,12 +24640,14 @@ const editPlanS3Dialog = p => ({
     k: "s3",
     label: "S3 stores — one per site",
     type: "rows",
-    cols: S3_COLS,
+    cols: s3Cols(p.sites.map(s => s.name)),
     max: 8,
     addLabel: "Add store",
     def: s3Rows(p.s3Profiles),
+    rowAction: S3_ROW_TEST,
+    hint: "Test probes a store from the DR hub (list, write, delete) with its Secret, before saving.",
     add: rows => ({
-      site: "",
+      site: nextSite(p.sites.map(s => s.name), rows),
       bucket: "",
       endpoint: rows.length ? rows[rows.length - 1].endpoint : "",
       region: rows.length ? rows[rows.length - 1].region : "",
@@ -24457,7 +24885,21 @@ const protectAppDialogDR = (plans, cfg) => ({
         target: "",
         timeout: "15s",
         expectStatus: ""
-      })
+      }),
+      hint: "Test runs a probe now, by dr-agent on the source site, against the running application.",
+      rowAction: {
+        label: "Test",
+        title: "dr-agent runs this probe on the source site now",
+        run: (row, fv) => {
+          if (!fv.plan || !fv.source) throw new Error("Choose the plan and the source site first.");
+          return drhub.probeHealth({
+            plan: fv.plan,
+            site: fv.source,
+            namespaces: fv.appKind === "managed" ? [] : csv(fv.namespaces),
+            probes: probeRowSpec(row)
+          }).then(healthAnswer);
+        }
+      }
     }, {
       k: "n1",
       type: "note",
@@ -24542,7 +24984,29 @@ const editTiersDialog = a => ({
       target: "",
       timeout: "15s",
       expectStatus: ""
-    })
+    }),
+    rowAction: {
+      label: "Test",
+      title: "dr-agent runs this probe where the application runs, now",
+      run: row => drhub.probeHealth({
+        app: a,
+        probes: probeRowSpec(row)
+      }).then(healthAnswer)
+    }
+  }, {
+    k: "ptest",
+    type: "check",
+    label: "All probes as edited",
+    button: "Test all probes",
+    hint: `dr-agent evaluates them on ${a.currentCluster || "the application's site"} now; nothing is saved.`,
+    run: v => {
+      const pr = probesSpec(v.probes);
+      if (!pr.length) throw new Error("No probe to test.");
+      return drhub.probeHealth({
+        app: a,
+        probes: pr
+      }).then(healthAnswer);
+    }
   }],
   run: v => drhub.patchApp(a, {
     tiers: tiersSpec(v.tiers),
@@ -24700,41 +25164,64 @@ const editBindingsDialog = s => ({
   confirm: "Save",
   done: "SiteProfile updated",
   desc: "How this site's networks map for recovered VMs (ADR 0020): the NAD each logical role is on here, the guest subnet of each role with the host ids never handed out, and the DHCP server the reservations are rendered to.",
-  fields: [{
-    k: "lnets",
-    label: "Logical networks — role → NAD on this site",
-    type: "rows",
-    cols: LNET_COLS,
-    max: 8,
-    addLabel: "Add network",
-    def: lnetRows(s.spec || {}),
-    add: () => ({
-      role: "app",
-      nad: ""
-    }),
-    hint: s.nads && s.nads.length ? `NADs reported here: ${s.nads.map(n => n.namespace ? `${n.namespace}/${n.name}` : n.name || n).slice(0, 8).join(", ")}` : ""
-  }, {
-    k: "gnets",
-    label: "Guest networks — the subnet of each role here",
-    type: "rows",
-    cols: GNET_COLS,
-    max: 8,
-    addLabel: "Add subnet",
-    def: gnetRows(s.spec || {}),
-    add: () => ({
-      role: "app",
-      cidr: "",
-      reservedHostIDs: "1, 2",
-      dhcpServerRef: knownServers(s.spec || {})[0] || ""
-    }),
-    hint: "The DHCP server is the name of a registered DHCPServer of this site (Disaster recovery → DHCP servers)."
-  }, {
-    k: "dhcp",
-    label: "DHCP server of the site (default for every guest network)",
-    type: "text",
-    def: (s.spec || {}).dhcpServerRef || "",
-    placeholder: knownServers(s.spec || {}).join(", ") || "name of a registered DHCPServer"
-  }],
+  prepare: () => drhub.dhcpServers().then(ds => ({
+    servers: ds.filter(d => d.site === s.name)
+  })),
+  fields: (v, prep) => {
+    const servers = prep && prep.servers || [];
+    const cur = srvRef((s.spec || {}).dhcpServerRef);
+    const unregistered = n => n && !servers.some(d => d.name === n);
+    return [!servers.length && {
+      k: "n0",
+      type: "note",
+      label: `No DHCP server is registered for ${s.name} yet. Register one under Disaster recovery → DHCP servers; until then guest addresses are not reserved on this site.`
+    }, {
+      k: "lnets",
+      label: "Logical networks — role → NAD on this site",
+      type: "rows",
+      cols: LNET_COLS,
+      max: 8,
+      addLabel: "Add network",
+      def: lnetRows(s.spec || {}),
+      add: () => ({
+        role: "app",
+        nad: ""
+      }),
+      hint: s.nads && s.nads.length ? `NADs reported here: ${s.nads.map(n => n.namespace ? `${n.namespace}/${n.name}` : n.name || n).slice(0, 8).join(", ")}` : ""
+    }, {
+      k: "gnets",
+      label: "Guest networks — the subnet of each role here",
+      type: "rows",
+      cols: gnetCols(servers),
+      max: 8,
+      addLabel: "Add subnet",
+      def: gnetRows(s.spec || {}),
+      add: () => ({
+        role: "app",
+        cidr: "",
+        reservedHostIDs: "1, 2",
+        dhcpServerRef: ""
+      }),
+      rowError: r => unregistered(r.dhcpServerRef) ? `DHCP server ${r.dhcpServerRef} is not registered for ${s.name}: guests on ${r.role || "this network"} get no reservation.` : null,
+      hint: `The DHCP servers registered for ${s.name}: ${servers.map(d => d.name).join(", ") || "none"}. Empty uses the site's default below.`
+    }, {
+      k: "dhcp",
+      label: "DHCP server of the site (default for every guest network)",
+      type: "select",
+      def: cur,
+      options: [{
+        v: "",
+        l: "— none —"
+      }].concat(servers.map(d => ({
+        v: d.name,
+        l: `${d.name} (${d.target || d.type})`
+      })), unregistered(cur) ? [{
+        v: cur,
+        l: `${cur} (not registered)`
+      }] : []),
+      validate: x => unregistered(x) ? `DHCP server ${x} is not registered for ${s.name}.` : null
+    }].filter(Boolean);
+  },
   run: v => drhub.patchSiteProfile(s, bindingsSpec(Object.assign({}, v, {
     dhcp: v.dhcp && v.dhcp.trim() ? v.dhcp.trim() : ""
   })))
@@ -27276,7 +27763,12 @@ function SiteProfileDetail({
   }, /*#__PURE__*/React.createElement(Icon, {
     n: "refresh",
     s: 15
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Inventory is rewritten on every scan", s.reportedAt ? `, last ${fmtAgo(s.reportedAt)}` : "", "."), " It is never edited; the bindings in the spec are what a dr-admin sets, and they are written with kubectl in this phase.")), /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Inventory is rewritten on every scan", s.reportedAt ? `, last ${fmtAgo(s.reportedAt)}` : "", "."), " It is never edited; the bindings in the spec are what a dr-admin sets (Actions \u2192 Edit bindings).")), dhcp.data && missingServers(sp, dhcp.data).length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "banner"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "DHCP server ", missingServers(sp, dhcp.data).join(", "), " is not registered for ", s.name, "."), " The bindings name it, so no reservation is rendered for guests on those networks and a move here fails its guest-address check. Choose a registered server under Edit bindings, or register one with that name.")), /*#__PURE__*/React.createElement("div", {
     className: "stats"
   }, /*#__PURE__*/React.createElement(Stat, {
     k: "Nodes ready",
@@ -28049,7 +28541,14 @@ Object.assign(window, {
   newScheduleDialog,
   newDHCPServerDialog,
   ACTION_KIND_META,
-  KIND_LABEL_DR
+  KIND_LABEL_DR,
+  editPlanS3Dialog,
+  editTiersDialog,
+  editBindingsDialog,
+  sitesSpec,
+  sitesError,
+  overrideError,
+  missingServers
 });
 })();
 // ---- details-data.jsx ----

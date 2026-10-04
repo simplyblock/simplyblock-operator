@@ -1417,9 +1417,29 @@ function ActionBtn({obj, big}) {
   );
 }
 
-function Field({f, val, setVal}) {
+// The answer of a "Test" button in a form: busy while the server works on it,
+// then ok / bad / warn with a line, and optionally one line per checked item.
+function CheckResult({r}) {
+  if (!r) return null;
+  const col = s => s === "ok" ? "var(--ok)" : s === "bad" ? "var(--bad)" : s === "warn" ? "var(--warn)" : "var(--dim)";
+  const mark = s => s === "ok" ? "✓" : s === "bad" ? "✗" : s === "warn" ? "!" : "…";
+  return (
+    <div className="checkres" style={{fontSize: 11, marginTop: 4, color: col(r.status), overflowWrap: "anywhere"}}>
+      <div><b>{mark(r.status)}</b> {r.text}</div>
+      {(r.lines || []).map((l, i) => <div key={i} style={{color: col(l.status), paddingLeft: 12}}><b>{mark(l.status)}</b> {l.text}</div>)}
+    </div>
+  );
+}
+// Runs a check and turns a thrown error into a "bad" answer.
+const runCheck = (fn, set) => {
+  set({status: "busy", text: "checking…"});
+  Promise.resolve().then(fn).then(set, e => set({status: "bad", text: (e && e.message) || "the check failed"}));
+};
+
+function Field({f, val, setVal, vals}) {
   const [opts, setOpts] = useState(f.options || null);
   const [loading, setLoading] = useState(!!f.load);
+  const [checks, setChecks] = useState({});
   useEffect(() => {
     if (f.load) f.load().then(o => { setOpts(o); setLoading(false); if (o.length && f.type !== "multiselect" && (val === undefined || val === "")) setVal(o[0].v); }).catch(() => setLoading(false));
     else if (f.options && f.options.length && f.type !== "multiselect" && val === undefined) setVal(f.options[0].v);
@@ -1431,6 +1451,21 @@ function Field({f, val, setVal}) {
     if (f.options.length && !f.options.some(o => o.v === val)) setVal(f.options[0].v);
   }, [f.options && f.options.map(o => o.v).join("|")]);
   if (f.type === "note") return <div className="fnote"><Icon n="alert" s={12} />{f.label}</div>;
+  if (f.type === "check") {
+    const r = checks.all;
+    return (
+      <div className="field">
+        <span className="flabel">{f.label}</span>
+        <div style={{display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap"}}>
+          <button type="button" className="btn" disabled={!!(r && r.status === "busy") || (f.disabled && f.disabled(vals || {}))}
+            onClick={() => runCheck(() => f.run(vals || {}), x => setChecks(c => Object.assign({}, c, {all: x})))}>
+            <Icon n="play" s={11} />{f.button || "Test"}</button>
+          {f.hint && <span className="fhint" style={{marginTop: 0, color: "var(--dim)"}}>{f.hint}</span>}
+        </div>
+        <CheckResult r={r} />
+      </div>
+    );
+  }
   if (f.type === "recipe") return <RecipeField f={f} val={val} setVal={setVal} />;
   if (f.type === "members") return <MembersField f={f} val={val} setVal={setVal} />;
   if (f.type === "kv") {
@@ -1457,27 +1492,47 @@ function Field({f, val, setVal}) {
   }
   if (f.type === "rows") {
     const rows = val || [];
-    const set = (i, k, x) => setVal(rows.map((r, j) => j === i ? Object.assign({}, r, {[k]: x}) : r));
+    const set = (i, k, x) => {
+      setVal(rows.map((r, j) => j === i ? Object.assign({}, r, {[k]: x}) : r));
+      // an edited row's last answer no longer says anything about it
+      setChecks(c => { const n = Object.assign({}, c); delete n[i]; return n; });
+    };
+    const ra = f.rowAction;
     const cell = (r, i, c) => {
       const w = {flex: c.flex || 1, minWidth: 0};
-      if (c.type === "select") return <select key={c.k} className="finput sm" style={w} value={r[c.k] || ""} onChange={e => set(i, c.k, e.target.value)}>
-        {(c.options || []).map(o => <option key={o.v} value={o.v}>{o.l}</option>)}</select>;
+      if (c.type === "select") {
+        const opts = c.options || [];
+        const cur = r[c.k] || "";
+        const known = opts.some(o => o.v === cur);
+        return <select key={c.k} className="finput sm" style={w} value={cur} onChange={e => set(i, c.k, e.target.value)}>
+          {c.blank !== undefined && <option value="">{c.blank}</option>}
+          {!known && cur && <option value={cur}>{c.unknown ? c.unknown(cur) : cur}</option>}
+          {opts.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}</select>;
+      }
       return <input key={c.k} className="finput sm" style={w} type={c.type === "number" ? "number" : "text"} placeholder={c.placeholder || ""} value={r[c.k] == null ? "" : r[c.k]} onChange={e => set(i, c.k, e.target.value)} />;
     };
     return (
       <label className="field">
         <span className="flabel">{f.label} <em>({rows.length}{f.max ? ` of ${f.max}` : ""})</em></span>
         <div className="schedbox">
-          <div className="schedrow head">{f.cols.map(c => <span key={c.k} className="sl" style={{flex: c.flex || 1}}>{c.label}</span>)}<span style={{width: 24}}></span></div>
+          <div className="schedrow head">{f.cols.map(c => <span key={c.k} className="sl" style={{flex: c.flex || 1}}>{c.label}</span>)}{ra && <span style={{width: 52}}></span>}<span style={{width: 24}}></span></div>
           {rows.map((r, i) => (
-            <div className="schedrow" key={i}>
-              {f.cols.map(c => cell(r, i, c))}
-              <button type="button" className="kebab" title="Remove" onClick={() => setVal(rows.filter((_, j) => j !== i))}><Icon n="x" s={11} /></button>
-            </div>
+            <React.Fragment key={i}>
+              <div className="schedrow">
+                {f.cols.map(c => cell(r, i, c))}
+                {ra && <button type="button" className="chip rowact" style={{width: 52, justifyContent: "center"}} title={ra.title || ra.label}
+                  disabled={!!(checks[i] && checks[i].status === "busy")}
+                  onClick={() => runCheck(() => ra.run(r, vals || {}), x => setChecks(c => Object.assign({}, c, {[i]: x})))}>{ra.label || "Test"}</button>}
+                <button type="button" className="kebab" title="Remove" onClick={() => { setVal(rows.filter((_, j) => j !== i)); setChecks({}); }}><Icon n="x" s={11} /></button>
+              </div>
+              {checks[i] && <div style={{padding: "0 0 4px 2px"}}><CheckResult r={checks[i]} /></div>}
+              {f.rowError && f.rowError(r, i, rows) && <div className="fhint" style={{color: "var(--bad)", margin: "0 0 4px 2px"}}>{f.rowError(r, i, rows)}</div>}
+            </React.Fragment>
           ))}
           <button type="button" className="schedadd" disabled={f.max && rows.length >= f.max} onClick={() => setVal(rows.concat(f.add ? f.add(rows) : {}))}>
             <Icon n="plus" s={11} />{f.addLabel || "Add"}</button>
         </div>
+        {f.validate && f.validate(val, vals || {}) && <span className="fhint" style={{color: "var(--bad)"}}>{f.validate(val, vals || {})}</span>}
         {f.hint && <span className="fhint">{f.hint}</span>}
       </label>
     );
@@ -1561,25 +1616,38 @@ function Field({f, val, setVal}) {
       ) : f.type === "checkbox" ? (
         <button type="button" className={"toggle" + (val ? " on" : "")} onClick={() => setVal(!val)}><i></i></button>
       ) : (
-        <input className="finput" type={f.type === "number" ? "number" : "text"} min={f.min} value={val === undefined ? "" : val}
+        <input className="finput" type={f.type === "number" ? "number" : "text"} min={f.min} maxLength={f.maxLen} value={val === undefined ? "" : val}
           placeholder={f.placeholder} onChange={e => setVal(e.target.value)} />
       )}
       {f.match && val && val !== f.match && <span className="fhint" style={{color: "var(--bad)"}}>must match “{f.match}”</span>}
+      {f.validate && f.validate(val, vals || {})
+        ? <span className="fhint" style={{color: "var(--bad)"}}>{f.validate(val, vals || {})}</span>
+        : f.hint && <span className="fhint" style={{color: "var(--dim)"}}>{typeof f.hint === "function" ? f.hint(val) : f.hint}</span>}
     </label>
   );
 }
 
+// spec.prepare, when set, loads what the fields need first (the DHCP servers
+// a binding may name, say); the fields are then fields(values, prepared).
 function Dialog({spec, obj, removes, onClose}) {
-  const resolve = v => typeof spec.fields === "function" ? spec.fields(v) : (spec.fields || []);
-  const [vals, setVals] = useState(() => {
-    const v = {}; resolve({}).forEach(f => { if (f.def !== undefined) v[f.k] = f.def; if (f.type === "checkbox") v[f.k] = !!f.def; });
+  const [prep, setPrep] = useState(spec.prepare ? null : {});
+  const resolve = (v, p) => typeof spec.fields === "function" ? spec.fields(v, p) : (spec.fields || []);
+  const defaults = p => {
+    const v = {}; resolve({}, p).forEach(f => { if (f.def !== undefined) v[f.k] = f.def; if (f.type === "checkbox") v[f.k] = !!f.def; });
     return v;
-  });
+  };
+  const [vals, setVals] = useState(() => spec.prepare ? {} : defaults({}));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
-  const allFields = resolve(vals);
+  useEffect(() => {
+    if (!spec.prepare) return;
+    Promise.resolve().then(spec.prepare).then(p => p || {}, e => { setErr(`Could not load the form's choices: ${(e && e.message) || e}`); return {}; })
+      .then(p => { setVals(defaults(p)); setPrep(p); });
+  }, []);
+  const allFields = prep ? resolve(vals, prep) : [];
   const fields = allFields.filter(f => f.type !== "note");
-  const invalid = fields.some(f => (f.required && (vals[f.k] === undefined || vals[f.k] === "" || (Array.isArray(vals[f.k]) && !vals[f.k].length))) || (f.match && vals[f.k] !== f.match));
+  const invalid = !prep || fields.some(f => (f.required && (vals[f.k] === undefined || vals[f.k] === "" || (Array.isArray(vals[f.k]) && !vals[f.k].length)))
+    || (f.match && vals[f.k] !== f.match) || (f.validate && f.validate(vals[f.k], vals)));
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
@@ -1602,9 +1670,10 @@ function Dialog({spec, obj, removes, onClose}) {
         </div>
         <div className="mbody">
           {spec.desc && <p className="mdesc">{spec.desc}</p>}
+          {!prep && <div className="fskel"></div>}
           {allFields.map(f => f.type === "note"
             ? <Field key={f.k || f.label} f={f} />
-            : <Field key={f.k} f={f} val={vals[f.k]} setVal={v => setVals(s => Object.assign({}, s, {[f.k]: v}))} />)}
+            : <Field key={f.k} f={f} val={vals[f.k]} vals={vals} setVal={v => setVals(s => Object.assign({}, s, {[f.k]: v}))} />)}
           {err && <div className="banner" style={{marginTop: 10, marginBottom: 0}}><Icon n="alert" s={14} />{err}</div>}
         </div>
         <div className="mfoot">
