@@ -144,6 +144,11 @@ rules:
   - apiGroups: ["sitemap.simplyblock.io"]
     resources: ["dhcpservers"]
     verbs: ["create", "update", "patch", "delete"]
+  # Site profile bindings (logical and guest networks, the DHCP server) are
+  # edited in the console; dr-hub creates and deletes the profiles themselves.
+  - apiGroups: ["sitemap.simplyblock.io"]
+    resources: ["siteprofiles"]
+    verbs: ["update", "patch"]
   # a managed site's storage deployment is requested, sized and approved
   # from the hub console (StorageSiteDeployment, carried to the site by OCM)
   - apiGroups: ["storage.simplyblock.io"]
