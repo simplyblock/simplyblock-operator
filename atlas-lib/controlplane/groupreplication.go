@@ -6,6 +6,7 @@
 package controlplane
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -171,4 +172,72 @@ func derefInt(p *int) int {
 		return 0
 	}
 	return *p
+}
+
+// GroupResolution is where a consistency group's data lives now, keyed by the
+// handles its PersistentVolumes keep (sbcli GET
+// /consistency-groups/{id}/replication/resolution).
+type GroupResolution struct {
+	// Active is the group holding live members: the group itself while it has
+	// any, else its peer group of the same name on another cluster. Nil when no
+	// group holds a live member.
+	Active *lvol.GroupHandle
+	// Members has one entry per protected volume with a live volume at the end
+	// of its lineage: Origin is the handle its PV carries, Active the volume
+	// serving the data now.
+	Members []GroupMemberResolution
+	// Legacy reports a control plane without the resolution endpoint (404): the
+	// caller then treats the group as live where it is, as before.
+	Legacy bool
+}
+
+// GroupMemberResolution maps one PV handle to the volume serving its data.
+type GroupMemberResolution struct {
+	Origin lvol.VolumeHandle
+	Active lvol.VolumeHandle
+}
+
+// ResolveGroup resolves a group handle to where the group's data lives now.
+//
+// A VolumeGroupReplication keeps its original group handle across a relocate,
+// while the group it names is emptied by design (its demoted members are
+// deleted so a relocate back stays possible) and the data moves to the peer
+// group as clones. The group verbs resolve the handle here, the group analogue
+// of the per-volume relationship chain (2026-10-04: WordPress's VRG waited for
+// destination info for ever against the emptied source group).
+func (c *Client) ResolveGroup(ctx context.Context, gh lvol.GroupHandle) (GroupResolution, error) {
+	cluster, group, err := groupIDs(gh)
+	if err != nil {
+		return GroupResolution{}, err
+	}
+	resp, err := c.api.ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGetWithResponse(
+		ctx, cluster, group)
+	if err != nil {
+		return GroupResolution{}, fmt.Errorf("resolve group %s: %w", gh.Handle(), err)
+	}
+	if resp.StatusCode() == http.StatusNotFound && resp.JSON200 == nil && !groupNotFound(resp.Body) {
+		return GroupResolution{Active: &gh, Legacy: true}, nil
+	}
+	d, err := payload("resolve group "+string(gh.Handle()), resp.JSON200, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return GroupResolution{}, err
+	}
+	out := GroupResolution{}
+	if d.ActiveGroupId != nil && *d.ActiveGroupId != "" && d.ActiveClusterId != nil && *d.ActiveClusterId != "" {
+		out.Active = &lvol.GroupHandle{ClusterID: *d.ActiveClusterId, GroupID: *d.ActiveGroupId}
+	}
+	if d.Members != nil {
+		for _, m := range *d.Members {
+			out.Members = append(out.Members, GroupMemberResolution{
+				Origin: lvol.VolumeHandle(m.OriginHandle), Active: lvol.VolumeHandle(m.ActiveHandle)})
+		}
+	}
+	return out, nil
+}
+
+// groupNotFound tells the group-level 404 ("ConsistencyGroup <id> not found",
+// the resource dependency's answer) from a route-level 404 (FastAPI's
+// {"detail":"Not Found"} on a control plane that predates the endpoint).
+func groupNotFound(body []byte) bool {
+	return bytes.Contains(bytes.ToLower(body), []byte("consistencygroup"))
 }

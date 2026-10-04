@@ -8133,6 +8133,65 @@
           }
         }
       }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/resolution": {
+      "get": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Replication:Resolution",
+        "description": "Where the group's data lives now, keyed by the handles its PVs keep.\n\nAfter a relocate the group a VGR names is empty -- its demoted members were\ndeleted so the way back stays open -- and its data lives in the peer group of\nthe same name. The CSI driver resolves the VGR's original group handle here:\nthe group holding live members, and each protected volume's original handle\nwith the volume serving it now (2026-10-04: WordPress's VRG waited for\ndestination info for ever against the emptied source group). Never a 404\nfor an existing group: ``active_group_id`` is empty when nothing serves it.",
+        "operationId": "clusters_consistency_groups_replication_resolution_api_v2_clusters__cluster_id__consistency_groups__group_id__replication_resolution_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsistencyGroupResolutionDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -12422,6 +12481,62 @@
           "spdk_image"
         ],
         "title": "_UpdateParams"
+      },
+      "ConsistencyGroupResolutionDTO": {
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "title": "Cluster Id"
+          },
+          "group_id": {
+            "type": "string",
+            "title": "Group Id"
+          },
+          "active_cluster_id": {
+            "type": "string",
+            "title": "Active Cluster Id",
+            "default": ""
+          },
+          "active_group_id": {
+            "type": "string",
+            "title": "Active Group Id",
+            "default": ""
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/ConsistencyGroupLineageMemberDTO"
+            },
+            "type": "array",
+            "title": "Members",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "cluster_id",
+          "group_id"
+        ],
+        "title": "ConsistencyGroupResolutionDTO",
+        "description": "Where a consistency group's data lives now (replication_policy_controller.\nresolve_group). ``active_*`` are empty when no group holds a live member."
+      },
+      "ConsistencyGroupLineageMemberDTO": {
+        "properties": {
+          "origin_handle": {
+            "type": "string",
+            "title": "Origin Handle"
+          },
+          "active_handle": {
+            "type": "string",
+            "title": "Active Handle"
+          }
+        },
+        "type": "object",
+        "required": [
+          "origin_handle",
+          "active_handle"
+        ],
+        "title": "ConsistencyGroupLineageMemberDTO",
+        "description": "One protected volume of a consistency group: the handle its\nPersistentVolume carries and the volume serving its data now."
       }
     },
     "securitySchemes": {

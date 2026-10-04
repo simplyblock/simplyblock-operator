@@ -2,11 +2,13 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/csi-addons/spec/lib/go/replication"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/csi-driver/internal/clusters"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
@@ -68,6 +70,33 @@ func (cs *Server) GetReplicationDestinationInfo(
 	}, nil
 }
 
+// groupPVHandles is every handle a PersistentVolume of the group carries. It
+// is resolved by the control plane (ResolveGroup): after a relocate the group a
+// VGR names is empty -- its demoted members were deleted so a relocate back
+// stays possible -- while its PVs keep their original handles, and listing the
+// empty group left Ramen's VRG waiting for destination info for ever
+// (2026-10-04, WordPress A -> B). The handles are the lineages' origins, the
+// keys csi-addons matches; each maps to itself, the contract above. A control
+// plane without the resolution endpoint is asked for the current members as
+// before.
+func groupPVHandles(ctx context.Context, client *atlascp.Client, gh lvol.GroupHandle) ([]lvol.VolumeHandle, error) {
+	res, err := client.ResolveGroup(ctx, gh)
+	if err != nil {
+		return nil, err
+	}
+	if res.Legacy {
+		return client.ConsistencyGroupMemberHandles(ctx, gh)
+	}
+	if len(res.Members) == 0 {
+		return nil, fmt.Errorf("consistency group %s has no live member", gh.Handle())
+	}
+	handles := make([]lvol.VolumeHandle, 0, len(res.Members))
+	for _, m := range res.Members {
+		handles = append(handles, m.Origin)
+	}
+	return handles, nil
+}
+
 // groupDestinationInfo is the group branch: the group's own handle, and a
 // complete source -> destination map over the group's current members (the spec
 // forbids a partial map). The keys are the members' volume handles exactly as
@@ -84,7 +113,7 @@ func groupDestinationInfo(
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	members, err := client.ConsistencyGroupMemberHandles(ctx, gh)
+	members, err := groupPVHandles(ctx, client, gh)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "members of %s: %v", groupID, err)
 	}

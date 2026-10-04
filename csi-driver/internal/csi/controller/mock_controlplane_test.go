@@ -162,6 +162,12 @@ type mockSBCLI struct {
 	// call landed on, so a test can assert the relationship resolution
 	// redirected it -- the same capture handleFailover keeps for promote.
 	lastFailbackVolumeID string
+
+	// groupResolution, keyed by group id, is the body GET
+	// .../consistency-groups/{id}/replication/resolution serves. Absent means
+	// a control plane that predates the endpoint (a route-level 404), so the
+	// driver keeps its pre-resolution behaviour.
+	groupResolution map[string]map[string]any
 }
 
 func newMockSBCLI() *mockSBCLI {
@@ -171,6 +177,7 @@ func newMockSBCLI() *mockSBCLI {
 		groups:                  make(map[string]*mockGroup),
 		replicationStatus:       make(map[string]map[string]any),
 		replicationRelationship: make(map[string]map[string]any),
+		groupResolution:         make(map[string]map[string]any),
 	}
 
 	mux := http.NewServeMux()
@@ -261,6 +268,10 @@ func newMockSBCLI() *mockSBCLI {
 	mux.HandleFunc(
 		"GET /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/replication/status",
 		m.locked(m.handleGroupReplicationStatus),
+	)
+	mux.HandleFunc(
+		"GET /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/replication/resolution",
+		m.locked(m.handleGroupResolution),
 	)
 	mux.HandleFunc(
 		"POST /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/snapshots",
@@ -773,6 +784,15 @@ func (m *mockSBCLI) handleGroupReplicationStatus(w http.ResponseWriter, r *http.
 		out["last_replicated_at"] = time.Unix(g.LastReplicatedAt, 0).UTC().Format(time.RFC3339)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (m *mockSBCLI) handleGroupResolution(w http.ResponseWriter, r *http.Request) {
+	body, ok := m.groupResolution[r.PathValue("groupID")]
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "Not Found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (m *mockSBCLI) handleGroupMembers(w http.ResponseWriter, r *http.Request) {
