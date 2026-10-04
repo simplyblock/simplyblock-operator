@@ -11,6 +11,8 @@ const ACTION_KIND_META = {
   Failover: {label: "Failover", icon: "shield", c: "var(--bad)", desc: "Unplanned move: the target takes over from the last replicated state. The source is assumed lost or fenced."},
   Relocate: {label: "Relocate", icon: "move", c: "var(--info)", desc: "Planned move: the application is stopped at the source, replication drains, the target starts. Failback is a Relocate along the opposite path."},
   Restart: {label: "Restart", icon: "refresh", c: "var(--warn)", desc: "Restart in place after a storage recovery. No path: the application stays where it is."},
+  Resume: {label: "Resume", icon: "play", c: "var(--info)", desc: "Follow the move Ramen is still carrying out to its end: no new Ramen action, the blocking error in the journal, the target's probes once Ramen finishes. Use it after fixing what blocked the move."},
+  Revert: {label: "Revert", icon: "swap", c: "var(--warn)", desc: "Point the move back at the site it started from: Ramen demotes the half-restored target and promotes the source again. Only while the target was never placed."},
   Test: {label: "Test", icon: "camera", c: "var(--accent)", desc: "Rehearsal in an isolated bubble on the target, from the latest replicated snapshot. Production is untouched."}
 };
 const VerdictBadge = ({v, sm}) => <TrafficLight status={v || "Unknown"} sm={sm} />;
@@ -78,14 +80,19 @@ const runActionDialog = (target, kind, ctx) => {
     done: `${m.label} submitted — RecoveryAction created`,
     desc: m.desc,
     fields: v => {
-      const verdict = kind === "Restart" ? "Ready" : verdictOf(v.path);
+      const pathless = PATHLESS_KINDS.includes(kind);
+      const verdict = pathless ? "Ready" : verdictOf(v.path);
+      const mv = target.move;
       return [
-        kind !== "Restart" && {k: "path", label: "DR path", type: "select", required: true,
+        mv && (kind === "Resume" || kind === "Revert") && {k: "nm", type: "note", label: `${mv.action} ${mv.from} → ${mv.to}, ${mv.phase === "Stuck" ? "stuck" : "in progress"}${mv.progression ? ` (Ramen: ${mv.progression})` : ""}${mv.blocking ? `. Blocked by: ${mv.blocking}` : ""}.`},
+        mv && kind === "Revert" && {k: "nr", type: "note", label: `Ramen relocates the application back to ${mv.from} along the declared path ${mv.to} → ${mv.from}. Nothing ran on ${mv.to}, so nothing written there is lost.`},
+        mv && kind === "Resume" && {k: "nu", type: "note", label: `No new Ramen action: the run waits for Ramen to finish the move to ${mv.to}, then checks the application's probes there. Fix what blocks the move first, or the run times out like the move did.`},
+        !pathless && {k: "path", label: "DR path", type: "select", required: true,
           options: paths.map(p => { const pp = target.kind === "papp" ? target.paths.find(x => x.name === p) : null; return {v: p, l: pp ? `${p}  (${pp.from} → ${pp.to}, ${pp.verdict})` : p}; }),
           empty: `No declared DRPath offers ${m.label} for this ${target.kind === "rplan" ? "plan" : "application"}. Declaring a direction is a dr-admin decision, not an override.`},
-        kind !== "Restart" && verdict === "NotReady" && {k: "n1", type: "note", label: `Readiness on this path is NotReady: ${blockingChecks(target, v.path).join(", ") || "blocking checks failed"}. Running anyway needs a reason and the "override" verb on recoveryactions (dr-admin). The run is audited with the reason.`},
-        kind !== "Restart" && verdict === "NotReady" && {k: "override", label: "Override reason (10–1024 characters)", type: "text", required: true, placeholder: "why this action must run despite the verdict"},
-        kind !== "Restart" && verdict === "Degraded" && {k: "n2", type: "note", label: "Readiness is Degraded: only advisory checks failed. The action runs without an override."},
+        !pathless && verdict === "NotReady" && {k: "n1", type: "note", label: `Readiness on this path is NotReady: ${blockingChecks(target, v.path).join(", ") || "blocking checks failed"}. Running anyway needs a reason and the "override" verb on recoveryactions (dr-admin). The run is audited with the reason.`},
+        !pathless && verdict === "NotReady" && {k: "override", label: "Override reason (10–1024 characters)", type: "text", required: true, placeholder: "why this action must run despite the verdict"},
+        !pathless && verdict === "Degraded" && {k: "n2", type: "note", label: "Readiness is Degraded: only advisory checks failed. The action runs without an override."},
         {k: "timeout", label: "Timeout", type: "text", def: "30m", placeholder: "30m"},
         opposite && {k: "n3", type: "note", label: `The application currently runs on ${target.currentCluster}. A Relocate along a path whose target is the current cluster is refused by the hub.`}
       ].filter(Boolean);
@@ -524,6 +531,9 @@ Object.assign(ACTIONS, {
     {label: "Failover", icon: "shield", op: "failover", danger: true, dialog: runActionDialog(a, "Failover"), disabled: !a.paths.some(p => p.actions.includes("Failover")), hint: "No declared path allows Failover"},
     {label: "Relocate", icon: "move", op: "relocate", dialog: runActionDialog(a, "Relocate"), disabled: !a.paths.some(p => p.actions.includes("Relocate")), hint: "No declared path allows Relocate"},
     {label: "Restart in place", icon: "refresh", op: "restart", dialog: runActionDialog(a, "Restart")},
+    {label: "Resume move", icon: "play", op: "relocate", dialog: runActionDialog(a, "Resume"), disabled: !a.move, hint: "No move is in progress"},
+    {label: a.move ? `Revert to ${a.move.from}` : "Revert move", icon: "swap", op: "relocate", dialog: runActionDialog(a, "Revert"),
+      disabled: !(a.move && a.move.revertible), hint: a.move ? (a.move.revertBlocked || "This move cannot be reverted") : "No move is in progress"},
     {label: "Test", icon: "camera", op: "test", dialog: runTestDialog(a), disabled: !a.paths.some(p => p.actions.includes("Test")), hint: "No declared path allows Test"},
     {label: "Schedule tests", icon: "clock", op: "create", dialog: newScheduleDialog(a), disabled: !a.paths.some(p => p.actions.includes("Test")), hint: "No declared path allows Test"},
     {label: "Restore from backup", icon: "cloud", op: "drrestore", dialog: restoreDialog(a)},
@@ -1001,7 +1011,12 @@ function PAppDetail({o: a, nav}) {
         badge={<><span className="badge">{a.appKind}</span>{a.method && <span className="badge">{a.method}</span>}{a.protected === false && <span className="badge" style={{color: "var(--bad)"}}>not protected</span>}</>} />
       {!!running.length && <div className="banner" style={{color: "var(--info)", borderColor: "color-mix(in srgb,var(--info) 35%,transparent)", background: "color-mix(in srgb,var(--info) 8%,var(--panel))"}}><Icon n="refresh" s={15} />
         <span><b>{running.length} run{running.length === 1 ? "" : "s"} in progress:</b> {running.map(r => <Ref key={r.id} label={`${r.action || "Test"} ${r.name}`} onClick={() => nav.detail(r)} />)}</span></div>}
-      {a.verdict === "NotReady" && <div className="banner"><Icon n="alert" s={15} /><span><b>Not ready on the path it can move along.</b> The run-action controls need an override with a reason on that path; the failing checks are listed under Readiness.</span></div>}
+      {a.move && <div className={"banner" + (a.move.phase === "Stuck" ? "" : " info")}><Icon n={a.move.phase === "Stuck" ? "alert" : "move"} s={15} /><span>
+        <b>{a.move.action} {a.move.from} → {a.move.to} {a.move.phase === "Stuck" ? "is stuck" : "in progress"}{a.move.since ? ` since ${fmtAgo(a.move.since)}` : ""}.</b>
+        {a.move.blocking ? <> Ramen reports: <Mono>{a.move.blocking}</Mono>.</> : a.move.progression ? ` Ramen: ${a.move.progression}.` : ""}
+        {a.move.phase === "Stuck" && <> Use ⋮ → <b>Resume move</b> once its cause is fixed{a.move.revertible ? <>, or <b>Revert to {a.move.from}</b></> : <> — it cannot be reverted: {a.move.revertBlocked}</>}.</>}
+      </span></div>}
+      {!a.move && a.verdict === "NotReady" && <div className="banner"><Icon n="alert" s={15} /><span><b>Not ready on the path it can move along.</b> The run-action controls need an override with a reason on that path; the failing checks are listed under Readiness.</span></div>}
       {a.awaitingRestore && <div className="banner" style={{color: "var(--warn)", borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)", background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"}}><Icon n="cloud" s={15} /><span><b>Awaiting restore.</b> The DR state was restored onto a rebuilt site; the volumes come back from the newest S3 capture when a dr-admin creates a RestoreAction.</span></div>}
       {a.siteMapping === "Open" && tab !== "mapping" && <div className="banner" style={{color: "var(--warn)", borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)", background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"}}><Icon n="link" s={15} /><span><b>Site mapping open: {a.counts.openFindings} VM network or guest address cannot be carried to a target.</b> <Ref label="See the findings" onClick={() => setTab("mapping")} /></span></div>}
       <div className="stats">

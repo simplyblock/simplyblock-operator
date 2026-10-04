@@ -3632,6 +3632,9 @@ const splitRef = s => {
 // A reference is a plain name (DRPath/ProtectedApplication planRef, every
 // pathRef) or a LocalRef object ({name}): both read as the name.
 const refName = r => typeof r === "string" ? r : r && r.name || "";
+// Kinds that name an application and no path: Restart acts where it runs,
+// Resume and Revert on the move Ramen is still carrying out.
+const PATHLESS_KINDS = ["Restart", "Resume", "Revert"];
 const worstVerdict = vs => vs.reduce((w, v) => (VERDICT_RANK[v] || 0) > (VERDICT_RANK[w] || 0) ? v : w, vs[0] || "Unknown");
 const isSyncType = t => /^sync/.test(t || "");
 const durMs = (a, b) => a && b ? Math.max(0, Date.parse(b) - Date.parse(a)) : a ? Math.max(0, Date.now() - Date.parse(a)) : null;
@@ -3786,6 +3789,19 @@ function normPApp(o) {
     drPolicy: st.drPolicy || "",
     zoneBinding: st.zoneBinding || "",
     currentCluster: st.currentCluster || "",
+    // a Relocate or Failover Ramen is still carrying out (dr-hub status.move);
+    // Resume and Revert act on it
+    move: st.move ? {
+      action: st.move.action || "",
+      from: st.move.from || "",
+      to: st.move.to || "",
+      phase: st.move.phase || "InProgress",
+      since: st.move.since || null,
+      progression: st.move.progression || "",
+      blocking: st.move.blocking || "",
+      revertible: !!st.move.revertible,
+      revertBlocked: st.move.revertBlocked || ""
+    } : null,
     paths,
     siteMapping: st.siteMapping || "Unknown",
     recipe: st.recipe || null,
@@ -4266,7 +4282,7 @@ const drhub = {
     },
     spec: Object.assign({
       kind
-    }, kind !== "Restart" && path ? {
+    }, !PATHLESS_KINDS.includes(kind) && path ? {
       pathRef: path
     } : {}, target.kind === "rplan" ? {
       planRef: {
@@ -4579,6 +4595,7 @@ Object.assign(GETTER, {
 });
 Object.assign(window, {
   drhub,
+  PATHLESS_KINDS,
   DR_KINDS,
   DR_ANN,
   VERDICT_RANK,
@@ -23261,6 +23278,18 @@ const ACTION_KIND_META = {
     c: "var(--warn)",
     desc: "Restart in place after a storage recovery. No path: the application stays where it is."
   },
+  Resume: {
+    label: "Resume",
+    icon: "play",
+    c: "var(--info)",
+    desc: "Follow the move Ramen is still carrying out to its end: no new Ramen action, the blocking error in the journal, the target's probes once Ramen finishes. Use it after fixing what blocked the move."
+  },
+  Revert: {
+    label: "Revert",
+    icon: "swap",
+    c: "var(--warn)",
+    desc: "Point the move back at the site it started from: Ramen demotes the half-restored target and promotes the source again. Only while the target was never placed."
+  },
   Test: {
     label: "Test",
     icon: "camera",
@@ -23529,8 +23558,22 @@ const runActionDialog = (target, kind, ctx) => {
     done: `${m.label} submitted — RecoveryAction created`,
     desc: m.desc,
     fields: v => {
-      const verdict = kind === "Restart" ? "Ready" : verdictOf(v.path);
-      return [kind !== "Restart" && {
+      const pathless = PATHLESS_KINDS.includes(kind);
+      const verdict = pathless ? "Ready" : verdictOf(v.path);
+      const mv = target.move;
+      return [mv && (kind === "Resume" || kind === "Revert") && {
+        k: "nm",
+        type: "note",
+        label: `${mv.action} ${mv.from} → ${mv.to}, ${mv.phase === "Stuck" ? "stuck" : "in progress"}${mv.progression ? ` (Ramen: ${mv.progression})` : ""}${mv.blocking ? `. Blocked by: ${mv.blocking}` : ""}.`
+      }, mv && kind === "Revert" && {
+        k: "nr",
+        type: "note",
+        label: `Ramen relocates the application back to ${mv.from} along the declared path ${mv.to} → ${mv.from}. Nothing ran on ${mv.to}, so nothing written there is lost.`
+      }, mv && kind === "Resume" && {
+        k: "nu",
+        type: "note",
+        label: `No new Ramen action: the run waits for Ramen to finish the move to ${mv.to}, then checks the application's probes there. Fix what blocks the move first, or the run times out like the move did.`
+      }, !pathless && {
         k: "path",
         label: "DR path",
         type: "select",
@@ -23543,17 +23586,17 @@ const runActionDialog = (target, kind, ctx) => {
           };
         }),
         empty: `No declared DRPath offers ${m.label} for this ${target.kind === "rplan" ? "plan" : "application"}. Declaring a direction is a dr-admin decision, not an override.`
-      }, kind !== "Restart" && verdict === "NotReady" && {
+      }, !pathless && verdict === "NotReady" && {
         k: "n1",
         type: "note",
         label: `Readiness on this path is NotReady: ${blockingChecks(target, v.path).join(", ") || "blocking checks failed"}. Running anyway needs a reason and the "override" verb on recoveryactions (dr-admin). The run is audited with the reason.`
-      }, kind !== "Restart" && verdict === "NotReady" && {
+      }, !pathless && verdict === "NotReady" && {
         k: "override",
         label: "Override reason (10–1024 characters)",
         type: "text",
         required: true,
         placeholder: "why this action must run despite the verdict"
-      }, kind !== "Restart" && verdict === "Degraded" && {
+      }, !pathless && verdict === "Degraded" && {
         k: "n2",
         type: "note",
         label: "Readiness is Degraded: only advisory checks failed. The action runs without an override."
@@ -24945,6 +24988,20 @@ Object.assign(ACTIONS, {
     op: "restart",
     dialog: runActionDialog(a, "Restart")
   }, {
+    label: "Resume move",
+    icon: "play",
+    op: "relocate",
+    dialog: runActionDialog(a, "Resume"),
+    disabled: !a.move,
+    hint: "No move is in progress"
+  }, {
+    label: a.move ? `Revert to ${a.move.from}` : "Revert move",
+    icon: "swap",
+    op: "relocate",
+    dialog: runActionDialog(a, "Revert"),
+    disabled: !(a.move && a.move.revertible),
+    hint: a.move ? a.move.revertBlocked || "This move cannot be reverted" : "No move is in progress"
+  }, {
     label: "Test",
     icon: "camera",
     op: "test",
@@ -26310,7 +26367,12 @@ function PAppDetail({
     key: r.id,
     label: `${r.action || "Test"} ${r.name}`,
     onClick: () => nav.detail(r)
-  })))), a.verdict === "NotReady" && /*#__PURE__*/React.createElement("div", {
+  })))), a.move && /*#__PURE__*/React.createElement("div", {
+    className: "banner" + (a.move.phase === "Stuck" ? "" : " info")
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: a.move.phase === "Stuck" ? "alert" : "move",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, a.move.action, " ", a.move.from, " \u2192 ", a.move.to, " ", a.move.phase === "Stuck" ? "is stuck" : "in progress", a.move.since ? ` since ${fmtAgo(a.move.since)}` : "", "."), a.move.blocking ? /*#__PURE__*/React.createElement(React.Fragment, null, " Ramen reports: ", /*#__PURE__*/React.createElement(Mono, null, a.move.blocking), ".") : a.move.progression ? ` Ramen: ${a.move.progression}.` : "", a.move.phase === "Stuck" && /*#__PURE__*/React.createElement(React.Fragment, null, " Use \u22EE \u2192 ", /*#__PURE__*/React.createElement("b", null, "Resume move"), " once its cause is fixed", a.move.revertible ? /*#__PURE__*/React.createElement(React.Fragment, null, ", or ", /*#__PURE__*/React.createElement("b", null, "Revert to ", a.move.from)) : /*#__PURE__*/React.createElement(React.Fragment, null, " \u2014 it cannot be reverted: ", a.move.revertBlocked), "."))), !a.move && a.verdict === "NotReady" && /*#__PURE__*/React.createElement("div", {
     className: "banner"
   }, /*#__PURE__*/React.createElement(Icon, {
     n: "alert",

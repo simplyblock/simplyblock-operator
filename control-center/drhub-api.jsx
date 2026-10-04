@@ -88,6 +88,9 @@ const splitRef = s => { const i = String(s || "").indexOf("/"); return i < 0 ? {
 // A reference is a plain name (DRPath/ProtectedApplication planRef, every
 // pathRef) or a LocalRef object ({name}): both read as the name.
 const refName = r => typeof r === "string" ? r : (r && r.name) || "";
+// Kinds that name an application and no path: Restart acts where it runs,
+// Resume and Revert on the move Ramen is still carrying out.
+const PATHLESS_KINDS = ["Restart", "Resume", "Revert"];
 const worstVerdict = vs => vs.reduce((w, v) => (VERDICT_RANK[v] || 0) > (VERDICT_RANK[w] || 0) ? v : w, vs[0] || "Unknown");
 const isSyncType = t => /^sync/.test(t || "");
 const durMs = (a, b) => a && b ? Math.max(0, Date.parse(b) - Date.parse(a)) : a ? Math.max(0, Date.now() - Date.parse(a)) : null;
@@ -162,6 +165,11 @@ function normPApp(o) {
     managed: sp.managed || null, discovered: sp.discovered || null, drpcRef: refName(sp.drpcRef),
     probes: (sp.health || {}).probes || [], tiers: sp.tiers || [], externalHooks: sp.externalHooks || {}, dependsOn: sp.dependsOn || [],
     drpc: st.drpc || "", placement: st.placement || "", drPolicy: st.drPolicy || "", zoneBinding: st.zoneBinding || "", currentCluster: st.currentCluster || "",
+    // a Relocate or Failover Ramen is still carrying out (dr-hub status.move);
+    // Resume and Revert act on it
+    move: st.move ? {action: st.move.action || "", from: st.move.from || "", to: st.move.to || "", phase: st.move.phase || "InProgress",
+      since: st.move.since || null, progression: st.move.progression || "", blocking: st.move.blocking || "",
+      revertible: !!st.move.revertible, revertBlocked: st.move.revertBlocked || ""} : null,
     paths, siteMapping: st.siteMapping || "Unknown", recipe: st.recipe || null, suggestedTiers: st.suggestedTiers || [], lastAction: st.lastAction ? splitRef(st.lastAction) : null,
     // site mapper (ADR 0020): VM network findings and guest addresses, resolved per declared path
     mapping: st.mapping ? {site: st.mapping.site || "", findings: st.mapping.findings || [], guests: st.mapping.guests || [], counts: st.mapping.counts || {open: 0, resolved: 0}} : null,
@@ -385,7 +393,7 @@ const drhub = {
   runAction: ({kind, target, path, override, timeout}) => k8s.create("RecoveryAction", {
     apiVersion: DR_API_GROUP, kind: "RecoveryAction",
     metadata: {name: dns63(`${kind}-${target.name}-${stamp()}`), namespace: target.namespace},
-    spec: Object.assign({kind}, kind !== "Restart" && path ? {pathRef: path} : {},
+    spec: Object.assign({kind}, !PATHLESS_KINDS.includes(kind) && path ? {pathRef: path} : {},
       target.kind === "rplan" ? {planRef: {name: target.name}} : {applicationRef: {name: target.name}},
       override ? {override: {reason: override}} : {}, timeout ? {timeout} : {})
   }, {namespace: target.namespace}),
@@ -453,5 +461,5 @@ Object.assign(GETTER, {pplan: drhub.plan, drpath: drhub.path, papp: drhub.app, r
   tbubble: drhub.test, tsched: drhub.schedule, restore: drhub.restoreAction, siteprofile: drhub.siteProfile, drconfig: drhub.config, dhcpserver: drhub.dhcpServer,
   sitedeploy: drhub.siteDeploy});
 
-Object.assign(window, {drhub, DR_KINDS, DR_ANN, VERDICT_RANK, ACTION_TERMINAL, TEST_TERMINAL, worstVerdict, fmtSecs, drCond, drCondOK, splitRef, kvToObj, csv, dns63, openFindings,
+Object.assign(window, {drhub, PATHLESS_KINDS, DR_KINDS, DR_ANN, VERDICT_RANK, ACTION_TERMINAL, TEST_TERMINAL, worstVerdict, fmtSecs, drCond, drCondOK, splitRef, kvToObj, csv, dns63, openFindings,
   normPPlan, normDRPath, normPApp, normRPlan, normRAction, normTBubble, normTSched, normRestore, normSiteProfile, normDRConfig, normDHCPServer, normSiteDeploy});

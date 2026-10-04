@@ -120,6 +120,16 @@
     [{name: "fra-a-to-fra-b", from: "fra-a", to: "fra-b", actions: ["Failover", "Relocate", "Test"], readiness: {verdict: "Ready", checks: readyChecks(true).map(c => c.name === "storage-replicating" ? check("storage-replicating", "Pass", false, "Replicating", "lag 42s") : c), lastTransitionTime: agoIso(3000)}},
      {name: "fra-b-to-fra-a", from: "fra-b", to: "fra-a", actions: ["Relocate"], readiness: {verdict: "NotReady", checks: [check("at-path-source", "Fail", true, "NotAtSource", "application runs on cluster-a")], lastTransitionTime: agoIso(3000)}}],
     {drpc: "payments/payments", placement: "payments/payments", drPolicy: "fra-primary-5m", recipe: {name: "payments", namespace: "payments", generated: true, hash: "0b77aa"}}));
+  // a consistency-group relocate stuck in the target's restore (2026-10-03): Ramen keeps retrying, the action ended
+  store.ProtectedApplication.push(app("wiki", OPS, "fra", "fra-a", "fra-b", "discovered",
+    {spec: {method: "primary", discovered: {protectedNamespaces: ["wiki"], pvcSelector: {matchLabels: {app: "wiki"}}}}},
+    [{name: "fra-a-to-fra-b", from: "fra-a", to: "fra-b", actions: ["Failover", "Relocate", "Test"], readiness: {verdict: "NotReady",
+      checks: readyChecks(true).concat([check("move-settled", "Fail", true, "MoveStuck", "relocate fra-a→fra-b since 2026-10-03T23:17:24Z is stuck: ClusterDataReady: Failed to restore PVs/PVCs: destination volume ID is empty for VGRC vgrcontent-a5b8. Resume it once its cause is fixed, or Revert it to fra-a")]), lastTransitionTime: agoIso(40)}},
+     {name: "fra-b-to-fra-a", from: "fra-b", to: "fra-a", actions: ["Relocate"], readiness: {verdict: "NotReady", checks: [check("at-path-source", "Fail", true, "NotAtSource", "application runs on cluster-a")], lastTransitionTime: agoIso(40)}}],
+    {drpc: `${OPS}/wiki`, drPolicy: "fra-primary-5m", recipe: {name: "wiki", namespace: OPS, generated: true, hash: "51aa0e"}, lastAction: `${OPS}/relocate-wiki-1`,
+      move: {action: "Relocate", from: "fra-a", to: "fra-b", phase: "Stuck", since: agoIso(55), progression: "WaitForReadiness",
+        blocking: "ClusterDataReady: Failed to restore PVs/PVCs: destination volume ID is empty for VGRC vgrcontent-a5b8", revertible: true},
+      conditions: [cond("Bound", true, "Bound", ""), cond("Protected", false, "Error", "VolumeReplicationGroup on cluster-b is reporting errors", 40)]}));
   store.ProtectedApplication.push(app("vm-erp", OPS, "metro", "metro-1a", "metro-1c", "discovered",
     {spec: {discovered: {protectedNamespaces: ["erp"], pvcSelector: {matchLabels: {"kubevirt.io/domain": "erp"}}}, tiers: [{name: "vm", selector: {resourceTypes: ["virtualmachines"]}, ready: [{type: "vmRunning"}]}]}},
     [{name: "metro-1a-to-1c", from: "metro-1a", to: "metro-1c", actions: ["Relocate", "Failover"], readiness: {verdict: "NotReady", checks: [check("path-declared", "Pass", true, "Declared", ""), check("zone-protected", "Pass", true, "Bound", "zone binding eu-central-1a"), check("executor-ready", "Fail", true, "AgentUnavailable", "dr-agent on stretch has not reported for 12m"), check("recipe-valid", "Pass", true, "Valid", "")], lastTransitionTime: agoIso(12)}}],
@@ -252,6 +262,8 @@
     // sends the wrong shape fails here too (2026-10-03, DRPath planRef).
     const sp = body.spec || {};
     const mustBeName = {DRPath: ["planRef"], ProtectedApplication: ["planRef"], RecoveryPlan: ["pathRef"], RecoveryAction: ["pathRef"], TestBubble: ["pathRef"]}[kind] || [];
+    if (kind === "RecoveryAction" && ["Restart", "Resume", "Revert"].includes(sp.kind) && sp.pathRef !== undefined)
+      return {err: `RecoveryAction.dr.simplyblock.io "${m.name}" is invalid: spec: a Restart, Resume or Revert names an application and no path`, reason: "Invalid"};
     for (const f of mustBeName)
       if (sp[f] !== undefined && typeof sp[f] !== "string")
         return {err: `${kind}.dr.simplyblock.io "${m.name}" is invalid: spec.${f}: Invalid value: "object": spec.${f} in body must be of type string: "object"`, reason: "Invalid"};
@@ -261,12 +273,17 @@
     if (kind === "RecoveryAction") {
       if (body.spec.override && viewer() !== "admin") return {err: 'admission webhook "vrecoveryaction.dr.simplyblock.io" denied the request: a readiness override needs the "override" verb on recoveryactions, which only dr-admin has', reason: "Forbidden"};
       const app = body.spec.applicationRef && findRef("ProtectedApplication", m.namespace, body.spec.applicationRef.name);
-      if (app && body.spec.kind !== "Restart") {
+      // Resume and Revert act on the application's in-flight move, not on a path (dr-hub's webhook)
+      if (app && (body.spec.kind === "Resume" || body.spec.kind === "Revert")) {
+        if (!app.status.move) return {err: `admission webhook denied the request: ProtectedApplication ${app.metadata.name} has no move in progress to ${body.spec.kind.toLowerCase()}`, reason: "Forbidden"};
+        if (body.spec.kind === "Revert" && !app.status.move.revertible) return {err: `admission webhook denied the request: the move cannot be reverted: ${app.status.move.revertBlocked}`, reason: "Forbidden"};
+      }
+      if (app && !["Restart", "Resume", "Revert"].includes(body.spec.kind)) {
         const p = (app.status.paths || []).find(x => x.name === body.spec.pathRef);
         if (!p) return {err: `application ${app.metadata.name} is not on path ${body.spec.pathRef}`, reason: "Invalid"};
         if (p.readiness.verdict === "NotReady" && !body.spec.override) return {err: `admission webhook denied the request: readiness on ${p.name} is NotReady (${p.readiness.checks.filter(c => c.blocking && c.status === "Fail").map(c => c.name).join(", ")}); an override with a reason is required`, reason: "Forbidden"};
       }
-      obj.__sim = true; obj.status = {phase: "Pending", startTime: obj.metadata.creationTimestamp, sourceCluster: "cluster-a", targetCluster: body.spec.kind === "Restart" ? "cluster-a" : "cluster-b", steps: [], conditions: []};
+      obj.__sim = true; obj.status = {phase: "Pending", startTime: obj.metadata.creationTimestamp, sourceCluster: "cluster-a", targetCluster: body.spec.kind === "Restart" || body.spec.kind === "Revert" ? "cluster-a" : "cluster-b", steps: [], conditions: []};
     }
     if (kind === "TestBubble") { obj.__sim = true; obj.status = {phase: "Pending", testID: U().hex(6), startTime: obj.metadata.creationTimestamp, sourceCluster: "cluster-a", targetCluster: "cluster-b", applications: [{name: (body.spec.applicationRef || body.spec.planRef).name, priority: 1, phase: "Pending"}], bubbleNamespaces: [], steps: [], invariants: [], checks: [], conditions: []}; }
     if (kind === "RestoreAction") obj.status = {phase: "Pending", startTime: obj.metadata.creationTimestamp, steps: [], checks: [], volumes: []};
