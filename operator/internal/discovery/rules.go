@@ -39,6 +39,17 @@ type DeviceRule interface {
 	Admit(report nodeprobe.Report, device nodeprobe.Device) (bool, string)
 }
 
+// PreFilter marks a device rule that decides whether a device was ever a
+// candidate. Refusing a loopback device for not being a whole disk is true and
+// says nothing about why a run found no storage; refusing a disk because
+// something else is using it is the answer.
+//
+// It is an optional interface rather than a method on DeviceRule because a rule
+// that does not say is the common case and should not have to.
+type PreFilter interface {
+	PreFilter() bool
+}
+
 // WorkerRule decides whether a worker takes part in the deployment.
 type WorkerRule interface {
 	Name() string
@@ -60,6 +71,12 @@ type Refusal struct {
 	// Rule is the rule that declined it, and Reason is why.
 	Rule   string
 	Reason string
+
+	// PreFilter says the rule answers whether the thing was ever a candidate,
+	// rather than why a candidate was not taken. A machine presents dozens of
+	// loopback and network block devices and one disk somebody cares about, and
+	// a report that treats the two alike buries the second under the first.
+	PreFilter bool
 }
 
 // String renders a refusal for an event or a status message.
@@ -87,22 +104,40 @@ const (
 	ClassBlock DeviceClass = "block"
 )
 
-// ClassOf reads which class a run is scanning out of its filter. Absent, or a
-// filter that does not ask for block devices, is NVMe: that is what every
-// deployment before the logical block-device class existed was built out of, so
-// it is what a run that says nothing keeps reporting.
-func ClassOf(filter *simplyblockv1alpha2.DeviceFilter) DeviceClass {
-	if filter != nil && filter.EnableLogicalBlockDevices != nil && *filter.EnableLogicalBlockDevices {
+// ClassOf reads which class a run is scanning. Absent, or a run that does not
+// ask for block devices, is NVMe: that is what every deployment before the
+// logical block-device class existed was built out of, so it is what a run that
+// says nothing keeps reporting.
+func ClassOf(run *simplyblockv1alpha2.DiscoverSpec) DeviceClass {
+	if run != nil && run.EnableLogicalBlockDevices != nil && *run.EnableLogicalBlockDevices {
 		return ClassBlock
 	}
 	return ClassNVMe
 }
 
 // Address is how the draft names a device of this class: its PCI address for
-// NVMe, its path for a logical block device. It is empty when the device cannot
-// be named in the class at all, which is what AdmitClass refuses on.
+// NVMe, and for a logical block device the persistent name udev published for
+// it. It is empty when the device cannot be named in the class at all, which is
+// what AdmitClass refuses on.
+//
+// The persistent name rather than the kernel path, because a draft is written
+// once and read back on every configure the deployment performs, the first of
+// them possibly after a reboot. The kernel path states a position in one boot's
+// enumeration order: on the lab worker this was developed against the disk the
+// kernel calls sdb is the one the hypervisor calls drive-scsi0, and sda is
+// drive-scsi2, so a machine that probes its controllers in another order hands
+// each name to another disk. Both names exist and both resolve, so a deployment
+// naming the first would be handed a different disk and nothing would say so.
+//
+// A device udev published nothing for falls back to its kernel path, which is
+// all there is. That is the weaker name and it carries the failure above, but
+// refusing the device would hold up a deployment on a host whose disks are
+// otherwise perfectly usable, over a udev that published no link.
 func (c DeviceClass) Address(device nodeprobe.Device) string {
 	if c == ClassBlock {
+		if device.StablePath != "" {
+			return device.StablePath
+		}
 		return device.Path
 	}
 	return device.PCIAddress
@@ -141,21 +176,46 @@ func (r AvailableRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool,
 	return false, "the probe refused it: " + strings.Join(reasons, ", ")
 }
 
-// ClassRule admits a device that can be named in the class the run is scanning.
+// ClassRule admits a device that can be named in the class the run is scanning,
+// and refuses one the class cannot take.
 //
 // It is a rule rather than a precondition because the failure is worth
 // reporting: an NVMe run against a worker whose disks are virtio finds devices
 // it cannot name, and "no NVMe devices" is a more useful answer than an empty
 // draft.
+//
+// The two sides are not symmetric, because the classes are not two disjoint
+// sets of hardware. The NVMe class is the narrow one: SPDK binds a controller
+// through vfio-pci, so only a device on the NVMe bus and carrying a PCI address
+// qualifies, and a virtio disk is refused. The block class is the wide one: it
+// reaches a device through the kernel, where a local NVMe namespace at
+// /dev/nvme0n1 is a block device like any other, so it is admitted. One machine
+// can therefore be deployed either way, and which way is the administrator's
+// statement through spec.discover.enableLogicalBlockDevices rather than
+// something the bus decides for them.
+//
+// A fabric namespace is the one bus the block class still refuses. It is a
+// volume something else exported rather than a disk the machine has, so it
+// belongs to neither class, and refusing it here keeps a block run's answer
+// about what the device is rather than about what is holding it.
 type ClassRule struct {
 	Class DeviceClass
 }
 
 func (ClassRule) Name() string { return "device class" }
 
+// PreFilter: a device of another class is not one this run was scanning for, so
+// saying so explains nothing about the storage the fleet has.
+func (ClassRule) PreFilter() bool { return true }
+
 func (r ClassRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
 	if r.Class == ClassNVMe && device.Transport != string(blockdev.TransportNVMe) {
 		return false, fmt.Sprintf("this run scans NVMe devices and the device is on %s",
+			transportOrNone(device.Transport))
+	}
+	if r.Class == ClassBlock && device.Transport == string(blockdev.TransportNVMeFabric) {
+		return false, fmt.Sprintf("this run scans logical block devices and the device is on %s, "+
+			"which is a volume something else exported rather than a disk this machine has",
 			transportOrNone(device.Transport))
 	}
 	if address := r.Class.Address(device); address == "" {
@@ -180,20 +240,41 @@ func addressKind(class DeviceClass) string {
 	return "PCI address"
 }
 
-// WholeDiskRule admits only a whole disk.
+// WholeDiskRule admits a whole disk, and a partition where the class can take
+// one.
 //
-// The probe already refuses everything else, so this is belt and braces — but
-// it is the one rule whose absence would be silent: a partition admitted by a
-// waiver would be handed to a cluster as though it were a disk.
-type WholeDiskRule struct{}
+// Which class can take one follows from how the device is reached. SPDK binds an
+// NVMe controller through vfio-pci and is handed the whole device, so a
+// partition of one was never something a run could propose: admitting it would
+// hand a cluster a partition as though it were a disk, which is the silent
+// failure this rule exists for. A logical block device is reached through the
+// kernel, where a partition is an ordinary block device and the backend takes
+// one — the journal share is documented for the case where the smallest device
+// selected is a partition.
+//
+// Nothing else is admitted in either class. A loopback device and a
+// device-mapper node are no more candidates for the block class than for NVMe,
+// so the relaxation is the partition and not the rule.
+type WholeDiskRule struct {
+	// Class is what the run is scanning, which decides whether a partition is a
+	// device this deployment could be handed at all.
+	Class DeviceClass
+}
 
 func (WholeDiskRule) Name() string { return "whole disk" }
 
-func (WholeDiskRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
-	if device.Kind != string(blockdev.KindDisk) {
-		return false, fmt.Sprintf("it is a %s rather than a whole disk", device.Kind)
+// PreFilter: a device this class could never have taken is not an answer to
+// why a fleet proposed no storage, so refusing it explains nothing.
+func (WholeDiskRule) PreFilter() bool { return true }
+
+func (r WholeDiskRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
+	if device.Kind == string(blockdev.KindDisk) {
+		return true, ""
 	}
-	return true, ""
+	if r.Class == ClassBlock && device.Kind == string(blockdev.KindPartition) {
+		return true, ""
+	}
+	return false, fmt.Sprintf("it is a %s rather than a whole disk", device.Kind)
 }
 
 // AllowDenyRule admits a device whose address is in the allow list, when there
@@ -209,23 +290,48 @@ type AllowDenyRule struct {
 
 func (AllowDenyRule) Name() string { return "allow and deny lists" }
 
-func (r AllowDenyRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
-	address := r.Class.Address(device)
+// The reason names the list and not the address. Which device was refused is
+// already on the refusal, and putting it in the sentence too made every such
+// refusal a different sentence, so a hundred disks declined by one list read as
+// a hundred separate findings rather than one list and a number.
 
+func (r AllowDenyRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
 	for _, denied := range r.Deny {
-		if strings.EqualFold(address, denied) {
-			return false, fmt.Sprintf("%s is in the deny list", address)
+		if r.Class.Names(device, denied) {
+			return false, "it is in the deny list"
 		}
 	}
 	if len(r.Allow) == 0 {
 		return true, ""
 	}
 	for _, allowed := range r.Allow {
-		if strings.EqualFold(address, allowed) {
+		if r.Class.Names(device, allowed) {
 			return true, ""
 		}
 	}
-	return false, fmt.Sprintf("%s is not in the allow list", address)
+	return false, "it is not in the allow list"
+}
+
+// Names reports whether an entry of a filter list refers to this device.
+//
+// It is every spelling the device answers to rather than the one the draft
+// writes, and the difference is the whole of this method. A block draft names a
+// device by the persistent /dev/disk path udev published, and a filter is
+// written by somebody reading `lsblk`, or copied from a document written before
+// the persistent names existed: matching only the drafted name breaks such a
+// list, and breaks it in opposite directions on the two lists. An allow list
+// stops admitting the disk it names; a deny list stops denying it, which puts a
+// mounted boot disk into a document whose whole purpose is to list free ones.
+//
+// The NVMe class has one spelling and keeps it. A controller is named by its
+// slot, a filter names the slot, and a udev link on one of its namespaces is not
+// another name for the controller.
+func (c DeviceClass) Names(device nodeprobe.Device, entry string) bool {
+	if c != ClassBlock {
+		return strings.EqualFold(device.PCIAddress, entry)
+	}
+	return (device.Path != "" && strings.EqualFold(device.Path, entry)) ||
+		(device.StablePath != "" && strings.EqualFold(device.StablePath, entry))
 }
 
 // ModelRule admits a device whose model string contains the wanted text.
@@ -253,20 +359,38 @@ func (r ModelRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, str
 type SizeRule struct {
 	// Min and Max are inclusive bounds in bytes. A zero Max is no upper bound.
 	Min, Max uint64
+
+	// Spec is the range as the filter wrote it, which is what a refusal quotes.
+	//
+	// The bound is not re-rendered from the parsed number, because that is a
+	// different string: a filter naming 1920G would be quoted back as 1.875T,
+	// and a reviewer comparing the refusal against what they wrote would be
+	// comparing two spellings of one number. What they can act on is what they
+	// typed.
+	Spec string
 }
 
 func (SizeRule) Name() string { return "size range" }
 
 func (r SizeRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
 	if device.SizeBytes < r.Min {
-		return false, fmt.Sprintf("it is %s and the range starts at %s",
-			humanBytes(device.SizeBytes), humanBytes(r.Min))
+		return false, fmt.Sprintf("it is %s and the range %s starts above it",
+			humanBytes(device.SizeBytes), r.describeRange(r.Min))
 	}
 	if r.Max > 0 && device.SizeBytes > r.Max {
-		return false, fmt.Sprintf("it is %s and the range ends at %s",
-			humanBytes(device.SizeBytes), humanBytes(r.Max))
+		return false, fmt.Sprintf("it is %s and the range %s ends below it",
+			humanBytes(device.SizeBytes), r.describeRange(r.Max))
 	}
 	return true, ""
+}
+
+// describeRange is the range as the filter wrote it, and the bound rendered
+// when the rule was built by hand rather than from a filter.
+func (r SizeRule) describeRange(bound uint64) string {
+	if r.Spec != "" {
+		return r.Spec
+	}
+	return humanBytes(bound)
 }
 
 // WorkerHasDevices admits a worker that has at least one device left.
@@ -285,14 +409,42 @@ func (WorkerHasDevices) Admit(report nodeprobe.Report, admitted []nodeprobe.Devi
 
 	// A worker whose disks are on a userspace driver has no block devices at
 	// all, so "no device survived the rules" is true and useless: the machine
-	// is full of disks that something else is already driving. Saying which
-	// controllers and which driver is the difference between a reviewer
-	// concluding the machine has no storage and knowing to reclaim it.
-	if taken := report.ControllersTakenByUserspace(); len(taken) > 0 {
+	// is full of disks that something else has. Saying which controllers and
+	// which driver is the difference between a reviewer concluding the machine
+	// has no storage and knowing what is on it.
+	if bound := report.ControllersBoundToUserspace(); len(bound) > 0 {
+		// Whether anything is driving them is the half that decides what to do
+		// next, and the two answers ask for opposite things. Nothing holding
+		// them means the binding is a leftover and the disks can be taken back.
+		// Something holding them means the machine is serving whatever that is,
+		// which need not be this product: a userspace binding is also how a
+		// disk is passed through to a guest.
+		var busy, unchecked []nodeprobe.Controller
+		for _, controller := range bound {
+			switch {
+			case controller.Held():
+				busy = append(busy, controller)
+			case !controller.Free():
+				unchecked = append(unchecked, controller)
+			}
+		}
+		if len(busy) == 0 && len(unchecked) > 0 {
+			return false, fmt.Sprintf(
+				"it presents no usable block device, and whether anything is driving %d of its "+
+					"NVMe controllers (%s) could not be established, so they are not offered",
+				len(unchecked), describeControllers(unchecked))
+		}
+		if len(busy) > 0 {
+			return false, fmt.Sprintf(
+				"it presents no usable block device, and %d of its NVMe controllers (%s) are "+
+					"bound to a userspace driver and in use, so something is driving its disks",
+				len(busy), describeControllers(busy))
+		}
 		return false, fmt.Sprintf(
 			"it presents no usable block device, and %d of its NVMe controllers (%s) are "+
-				"held by a userspace driver, so the kernel presents no disk for them",
-			len(taken), describeControllers(taken))
+				"bound to a userspace driver and nothing is using them, so the disks are "+
+				"there to be reclaimed",
+			len(bound), describeControllers(bound))
 	}
 	return false, "no device of it survived the device rules"
 }
@@ -324,17 +476,40 @@ func (WorkerWasReadable) Admit(report nodeprobe.Report, _ []nodeprobe.Device) (b
 		len(report.Unreadable), strings.Join(report.Unreadable, "; "))
 }
 
-// humanBytes renders a size the way an administrator writes one, so that a
-// refusal quotes the same units the filter was written in.
+// humanBytes renders a size the way an administrator writes one.
+//
+// Two properties, and the old rendering had neither. A whole number of units is
+// written as that whole number, so the sizes a fleet is actually built out of
+// read as 3T rather than as 3.001T and parse back to the byte they came from.
+// Anything else is truncated rather than rounded, because a size that reads as
+// more than the device holds is one that says the disk is bigger than it is:
+// the old rendering printed a byte under a tebibyte as 1024G, which is not a
+// approximation of the value, it is above it.
 func humanBytes(bytes uint64) string {
-	switch {
-	case bytes >= 1<<40:
-		return fmt.Sprintf("%.4gT", float64(bytes)/float64(uint64(1)<<40))
-	case bytes >= 1<<30:
-		return fmt.Sprintf("%.4gG", float64(bytes)/float64(uint64(1)<<30))
-	case bytes >= 1<<20:
-		return fmt.Sprintf("%.4gM", float64(bytes)/float64(uint64(1)<<20))
-	default:
-		return fmt.Sprintf("%dB", bytes)
+	for _, unit := range []struct {
+		size   uint64
+		suffix string
+	}{
+		{uint64(1) << 40, "T"},
+		{uint64(1) << 30, "G"},
+		{uint64(1) << 20, "M"},
+	} {
+		if bytes < unit.size {
+			continue
+		}
+		if bytes%unit.size == 0 {
+			return fmt.Sprintf("%d%s", bytes/unit.size, unit.suffix)
+		}
+		// Truncated to two decimals, which is the precision a disk is sold in
+		// and never more than the device holds. A trailing zero is dropped, so
+		// a size and a half reads as 1.5T rather than 1.50T.
+		hundredths := (bytes % unit.size) * 100 / unit.size
+		decimals := fmt.Sprintf("%02d", hundredths)
+		decimals = strings.TrimRight(decimals, "0")
+		if decimals == "" {
+			return fmt.Sprintf("%d%s", bytes/unit.size, unit.suffix)
+		}
+		return fmt.Sprintf("%d.%s%s", bytes/unit.size, decimals, unit.suffix)
 	}
+	return fmt.Sprintf("%dB", bytes)
 }

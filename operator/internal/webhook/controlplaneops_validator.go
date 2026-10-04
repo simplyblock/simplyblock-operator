@@ -1,0 +1,180 @@
+// The ControlPlaneOps guard: a validating webhook that resolves
+// spec.controlPlaneRef at creation and refuses an operation naming a control
+// plane none of its actions can act on.
+//
+// Every action acts on what the operator installed: Restart recycles a workload,
+// Upgrade replaces its image, and Backup asks the FoundationDBCluster the
+// operator applied. An operation naming a remote control plane is therefore one
+// that can only fail. Admission is where the check belongs, because an operation
+// that can only fail belongs in an error message on the terminal that wrote it
+// rather than in a Failed object somebody has to go and read.
+//
+// Admission is also where the check *can* live, because the answer cannot move:
+// spec.controlPlaneRef is immutable and ControlPlane.spec.source is immutable, so
+// a control plane admitted as managed stays managed for the life of the
+// operation. What can still happen is the target being deleted, and an operation
+// whose target has vanished is a missing-target failure the controller handles.
+//
+// design-controlplane.md §6 is the specification.
+
+package webhook
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+
+	admissionv1 "k8s.io/api/admission/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+)
+
+// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-controlplaneops,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=controlplaneops,verbs=create;delete,versions=v1alpha2,name=vcontrolplaneops.simplyblock.io,admissionReviewVersions=v1
+
+// ControlPlaneOpsValidator refuses an operation whose target cannot be operated
+// on, and one whose action is missing the block that parameterizes it.
+//
+// failurePolicy=Fail, because the webhook server runs inside the operator pod:
+// its availability tracks the operator's, and while the operator is down nothing
+// advances an operation anyway.
+type ControlPlaneOpsValidator struct {
+	Client client.Client
+}
+
+// undeletableControlPlaneSteps are the steps from which a running operation's record may not
+// be withdrawn, and what it is in the middle of.
+//
+// Each has already changed something that nothing else would finish. Restarting
+// and Applying have rolled a Deployment or written a new image onto the entity,
+// and Awaiting and Verifying are watching that rollout back. Deleting the record
+// there releases the control plane's lock while the rollout is still moving, so
+// the next operation starts against a half-applied one.
+//
+// It is the same guard StorageBackupOps carries, and the stronger of the two the
+// operation has: the finalizer alone does not catch a forced delete with no
+// grace period.
+var undeletableControlPlaneSteps = map[simplyblockv1alpha2.ControlPlaneOpsStep]string{
+	simplyblockv1alpha2.ControlPlaneOpsStepRestarting: "the workloads are being recycled",
+	simplyblockv1alpha2.ControlPlaneOpsStepApplying:   "the new image is being written onto the control plane",
+	simplyblockv1alpha2.ControlPlaneOpsStepAwaiting:   "the recycled workloads are still coming back",
+	simplyblockv1alpha2.ControlPlaneOpsStepVerifying:  "the rollout is being checked against the version it asked for",
+}
+
+func (v *ControlPlaneOpsValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
+	switch req.Operation {
+	case admissionv1.Create:
+		return v.admitCreate(ctx, req)
+	case admissionv1.Delete:
+		return v.admitDelete(req)
+	default:
+		return admission.Allowed("")
+	}
+}
+
+// admitDelete refuses to withdraw the record of an operation that is part-way
+// through a rollout.
+//
+// The object is read from req.OldObject, which is what the API server sends on a
+// DELETE: there is no new object, and the step the operation is on is in the
+// status of the one being removed.
+func (v *ControlPlaneOpsValidator) admitDelete(req admission.Request) admission.Response {
+	if len(req.OldObject.Raw) == 0 {
+		// Nothing to read means nothing to refuse on. Admitting is the only
+		// answer that does not block a delete on the basis of no information.
+		return admission.Allowed("")
+	}
+
+	var ops simplyblockv1alpha2.ControlPlaneOps
+	if err := json.Unmarshal(req.OldObject.Raw, &ops); err != nil {
+		return admission.Errored(http.StatusBadRequest, err)
+	}
+
+	// A terminal operation is a record of work that has finished, and
+	// withdrawing it stops nothing.
+	switch ops.Status.Phase {
+	case simplyblockv1alpha2.ControlPlaneOpsPhaseSucceeded,
+		simplyblockv1alpha2.ControlPlaneOpsPhaseFailed,
+		simplyblockv1alpha2.ControlPlaneOpsPhaseAborted:
+		return admission.Allowed("the operation is terminal")
+	}
+
+	step := simplyblockv1alpha2.ControlPlaneOpsStep(ops.Status.Step.State)
+	doing, undeletable := undeletableControlPlaneSteps[step]
+	if !undeletable {
+		return admission.Allowed("")
+	}
+
+	return admission.Denied(fmt.Sprintf(
+		"ControlPlaneOps %s/%s is at step %s, where %s. Deleting the record would not stop that "+
+			"work, it would release the control plane's lock while it is still moving and let the "+
+			"next operation start against a half-applied one. Wait for it to finish, then delete "+
+			"the record.",
+		ops.Namespace, ops.Name, step, doing))
+}
+
+// admitCreate resolves the target and checks the action's parameters.
+func (v *ControlPlaneOpsValidator) admitCreate(
+	ctx context.Context, req admission.Request,
+) admission.Response {
+	var ops simplyblockv1alpha2.ControlPlaneOps
+	if err := json.Unmarshal(req.Object.Raw, &ops); err != nil {
+		return admission.Errored(http.StatusBadRequest, err)
+	}
+
+	// v1alpha2 is the stored version, and it is read directly. A read at
+	// v1alpha1 is answered only by the conversion webhook, which a fresh install
+	// does not deploy.
+	var target simplyblockv1alpha2.ControlPlane
+	key := client.ObjectKey{Name: ops.Spec.ControlPlaneRef, Namespace: ops.Namespace}
+	err := v.Client.Get(ctx, key, &target)
+	switch {
+	case apierrors.IsNotFound(err):
+		return admission.Denied(fmt.Sprintf(
+			"spec.controlPlaneRef %q does not name a ControlPlane in namespace %q",
+			ops.Spec.ControlPlaneRef, ops.Namespace))
+	case err != nil:
+		return admission.Errored(http.StatusInternalServerError, err)
+	}
+
+	if target.Spec.Source.Local == nil {
+		return admission.Denied(fmt.Sprintf(
+			"ControlPlane %q names a control plane this cluster does not host, and every "+
+				"action of this kind acts on something the operator installed: Restart recycles a "+
+				"workload, Upgrade replaces its image, and Backup asks the FoundationDBCluster the "+
+				"operator applied. A control plane elsewhere is an endpoint and a credential, so "+
+				"there is nothing here for any of them to act on.",
+			ops.Spec.ControlPlaneRef))
+	}
+
+	return actionBlockPresent(&ops)
+}
+
+// actionBlockPresent refuses an action whose parameter block is absent.
+//
+// The blocks are optional on the type because each action ignores the others',
+// so the API cannot require one without requiring all three. Checking it here is
+// what turns "the operation failed at its first step" into an error on the
+// terminal that wrote the object.
+func actionBlockPresent(ops *simplyblockv1alpha2.ControlPlaneOps) admission.Response {
+	switch ops.Spec.Action {
+	case simplyblockv1alpha2.ControlPlaneOpsActionUpgrade:
+		if ops.Spec.Upgrade == nil || ops.Spec.Upgrade.Image == "" {
+			return admission.Denied(
+				"action Upgrade needs spec.upgrade.image, which names the version to move to")
+		}
+	case simplyblockv1alpha2.ControlPlaneOpsActionBackup:
+		if ops.Spec.Backup == nil || ops.Spec.Backup.BlobStore == "" {
+			return admission.Denied(
+				"action Backup needs spec.backup.blobStore, which names where the backup goes")
+		}
+	case simplyblockv1alpha2.ControlPlaneOpsActionRestart:
+		// Restart takes no required block: an empty spec.restart.components
+		// recycles the whole control plane, which is the common case and a
+		// legitimate one to write nothing for.
+	}
+	return admission.Allowed("")
+}

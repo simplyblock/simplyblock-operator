@@ -32,7 +32,7 @@ const (
 )
 
 // certManagerProvisioner runs when SB_TLS_PROVIDER=cert-manager. It creates a
-// cert-manager Certificate for the webhook Service, then materialises the issued
+// cert-manager Certificate for the webhook Service, then materializes the issued
 // Secret onto disk (utils.WebhookCertDir) and injects the CA bundle into the
 // MutatingWebhookConfiguration — the same responsibilities cert-controller's
 // rotator handles in self-signed mode, but sourced from cert-manager. It keeps
@@ -198,6 +198,13 @@ func (p *certManagerProvisioner) injectCABundle(ctx context.Context, ca []byte) 
 		if err := p.client.Patch(ctx, &vwc, vPatch); err != nil {
 			return fmt.Errorf("patch validating webhook caBundle: %w", err)
 		}
+	}
+
+	// The converted kinds' CRDs need the same CA, plus a service reference that
+	// resolves in this namespace. injectConversionTrust is shared with the
+	// pre-start bootstrap so the two cannot drift.
+	if err := injectConversionTrust(ctx, p.client, p.apiReader, ca, p.namespace); err != nil {
+		return err
 	}
 
 	p.lastCA = ca

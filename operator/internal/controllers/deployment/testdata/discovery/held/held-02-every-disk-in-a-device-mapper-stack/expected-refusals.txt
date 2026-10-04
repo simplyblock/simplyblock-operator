@@ -1,0 +1,5 @@
+worker-01/nvme0n1: declined by available because the probe refused it: Stacked
+worker-01/nvme1n1: declined by available because the probe refused it: Stacked
+worker-01/nvme2n1: declined by available because the probe refused it: Stacked
+worker-01/nvme3n1: declined by available because the probe refused it: Stacked
+worker-01: declined by has devices because no device of it survived the device rules

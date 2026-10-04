@@ -1,0 +1,437 @@
+// Round trips that start at the hub, which is the direction a v1alpha1 client
+// forces.
+//
+// v1alpha2 is the storage version and v1alpha1 is served beside it
+// (design-property-renames.md §3.8), so an object a controller wrote is converted
+// down to v1alpha1 for any client that asks for that version and back up to
+// v1alpha2 on the next read of it. That makes hub → spoke → hub the fidelity that
+// matters in practice, and it is not the same property as the spoke → hub → spoke
+// trip the per-kind tests already cover: a field only the hub can express survives
+// one and not the other.
+
+package v1alpha1
+
+import (
+	"testing"
+	"time"
+
+	"github.com/google/go-cmp/cmp"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/simplyblock/atlas/ptr"
+	"github.com/simplyblock/atlas/statemachine"
+
+	"github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+)
+
+func TestControlPlaneRoundTripsFromTheHub(t *testing.T) {
+	checked := metav1.Now()
+
+	hub := &v1alpha2.ControlPlane{
+		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock", Namespace: "sb"},
+		Spec: v1alpha2.ControlPlaneSpec{
+			Source: v1alpha2.ControlPlaneSource{
+				Local: &v1alpha2.LocalControlPlane{Image: testImage},
+			},
+		},
+		Status: v1alpha2.ControlPlaneStatus{
+			Phase:       "Available",
+			Message:     "healthy",
+			LastChecked: &checked,
+		},
+	}
+
+	var stored ControlPlane
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.ControlPlane
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if diff := cmp.Diff(hub, &back); diff != "" {
+		t.Errorf("storing and reading back changed the object (-written +read):\n%s", diff)
+	}
+}
+
+// A managed block with no image survives the round trip as a managed block with
+// no image, which is what makes the trip lossless for every hub object v1alpha1
+// can hold.
+//
+// v1alpha1 states the image as one optional string, so an empty managed block
+// and an absent source are the same stored shape. The upward conversion resolves
+// that ambiguity toward managed, because every object stored at v1alpha1 is one
+// the chart installed and the hub requires exactly one member of spec.source.
+func TestControlPlaneEmptyManagedBlockSurvivesTheRoundTrip(t *testing.T) {
+	hub := &v1alpha2.ControlPlane{
+		Spec: v1alpha2.ControlPlaneSpec{
+			Source: v1alpha2.ControlPlaneSource{Local: &v1alpha2.LocalControlPlane{}},
+		},
+	}
+
+	var stored ControlPlane
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.ControlPlane
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if diff := cmp.Diff(hub, &back); diff != "" {
+		t.Errorf("storing and reading back changed the object (-written +read):\n%s", diff)
+	}
+}
+
+// A control plane this cluster is managed by has no v1alpha1 spelling, so
+// storing one at that version and reading it back loses which control plane the
+// object meant. The conversion is lossy here rather than failing: the object
+// stays readable and comes back describing a local control plane with no image.
+//
+// Nothing stores one at v1alpha1 in practice, because the mode did not exist
+// before the storage version moved to v1alpha2. What this pins is the behavior
+// if something ever does.
+func TestControlPlaneExternalSourceDoesNotSurviveV1Alpha1(t *testing.T) {
+	hub := &v1alpha2.ControlPlane{
+		Spec: v1alpha2.ControlPlaneSpec{
+			Source: v1alpha2.ControlPlaneSource{
+				Managed: &v1alpha2.ManagedControlPlane{
+					Endpoint:             "https://sb-control.example.com:5000",
+					CredentialsSecretRef: &corev1.LocalObjectReference{Name: "cp-token"},
+				},
+			},
+		},
+	}
+
+	var stored ControlPlane
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	if stored.Spec.Image != "" {
+		t.Errorf("spec.image = %q, want empty for a remote control plane", stored.Spec.Image)
+	}
+
+	var back v1alpha2.ControlPlane
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+	if back.Spec.Source.Managed != nil {
+		t.Errorf("spec.source.managed = %+v, want nil: v1alpha1 cannot hold it",
+			back.Spec.Source.Managed)
+	}
+	if back.Spec.Source.Local == nil {
+		t.Error("spec.source.local is absent, want the upward conversion's managed default")
+	}
+}
+
+func TestStorageBackupRoundTripsFromTheHub(t *testing.T) {
+	created := metav1.Now()
+
+	hub := &v1alpha2.StorageBackup{
+		ObjectMeta: metav1.ObjectMeta{Name: "backup-1", Namespace: "sb"},
+		Spec: v1alpha2.StorageBackupSpec{
+			ClusterRef: "production",
+			BackupID:   "backup-uuid",
+		},
+		Status: v1alpha2.StorageBackupStatus{
+			Phase:     v1alpha2.StorageBackupPhaseAvailable,
+			APIStatus: "completed",
+			ClusterID: "cluster-uuid",
+			Backup: &v1alpha2.BackupCopy{
+				BackupID:         "backup-uuid",
+				S3ID:             42,
+				Size:             ptr.To(int64(1 << 30)),
+				PreviousBackupID: "prev-uuid",
+				StartedAt:        &created,
+				CompletedAt:      &created,
+			},
+			Source: &v1alpha2.BackupSource{
+				ClaimName:            "claim-1",
+				ClaimNamespace:       "apps",
+				PersistentVolumeName: "pv-1",
+				PoolName:             "pool-1",
+				PoolUUID:             "pool-uuid",
+				LvolID:               "lvol-uuid",
+				LvolName:             "lvol-1",
+				FSType:               "ext4",
+				SnapshotID:           "snapshot-uuid",
+				SnapshotName:         "snap-1",
+				NodeID:               "node-uuid",
+				ClusterUUID:          "source-cluster-uuid",
+			},
+			// The lock is the field this trip exists for. It lives only in the
+			// hub's vocabulary, and a conversion with nowhere to put it would
+			// free the lock on every write while v1alpha1 is the storage
+			// version, so two restores of one backup would each believe they
+			// held it.
+			ActiveOpsRef:       "restore-1",
+			Message:            "completed",
+			ObservedGeneration: 3,
+		},
+	}
+
+	var stored StorageBackup
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StorageBackup
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if diff := cmp.Diff(hub, &back); diff != "" {
+		t.Errorf("storing and reading back changed the object (-written +read):\n%s", diff)
+	}
+}
+
+func TestStorageClusterOpsRoundTripsFromTheHub(t *testing.T) {
+	started := metav1.Now()
+	// Truncated to the second because that is the only precision a
+	// metav1.Time has on the wire, so a deadline stored in a resource is
+	// already second-resolution before this conversion sees it.
+	deadline := metav1.NewTime(started.Add(10 * time.Minute).Truncate(time.Second))
+
+	hub := &v1alpha2.StorageClusterOps{
+		ObjectMeta: metav1.ObjectMeta{Name: "ops-1", Namespace: "sb"},
+		Spec: v1alpha2.StorageClusterOpsSpec{
+			ClusterRef:     "production",
+			Action:         v1alpha2.StorageClusterOpsActionRollingRestart,
+			RollingRestart: &v1alpha2.RollingRestartSpec{RefreshSNodeAPI: true},
+		},
+		Status: v1alpha2.StorageClusterOpsStatus{
+			Phase: v1alpha2.StorageClusterOpsPhaseRunning,
+			Step: statemachine.KubeSnapshot{
+				State:    string(v1alpha2.StorageClusterOpsStepRestartingNode),
+				Deadline: &deadline,
+			},
+			Message:            "Node 2/2 (node-b): RestartingNode",
+			ObservedGeneration: 1,
+			StartedAt:          &started,
+			RollingRestart: &v1alpha2.RollingRestartStatus{
+				Nodes:     []string{"node-a", "node-b"},
+				NodeIndex: 1,
+			},
+		},
+	}
+
+	var stored StorageClusterOps
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StorageClusterOps
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if diff := cmp.Diff(hub, &back); diff != "" {
+		t.Errorf("storing and reading back changed the object (-written +read):\n%s", diff)
+	}
+}
+
+func TestStorageNodeOpsRoundTripsFromTheHub(t *testing.T) {
+	started := metav1.Now()
+	filter := testSystemVolumeFilter
+	force := true
+
+	hub := &v1alpha2.StorageNodeOps{
+		ObjectMeta: metav1.ObjectMeta{Name: "ops-1", Namespace: "sb"},
+		Spec: v1alpha2.StorageNodeOpsSpec{
+			NodeRef: "node-1",
+			Action:  v1alpha2.StorageNodeOpsActionMigrate,
+			Force:   &force,
+			Migrate: &v1alpha2.MigrateSpec{
+				TargetWorkerNode: "worker-5",
+				NewSsdPcie:       []string{"0000:5e:00.0"},
+			},
+			Remove: &v1alpha2.RemoveSpec{SystemVolumeFilterRegex: &filter},
+		},
+		Status: v1alpha2.StorageNodeOpsStatus{
+			Phase: v1alpha2.StorageNodeOpsPhaseRunning,
+			// AwaitingNode is the sharper half of the pair this version spells as
+			// one Restarting, so it is the value that proves the stash carries
+			// what the projection cannot.
+			Step:               statemachine.KubeSnapshot{State: string(v1alpha2.StorageNodeOpsStepAwaitingNode)},
+			Message:            "waiting for node-1",
+			Drain:              &v1alpha2.DrainStatus{VolumesTotal: 10, VolumesMigrated: 7},
+			ObservedGeneration: 3,
+			StartedAt:          &started,
+		},
+	}
+
+	var stored StorageNodeOps
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StorageNodeOps
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if diff := cmp.Diff(hub, &back); diff != "" {
+		t.Errorf("storing and reading back changed the object (-written +read):\n%s", diff)
+	}
+}
+
+// The pool's round trip is the widest, because its spec is the one the redesign
+// regrouped: three top-level fields and a QoS block gather into spec.limits, a
+// parameters struct and a toggle gather into spec.volumeDefaults, and the four
+// ceilings change type on the way. Every one of those has to survive being
+// stored as v1alpha1 and read back.
+func TestStoragePoolRoundTripsFromTheHub(t *testing.T) {
+	hub := &v1alpha2.StoragePool{
+		ObjectMeta: metav1.ObjectMeta{Name: "tenant-a", Namespace: "simplyblock"},
+		Spec: v1alpha2.StoragePoolSpec{
+			ClusterRef:   "production",
+			AllowedNodes: []string{"production-7f3a9c", "production-2b81de"},
+			Limits: &v1alpha2.PoolLimits{
+				Capacity:      "10T",
+				MaxVolumeSize: "2T",
+				IOPS:          ptr.To(int32(200000)),
+				Throughput: &v1alpha2.ThroughputLimits{
+					Read: ptr.To(int32(2048)), Write: ptr.To(int32(1024)), ReadWrite: ptr.To(int32(4096)),
+				},
+			},
+			VolumeDefaults: &v1alpha2.VolumeDefaults{
+				IOPS: ptr.To(int32(20000)),
+				Throughput: &v1alpha2.ThroughputLimits{
+					Read: ptr.To(int32(300)), Write: ptr.To(int32(200)), ReadWrite: ptr.To(int32(512)),
+				},
+				Filesystem:                "xfs",
+				EnableCompression:         ptr.To(true),
+				EnableClientCompression:   ptr.To(true),
+				EnableClientDeduplication: ptr.To(false),
+				EnableReplication:         ptr.To(false),
+				EnableDHCHAP:              ptr.To(true),
+				PriorityClass:             "high",
+				Fabric:                    "tcp",
+				MaxNamespacesPerSubsystem: ptr.To(int32(4)),
+				Tune2fsReservedBlocks:     "1",
+			},
+		},
+		Status: v1alpha2.StoragePoolStatus{
+			Phase:                   v1alpha2.StoragePoolPhaseReady,
+			UUID:                    "4f2c8a11-6b3d-4e19-9a55-0c7e1d8f2b34",
+			Status:                  "online",
+			StorageClassNames:       []string{"archive-ext4", "fast-xfs"},
+			DefaultStorageClassName: "simplyblock-production",
+			Limits: &v1alpha2.PoolLimitsStatus{
+				Host: "node-a",
+				IOPS: ptr.To(int32(200000)),
+				Throughput: &v1alpha2.ThroughputLimits{
+					Read: ptr.To(int32(2048)), Write: ptr.To(int32(1024)), ReadWrite: ptr.To(int32(4096)),
+				},
+			},
+			AllowedNodes:       []string{"production-7f3a9c"},
+			ActiveOpsRef:       "rebalance-1",
+			Message:            "ready",
+			ObservedGeneration: 3,
+		},
+	}
+
+	var stored StoragePool
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StoragePool
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if diff := cmp.Diff(hub, &back); diff != "" {
+		t.Errorf("storing and reading back changed the object (-written +read):\n%s", diff)
+	}
+}
+
+// A pool that asked for no ceiling and no defaults comes back with neither group
+// rather than with two empty ones, which for spec.volumeDefaults is the
+// difference between a field that can still be set and one that never can.
+func TestStoragePoolEmptyGroupsRoundTripAsAbsent(t *testing.T) {
+	hub := &v1alpha2.StoragePool{Spec: v1alpha2.StoragePoolSpec{ClusterRef: "production"}}
+
+	var stored StoragePool
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StoragePool
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if back.Spec.Limits != nil {
+		t.Errorf("spec.limits = %+v, want nil", back.Spec.Limits)
+	}
+	if back.Spec.VolumeDefaults != nil {
+		t.Errorf("spec.volumeDefaults = %+v, want nil", back.Spec.VolumeDefaults)
+	}
+}
+
+// The cluster's round trip is the other wide one. Its spec is renamed,
+// regrouped, widened, and stripped of four fields at once, and its status gains
+// a phase, a step, a task window, and a generation this version has nowhere to
+// put. Every one of those has to survive being stored as v1alpha1 and read
+// back, because while v1alpha1 is the storage version that is what every write
+// costs.
+func TestStorageClusterRoundTripsFromTheHub(t *testing.T) {
+	// Truncated to the second, because that is the only precision a
+	// metav1.Time has on the wire: the deadline passes through an annotation
+	// on the way down, and a stored resource would already have lost the rest.
+	deadline := metav1.NewTime(metav1.Now().Add(5 * time.Minute).Truncate(time.Second))
+
+	hub := &v1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "production", Namespace: "sb"},
+		Spec: v1alpha2.StorageClusterSpec{
+			MaxSubsystemCount: ptr.To(int32(20)),
+			VCPUCount:         ptr.To(int32(8)),
+			MinHugePagesSize:  "100G",
+			DeviceClass:       v1alpha2.StorageClusterDeviceClassLogicalBlock,
+			KMS: &v1alpha2.KMSSpec{
+				Vault: &v1alpha2.VaultKMS{Endpoint: "https://vault.example.com:8200"},
+			},
+			Backup: &v1alpha2.BackupStoreSpec{
+				Endpoint:             "https://s3.example.com",
+				Bucket:               "simplyblock-backups",
+				Region:               "eu-central-1",
+				CredentialsSecretRef: corev1.LocalObjectReference{Name: "backup-credentials"},
+			},
+			DisableDataRealignment:    ptr.To(true),
+			EnableVolumeAutoPlacement: ptr.To(true),
+			VolumeAutoPlacement: &v1alpha2.VolumeAutoPlacementSettings{
+				DisableMigration: ptr.To(true),
+				MetricsBackend:   ptr.To(v1alpha2.MetricsBackendPrometheus),
+			},
+		},
+		Status: v1alpha2.StorageClusterStatus{
+			Phase:               v1alpha2.StorageClusterPhaseCreating,
+			Step:                statemachine.KubeSnapshot{State: "Creating", Deadline: &deadline},
+			UUID:                "8f3c1e70-9a2b-4d51-b1c7-2f6e0d9a4c88",
+			ClusterName:         "production",
+			Status:              "active",
+			ErasureCodingScheme: "2x1",
+			Configured:          true,
+			Tasks: []v1alpha2.ClusterTask{
+				{ID: "task-1", Type: "node_restart", Status: "running", Retry: 2},
+			},
+			FailureDomains: []v1alpha2.FailureDomainIndex{
+				{Name: "rack-a", Index: 0},
+				{Name: "rack-b", Index: 1},
+			},
+			Message:            "creating the backend cluster",
+			ObservedGeneration: 7,
+		},
+	}
+
+	var stored StorageCluster
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StorageCluster
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if diff := cmp.Diff(hub, &back); diff != "" {
+		t.Errorf("storing and reading back changed the object (-written +read):\n%s", diff)
+	}
+}

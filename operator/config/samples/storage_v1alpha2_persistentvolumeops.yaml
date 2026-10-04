@@ -1,0 +1,21 @@
+# A PersistentVolumeOps moving one volume to another storage node.
+#
+# It carries no namespace, because a PersistentVolume is cluster-scoped and so
+# is an operation on one. The target is named as a StorageNode object rather
+# than as a backend UUID, so a migration can be written by hand without looking
+# one up, and it carries a namespace because a bare name has none to mean from
+# here.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: PersistentVolumeOps
+metadata:
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: persistentvolumeops-sample
+spec:
+  persistentVolumeName: pvc-00000000-0000-0000-0000-000000000000
+  action: Migrate
+  migrate:
+    targetNodeRef:
+      namespace: simplyblock
+      name: storagenode-sample

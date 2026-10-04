@@ -1,0 +1,17 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: discover-role-02
+  namespace: simplyblock
+spec:
+  action: Discover
+status:
+  environment: K3s
+  step: {}
+  workers:
+  - worker-01
+  - worker-02
+  - worker-03
+  - worker-04
+  - worker-05
+  - worker-06

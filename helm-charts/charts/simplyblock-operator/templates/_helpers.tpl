@@ -1,83 +1,31 @@
-{{/* vim: set filetype=mustache: */}}
+{{/*
+Whether this profile runs a CSI driver.
 
-{{/* labels for helm resources */}}
-{{- define "spdk.labels" -}}
-labels:
-  heritage: "{{ .Release.Service }}"
-  release: "{{ .Release.Name }}"
-  revision: "{{ .Release.Revision }}"
-  chart: "{{ .Chart.Name }}"
-  chartVersion: "{{ .Chart.Version }}"
+The profiles are listed rather than a negation of the ones that do not, so a
+profile added later renders no driver until somebody decides it should. The
+negation would do the opposite and give every future profile a CSI deployment
+by default, which is the wrong way round: a driver registers a provisioner and
+takes over the node plugin's socket on every worker, and a profile that wanted
+neither would get both by saying nothing.
+
+standalone and managed are here because both run workloads that mount
+simplyblock volumes. What differs between them is where the control plane is,
+and the driver reaches it through the credentials Secret either way
+(design-simplyblockdriver.md §4.3). empty is not: its administrator writes the
+SimplyblockDriver, and a chart-rendered one beside it would be a second CSI
+deployment.
+*/}}
+{{- define "simplyblock.rendersCSIDriver" -}}
+{{- if has .Values.deployment.profile (list "standalone" "managed") -}}
+true
+{{- end -}}
 {{- end -}}
 
 {{- define "simplyblock.controlPlaneAddr" -}}
 {{- if .Values.csiConfig.simplybk.ip -}}
 {{ .Values.csiConfig.simplybk.ip }}
-{{- else if .Values.operator.enabled -}}
-http://simplyblock-webappapi.{{ .Release.Namespace }}.svc.cluster.local:5000
-{{- end -}}
-{{- end -}}
-
-{{/*
-The clusters whose event log the Grafana event-driven alert rules read, as a
-JSON array of {"id","secret"} objects for `fromJsonArray`. Both the Infinity
-data sources and the rules that query them iterate this, so the two can never
-disagree about which clusters exist.
-
-A cluster with no id or no secret is skipped rather than rendered half-configured.
-The two are used for different halves of the same request: the secret is the
-whole credential, sent as the bearer token that /api/v2 matches against every
-cluster's secret, while the id addresses the cluster in the request path. The
-API then checks that the two agree, so a half-configured or mismatched entry
-fails every evaluation with a 401 that reads like an outage rather than like a
-missing value. The list is empty until `cluster create` has run and its UUID and
-secret have been fed back into the values, which is the normal state right after
-install.
-*/}}
-{{- define "simplyblock.eventAlertClusters" -}}
-{{- $out := list -}}
-{{- if .Values.storagenode.multiCluster.enable -}}
-{{- range default (list) .Values.storagenode.multiCluster.clusters -}}
-{{- if and .cluster_id .secret -}}
-{{- $out = append $out (dict "id" .cluster_id "secret" .secret) -}}
-{{- end -}}
-{{- end -}}
 {{- else -}}
-{{- if and .Values.csiConfig.simplybk.uuid .Values.csiSecret.simplybk.secret -}}
-{{- $out = append $out (dict "id" .Values.csiConfig.simplybk.uuid "secret" .Values.csiSecret.simplybk.secret) -}}
-{{- end -}}
-{{- end -}}
-{{- toJson $out -}}
-{{- end -}}
-
-{{/*
-Volume named "tls" holding the serving cert bundle for pods that terminate TLS.
-Args: dict "ctx" $root "secret" <serving-cert-secret-name>
-- openshift: project the serving Secret with the cabundle ConfigMap (renaming
-  service-ca.crt -> ca.crt) since the Secret carries only tls.crt/tls.key.
-- cert-manager: mount the Secret directly; it already contains ca.crt.
-Caller pipes through `nindent N`.
-*/}}
-{{- define "simplyblock.tlsVolume" -}}
-{{- $ctx := .ctx -}}
-{{- $secret := .secret -}}
-{{- if $ctx.Values.tls.enabled -}}
-{{- if eq $ctx.Values.tls.provider "openshift" }}
-- name: tls
-  projected:
-    sources:
-    - secret:
-        name: {{ $secret }}
-    - configMap:
-        name: simplyblock-certificate-authority
-        items:
-        - key: service-ca.crt
-          path: ca.crt
-{{- else if eq $ctx.Values.tls.provider "cert-manager" }}
-- name: tls
-  secret:
-    secretName: {{ $secret }}
-{{- end -}}
+http://simplyblock-webappapi.{{ .Release.Namespace }}.svc.cluster.local:5000
 {{- end -}}
 {{- end -}}
 
@@ -186,61 +134,3 @@ to land them at the right column inside an `env:` list.
   value: "anonymous"
 {{- end }}
 {{- end -}}
-
-{{/*
-Volume entry for the FDB peer cert. Pipes into a podTemplate's `volumes:` list.
-The FDB operator fully replaces general.podTemplate with the per-class one when
-a class override exists, so the volume must be repeated in each podTemplate that
-sets one (general, storage, log).
-*/}}
-{{- define "simplyblock.foundationdbCertVolume" -}}
-{{- if .Values.tls.mutual_enabled }}
-- name: tls-fdb
-  secret:
-    secretName: simplyblock-foundationdb-tls
-{{- end }}
-{{- end -}}
-
-{{/*
-TLS env vars + volumeMount for the unified-image `foundationdb` container.
-Pipes into a container entry at the same indent as `name`/`resources`.
-*/}}
-{{- define "simplyblock.foundationdbContainerTls" -}}
-{{- if .Values.tls.mutual_enabled }}
-env:
-- name: FDB_TLS_CERTIFICATE_FILE
-  value: /var/fdb/tls/tls.crt
-- name: FDB_TLS_KEY_FILE
-  value: /var/fdb/tls/tls.key
-- name: FDB_TLS_CA_FILE
-  value: /var/fdb/tls/ca.crt
-volumeMounts:
-- name: tls-fdb
-  mountPath: /var/fdb/tls
-  readOnly: true
-{{- end }}
-{{- end -}}
-
-{{- define "simplyblock.commonContainer" }}
-env:
-  - name: SIMPLYBLOCK_LOG_LEVEL
-    valueFrom:
-      configMapKeyRef:
-        name: simplyblock-config
-        key: LOG_LEVEL
-  {{- include "simplyblock.tlsEnv" . | nindent 2 }}
-
-volumeMounts:
-  - name: fdb-cluster-file
-    mountPath: /etc/foundationdb/fdb.cluster
-    subPath: fdb.cluster
-  {{- include "simplyblock.tlsVolumeMount" . | nindent 2 }}
-
-resources:
-  requests:
-    cpu: "50m"
-    memory: "100Mi"
-  limits:
-    cpu: "300m"
-    memory: "1Gi"
-{{- end }}

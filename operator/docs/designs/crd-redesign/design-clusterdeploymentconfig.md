@@ -1,8 +1,8 @@
 # Design Document: The Deployment Config and the Operator's Own Operations
 
-**Status:** Draft  
+**Status:** Implemented, with the exceptions §12 records  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-29 (last updated 2026-09-08)  
+**Date:** 2026-08-29 (last updated 2026-09-17)  
 **Target Release:** simplyblock 26.4  
 **Test Plan:** [`tests/test-plan-clusterdeploymentconfig.md`](../../tests/test-plan-clusterdeploymentconfig.md)  
 **Example:** [`assets/example-cluster-config.yaml`](assets/example-cluster-config.yaml)  
@@ -125,18 +125,18 @@ corrects it, approves it, and the operator expands it.
 
 ## 3. ClusterDeploymentConfig: API
 
-Declared in `operator/api/v1alpha1/clusterdeploymentconfig_types.go`, short name
+Declared in `operator/api/v1alpha2/clusterdeploymentconfig_types.go`, short name
 `cdc`. The type is Appendix A and a filled-in document is
 [`assets/example-cluster-config.yaml`](assets/example-cluster-config.yaml). What
 follows quotes the field an argument turns on and no more.
 
 ### 3.1 Shape
 
-The document has three parts: what the deployment is, what cluster to make, and
-which nodes to make it out of.
+The document has four parts: what the deployment is, which images it runs, what
+cluster to make, and which nodes to make it out of.
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: ClusterDeploymentConfig
 metadata:
   name: production
@@ -145,6 +145,16 @@ spec:
   approved: true
   environment: OpenShift
   edgeCluster: false
+  images:
+    nodeAgent:
+      image: public.ecr.aws/simply-block/simplyblock:main
+      imagePullPolicy: Always
+    spdk:
+      image: public.ecr.aws/simply-block/ultra:main-latest
+      imagePullPolicy: Always
+    spdkProxy:
+      image: public.ecr.aws/simply-block/simplyblock:main
+      imagePullPolicy: Always
   cluster:
     name: production
     maxSubsystemCount: 20
@@ -169,6 +179,57 @@ spec:
           devices:
             nvme: ["0000:5e:00.0"]
 ```
+
+**Every image the deployment pins is in one block, and all three are software that
+runs on a storage node.** `images.nodeAgent` is what the storage-node DaemonSet
+runs: the agent the control plane drives a worker through, and the two init
+containers that configure the host before it starts. It is written to
+`StorageCluster.spec.storageNodes`, which is where the retired
+`StorageNodeSet.spec.clusterImage` went. `images.spdk` and `images.spdkProxy` are
+written onto every `StorageNode.spec.config` the expansion creates, because those
+two fields are per node so that a later rollout can walk the fleet one machine at
+a time ([`design-storagenode.md`](design-storagenode.md) §3.2) and a document
+states the fleet's starting point.
+
+The slot is `nodeAgent` and not `cluster`, which is what it was called first. The
+earlier name said where the value lands and not what it is, and a reader who had
+to ask what a cluster image was had already lost the fact the block turns on: these
+are three processes on a worker, two of them in a pod the control plane creates
+and one in a DaemonSet the operator creates.
+
+`images.nodeAgent` and `images.spdkProxy` are ordinarily the same image, since the
+agent and the proxy are one Python codebase. They are two slots because their
+lifetimes differ: the agent is replaced by rolling the DaemonSet, and the proxy
+only when the SPDK pod it is a sidecar of is torn down and restarted.
+
+They are together here rather than each beside the object it configures because
+pinning images is one decision taken once. An air-gapped installation overrides
+all three against its own registry, and a reviewer reading the document has one
+place to check what this deployment will run, which is the property the whole kind
+exists for.
+
+The control plane's own image is not one of the slots. This kind creates a
+`StorageCluster` and its `StorageNode` objects and neither creates nor adopts the
+`ControlPlane`, so a slot for it would be a field the expansion has nowhere to
+write. It is `ControlPlane.spec.source.local.image`, and the CSI driver's is
+`SimplyblockDriver.spec.image`.
+
+Each slot is an image and a pull policy, and either may be stated without the
+other: an override of the image keeps the default policy, and a pin of the policy
+keeps the default image. A slot the document does not state is written nowhere, so
+the field it would have filled keeps its own default rather than being overridden
+with an empty string. Every image is held to the trusted-registry set the rest of
+this API holds them to.
+
+`images.nodeAgent` is spent only where the document creates the cluster. A document
+naming an existing one in `spec.clusterRef` adds nodes to a DaemonSet already
+running under an image that cluster states, and the slot is ignored the same way
+`spec.cluster` is.
+
+The two SPDK policies are recorded and not yet obeyed. The control plane starts
+the SPDK pod, and its `spdk_process_start` takes no pull policy: the pod template
+it renders writes `Always` for both containers. They are in the document because a
+deployment states them, and they reach the pod once the control plane accepts one.
 
 **All three sizing values sit in the cluster block, and nothing below it varies
 them.** `maxSubsystemCount`, `vcpuCount`, and `minHugePagesSize` are stated once
@@ -201,15 +262,98 @@ workers sharing one configuration rather than one of anything.
 `spec.edgeCluster` names a fact about the deployment rather than switching a
 capability on, which is the class
 [`design-crd-model.md`](design-crd-model.md) §7.5 leaves outside the `enableXyz`
-and `disableXyz` rule, alongside `ubuntuHost` and `openShiftCluster`.
+and `disableXyz` rule, alongside `ubuntuHost`.
 
 **`spec.environment` is a shorthand, and the expansion is where it is spent.** A
-distribution decides whether the kubelet is reconfigured, whether CPU topology is
-read, and which host assumptions hold, which
-[`design-storagenode.md`](design-storagenode.md) §5.1 carries as
-`enableKubeletConfiguration`, `enableCpuTopology`, `ubuntuHost`, and
-`openShiftCluster` on each node. Naming `OpenShift` once decides all four, and
-`CreatingNodes` stamps them onto every `StorageNode` it creates (§4.2).
+distribution decides whether the kubelet is reconfigured and whether CPU topology
+is read, which [`design-storagenode.md`](design-storagenode.md) §5.1 carries as
+`enableKubeletConfiguration` and `enableCpuTopology` on the cluster, and the
+`openshift` block whose presence states the distribution. Naming `OpenShift` once decides all three, and `CreatingNodes` stamps
+them onto every `StorageNode` it creates (§4.2).
+
+**`spec.hostOS` is the other half of the same question, and it is a separate
+field because it has a separate answer.** The distribution decides what
+Kubernetes does to a machine; the host OS decides what the machine itself
+offers. A fleet on OpenShift runs Red Hat Enterprise Linux CoreOS and a fleet on
+K3s runs whatever its administrator installed, so neither can be read off the
+other. It carries the os-release `distro` and the packaging `family` that places
+it, and the expansion spends the distro on
+`StorageCluster.spec.storageNodes.ubuntuHost`: Ubuntu keeps the NVMe-oF modules
+in `linux-modules-extra` rather than in the base install, so a storage node on
+one installs the package for its running kernel before it starts.
+
+A document that states no `hostOS` states nothing about `ubuntuHost` either, and
+that is not the same as stating a host that is not Ubuntu. The cluster then
+falls back to its own default, which is what a hand-written cluster gets.
+
+**`spec.cluster.backup` is where the cluster's backups go, and it is on the
+document for the reason `kms` is.** The expansion creates the cluster and its own
+reconciler reads it back on the very next pass, so a store stated here is present
+at the cluster's creation rather than a race with whoever patches it in
+afterward. It is the one member of the template whose cluster field is mutable,
+which is what makes omitting it cost nothing permanent: a cluster is given a
+store whenever there is one to give. The `Secret` it names is not resolved at
+admission, because it is a core object a deployment legitimately creates
+alongside the document, and the cluster's creation is where its absence is
+reported.
+
+**`spec.cluster.openshift` is what a deployment onto OpenShift states beyond
+the environment.** Its one member names a machine-config role the storage nodes'
+own pool inherits from: adding a node creates a pool of its own,
+`storage-<cluster>`, and a node belongs to exactly one custom pool, so a fleet
+whose workers sat in a custom pool loses that pool's machine configuration
+unless its role is named here for the new pool to select as well. The block is
+read only for a document whose `environment` is `OpenShift`, and the schema
+refuses one that names it without saying so: the environment says which
+distribution this is, and the block is what that distribution needs said beyond
+it.
+
+**`spec.cluster.ports` is one block where the cluster has three fields.** The
+NVMe-oF and RPC bases and the node agent's port are the same decision taken once,
+which is which ports this deployment's nodes bind, and a reviewer reads them
+together or not at all. Each member expands into the cluster field it names
+(`nvmfBasePort`, `rpcBasePort`, `snodeApiPort`), and each carries the control
+plane's own default, so a document that names the block shows a reviewer the
+three numbers the cluster will run with rather than the one somebody happened to
+state. All three are immutable on the cluster, so this is the only place any of
+them can be stated at all.
+
+The third is `nodeAgent` rather than `snodeApi` because that is what the
+component is called everywhere else a document names it, `spec.images.nodeAgent`
+included.
+
+**`spec.cluster.enableNodeAffinity` is the data plane's locality, not
+Kubernetes'.** It has an erasure-coded volume's I/O served from the local node's
+own devices where it can, before crossing the network, and the control plane
+takes it at cluster create and never re-applies it — so the document is the only
+place it can be stated at all. The name is the one place this API invites the
+other reading:
+[`design-primary-node-placement.md`](../design-primary-node-placement.md)
+§`EnableNodeAffinity` is unrelated to Tier 1 is the account of what it is not,
+and co-locating a workload with its primary node is the separate mechanism
+described there.
+
+**`spec.cluster.containerResources` sizes the storage-node container.** The
+container is the node's management API and not SPDK, which runs in a pod of its
+own, so what outgrows the default is a node answering for many subsystems rather
+than a node moving more data. It expands into the cluster's own
+`spec.storageNodes.containerResources`, and stating either half of it replaces
+both: the defaults apply to a cluster that states neither requests nor limits,
+so a document stating requests alone produces a container with no limits at all.
+
+`spec.cluster.initContainerResources` sizes the two init containers, which are
+gone before that container starts: one writes the node's env file and the other
+runs `node_configure.py` once, so what they need is a short burst rather than
+the footprint of a process that runs for the node's life.
+
+**`spec.cluster.tolerations` is where the storage-node pods are allowed to
+run.** A fleet that dedicates machines to storage taints them, which is what
+keeps everything else off, and the DaemonSet that lands on those machines has to
+tolerate the taint or it schedules nowhere. It expands into the cluster's own
+`spec.storageNodes.tolerations`, and it is on the template rather than on the
+document because a growth document has no template: it names a cluster that
+already states what its storage nodes tolerate, and a second statement could
+only agree or disagree.
 
 That is the same relationship the cluster's sizing has, and it is what keeps the
 document ephemeral: the nodes carry the resolved flags and the sizing they were
@@ -275,15 +419,28 @@ document is a draft and a reviewer edits it freely. After approval it is the
 record of what was deployed, and editing it would describe a deployment that
 never happened.
 
-That is one CEL rule on the spec rather than a marker per field:
+That is one CEL rule on the spec rather than a marker per field, and a second
+rule stops the gate itself from being closed again:
 
 ```go
-// +kubebuilder:validation:XValidation:rule="!oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval cannot be withdrawn"
 ```
 
 **`spec.approved` itself is immutable once true.** Un-approving something already
 expanded does not un-expand it, and a field that can be toggled back invites the
 belief that it does.
+
+**The field is defaulted and serialized rather than omitted when false, and the
+`has()` guard is why both rules work.** A bool omitted when false is a key the API
+server never stores, so a rule reading `oldSelf.approved` on a document that has
+never been approved fails to evaluate rather than reading `false`, and a rule that
+fails to evaluate denies the request. Spelled without the guard, the immutability
+rule refuses every approval there could ever be. `+kubebuilder:default=false` and
+the absent `omitempty` put the key in the stored object, and the guard carries the
+documents written before the default existed. It is also what a reviewer needs:
+the gate they are being asked to open has to be visible in the document rather
+than implied by its absence.
 
 Both rules are restated by the validating webhook of §5, which is what turns a
 rejection naming a CEL rule into one naming the field that was edited.
@@ -343,6 +500,27 @@ can, and `DeviceNotFound` in `status.message` is what says so while the document
 is still editable. Approving without reading it is how a device mistake becomes
 an immutable document, and no mechanism below the reviewer prevents that.
 
+**The erasure coding is the other thing only this operator checks.** A scheme
+decides how many storage nodes the deployment must have: `ndcs+npcs` of them to
+place a stripe across, plus one spare per tolerated failure to rebuild onto,
+which is 3 for 1+1, 4 for 2+1, 6 for 4+1, 5 for 1+2, 6 for 2+2, and 8 for 4+2.
+The control plane validates the scheme itself on the cluster create and counts
+devices at activation — `ndcs+npcs+1` of them — and never nodes, so a fleet of
+four configured 4+2 is admitted everywhere below this document and produces a
+cluster that loses data on the second failure it was configured to survive.
+Validation counts the nodes the document produces, one per slot per worker, adds
+the ones the cluster already has for a growth document, and reports
+`StripeBelowMinimumNodes` when the total is short. A document that says nothing
+about erasure coding is counted as 1+1, because that is what the control plane
+defaults to.
+
+**Nodes that share a worker are counted, and then counted again.** The minimum is
+a node count, and a fleet that reaches it by running several nodes per socket on
+two workers has not bought the independent spare the count was asking for, since
+every node of a worker fails with the worker. `StripeBelowMinimumWorkers` is that
+case reported separately, so that the remedy — another machine rather than
+another slot — is the one stated.
+
 ### 4.2 The expansion machine
 
 ```
@@ -359,7 +537,12 @@ an immutable document, and no mechanism below the reviewer prevents that.
   AwaitingCluster   ← wait for status.uuid
     │
     ▼
-  CreatingNodes     ← one StorageNode per worker per slot
+  CreatingNodes     ← map the failure domains, then one StorageNode per
+                      worker per slot
+    │
+    ▼
+  Activating        ← wait for this document's own nodes, then ask for the
+                      cluster to be activated
     │
     ▼
   phase: Expanded
@@ -373,9 +556,29 @@ existing cluster writes nothing: the cluster's class already holds, and a docume
 whose groups disagree with it was rejected at approval (§5.1).
 
 **`CreatingNodes` resolves the document's shorthands as it writes.** Each node
-gets the cluster's sizing, its group's devices as one `config.deviceNames` list
-(§3.1), and the four distribution flags `spec.environment` stands for. Nothing on
-the node refers back to the config, which is what §4.3 means by owning nothing.
+gets the cluster's sizing and its group's devices as one `config.deviceNames`
+list (§3.1). Nothing on the node refers back to the config, which is what §4.3
+means by the document owning no part of the deployment.
+
+**`CreatingNodes` maps the document's failure domains before it creates a node.**
+A group's `failureDomain` is a label, and the control plane indexes a failure
+domain by integer, so the step gives every label the document introduces an
+index in the cluster's `status.failureDomains`
+([`design-storagecluster.md`](design-storagecluster.md) §3.3). It does this for
+a cluster the document created and for one it joined through `clusterRef`, and
+it only adds: a label already mapped keeps its index. Writing the mapping first
+means no node's add runs before the index it sends exists. The mapping holds at
+most 256 labels, so validation refuses a document that would take its cluster
+past that with `TooManyFailureDomains`, counting the labels the cluster already
+maps. Without it the status patch would be refused on every pass and the
+expansion would stall after approval.
+
+**The distribution flags `spec.environment` stands for land on the cluster, not on
+each node.** They configure the storage-node workload, which is one DaemonSet for
+every node it schedules, so they are resolved once onto
+`StorageCluster.spec.storageNodes`
+([`design-storagenode.md`](design-storagenode.md) §5.1) rather than stamped node
+by node. §12 Q1 is the mapping.
 
 **`CreatingNodes` is the step that must be idempotent, and it is by construction.**
 A `StorageNode` is identified by `(clusterRef, workerNode, slot)`
@@ -383,22 +586,48 @@ A `StorageNode` is identified by `(clusterRef, workerNode, slot)`
 exists for the cluster and creates only the slots that do not. A crash part-way
 through creates the rest on the next pass and duplicates nothing.
 
-**The expansion does not wait for the nodes to come up.** It creates the objects
-and finishes. Provisioning them is the node controller's, it is bounded by
-`maxParallelNodeAdds`, and a document that stayed `Expanding` until a
-twenty-node fleet was online would be reporting the fleet's progress rather than
-its own.
+**`Activating` waits for this document's own nodes and then asks for the
+cluster.** A document knows how many nodes it made, so it knows when the
+deployment it describes is whole, and stopping at "the objects exist" would leave
+a cluster serving nothing behind a document reporting `Expanded`, with nothing
+saying that one more thing was required of anybody. The step holds while any node
+it created is still coming up, raises one `StorageClusterOps` activation when they
+are all Online, and completes when that operation does.
+
+**It waits for its own nodes and not for the fleet.** The set it watches is the
+one `CreatingNodes` wrote, so a document adding four nodes to a twenty-node
+cluster waits for four. Provisioning is still the node controller's and still
+bounded by `nodeProvisioningBudget`. What the document adds is the knowledge of which
+nodes are its own.
+
+**The budget is the document's to state.** `nodeProvisioningBudget` is the
+cluster's field, and the template carries it because the document is what states
+the size of a deployment: thirty workers added one at a time is the difference
+between an afternoon and a week, and there is no later moment at which somebody
+is asked. A document that states nothing leaves the field unset, so the cluster's
+own default of one decides it rather than the expansion inventing a cap nobody
+reviewed.
+
+**The activation is asked for once.** `Activating` is re-entered on every
+reconcile until the operation finishes, and the operation is named after the
+document rather than generated, so a second pass finds the one that exists rather
+than raising another.
 
 ### 4.3 Deletion
 
 **There is no finalizer, and that is deliberate.** Deleting a
-`ClusterDeploymentConfig` deletes a document. It owns nothing, nothing references
-it, and nothing reads it after expansion, so there is nothing to clean up and
-nothing to protect.
+`ClusterDeploymentConfig` deletes a document. Nothing references it and nothing
+reads it after expansion, so there is nothing to clean up.
 
-Specifically, it does **not** own the `StorageCluster` it created. An owner
-reference would make deleting the document delete the cluster and every volume in
-it, which is the opposite of ephemeral.
+Specifically, it does **not** own the `StorageCluster` it created, nor any
+`StorageNode`. An owner reference would make deleting the document delete the
+cluster and every volume in it, which is the opposite of ephemeral.
+
+**The one object it does own is the activation it raised.** The
+`StorageClusterOps` of §4.2 carries a controller reference to the document,
+because it is the document's own act rather than a lasting part of the deployment:
+an operation that has finished is a record of a request, and deleting the request
+with the document that made it leaves the cluster it activated untouched.
 
 ---
 
@@ -434,10 +663,20 @@ it found in `status.message` (§4.1) so that a reviewer fixes it in place.
 API.** Every worker named by every group has to exist as a Node,
 `spec.clusterRef` has to resolve to a `StorageCluster` when it is set and to
 nothing when it is not (§6), the class the groups name has to match that cluster's
-`spec.deviceClass` where one is named, and no other approved config may already
-own the cluster this one would create. All four are answerable from objects the
-operator already caches, which is what makes them cheap enough to answer inside an
-admission request.
+`spec.deviceClass` where one is named, no other approved config may already own
+the cluster this one would create, and the deployment has to have the storage
+nodes its erasure-coding scheme requires (§4.1). All five are answerable from
+objects the operator already caches, which is what makes them cheap enough to
+answer inside an admission request.
+
+**The erasure-coding check is the one with nothing behind it.** The other four
+are refused again later by something — a node create, the expansion's own
+refusals — where this one is refused by nothing: the control plane accepts a
+cluster whose fleet is too small for its stripe, activates it, and serves from
+it. The schema refuses an unsupported scheme at the apply, which is CEL's half
+(`StripeSpec` in
+[`design-storagecluster.md`](design-storagecluster.md) §3.1), and the node count
+is this webhook's, because a schema cannot count objects that do not exist yet.
 
 **The class check is the one of the four that has a schema half.** That every
 group agrees is CEL's (§3.1), and it holds from the first draft. What admission
@@ -550,7 +789,7 @@ has data on those devices.
 
 ## 7. OperatorOps
 
-Declared in `operator/api/v1alpha1/operatorops_types.go`, short name `oops`, and
+Declared in `operator/api/v1alpha2/operatorops_types.go`, short name `oops`, and
 reconciled by `OperatorOpsReconciler` in
 `operator/internal/controllers/deployment/operatorops_controller.go`, beside the
 config its discovery action writes. The type is Appendix B.
@@ -633,14 +872,31 @@ kind exists for.
 |-------------------------------------------------------|-------------------------------------------------------------|
 | The Kubernetes API's node list                        | Worker hostnames, labels, taints, and allocatable resources |
 | Each node's available NVMe devices                    | Candidate devices, by PCI address (§8.2)                    |
-| Each node's available block devices, where enabled    | Candidate devices, by path (§8.2)                           |
+| Each node's available block devices, where enabled    | Candidate devices, by persistent path (§8.2)                |
 | Node labels, annotations, and cluster-scoped services | `spec.environment`, from the markers a distribution leaves  |
+| Each node's `/etc/os-release` and `uname`             | `spec.hostOS`, when every worker agrees                     |
 | `StorageNode` objects in the namespace                | Which workers and devices are already taken                 |
 
 **Discovery reads the cluster it runs in and nothing else.** What a worker has
 free is a property of the worker, so the Kubernetes API and the node itself are
 where both halves of it are read. There is no control-plane client and no backend
 call, which is why this document has no backend API requirements.
+
+**A block device is named by the persistent path udev published for it, never by
+its kernel path.** A document is written once and read back on every configure
+the deployment performs, the first of them possibly after a reboot, and
+`/dev/sdb` names whichever disk the kernel found second this boot. On the QEMU
+workers this was developed against, the disk the kernel calls `sdb` is the one
+the hypervisor calls `drive-scsi0` and `sda` is `drive-scsi2`, so a host that
+probes its controllers in another order hands each kernel name to another disk;
+both names exist and both resolve, so a document naming the first would hand a
+storage node a disk it was never given and nothing would say so. The probe
+therefore reports the `/dev/disk` link a device answers to alongside its kernel
+path, preferring the one built from what the device itself reports — a WWN, an
+NVMe namespace's EUI or UUID, the identifier in a partition's own partition
+table — over one assembled from the model and serial its enclosure exports. A
+device udev published no link for is named by its kernel path, which is all
+there is.
 
 **A discovery run reports only what is unclaimed, which is what makes re-running
 it useful.** A worker that already carries a `StorageNode`, and a device that node
@@ -657,17 +913,41 @@ boots. Discovery reads them together and writes the distribution it concluded,
 which is what makes the field a finding a reviewer corrects rather than a
 question a reviewer answers. §3.1 is what the answer then buys.
 
+**`spec.hostOS` is read the same way and stated only when the fleet agrees.**
+Each probe reads its own host's `os-release`, which is on the worker's root
+filesystem rather than in the trees the rest of the inventory comes from, and
+the run states what every worker reported. One document becomes one cluster,
+which runs one storage-node DaemonSet, which carries one host OS for every
+worker it schedules, so a fleet whose workers run different distributions has no
+answer to state: the run states none and writes an event naming which worker
+runs what. The same is true of a fleet whose `os-release` nothing could read,
+which on a probe means its host's root filesystem was not mounted into it.
+
+**`spec.discover.tolerations` is what the run may probe through, and what the
+draft then states.** A probe pod is pinned with `spec.nodeName`, which bypasses
+the scheduler and not the taints: a `NoSchedule` taint still keeps the pod off
+and a `NoExecute` taint evicts one that landed, so a run against a dedicated
+storage plane that tolerates nothing inspects nothing. The same tolerations
+reach the draft's `spec.cluster.tolerations`, because the taints a run was
+allowed to probe through are the taints the cluster it proposes has to live
+with, and a document that stated the machines but not their taints described a
+deployment whose DaemonSet schedules nowhere.
 It also means two documents written against one Kubernetes cluster agree on it
 without anybody coordinating, since both runs read the same evidence.
 
 **Two classes of backend storage, and a run scans one of them.** NVMe devices are
 the class simplyblock has always accepted, and logical block devices are the class
-26.4 adds. `spec.discover.deviceFilter.enableLogicalBlockDevices` scans the block
-class, and leaving it unset scans NVMe. It selects rather than adds, because the
-draft a run writes describes one cluster and a cluster is built out of one class
+26.4 adds. `spec.discover.enableLogicalBlockDevices` scans the block class, and
+leaving it unset scans NVMe. It selects rather than adds, because the draft a run
+writes describes one cluster and a cluster is built out of one class
 ([`design-storagecluster.md`](design-storagecluster.md) §3.1): a run reporting
 both would write a document no reviewer could approve and no CEL rule would admit
 (§3.1).
+
+The field sits on `spec.discover` beside `forceJournalDevice` rather than inside
+`deviceFilter`, because it does not narrow the candidates. It decides which class
+of them is looked at, which of the filters apply, and what `forceJournalDevice`
+resolves, since the two classes lay out a journal differently.
 
 Unset is the conservative default for two reasons. Upgrading to 26.4 must not
 change what a discovery run reports, and NVMe is what every deployment before it
@@ -683,14 +963,13 @@ It is the only place in either kind that a device is described by a rule, and it
 has one set of filters per class. `pcieAllowList`, `pcieDenyList`, and `pcieModel`
 narrow the NVMe class, matching on an address and a model string only an NVMe
 device has. `blockAllowList` and `blockDenyList` narrow the block class, matching
-device paths. `driveSizeRange` and `enablePartitionedDevices` apply to whichever
-class the run is scanning, because a size and a partition table are properties of
-any device.
+device paths. `driveSizeRange` applies to whichever class the run is scanning,
+because a size is a property of any device.
 
 **A filter for the class the run is not scanning is refused.** A PCI list beside
 `enableLogicalBlockDevices: true` describes devices this run will never look at,
 and a block list without it does the same in the other direction, so a CEL rule on
-the filter rejects both combinations (Appendix B). Ignoring them instead would
+`spec.discover` rejects both combinations (Appendix B). Ignoring them instead would
 leave an administrator reading a narrowed run that was never narrowed, and the
 draft they would then review is the whole fleet's disks.
 
@@ -721,9 +1000,11 @@ an inspection cannot tell, so the inspection excludes it rather than handing a
 reviewer the job of noticing.
 
 **Partitions are the one condition an administrator can override.**
-`spec.discover.deviceFilter.enablePartitionedDevices` reports partitioned devices
-alongside the available ones, for the case where the partition table is stale and
-the device is meant to be handed over anyway. Naming such a device in a group is
+`spec.discover.enablePartitionedDevices` reports partitioned devices alongside
+the available ones, for the case where the partition table is stale and the
+device is meant to be handed over anyway. It sits on `spec.discover` rather than
+inside `deviceFilter` because it widens what a run reports, where every filter
+narrows it. Naming such a device in a group is
 then how it is forced into use (§3.1). Mounted and busy stay absolute: a device
 another subsystem is writing to is one simplyblock would corrupt, and a flag that
 turned that into an intention would be a flag for losing data.
@@ -741,6 +1022,19 @@ rather than removing it.
 **How workers should be grouped.** It groups by identical hardware, which is a
 guess at intent: two racks with identical machines are one group by that rule and
 two by any sensible operational one. A reviewer regroups.
+
+Identical hardware means the same device list, and a group carries one list for
+every worker in it, so what counts as identical follows from how a device is
+named (§8.1). Under kernel names it meant identical enumeration order, which is
+not a property of the hardware at all: two machines with genuinely different
+disks both call theirs `sda` and grouped together, which wrote one device list
+that was wrong for whichever of them the reviewer did not check. Under persistent
+names it means what it says. A fleet of cloned virtual machines names its disks
+identically — `drive-scsi0` is `drive-scsi0` on every one of them — and groups as
+one; a fleet of real machines names each disk by something only that disk
+carries, so each worker describes its own group. The second is the honest
+document: one device list shared between workers was only ever correct because
+kernel names repeat.
 
 **What the failure domains are.** Rack and power topology is not in the
 Kubernetes API. Where nodes carry `topology.kubernetes.io/zone` discovery copies
@@ -766,6 +1060,33 @@ re-run. A second discovery writes a second document rather than editing the
 first, because the first may have been reviewed and edited, and overwriting a
 reviewer's corrections with a fresh guess is the worst behavior available.
 
+### 8.4 The first run raises itself
+
+**An install that has nothing raises one `Discover` run by itself**, so that an
+administrator finds a draft of what the fleet has rather than an empty namespace.
+It is raised by a `Runnable` in the operator rather than by a reconciler, because
+there is no object whose desired state it converges toward and the question has
+one answer per installation. It is declined the moment anything already exists:
+an `OperatorOps` of any kind, a `ClusterDeploymentConfig`, a `StorageCluster`, or
+a fleet with no worker that holds storage without being asked to. The guard is
+most of the behavior, because probing puts a Job on every worker, and against a
+deployed fleet that cost falls on every worker of it once per operator upgrade.
+
+**The run is named rather than generated**, so the create is idempotent on top of
+that guard, and so an administrator who does not want it can say so by writing an
+object under that name.
+
+**It is the one write in the operator whose admission depends on the operator.**
+An `OperatorOps` is validated by `voperatorops.simplyblock.io`, which this same
+process serves, so the create races the webhook server the manager is still
+starting and the API server answers `failed calling webhook ... connection
+refused` until it is listening. The create therefore waits that window out rather
+than attempting once: a `Runnable` that is not a loop turns a few seconds of
+unavailability into an installation that never gets its draft, with nothing left
+to raise it. Only an unreachable webhook is waited out, and a webhook that
+answered and refused the spec has given an answer that repeating the write cannot
+change.
+
 ---
 
 ## 9. Observability
@@ -774,25 +1095,29 @@ Both kinds are new, so both tables are new infrastructure.
 
 ### 9.1 Kubernetes events
 
-| Event                                                    | Type      | Reason                   | On                        |
-|----------------------------------------------------------|-----------|--------------------------|---------------------------|
-| A draft names a worker that does not exist               | `Warning` | `WorkerNotFound`         | `ClusterDeploymentConfig` |
-| A draft names a device no node advertises                | `Warning` | `DeviceNotFound`         | `ClusterDeploymentConfig` |
-| A draft's devices are not the class its cluster uses     | `Warning` | `DeviceClassMismatch`    | `ClusterDeploymentConfig` |
-| A draft is valid and awaiting approval                   | `Normal`  | `AwaitingApproval`       | `ClusterDeploymentConfig` |
-| Expansion is held because the control plane is not ready | `Warning` | `ControlPlaneNotReady`   | `ClusterDeploymentConfig` |
-| Expansion refused: the cluster already exists            | `Warning` | `ClusterExists`          | `ClusterDeploymentConfig` |
-| Expansion refused: `clusterRef` names no cluster         | `Warning` | `ClusterNotFound`        | `ClusterDeploymentConfig` |
-| Expansion created the cluster                            | `Normal`  | `ClusterCreated`         | `ClusterDeploymentConfig` |
-| Expansion created the nodes                              | `Normal`  | `NodesCreated`           | `ClusterDeploymentConfig` |
-| A step's deadline expired                                | `Warning` | `StepDeadlineExceeded`   | `ClusterDeploymentConfig` |
-| Discovery could not read a node's devices                | `Warning` | `DeviceInspectionFailed` | `OperatorOps`             |
-| Discovery wrote a config                                 | `Normal`  | `ConfigWritten`          | `OperatorOps`             |
-| The run is waiting for another to finish (§7)            | `Normal`  | `OperationQueued`        | `OperatorOps`             |
-| The run started                                          | `Normal`  | `OperationStarted`       | `OperatorOps`             |
-| The operation finished successfully                      | `Normal`  | `OperationSucceeded`     | `OperatorOps`             |
-| The operation failed                                     | `Warning` | `OperationFailed`        | `OperatorOps`             |
-| The run was aborted and its unwind finished              | `Normal`  | `OperationAborted`       | `OperatorOps`             |
+| Event                                                    | Type      | Reason                      | On                        |
+|----------------------------------------------------------|-----------|-----------------------------|---------------------------|
+| A draft names a worker that does not exist               | `Warning` | `WorkerNotFound`            | `ClusterDeploymentConfig` |
+| A draft names a device no node advertises                | `Warning` | `DeviceNotFound`            | `ClusterDeploymentConfig` |
+| A draft's devices are not the class its cluster uses     | `Warning` | `DeviceClassMismatch`       | `ClusterDeploymentConfig` |
+| A draft would map more than 256 failure domains          | `Warning` | `TooManyFailureDomains`     | `ClusterDeploymentConfig` |
+| A draft's scheme is one the control plane refuses        | `Warning` | `StripeUnsupported`         | `ClusterDeploymentConfig` |
+| A draft has fewer nodes than its scheme requires         | `Warning` | `StripeBelowMinimumNodes`   | `ClusterDeploymentConfig` |
+| A draft's nodes sit on too few workers for its scheme    | `Warning` | `StripeBelowMinimumWorkers` | `ClusterDeploymentConfig` |
+| A draft is valid and awaiting approval                   | `Normal`  | `AwaitingApproval`          | `ClusterDeploymentConfig` |
+| Expansion is held because the control plane is not ready | `Warning` | `ControlPlaneNotReady`      | `ClusterDeploymentConfig` |
+| Expansion refused: the cluster already exists            | `Warning` | `ClusterExists`             | `ClusterDeploymentConfig` |
+| Expansion refused: `clusterRef` names no cluster         | `Warning` | `ClusterNotFound`           | `ClusterDeploymentConfig` |
+| Expansion created the cluster                            | `Normal`  | `ClusterCreated`            | `ClusterDeploymentConfig` |
+| Expansion created the nodes                              | `Normal`  | `NodesCreated`              | `ClusterDeploymentConfig` |
+| A step's deadline expired                                | `Warning` | `StepDeadlineExceeded`      | `ClusterDeploymentConfig` |
+| Discovery could not read a node's devices                | `Warning` | `DeviceInspectionFailed`    | `OperatorOps`             |
+| Discovery wrote a config                                 | `Normal`  | `ConfigWritten`             | `OperatorOps`             |
+| The run is waiting for another to finish (§7)            | `Normal`  | `OperationQueued`           | `OperatorOps`             |
+| The run started                                          | `Normal`  | `OperationStarted`          | `OperatorOps`             |
+| The operation finished successfully                      | `Normal`  | `OperationSucceeded`        | `OperatorOps`             |
+| The operation failed                                     | `Warning` | `OperationFailed`           | `OperatorOps`             |
+| The run was aborted and its unwind finished              | `Normal`  | `OperationAborted`          | `OperatorOps`             |
 
 **No event reports a rejected approval.** An admission rejection fails the
 request, so what the administrator gets is the webhook's message on their own
@@ -890,14 +1215,26 @@ piece left.
 
 ## 12. Open Questions
 
-**Q1: What each `KubernetesEnvironment` value resolves to.** §3.1 has
-`spec.environment` decide `enableKubeletConfiguration`, `enableCpuTopology`,
-`ubuntuHost`, and `openShiftCluster` on every node the expansion creates, and
-names `OpenShift` as the value a reader can already infer. `Vanilla`, `Rancher`,
-`K3s`, and `Talos` have no stated mapping. The table belongs in this document,
-because the expansion is what applies it, and writing it needs one answer per
-distribution about whether the kubelet is reconfigured and whether CPU topology
-is readable, which is a question for whoever has run simplyblock on each of them.
+**Q1 is settled and its number is retired rather than reused**, since it is cited
+from review history. §4.2 is where the answer went: the table below is what
+`spec.environment` resolves to, and the expansion writes it onto
+`StorageCluster.spec.storageNodes` rather than onto each node.
+
+| Environment                 | Kubelet configuration | CPU topology | OpenShift |
+|-----------------------------|-----------------------|--------------|-----------|
+| `OpenShift`                 | Applied               | Read         | Yes       |
+| `Vanilla`, `Rancher`, `K3s` | Applied               | Unset        | No        |
+| `Talos`                     | Not applied           | Unset        | No        |
+
+`Talos` is the row the shorthand exists for: it has no writable kubelet
+configuration and no package manager, so a node applies neither, and a deployment
+onto it that had to discover that field by field would discover it by failing.
+`OpenShift` states the kubelet flag rather than leaving it unset, because the
+renderer reads an unset flag as skipping the configuration and every OpenShift
+deployment this product has shipped configures it. `ubuntuHost` is not in the
+table: it describes the worker's host OS rather than the distribution running on
+it, so it is `spec.hostOS`'s to decide (§3.1), which a discovery run fills in
+from what the probes read.
 
 ---
 
@@ -921,8 +1258,62 @@ const (
 	ClusterDeploymentConfigPhaseFailed    ClusterDeploymentConfigPhase = "Failed"
 )
 
+// HostOSFamily is the packaging tradition a Linux distribution belongs to.
+//
+// It is the coarse half of what a host OS is, and the half most decisions are
+// actually about: what differs between Ubuntu and Debian is rarely what a
+// storage node needs, and what differs between Ubuntu and Rocky always is.
+// There is no member for a host with no package manager: Talos and Flatcar are
+// not a family with no name, they are machines where the question does not
+// arise, and a document describing one leaves the family unstated.
+//
+// +kubebuilder:validation:Enum=Debian;RedHat;SUSE;Alpine;Arch
+type HostOSFamily string
+
+const (
+	HostOSFamilyDebian HostOSFamily = "Debian"
+	HostOSFamilyRedHat HostOSFamily = "RedHat"
+	HostOSFamilySUSE   HostOSFamily = "SUSE"
+	HostOSFamilyAlpine HostOSFamily = "Alpine"
+	HostOSFamilyArch   HostOSFamily = "Arch"
+)
+
+// DistroUbuntu is the one distribution the expansion decides anything by.
+//
+// Ubuntu keeps the NVMe-oF modules in a package the base install does not
+// carry, so a storage node on one installs linux-modules-extra for its kernel
+// before it starts and a node on anything else does not. That is what
+// StorageCluster.spec.storageNodes.ubuntuHost states, and stating it is the
+// whole of what spec.hostOS.distro is spent on.
+const DistroUbuntu = "ubuntu"
+
+// HostOSSpec is the operating system a deployment's workers run.
+//
+// It is a fact about the machines rather than about Kubernetes, which is why it
+// is stated here and not derived from spec.environment: a fleet on OpenShift
+// runs Red Hat Enterprise Linux CoreOS, and a fleet on K3s runs whatever its
+// administrator installed. A discovery run fills it in from what the probes
+// read, and fills it in only when every worker agrees, so a document that
+// states one is a document whose fleet is uniform.
+type HostOSSpec struct {
+	// Distro is the distribution's os-release ID, lowercase and verbatim:
+	// `ubuntu`, `rocky`, `rhel`, `talos`. It is what the expansion reads.
+	// +optional
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9._-]*$`
+	Distro string `json:"distro,omitempty"`
+
+	// Family is the packaging tradition Distro belongs to. A discovery run
+	// concludes it from the distribution itself, or from the distributions its
+	// os-release says it is built on, which is what places a derivative this
+	// product has never heard of. It is left unstated for a host with no
+	// package manager.
+	// +optional
+	Family HostOSFamily `json:"family,omitempty"`
+}
+
 // ClusterDeploymentConfigStep is one step of the expansion path.
-// +kubebuilder:validation:Enum=Validating;CreatingCluster;AwaitingCluster;CreatingNodes
+// +kubebuilder:validation:Enum=Validating;CreatingCluster;AwaitingCluster;CreatingNodes;Activating
 type ClusterDeploymentConfigStep string
 
 const (
@@ -930,6 +1321,15 @@ const (
 	ClusterDeploymentConfigStepCreatingCluster ClusterDeploymentConfigStep = "CreatingCluster"
 	ClusterDeploymentConfigStepAwaitingCluster ClusterDeploymentConfigStep = "AwaitingCluster"
 	ClusterDeploymentConfigStepCreatingNodes   ClusterDeploymentConfigStep = "CreatingNodes"
+
+	// ClusterDeploymentConfigStepActivating waits for the nodes this document
+	// created and then asks for the cluster to be activated.
+	//
+	// The document knows how many nodes it made, so it knows when the deployment
+	// it describes is whole. Stopping at "the objects exist" would leave a
+	// cluster that serves nothing behind a document reporting Expanded, with
+	// nothing saying that one more thing is required of anybody.
+	ClusterDeploymentConfigStepActivating ClusterDeploymentConfigStep = "Activating"
 )
 
 // KubernetesEnvironment is the distribution a deployment targets. The values are
@@ -937,6 +1337,49 @@ const (
 // carries for a word this group did not invent.
 // +kubebuilder:validation:Enum=Vanilla;OpenShift;Rancher;K3s;Talos
 type KubernetesEnvironment string
+
+// ClusterPortsSpec is where a cluster's storage nodes listen.
+//
+// The three are one block here and three fields on the StorageCluster, which is
+// the one place the document deliberately does not mirror the cluster's shape.
+// They are the same decision taken once — which ports this deployment's nodes
+// bind — and a reviewer reads them together or not at all, where the cluster
+// carries them flat because that is what shipped.
+//
+// Every member is immutable on the cluster: a node binds its ports when it
+// starts and the control plane hands them out from the bases it was given at
+// cluster create, so the document is the only place any of them can be stated.
+//
+// Each carries the control plane's own default, so a document that names the
+// block shows a reviewer the three numbers a cluster will actually run with
+// rather than three blanks they would have to know the backend to fill in.
+type ClusterPortsSpec struct {
+	// NVMf is the base of the NVMe-oF port range every node binds. It expands
+	// into StorageCluster.spec.nvmfBasePort.
+	// +kubebuilder:validation:Minimum=1024
+	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=4420
+	// +optional
+	NVMf *int32 `json:"nvmf,omitempty"`
+
+	// Rpc is the base of the RPC port range every node binds. It expands into
+	// StorageCluster.spec.rpcBasePort.
+	// +kubebuilder:validation:Minimum=1024
+	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=8080
+	// +optional
+	Rpc *int32 `json:"rpc,omitempty"`
+
+	// NodeAgent is the port each node's agent API listens on. It expands into
+	// StorageCluster.spec.snodeApiPort, and it is named for the component
+	// rather than for that field: the agent is what spec.images.nodeAgent pins
+	// and what the storage-node DaemonSet runs.
+	// +kubebuilder:validation:Minimum=1024
+	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=50001
+	// +optional
+	NodeAgent *int32 `json:"nodeAgent,omitempty"`
+}
 
 // DeviceSelection is the explicit list of storage devices a group's workers hand
 // to simplyblock. It carries no filter of any kind: a document whose meaning
@@ -1012,6 +1455,24 @@ type NodeGroup struct {
 	// +optional
 	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
 
+	// ReservedSystemCPU is the CPU set held back from SPDK for the system on
+	// these nodes, as a core list such as 0,1 or 0-3.
+	//
+	// It is a group's rather than the cluster's because it names core ids, and a
+	// group is what a document calls the workers that share their hardware: 0,1
+	// on a sixteen-core worker and 0,1 on a ninety-six-core worker are different
+	// fractions of the machine. It expands into
+	// StorageNode.spec.config.reservedSystemCPU, whose shape it shares, and a
+	// group that states none leaves the cluster's fleet-wide value to decide.
+	//
+	// On OpenShift it reaches the kubelet through a KubeletConfig for the
+	// machine config pool, which is the cluster's, so groups that disagree there
+	// are writing over one another's pool configuration.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$`
+	// +optional
+	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
+
 	// JournalManager tunes the journal managers on these nodes.
 	// +optional
 	JournalManager *JournalManagerSpec `json:"journalManager,omitempty"`
@@ -1053,9 +1514,9 @@ type ClusterTemplate struct {
 	// this cluster. It is stated here and nowhere below, because the control
 	// plane assumes it uniform across a cluster's nodes; CreatingNodes copies it
 	// into every StorageNode.spec.config.sizing it writes. Required, because the
-	// StorageCluster's own field is.
+	// StorageCluster's own field is, and with the same floor.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Minimum=6
+	// +kubebuilder:validation:Minimum=4
 	VCPUCount *int32 `json:"vcpuCount"`
 
 	// MinHugePagesSize is the smallest huge-page allocation each storage node of
@@ -1065,6 +1526,124 @@ type ClusterTemplate struct {
 	// +optional
 	MinHugePagesSize string `json:"minHugePagesSize,omitempty"`
 
+	// EnableDriveFormat formats every device the document names before a storage
+	// node takes it, which is how a drive carrying anything already is made
+	// usable.
+	//
+	// It says what is wanted rather than how, because the how differs by device
+	// class: an NVMe device is formatted to a 4K block size, and a logical block
+	// device has its signatures wiped. One field covers both, so a document does
+	// not have to know which class the expansion will resolve it to.
+	//
+	// It is on the document rather than defaulted further down because it is
+	// destructive and the document is what somebody approves. A reviewer reading
+	// a draft has to see that the drives it lists will be formatted, and be able
+	// to strike it before approving; the cluster's own field is immutable once
+	// the cluster exists, so a default nobody saw could not be undone either.
+	// +optional
+	EnableDriveFormat *bool `json:"enableDriveFormat,omitempty"`
+
+	// EnableJournalDevice dedicates the smallest NVMe device on each of this
+	// deployment's workers to the journal manager, instead of carving a journal
+	// partition out of every device.
+	//
+	// It is here rather than on a node set because it is immutable on the cluster
+	// it lands on, for the reason SocketsToUse is: the on-disk layout a fleet was
+	// built with is not one a later document can vary. It also costs a drive of
+	// capacity per node, which is a trade a reviewer approves rather than one a
+	// default makes for them.
+	// +optional
+	EnableJournalDevice *bool `json:"enableJournalDevice,omitempty"`
+
+	// SocketsToUse restricts the deployment to selected NUMA sockets, and empty
+	// means socket 0 alone. With NodesPerSocket it decides how many storage nodes
+	// each worker runs, so a group of two workers on a two-socket layout expands
+	// to four nodes.
+	//
+	// It is here rather than on a node set because it is immutable on the cluster
+	// it lands on: the layout a fleet was built with is not one a later document
+	// can vary, and a reviewer should see it before the cluster exists.
+	// +kubebuilder:validation:items:MaxLength=16
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=set
+	// +optional
+	SocketsToUse []string `json:"socketsToUse,omitempty"`
+
+	// NodesPerSocket is how many storage nodes run per NUMA socket. See
+	// SocketsToUse, which it multiplies.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=8
+	// +optional
+	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
+
+	// ContainerResources sizes the storage-node container, and expands into the
+	// cluster's own spec.storageNodes.containerResources.
+	//
+	// The container it sizes is the node's management API rather than SPDK,
+	// which runs in a pod of its own: what outgrows the default is a node
+	// answering for many subsystems, not a node moving more data. It is on the
+	// document because a deployment is where a fleet's sizing is decided, and
+	// a cluster written from a document that could not say so had to be edited
+	// afterward on a field the document owns everywhere else.
+	//
+	// Stating either half replaces both. The defaults apply to a cluster that
+	// states neither requests nor limits, so a document stating requests alone
+	// produces a container with no limits rather than one with the default
+	// limits, and a memory limit is what has the kubelet evict a leaking agent
+	// rather than losing the worker.
+	//
+	// It is a pointer because a resource block is a struct, and a struct with
+	// omitempty is serialized whether or not anything is in it: as a value,
+	// every document a discovery run writes would carry an empty
+	// containerResources that says nothing and that a reviewer has to decide
+	// about.
+	// +optional
+	ContainerResources *corev1.ResourceRequirements `json:"containerResources,omitempty"`
+
+	// InitContainerResources sizes both of the storage node's init containers,
+	// and expands into the cluster's own spec.storageNodes.initContainerResources.
+	//
+	// They are sized apart from the container because they do a different job
+	// and are gone before it starts: one writes the node's env file and the
+	// other runs node_configure.py once, so what they need is a short burst
+	// rather than the footprint of a process that runs for the node's life.
+	//
+	// Stating either half replaces both, as with containerResources, and it is
+	// a pointer for the same reason.
+	// +optional
+	InitContainerResources *corev1.ResourceRequirements `json:"initContainerResources,omitempty"`
+
+	// Tolerations are what the storage-node pods tolerate, and they expand into
+	// the cluster's own spec.storageNodes.tolerations.
+	//
+	// A fleet that dedicates machines to storage taints them, which is what
+	// keeps everything else off. The DaemonSet that lands on those machines has
+	// to tolerate the taint or it schedules nowhere, and a document that could
+	// not say so described a deployment that does not start: the correction was
+	// an edit to the cluster the document had just created, on a field the
+	// document owns everywhere else.
+	//
+	// A growth document states none. It names a cluster rather than describing
+	// one, and that cluster already carries what its storage nodes tolerate.
+	// +kubebuilder:validation:MaxItems=32
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// NodeProvisioningBudget is how many workers the expansion may have in the
+	// node-add process at once. It expands into the cluster's own
+	// spec.storageNodes.nodeProvisioningBudget, whose meaning it shares: the cap
+	// is counted by distinct worker, so a two-socket host spends one of the
+	// budget, and a worker hosting a FoundationDB pod is sequential whatever the
+	// budget says.
+	//
+	// It is on the document because a document is what states the size of a
+	// deployment, and a deployment of thirty workers added one at a time is the
+	// difference between an afternoon and a week. Omitted, the cluster's default
+	// of one applies, which is the serial behavior.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	NodeProvisioningBudget *int32 `json:"nodeProvisioningBudget,omitempty"`
+
 	// Stripe is the erasure-coding layout.
 	// +optional
 	Stripe *StripeSpec `json:"stripe,omitempty"`
@@ -1073,10 +1652,103 @@ type ClusterTemplate struct {
 	// +optional
 	FabricType string `json:"fabricType,omitempty"`
 
+	// OpenShift is what this deployment states because it runs on OpenShift. It
+	// expands into StorageCluster.spec.storageNodes.openshift, whose shape it
+	// shares, and it is read only for a document whose environment is
+	// OpenShift: the environment is what says which distribution this is, and
+	// the block is what that distribution needs said beyond it.
+	// +optional
+	OpenShift *OpenShiftSpec `json:"openshift,omitempty"`
+
+	// Ports are where this cluster's storage nodes listen. Unstated, and for
+	// each member left unstated, the cluster's own defaults decide.
+	// +optional
+	Ports *ClusterPortsSpec `json:"ports,omitempty"`
+
 	// EnableFailureDomains opts the cluster into failure-domain mode, in which
 	// every group must label the fault group its workers belong to.
 	// +optional
 	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
+
+	// EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
+	// from the local node's own devices where it can, before crossing the
+	// network.
+	//
+	// It is not Kubernetes affinity, and the name is the one place this API
+	// invites that reading: nothing about it schedules a pod, labels a worker,
+	// or places a volume's primary node. The control plane carries it into the
+	// cluster map it pushes to each node, where it sets the local node's index,
+	// and what changes is which copy of a chunk is read.
+	// design-primary-node-placement.md §"EnableNodeAffinity is unrelated to
+	// Tier 1" is the longer account, and the co-location of a workload with its
+	// primary node is the separate mechanism described there.
+	//
+	// It is on the document because it is immutable on the cluster: the control
+	// plane takes it at cluster create and never re-applies it, so this is the
+	// only moment it can be set at all.
+	// +optional
+	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
+
+	// EnableChecksumValidation turns on inline CRC validation of every I/O, for
+	// silent-data-error protection.
+	//
+	// It is on the document because it is immutable on the cluster it lands on:
+	// the backend bakes the checksum method into each device when the cluster is
+	// created and never re-applies it, so a cluster created without this is one
+	// nobody can turn it on for. A deployment that wants its data checked has to
+	// say so here or not at all.
+	// +optional
+	EnableChecksumValidation *bool `json:"enableChecksumValidation,omitempty"`
+
+	// EnableAtomicity4K enforces 4K write atomicity on every device this
+	// deployment names, which is what lets checksum validation run on devices
+	// whose logical block size is under the data plane's 4K minimum.
+	//
+	// It is the route to checked I/O on a device that cannot be reformatted: a
+	// logical block device's block size is fixed by the drive, and some NVMe
+	// devices offer no 4K format either. Where a device can be reformatted,
+	// EnableDriveFormat is the other route and this is unnecessary.
+	//
+	// It is an enforcement because the question is often unanswerable. A SATA
+	// drive presenting 512-byte logical blocks over a 4K physical sector reports
+	// 512 and nothing more, and a kernel older than 6.11 publishes no atomic
+	// write attributes at all. Where a device does answer, the storage node's
+	// report carries it, and a reviewer approves this against that rather than
+	// against a vendor's datasheet -- because enforcing a guarantee the hardware
+	// does not keep is how a torn write becomes a checksum that silently
+	// disagrees with it.
+	//
+	// It means nothing unless EnableChecksumValidation is set, which is the
+	// cluster's own rule and is left to the cluster to enforce.
+	// +optional
+	EnableAtomicity4K *bool `json:"enableAtomicity4K,omitempty"`
+
+
+	// Backup is where this cluster's backups live, and it expands into
+	// StorageCluster.spec.backup unchanged.
+	//
+	// It is here for the reason KMS is: the expansion creates the cluster and
+	// its own reconciler reads it back on the next pass, so a store stated on
+	// the document is present at the cluster's creation rather than patched in
+	// afterward by whoever remembers. Unlike most of what this template
+	// carries, the field it fills is mutable, so a document that states none
+	// costs nothing permanent — a cluster can be given a store whenever there
+	// is one to give.
+	//
+	// The Secret it names is not resolved at admission. It is a core object a
+	// deployment legitimately creates alongside the document or after it, and
+	// the cluster's own creation is where its absence is reported.
+	// +optional
+	Backup *BackupStoreSpec `json:"backup,omitempty"`
+
+	// KMS selects where the cluster stores volume encryption keys. It is here
+	// rather than left to be set on the StorageCluster afterward because the
+	// expansion's own reconciler reads it back off that object on the very next
+	// pass, before anything external could patch it in; stating it on the
+	// document is what makes it present at the cluster's creation rather than a
+	// race with one.
+	// +optional
+	KMS *KMSSpec `json:"kms,omitempty"`
 }
 
 // ClusterDeploymentConfigSpec is a whole simplyblock deployment as one
@@ -1090,6 +1762,7 @@ type ClusterTemplate struct {
 // +kubebuilder:validation:XValidation:rule="!oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
 // +kubebuilder:validation:XValidation:rule="!oldSelf.approved || self.approved",message="approval cannot be withdrawn"
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block))) || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group must name the same device class: all nvme or all block"
+// +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment) && self.environment == 'OpenShift')",message="spec.cluster.openshift is what a deployment onto OpenShift states, so spec.environment has to be OpenShift"
 type ClusterDeploymentConfigSpec struct {
 	// Approved is the review gate. A document is expanded only once it is set,
 	// and is validated but otherwise inert before that, which is what makes
@@ -1099,10 +1772,19 @@ type ClusterDeploymentConfigSpec struct {
 
 	// Environment is the Kubernetes distribution this deployment targets. It is a
 	// shorthand the expansion spends: it sets enableKubeletConfiguration,
-	// enableCpuTopology, ubuntuHost, and openShiftCluster on every StorageNode
-	// the document produces, after which nothing reads it again.
+	// enableCpuTopology, and the openshift block on the cluster the document
+	// produces, after which nothing reads it again. The worker's host OS is not
+	// among them and is stated in hostOS, because a distribution decides what
+	// Kubernetes does to a machine and not which packages the machine has.
 	// +optional
 	Environment KubernetesEnvironment `json:"environment,omitempty"`
+
+	// HostOS is the operating system the workers run, which decides what the
+	// host itself offers rather than what Kubernetes does to it. The expansion
+	// spends the distro on StorageCluster.spec.storageNodes.ubuntuHost and
+	// carries the family for the reviewer reading the document.
+	// +optional
+	HostOS *HostOSSpec `json:"hostOS,omitempty"`
 
 	// EdgeCluster states that this is an edge deployment. An edge deployment
 	// differs from a datacenter one in topology and scale rather than in kind,
@@ -1121,10 +1803,54 @@ type ClusterDeploymentConfigSpec struct {
 	// +optional
 	Cluster *ClusterTemplate `json:"cluster,omitempty"`
 
+	// Images are the container images this deployment pins. Unstated, each field
+	// the expansion would write keeps its own default.
+	// +optional
+	Images *DeploymentImages `json:"images,omitempty"`
+
 	// NodeSets are the nodes the deployment is made of.
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:Required
 	NodeSets []NodeSet `json:"nodeSets"`
+}
+
+// ImageSpec is one container image and when to pull it, which is the pair every
+// image in this product is stated as. Both members are optional so that each can
+// be stated without the other.
+type ImageSpec struct {
+	// Image is the repository and tag, optionally digest-pinned. An empty value
+	// is not written downstream, so the field it would fill keeps its own
+	// default rather than being overridden with nothing.
+	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// ImagePullPolicy is when that image is pulled, and defaults to Always
+	// because every image this product ships by default is a moving tag.
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +kubebuilder:default=Always
+	// +optional
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+}
+
+// DeploymentImages is every image a deployment pins, in one block. All three run
+// on a storage node. The expansion spends them on two objects: the node agent is
+// the cluster's workload, and the two SPDK slots are every node's own config.
+type DeploymentImages struct {
+	// NodeAgent is the image the storage-node DaemonSet runs, written to
+	// StorageCluster.spec.storageNodes and ignored when ClusterRef names an
+	// existing cluster.
+	// +optional
+	NodeAgent *ImageSpec `json:"nodeAgent,omitempty"`
+
+	// SPDK is the SPDK image, written onto every StorageNode.spec.config the
+	// expansion creates.
+	// +optional
+	SPDK *ImageSpec `json:"spdk,omitempty"`
+
+	// SPDKProxy is the SPDK proxy image, written per node for the reason SPDK is.
+	// +optional
+	SPDKProxy *ImageSpec `json:"spdkProxy,omitempty"`
 }
 
 // ClusterDeploymentConfigStatus is the observed state of the document.
@@ -1134,7 +1860,7 @@ type ClusterDeploymentConfigStatus struct {
 	Phase ClusterDeploymentConfigPhase `json:"phase,omitempty"`
 
 	// Step is the position of the expansion machine within Expanding.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','CreatingCluster','AwaitingCluster','CreatingNodes']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','CreatingCluster','AwaitingCluster','CreatingNodes','Activating']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
@@ -1160,6 +1886,18 @@ type ClusterDeploymentConfigStatus struct {
 	// from, so a stale status can be told from a current one.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// ExpansionStartedAt is when the expansion machine was born, which is the
+	// first reconcile after the document was approved. A document may sit as a
+	// draft for as long as a review takes, so this is not creationTimestamp and
+	// the difference is the whole point: how long a deployment takes is measured
+	// from the moment somebody said yes.
+	//
+	// It is the start of §9.2's expansion_duration_seconds. A histogram needs an
+	// instant that survives the operator restarting mid-expansion, which nothing
+	// in memory and no step deadline supplies.
+	// +optional
+	ExpansionStartedAt *metav1.Time `json:"expansionStartedAt,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -1241,31 +1979,14 @@ const (
 // ClusterDeploymentConfig carries the explicit list the filter produced, not the
 // rule that produced it.
 //
-// The filters come in two sets, one per device class, and a run scans one class.
-// The two rules below reject the set belonging to the class this run is not
-// scanning, because a filter that will never be applied is one an administrator
-// reads as having narrowed a draft that was never narrowed.
-//
-// +kubebuilder:validation:XValidation:rule="!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !(has(self.pcieAllowList) || has(self.pcieDenyList) || has(self.pcieModel))",message="the PCI filters select NVMe devices and cannot be combined with enableLogicalBlockDevices; use blockAllowList and blockDenyList"
-// +kubebuilder:validation:XValidation:rule="(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !(has(self.blockAllowList) || has(self.blockDenyList))",message="blockAllowList and blockDenyList select logical block devices and require enableLogicalBlockDevices"
+// Every member narrows the devices of the class a run scans. Neither choosing
+// that class nor waiving an availability condition is a member: both are
+// statements about the run, spec.discover.enableLogicalBlockDevices and
+// spec.discover.enablePartitionedDevices, because the first decides which kind
+// of cluster the draft describes and the second widens what is reported. The
+// filters come in two sets, one per class, and the rules on DiscoverSpec reject
+// the set belonging to the class the run is not scanning.
 type DeviceFilter struct {
-	// EnableLogicalBlockDevices scans a worker's available logical block devices
-	// instead of its available NVMe devices. It selects the class rather than
-	// adding one, because the draft a run writes describes one cluster and a
-	// cluster is built out of one class. Unset scans NVMe, so that upgrading to
-	// 26.4 does not change what a discovery run reports.
-	// +optional
-	EnableLogicalBlockDevices *bool `json:"enableLogicalBlockDevices,omitempty"`
-
-	// EnablePartitionedDevices reports devices carrying a partition table
-	// alongside the available ones, for the administrator who knows the table is
-	// stale and intends to hand the device over anyway. It is the only one of the
-	// three availability conditions that can be waived: a mounted or otherwise
-	// busy device is never reported, because simplyblock taking it would corrupt
-	// whatever is using it.
-	// +optional
-	EnablePartitionedDevices *bool `json:"enablePartitionedDevices,omitempty"`
-
 	// PcieAllowList restricts candidates to these PCI addresses. This and the two
 	// PCI filters below narrow the NVMe class alone, because a logical block
 	// device has no PCI address to match, so setting any of them on a run that
@@ -1309,6 +2030,13 @@ type DeviceFilter struct {
 }
 
 // DiscoverSpec parameterizes the Discover action.
+//
+// The device filters come in two sets, one per device class, and a run scans
+// one class. The two class rules reject the set belonging to the class this run
+// is not scanning, because a filter that will never be applied is one an
+// administrator reads as having narrowed a draft that was never narrowed.
+// +kubebuilder:validation:XValidation:rule="!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !has(self.deviceFilter) || !(has(self.deviceFilter.pcieAllowList) || has(self.deviceFilter.pcieDenyList) || has(self.deviceFilter.pcieModel))",message="the PCI filters select NVMe devices and cannot be combined with enableLogicalBlockDevices; use blockAllowList and blockDenyList"
+// +kubebuilder:validation:XValidation:rule="(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !has(self.deviceFilter) || !(has(self.deviceFilter.blockAllowList) || has(self.deviceFilter.blockDenyList))",message="blockAllowList and blockDenyList select logical block devices and require enableLogicalBlockDevices"
 type DiscoverSpec struct {
 	// ConfigName is the ClusterDeploymentConfig to write. Absent generates one
 	// from the run's timestamp, so that a second discovery never overwrites the
@@ -1321,11 +2049,85 @@ type DiscoverSpec struct {
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
+	// Tolerations are what the probe pods tolerate, and what the draft states
+	// for the storage nodes it proposes.
+	//
+	// A probe is pinned to its worker with spec.nodeName rather than scheduled
+	// onto it, which bypasses the scheduler and not the taints: a NoSchedule
+	// taint still keeps the pod off, and a NoExecute taint evicts one that
+	// landed. A fleet that dedicates machines to storage taints them, so a run
+	// against one that tolerates nothing inspects nothing.
+	//
+	// They reach the draft as well, because the taints a run was allowed to
+	// probe through are the taints the cluster it proposes has to live with.
+	// Stating them in one place is what keeps a reviewer from approving a
+	// document whose DaemonSet schedules nowhere.
+	// +kubebuilder:validation:MaxItems=32
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// EnableControlPlaneNodes lets the run consider machines that run the API
+	// server and etcd.
+	//
+	// It is off by default because a storage node is a data path, and putting one
+	// on an etcd host is a placement almost nobody intends. The approval gate is a
+	// poor place to catch it: a fifty-worker draft is not a document anybody reads
+	// closely enough to spot three control-plane nodes in it. A combined three-node
+	// or single-node deployment is the case that wants it, and those are set up
+	// deliberately.
+	//
+	// There is no field beside it for infrastructure nodes, because those are used
+	// without asking: an OpenShift infra node is the tier a cluster's own
+	// infrastructure runs on, and simplyblock storage is infrastructure. A fleet
+	// with disks in its infra nodes meant those disks to be the storage, so a draft
+	// proposes them ahead of the workers rather than leaving them out.
+	// +optional
+	EnableControlPlaneNodes *bool `json:"enableControlPlaneNodes,omitempty"`
+
+	// EnableLogicalBlockDevices scans a worker's available logical block devices
+	// instead of its available NVMe devices. It selects the class rather than
+	// adding one, because the draft a run writes describes one cluster and a
+	// cluster is built out of one class. Unset scans NVMe, so that upgrading to
+	// 26.4 does not change what a discovery run reports.
+	//
+	// It is a statement about the run rather than a member of DeviceFilter,
+	// because it does not narrow the devices reported: it decides which class of
+	// them is looked at, which filters in DeviceFilter apply, and what
+	// ForceJournalDevice resolves, since the two classes lay out a journal
+	// differently.
+	// +optional
+	EnableLogicalBlockDevices *bool `json:"enableLogicalBlockDevices,omitempty"`
+
+	// EnablePartitionedDevices reports devices carrying a partition table
+	// alongside the available ones, for the administrator who knows the table is
+	// stale and intends to hand the device over anyway. It is the only one of the
+	// three availability conditions that can be waived: a mounted or otherwise
+	// busy device is never reported, because simplyblock taking it would corrupt
+	// whatever is using it.
+	//
+	// It is a statement about the run rather than a member of DeviceFilter for
+	// the reason EnableLogicalBlockDevices is: it waives an availability
+	// condition for whichever class is scanned, and so widens what is reported,
+	// where every member of the filter narrows it.
+	// +optional
+	EnablePartitionedDevices *bool `json:"enablePartitionedDevices,omitempty"`
+
 	// DeviceFilter narrows which of an inspected worker's devices reach the
 	// draft. Empty reports every device the worker advertises, including the one
 	// it boots from, which is what the approval gate then has to catch.
 	// +optional
 	DeviceFilter *DeviceFilter `json:"deviceFilter,omitempty"`
+
+	// ClusterRef names an existing StorageCluster the draft grows rather than
+	// creates. It is copied to the draft's own clusterRef, so that re-running
+	// discovery after an expansion produces a growth document naming the same
+	// cluster.
+	//
+	// Bounded at what a StorageCluster name may be, since a longer value names
+	// nothing that can exist (design-api-upgrade.md §19.4).
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	ClusterRef string `json:"clusterRef,omitempty"`
 }
 
 // OperatorOpsSpec is one operation to perform against the operator itself.
@@ -1365,6 +2167,19 @@ type OperatorOpsStatus struct {
 	// ConfigRef names the ClusterDeploymentConfig a Discover run wrote.
 	// +optional
 	ConfigRef string `json:"configRef,omitempty"`
+
+	// Workers are the workers this run is inspecting, decided once in
+	// Inspecting so that a node joining the cluster mid-run does not change
+	// what the run is about.
+	// +optional
+	// +listType=set
+	Workers []string `json:"workers,omitempty"`
+
+	// Environment is the Kubernetes distribution Inspecting concluded, which
+	// Writing copies into the draft. It is recorded here as well so that a run
+	// that failed later still says what it found.
+	// +optional
+	Environment KubernetesEnvironment `json:"environment,omitempty"`
 
 	// Message is the reason the phase is what it is: one sentence, replaced as
 	// the operation moves, and never a log.

@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+    storage.simplyblock.io/nodeprobe-node: worker-01
+    storage.simplyblock.io/nodeprobe-run: discover-cm-02
+  name: sb-nodeprobe-discover-cm-02-worker-01-54a2b7e2
+  namespace: simplyblock

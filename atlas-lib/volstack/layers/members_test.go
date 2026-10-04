@@ -24,7 +24,8 @@ type memberLayer struct {
 	state   volstack.State
 	healthy bool
 
-	ensureErr error
+	ensureErr  error
+	observeErr error
 }
 
 func (m *memberLayer) Name() string { return m.name }
@@ -40,6 +41,9 @@ func (m *memberLayer) own() volstack.Artifact {
 
 func (m *memberLayer) Observe(context.Context, volstack.Artifact) (volstack.State, volstack.Artifact, error) {
 	m.note("observe")
+	if m.observeErr != nil {
+		return volstack.StateAbsent, volstack.Artifact{}, m.observeErr
+	}
 	return m.state, m.own(), nil
 }
 
@@ -113,9 +117,22 @@ func TestMembersReleaseReverses(t *testing.T) {
 	if err := m.Release(context.Background(), volstack.Artifact{}); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	if got := strings.Join(log, " "); got != "m2:release m1:release m0:release" {
+	// The releases alone: each is preceded by the read that decides whether it
+	// can be skipped, and what this is about is the order of the releases.
+	if got := strings.Join(verbsIn(log, "release"), " "); got != "m2:release m1:release m0:release" {
 		t.Errorf("released in the order %q, want the reverse of the bring-up", got)
 	}
+}
+
+// verbsIn is the entries of one verb, in the order they happened.
+func verbsIn(log []string, verb string) []string {
+	var found []string
+	for _, entry := range log {
+		if strings.HasSuffix(entry, ":"+verb) {
+			found = append(found, entry)
+		}
+	}
+	return found
 }
 
 // The composite is only as present as its members. A stripe missing one member
@@ -226,5 +243,77 @@ func TestMembersExposesItsSubPlanForTheRecord(t *testing.T) {
 		if got[i].Name() != want {
 			t.Errorf("member %d is %s, want %s", i, got[i].Name(), want)
 		}
+	}
+}
+
+// A member that is already down is one a release has nothing to do to, and the
+// composite walks its own members rather than going through the runner, so the
+// rule the runner applies to a plan has to be applied here too.
+//
+// Absent is nothing of the member being there. Inactive is the state Release
+// itself leaves behind. A teardown resuming over a stripe something already took
+// part of down meets both, and a member that is down is a hold this host has
+// already given up.
+func TestMembersReleaseSkipsMembersAlreadyDown(t *testing.T) {
+	var log []string
+	plan := volstack.Plan{
+		&memberLayer{name: "m0", log: &log, device: "nvme0n1", state: volstack.StateReady},
+		&memberLayer{name: "m1", log: &log, state: volstack.StateAbsent},
+		&memberLayer{name: "m2", log: &log, device: "nvme2n1", state: volstack.StateInactive},
+	}
+
+	if err := NewMembers(plan).Release(context.Background(), volstack.Artifact{}); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	joined := strings.Join(log, " ")
+	for _, down := range []string{"m1:release", "m2:release"} {
+		if strings.Contains(joined, down) {
+			t.Errorf("a member that was already down was released (%s):\n%s", down, joined)
+		}
+	}
+	if !strings.Contains(joined, "m0:release") {
+		t.Errorf("the member that was still up was not released:\n%s", joined)
+	}
+}
+
+// The same for Destroy, and only for Absent: removing what is already gone is
+// the state the caller asked for, while an inactive member's object is still
+// there to remove.
+func TestMembersDestroySkipsMembersAlreadyGone(t *testing.T) {
+	var log []string
+	plan := volstack.Plan{
+		&memberLayer{name: "m0", log: &log, device: "nvme0n1", state: volstack.StateReady},
+		&memberLayer{name: "m1", log: &log, state: volstack.StateAbsent},
+	}
+
+	if err := NewMembers(plan).Destroy(context.Background(), volstack.Artifact{}); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+
+	joined := strings.Join(log, " ")
+	if strings.Contains(joined, "m1:destroy") {
+		t.Errorf("a member that was already gone was destroyed:\n%s", joined)
+	}
+	if !strings.Contains(joined, "m0:destroy") {
+		t.Errorf("the member that was still there was not destroyed:\n%s", joined)
+	}
+}
+
+// A member whose state cannot be read is released anyway. The reading is what
+// decides whether work can be skipped, not whether the hold exists, and a
+// teardown that skipped on a failed read would strand it.
+func TestMembersReleaseWhenAMemberCannotBeRead(t *testing.T) {
+	var log []string
+	plan := volstack.Plan{
+		&memberLayer{name: "m0", log: &log, device: "nvme0n1", state: volstack.StateReady,
+			observeErr: errors.New("sysfs unreadable")},
+	}
+
+	if err := NewMembers(plan).Release(context.Background(), volstack.Artifact{}); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if !strings.Contains(strings.Join(log, " "), "m0:release") {
+		t.Errorf("a member that could not be read was not released:\n%v", log)
 	}
 }

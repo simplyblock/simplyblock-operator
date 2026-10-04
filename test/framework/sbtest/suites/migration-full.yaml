@@ -1,0 +1,105 @@
+# The full driven migration run: the sbtest equivalent of
+#
+#   fio_migration_test.py --keep --pods 0 --runtime 7200 --ns-pods 25 \
+#                         --ns-per-subsys 6 --snapshot-chance 0 --target-policy alternate
+#
+#   make run SUITE=migration-full DURATION=7200 KEEP=1
+description: >-
+  The full driven migration run: 25 namespaced volumes packed 6 to a subsystem, so every
+  migration is a batch migration — the case that corrupts.
+
+run:
+  id_prefix: fiomig
+  outdir: ./runs
+
+components:
+  workload.fio:
+    # pods=0: the single-namespace path is not what is under investigation. Raise it to
+    # compare single against batch in one run — they share the geometry, so the comparison
+    # is meaningful only if both classes format their filesystems identically, which is why
+    # the workload derives both from the same base parameters.
+    pods: 0
+    ns_pods: 25
+    ns_per_subsys: 6
+    volume_size_gb: 10
+    # Small on purpose: fio always lays out a file-backed target before random I/O and
+    # cannot be told to skip it. The point is continuous I/O, not capacity.
+    file_size_gb: 1
+    # Longer than the run's DURATION so fio never exits first and leaves the last migrations
+    # measuring an idle volume.
+    runtime_s: 7500
+    iodepth: 8
+    # 1, and it must stay 1 for an integrity run: numjobs > 1 cannot serialize overlapping
+    # writes without io_submit_mode=offload, so verify would report corruption that never
+    # happened — and the workload switches verification off rather than lie.
+    numjobs: 1
+
+  migration.driver:
+    # `alternate` puts the harder case (target also hosts a consumer) on the odd migrations,
+    # so a run cut short still exercised it.
+    target_policy: alternate
+    gap_s: 30.0
+    timeout_s: 600.0
+
+  ana.sample:
+    # 2s. The freeze windows being measured are 2-8s, so a coarser interval cannot count
+    # them and a finer one costs an exec per node per sample.
+    interval_s: 2.0
+
+  # The SPDK containers outrun kubelet rotation within the hour — measured on vm04: rotation
+  # every ~2 min, so the whole 50 MiB budget bought about 10 minutes — so they are followed
+  # live. Everything else is still complete from a one-shot grab at the end.
+  logs.stream:
+    containers:
+      - spdk-container
+      - spdk-proxy-container
+    ttl_s: 21600
+  logs.collect: true
+  host.dmesg: true
+  cluster.events: true
+  nvme.snapshot: true
+
+detectors:
+  ana.freeze-count:
+    # 1. More than one ANA freeze in a migration meant lost writes on 5 of 5 archived runs:
+    # each extra freeze is a revert-and-retry, and the retry can copy nothing.
+    max_freezes: 1
+  ana.cutover-pause:
+    # The control plane makes all paths inaccessible for ~2s by design; 5 leaves headroom
+    # without reaching fast_io_fail_tmo, past which the pause becomes application-visible.
+    max_pause_s: 5.0
+  ana.split-brain: true
+  ana.unserved-after-cutover: true
+
+  fio.job-error: true
+  fio.checksum:
+    # A lost write surfaces when fio next reads the block, which is seconds to tens of
+    # seconds after the migration that lost it — without the lag, a migration's own
+    # corruption files itself under "no migration was running".
+    verify_lag_s: 45
+  fio.outage:
+    min_seconds: 30
+
+  migration.outcomes:
+    min_completed_fraction: 0.8
+    max_timeout_fraction: 0.1
+  migration.errors: true
+
+  nvme.stale-controllers: true
+  nvme.loss-timeout: true
+  nvme.controller-churn: true
+  nvme.foreign-cluster: true
+
+  kernel.path-loss: true
+  kernel.filesystem-shutdown: true
+
+  control.node-flap: true
+  control.task-stuck: true
+  control.volume-health: true
+
+  logs.pattern: true
+
+  # Bounds what the rest of the report is allowed to claim.
+  evidence.log-coverage: true
+  evidence.blind-spot: true
+  evidence.inventory: true

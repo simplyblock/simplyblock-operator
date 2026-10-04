@@ -35,6 +35,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -65,6 +66,30 @@ type importBackupsRequest struct {
 
 type importBackupsResponse struct {
 	Imported int `json:"imported"`
+}
+
+// backupExport is the control plane's export document, read only as far as
+// telling an export that carries manifests from one that carries none.
+//
+// It is grouped by location because a cluster can hold backups in several
+// buckets at once (its own, plus any it has imported), and a chain never spans
+// two, so an export of more than one chain names more than one bucket. Nothing
+// beyond the count is decoded: the body goes back to the import endpoint
+// verbatim, and a second reading of it here would only be somewhere for the two
+// readings to disagree.
+type backupExport struct {
+	Groups []struct {
+		Manifests []json.RawMessage `json:"manifests"`
+	} `json:"groups"`
+}
+
+// manifests counts the backups an export carries across all of its groups.
+func (e backupExport) manifests() int {
+	total := 0
+	for _, group := range e.Groups {
+		total += len(group.Manifests)
+	}
+	return total
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=backupimports,verbs=get;list;watch;create;update;patch;delete
@@ -210,12 +235,13 @@ func (r *BackupImportReconciler) exportBackup(
 	if status >= 300 {
 		return nil, fmt.Errorf("export API failed: status=%d body=%s", status, string(body))
 	}
-	// Validate it's a non-empty JSON array.
-	var items []json.RawMessage
-	if err := json.Unmarshal(body, &items); err != nil {
+	// An export that carries no manifest would import as a success and leave the
+	// restore with nothing to read, so it is refused here instead.
+	var export backupExport
+	if err := json.Unmarshal(body, &export); err != nil {
 		return nil, fmt.Errorf("unmarshal export response: %w", err)
 	}
-	if len(items) == 0 {
+	if export.manifests() == 0 {
 		return nil, fmt.Errorf("backup %s has no completed backups to export", backupID)
 	}
 	return body, nil
@@ -248,7 +274,7 @@ func (r *BackupImportReconciler) ensureStorageBackupCR(
 	importCR *simplyblockv1alpha1.BackupImport,
 	name, srcClusterUUID string,
 ) error {
-	existing := &simplyblockv1alpha1.StorageBackup{}
+	existing := &simplyblockv1alpha2.StorageBackup{}
 	err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: importCR.Namespace}, existing)
 	if err == nil {
 		return nil // already exists
@@ -257,7 +283,7 @@ func (r *BackupImportReconciler) ensureStorageBackupCR(
 		return fmt.Errorf("get StorageBackup %s: %w", name, err)
 	}
 
-	backupCR := &simplyblockv1alpha1.StorageBackup{
+	backupCR := &simplyblockv1alpha2.StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: importCR.Namespace,
@@ -265,9 +291,13 @@ func (r *BackupImportReconciler) ensureStorageBackupCR(
 				*metav1.NewControllerRef(importCR, simplyblockv1alpha1.GroupVersion.WithKind("BackupImport")),
 			},
 		},
-		Spec: simplyblockv1alpha1.StorageBackupSpec{
-			ClusterName:       importCR.Spec.TargetClusterName,
-			SourceClusterUUID: srcClusterUUID,
+		Spec: simplyblockv1alpha2.StorageBackupSpec{
+			ClusterRef: importCR.Spec.TargetClusterName,
+			// The imported copy is addressed by the source's identifier, which
+			// the import does not change. The spec is identity and nothing else
+			// now (design-storagebackup.md §5.1), so where the copy came from
+			// is an observation and moves to status.source below.
+			BackupID: importCR.Spec.SourceBackupID,
 		},
 	}
 	if err := r.Create(ctx, backupCR); err != nil {
@@ -283,14 +313,16 @@ func (r *BackupImportReconciler) ensureStorageBackupCR(
 
 func (r *BackupImportReconciler) patchStorageBackupStatus(
 	ctx context.Context,
-	backupCR *simplyblockv1alpha1.StorageBackup,
+	backupCR *simplyblockv1alpha2.StorageBackup,
 	backupID, srcClusterUUID, targetClusterUUID string,
 ) error {
 	patch := client.MergeFrom(backupCR.DeepCopy())
-	backupCR.Status.Phase = simplyblockv1alpha1.BackupPhaseDone
-	backupCR.Status.BackupID = backupID
-	backupCR.Status.SourceClusterUUID = srcClusterUUID
-	backupCR.Status.ClusterUUID = targetClusterUUID
+	backupCR.Status.Phase = simplyblockv1alpha2.StorageBackupPhaseAvailable
+	backupCR.Status.ClusterID = targetClusterUUID
+	backupCR.Status.Backup = &simplyblockv1alpha2.BackupCopy{BackupID: backupID}
+	// The cluster that wrote the copy is what makes this an import, and it is
+	// the one thing a restore has to know in order to reach the right bucket.
+	backupCR.Status.Source = &simplyblockv1alpha2.BackupSource{ClusterUUID: srcClusterUUID}
 	backupCR.Status.Message = fmt.Sprintf("Imported from cluster %s", srcClusterUUID)
 	return r.Status().Patch(ctx, backupCR, patch)
 }

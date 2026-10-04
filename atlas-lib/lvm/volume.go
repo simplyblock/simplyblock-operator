@@ -2,6 +2,7 @@ package lvm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -59,9 +60,12 @@ func RegisterVolumeProvisioning(handler VolumeProvisioning) {
 // that is free to remove, which a node service has no terminal to answer, and it
 // overrides nothing.
 func (m *Manager) RemovePhysicalVolume(ctx context.Context, pv PhysicalVolume) error {
+	if err := m.requireOwnedDevice(ctx, pv); err != nil {
+		return err
+	}
 	_, err := m.exec(ctx, []string{pv.DevicePath}, "pvremove", "--yes", pv.DevicePath)
 	if err != nil {
-		if isNoPVLabel(err) {
+		if isAlreadyGone(err) {
 			return nil
 		}
 		return fmt.Errorf("pvremove %s: %w", pv.DevicePath, err)
@@ -69,17 +73,31 @@ func (m *Manager) RemovePhysicalVolume(ctx context.Context, pv PhysicalVolume) e
 	return nil
 }
 
-// isNoPVLabel reports whether err is pvremove's own "there was no label here"
-// failure, which for it reads: No PV label found on <device>.
+// isAlreadyGone reports whether err is LVM saying that what a removal was asked
+// to remove is not there.
 //
-// It is separate from isNoPVSignature rather than folded into it, even though
-// both mean the same thing about the device. That one decides whether a device
-// is blank, and a caller reading blank proceeds to create over it, so widening
-// what counts as blank widens what may be written over. This one only decides
-// whether a removal that was asked for has already happened, where the same
-// answer costs nothing.
-func isNoPVLabel(err error) bool {
-	return strings.Contains(strings.ToLower(err.Error()), "no pv label")
+// Every removal in this package treats that as success, because removing is not
+// a read: the caller has asked for the object to be gone, and one that is
+// already gone is the state it asked for. That is what lets a deletion resume
+// after a crash, and a teardown run against a stack something else has already
+// taken part of down.
+//
+// LVM names whichever object it could not find, which on a teardown is often the
+// container rather than the target: once the device underneath is detached, the
+// metadata goes with it, and lvremove reports the volume group missing rather
+// than the logical volume inside it. Both readings mean the same thing to a
+// caller that wanted the volume gone.
+//
+// It stays separate from isNoPVSignature, which reads the same words for a
+// different question. That one decides whether a device is blank, and a caller
+// reading blank proceeds to create over it, so widening what counts as blank
+// widens what may be written over. This one only decides whether a removal that
+// was asked for has already happened, where the same answer costs nothing.
+func isAlreadyGone(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "failed to find") ||
+		strings.Contains(msg, "no pv label")
 }
 
 // CreatePhysicalVolume writes an LVM PV signature onto pv's device (pvcreate),
@@ -101,7 +119,9 @@ func (m *Manager) CreateVolumeGroup(
 	ctx context.Context, volumeGroup VolumeGroup, pvs ...PhysicalVolume,
 ) (VolumeGroup, error) {
 	paths := devicePaths(pvs)
-	args := append([]string{"vgcreate", volumeGroup.Name}, paths...)
+	// Tagged in the same command that makes it, so no group of ours ever exists
+	// without the tag, however the process ends.
+	args := append([]string{"vgcreate", "--addtag", OwnerTag, volumeGroup.Name}, paths...)
 	if _, err := m.exec(ctx, paths, args...); err != nil {
 		return VolumeGroup{}, fmt.Errorf("vgcreate %s on %v: %w", volumeGroup.Name, paths, err)
 	}
@@ -111,6 +131,9 @@ func (m *Manager) CreateVolumeGroup(
 // ActivateVolumeGroup activates volumeGroup's logical volumes (vgchange -ay),
 // never recreating or reformatting anything.
 func (m *Manager) ActivateVolumeGroup(ctx context.Context, volumeGroup VolumeGroup) error {
+	if err := m.requireOwned(ctx, volumeGroup); err != nil {
+		return err
+	}
 	if _, err := m.exec(ctx, nil, "vgchange", "-ay", volumeGroup.Name); err != nil {
 		return fmt.Errorf("activate VG %s: %w", volumeGroup.Name, err)
 	}
@@ -120,6 +143,9 @@ func (m *Manager) ActivateVolumeGroup(ctx context.Context, volumeGroup VolumeGro
 // DeactivateVolumeGroup deactivates (but does not destroy) volumeGroup
 // (vgchange -an).
 func (m *Manager) DeactivateVolumeGroup(ctx context.Context, volumeGroup VolumeGroup) error {
+	if err := m.requireOwned(ctx, volumeGroup); err != nil {
+		return err
+	}
 	if _, err := m.exec(ctx, nil, "vgchange", "-an", volumeGroup.Name); err != nil {
 		return fmt.Errorf("deactivate VG %s: %w", volumeGroup.Name, err)
 	}
@@ -128,8 +154,22 @@ func (m *Manager) DeactivateVolumeGroup(ctx context.Context, volumeGroup VolumeG
 
 // RemoveVolumeGroup deactivates and removes volumeGroup, destroying its data
 // (vgremove -f).
+//
+// Convergent, like the removals either side of it: a volume group that is
+// already gone is the state the caller asked for. On the teardown path that is
+// the ordinary answer rather than an unusual one, because the group's metadata
+// lives on a device the release has already detached.
 func (m *Manager) RemoveVolumeGroup(ctx context.Context, volumeGroup VolumeGroup) error {
+	if err := m.requireOwned(ctx, volumeGroup); err != nil {
+		if errors.Is(err, errGroupGone) {
+			return nil
+		}
+		return err
+	}
 	if _, err := m.exec(ctx, nil, "vgremove", "-f", volumeGroup.Name); err != nil {
+		if isAlreadyGone(err) {
+			return nil
+		}
 		return fmt.Errorf("remove VG %s: %w", volumeGroup.Name, err)
 	}
 	return nil
@@ -145,21 +185,20 @@ func (m *Manager) RemoveVolumeGroup(ctx context.Context, volumeGroup VolumeGroup
 // is what stands between a mis-ordered teardown and a pod losing its filesystem
 // underneath it, so it is returned rather than overridden.
 func (m *Manager) RemoveLogicalVolume(ctx context.Context, logicalVolume LogicalVolume) error {
+	if err := m.requireOwned(ctx, logicalVolume.VolumeGroup); err != nil {
+		if errors.Is(err, errGroupGone) {
+			return nil
+		}
+		return err
+	}
 	path := logicalVolume.VolumeGroup.Name + "/" + logicalVolume.Name
 	if _, err := m.exec(ctx, nil, "lvremove", "--yes", path); err != nil {
-		if isNoSuchLogicalVolume(err) {
+		if isAlreadyGone(err) {
 			return nil
 		}
 		return fmt.Errorf("lvremove %s: %w", path, err)
 	}
 	return nil
-}
-
-// isNoSuchLogicalVolume reports whether err is lvremove's own "there was nothing
-// here" failure, which reads: Failed to find logical volume <vg>/<lv>.
-func isNoSuchLogicalVolume(err error) bool {
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "failed to find logical volume")
 }
 
 // lvAttrStateIndex is the position of the state character in lv_attr, LVM's
@@ -202,9 +241,12 @@ func (m *Manager) LogicalVolumeActive(ctx context.Context, logicalVolume Logical
 func (m *Manager) CreateLogicalVolume(
 	ctx context.Context, volumeGroup VolumeGroup, poolName, logicalVolume string, def LogicalVolumeDefinition,
 ) (LogicalVolume, error) {
+	if err := m.requireOwned(ctx, volumeGroup); err != nil {
+		return LogicalVolume{}, err
+	}
 	args := []string{"lvcreate", "-n", logicalVolume, "-l", "100%FREE"}
 	args = append(args, stripeArgs(def)...)
-	args = append(args, createTarget(volumeGroup, poolName), "--yes")
+	args = append(args, createTarget(volumeGroup, poolName), "--yes", "--addtag", OwnerTag)
 
 	for _, handler := range volumeProvisioning {
 		if !handler.Handles(def) {

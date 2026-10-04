@@ -3,7 +3,7 @@
 // The CSI node and controller pods dial the operator and hold the connection;
 // the operator issues its RPCs back down it. Nothing listens on a node, so no
 // per-node ingress or discovery is needed — see the atlas link package for why
-// the connection runs backwards and how gRPC still works over it.
+// the connection runs backward and how gRPC still works over it.
 //
 // Setup adds the hub to the manager and hands back the registry the reconcilers
 // read. A peer that is not currently linked is normal, not exceptional: expect
@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"sync"
 	"time"
@@ -30,12 +31,17 @@ import (
 
 // Config configures the operator's hub.
 type Config struct {
-	// BindAddress is where peers dial, e.g. ":9500".
+	// BindAddress is where peers dial, for example, ":9500."
 	BindAddress string
 
-	// CertFile and KeyFile are the hub's serving certificate. Both are
-	// required: peers authenticate with bearer tokens, which must not travel
-	// in the clear.
+	// CertFile and KeyFile are the hub's serving certificate. Both optional:
+	// present, the hub serves TLS and the peers verify it; absent, it serves
+	// plaintext and the peers dial plaintext, which is what a cluster with no
+	// certificate provisioned for the link gets.
+	//
+	// Peers authenticate with bearer tokens either way, so plaintext publishes
+	// them to anything on the path. Provide a certificate on a cluster where
+	// that matters.
 	CertFile string
 	KeyFile  string
 
@@ -68,26 +74,14 @@ type Config struct {
 // the handshake so the peer redials and lands on the one that is. Reconcilers
 // take the returned registry.
 func Setup(mgr ctrl.Manager, cfg Config) (*link.Registry, error) {
-	if cfg.CertFile == "" || cfg.KeyFile == "" {
-		return nil, fmt.Errorf("csi link: a serving certificate is required")
-	}
-
 	clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
 	if err != nil {
 		return nil, fmt.Errorf("csi link: kubernetes client: %w", err)
 	}
 
-	certs := &certReloader{certFile: cfg.CertFile, keyFile: cfg.KeyFile}
-	if _, err := certs.load(); err != nil {
-		return nil, fmt.Errorf("csi link: serving certificate: %w", err)
-	}
-
-	listener, err := tls.Listen("tcp", cfg.BindAddress, &tls.Config{
-		GetCertificate: certs.get,
-		MinVersion:     tls.VersionTLS13,
-	})
+	listener, err := listen(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("csi link: listen on %s: %w", cfg.BindAddress, err)
+		return nil, err
 	}
 
 	hub, err := link.NewHub(link.HubConfig{
@@ -143,6 +137,40 @@ func (r *hubRunnable) Start(ctx context.Context) error {
 		return nil
 	}
 	return err
+}
+
+// listen serves TLS when a certificate is configured and readable, and
+// plaintext when none is.
+//
+// A configured certificate that cannot be read is an error rather than a
+// fallback: somebody provisioned one and it is broken, and quietly serving
+// plaintext instead would hand every peer's token to the network without
+// anyone having asked for that.
+func listen(cfg Config) (net.Listener, error) {
+	if cfg.CertFile == "" || cfg.KeyFile == "" {
+		logf.Log.WithName("csi-link").Info(
+			"serving the CSI link without TLS: no certificate is configured, "+
+				"so peers' ServiceAccount tokens travel in the clear",
+			"address", cfg.BindAddress)
+		listener, err := net.Listen("tcp", cfg.BindAddress)
+		if err != nil {
+			return nil, fmt.Errorf("csi link: listen on %s: %w", cfg.BindAddress, err)
+		}
+		return listener, nil
+	}
+
+	certs := &certReloader{certFile: cfg.CertFile, keyFile: cfg.KeyFile}
+	if _, err := certs.load(); err != nil {
+		return nil, fmt.Errorf("csi link: serving certificate: %w", err)
+	}
+	listener, err := tls.Listen("tcp", cfg.BindAddress, &tls.Config{
+		GetCertificate: certs.get,
+		MinVersion:     tls.VersionTLS13,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("csi link: listen on %s: %w", cfg.BindAddress, err)
+	}
+	return listener, nil
 }
 
 // certReloader serves the hub's certificate, re-reading it when it changes on

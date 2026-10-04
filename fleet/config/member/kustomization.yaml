@@ -1,0 +1,5 @@
+# The member-side prerequisites. These are applied in a member before it is
+# enrolled, by whoever enrolls it, and never by the fleet: the fleet's own
+# delivery path is what they exist to make possible.
+resources:
+- work-agent-rbac.yaml

@@ -216,6 +216,86 @@ func TestClientRefusesAMigrationOfNoKnownKind(t *testing.T) {
 	}
 }
 
+// connectStringsJSON is what the control plane publishes alongside a created
+// migration: the NVMe-oF paths the target now answers on, in the same shape
+// /connect returns, with the hyphenated keys of the `nvme connect` options.
+const connectStringsJSON = `,"connect_strings":[` +
+	`{"transport":"tcp","ip":"10.10.10.1","port":4420,"nqn":"nqn.target",` +
+	`"reconnect-delay":2,"ctrl-loss-tmo":60,"fast-io-fail-tmo":0,"nr-io-queues":8,` +
+	`"keep-alive-tmo":5,"connect":"nvme connect ..."},` +
+	`{"transport":"tcp","ip":"10.10.10.2","port":4420,"nqn":"nqn.target",` +
+	`"reconnect-delay":2,"ctrl-loss-tmo":60,"fast-io-fail-tmo":0,"nr-io-queues":8,` +
+	`"keep-alive-tmo":5,"connect":"nvme connect ..."}]`
+
+// TestClientCreateMigrationReturnsTheTargetPaths. A migration is created
+// before it copies anything, and the window between the two is what the paths
+// are for: the target answers on them, every host consuming the subsystem has
+// to be able to reach it there, and a caller checks that before it lets the
+// copy start. They arrive only in the create's answer, so a client that read
+// the migration and dropped them would leave its caller nothing to check and
+// no way to ask again.
+func TestClientCreateMigrationReturnsTheTargetPaths(t *testing.T) {
+	const target = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	body := strings.TrimSuffix(batchMigration, "}") + connectStringsJSON + "}"
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(body))
+	})
+
+	m, err := c.CreateMigration(context.Background(), testCluster, testNQN, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Paths) != 2 {
+		t.Fatalf("paths = %d, want both of them: %+v", len(m.Paths), m.Paths)
+	}
+	// Order is the control plane's priority order and is preserved, for the
+	// reason lvol.Connection.Endpoints gives: the primary path is attached
+	// first.
+	if m.Paths[0].Address != "10.10.10.1" || m.Paths[1].Address != "10.10.10.2" {
+		t.Errorf("paths = %+v, want them in the order they arrived", m.Paths)
+	}
+	e := m.Paths[0]
+	if e.Transport != "tcp" || e.Port != 4420 || e.NrIOQueues != 8 ||
+		e.ReconnectDelaySec != 2 || e.KeepAliveTMOSec != 5 {
+		t.Errorf("path = %+v, want the connect parameters the control plane chose", e)
+	}
+	// Zero means "fail I/O immediately," which is a choice rather than a
+	// missing value, so both timeouts are pointers and both must survive.
+	if e.CtrlLossTMOSec == nil || *e.CtrlLossTMOSec != 60 {
+		t.Errorf("ctrl-loss-tmo = %v, want 60", e.CtrlLossTMOSec)
+	}
+	if e.FastIOFailTMOSec == nil || *e.FastIOFailTMOSec != 0 {
+		t.Errorf("fast-io-fail-tmo = %v, want 0", e.FastIOFailTMOSec)
+	}
+}
+
+// TestClientCreateMigrationNamesTheSubsystemThePathsLeadTo. A volume's
+// migration carries no target_nqn of its own, and the NQN is what a host
+// connects to, so without the one on the paths a caller would have the
+// addresses and nothing to ask for at them.
+func TestClientCreateMigrationNamesTheSubsystemThePathsLeadTo(t *testing.T) {
+	const target = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	body := strings.TrimSuffix(singleMigration, "}") + connectStringsJSON + "}"
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(body))
+	})
+
+	m, err := c.CreateMigration(context.Background(), testCluster, testNQN, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Kind != MigrationOfVolume {
+		t.Fatalf("kind = %q, want a volume's migration", m.Kind)
+	}
+	if m.TargetNQN != "nqn.target" {
+		t.Errorf("target NQN = %q, want the one the paths lead to", m.TargetNQN)
+	}
+}
+
 // TestMigrationJSONShapesAreDistinguishable is the assumption the two above
 // rest on, asserted directly: the discriminating fields are present in one
 // shape and absent from the other, so neither decodes as the other by accident.

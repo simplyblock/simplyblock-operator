@@ -10,6 +10,7 @@ import (
 
 	atlasprom "github.com/simplyblock/atlas/prometheus"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 func baselineTestScheme(t *testing.T) *runtime.Scheme {
@@ -37,7 +38,7 @@ func TestNewBaselineProvider_SelectsImplementation(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
 
 	bench, err := newBaselineProvider(cl, RebalancingConfig{
-		BaselineStrategy: string(simplyblockv1alpha1.BaselineStrategyBenchmark),
+		BaselineStrategy: string(simplyblockv1alpha2.BaselineStrategyBenchmark),
 		PrometheusURL:    "http://prom:9090",
 	})
 	if err != nil {
@@ -47,7 +48,7 @@ func TestNewBaselineProvider_SelectsImplementation(t *testing.T) {
 		t.Errorf("strategy=benchmark gave %T, want *benchmarkBaselineProvider", bench)
 	}
 
-	for _, strategy := range []string{string(simplyblockv1alpha1.BaselineStrategyRollingWindow), "", "bogus"} {
+	for _, strategy := range []string{string(simplyblockv1alpha2.BaselineStrategyRollingWindow), "", "bogus"} {
 		p, err := newBaselineProvider(cl, RebalancingConfig{BaselineStrategy: strategy, PrometheusURL: "http://prom:9090"})
 		if err != nil {
 			t.Fatalf("strategy=%q: %v", strategy, err)
@@ -110,7 +111,7 @@ func TestReduceWindowedBaselines_ColdStart(t *testing.T) {
 
 	t.Run("partialWindow includes under-sampled node", func(t *testing.T) {
 		cfg := base
-		cfg.BaselineColdStart = string(simplyblockv1alpha1.BaselineColdStartPartialWindow)
+		cfg.BaselineColdStart = string(simplyblockv1alpha2.BaselineColdStartPartialWindow)
 		got := baselineMap(reduceWindowedBaselines(windowed, cfg))
 		if _, ok := got["node-new"]; !ok {
 			t.Errorf("partialWindow should include node-new, got %v", got)
@@ -125,7 +126,7 @@ func TestReduceWindowedBaselines_ColdStart(t *testing.T) {
 
 	t.Run("defer omits under-sampled node", func(t *testing.T) {
 		cfg := base
-		cfg.BaselineColdStart = string(simplyblockv1alpha1.BaselineColdStartDefer)
+		cfg.BaselineColdStart = string(simplyblockv1alpha2.BaselineColdStartDefer)
 		got := baselineMap(reduceWindowedBaselines(windowed, cfg))
 		if _, ok := got["node-new"]; ok {
 			t.Errorf("defer should omit under-sampled node-new, got %v", got)

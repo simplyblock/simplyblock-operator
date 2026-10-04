@@ -26,8 +26,13 @@ func (s *Server) ReadyApiV2MetaReadyGet(w http.ResponseWriter, _ *http.Request) 
 }
 
 func (s *Server) ClustersStoragePoolsListApiV2ClustersClusterIdStoragePoolsGet(
-	w http.ResponseWriter, _ *http.Request, clusterId openapi_types.UUID,
+	w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID,
+	params ClustersStoragePoolsListApiV2ClustersClusterIdStoragePoolsGetParams,
 ) {
+	if watching(w, r, params.Watch) {
+		return
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -41,8 +46,13 @@ func (s *Server) ClustersStoragePoolsListApiV2ClustersClusterIdStoragePoolsGet(
 }
 
 func (s *Server) ClustersStoragePoolsDetailApiV2ClustersClusterIdStoragePoolsPoolIdGet(
-	w http.ResponseWriter, _ *http.Request, _ openapi_types.UUID, poolId openapi_types.UUID,
+	w http.ResponseWriter, r *http.Request, _ openapi_types.UUID, poolId openapi_types.UUID,
+	params ClustersStoragePoolsDetailApiV2ClustersClusterIdStoragePoolsPoolIdGetParams,
 ) {
+	if watching(w, r, params.Watch) {
+		return
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -55,8 +65,13 @@ func (s *Server) ClustersStoragePoolsDetailApiV2ClustersClusterIdStoragePoolsPoo
 }
 
 func (s *Server) ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGet(
-	w http.ResponseWriter, _ *http.Request, clusterId openapi_types.UUID,
+	w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID,
+	params ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGetParams,
 ) {
+	if watching(w, r, params.Watch) {
+		return
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -70,8 +85,13 @@ func (s *Server) ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGet(
 }
 
 func (s *Server) ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGet(
-	w http.ResponseWriter, _ *http.Request, _ openapi_types.UUID, storageNodeId openapi_types.UUID,
+	w http.ResponseWriter, r *http.Request, _ openapi_types.UUID, storageNodeId openapi_types.UUID,
+	params ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGetParams,
 ) {
+	if watching(w, r, params.Watch) {
+		return
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -84,8 +104,13 @@ func (s *Server) ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesSto
 }
 
 func (s *Server) ClustersStoragePoolsVolumesListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesGet(
-	w http.ResponseWriter, _ *http.Request, _ openapi_types.UUID, poolId openapi_types.UUID,
+	w http.ResponseWriter, r *http.Request, _ openapi_types.UUID, poolId openapi_types.UUID,
+	params ClustersStoragePoolsVolumesListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesGetParams,
 ) {
+	if watching(w, r, params.Watch) {
+		return
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -99,8 +124,13 @@ func (s *Server) ClustersStoragePoolsVolumesListApiV2ClustersClusterIdStoragePoo
 }
 
 func (s *Server) ClustersStoragePoolsVolumesDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdGet(
-	w http.ResponseWriter, _ *http.Request, _, _, volumeId openapi_types.UUID,
+	w http.ResponseWriter, r *http.Request, _, _, volumeId openapi_types.UUID,
+	params ClustersStoragePoolsVolumesDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdGetParams,
 ) {
+	if watching(w, r, params.Watch) {
+		return
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

@@ -1,0 +1,15 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: discover-filt-06
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    deviceFilter:
+      driveSizeRange: 2T-1T
+status:
+  environment: K3s
+  step: {}
+  workers:
+  - worker-01

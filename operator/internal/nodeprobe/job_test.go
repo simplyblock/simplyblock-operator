@@ -104,15 +104,23 @@ func TestJobMountsTheHostsTreesReadOnlyExceptTheDeviceNodes(t *testing.T) {
 		byPath[mount.MountPath] = mount
 	}
 
-	for _, path := range []string{hostSysfsMount, hostProcMount} {
-		mount, ok := byPath[path]
-		if !ok {
-			t.Errorf("the host's tree at %s is not mounted", path)
-			continue
-		}
-		if !mount.ReadOnly {
-			t.Errorf("%s is mounted writable, and the probe only reads it", path)
-		}
+	mount, ok := byPath[hostProcMount]
+	if !ok {
+		t.Errorf("the host's tree at %s is not mounted", hostProcMount)
+	} else if !mount.ReadOnly {
+		t.Errorf("%s is mounted writable, and the probe only reads it", hostProcMount)
+	}
+
+	// sysfs is the other exception: handing an NVMe controller back to the
+	// kernel is three writes under it, and a read-only mount turns a worker
+	// whose disks a dead deployment still holds into a worker with no disks.
+	sysfs, ok := byPath[hostSysfsMount]
+	if !ok {
+		t.Fatalf("the host's sysfs is not mounted at %s", hostSysfsMount)
+	}
+	if sysfs.ReadOnly {
+		t.Error("sysfs is mounted read-only, so the probe cannot hand back a " +
+			"controller and every disk behind one stays invisible")
 	}
 
 	// /dev is the exception: asking the kernel whether anything holds a device
@@ -182,7 +190,7 @@ func TestJobPassesTheNodeAndNamespaceOutOfThePodsOwnSpec(t *testing.T) {
 			t.Errorf("%s comes from %+v, want a field reference to %s", name, env.ValueFrom, want)
 		}
 	}
-	for _, flag := range []string{"--node=", "--namespace=", "--run=", "--sysfs-root=", "--proc-root=", "--dev-root="} {
+	for _, flag := range []string{"--node=", "--namespace=", "--run=", "--sysfs-root=", "--proc-root=", "--dev-root=", "--host-root="} {
 		if !arg(c, flag) {
 			t.Errorf("the command %v does not carry %s", c.Command, flag)
 		}
@@ -357,5 +365,88 @@ func TestJobNameFitsWhereKubernetesPutsIt(t *testing.T) {
 				"label Kubernetes copies it into, so the API server refuses it",
 				node, job.Name, len(job.Name))
 		}
+	}
+}
+
+// The probe is pulled on every run unless a caller says otherwise.
+//
+// The probe and the operator ship in one image, and an operator deployed from a
+// moving tag is replaced by a pull while its probes are not: a node holding the
+// previous layer keeps running the previous probe. The report carries a version
+// for exactly this skew, so the operator then refuses those reports and the run
+// waits on machines that will never answer — an upgrade that silently produces
+// a stalled discovery rather than a wrong one.
+//
+// The cost is a registry round-trip per worker per run, against a Job that runs
+// once per discovery and lives for seconds.
+func TestTheProbeIsPulledForEveryRun(t *testing.T) {
+	job, err := Job(JobOptions{
+		Namespace:          "simplyblock",
+		Run:                "run-1",
+		Node:               "worker-1",
+		Image:              "example.test/simplyblock-operator:develop",
+		ServiceAccountName: "sb-nodeprobe",
+	})
+	if err != nil {
+		t.Fatalf("build the Job: %v", err)
+	}
+
+	container := job.Spec.Template.Spec.Containers[0]
+	if container.ImagePullPolicy != corev1.PullAlways {
+		t.Errorf("the probe pull policy is %q, want Always", container.ImagePullPolicy)
+	}
+}
+
+// A caller that states one keeps it, which is what an air-gapped fleet or a
+// pinned digest needs.
+func TestAStatedPullPolicyIsKept(t *testing.T) {
+	job, err := Job(JobOptions{
+		Namespace:          "simplyblock",
+		Run:                "run-1",
+		Node:               "worker-1",
+		Image:              "example.test/simplyblock-operator:develop",
+		ServiceAccountName: "sb-nodeprobe",
+		ImagePullPolicy:    corev1.PullIfNotPresent,
+	})
+	if err != nil {
+		t.Fatalf("build the Job: %v", err)
+	}
+
+	if got := job.Spec.Template.Spec.Containers[0].ImagePullPolicy; got != corev1.PullIfNotPresent {
+		t.Errorf("the stated pull policy became %q", got)
+	}
+}
+
+func TestJobReadsTheHostsOSReleaseAndNotTheProbeImagesOwn(t *testing.T) {
+	// Every container image carries an /etc/os-release, so a probe left to read
+	// its own reports the image's distribution as the worker's and nothing
+	// about the answer looks wrong. The host's root filesystem is mounted
+	// read-only and named on the command line.
+	c := container(t, probeJob(t))
+
+	want := "--host-root=" + HostRootMount
+	if !slices.Contains(c.Command, want) {
+		t.Fatalf("the command is %v, and it does not carry %s", c.Command, want)
+	}
+
+	// Only the two directories os-release may live in are mounted, and both
+	// under that root: the probe needs one file, and a mount of the host's
+	// whole root filesystem would hand the pod every secret on the node.
+	byPath := map[string]corev1.VolumeMount{}
+	for _, mount := range c.VolumeMounts {
+		byPath[mount.MountPath] = mount
+	}
+	for _, path := range []string{HostRootMount + "/etc", HostRootMount + "/usr/lib"} {
+		mount, ok := byPath[path]
+		if !ok {
+			t.Errorf("%s is not mounted, so the probe reads its own image's os-release", path)
+			continue
+		}
+		if !mount.ReadOnly {
+			t.Errorf("%s is mounted writable, and the probe writes nothing", path)
+		}
+	}
+	if _, whole := byPath[HostRootMount]; whole {
+		t.Errorf("the host's whole root filesystem is mounted at %s, where two directories would do", HostRootMount)
 	}
 }

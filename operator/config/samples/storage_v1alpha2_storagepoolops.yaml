@@ -1,0 +1,15 @@
+# A StoragePoolOps against one pool. The kind's only action is provisional: it
+# is declared because the gap it would close is real — narrowing
+# spec.allowedNodes stops new volumes landing on the removed nodes and does
+# nothing to the volumes already there — and it is refused at run time until the
+# per-volume fan-out it needs exists.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StoragePoolOps
+metadata:
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: storagepoolops-sample
+spec:
+  poolRef: storagepool-sample
+  action: Rebalance

@@ -16,6 +16,7 @@
 package v1alpha2
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/simplyblock/atlas/statemachine"
@@ -69,31 +70,14 @@ const (
 // ClusterDeploymentConfig carries the explicit list the filter produced, not the
 // rule that produced it.
 //
-// The filters come in two sets, one per device class, and a run scans one class.
-// The two rules below reject the set belonging to the class this run is not
-// scanning, because a filter that will never be applied is one an administrator
-// reads as having narrowed a draft that was never narrowed.
-//
-// +kubebuilder:validation:XValidation:rule="!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !(has(self.pcieAllowList) || has(self.pcieDenyList) || has(self.pcieModel))",message="the PCI filters select NVMe devices and cannot be combined with enableLogicalBlockDevices; use blockAllowList and blockDenyList"
-// +kubebuilder:validation:XValidation:rule="(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !(has(self.blockAllowList) || has(self.blockDenyList))",message="blockAllowList and blockDenyList select logical block devices and require enableLogicalBlockDevices"
+// Every member narrows the devices of the class a run scans. Neither choosing
+// that class nor waiving an availability condition is a member: both are
+// statements about the run, spec.discover.enableLogicalBlockDevices and
+// spec.discover.enablePartitionedDevices, because the first decides which kind
+// of cluster the draft describes and the second widens what is reported. The
+// filters come in two sets, one per class, and the rules on DiscoverSpec reject
+// the set belonging to the class the run is not scanning.
 type DeviceFilter struct {
-	// EnableLogicalBlockDevices scans a worker's available logical block devices
-	// instead of its available NVMe devices. It selects the class rather than
-	// adding one, because the draft a run writes describes one cluster and a
-	// cluster is built out of one class. Unset scans NVMe, so that upgrading to
-	// 26.4 does not change what a discovery run reports.
-	// +optional
-	EnableLogicalBlockDevices *bool `json:"enableLogicalBlockDevices,omitempty"`
-
-	// EnablePartitionedDevices reports devices carrying a partition table
-	// alongside the available ones, for the administrator who knows the table is
-	// stale and intends to hand the device over anyway. It is the only one of the
-	// three availability conditions that can be waived: a mounted or otherwise
-	// busy device is never reported, because simplyblock taking it would corrupt
-	// whatever is using it.
-	// +optional
-	EnablePartitionedDevices *bool `json:"enablePartitionedDevices,omitempty"`
-
 	// PcieAllowList restricts candidates to these PCI addresses. This and the two
 	// PCI filters below narrow the NVMe class alone, because a logical block
 	// device has no PCI address to match, so setting any of them on a run that
@@ -137,6 +121,20 @@ type DeviceFilter struct {
 }
 
 // DiscoverSpec parameterizes the Discover action.
+//
+// Which workers a run inspects is stated one of two ways and never both: by name
+// in Workers, or by label in NodeSelector. They are exclusive rather than
+// intersected because the intersection of a name list and a label selector is a
+// question nobody asks deliberately, and reading one as narrowing the other
+// would make a run inspect fewer machines than either field says.
+//
+// The device filters come in two sets, one per device class, and a run scans
+// one class. The two class rules reject the set belonging to the class this run
+// is not scanning, because a filter that will never be applied is one an
+// administrator reads as having narrowed a draft that was never narrowed.
+// +kubebuilder:validation:XValidation:rule="!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !has(self.deviceFilter) || !(has(self.deviceFilter.pcieAllowList) || has(self.deviceFilter.pcieDenyList) || has(self.deviceFilter.pcieModel))",message="the PCI filters select NVMe devices and cannot be combined with enableLogicalBlockDevices; use blockAllowList and blockDenyList"
+// +kubebuilder:validation:XValidation:rule="(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !has(self.deviceFilter) || !(has(self.deviceFilter.blockAllowList) || has(self.deviceFilter.blockDenyList))",message="blockAllowList and blockDenyList select logical block devices and require enableLogicalBlockDevices"
+// +kubebuilder:validation:XValidation:rule="!(has(self.workers) && size(self.workers) > 0 && has(self.nodeSelector) && size(self.nodeSelector) > 0)",message="spec.discover names workers and also carries a nodeSelector; state one or the other"
 type DiscoverSpec struct {
 	// ConfigName is the ClusterDeploymentConfig to write. Absent generates one
 	// from the run's timestamp, so that a second discovery never overwrites the
@@ -144,10 +142,117 @@ type DiscoverSpec struct {
 	// +optional
 	ConfigName string `json:"configName,omitempty"`
 
+	// Workers are the workers to inspect, by node name.
+	//
+	// It is the answer to inspecting two named machines, which a label selector
+	// can only express by labeling them first: a selector's entries are ANDed,
+	// so two hostnames in one selector match nothing at all.
+	//
+	// A named worker that does not exist, or that is declined for one of the
+	// reasons any worker is declined, is reported by the same event the selector
+	// path reports it by. Naming a worker is a statement about which machines to
+	// consider, not a claim that each of them will be used.
+	// +kubebuilder:validation:MaxItems=128
+	// +kubebuilder:validation:items:MaxLength=253
+	// +optional
+	Workers []string `json:"workers,omitempty"`
+
 	// NodeSelector restricts which workers are inspected. Empty inspects every
-	// schedulable worker.
+	// schedulable worker, and it is exclusive with Workers.
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Tolerations are what the probe pods tolerate, and what the draft states
+	// for the storage nodes it proposes.
+	//
+	// A probe is pinned to its worker with spec.nodeName rather than scheduled
+	// onto it, which bypasses the scheduler and not the taints: a NoSchedule
+	// taint still keeps the pod off, and a NoExecute taint evicts one that
+	// landed. A fleet that dedicates machines to storage taints them, so a run
+	// against one that tolerates nothing inspects nothing.
+	//
+	// They reach the draft as well, because the taints a run was allowed to
+	// probe through are the taints the cluster it proposes has to live with.
+	// Stating them in one place is what keeps a reviewer from approving a
+	// document whose DaemonSet schedules nowhere.
+	// +kubebuilder:validation:MaxItems=32
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// EnableControlPlaneNodes lets the run consider machines that run the API
+	// server and etcd.
+	//
+	// It is off by default because a storage node is a data path, and putting one
+	// on an etcd host is a placement almost nobody intends. The approval gate is a
+	// poor place to catch it: a fifty-worker draft is not a document anybody reads
+	// closely enough to spot three control-plane nodes in it. A combined three-node
+	// or single-node deployment is the case that wants it, and those are set up
+	// deliberately.
+	//
+	// There is no field beside it for infrastructure nodes, because those are used
+	// without asking: an OpenShift infra node is the tier a cluster's own
+	// infrastructure runs on, and simplyblock storage is infrastructure. A fleet
+	// with disks in its infra nodes meant those disks to be the storage, so a draft
+	// proposes them ahead of the workers rather than leaving them out.
+	// +optional
+	EnableControlPlaneNodes *bool `json:"enableControlPlaneNodes,omitempty"`
+
+	// EnableLogicalBlockDevices scans a worker's available logical block devices
+	// instead of its available NVMe devices. It selects the class rather than
+	// adding one, because the draft a run writes describes one cluster and a
+	// cluster is built out of one class. Unset scans NVMe, so that upgrading to
+	// 26.4 does not change what a discovery run reports.
+	//
+	// It is a statement about the run rather than a member of DeviceFilter,
+	// because it does not narrow the devices reported: it decides which class of
+	// them is looked at, which filters in DeviceFilter apply, and what
+	// ForceJournalDevice resolves, since the two classes lay out a journal
+	// differently.
+	// +optional
+	EnableLogicalBlockDevices *bool `json:"enableLogicalBlockDevices,omitempty"`
+
+	// EnablePartitionedDevices reports devices carrying a partition table
+	// alongside the available ones, for the administrator who knows the table is
+	// stale and intends to hand the device over anyway. It is the only one of the
+	// three availability conditions that can be waived: a mounted or otherwise
+	// busy device is never reported, because simplyblock taking it would corrupt
+	// whatever is using it.
+	//
+	// It is a statement about the run rather than a member of DeviceFilter for
+	// the reason EnableLogicalBlockDevices is: it waives an availability
+	// condition for whichever class is scanned, and so widens what is reported,
+	// where every member of the filter narrows it.
+	// +optional
+	EnablePartitionedDevices *bool `json:"enablePartitionedDevices,omitempty"`
+
+	// ForceJournalDevice makes the run dedicate a journal device even where the
+	// fleet's disks do not say which one.
+	//
+	// A run proposes a dedicated journal device when every worker hands over one
+	// disk smaller than its others, because a fleet built that way was built that
+	// way on purpose. Where several disks share the smallest size, nothing says
+	// which to take, and taking one spends a whole disk the fleet did not set
+	// aside: on a worker with ten 10 TB disks that is 10 TB, silently. So the run
+	// does not guess.
+	//
+	// What it does instead depends on the class. An NVMe cluster with no
+	// dedicated journal device carves a journal partition out of every device, so
+	// the run leaves the field unset, says so, and every disk stays storage. A
+	// logical block-device cluster has no such layout — the control plane refuses
+	// the partitioned journal for the class — so the run fails rather than
+	// writing a document that creates the cluster, formats its drives, and then
+	// fails every node_add. Setting this is what asks for one of the equal disks
+	// to be taken anyway, and the draft says the disk was taken rather than
+	// offered.
+	//
+	// It does not force the cases that are impossible rather than ambiguous. A
+	// worker handing over a single disk is refused with it or without it, because
+	// dedicating that disk leaves the worker nothing to store on, and so is a
+	// worker whose disks report no size. The tie it does resolve is broken by
+	// address, ascending, so two runs over one unchanged fleet propose the same
+	// document.
+	// +optional
+	ForceJournalDevice *bool `json:"forceJournalDevice,omitempty"`
 
 	// DeviceFilter narrows which of an inspected worker's devices reach the
 	// draft. Empty reports every device the worker advertises, including the one
@@ -159,6 +264,10 @@ type DiscoverSpec struct {
 	// creates. It is copied to the draft's own clusterRef, so that re-running
 	// discovery after an expansion produces a growth document naming the same
 	// cluster.
+	//
+	// Bounded at what a StorageCluster name may be, since a longer value names
+	// nothing that can exist.
+	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	ClusterRef string `json:"clusterRef,omitempty"`
 }

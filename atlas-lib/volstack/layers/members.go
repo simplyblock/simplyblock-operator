@@ -94,9 +94,16 @@ func (m *Members) Ensure(ctx context.Context, below volstack.Artifact) (volstack
 // in, and lets every one of them go even when an earlier release failed: the
 // members are independent holds, and stopping at the first failure would strand
 // the rest.
+//
+// A member that is already down is skipped, which is the rule the runner applies
+// to a plan and which this has to apply itself, because a composite walks its
+// own members rather than handing them back to the runner.
 func (m *Members) Release(ctx context.Context, below volstack.Artifact) error {
 	var firstErr error
 	for i := len(m.members) - 1; i >= 0; i-- {
+		if m.alreadyDown(ctx, m.members[i], below, "release") {
+			continue
+		}
 		if err := m.members[i].Release(ctx, below); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("members: release %s: %w", m.members[i].Name(), err)
 		}
@@ -107,13 +114,54 @@ func (m *Members) Release(ctx context.Context, below volstack.Artifact) error {
 // Destroy removes the members' durable objects in reverse order. For a stack of
 // fabric layers there is nothing to remove, because the namespaces belong to the
 // control plane.
+//
+// A member already gone is skipped rather than removed again, since removing
+// what is not there is the state the caller asked for either way.
 func (m *Members) Destroy(ctx context.Context, below volstack.Artifact) error {
 	for i := len(m.members) - 1; i >= 0; i-- {
+		if m.alreadyGone(ctx, m.members[i], below, "destroy") {
+			continue
+		}
 		if err := m.members[i].Destroy(ctx, below); err != nil {
 			return fmt.Errorf("members: destroy %s: %w", m.members[i].Name(), err)
 		}
 	}
 	return nil
+}
+
+// alreadyDown reports whether member needs no releasing: nothing of it is there,
+// or it is complete and not mapped, which is what a release leaves behind.
+//
+// Partial is not among them and must not be: a member that is present and cannot
+// serve is still a hold this host has to give up.
+func (m *Members) alreadyDown(ctx context.Context, member volstack.Layer, below volstack.Artifact, verb string) bool {
+	state, ok := m.stateOf(ctx, member, below, verb)
+	return ok && (state == volstack.StateAbsent || state == volstack.StateInactive)
+}
+
+// alreadyGone reports whether member has nothing left to remove.
+func (m *Members) alreadyGone(ctx context.Context, member volstack.Layer, below volstack.Artifact, verb string) bool {
+	state, ok := m.stateOf(ctx, member, below, verb)
+	return ok && state == volstack.StateAbsent
+}
+
+// stateOf reads a member, and reports whether the reading can be acted on.
+//
+// A member that cannot be read is acted on rather than skipped. The reading
+// decides whether work can be saved, not whether the hold exists, so a teardown
+// that skipped on a failed read would strand exactly what it was called to
+// release.
+func (m *Members) stateOf(
+	ctx context.Context, member volstack.Layer, below volstack.Artifact, verb string,
+) (volstack.State, bool) {
+	state, _, err := member.Observe(ctx, below)
+	if err != nil {
+		return volstack.StateAbsent, false
+	}
+	if state == volstack.StateAbsent || state == volstack.StateInactive {
+		volstack.Infof("members: %s %s skipped, already down (%s)", verb, member.Name(), state)
+	}
+	return state, true
 }
 
 // Healthy reports the composite healthy only when every member is. One member

@@ -6,10 +6,14 @@ on:
       - main
     paths:
       - "helm-charts/charts/simplyblock-operator/**"
+      - "helm-charts/scripts/**"
+      - "csi-driver/charts/spdk-csi/latest/**"
       - ".github/workflows/helm_lint.yaml"
   pull_request:
     paths:
       - "helm-charts/charts/simplyblock-operator/**"
+      - "helm-charts/scripts/**"
+      - "csi-driver/charts/spdk-csi/latest/**"
       - ".github/workflows/helm_lint.yaml"
 
 jobs:
@@ -27,5 +31,32 @@ jobs:
       - name: Lint
         run: helm lint helm-charts/charts/simplyblock-operator
 
+      # --api-versions states a capability the render has no cluster to read.
+      # TLS is on by default and the chart refuses a cluster that does not serve
+      # cert-manager's API; a cluster-less render serves nothing, so the default
+      # values cannot be rendered at all without saying so here.
       - name: Template
-        run: helm template simplyblock-operator helm-charts/charts/simplyblock-operator
+        run: >
+          helm template simplyblock-operator helm-charts/charts/simplyblock-operator
+          --api-versions cert-manager.io/v1
+
+      - name: Required objects
+        run: helm-charts/scripts/check-rendered-objects.sh
+
+      - name: KMS setup script
+        run: helm-charts/scripts/test-setup-kms.sh
+
+      - name: Value references
+        run: |
+          make -C operator yq
+          helm-charts/scripts/check-values-references.sh
+
+      # The release packages the chart with its image tags rewritten, and the
+      # rewrite is anchored to the shape of values.yaml. Running it here on a
+      # copy fails the pull request that moves those keys, rather than the
+      # release that would have published the development tags.
+      - name: Release stamping
+        run: |
+          make -C operator yq
+          cp -R helm-charts/charts/simplyblock-operator "$RUNNER_TEMP/chart"
+          helm-charts/scripts/stamp-release-version.sh "$RUNNER_TEMP/chart" v0.0.0-lint

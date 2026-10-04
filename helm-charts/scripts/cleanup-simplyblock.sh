@@ -172,8 +172,14 @@ for crd in $CRDS; do
         $KUBECTL patch "$crd" "$name" -n "$NAMESPACE" \
             --type=merge -p '{"metadata":{"finalizers":[]}}' 2>/dev/null || \
             warn "  Could not patch finalizers on $crd/$name"
-        $KUBECTL delete "$crd" "$name" -n "$NAMESPACE" \
-            --ignore-not-found --timeout=30s 2>/dev/null || true
+        # The delete's own error is reported rather than discarded. A CR that
+        # will not go is as often refused by a validating webhook as held by a
+        # finalizer, and the two are indistinguishable from the final count
+        # alone: the wipe above says "no change" either way.
+        if ! delete_error=$($KUBECTL delete "$crd" "$name" -n "$NAMESPACE" \
+            --ignore-not-found --timeout=30s 2>&1); then
+            warn "  Could not delete $crd/$name: $delete_error"
+        fi
     done
 done
 
@@ -186,8 +192,10 @@ for crd in $CRDS; do
         $KUBECTL patch "$crd" "$name" -n "$NAMESPACE" \
             --type=merge -p '{"metadata":{"finalizers":[]}}' 2>/dev/null || \
             warn "  Could not patch finalizers on $crd/$name"
-        $KUBECTL delete "$crd" "$name" -n "$NAMESPACE" \
-            --ignore-not-found --force --grace-period=0 2>/dev/null || true
+        if ! delete_error=$($KUBECTL delete "$crd" "$name" -n "$NAMESPACE" \
+            --ignore-not-found --force --grace-period=0 2>&1); then
+            warn "  Could not delete $crd/$name: $delete_error"
+        fi
     done
 done
 

@@ -1039,7 +1039,7 @@ v5.1.0, so those floors are already met.
 
 The operator owns cluster, node, and pool lifecycle plus drain and migration. pNFS
 layers onto that without disturbing RWO. What it already has and this design uses:
-node labeling (`io.simplyblock.node-type`, `io.simplyblock.storagenodeset`), a
+node labeling (`io.simplyblock.storagenodeset`), a
 `/snode/info` readiness poll (`SNODEAPIResponse`, `checkNodeInfoReachable()`,
 `pollNodeOnline()`), EndpointSlice management over node IPs
 (`BuildStorageNodeSetEndpointSlice`, `reconcileEndpointSlice`), the `Task` polling

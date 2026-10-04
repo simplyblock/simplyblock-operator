@@ -9,6 +9,7 @@ import (
 	jsonpatch "gomodules.xyz/jsonpatch/v2"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -16,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 const (
@@ -33,23 +35,32 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	if err := simplyblockv1alpha1.AddToScheme(s); err != nil {
 		t.Fatalf("add simplyblock scheme: %v", err)
 	}
+	// The kinds the data-protection band's validators read are all v1alpha2.
+	if err := simplyblockv1alpha2.AddToScheme(s); err != nil {
+		t.Fatalf("add the v1alpha2 simplyblock scheme: %v", err)
+	}
+	// The conversion webhook's CA bundle is injected into CRDs, so the fake
+	// client has to know that kind too.
+	if err := apiextensionsv1.AddToScheme(s); err != nil {
+		t.Fatalf("add apiextensions scheme: %v", err)
+	}
 	return s
 }
 
 const testClusterUUID = "c03e1571-75e8-46d6-b76f-d08a4e2abe2f"
 
-func makeCluster(benchmarkEnabled bool, image string) *simplyblockv1alpha1.StorageCluster {
-	return &simplyblockv1alpha1.StorageCluster{
+func makeCluster(benchmarkEnabled bool, image string) *simplyblockv1alpha2.StorageCluster {
+	return &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster", Namespace: "default"},
-		Spec: simplyblockv1alpha1.StorageClusterSpec{
-			VolumeMigrationSettings: &simplyblockv1alpha1.VolumeMigrationSettings{
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			VolumeMigrationSettings: &simplyblockv1alpha2.VolumeMigrationSettings{
 				RebalancerImage: ptr.To(image),
 			},
-			VolumeAutoPlacement: &simplyblockv1alpha1.VolumeAutoPlacementSettings{
-				LatencyBenchmarkEnabled: ptr.To(benchmarkEnabled),
+			VolumeAutoPlacement: &simplyblockv1alpha2.VolumeAutoPlacementSettings{
+				EnableLatencyBenchmark: ptr.To(benchmarkEnabled),
 			},
 		},
-		Status: simplyblockv1alpha1.StorageClusterStatus{UUID: testClusterUUID},
+		Status: simplyblockv1alpha2.StorageClusterStatus{UUID: testClusterUUID},
 	}
 }
 
@@ -117,7 +128,7 @@ func TestSimplyblockRebalancerInjector_Handle(t *testing.T) {
 	cases := []struct {
 		name        string
 		pod         *corev1.Pod
-		cluster     *simplyblockv1alpha1.StorageCluster
+		cluster     *simplyblockv1alpha2.StorageCluster
 		wantAllowed bool
 		wantPatch   bool
 	}{

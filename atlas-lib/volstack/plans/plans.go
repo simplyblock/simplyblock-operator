@@ -26,6 +26,8 @@ import (
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/volstack"
 	"github.com/simplyblock/atlas/volstack/layers"
+	"slices"
+	"strings"
 )
 
 // The prefixes the LVM names carry. They exist to keep the group and the volume
@@ -61,11 +63,28 @@ type Volume struct {
 	// geometry underneath.
 	FormatOptions []string
 
+	// PVName, PVCNamespace, and PVCName are the Kubernetes objects the volume
+	// serves, as the node service was told them. They are written into the
+	// group's LVM metadata as informational tags for whoever reads a node, and
+	// decide nothing: a claim can be rebound, and the tags follow it on the next
+	// bring-up. Empty when the node service was not told, which a volume staged
+	// outside Kubernetes is.
+	PVName       string
+	PVCNamespace string
+	PVCName      string
+
 	// ReservedBlocksPercent is how much of the filesystem is held back for
 	// privileged processes, for a filesystem that has such a notion. Empty leaves
 	// it at that filesystem's own default, which is not what asking for zero
 	// means. How it is spelled is the filesystem's business, not the caller's.
 	ReservedBlocksPercent string
+
+	// Encrypted says the control plane encrypts this volume beneath the
+	// namespace it exports, which makes the bytes the host reads meaningless:
+	// an empty encrypted volume decrypts from zeros into pseudo-random
+	// plaintext. The filesystem layer needs it to know that an unrecognized
+	// reading is no evidence of anything.
+	Encrypted bool
 }
 
 // VolumeGroup is the name of the group this volume's LVM layers use.
@@ -82,6 +101,49 @@ func VolumeGroupName(uuid string) string { return volumeGroupPrefix + uuid }
 
 // LogicalVolumeName is the same rule for the volume inside the group.
 func LogicalVolumeName(uuid string) string { return logicalVolumePrefix + uuid }
+
+// RecognizeStack answers whether a group carrying no ownership tag is a stack of
+// this driver's from before the tag existed: one named by VolumeGroupName over a
+// volume named by LogicalVolumeName from the same UUID, and nothing else in it
+// but the structural volumes the stack makes for itself, which preserve names.
+// Nothing else makes that exact layout, so it is the one shape adoption accepts.
+func RecognizeStack(preserve ...string) lvm.StackRecognizer {
+	return func(volumeGroup string, logicalVolumes []string) bool {
+		uuid, ok := strings.CutPrefix(volumeGroup, volumeGroupPrefix)
+		if !ok || uuid == "" {
+			return false
+		}
+		return exactStack(LogicalVolumeName(uuid), logicalVolumes, preserve)
+	}
+}
+
+// exactStack reports whether logicalVolumes is the volume plus a subset of the
+// structural names, and nothing else.
+func exactStack(volume string, logicalVolumes, preserve []string) bool {
+	if !slices.Contains(logicalVolumes, volume) {
+		return false
+	}
+	for _, name := range logicalVolumes {
+		if name != volume && !slices.Contains(preserve, name) {
+			return false
+		}
+	}
+	return true
+}
+
+// InformationalTags is what the group carries for whoever reads a node's LVM
+// metadata: which volume it is, and which PersistentVolume and claim it serves
+// when the node service was told.
+func (v Volume) InformationalTags() []string {
+	tags := []string{lvm.InformationalTag("lvol", v.UUID)}
+	if v.PVName != "" {
+		tags = append(tags, lvm.InformationalTag("pv", v.PVName))
+	}
+	if v.PVCNamespace != "" && v.PVCName != "" {
+		tags = append(tags, lvm.InformationalTag("pvc", v.PVCNamespace+"/"+v.PVCName))
+	}
+	return tags
+}
 
 // LogicalVolumeOptions is what the LVM rows differ in. The linear, VDO, and
 // striped plans use one lvmLogicalVolume layer with different contents here,
@@ -126,6 +188,18 @@ func (n *Node) LVM(
 	return append(volstack.Plan{n.fabric(connection)}, n.lvmStack(volume, options)...)
 }
 
+// LVMRawBlock is `fabric` → `lvmPhysicalVolume` → `lvmVolumeGroup` →
+// `lvmLogicalVolume`, the LVM row for a volume the pod opens as a block device.
+// Deduplication and compression are a property of the logical volume rather than
+// of the filesystem above it, so a raw block volume gets them the same way a
+// formatted one does, and the plan is the formatted row with its top layer
+// absent.
+func (n *Node) LVMRawBlock(
+	connection lvol.Connection, volume Volume, options LogicalVolumeOptions,
+) volstack.Plan {
+	return append(volstack.Plan{n.fabric(connection)}, n.lvmStackRaw(volume, options)...)
+}
+
 // Striped is `members(n)` → `lvmPhysicalVolume` → `lvmVolumeGroup` →
 // `lvmLogicalVolume` → `filesystem`: several namespaces where every other plan
 // has one. It is the only plan whose bottom is not a single layer, which is the
@@ -147,10 +221,18 @@ func (n *Node) Striped(
 // part of either, because a striped volume gains capacity by taking on members
 // rather than by growing the ones it has.
 func (n *Node) lvmStack(volume Volume, options LogicalVolumeOptions) volstack.Plan {
+	return append(n.lvmStackRaw(volume, options), n.filesystem(volume))
+}
+
+// lvmStackRaw is the same three LVM layers without the filesystem on top, which
+// is what a volume the pod opens as a block device is. It is separate from
+// lvmStack rather than a flag inside it for the reason RawBlock is separate from
+// Plain: a volume that is never formatted must not share a code path with one
+// that is.
+func (n *Node) lvmStackRaw(volume Volume, options LogicalVolumeOptions) volstack.Plan {
 	return volstack.Plan{
-		n.physicalVolume(volume),
-		n.volumeGroup(volume),
+		n.physicalVolume(volume, options),
+		n.volumeGroup(volume, options),
 		n.logicalVolume(volume, options),
-		n.filesystem(volume),
 	}
 }

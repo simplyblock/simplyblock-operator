@@ -7,6 +7,7 @@ import (
 
 	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/internal/cpapi"
+	"github.com/simplyblock/atlas/lvol"
 )
 
 // MigrationKind is what one migration moves.
@@ -52,14 +53,29 @@ type Migration struct {
 	SnapsTotal    int
 
 	// TargetNQN, MemberCount, and ClusterID describe a subsystem's migration:
-	// the subsystem the members land on, and how many there are.
+	// the subsystem the members land on, and how many there are. TargetNQN is
+	// also filled for a volume's migration, from the paths below, because the
+	// shape carries no such field of its own and the NQN is what a host asks
+	// the target for.
 	TargetNQN   string
 	MemberCount int
 	ClusterID   string
+
+	// Paths are the NVMe-oF endpoints the target answers the migrated
+	// subsystem on, in the control plane's priority order.
+	//
+	// They arrive with the migration's creation and with nothing else: a
+	// migration read back by id carries none, so a caller that means to use
+	// them keeps what the create returned. That window is what they are for.
+	// A created migration copies nothing until it is continued, and in between
+	// every host consuming the subsystem has to be able to reach the target,
+	// which is checked by connecting these paths and finding them established
+	// and not yet serving.
+	Paths []lvol.Endpoint
 }
 
 func volumeMigration(d cpapi.MigrationDTO) Migration {
-	return Migration{
+	m := Migration{
 		Kind:          MigrationOfVolume,
 		ID:            d.Id.String(),
 		SourceNodeID:  d.SourceNodeId,
@@ -73,10 +89,12 @@ func volumeMigration(d cpapi.MigrationDTO) Migration {
 		SnapsMigrated: d.SnapsMigrated,
 		SnapsTotal:    d.SnapsTotal,
 	}
+	m.Paths, m.TargetNQN = migrationPaths(d.ConnectStrings)
+	return m
 }
 
 func subsystemMigration(d cpapi.BatchMigrationDTO) Migration {
-	return Migration{
+	m := Migration{
 		Kind:         MigrationOfSubsystem,
 		ID:           d.Id.String(),
 		SourceNodeID: d.SourceNodeId,
@@ -88,6 +106,29 @@ func subsystemMigration(d cpapi.BatchMigrationDTO) Migration {
 		MemberCount:  d.MemberCount,
 		ClusterID:    d.ClusterId,
 	}
+	paths, nqn := migrationPaths(d.ConnectStrings)
+	m.Paths = paths
+	if m.TargetNQN == "" {
+		m.TargetNQN = nqn
+	}
+	return m
+}
+
+// migrationPaths reads a migration's connect entries, and returns the NQN they
+// lead to alongside them.
+//
+// The NQN comes off the first entry rather than being collected from all of
+// them: every path of one migration answers the same subsystem, since that is
+// what makes them paths to one thing rather than a list of unrelated targets.
+func migrationPaths(entries *[]cpapi.NvmeConnectEntry) ([]lvol.Endpoint, string) {
+	if entries == nil || len(*entries) == 0 {
+		return nil, ""
+	}
+	paths := make([]lvol.Endpoint, 0, len(*entries))
+	for _, e := range *entries {
+		paths = append(paths, endpointOf(e))
+	}
+	return paths, (*entries)[0].Nqn
 }
 
 // migrationFromJSON reads whichever shape arrived.

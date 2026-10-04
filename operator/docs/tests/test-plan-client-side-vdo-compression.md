@@ -68,6 +68,18 @@ device scoping, and volume-group/logical-volume identity.
 | U-34 | Rescan is scoped to exactly the given devices                           | Positive | `TestManager_Rescan`                                   |
 | U-35 | Rescan propagates a runner error                                        | Negative | `TestManager_Rescan_PropagatesRunnerError`             |
 
+### Volume Group Tags (`atlas-lib/lvm/tags_test.go`)
+
+The marker a create leaves on the group while `lvcreate --type vdo` runs, and
+what a later bring-up reads back (pins the 2026-09-26 interrupted create, e2e
+run 36219557238).
+
+| #    | Scenario                                                                  | Type     | Test                                       |
+|------|---------------------------------------------------------------------------|----------|--------------------------------------------|
+| U-62 | Add and remove a tag on a volume group, as `vgchange --addtag`/`--deltag` | Positive | `TestVolumeGroupTagsRoundTrip`             |
+| U-63 | Read a group's tags off `vgs`: two, one, none, and past a `WARNING:` line | Positive | `TestVolumeGroupTagsReadsTheListing`       |
+| U-64 | A failed `vgs` is an error, not a group without tags                      | Negative | `TestVolumeGroupTagsReturnsAFailedListing` |
+
 ### Orphaned Device-Mapper Node Cleanup (`atlas-lib/lvm/dm_test.go`)
 
 | #    | Scenario                                                              | Type     | Test                                                                                             |
@@ -134,7 +146,18 @@ device scoping, and volume-group/logical-volume identity.
 
 ---
 
-## 5. Manual Scenarios (Live Cluster)
+## 5. On-Node Integration (`test/integration/onnode/vdo_test.go`)
+
+Real LVM and a real VDO target, which the QEMU cluster's Talos kernel does not
+carry: these run on the integration workflow's runner-kernel job, where a
+skipped case fails the job.
+
+| #   | Scenario                                                                                                                                                                                                                                           | Type       | Test                                                |
+|-----|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|-----------------------------------------------------|
+| I-1 | A bring-up interrupted inside `lvcreate --type vdo` after the pool's first commit leaves only `vdopool`, and the next bring-up converges, mounts, and rebuilds a `vdo-pool` with the volume in it (pins the 2026-09-26 crash, e2e run 36219557238) | Regression | `TestVDOStackConvergesAfterAnInterruptedPoolCreate` |
+| I-2 | The pool beside a volume the plan did not name, under the marker, is refused, and the volume and its bytes read back intact afterward                                                                                                              | Negative   | `TestVDOStackRefusesAPoolBesideSomebodysVolume`     |
+
+## 6. Manual Scenarios (Live Cluster)
 
 `csi-driver/internal/mount/vdo.go` itself has no direct unit tests (design §9): its
 only logic is a one-line delegation per RPC concern into already-tested
@@ -217,9 +240,10 @@ plan's scenarios.
 
 ## Coverage Summary
 
-61 unit scenarios across `atlas-lib/lvm`, `atlas-lib/lvm/vdo`, and the CSI
-driver's topology segment, plus 6 manual live-cluster scenarios covering what
-unit tests cannot reach (design §9).
+64 unit scenarios across `atlas-lib/lvm`, `atlas-lib/lvm/vdo`, and the CSI
+driver's topology segment, 2 on-node integration scenarios on a kernel that
+carries VDO, plus 6 manual live-cluster scenarios covering what unit tests
+cannot reach (design §9).
 
 ## What Is Not Yet Covered
 

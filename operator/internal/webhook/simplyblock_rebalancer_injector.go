@@ -16,7 +16,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -104,7 +104,7 @@ func (h *SimplyblockRebalancerInjector) resolveConfig(
 ) (image, configMapName string, ok bool) {
 	uuidPrefix := clusterUUIDFromPodName(podName)
 
-	var list simplyblockv1alpha1.StorageClusterList
+	var list simplyblockv1alpha2.StorageClusterList
 	if err := h.Client.List(ctx, &list); err != nil {
 		log.Error(err, "Failed to list StorageClusters")
 		return "", "", false
@@ -115,7 +115,7 @@ func (h *SimplyblockRebalancerInjector) resolveConfig(
 			continue
 		}
 		rb := autoplacement.GetConfig(cr.Spec.VolumeAutoPlacement)
-		if !ptr.BoolFromOrFalse(rb.LatencyBenchmarkEnabled) {
+		if !ptr.BoolFromOrFalse(rb.EnableLatencyBenchmark) {
 			log.Info("Skipping: latency benchmark not enabled", "cluster", cr.Name)
 			return "", "", false
 		}

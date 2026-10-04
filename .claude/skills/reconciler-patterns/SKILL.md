@@ -110,8 +110,11 @@ Every retried mutating call has to be idempotent, or guarded by a read that tell
 whether it landed. `drainSuspend` reads the node's backend status before POSTing
 suspend, which is the pattern: **ask, then act**.
 
-Canonical: `storagenodeops_controller.go:204`,
-`storageclusterops_noderollingrestart.go:50`.
+Canonical: `storagenodeops_controller.go:204`, and
+`controllers/cluster/actions.go` for the shape that needs no flag at all: every
+step's completion condition is a predicate over current state, and every call is
+skipped when its target is already at or past what the call would produce, so a
+step recorded without its side effect having fired is safe to re-enter.
 
 ### 5. Generation and resourceVersion
 
@@ -139,7 +142,9 @@ An imperative operation takes a lock on its target (`status.activeOpsRef` on the
 `StorageCluster` or the pair) and releases it on **every** terminal path,
 including the failures. A release only clears a lock it owns.
 
-Canonical: `storageclusterops_controller.go:568` (`releaseClusterLock`),
+Canonical: `controllers/cluster/storageclusterops_controller.go`
+(`releaseLock`, reached from the terminal transition, from the terminal branch
+of a later reconcile, and from the finalizer), and
 `replicationops_controller.go:566`.
 
 ### 7. Requeue against error
@@ -163,7 +168,8 @@ cadence of a controller can be read or tuned.
 ### 8. Terminal, finalizer, event
 
 - **A terminal phase re-reconciles to nothing.** First thing after the `Get`:
-  if the phase is `Succeeded` or `Failed`, return. `storageclusterops_controller.go:84`.
+  if the phase is terminal, release the lock once more and return.
+  `controllers/cluster/storageclusterops_controller.go`.
 - **`client.IgnoreNotFound(err)` after the `Get`.** A deleted object is not an
   error, and `reconcile_contract_test.go` asserts it.
 - **A finalizer is removed on every path**, including the failure paths and the

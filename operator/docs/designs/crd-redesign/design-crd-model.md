@@ -2,8 +2,8 @@
 
 **Status:** Draft  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-19 (last updated 2026-09-08)  
-**API groups:** `storage.simplyblock.io/v1alpha1`, and `metrics.simplyblock.io/v1alpha1` for the readings that are not resources (§7.13)  
+**Date:** 2026-08-19 (last updated 2026-09-17)  
+**API groups:** `storage.simplyblock.io`, served at `v1alpha1` and `v1alpha2`, and `metrics.simplyblock.io/v1alpha2` for the readings that are not resources (§7.13)  
 **Diagram:** [`assets/crd-overview.jpg`](assets/crd-overview.jpg)
 
 ---
@@ -24,9 +24,9 @@
 
 ## Overview
 
-The API group `storage.simplyblock.io/v1alpha1` registers seventeen custom
-resource definitions today, thirteen of which are in scope here, and the target
-model drawn in
+The registered API, `storage.simplyblock.io/v1alpha1`, carries seventeen custom
+resource definitions, thirteen of which are in scope here, and the target model
+drawn in
 [`assets/crd-overview.jpg`](assets/crd-overview.jpg) has roughly thirty boxes.
 This document is the map: which categories a kind can belong to, what its name
 has to look like once that category is chosen, which resource owns which, and
@@ -42,7 +42,7 @@ and behaves nothing like it when something is deleted.
 One group is not enough for all of it. A measurement of a volume is not desired
 state, nothing reconciles toward it, and storing one per volume would write the
 workload's I/O rate into etcd, so measurements are served from a second group,
-`metrics.simplyblock.io/v1alpha1`, by an aggregated API server rather than kept as
+`metrics.simplyblock.io/v1alpha2`, by an aggregated API server rather than kept as
 resources. Which of the two a number belongs in is §7.13.
 
 ---
@@ -438,17 +438,23 @@ the outer `Pending` to `Succeeded` spine an operation has.
 step machine is per-action, the phase machine is not, and a step is not contained
 in a phase. §9.5 is what the rename costs.
 
-**No kind meets this rule yet.** `atlas-lib/statemachine` has no consumer in
-either the operator or the CSI driver, and the three registered `Ops` kinds all
-drive their steps by hand.
+**The rule is what separates the kinds that were rebuilt against it from the ones
+that were not.** The `StorageCluster`, `StorageNode`, `StoragePool`,
+`StorageDevice`, `StorageBackup`, and `ControlPlane` families drive their steps
+from a declared `statemachine` graph and carry the step-set agreement test that
+proves the graph and the `Enum` marker have not drifted apart. `OperatorOps` is
+the one `Ops` kind still driving its steps from a hand-rolled `switch`, which is
+the shape §1 lists as what motivated the rule.
 
 ### 3.2 The lock an entity carries
 
 **Every entity with an `Ops` companion carries `status.activeOpsRef`**, a string
 naming the operation currently allowed to act on it, and empty when none is. The
 field has the same name and the same meaning on every kind, so a reader, a script,
-and a dashboard learn it once rather than per kind. Four kinds carry it today:
-`StorageCluster`, `StorageNode`, and the two replication kinds (§2).
+and a dashboard learn it once rather than per kind. Every entity with a companion
+carries it: `StorageCluster`, `StorageNode`, `StoragePool`, `StorageDevice`,
+`ControlPlane`, and `StorageBackup`, alongside the two replication kinds this
+document leaves out of scope (§2).
 
 **One operation at a time per entity, and that is the design rather than a limit
 to work around.** A second operation is admitted by the API server, acquires
@@ -574,7 +580,7 @@ than for kinds this model settles.
 Strip the diagram down to its solid arrows and a single tree remains.
 
 ```
-ControlPlane                                       (singleton, one per namespace)
+ControlPlane                                       (singleton, one per Kubernetes cluster)
     │
 StorageCluster                                     (one simplyblock backend cluster)
     ├─owns─► StorageNode                           (one per worker node × NUMA socket)
@@ -684,7 +690,7 @@ for this document (§2), leaving the thirteen below, one CRD per row.
 
 | Kind                | Short name today | Category | In the target model                                                             | Note                                                                                                       |
 |---------------------|------------------|----------|---------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------|
-| `ControlPlane`      | —                | Entity   | Reworked ([`design-controlplane.md`](design-controlplane.md))                   | Singleton, named `simplyblock`, one per namespace                                                          |
+| `ControlPlane`      | —                | Entity   | Reworked ([`design-controlplane.md`](design-controlplane.md))                   | Singleton, named `simplyblock`, one per Kubernetes cluster                                                 |
 | `StorageCluster`    | —                | Entity   | Reworked ([`design-storagecluster.md`](design-storagecluster.md))               | Drawn as `Storage(Edge)Cluster`, because edge deployments differ in topology and scale rather than in kind |
 | `StorageClusterOps` | `scops`          | Action   | Reworked ([`design-storagecluster.md`](design-storagecluster.md))               | Holds `StorageCluster.status.activeOpsRef`                                                                 |
 | `StorageNodeSet`    | —                | Entity   | **Retired** (§9.2)                                                              | The fleet template becomes `ClusterDeploymentConfig.nodeSets[]`                                            |
@@ -898,14 +904,13 @@ every kind this group models reads its backend state from a subscription: the
 control plane honors `?watch=true` on the type, the operator holds the streamed
 objects in an in-memory store, and reconcilers read that store.
 
-**None of it is shipped, and every design here depends on it.** The subscriptions
-arrive with the control plane's SSE work rather than with any design in this group,
-which is why a `?watch=true` row in a backend table is an external dependency rather
-than an endpoint somebody can call today.
+**The store and the subscription manager are `operator/internal/cpinformer`**, and
+the streams a design names as a `?watch=true` row are its subscriptions. The
+cluster, task, node, device, volume, backup, and backup-policy streams are
+consumed; the pool is the one resource in the family still read by polling, which
+[`design-storagepool.md`](design-storagepool.md) §4.2 records.
 `design-sse-push-notifications.md`, on the `sse` branch, owns the mechanism, the
-verified wire contract, and the adoption phases, alongside the
-`operator/internal/cpinformer` implementation of the store and the subscription
-manager.
+verified wire contract, and the adoption phases.
 
 **No design in this group specifies a poll.** A `RequeueAfter` still appears where
 a controller is waiting on something the stream does not carry, and as a slow
@@ -1118,7 +1123,7 @@ kind under one prefix, which is what a dashboard selects on.
 Every number this operator publishes about a simplyblock object is either state
 something reconciles toward or a measurement of what the storage is doing, and
 only the first is a custom resource. A measurement is served from
-`metrics.simplyblock.io/v1alpha1`, a second API group the operator registers from
+`metrics.simplyblock.io/v1alpha2`, a second API group the operator registers from
 an extension API server running inside its own process. A kind there is computed
 from the control-plane cache when a client asks for it and is never persisted,
 which is the trade `metrics.k8s.io` makes for `PodMetrics`.
@@ -1141,16 +1146,28 @@ all. What the chart ships for them is an `APIService` and the two bindings the
 Kubernetes API server's authentication and authorization delegation needs, which
 is also what makes an ordinary `RoleBinding` on the group work.
 
-| Kind                   | Short name | Scope      | Reports                                                                                             | Named after                                                             |
-|------------------------|------------|------------|-----------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
-| `LogicalVolumeMetrics` | `lvm`      | Namespaced | A volume's provisioned, used, free, and total bytes, and the control plane's own utilization figure | The `PersistentVolumeClaim` the volume backs, in that claim's namespace |
+| Kind                    | Short name | Scope      | Reports                                                                                             | Named after                                                             |
+|-------------------------|------------|------------|-----------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
+| `LogicalVolumeMetrics`  | `lvm`      | Namespaced | A volume's provisioned, used, free, and total bytes, and the control plane's own utilization figure | The `PersistentVolumeClaim` the volume backs, in that claim's namespace |
+| `StorageClusterMetrics` | `scm`      | Namespaced | How full a whole cluster is, which is the number a capacity plan is made against                    | The `StorageCluster`, in its namespace                                  |
+| `StoragePoolMetrics`    | `spm`      | Namespaced | A pool's occupancy against the capacity it was carved out with                                      | The `StoragePool`, in its namespace                                     |
+| `StorageNodeMetrics`    | `snm`      | Namespaced | One node's occupancy across the devices it carries                                                  | The `StorageNode`, in its namespace                                     |
+| `StorageDeviceMetrics`  | `sdm`      | Namespaced | One device's occupancy                                                                              | The `StorageDevice`, in its namespace                                   |
+
+**Each narrower reading answers a question the one above it cannot.** A device's
+reading is bounded by one device and a pool's by the capacity that pool was carved
+out with, so neither says whether the cluster underneath them is about to run out,
+which is why the cluster carries its own. Which pool or which volume is filling a
+cluster up is deliberately not on the cluster's reading: a cluster reports its own
+totals, and the breakdown behind them is what the narrower kinds are for.
 
 **A reading is named for the Kubernetes object it is about, and lives where that
 object lives.** A tenant who knows their claim's name needs to learn nothing else
 to ask for its occupancy, and namespaced RBAC confines them to their own volumes
 without a single rule this group has to invent. A logical volume with no bound
 claim is therefore not served, because it has no name in this API and no namespace
-to be authorized against. The plural is its own singular, the way `endpoints` is,
+to be authorized against, and the same rule makes every other kind here namespaced:
+each is named after an object that is. The plural is its own singular, the way `endpoints` is,
 since "metrics" is already the noun.
 
 **A measured number stays in a CRD's status only when it is bounded,
@@ -1181,7 +1198,7 @@ less than the whole answer and more than refusing to answer.
 The group depends on the same stream §7.7 does, because the volumes it lists come
 from the subscription's cache rather than from a call per read. Both arrive
 together: `design-sse-push-notifications.md` on the `sse` branch owns the stream,
-and the branch carries the group as `operator/api/metrics/v1alpha1` and its server
+and the branch carries the group as `operator/api/metrics/v1alpha2` and its server
 as `operator/internal/metricsapi`.
 
 ---
@@ -1422,7 +1439,6 @@ authentication rather than failing to apply.
 | `enabled`                  | on      | `disableDataRealignment`     | `DataRealignmentSettings`                    |
 | `enabled`                  | off     | `enableVolumeAutoPlacement`  | `VolumeAutoPlacementSettings`                |
 | `withCompression`          | off     | `enableCompression`          | `BackupSpec`                                 |
-| `encryption`               | off     | `enableEncryption`           | `StorageClassParameters`                     |
 | `replicate`                | off     | `enableReplication`          | `StorageClassParameters`                     |
 | `dhchap`                   | off     | `enableDHCHAP`               | `StoragePoolSpec`                            |
 

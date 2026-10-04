@@ -1,14 +1,15 @@
 // A deployment's whole inventory, gathered in one call.
 //
 // This is the only place a caller has to know about to ask what there is to
-// deploy on. The five readings come from five places — the CPU topology, the
-// huge-page pools, the network interfaces, the block devices, and the
-// Kubernetes API — and a discovery run wants all five before it writes a
-// document, so collecting them separately would leave every caller writing the
-// same five calls and the same partial-failure handling.
+// deploy on. The readings come from as many places — the CPU topology, the
+// memory, the huge-page pools, the network interfaces, the block devices, the
+// host's own os-release, and the Kubernetes API — and a discovery run wants all
+// of them before it writes a document, so collecting them separately would
+// leave every caller writing the same calls and the same partial-failure
+// handling.
 //
-// Four of the five are one machine's and the fifth is the cluster's, and they
-// are gathered together anyway because that is the shape of the answer: a
+// All but one are a machine's own and the last is the cluster's, and they are
+// gathered together anyway because that is the shape of the answer: a
 // ClusterDeploymentConfig states an environment and a set of workers with their
 // devices, so a run that produced one half without the other has produced
 // nothing reviewable.
@@ -32,6 +33,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/discovery"
@@ -74,6 +76,12 @@ type Config struct {
 	// blockdev.DefaultDevRoot. It decides the paths the disks are opened by.
 	DevRoot string
 
+	// HostRoot is where the host's root filesystem is mounted, defaulting to
+	// DefaultHostRoot. The OS reading is the only one that uses it, and it is
+	// the reading a container gets a plausible wrong answer for when it is left
+	// alone: every image carries an os-release of its own. See ReadHostOS.
+	HostRoot string
+
 	// MountinfoPath is the mount table the disk reading consults, defaulting to
 	// this process's own. A collection running in a pod has to point it at the
 	// host's, which is PID 1's: a pod has its own mount namespace, so its own
@@ -90,10 +98,66 @@ type Config struct {
 	// kernel.
 	Exclusive blockdev.ExclusiveOpener
 
+	// InterfaceAddresses answers which IP addresses each interface holds. A nil
+	// reader is LocalAddresses, this process's own network namespace, which is
+	// the host's for a caller running with host networking.
+	InterfaceAddresses AddressReader
+
+	// InterfaceLinks answers which VLAN tag or VXLAN network identifier each
+	// interface carries. A nil reader is LocalLinks, which asks netlink in this
+	// process's own network namespace and has the same caveat as the addresses.
+	InterfaceLinks LinkReader
+
+	// Machine answers what hardware the kernel is running on. A nil reader is
+	// LocalMachine, the uname of the kernel this process runs under, which is
+	// the host's kernel whether or not the process is in a container.
+	Machine MachineReader
+
+	// ReclaimControllers hands every NVMe controller a userspace driver holds,
+	// and nothing is driving, back to the kernel before the block devices are
+	// read.
+	//
+	// It is how a fleet that has run this product before reports its disks at
+	// all. A controller SPDK took presents no block device, so a collection
+	// that only looks finds a machine with no storage on it. Off by default,
+	// because a collection that changes the machine it came to read is
+	// something a caller asks for: the capture tool and anything else
+	// inspecting a host it does not own leaves it alone.
+	//
+	// What a running deployment is driving is never taken. See
+	// [pci.ReclaimIdle].
+	ReclaimControllers bool
+
+	// ReclaimSettle is how long to wait for the kernel to enumerate the disks
+	// behind the controllers it was handed. It is ignored unless
+	// ReclaimControllers is set, and a zero value waits DefaultReclaimSettle.
+	//
+	// A bind returns before the namespaces exist, and reading the disks in that
+	// window finds the absence the reclaim was for. A negative value waits not
+	// at all, which is what a test against a tree with no kernel behind it
+	// wants.
+	ReclaimSettle time.Duration
+
 	// Kubernetes is the cluster half of a collection's sources. The zero value
 	// collects no environment, which is what a caller inspecting a machine
 	// outside a cluster has.
 	Kubernetes KubernetesSources
+}
+
+// addresses is the reader to use, defaulted.
+func (c Config) addresses() AddressReader {
+	if c.InterfaceAddresses != nil {
+		return c.InterfaceAddresses
+	}
+	return LocalAddresses
+}
+
+// links is the link-identity reader to use, defaulted.
+func (c Config) links() LinkReader {
+	if c.InterfaceLinks != nil {
+		return c.InterfaceLinks
+	}
+	return LocalLinks
 }
 
 // KubernetesSources is what the environment is concluded from.
@@ -201,6 +265,20 @@ type Inventory struct {
 	// them.
 	NVMeControllers []pci.Device
 
+	// Reclaimed is the controllers this collection handed back to the kernel,
+	// as they were before it did.
+	//
+	// It is empty unless Config.ReclaimControllers was set. It is reported
+	// because the machine keeps the new binding: a collection that changed a
+	// host owes its reader the list, and these are the disks that are in
+	// Devices only because it did.
+	Reclaimed []pci.Device
+
+	// HostOS is the distribution the worker runs and the architecture it runs
+	// on. It is the machine's own answer, read from its os-release and its
+	// kernel, where Environment is the cluster's.
+	HostOS HostOS
+
 	// Environment is which Kubernetes distribution the cluster runs, and the
 	// markers that said so.
 	//
@@ -226,14 +304,19 @@ func (i Inventory) AvailableDevices() []blockdev.Candidate {
 	return free
 }
 
-// ControllersTakenByUserspace is the NVMe controllers a userspace driver owns,
+// ControllersBoundToUserspace is the NVMe controllers a userspace driver owns,
 // which are the disks this machine has and the kernel does not present.
 //
 // A discovery run that found no candidate devices should say whether this is
 // empty: no disks and no controllers is a machine with no storage, and no disks
 // with four controllers is a machine whose storage something else is already
 // driving. They are different answers and only one of them is a surprise.
-func (i Inventory) ControllersTakenByUserspace() []pci.Device {
+//
+// Whether that something is still running is a separate question, answered per
+// controller by [pci.Device.InUse]. Both belong in the refusal, because they
+// ask a reviewer for opposite things: reclaim these disks, or leave the machine
+// alone.
+func (i Inventory) ControllersBoundToUserspace() []pci.Device {
 	var taken []pci.Device
 	for _, controller := range i.NVMeControllers {
 		if controller.BoundToUserspace() {
@@ -366,8 +449,8 @@ func (i Inventory) ByNUMANode() []NUMANodeInventory {
 	return nodes
 }
 
-// Collect reads all five, and returns what it could read beside what it could
-// not.
+// Collect reads all of them, and returns what it could read beside what it
+// could not.
 //
 // The error joins every reader that failed, so a caller inspecting twenty
 // workers can record the failure against the one worker and keep the rest of
@@ -402,27 +485,69 @@ func Collect(ctx context.Context, cfg Config) (Inventory, error) {
 	}
 	inv.HugePages = pages
 
+	hostOS, err := ReadHostOS(cfg)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("read the host OS: %w", err))
+	}
+	inv.HostOS = hostOS
+
 	ifaces, err := ReadInterfaces(cfg)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("read the network interfaces: %w", err))
 	}
 	inv.Interfaces = ifaces
 
+	// The bus is read before the disks, and not only because the reclaim has to
+	// happen first. The controllers are what says a machine reporting no disks
+	// is full of them, and the reclaim is what turns that statement into a disk
+	// the reading can answer questions about.
+	pciCfg := pci.Config{
+		SysfsRoot: cfg.sysfs(),
+		ProcRoot:  cfg.proc(),
+		DevRoot:   cfg.dev(),
+	}
+	controllers, err := pci.Scan(pciCfg)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("read the PCI controllers: %w", err))
+	}
+	// Which driver is bound comes from sysfs and whether anything is driving it
+	// comes from the process table, and the second is the one that says whether
+	// a controller can be reclaimed. A failure to answer it is recorded rather
+	// than defaulted, because an unchecked controller and an idle one are
+	// indistinguishable once the error is dropped.
+	checked, err := pci.CheckHolders(pciCfg, pci.NVMeControllers(controllers))
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	if cfg.ReclaimControllers {
+		reclaimed, err := pci.ReclaimIdle(pciCfg, checked)
+		if err != nil {
+			// A controller that could not be handed back is reported and the
+			// rest are still taken: one machine's refusal is not a reason to
+			// read none of the disks the others just presented.
+			errs = append(errs, err)
+		}
+		inv.Reclaimed = reclaimed
+
+		if len(reclaimed) > 0 {
+			waitForReclaimed(cfg.sysfs(), reclaimed, cfg.reclaimSettle())
+			// The scan is stale the moment a controller changes hands, and the
+			// driver it is on now is the fact a reader checks the reclaim by.
+			if rescanned, err := pci.Scan(pciCfg); err == nil {
+				if rechecked, err := pci.CheckHolders(pciCfg, pci.NVMeControllers(rescanned)); err == nil {
+					checked = rechecked
+				}
+			}
+		}
+	}
+	inv.NVMeControllers = checked
+
 	devices, err := cfg.inspector().Candidates(ctx)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("read the block devices: %w", err))
 	}
 	inv.Devices = devices
-
-	controllers, err := pci.Scan(pci.Config{
-		SysfsRoot: cfg.sysfs(),
-		ProcRoot:  cfg.proc(),
-		DevRoot:   cfg.dev(),
-	})
-	if err != nil {
-		errs = append(errs, fmt.Errorf("read the PCI controllers: %w", err))
-	}
-	inv.NVMeControllers = pci.NVMeControllers(controllers)
 
 	if cfg.Kubernetes.Discovery != nil || len(cfg.Kubernetes.Nodes) > 0 {
 		env, err := CollectEnvironment(ctx, cfg.Kubernetes.Discovery, cfg.Kubernetes.Nodes)

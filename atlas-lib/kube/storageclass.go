@@ -45,9 +45,22 @@ type Properties struct {
 	MaxNamespacePerSubsys int
 	// Encryption enables volume encryption (encryption).
 	Encryption bool
+	// ClientCompression enables client-side (VDO) compression (client_compression),
+	// independent of the server-side Compression concept and of
+	// ClientDeduplication.
+	ClientCompression bool
+	// ClientDeduplication enables client-side (VDO) deduplication
+	// (client_deduplication), independent of ClientCompression.
+	ClientDeduplication bool
 	// QoS holds the quality-of-service caps.
 	QoS QoSLimits
 }
+
+// WantsVDO reports whether either client-side parameter is set, which is the
+// one answer the capability check, the topology gate, and the node's VDO
+// device management all key off (ParamClientCompression/ParamClientDeduplication
+// are independent parameters, but both need a working VDO stack to run at all).
+func (p Properties) WantsVDO() bool { return p.ClientCompression || p.ClientDeduplication }
 
 // IsMultiNamespace reports whether volumes provisioned by this class share an
 // NVMe subsystem with sibling volumes (max_namespace_per_subsys > 1). Such a
@@ -79,6 +92,14 @@ func PropertiesFromStorageClass(sc *storagev1.StorageClass) (Properties, error) 
 	if err != nil {
 		return Properties{}, err
 	}
+	clientCompression, err := BoolParam(p, ParamClientCompression, false)
+	if err != nil {
+		return Properties{}, err
+	}
+	clientDeduplication, err := BoolParam(p, ParamClientDeduplication, false)
+	if err != nil {
+		return Properties{}, err
+	}
 	qos, err := qosFromParams(p)
 	if err != nil {
 		return Properties{}, err
@@ -91,28 +112,47 @@ func PropertiesFromStorageClass(sc *storagev1.StorageClass) (Properties, error) 
 		MaxSize:               StringParam(p, ParamMaxSize, ""),
 		MaxNamespacePerSubsys: maxNS,
 		Encryption:            encryption,
+		ClientCompression:     clientCompression,
+		ClientDeduplication:   clientDeduplication,
 		QoS:                   qos,
 	}, nil
 }
 
+// qosFromParams reads the four ceilings through the generation-aware resolver in
+// qos.go, so a class written under either vocabulary parses the same. Which key
+// carried the value is not recorded: a Properties describes how a volume was
+// provisioned, and the spelling the class happened to use is not part of that.
 func qosFromParams(p map[string]string) (QoSLimits, error) {
-	rwIOPS, err := IntParam(p, ParamQoSRWIOPS, 0)
+	rwIOPS, err := qosCeilingFromParams(p, CeilingIOPS)
 	if err != nil {
 		return QoSLimits{}, err
 	}
-	rwMB, err := IntParam(p, ParamQoSRWMBytes, 0)
+	rwMB, err := qosCeilingFromParams(p, CeilingMBytesPerSec)
 	if err != nil {
 		return QoSLimits{}, err
 	}
-	rMB, err := IntParam(p, ParamQoSRMBytes, 0)
+	rMB, err := qosCeilingFromParams(p, CeilingReadMBytesPerSec)
 	if err != nil {
 		return QoSLimits{}, err
 	}
-	wMB, err := IntParam(p, ParamQoSWMBytes, 0)
+	wMB, err := qosCeilingFromParams(p, CeilingWriteMBytesPerSec)
 	if err != nil {
 		return QoSLimits{}, err
 	}
 	return QoSLimits{RWIOPS: rwIOPS, RWMBytes: rwMB, RMBytes: rMB, WMBytes: wMB}, nil
+}
+
+// qosCeilingFromParams parses one ceiling, naming the key the value actually
+// came from in an error. Reporting the newest spelling for a value that was
+// written under the oldest would send somebody to a key their class does not
+// have.
+func qosCeilingFromParams(p map[string]string, ceiling QoSCeiling) (int, error) {
+	for _, key := range qosParamKeys[ceiling] {
+		if v, ok := p[key]; ok && v != "" {
+			return IntParam(p, key, 0)
+		}
+	}
+	return 0, nil
 }
 
 // StorageClassNameFromPV returns the name of the StorageClass that provisioned

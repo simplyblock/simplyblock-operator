@@ -8,22 +8,24 @@ rules:
   - ""
   resources:
   - configmaps
+  - secrets
+  - serviceaccounts
+  - services
   verbs:
   - create
+  - delete
   - get
   - list
+  - patch
   - update
   - watch
 - apiGroups:
   - ""
   resources:
-  - events
+  - namespaces
+  - pods/log
   verbs:
-  - create
   - get
-  - list
-  - patch
-  - watch
 - apiGroups:
   - ""
   resources:
@@ -53,6 +55,7 @@ rules:
   - create
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - ""
@@ -63,28 +66,15 @@ rules:
   - get
   - list
   - patch
-  - update
   - watch
 - apiGroups:
   - ""
+  - events.k8s.io
   resources:
-  - pods/log
-  verbs:
-  - get
-- apiGroups:
-  - ""
-  resources:
-  - secrets
-  - serviceaccounts
-  - services
+  - events
   verbs:
   - create
-  - delete
-  - get
-  - list
   - patch
-  - update
-  - watch
 - apiGroups:
   - admissionregistration.k8s.io
   resources:
@@ -96,6 +86,29 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - apiextensions.k8s.io
+  resourceNames:
+  - controlplanes.storage.simplyblock.io
+  - storagebackups.storage.simplyblock.io
+  - storageclusterops.storage.simplyblock.io
+  - storageclusters.storage.simplyblock.io
+  - storagenodeops.storage.simplyblock.io
+  - storagenodes.storage.simplyblock.io
+  - storagepools.storage.simplyblock.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - get
+  - patch
+  - update
 - apiGroups:
   - apiregistration.k8s.io
   resources:
@@ -110,6 +123,21 @@ rules:
   - apps
   resources:
   - daemonsets
+  - deployments
+  - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps.foundationdb.org
+  resources:
+  - foundationdbbackups
+  - foundationdbclusters
   verbs:
   - create
   - delete
@@ -133,6 +161,8 @@ rules:
   - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - cert-manager.io
@@ -159,12 +189,15 @@ rules:
   - update
   - watch
 - apiGroups:
-  - events.k8s.io
+  - groupsnapshot.storage.k8s.io
   resources:
-  - events
+  - volumegroupsnapshotclasses
+  - volumegroupsnapshotcontents
+  - volumegroupsnapshots
   verbs:
-  - create
-  - patch
+  - get
+  - list
+  - watch
 - apiGroups:
   - policy
   resources:
@@ -182,6 +215,42 @@ rules:
   resources:
   - clusterrolebindings
   - clusterroles
+  - rolebindings
+  - roles
+  verbs:
+  - bind
+  - create
+  - delete
+  - escalate
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshotclasses
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshots
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - csidrivers
   verbs:
   - create
   - delete
@@ -206,19 +275,25 @@ rules:
   - backupimports
   - backuppolicies
   - backuprestores
+  - controlplaneops
   - controlplanes
   - operatorops
+  - persistentvolumeops
   - replicationops
   - replicationpairs
   - replicationpolicies
   - replicationslots
+  - simplyblockdrivers
+  - storagebackupops
+  - storagebackuppolicies
   - storagebackups
   - storageclusterops
   - storageclusters
+  - storagedeviceops
   - storagedevices
   - storagenodeops
   - storagenodes
-  - storagenodesets
+  - storagepoolops
   - storagepools
   - tasks
   - volumemigrations
@@ -236,17 +311,24 @@ rules:
   - backupimports/finalizers
   - backuppolicies/finalizers
   - backuprestores/finalizers
+  - clusterdeploymentconfigs/finalizers
+  - controlplaneops/finalizers
+  - controlplanes/finalizers
   - operatorops/finalizers
+  - persistentvolumeops/finalizers
   - replicationops/finalizers
   - replicationpairs/finalizers
   - replicationpolicies/finalizers
   - replicationslots/finalizers
-  - storagebackups/finalizers
+  - simplyblockdrivers/finalizers
+  - storagebackupops/finalizers
+  - storagebackuppolicies/finalizers
   - storageclusterops/finalizers
   - storageclusters/finalizers
+  - storagedeviceops/finalizers
   - storagenodeops/finalizers
   - storagenodes/finalizers
-  - storagenodesets/finalizers
+  - storagepoolops/finalizers
   - storagepools/finalizers
   - tasks/finalizers
   - volumemigrations/finalizers
@@ -259,21 +341,29 @@ rules:
   - backuppolicies/status
   - backuprestores/status
   - clusterdeploymentconfigs/status
+  - controlplaneops/status
   - controlplanes/status
   - operatorops/status
+  - persistentvolumeops/status
   - replicationops/status
   - replicationpairs/status
   - replicationpolicies/status
   - replicationslots/status
+  - simplyblockdrivers/status
+  - storagebackupops/status
+  - storagebackuppolicies/status
   - storagebackups/status
   - storageclusterops/status
   - storageclusters/status
+  - storagedeviceops/status
   - storagedevices/status
   - storagenodeops/status
   - storagenodes/status
   - storagenodesets/status
+  - storagepoolops/status
   - storagepools/status
   - tasks/status
+  - volumegroupsnapshotops/status
   - volumemigrations/status
   verbs:
   - get
@@ -289,4 +379,13 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagenodesets
+  - volumegroupsnapshotops
+  verbs:
+  - get
+  - list
   - watch

@@ -1,15 +1,16 @@
 # Design Document: The StorageNode and Its Operations
 
-**Status:** Draft  
+**Status:** Implemented  
 **Authors:** Christoph Engelbert (noctarius), Israel Geoffrey (`StorageNodeOps`)  
-**Date:** 2026-08-28 (last updated 2026-09-08)  
+**Date:** 2026-08-28 (last updated 2026-09-17)  
 **Supersedes:** `design-storagenodeset-storagenode.md` and `design-node-removal-draining.md`, both removed in the same change  
 **Test Plan:** [`tests/test-plan-storagenode.md`](../../tests/test-plan-storagenode.md)
 
-This document specifies the target model. Both kinds and all four controllers
-exist in a shape that predates the conventions of
-[`design-crd-model.md`](design-crd-model.md), and §15 is the single record of what
-the rework changes against them.
+This document specifies the model both kinds now carry. Both moved to
+`storage.simplyblock.io/v1alpha2` with a `v1alpha1` spoke and a conversion between
+them, and the controllers were rewritten against this specification in
+`operator/internal/controllers/node/`. §15 remains the record of what changed
+against the registered API.
 
 ---
 
@@ -156,7 +157,7 @@ was.
 
 ## 3. StorageNode: API
 
-Declared in `operator/api/v1alpha1/storagenode_types.go`, short name `sn`.
+Declared in `operator/api/v1alpha2/storagenode_types.go`, short name `sn`.
 **The type is Appendix A**, whole and as it is to be written. What follows quotes
 the field an argument turns on and no more, so that one copy of each type exists
 and it is the one an implementation is written against.
@@ -193,7 +194,11 @@ the slot is the position among them. The other two decompose it into the socket 
 node is bound to and its position among the nodes sharing that socket, which is
 what a `kubectl get sn` column is worth showing, and nothing but those columns
 reads either. The three are not peers: the slot is what the topology label key,
-the CR-to-slot matching, and the adoption lookup all use (§4.3, §5.2).
+the CR-to-slot matching, and the adoption lookup all use (§4.3, §5.2), so it is
+frozen to everybody while the other two are the operator's to rewrite. A
+relocation moves a node onto a host whose free socket is not necessarily the
+source's, and a pair that still described the old host would be a column telling
+a person something that is not so.
 
 **The slot is named for where a user already meets it.** The topology label the
 CSI driver reads is
@@ -203,12 +208,39 @@ it would describe something that stops being true once `nodesPerSocket` exceeds
 one and two slots share a socket, and naming it for the RPC-port ordering would
 describe how a slot is matched to a backend node rather than what it identifies.
 
-**`spec.clusterRef` replaces `spec.storageNodeSetRef`, and the object name keeps
-no worker in it.** A `StorageNode` is named `<cluster>-<id>` with a random short
-identifier, because the socket and the worker are spec fields and the name has to
-stay stable when a node relocates (§9). A name that encoded the worker would have
-to be recreated by a migration, which would mean deleting a `StorageNode` whose
-backend node is still running.
+**`spec.clusterRef` replaces `spec.storageNodeSetRef`, and the object name is
+derived rather than generated.** A `StorageNode` is named from its cluster, its
+worker, and its slot through the shared formula
+([`design-api-upgrade.md`](design-api-upgrade.md) §19.6), so the three facts that
+identify a node at creation are the three the name is built from and a name is
+arrived at the same way twice by anything that has to predict one.
+
+**The formula is bounded at a label's 63 bytes and not at the 253 an object name
+may be**, because the name travels: the `StorageDevice` mirror writes it into
+`storage.simplyblock.io/node` on every device the node carries
+([`design-api-upgrade.md`](design-api-upgrade.md) §19.1). The arithmetic is not
+academic. A regional cluster name and a worker a cloud named after its fully
+qualified domain name are most of the budget between them, so a name that
+overflows is what ordinary inputs produce rather than what a contrived one does.
+Past that point the formula keeps what fits and spends the rest on a digest taken
+over all three parts, so the worker stays in the name's text while it fits and in
+its digest afterward, and two nodes differing only by worker never collide either
+way.
+
+**The name is stable across a migration because Kubernetes never renames an
+object**, not because the worker is absent from it. A migration re-points
+`spec.workerNode` on the node that exists (§9), so what changes is the field and
+not the object's identity. What that costs is stated rather than avoided: a node
+built on one worker and migrated to another keeps a name describing where it was
+built. `spec.workerNode` is where the current host is read, which is the field the
+webhook restricts to one writer (§3.2), and the name is an identifier rather than
+a report.
+
+**Re-expansion is idempotent without consulting the name.** The expansion lists
+the cluster's existing nodes and matches them on the worker and slot their specs
+record ([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md)
+§4.2), so a crash part-way through creates the rest and duplicates nothing even
+where a name was derived under a wider limit than the one in force now.
 
 **Placement, mutable by the operator alone.**
 
@@ -275,6 +307,17 @@ is one object for every node it schedules. A per-node value has nowhere to go. A
 four move to `StorageCluster.spec.storageNodes` (§5.1), which is where a
 cluster-uniform value belongs and where setting one has an effect.
 
+**`reservedSystemCPU` comes back, because one of them is not
+cluster-uniform.** It names core ids rather than a quantity, so `0,1` on a
+sixteen-core worker and `0,1` on a ninety-six-core worker hold back different
+fractions of the machine, and a fleet whose groups differ in core count has no
+one list that is right for all of them. What changed is that a per-node value
+now has somewhere to go: the per-node ConfigMap carries one shell-sourceable
+entry per worker, the pod sources its own, and the agent exports that one
+variable out of it, so the node's list wins over the pod's environment while the
+cluster's value stays the fleet's default. The other three are uniform and stay
+where they went.
+
 #### A device is named by a PCI address or by a device path
 
 `config.deviceNames` is the explicit list of devices a node owns, and an entry is
@@ -294,6 +337,22 @@ list holding both is rejected at admission, and so is a list of the class the
 cluster is not (§3.4). One field still carries both spellings, because a node's
 devices are one set however each of them was reached and the cluster is what says
 which spelling that set is written in.
+
+**A generated deployment writes the persistent path, not the kernel one.** Both
+are device paths and the field takes either, but they answer different questions.
+`/dev/sdb` names whichever disk the kernel found second this boot: on the QEMU
+workers this was developed against, the disk the kernel calls `sdb` is the one the
+hypervisor calls `drive-scsi0` and `sda` is `drive-scsi2`, so a host that comes
+back with its controllers probed in another order hands each kernel name to
+another disk. `/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0` and
+`/dev/disk/by-partuuid/28427de0-…` are built from what the device itself reports,
+and follow it. Both names exist and both resolve, so a list written in the first
+spelling selects a different disk after such a reboot and nothing says so — which
+is why discovery writes the second
+([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §8.1),
+and why the node configuration carries the name whole rather than shortening it
+to the kernel name the backend used to be given. A hand-written list may still
+use either spelling, and the node resolves whichever it is handed.
 
 **The PCI filters belong to an NVMe cluster and to no other.**
 `config.pcieAllowList`, `config.pcieDenyList`, and `config.pcieModel` match on
@@ -345,7 +404,7 @@ So the node carries its own copy of the two that describe the host it runs on:
 // equal across the fleet in steady state; a rolling hardware upgrade is what
 // makes two nodes differ, and only for as long as the roll takes.
 type StorageNodeSizing struct {
-	// +kubebuilder:validation:Minimum=6
+	// +kubebuilder:validation:Minimum=4
 	// +kubebuilder:validation:Required
 	VCPUCount *int32 `json:"vcpuCount"`
 	// ...
@@ -391,7 +450,7 @@ creation.
 | Field                                                                                    | Optionality | Why                                                                                                     |
 |------------------------------------------------------------------------------------------|-------------|---------------------------------------------------------------------------------------------------------|
 | `clusterRef`                                                                             | `Required`  | Which cluster a node belongs to is its identity                                                         |
-| `nodeSet`, `socketId`, `nodeIndex`, `slot`                                               | `+optional` | The slot and its decomposition (§3.1)                                                                   |
+| `nodeSet`, `slot`                                                                        | `+optional` | The slot a node fills, and the document it was declared under (§3.1)                                    |
 | `config.deviceNames`, `config.pcieDenyList`, `config.pcieModel`, `config.driveSizeRange` | `+optional` | They select which physical devices the node owns                                                        |
 | `config.journalManager`                                                                  | `+optional` | Journal count and per-device share are on-disk layout, fixed when the devices were partitioned          |
 | `config.failureDomain`                                                                   | `+optional` | Chunk placement was computed from it. Fillable later, since §4.2 holds provisioning until it is present |
@@ -416,13 +475,18 @@ and is printed in a column of its own (§15.1).
 
 **Immutable to users, writable by the operator, by webhook.** Each of these has
 exactly one legitimate writer, so a marker would lock the operator out along with
-everyone else.
+everyone else. `spec.config` is guarded as a block rather than member by member:
+the rule is about what the block is, and a list of the fields it happens to have
+is a thing to keep up to date. The two rules stack where both apply, so a member
+carrying a marker is frozen to the operator as well.
 
-| Field                  | Written by                                                 |
-|------------------------|------------------------------------------------------------|
-| `workerNode`           | A migration re-pointing the node onto another host (§9)    |
-| `config.pcieAllowList` | A migration merging `spec.migrate.newSsdPcie` into it (§9) |
-| `config.sizing`        | A re-size during a rolling hardware upgrade (§3.1)         |
+| Field                          | Written by                                                                                                                                                                         |
+|--------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `workerNode`                   | A migration re-pointing the node onto another host (§9)                                                                                                                            |
+| `config.pcieAllowList`         | A migration merging `spec.migrate.newSsdPcie` into it (§9)                                                                                                                         |
+| `config.sizing`                | A re-size during a rolling hardware upgrade (§3.1)                                                                                                                                 |
+| every other member of `config` | Nothing today. The block is the record of what the node was built as, and it is guarded whole so that a member added later is the operator's without anybody remembering to say so |
+| `socketId`, `nodeIndex`        | A relocation: where a node sits is a fact about the host it runs on (§9)                                                                                                           |
 
 The `StorageNode` validating admission webhook admits a change to any of them
 from a service account in the operator's namespace and rejects it from every other
@@ -430,12 +494,21 @@ identity. It fails closed, which is safe because it runs in the operator pod: it
 availability tracks the operator's own, and an operator that is down is not
 reconciling anything the rejection could deadlock.
 
-**Mutable.** `config.spdkImage`, `config.spdkProxyImage`, and
-`config.spdkSystemMemory`. The two images are per-node so that an image rollout can
-be phased, which is the whole reason they are not on the cluster, and the memory
-figure is what a node whose device count grew legitimately needs to raise. All
-three take effect on the node's next configuration generation, which is a
-restart-shaped change rather than a declarative one.
+**Mutable.** `config.spdkImage`, `config.spdkImagePullPolicy`,
+`config.spdkProxyImage`, `config.spdkProxyImagePullPolicy`, and
+`config.spdkSystemMemory`. The two images are
+per-node so that an image rollout can be phased, which is the whole reason they
+are not on the cluster, and the memory figure is what a node whose device count
+grew legitimately needs to raise. All of them take effect on the node's next
+configuration generation, which is a restart-shaped change rather than a
+declarative one.
+
+The two pull policies are the fields of the set the operator records and does not
+yet spend. The control plane starts the SPDK pod, and its `spdk_process_start`
+takes no pull policy: the pod template it renders writes `Always` for both
+containers. They are on this kind because a deployment document states them, and
+they reach the pod once the control plane accepts one. They are two fields rather
+than one because a node may pin the proxy and follow the SPDK image.
 
 ### 3.3 Status
 
@@ -495,6 +568,11 @@ latency controller and specified in
 [`design-auto-rebalancing.md`](../design-auto-rebalancing.md).
 `status.failureDomain` is the failure-domain label the control plane actually
 assigned, which is not necessarily the one `spec.config.failureDomain` requested.
+The control plane indexes a failure domain by integer, so the add sends the index
+the cluster's `status.failureDomains` maps the label to
+([`design-storagecluster.md`](design-storagecluster.md) §3.3). A label the
+mapping does not hold is sent as its number when it is one, and is otherwise left
+for the control plane to assign.
 
 `status.observedGeneration` is the generation the rest of `status` was computed
 from, so a stale status can be told from a current one.
@@ -541,7 +619,7 @@ compares the node's sizing against the cluster it is joining and rejects a misma
 | Field                                                      | Rejected when                                                             |
 |------------------------------------------------------------|---------------------------------------------------------------------------|
 | `config.sizing.vcpuCount`                                  | It differs from the cluster's stamp value                                 |
-| `config.sizing.minHugePagesSize`                           | It is set and differs from the cluster's stamp value                      |
+| `config.sizing.minHugePagesSize`                           | It differs from the cluster's stamp value, an unset value included        |
 | `config.deviceNames`                                       | An entry is of a class other than the cluster's `spec.deviceClass`        |
 | `config.pcieAllowList`, `config.pcieDenyList`, `pcieModel` | Any of them is set and the cluster's `spec.deviceClass` is `LogicalBlock` |
 
@@ -557,10 +635,22 @@ ignoring them would leave somebody reading a filter that never ran.
 **The sizing rows are two and not others, because the control plane assumes them
 uniform.** §3.1 states why: a node whose core layout and huge pages disagree with its
 peers gets a layout the cluster cannot place erasure-coding chunks across evenly.
-`vcpuCount` is `Required`, so a hand-written node states it and cannot inherit it by
-omission, which is exactly the case where a typed value silently disagrees with the
-fleet. There is no row for `maxSubsystemCount`: the node has no copy of it to
-disagree with, which is the point of leaving it on the cluster (§3.1).
+There is no row for `maxSubsystemCount`: the node has no copy of it to disagree
+with, which is the point of leaving it on the cluster (§3.1).
+
+**An unset value is a divergence, because nothing inherits at render time.** The
+node's own `config.sizing` is what §5.3 writes into the per-node ConfigMap, and it
+writes `MAX_HUGE_PAGES_SIZE` from that field without consulting the cluster, so a
+node omitting it runs on the computed minimum rather than on the floor the cluster
+states. `minHugePagesSize` is optional on the type, which is what makes this worth
+saying: optional means a cluster need not state a floor at all, not that a node may
+decline the one its cluster states. Both rows therefore read the same way, and the
+webhook compares the node's value to the cluster's whenever the cluster has one.
+
+**A cluster that states no floor checks nothing.** The comparison is skipped when
+`StorageCluster.spec.minHugePagesSize` is empty, because there is no stamp value to
+diverge from and every node is then on the computed minimum together, which is
+uniform by construction.
 
 **The reference is the cluster's stamp value, not the siblings'.** During a rolling
 hardware upgrade the fleet is deliberately heterogeneous (§3.1), so sibling nodes
@@ -586,7 +676,7 @@ A node as the operator writes it when expanding a deployment config, before
 anything has been provisioned:
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageNode
 metadata:
   name: production-7f3a9c
@@ -716,15 +806,16 @@ transition of the node's own machine:
   CheckingConfig  ← failure domain present when the cluster requires one
     │  valid
     ▼
-  AwaitingSlot    ← under maxParallelNodeAdds, and no FDB worker in flight
+  AwaitingSlot    ← under nodeProvisioningBudget, and no FDB worker in flight
     │  a slot is free
     ▼
   Posting         ← Status().Patch with MergeFromWithOptimisticLock, then
-    │               POST /storage-nodes
-    ▼
-  Resolving       ← match this slot against the cluster's node list
-    │  UUID found
-    ▼
+    │               POST /storage-nodes        │ worker away → AwaitingWorker
+    ▼                                          │
+  Resolving       ← match this slot against    │ worker away → AwaitingWorker
+    │               the cluster's node list    │
+    │  UUID found                              ▼
+    ▼                                   AwaitingWorker  ← back? → CheckingHost
   phase: Online
 ```
 
@@ -742,14 +833,75 @@ its sibling's step rather than its `postedAt`: a sibling at `Posting` or beyond
 means the worker has been claimed, and the second object enters `Resolving`
 directly.
 
+**A worker that goes away mid-add is waited for, not counted against.** The
+storage pool's MachineConfig is applied by rebooting the machine, so the first
+node of a fresh cluster is cordoned, drained, rebooted, and uncordoned in the
+middle of being added. Every step of this path waits on something the worker
+does, so none of them can progress meanwhile, and a step that kept its deadline
+through the reboot would fail the node for the reboot. `AwaitingWorker` is that
+wait written down: `Posting` and `Resolving` enter it when the worker stops being
+`Ready` or is cordoned, it carries its own hour-long budget, and it leaves for
+`CheckingHost` when the machine is back.
+
+**It returns to the first step rather than to the step it left**, because what a
+reboot interrupts is not resumable in the middle: a `Posting` resumed after the
+fact would ask for a second node, and the add it was waiting on may well have
+landed while the machine was away. `CheckingHost` is where a backend node that
+already exists is found, and its `Adopting` edge takes that node over instead of
+adding it twice.
+
+**It holds the claim while it waits.** A node in `AwaitingWorker` still counts as
+having claimed its worker, so `nodeProvisioningBudget` stays closed and no second
+worker is handed a configuration change on top of a reboot already running — the
+same reason the cap exists at all. That is also why only the two steps that have
+claimed the worker divert into it: a claimed sibling on the same worker is read as
+an add that already happened and a reason to skip `Posting`, and a node that never
+posted must not be read that way. The steps before the claim wait where they are,
+and `AwaitingSlot` declines to take a slot at all while its worker is away, which
+is what stops an add being posted against a machine that cannot answer it.
+
+**Adoption is checked at every gate before the add, the queue included.** A
+backend node the worker already has is what `CheckingHost` and `CheckingConfig`
+divert on, and an object passes each of them once. One that reached the queue
+before its backend node existed — a previous operator's add, a `POST` whose
+response was lost after the control plane committed, a rebuilt object — has no
+add to ask for, and checking again where it waits is what recognizes that. It is
+checked before the worker is, for the reason `CheckingHost` checks it first: an
+adopted node is already running, and the machine being reachable is not this
+operator's precondition to establish.
+
 **`AwaitingSlot` is where two independent serialization rules live.**
-`maxParallelNodeAdds` caps how many workers may be in flight at once, counted by
+`nodeProvisioningBudget` caps how many workers may be in flight at once, counted by
 distinct worker rather than by object so that a two-socket host consumes one slot.
 Workers hosting a FoundationDB pod are always sequential regardless of that cap,
 because a node add reboots the host and two simultaneous FDB reboots reduce the
-control plane's own fault tolerance. Both are predicates over the current state of
-the cluster's other nodes, so the step re-evaluates them on every pass and holds
-rather than failing.
+control plane's own fault tolerance. The step re-evaluates both on every pass and
+holds rather than failing.
+
+**A slot is taken, and the holders are the Provisioning phase's metadata on the
+cluster.** `StorageCluster.status.provisioningSlots` is the list of workers whose
+add is outstanding, each entry naming the worker, the `StorageNode` that took it,
+and when. Taking one is an optimistic-locked patch of that single list, which is
+what makes the cap hold: exactly one node wins a given `resourceVersion` and every
+other is refused and counts again. A cap derived instead from the siblings' steps
+holds only while every node reads the same set, and reconciles are served from an
+informer cache — a cache filled moments ago, after a restart or a lease change,
+gives each node a different set and every one of them is alone in its own.
+
+The list is on the cluster rather than a field per node for the same reason. Six
+node objects carry six `resourceVersion`s, so a claim written to each is six
+separate agreements and no mutual exclusion between them.
+
+A holder releases its own entry and no other, on each of the three ends of an add:
+the UUID arriving, the step outliving its deadline, and the object being deleted.
+A slot whose holder is gone, has a UUID already, or has failed is reaped by the
+next node to ask for one, so a cap cannot be left closed by an object that will
+never reconcile again.
+
+The ordering of the waiting workers stays, as a tie-break rather than as the cap.
+It settles who tries first among nodes that can see each other, so a node told to
+wait is not overtaken by one told to wait beside it, and it is computed net of the
+workers already holding a slot.
 
 **`CheckingConfig` is a gate rather than a validation.** A cluster with
 `enableFailureDomains` set requires every node to declare a fault group, and a
@@ -768,7 +920,7 @@ type StorageNodePhase string
 
 // StorageNodeStep is one step of the provisioning path. There is one graph
 // rather than a MultiConfig, because an entity has no spec.action to key one on.
-// +kubebuilder:validation:Enum=CheckingHost;CheckingConfig;AwaitingSlot;Posting;Resolving;Adopting
+// +kubebuilder:validation:Enum=CheckingHost;CheckingConfig;AwaitingSlot;Posting;Resolving;Adopting;AwaitingWorker
 type StorageNodeStep string
 ```
 
@@ -871,13 +1023,13 @@ Their configuration becomes one spec group on the cluster.
 // +optional
 Image string `json:"image,omitempty"`
 
-// MaxParallelNodeAdds limits how many workers may be in the node-add process at
-// once. Workers hosting a FoundationDB pod are always sequential regardless of
+// NodeProvisioningBudget limits how many workers may be in the node-add process
+// at once. Workers hosting a FoundationDB pod are always sequential regardless of
 // this value.
 // +kubebuilder:validation:Minimum=1
 // +kubebuilder:default=1
 // +optional
-MaxParallelNodeAdds *int32 `json:"maxParallelNodeAdds,omitempty"`
+NodeProvisioningBudget *int32 `json:"nodeProvisioningBudget,omitempty"`
 
 // EnableKubeletConfiguration lets the storage node apply the kubelet
 // configuration changes it needs. Off by default, which is the behavior
@@ -885,6 +1037,15 @@ MaxParallelNodeAdds *int32 `json:"maxParallelNodeAdds,omitempty"`
 // +optional
 EnableKubeletConfiguration *bool `json:"enableKubeletConfiguration,omitempty"`
 ```
+
+**The two network-interface fields are immutable once set.** `mgmtInterface` and
+`dataInterfaces` reach the control plane as the node-add's `interface_name` and
+`data_nics`, which it spends on the node it is adding and never revisits. An edit
+afterward reconfigures no node that already joined, so the cluster would name one
+set of NICs while every node built from it ran on another. Growing the list falls
+under the same rule for the same reason: the nodes already added do not pick the
+new interface up. Once-set rather than from-creation, so a cluster created before
+its network was decided can still be given them.
 
 The whole group is Appendix C, which states it against the file it lands in
 rather than either of this document's own. It sits at
@@ -921,16 +1082,15 @@ competing with.
 
 ### 5.2 The storage-plane labels
 
-Three labels on the Kubernetes `Node` object make the workload land, and one of
+Two labels on the Kubernetes `Node` object make the workload land, and one of
 them is load-bearing far outside this document.
 
-| Label                                                   | Value                         | Read by                                   |
-|---------------------------------------------------------|-------------------------------|-------------------------------------------|
-| `io.simplyblock.node-type`                              | The storage-plane value       | The DaemonSet's node selector             |
-| `io.simplyblock.storagenodeset`                         | The node set name             | The DaemonSet's node selector             |
-| `simplyblock.io/storage-node-uuid.<clusterUUID>.<slot>` | The backend storage node UUID | The CSI node plugin and controller plugin |
+| Label                                                   | Value                         | Read by                                                                      |
+|---------------------------------------------------------|-------------------------------|------------------------------------------------------------------------------|
+| `io.simplyblock.storagenodeset`                         | The node set name             | The DaemonSet's node selector, and the numa-plugin and fluent-bit affinities |
+| `simplyblock.io/storage-node-uuid.<clusterUUID>.<slot>` | The backend storage node UUID | The CSI node plugin and controller plugin                                    |
 
-**The third label's key must never change for a worker's lifetime, and its value
+**The second label's key must never change for a worker's lifetime, and its value
 may change freely.** Kubernetes' external-provisioner caches the *set* of topology
 keys in the `CSINode` object when the node plugin registers, refreshes it only
 when that pod restarts, and then hard-errors `CreateVolume` when a live `Node`'s
@@ -1026,7 +1186,7 @@ name does not change when it rotates, so nothing else would notice.
 
 ## 6. StorageNodeOps: API
 
-Declared in `operator/api/v1alpha1/storagenodeops_types.go`, short name `snops`.
+Declared in `operator/api/v1alpha2/storagenodeops_types.go`, short name `snops`.
 The type is Appendix B.
 
 ### 6.1 Spec
@@ -1060,7 +1220,7 @@ which is the class [`design-crd-model.md`](design-crd-model.md) §7.5 leaves
 outside the `enableXyz` and `disableXyz` rule.
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageNodeOps
 metadata:
   name: move-node-off-worker-3
@@ -1111,7 +1271,7 @@ wire value.
 A drain part-way through moving a node's volumes:
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageNodeOps
 metadata:
   name: production-7f3a9c-remove
@@ -1180,7 +1340,7 @@ the `MultiConfig` form: one graph per action over one step type.
 ```go
 // StorageNodeOpsStep is the union of every action's steps; which steps belong to
 // which action is declared by the graph rather than by this type.
-// +kubebuilder:validation:Enum=Requesting;Awaiting;Validating;Suspending;MigratingVolumes;Verifying;Removing;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
+// +kubebuilder:validation:Enum=Requesting;Departing;Awaiting;Validating;Suspending;MigratingVolumes;Verifying;Removing;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
 type StorageNodeOpsStep string
 ```
 
@@ -1209,8 +1369,11 @@ catch, because the rule is the union over the kind and the graph is per action.
 The seven graphs:
 
 ```
-Shutdown, Restart, Suspend, Resume
+Shutdown, Suspend, Resume
     Requesting ──► Awaiting
+
+Restart (§7.3)
+    Requesting ──► Departing ──► Awaiting
 
 Remove (§8)
     Validating ──► Suspending ──► MigratingVolumes ──► Verifying ──► Removing
@@ -1269,14 +1432,17 @@ operation lock.
   Terminal phase?    ← release the lock again best-effort, stop
     │  no
     ▼
+  Admitted already?  ← Running, or the lock names it → skip the gate
+    │  no
+    ▼
+  Cluster available? ← not active, rebalancing, or no object → stay Pending, emit, requeue
+    │  yes, or the action is exempt
+    ▼
   Get the node       ← not found → Failed
     │  found
     ▼
   Lock free?         ← held by another ops → stay Pending, requeue after 15s
     │  free or ours
-    ▼
-  Cluster available? ← not active, or rebalancing → hold, emit, requeue
-    │  yes
     ▼
   Acquire the lock   ← optimistic-lock patch; 409 → requeue immediately
     │
@@ -1292,12 +1458,43 @@ between persisting `Succeeded` and clearing `activeOpsRef` would otherwise leave
 the node locked by a finished operation forever, and the release is idempotent
 (§11).
 
-**The cluster gate is not the same as the lock.** A node operation runs inside a
-cluster, and one whose cluster is mid-rebalance or not active will either be
-rejected by the control plane or succeed into an inconsistent layout. The
-operation holds rather than fails, emits `ClusterNotReady`, and resumes when the
-cluster does. It applies to every action that changes the node's state, which is
-all of them except the four single-step reads of a status.
+**The cluster gate is not the same as the lock.** A node operation that moves
+data runs inside a cluster, and one whose cluster is mid-rebalance or not active
+will either be rejected by the control plane or succeed into an inconsistent
+layout. The operation holds rather than fails, emits `ClusterNotReady`, and is
+admitted when the cluster is ready. It applies to the two actions that move data,
+`Migrate` and `HostMaintenance`, and to no others.
+
+**The gate is an admission check, asked once and never of an admitted
+operation.** A held operation stays `Pending` and holds nothing: it has not taken
+the node's lock, so an operation queued on the same node is not queued behind a
+wait. Admission is the lock rather than the phase, because the lock is patched
+onto the node before the phase is written and a crash between the two restores
+an operation that holds its lock at `Pending`. Once admitted, an operation is
+never gated again, because an admitted operation
+changes the cluster's own reading: a relocation restarts the node and a
+maintenance window shuts it down, and either makes the cluster degraded until
+the node is back. A gate asked on every pass held each of them on the
+consequence of its own action, and it stood in front of the deadline check, so a
+held operation could never expire. The steps of a running operation are guarded
+by their own preconditions and by their deadlines, and the deadline is the first
+thing a pass reads after the abort flag.
+
+**The five other actions are exempt, because each is how the cluster's reading
+changes.** A removal is how an unready cluster becomes ready: holding it until
+the cluster is active closes a loop with no way out, since the node cannot be
+removed until the cluster is active and the cluster cannot become active while
+the node it is stuck on is still in it, which is what a node whose add never
+finished does to the cluster it was being added to. A `Shutdown` or a `Suspend`
+is what makes a cluster degraded, and a `Restart` or a `Resume` is what makes it
+active again, so a gate on that reading holds the first pair on what they
+produced and makes the second pair unavailable exactly when they are needed. One
+`Shutdown` against a healthy four-node cluster demonstrated the loop on
+2026-09-28: the node it took down degraded the cluster, the degraded cluster
+held the shutdown in `Awaiting` with the node's lock for hours, and three
+`Restart` operations queued behind it. The exemptions follow from the gate's own
+purpose rather than working against it: none of the five moves data, and each is
+what lets the control plane reach a state it will accept further work in.
 
 Watching only `StorageNodeOps` would leave a queued operation waiting up to its
 requeue interval after the lock frees. `nodeToOpsRequests` maps a `StorageNode`
@@ -1342,23 +1539,58 @@ step's unwind. That is why the resume call is part of the abort path for a
 
 ### 7.3 The four single-step actions
 
-`Shutdown`, `Restart`, `Suspend`, and `Resume` are one call and one wait, and
-share a two-step graph:
+`Shutdown`, `Restart`, `Suspend`, and `Resume` are one call and one wait.
+Three of them share a two-step graph:
 
 ```
     Requesting ──► Awaiting
       ← POST the action        ← wait for the completion condition below
 ```
 
-| Action     | Backend call                          | Completion condition  |
-|------------|---------------------------------------|-----------------------|
-| `Shutdown` | `POST /storage-nodes/{node}/shutdown` | `status == offline`   |
-| `Restart`  | `POST /storage-nodes/{node}/restart`  | `status == online`    |
-| `Suspend`  | `POST /storage-nodes/{node}/suspend`  | `status == suspended` |
-| `Resume`   | `POST /storage-nodes/{node}/resume`   | `status == online`    |
+`Restart` waits twice, because its completion state is the state it started in.
+The control plane accepts the call and performs it on a thread, so the node
+keeps reporting `online` for a moment after the request, and a wait for `online`
+alone completes before the restart began:
+
+```
+    Requesting ──► Departing ──► Awaiting
+      ← POST the restart   ← status != online   ← status == online
+```
+
+`Departing` is the observation that the restart has begun, and it is satisfied
+at once by a node that was offline when the restart was requested. A stream that
+coalesces can deliver `online` before and `online` after with nothing in
+between, and the step then waits out its budget and fails an operation whose
+restart happened. That is the trade §16 Q4 records, and it is the right side of
+it: a false failure is visible and recoverable, where the false success it
+replaces released the node's lock while the node was restarting.
+
+| Action     | Backend call                          | Completion condition                        |
+|------------|---------------------------------------|---------------------------------------------|
+| `Shutdown` | `POST /storage-nodes/{node}/shutdown` | `status == offline`                         |
+| `Restart`  | `POST /storage-nodes/{node}/restart`  | `status != online`, then `status == online` |
+| `Suspend`  | `POST /storage-nodes/{node}/suspend`  | `status == suspended`                       |
+| `Resume`   | `POST /storage-nodes/{node}/resume`   | `status == online`                          |
 
 `Restart` passes `reattachVolume` and `force` through when they are set. The
 completion condition is evaluated against the streamed storage-node object (§4.4).
+
+Each call is skipped when the node is already at or past the state the call
+produces, and "past" includes the state of the call being performed: a node
+reporting `in_shutdown` has a shutdown landed on it, and one reporting
+`in_restart` has a restart. The second matters most, because a forced restart
+into a node already restarting is two restarts of one node, and the step is
+re-entered after any crash between the call and the step record (§7.2).
+
+**An unforced restart of a node that is not offline is refused by the operator,
+terminally and with the reason.** The control plane restarts only an offline node
+unless the restart is forced, and it says so nowhere a caller can see: the
+request is accepted with 202 and the restart is dropped on the thread that would
+have performed it. An operation that issued that call would then read an online
+node as a finished restart. Refusing first is what makes the operation say what
+it needs, which is the node shut down first or `spec.force` set. `Migrate` is
+different, and forces by default, because a relocation always restarts a node
+that is online (§9).
 
 The endpoint column keeps the control plane's own lowercase paths, and the
 completion column the control plane's own status strings. A URL segment and a
@@ -1594,11 +1826,16 @@ of a maintenance window afterward.
 | Step           | Side effect on entry                                                                          | Complete when                                     |
 |----------------|-----------------------------------------------------------------------------------------------|---------------------------------------------------|
 | `Holding`      | None                                                                                          | Fewer than the cluster's limit are in maintenance |
-| `ShuttingDown` | Label the storage pod, create a blocking PDB, `POST /storage-nodes/{node}/shutdown`           | The node is `offline`                             |
-| `Releasing`    | Relax the PDB to allow one eviction                                                           | The storage pod is gone                           |
+| `ShuttingDown` | Label the evictable pods, create a blocking PDB, `POST /storage-nodes/{node}/shutdown`        | The node is `offline`                             |
+| `Releasing`    | Delete the PDB                                                                                | The SPDK pod is gone                              |
 | `AwaitingHost` | None                                                                                          | The worker's storage-node API answers again       |
 | `Restarting`   | `POST /storage-nodes/{node}/restart`, skipped if the node is already `in_restart` or `online` | The node is `online`                              |
 | `Cleanup`      | Delete the PDB, remove the drain label                                                        | Terminal                                          |
+
+The shutdown call is skipped when the node is already `in_shutdown` as well as
+`in_restart`, for the same reason: re-posting it is refused with a 409, and a
+refusal the step reads as an error spends the window's budget backing off against
+its own progress.
 
 **`Holding` is the concurrency gate, and it is a cluster-wide count.** How many
 workers may be in maintenance at once is
@@ -1612,15 +1849,73 @@ worker's worth of unavailability.
 **The PodDisruptionBudget is the throttle, and it runs backward from the usual
 one.** A per-node PDB with no disruption allowed is created *before* the shutdown,
 so `kubectl drain` blocks on it while the backend node is being taken down
-gracefully. Relaxing it in `Releasing` is what lets the drain proceed. The
+gracefully. Removing it in `Releasing` is what lets the drain proceed. The
 budget's job is therefore to hold the eviction until the storage node is safely
 offline, rather than to keep a replica count up.
+
+**What the budget selects is the set of pods a drain can actually evict**, and
+the node agent's is not one of them. The agent runs in a DaemonSet, and
+`kubectl drain --ignore-daemonsets` skips DaemonSet pods entirely, so a budget
+over one holds nothing: the drain never asks about it. The three the budget does
+cover are the SPDK pod (`role=simplyblock-storage-node`), the management API, and
+the FoundationDB processes. The first is the point of the window. The other two
+are there because the shutdown needs the control plane it is talking to, and
+losing a webAPI replica or an FDB process mid-shutdown leaves the window with
+nothing to ask.
+
+**`Releasing` removes the budget rather than relaxing it to one disruption**, and
+that follows from covering several pods. A budget at `maxUnavailable: 1` permits
+the first eviction and then reports zero allowed disruptions until the evicted
+pod is healthy again — and the SPDK pod is owned by nothing, so nothing
+reschedules it. The drain the step just released would block on the budget for
+the rest of the window.
+
+**`Releasing` waits for the SPDK pod rather than the agent's**, for the same
+reason the budget does not cover the agent's, and one more: a DaemonSet pod on a
+rebooting host stays `Running` in the API, because DaemonSet pods tolerate
+`unreachable` with no `tolerationSeconds`. Its absence is a state no drain, no
+reboot, and no window can bring about. The SPDK pod's absence is exactly what "the
+SPDK process is off this host" means, and the graceful shutdown ends in the
+control plane deleting it.
 
 The operator protects itself the same way when the worker being drained is its
 own: a temporary self-budget prevents the manager pod from being evicted while it
 is still setting the storage node's budget up on that host. A stale self-budget
 left by a crashed manager is cleaned up on the next pass, since it would otherwise
 make the node undrainable.
+
+**The markers are the worker's, and a multi-socket worker shares them.** The
+budget and the label are named per worker, and the concurrency gate admits one
+window per socket at the same time on purpose — the pair is one worker's worth of
+unavailability. They therefore hold the same budget and label the same pods, and
+the socket whose backend node goes offline first must not drop the guard the
+other's SPDK process is still standing behind, or the drain evicts a live one.
+A window releases or clears the worker's markers only once no sibling window on
+that worker is still before `Releasing`, and the last of them to end is what takes
+them down. A sibling whose node cannot be read counts as still guarding: a drain
+that waits is cheaper than an SPDK process that is evicted on a guess.
+
+**Every terminal outcome takes the markers down.** `Cleanup` is on the success
+path only — the graph is a chain with no edge from a failing step to it — so a
+window that fails on a deadline or is aborted runs the same teardown from its
+terminal transition. A budget at `maxUnavailable: 0` outliving the window that
+raised it makes the worker undrainable by anything, forever, with nothing left
+saying why. The teardown is best-effort for the reason the suspend's unwind is,
+and a `MaintenanceMarkersLeft` event is what says a worker needs a hand.
+
+**An uncordon is answered.** A window still at `Holding`, or raised and not yet
+admitted at all, has done nothing to the node, so the cordon being undone calls it
+off through `spec.abort`, which is what that step being abortable is for. An abort
+skips the cluster gate: the gate keeps work off a cluster that cannot take it, and
+an operation being called off is not going to do any, so holding it there would
+leave a window alive on a worker nobody is draining any more. From `ShuttingDown`
+onward the node is down and something has to bring it back, so the window runs
+on, and the uncordon it is waiting for is the one `AwaitingHost` reads. A window
+that has finished is **deleted** on the uncordon: the operation's name is derived
+from the node's, so a terminal record left in place is what `ensureOps` finds on
+the next cordon, and the worker would get one window for the lifetime of the
+object with every drain after the first unheld. The worker being schedulable
+again is the boundary that record belongs on.
 
 **`AwaitingHost` is the step whose length nobody controls.** An OS upgrade and a
 reboot take as long as they take, and the node's lock is held throughout. That is
@@ -1740,6 +2035,8 @@ starts and the operation's name is not something they know yet.
 | Provisioning is held because no fault group is declared         | `Warning` | `FailureDomainMissing` | `StorageNode`    |
 | Provisioning is held because the worker's API does not answer   | `Warning` | `HostUnreachable`      | `StorageNode`    |
 | Provisioning is held because no node-add slot is free           | `Normal`  | `AwaitingSlot`         | `StorageNode`    |
+| The worker is not Ready or is cordoned, so the step is held     | `Warning` | `WorkerAway`           | `StorageNode`    |
+| The worker came back and provisioning starts again              | `Normal`  | `WorkerReturned`       | `StorageNode`    |
 | The node was adopted rather than added                          | `Normal`  | `NodeAdopted`          | `StorageNode`    |
 | The node came online                                            | `Normal`  | `NodeOnline`           | `StorageNode`    |
 | The node's pod reported a scheduling failure                    | `Warning` | `PodSchedulingFailed`  | `StorageNode`    |
@@ -1803,7 +2100,7 @@ support question about a stalled drain into a dashboard panel.
 that stopped, which is the distinction `status.message` cannot express.
 
 `simplyblock_storagenode_provisioning_duration_seconds` is the one to watch when a cluster
-is being expanded, because `maxParallelNodeAdds` and the FoundationDB
+is being expanded, because `nodeProvisioningBudget` and the FoundationDB
 serialization of §4.2 mean the time to add ten workers is not ten times the time to
 add one, and nothing today says what it actually is.
 
@@ -1854,8 +2151,8 @@ delta, so that no other section has to carry it.
 | Everything under `spec.overrides` mutable               | Most of `spec.config` immutable (§3.2)                  | Tightening. A user editing a device filter on a running node is now rejected                                                                                                                                           |
 | `deviceNames`, NVMe namespace names                     | A PCI address or a device path (§3.1)                   | Widening. Every value the registered field took is still taken, and a logical block device becomes expressible                                                                                                         |
 | `failureDomain`, an integer index                       | A label such as `rack-b` (§3.1)                         | Spec type change on both the spec and the status field. A stored index is not a valid label, so every node that declares a domain is rewritten, and the value stops being a number whose meaning lived outside the API |
-| Four dead per-node fields in that struct                | Moved to the cluster (§5.1)                             | Spec removal. None of them reached a consumer, so nothing loses behavior                                                                                                                                               |
-| `skipKubeletConfiguration`                              | `enableKubeletConfiguration`, inverted (§5.1)           | Spec rename that also inverts, which is the one mechanical rename that is wrong                                                                                                                                        |
+| Four dead per-node fields in that struct                | Moved to the cluster (§5.1)                             | Spec removal. None of them reached a consumer, so nothing loses behavior. `skipKubeletConfiguration` is one of them, and the row below is what its successor is called                                                 |
+| `skipKubeletConfiguration`                              | Removed here, re-landed on the cluster (§5.1)           | Spec removal. The successor is `StorageCluster.spec.storageNodes.enableKubeletConfiguration`, which is a different kind, so the registered field stashes on the way up rather than converting                          |
 | No `status.phase`                                       | `StorageNodePhase` (§4.2)                               | Additive                                                                                                                                                                                                               |
 | No step field, provisioning improvising one             | `status.step` (§4.2)                                    | Status only. The optimistic-lock claim moves to the `Posting` transition                                                                                                                                               |
 | `status.postedAt` as the duplicate-POST guard           | Removed (§3.3)                                          | Status removal. The persisted step is the record                                                                                                                                                                       |
@@ -1870,23 +2167,23 @@ delta, so that no other section has to carry it.
 
 ### 15.2 StorageNodeOps
 
-| Registered                                            | This design                                 | Cost                                                                                   |
-|-------------------------------------------------------|---------------------------------------------|----------------------------------------------------------------------------------------|
-| `spec.storageNodeRef`                                 | `spec.nodeRef` (§6.1)                       | Spec rename                                                                            |
-| `spec.action` as a plain `string`                     | `StorageNodeOpsAction` (§6.1)               | Type only, the wire values change with the row below                                   |
-| Six lowercase action values                           | PascalCase (§6.3)                           | Spec rename of every value. `design-crd-model.md` §9.7 owns the deprecation window     |
-| `spec.targetWorkerNode`, `spec.newSsdPcie` at the top | `spec.migrate` (§6.1)                       | Spec regrouping                                                                        |
-| `spec.drain`                                          | `spec.remove` (§6.1)                        | Spec rename, matching the action it parameterizes                                      |
-| Six actions                                           | Seven, adding `HostMaintenance` (§10)       | Additive, and it retires a controller (§15.3)                                          |
-| No abort                                              | `spec.abort` and the `Aborted` phase (§6.2) | Additive. Cancellation today means deleting the object                                 |
-| `status.subPhase`, a union of two workflows           | `status.step`, one graph per action (§6.3)  | Status only. The old string reads into `step.state` with no deadline                   |
-| `Migrating` meaning two different things              | `MigratingVolumes` and `Relocating` (§6.3)  | Status only, and it removes an enum value that is ambiguous by construction            |
-| `status.triggered`                                    | Removed (§7.2)                              | Status removal. The persisted step is the record, and it covers a case the flag cannot |
-| `status.volumesMigrated`, `status.volumesPending`     | `status.drain` (§6.2)                       | Status regrouping. `volumesTotal` replaces a pending count that has to be kept in step |
-| No `observedGeneration`                               | Present (§6.2)                              | Additive                                                                               |
-| No state machine behind any action                    | Seven declared graphs (§6.3)                | The largest piece of work here. Every side effect moves into a step                    |
-| No deadline on any step                               | `status.step.deadline` (§6.3)               | Additive, and what makes a stalled operation detectable                                |
-| A cluster gate only for `Remove`                      | For every state-changing action (§7.1)      | Behavioral. A relocation during a rebalance is currently accepted                      |
+| Registered                                            | This design                                              | Cost                                                                                                                                                                                                                                            |
+|-------------------------------------------------------|----------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `spec.storageNodeRef`                                 | `spec.nodeRef` (§6.1)                                    | Spec rename                                                                                                                                                                                                                                     |
+| `spec.action` as a plain `string`                     | `StorageNodeOpsAction` (§6.1)                            | Type only, the wire values change with the row below                                                                                                                                                                                            |
+| Six lowercase action values                           | PascalCase (§6.3)                                        | Spec rename of every value. `design-crd-model.md` §9.7 owns the deprecation window                                                                                                                                                              |
+| `spec.targetWorkerNode`, `spec.newSsdPcie` at the top | `spec.migrate` (§6.1)                                    | Spec regrouping                                                                                                                                                                                                                                 |
+| `spec.drain`                                          | `spec.remove` (§6.1)                                     | Spec rename, matching the action it parameterizes                                                                                                                                                                                               |
+| Six actions                                           | Seven, adding `HostMaintenance` (§10)                    | Additive, and it retires a controller (§15.3)                                                                                                                                                                                                   |
+| No abort                                              | `spec.abort` and the `Aborted` phase (§6.2)              | Additive. Cancellation today means deleting the object                                                                                                                                                                                          |
+| `status.subPhase`, a union of two workflows           | `status.step`, one graph per action (§6.3)               | Status only. The old string reads into `step.state` with no deadline                                                                                                                                                                            |
+| `Migrating` meaning two different things              | `MigratingVolumes` and `Relocating` (§6.3)               | Status only, and it removes an enum value that is ambiguous by construction                                                                                                                                                                     |
+| `status.triggered`                                    | Removed (§7.2)                                           | Status removal. The persisted step is the record, and it covers a case the flag cannot                                                                                                                                                          |
+| `status.volumesMigrated`, `status.volumesPending`     | `status.drain` (§6.2)                                    | Status regrouping. `volumesTotal` replaces a pending count that has to be kept in step                                                                                                                                                          |
+| No `observedGeneration`                               | Present (§6.2)                                           | Additive                                                                                                                                                                                                                                        |
+| No state machine behind any action                    | Seven declared graphs (§6.3)                             | The largest piece of work here. Every side effect moves into a step                                                                                                                                                                             |
+| No deadline on any step                               | `status.step.deadline` (§6.3)                            | Additive, and what makes a stalled operation detectable                                                                                                                                                                                         |
+| A cluster gate only for `Remove`                      | At admission, for `Migrate` and `HostMaintenance` (§7.1) | Behavioral. A relocation during a rebalance is currently accepted. `Remove` keeps its exemption because it is how an unready cluster becomes ready, and the four single-step actions share it because each is how the cluster's reading changes |
 
 ### 15.3 Retiring StorageNodeSet
 
@@ -1915,10 +2212,12 @@ fields §5.1 names.
 
 Every spec row above is breaking, because a renamed spec field is silently ignored
 on an object that still sets the old name. Every status row is not, because the
-operator is the only writer. The `skipKubeletConfiguration` row is the one to read
-twice: it inverts as well as renames, so a deprecation window that reads the old
-field and writes the new one has to negate it, and a mechanical rename produces the
-opposite behavior.
+operator is the only writer. The four per-node fields that move to the cluster are
+the rows to read twice. Their successor is on a different kind, so no conversion
+reaches them, and each stashes under
+`storage.simplyblock.io/v1alpha1-spec.overrides.<field>` on the way up so that a
+node converted back down carries what it carried
+([`design-property-renames.md`](design-property-renames.md) §3.3).
 
 The rows above are audited by
 `.claude/skills/api-design/scripts/check-crds.py --kind StorageNode` and
@@ -1961,10 +2260,11 @@ observation positive. This is a control-plane request, and §12 records it.
 holds the cluster's lock while walking every node
 ([`design-storagecluster.md`](design-storagecluster.md) §8), and nothing prevents
 a `StorageNodeOps` from acquiring a node's lock during the walk. The cluster gate
-of §7.1 blocks it in practice, because a walk puts the cluster into a state the
-gate holds on, which is a consequence rather than a rule. Making the cluster lock
-explicit would mean a node operation checking two locks, and a rolling restart
-having to acquire each node's lock as it reaches it.
+of §7.1 blocks a relocation or a maintenance window in practice, because a walk
+puts the cluster into a state the gate holds on, which is a consequence rather
+than a rule, and it blocks none of the five exempt actions. Making the cluster
+lock explicit would mean a node operation checking two locks, and a rolling
+restart having to acquire each node's lock as it reaches it.
 
 **Q6: Retention of completed operations.** Nothing deletes a terminal
 `StorageNodeOps`, so the audit record grows without bound, and a cluster that
@@ -2043,7 +2343,7 @@ const (
 
 // StorageNodeStep is one step of the provisioning path. There is one graph
 // rather than a MultiConfig, because an entity has no spec.action to key one on.
-// +kubebuilder:validation:Enum=CheckingHost;CheckingConfig;AwaitingSlot;Posting;Resolving;Adopting
+// +kubebuilder:validation:Enum=CheckingHost;CheckingConfig;AwaitingSlot;Posting;Resolving;Adopting;AwaitingWorker
 type StorageNodeStep string
 
 const (
@@ -2084,8 +2384,11 @@ type JournalManagerSpec struct {
 // the node's configuration is generated (§3.1).
 type StorageNodeSizing struct {
 	// VCPUCount is the number of vCPUs allocated to SPDK on this node, as an
-	// explicit core count rather than a percentage.
-	// +kubebuilder:validation:Minimum=6
+	// explicit core count rather than a percentage. The floor matches the
+	// cluster's: a node must carry one core beyond this budget for the system,
+	// and the control plane's core layout assigns no NVMe-oF poller core at all
+	// for a 2-vCPU budget.
+	// +kubebuilder:validation:Minimum=4
 	// +kubebuilder:validation:Required
 	VCPUCount *int32 `json:"vcpuCount"`
 
@@ -2115,16 +2418,62 @@ type StorageNodeConfig struct {
 	// +optional
 	SpdkImage string `json:"spdkImage,omitempty"`
 
+	// SpdkImagePullPolicy controls when that image is pulled, and defaults to
+	// Always because the images this product ships are moving tags.
+	//
+	// The control plane starts the SPDK pod, not the operator, and its
+	// spdk_process_start takes no pull policy: the pod template it renders writes
+	// Always itself. So a node states the policy here and the node-add call does
+	// not yet carry it, which is a gap the control plane closes rather than this
+	// kind. Stating anything but Always is therefore recorded and not yet obeyed.
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +kubebuilder:default=Always
+	// +optional
+	SpdkImagePullPolicy corev1.PullPolicy `json:"spdkImagePullPolicy,omitempty"`
+
 	// SpdkProxyImage overrides the SPDK proxy image for this node.
 	// +optional
 	SpdkProxyImage string `json:"spdkProxyImage,omitempty"`
 
+	// SpdkProxyImagePullPolicy controls when that image is pulled. It is stated
+	// apart from SpdkImagePullPolicy because a node may pin the proxy and follow
+	// the SPDK image, and it carries the same not-yet-spent caveat: the template
+	// the control plane renders writes Always for both containers.
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +kubebuilder:default=Always
+	// +optional
+	SpdkProxyImagePullPolicy corev1.PullPolicy `json:"spdkProxyImagePullPolicy,omitempty"`
+
 	// SpdkSystemMemory is the memory the control plane starts this node's SPDK
-	// with ("4G", "512M"). Mutable: a node whose device count grew legitimately
-	// needs to raise it.
+	// with ("4G", "512M"). It carries no immutability marker, because a node
+	// whose device count grew legitimately needs it raised, and the webhook that
+	// guards spec.config is what decides who may raise it.
 	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
 	// +optional
 	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
+
+	// ReservedSystemCPU is the CPU set held back from SPDK for the system, as a
+	// core list such as 0,1 or 0-3.
+	//
+	// It is per node and not per cluster because it names core ids: 0,1 on a
+	// sixteen-core worker and 0,1 on a ninety-six-core worker are different
+	// fractions of the machine, and a fleet whose groups differ in core count
+	// has no one list that is right for all of them.
+	// StorageCluster.spec.storageNodes.reservedSystemCPU is the fleet's value,
+	// which the pod carries as an environment variable, and this overrides it
+	// for the node that states it.
+	//
+	// On OpenShift the value reaches the kubelet through a KubeletConfig for
+	// the machine config pool rather than through the node alone, so nodes
+	// sharing a pool that disagree are writing over one another's pool
+	// configuration. It carries no immutability marker, because the CPUs a
+	// machine holds back are a tuning decision rather than a layout one, and
+	// the webhook that guards spec.config is what decides who may retune
+	// them.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$`
+	// +optional
+	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
 
 	// JournalManager tunes the journal manager count and per-device capacity
 	// share for this node. Immutable: both are on-disk layout, fixed when the
@@ -2223,15 +2572,19 @@ type StorageNodeSpec struct {
 	// SocketID is the NUMA socket this node is bound to, as declared in the node
 	// set's socket list ("0", "1"). With NodeIndex it decomposes Slot into the
 	// pair a person reads; nothing but a print column consumes either.
+	//
+	// It is not marked immutable, because where a node sits is a fact about the
+	// host it runs on and a relocation moves it: the target worker's free socket
+	// is not necessarily the source's. The StorageNode validating webhook
+	// rejects a change made by an identity outside the operator's namespace,
+	// which is the same treatment WorkerNode takes and for the same reason.
 	// +optional
-	// +k8s:immutable
 	SocketID string `json:"socketId,omitempty"`
 
 	// NodeIndex is the position among the nodes sharing this socket, in
-	// 0..nodesPerSocket-1. See SocketID.
+	// 0..nodesPerSocket-1. See SocketID, whose guard it shares.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
-	// +k8s:immutable
 	NodeIndex *int32 `json:"nodeIndex,omitempty"`
 
 	// Slot is which storage-node slot on this worker the object occupies,
@@ -2499,7 +2852,7 @@ const (
 // StorageNodeOpsStep is one step of a running node operation. The enum is the
 // union of every action's steps; which steps belong to which action is declared
 // by the graph rather than by this type.
-// +kubebuilder:validation:Enum=Requesting;Awaiting;Validating;Suspending;MigratingVolumes;Verifying;Removing;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
+// +kubebuilder:validation:Enum=Requesting;Departing;Awaiting;Validating;Suspending;MigratingVolumes;Verifying;Removing;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
 type StorageNodeOpsStep string
 
 const (
@@ -2620,7 +2973,7 @@ type StorageNodeOpsStatus struct {
 	// Step is the position of the running action's state machine, as the shared
 	// statemachine.KubeSnapshot (design-crd-model.md §3.1). The rule is what an
 	// Enum marker would do if a marker could reach a field of a shared type.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Awaiting','Validating','Suspending','MigratingVolumes','Verifying','Removing','Preparing','Relocating','AwaitingNode','Promoting','Holding','ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Departing','Awaiting','Validating','Suspending','MigratingVolumes','Verifying','Removing','Preparing','Relocating','AwaitingNode','Promoting','Holding','ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
@@ -2690,6 +3043,32 @@ because §5 specifies it and
 before the `StorageNodeSet` retirement can land (§15.3).
 
 ```go
+// OpenShiftSpec is what a deployment onto OpenShift states beyond what every
+// distribution states.
+//
+// Its presence is the statement. A cluster carrying the block runs on OpenShift
+// and one without it does not, which is why there is no boolean beside it: a
+// block naming a machine-config pool on a cluster that also said it was not
+// OpenShift was expressible before and meant nothing.
+type OpenShiftSpec struct {
+	// MachineConfigPool names a machine-config role the storage nodes' own pool
+	// inherits from, beyond the worker role it always inherits.
+	//
+	// It is not the pool the nodes end up in, which the description it carried
+	// before said and which cost a reader the reboot they were trying to avoid.
+	// Adding a node creates a pool of its own, storage-<cluster>, and moves the
+	// node into it; a node belongs to exactly one custom pool, so whatever
+	// machine configuration its previous pool carried is lost unless that
+	// pool's role is named here for the new one to select as well. The default
+	// is the role every pool already selects, which is what makes it a no-op
+	// for a fleet whose workers are ordinary workers.
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:default=worker
+	// +optional
+	MachineConfigPool string `json:"machineConfigPool,omitempty"`
+}
+
 // StorageNodesSpec is the Kubernetes workload every storage node in the cluster
 // runs as. Every field here is cluster-uniform by construction, because a
 // DaemonSet is one object for every node it schedules and its pod template
@@ -2701,9 +3080,14 @@ type StorageNodesSpec struct {
 	// +optional
 	Image string `json:"image,omitempty"`
 
-	// ImagePullPolicy controls when that image is pulled.
+	// ImagePullPolicy controls when that image is pulled. It defaults to Always
+	// for the reason SimplyblockDriver's does: the images this product ships are
+	// moving tags, so a node brought up after a release that kept IfNotPresent
+	// would run whatever its kubelet already held. The workload builder has
+	// always meant this and falls back to Always for an unset policy, a fallback
+	// the schema default means it never reaches.
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
-	// +kubebuilder:default=IfNotPresent
+	// +kubebuilder:default=Always
 	// +optional
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 
@@ -2712,8 +3096,12 @@ type StorageNodesSpec struct {
 	// +k8s:immutable
 	MgmtInterface string `json:"mgmtInterface,omitempty"`
 
-	// DataInterfaces are the data-plane network interfaces.
+	// DataInterfaces are the data-plane network interfaces, frozen once set for
+	// the reason MgmtInterface is: both reach the control plane as the node-add's
+	// interface_name and data_nics, which it spends on the node it is adding and
+	// never revisits.
 	// +optional
+	// +k8s:immutable
 	DataInterfaces []string `json:"dataInterfaces,omitempty"`
 
 	// SocketsToUse restricts deployment to selected NUMA sockets. Empty means
@@ -2728,13 +3116,13 @@ type StorageNodesSpec struct {
 	// +k8s:immutable
 	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
 
-	// MaxParallelNodeAdds limits how many workers may be in the node-add process
-	// at once. Workers hosting a FoundationDB pod are always sequential
+	// NodeProvisioningBudget limits how many workers may be in the node-add
+	// process at once. Workers hosting a FoundationDB pod are always sequential
 	// regardless of this value.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=1
 	// +optional
-	MaxParallelNodeAdds *int32 `json:"maxParallelNodeAdds,omitempty"`
+	NodeProvisioningBudget *int32 `json:"nodeProvisioningBudget,omitempty"`
 
 	// EnableJournalDevice dedicates the smallest NVMe device on each node to the
 	// journal manager, instead of carving a journal partition out of every
@@ -2768,15 +3156,10 @@ type StorageNodesSpec struct {
 	// +optional
 	UbuntuHost *bool `json:"ubuntuHost,omitempty"`
 
-	// OpenShiftCluster states that the Kubernetes distribution is OpenShift.
+	// OpenShift is what this deployment states because it runs on OpenShift,
+	// and its presence is that statement. See OpenShiftSpec.
 	// +optional
-	OpenShiftCluster *bool `json:"openShiftCluster,omitempty"`
-
-	// OpenShiftMachineConfigPool names the pool generated MachineConfig objects
-	// are labeled into.
-	// +kubebuilder:default=worker
-	// +optional
-	OpenShiftMachineConfigPool string `json:"openShiftMachineConfigPool,omitempty"`
+	OpenShift *OpenShiftSpec `json:"openshift,omitempty"`
 
 	// Tolerations are applied to the storage-node pods.
 	// +optional

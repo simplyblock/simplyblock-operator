@@ -292,9 +292,9 @@ as `accessibility_requirements` on `CreateVolumeRequest`. `spdk-csi`'s
    `StorageNodeSetReconciler.labelWorkerNodes`
    (`operator/internal/controller/simplyblockstoragenodeset_controller.go`)
    labels each worker with
-   `io.simplyblock.node-type: simplyblock-storage-plane-<clusterName>` — a
-   cluster-level "this worker hosts the storage plane" label, not a per-node
-   one — and, alongside it, one label per co-located storage-node instance:
+   `io.simplyblock.storagenodeset: <storageNodeSetName>` — a set-level "this
+   worker hosts the storage plane" label, not a per-node one — and, alongside
+   it, one label per co-located storage-node instance:
 
    ```
    simplyblock.io/storage-node-uuid.<clusterUUID>.<socketOrdinal> = <storage-node UUID>
@@ -367,7 +367,7 @@ which Kubernetes mechanism put the Pod there:
 (`operator/api/v1alpha1/storagecluster_types.go`) and is **already wired up
 end-to-end** — but it means something else entirely. It's forwarded to `sbcli`
 as `enable_node_affinity` at cluster-creation time
-(`simplyblockstoragecluster_controller.go` →
+(`controllers/cluster/storagecluster_controller.go` →
 `utils.ClusterAddParams.EnableNodeAffinity` → `cluster_ops.py` →
 `cluster.enable_node_affinity`), and consumed in `distr_controller.py`
 (`build_cluster_map`) to set `ppln1`/`local_node_index` on an erasure-coded
@@ -758,7 +758,7 @@ the `simplyblock.io/pod-affinity` annotation.
 
 `labelWorkerNodes`
 (`operator/internal/controller/simplyblockstoragenodeset_controller.go`)
-labels each worker with `io.simplyblock.node-type` and, unconditionally (no
+labels each worker with `io.simplyblock.storagenodeset` and, unconditionally (no
 `StorageCluster.Spec.EnableNodeAffinity` check — see §4), with
 `simplyblock.io/storage-node-uuid.<clusterUUID>.<socketOrdinal> = <uuid>` for
 every co-located storage-node instance — reconciling additions, value updates

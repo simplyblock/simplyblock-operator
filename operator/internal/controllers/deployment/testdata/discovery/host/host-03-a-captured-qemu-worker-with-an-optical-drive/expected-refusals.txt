@@ -1,0 +1,22 @@
+worker-1/nbd0: declined by whole disk because it is a Network rather than a whole disk
+worker-1/nbd1: declined by whole disk because it is a Network rather than a whole disk
+worker-1/nbd10: declined by whole disk because it is a Network rather than a whole disk
+worker-1/nbd11: declined by whole disk because it is a Network rather than a whole disk
+worker-1/nbd12: declined by whole disk because it is a Network rather than a whole disk
+worker-1/nbd13: declined by whole disk because it is a Network rather than a whole disk
+worker-1/nbd14: declined by whole disk because it is a Network rather than a whole disk
+worker-1/nbd15: declined by whole disk because it is a Network rather than a whole disk
+worker-1/nbd2: declined by whole disk because it is a Network rather than a whole disk
+worker-1/nbd3: declined by whole disk because it is a Network rather than a whole disk
+worker-1/nbd4: declined by whole disk because it is a Network rather than a whole disk
+worker-1/nbd5: declined by whole disk because it is a Network rather than a whole disk
+worker-1/nbd6: declined by whole disk because it is a Network rather than a whole disk
+worker-1/nbd7: declined by whole disk because it is a Network rather than a whole disk
+worker-1/nbd8: declined by whole disk because it is a Network rather than a whole disk
+worker-1/nbd9: declined by whole disk because it is a Network rather than a whole disk
+worker-1/sda: declined by available because the probe refused it: Partitioned
+worker-1/sda1: declined by available because the probe refused it: NotAWholeDisk
+worker-1/sda2: declined by available because the probe refused it: NotAWholeDisk
+worker-1/sda3: declined by available because the probe refused it: NotAWholeDisk
+worker-1/sda4: declined by available because the probe refused it: NotAWholeDisk
+worker-1/sr0: declined by available because the probe refused it: Removable

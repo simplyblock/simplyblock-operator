@@ -1,0 +1,43 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: discover-fleet-05
+  namespace: simplyblock
+spec:
+  action: Discover
+status:
+  environment: K3s
+  step: {}
+  workers:
+  - worker-01
+  - worker-02
+  - worker-03
+  - worker-04
+  - worker-05
+  - worker-06
+  - worker-07
+  - worker-08
+  - worker-09
+  - worker-10
+  - worker-11
+  - worker-12
+  - worker-13
+  - worker-14
+  - worker-15
+  - worker-16
+  - worker-17
+  - worker-18
+  - worker-19
+  - worker-20
+  - worker-21
+  - worker-22
+  - worker-23
+  - worker-24
+  - worker-25
+  - worker-26
+  - worker-27
+  - worker-28
+  - worker-29
+  - worker-30
+  - worker-31
+  - worker-32

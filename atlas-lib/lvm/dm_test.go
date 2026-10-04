@@ -98,3 +98,64 @@ func TestManager_RemoveOrphanedDMNodes(t *testing.T) {
 		}
 	})
 }
+
+// HasOrphanedDMNodes answers the same listing RemoveOrphanedDMNodes acts on,
+// without removing anything: a volstack layer whose member device has
+// vanished entirely checks this before deciding whether it has something left
+// to release.
+func TestManager_HasOrphanedDMNodes(t *testing.T) {
+	t.Run("no matching nodes", func(t *testing.T) {
+		fake := &fakeRunner{
+			out: map[string]string{joinKey([]string{"dmsetup", "ls"}): "No devices found"},
+			err: map[string]error{},
+		}
+		mgr := NewManagerWithRunner(fake.run)
+		has, err := mgr.HasOrphanedDMNodes(context.Background(), VolumeGroup{Name: "vdo-abc123"})
+		if err != nil {
+			t.Fatalf("HasOrphanedDMNodes: %v", err)
+		}
+		if has {
+			t.Error("HasOrphanedDMNodes() = true, want false when dmsetup ls lists nothing matching")
+		}
+		for _, call := range fake.calls {
+			if len(call) > 0 && call[0] == "dmsetup" && call[1] == "remove" {
+				t.Errorf("HasOrphanedDMNodes must never remove anything, but it ran %v", call)
+			}
+		}
+	})
+
+	t.Run("matching nodes present", func(t *testing.T) {
+		lsOut := "vdo--abc123-vdopool-vpool\t(253:3)\n" +
+			"vdo--abc123-vdopool_vdata\t(253:2)\n" +
+			"rl-root\t(253:0)\n"
+		fake := &fakeRunner{
+			out: map[string]string{joinKey([]string{"dmsetup", "ls"}): lsOut},
+			err: map[string]error{},
+		}
+		mgr := NewManagerWithRunner(fake.run)
+		has, err := mgr.HasOrphanedDMNodes(context.Background(), VolumeGroup{Name: "vdo-abc123"})
+		if err != nil {
+			t.Fatalf("HasOrphanedDMNodes: %v", err)
+		}
+		if !has {
+			t.Error("HasOrphanedDMNodes() = false, want true when dmsetup ls lists a matching node")
+		}
+		for _, call := range fake.calls {
+			if len(call) > 0 && call[0] == "dmsetup" && call[1] == "remove" {
+				t.Errorf("HasOrphanedDMNodes must never remove anything, but it ran %v", call)
+			}
+		}
+	})
+
+	t.Run("dmsetup ls itself fails", func(t *testing.T) {
+		wantErr := errors.New("dmsetup: command not found")
+		fake := &fakeRunner{
+			out: map[string]string{},
+			err: map[string]error{joinKey([]string{"dmsetup", "ls"}): wantErr},
+		}
+		mgr := NewManagerWithRunner(fake.run)
+		if _, err := mgr.HasOrphanedDMNodes(context.Background(), VolumeGroup{Name: "vdo-abc123"}); !errors.Is(err, wantErr) {
+			t.Errorf("HasOrphanedDMNodes() error = %v, want wrapping %v", err, wantErr)
+		}
+	})
+}

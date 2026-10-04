@@ -46,6 +46,17 @@ const (
 	hostSysfsMount = "/host/sys"
 	hostProcMount  = "/host/proc"
 
+	// HostRootMount is where the host's root filesystem is presented, and what
+	// the OS reading takes its os-release from.
+	//
+	// It is assembled from the two directories os-release may live in rather
+	// than being a mount of / itself. The probe needs one file, and a read-only
+	// mount of the host's whole root filesystem would hand a pod every secret
+	// and key on the node to read the name of a distribution. The two are
+	// mounted under one root because /etc/os-release is ordinarily a relative
+	// symlink into /usr/lib, and a mount of /etc alone would leave it dangling.
+	HostRootMount = "/host/root"
+
 	// hostDevMount is /dev and not /host/dev, because a device path is what the
 	// report carries and a reviewer approves: a report naming
 	// /host/dev/nvme0n1 would name a path that exists on no host.
@@ -185,6 +196,8 @@ func Job(opts JobOptions) (*batchv1.Job, error) {
 						hostPathVolume("host-sys", "/sys"),
 						hostPathVolume("host-proc", "/proc"),
 						hostPathVolume("host-dev", "/dev"),
+						hostPathVolume("host-etc", "/etc"),
+						hostPathVolume("host-usr-lib", "/usr/lib"),
 					},
 					Containers: []corev1.Container{{
 						Name:            ContainerName,
@@ -198,6 +211,7 @@ func Job(opts JobOptions) (*batchv1.Job, error) {
 							"--sysfs-root=" + hostSysfsMount,
 							"--proc-root=" + hostProcMount,
 							"--dev-root=" + hostDevMount,
+							"--host-root=" + HostRootMount,
 							"--mountinfo=" + HostMountinfoPath,
 						},
 						Env: append([]corev1.EnvVar{
@@ -215,7 +229,16 @@ func Job(opts JobOptions) (*batchv1.Job, error) {
 							ReadOnlyRootFilesystem: &readOnlyRoot,
 						},
 						VolumeMounts: []corev1.VolumeMount{
-							{Name: "host-sys", MountPath: hostSysfsMount, ReadOnly: true},
+							// sysfs is writable because the probe hands back
+							// the NVMe controllers a dead deployment left on a
+							// userspace driver, which is three writes under
+							// /sys/bus/pci. Scoping the write to that subtree
+							// would not do it: a device there is a symlink into
+							// /sys/devices, so the attribute the rebind sets
+							// resolves outside it. Read-only, a worker whose
+							// disks a previous deployment still holds is a
+							// worker with no disks.
+							{Name: "host-sys", MountPath: hostSysfsMount},
 							{Name: "host-proc", MountPath: hostProcMount, ReadOnly: true},
 							// /dev is not read-only: opening a device node
 							// O_EXCL is the kernel's own answer to whether
@@ -223,6 +246,10 @@ func Job(opts JobOptions) (*batchv1.Job, error) {
 							// to be writable even though the device is opened
 							// for reading.
 							{Name: "host-dev", MountPath: hostDevMount},
+							// The host's os-release, in the two places it may
+							// be, under the root the probe is given.
+							{Name: "host-etc", MountPath: HostRootMount + "/etc", ReadOnly: true},
+							{Name: "host-usr-lib", MountPath: HostRootMount + "/usr/lib", ReadOnly: true},
 						},
 						Resources: corev1.ResourceRequirements{
 							Requests: corev1.ResourceList{
@@ -282,9 +309,22 @@ func fieldRefEnv(name, path string) corev1.EnvVar {
 	}
 }
 
+// pullPolicyOr defaults the probe to being pulled on every run.
+//
+// The probe and the operator ship in one image, so an operator deployed from a
+// moving tag is replaced by a pull while its probes are not: a node still
+// holding the previous layer keeps running the previous probe. The report
+// carries a version for exactly that skew, so the operator refuses those reports
+// and the run waits on machines that will never answer — an upgrade that
+// produces a stalled discovery rather than a wrong one, which is harder to read
+// than either.
+//
+// The cost is a registry round-trip per worker per run, against a Job that runs
+// once per discovery and lives for seconds. A fleet that cannot pay it, because
+// it is air-gapped or already pins a digest, states its own policy.
 func pullPolicyOr(policy corev1.PullPolicy) corev1.PullPolicy {
 	if policy == "" {
-		return corev1.PullIfNotPresent
+		return corev1.PullAlways
 	}
 	return policy
 }

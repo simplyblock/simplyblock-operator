@@ -28,7 +28,7 @@ import (
 	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/prometheus"
 
-	metricsv1alpha1 "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha1"
+	metricsv1alpha2 "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 )
 
@@ -165,7 +165,7 @@ func newStorage(t *testing.T, vols []subscriptions.VolumeDTO, objs ...client.Obj
 	return NewStorage(fakeVolumes{items: vols}, c, capacityFrom(vols))
 }
 
-func listFrom(t *testing.T, s *Storage, namespace string, opts *metainternalversion.ListOptions) *metricsv1alpha1.LogicalVolumeMetricsList {
+func listFrom(t *testing.T, s *Storage, namespace string, opts *metainternalversion.ListOptions) *metricsv1alpha2.LogicalVolumeMetricsList {
 	t.Helper()
 	ctx := request.WithNamespace(context.Background(), namespace)
 	if opts == nil {
@@ -175,7 +175,7 @@ func listFrom(t *testing.T, s *Storage, namespace string, opts *metainternalvers
 	if err != nil {
 		t.Fatalf("List(%q): %v", namespace, err)
 	}
-	list, ok := obj.(*metricsv1alpha1.LogicalVolumeMetricsList)
+	list, ok := obj.(*metricsv1alpha2.LogicalVolumeMetricsList)
 	if !ok {
 		t.Fatalf("List returned %T, want *LogicalVolumeMetricsList", obj)
 	}
@@ -294,7 +294,7 @@ func TestGetByClaimName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	got, ok := obj.(*metricsv1alpha1.LogicalVolumeMetrics)
+	got, ok := obj.(*metricsv1alpha2.LogicalVolumeMetrics)
 	if !ok {
 		t.Fatalf("Get returned %T, want *LogicalVolumeMetrics", obj)
 	}
@@ -364,10 +364,10 @@ func TestStorageSurfaceMatchesWhatKubectlNeeds(t *testing.T) {
 	if got := s.ShortNames(); len(got) != 1 || got[0] != "lvm" {
 		t.Errorf("ShortNames() = %v, want [lvm]", got)
 	}
-	if _, ok := s.New().(*metricsv1alpha1.LogicalVolumeMetrics); !ok {
+	if _, ok := s.New().(*metricsv1alpha2.LogicalVolumeMetrics); !ok {
 		t.Errorf("New() = %T, want *LogicalVolumeMetrics", s.New())
 	}
-	if _, ok := s.NewList().(*metricsv1alpha1.LogicalVolumeMetricsList); !ok {
+	if _, ok := s.NewList().(*metricsv1alpha2.LogicalVolumeMetricsList); !ok {
 		t.Errorf("NewList() = %T, want *LogicalVolumeMetricsList", s.NewList())
 	}
 }

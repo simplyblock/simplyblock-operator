@@ -191,6 +191,17 @@ const (
 	// TransportSCSI is a SCSI disk whose bus the tree does not narrow further.
 	TransportSCSI Transport = "SCSI"
 
+	// TransportISCSI is a LUN reached over iSCSI, which is a disk on the other
+	// side of a network presented through the SCSI stack.
+	//
+	// It is a separate transport from TransportSCSI, and the distinction is the
+	// whole reason it is read. Every marker an iSCSI LUN carries says SCSI: it
+	// hangs off a host, it is addressed as a target, and it presents an sdX. The
+	// one thing that says where its bytes are is the session the SCSI transport
+	// class creates for it, and a caller deciding whether to hand a disk to a
+	// storage cluster is deciding about bytes that are somewhere else.
+	TransportISCSI Transport = "iSCSI"
+
 	// TransportVirtio is a paravirtualized disk, which is what a virtual worker
 	// has.
 	TransportVirtio Transport = "Virtio"
@@ -246,6 +257,16 @@ type Disk struct {
 	// NUMANodeUnknown.
 	NUMANode int
 
+	// SubsystemNQN is the NVMe Qualified Name of the subsystem the namespace
+	// belongs to, and is empty for a device on any other bus.
+	//
+	// It is what identifies a namespace rather than placing it. The transport
+	// says a fabric namespace came from somewhere else, which is an inference
+	// from where its controllers are; the NQN says what it is, and a caller
+	// that needs to recognize its own product's volumes among a machine's
+	// disks has nothing else to read.
+	SubsystemNQN string
+
 	// Partitions is the kernel names of the partitions on this device,
 	// ascending. A disk with any is a disk something has already divided up,
 	// whether or not those partitions carry anything.
@@ -275,7 +296,11 @@ func Scan(cfg ScanConfig) ([]Disk, error) {
 
 	disks := make([]Disk, 0, len(entries))
 	for _, entry := range entries {
-		disk, err := scanOne(cfg, filepath.Join(base, entry.Name()), entry.Name())
+		dir := filepath.Join(base, entry.Name())
+		if hidden(dir) {
+			continue
+		}
+		disk, err := scanOne(cfg, dir, entry.Name())
 		if err != nil {
 			return nil, err
 		}
@@ -309,8 +334,11 @@ func scanOne(cfg ScanConfig, dir, name string) (Disk, error) {
 			Minor:             minor,
 			LogicalBlockSize:  sysfs.Uint32(dir, "queue", "logical_block_size"),
 			PhysicalBlockSize: sysfs.Uint32(dir, "queue", "physical_block_size"),
-			SizeBytes:         sysfs.Uint64(dir, "size") * sectorSize,
-			ReadOnly:          sysfs.Bool(dir, "ro"),
+			// Optional, and their absence is not a zero: see Device.
+			AtomicWriteUnitMaxBytes: optionalUint32(dir, "queue", "atomic_write_unit_max_bytes"),
+			AtomicWriteUnitMinBytes: optionalUint32(dir, "queue", "atomic_write_unit_min_bytes"),
+			SizeBytes:               sysfs.Uint64(dir, "size") * sectorSize,
+			ReadOnly:                sysfs.Bool(dir, "ro"),
 		},
 		Removable:  sysfs.Bool(dir, "removable"),
 		Rotational: sysfs.Bool(dir, "queue", "rotational"),
@@ -331,6 +359,7 @@ func scanOne(cfg ScanConfig, dir, name string) (Disk, error) {
 	disk.Virtual = sysfs.IsVirtual(resolved)
 	disk.PCIAddress = sysfs.PCIAddressOf(resolved)
 	disk.NUMANode = numaNodeOf(resolved)
+	disk.SubsystemNQN = subsystemNQNOf(resolved)
 	if transport, ok := nvmeSubsystemTransport(resolved); ok {
 		disk.Transport = transport
 	} else {
@@ -345,6 +374,25 @@ func scanOne(cfg ScanConfig, dir, name string) (Disk, error) {
 	disk.Model = strings.TrimSpace(sysfs.String(device, "model"))
 	disk.Serial = strings.TrimSpace(sysfs.String(device, "serial"))
 	return disk, nil
+}
+
+// hidden reports whether the kernel marked this gendisk as one it presents to
+// nobody, which is the one entry of class/block that is not a device.
+//
+// It is what a namespace reached over NVMe multipath publishes per controller,
+// beside the namespace itself: the namespace has a device node and is what
+// anything opens, and each path is a gendisk with no device node, no dev
+// attribute, and therefore no identity a mount could be matched against. On a
+// worker that has attached one of this product's volumes there are two of them
+// per namespace, so the alternative to skipping them is a scan that fails on
+// the whole machine over an entry naming bytes it already reported.
+//
+// Read before the entry is scanned rather than as a rejection afterward,
+// because scanOne cannot read one: its first act is to read the device numbers,
+// whose absence is a failure for every device that is not this.
+func hidden(dir string) bool {
+	raw, err := sysfs.ReadAttr(dir, "hidden")
+	return err == nil && raw == "1"
 }
 
 // readDevNumbers reads the dev attribute, which the kernel writes as the
@@ -425,6 +473,12 @@ func transportOf(resolved string) Transport {
 		case strings.HasPrefix(segment, "end_device-"), strings.HasPrefix(segment, "sas_"),
 			strings.HasPrefix(segment, "expander-"):
 			return TransportSAS
+		case numbered(segment, "session"):
+			// The SCSI transport class names an iSCSI session sessionN and
+			// nothing else in the tree is named that way. The host segment
+			// above it has already set the SCSI fallback, and this overrides
+			// it, because where a LUN's bytes are is the more specific answer.
+			return TransportISCSI
 		case numbered(segment, "host"):
 			scsi = true
 		}
@@ -502,6 +556,18 @@ func nvmeSubsystemTransport(resolved string) (Transport, bool) {
 		}
 	}
 	return TransportNVMeFabric, true
+}
+
+// subsystemNQNOf reads the NQN of the NVMe subsystem a namespace belongs to,
+// and returns the empty string for a device that is on no NVMe subsystem.
+//
+// One read covers both shapes the kernel presents. A namespace reached through
+// a multipath head sits under its nvme-subsysN directory, and one reached
+// through a single controller sits under that controller: in both, the
+// subsysnqn attribute is in the parent, which is why this reads the parent
+// rather than deciding which shape it is looking at first.
+func subsystemNQNOf(resolved string) string {
+	return sysfs.String(filepath.Dir(filepath.Clean(resolved)), "subsysnqn")
 }
 
 // controllerName matches the controller entries of a subsystem directory,
@@ -587,4 +653,21 @@ func isDir(path string) bool {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+// optionalUint32 reads an attribute a kernel may not publish at all, and tells
+// the two cases apart: a missing file is nil, and a file holding 0 is a stated
+// zero. sysfs.Uint32 collapses both to 0, which is the right reading for an
+// attribute that has always existed and the wrong one for these.
+func optionalUint32(elem ...string) *uint32 {
+	raw, err := os.ReadFile(filepath.Join(elem...))
+	if err != nil {
+		return nil
+	}
+	value, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 32)
+	if err != nil {
+		return nil
+	}
+	out := uint32(value)
+	return &out
 }

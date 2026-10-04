@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,6 +18,11 @@ import (
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2ekubectl "k8s.io/kubernetes/test/e2e/framework/kubectl"
 )
+
+// defaultMultiClusterPool is the pool both clusters provision out of when
+// MULTI_CLUSTER_POOL_NAME says nothing, which is the name the deployment
+// workflows have always given it.
+const defaultMultiClusterPool = "pool1"
 
 var _ = ginkgo.Describe("SPDKCSI-MULTICLUSTER", func() {
 	f := newTestFramework("spdkcsi-multicluster")
@@ -32,27 +38,35 @@ var _ = ginkgo.Describe("SPDKCSI-MULTICLUSTER", func() {
 
 		clusterRefs := envList("MULTI_CLUSTER_REFS", []string{"simplyblock-cluster-a", "simplyblock-cluster-b"})
 		zones := envList("MULTI_CLUSTER_ZONES", []string{"multi-cluster-a", "multi-cluster-b"})
-		poolName := envOrDefault("MULTI_CLUSTER_POOL_NAME", "pool1")
-		storageClassNames := envList("MULTI_CLUSTER_STORAGE_CLASS_NAMES", nil)
-
 		if len(clusterRefs) != 2 || len(zones) != 2 {
 			ginkgo.Fail(
 				"MULTI_CLUSTER_REFS and MULTI_CLUSTER_ZONES must each contain exactly two comma-separated values",
 			)
 		}
-		if len(storageClassNames) == 0 {
-			storageClassNames = deriveMultiClusterStorageClassNames(clusterRefs, poolName)
-		}
-		if len(storageClassNames) != 2 {
-			ginkgo.Fail("MULTI_CLUSTER_STORAGE_CLASS_NAMES must contain exactly two comma-separated values when set")
-		}
 
+		poolNames, err := poolNamesForClusters(len(clusterRefs))
+		framework.ExpectNoError(err, "resolve the pool each cluster provisions out of")
+
+		// One class per cluster, written here. This spec is the one place in the
+		// suite where the class cannot come from specStorageClass: what it
+		// asserts is that a claim lands on the backend cluster its pod's zone
+		// names, so the two classes have to carry two different cluster_ids and
+		// specStorageClass writes one, for the cluster the suite was pointed at.
 		clusterIDs := make([]string, len(clusterRefs))
+		storageClassNames := make([]string, len(clusterRefs))
 		for i, clusterRef := range clusterRefs {
 			clusterNamespace, clusterName := splitNamespacedRef(clusterRef, nameSpace)
 			clusterID, err := waitForStorageClusterUUID(clusterNamespace, clusterName, 10*time.Minute)
 			framework.ExpectNoError(err, "resolve cluster UUID for %s", clusterRef)
 			clusterIDs[i] = clusterID
+
+			scName := fmt.Sprintf("%s-%s", ns, clusterName)
+			createStorageClass(f, scName, map[string]string{
+				scParamClusterID: clusterID,
+				scParamPool:      poolNames[i],
+			}, nil)
+			ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
+			storageClassNames[i] = scName
 		}
 
 		for i, zone := range zones {
@@ -98,13 +112,6 @@ var _ = ginkgo.Describe("SPDKCSI-MULTICLUSTER", func() {
 // Multi-cluster utility functions
 // ---------------------------------------------------------------------------
 
-func envOrDefault(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
-	}
-	return fallback
-}
-
 func envList(key string, fallback []string) []string {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
@@ -120,13 +127,33 @@ func envList(key string, fallback []string) []string {
 	return values
 }
 
-func deriveMultiClusterStorageClassNames(clusterRefs []string, poolName string) []string {
-	names := make([]string, 0, len(clusterRefs))
-	for _, clusterRef := range clusterRefs {
-		ns, clusterName := splitNamespacedRef(clusterRef, nameSpace)
-		names = append(names, fmt.Sprintf("simplyblock-%s-%s-%s", ns, clusterName, poolName))
+// poolNamesForClusters is the storage pool each backend cluster provisions out
+// of, in the order MULTI_CLUSTER_REFS names the clusters.
+//
+// One name is the usual case and covers every cluster, which is what a
+// deployment with a cluster per namespace looks like: two StoragePool objects
+// in two namespaces may both be called pool1. One name per cluster is the case
+// that needs the field, and it is the deployment where both clusters live in one
+// namespace. A StoragePool's CR name is the pool name the control plane is asked
+// for, so two clusters sharing a namespace cannot share a pool name, and the
+// suite has to be told the second one.
+//
+// A count that is neither is refused rather than padded or truncated, because
+// both repairs silently point a spec at the wrong pool.
+func poolNamesForClusters(clusters int) ([]string, error) {
+	names := envList("MULTI_CLUSTER_POOL_NAME", []string{defaultMultiClusterPool})
+
+	switch len(names) {
+	case 1:
+		return slices.Repeat(names, clusters), nil
+	case clusters:
+		return names, nil
+	default:
+		return nil, fmt.Errorf(
+			"MULTI_CLUSTER_POOL_NAME holds %d names (%s), which is neither one for every "+
+				"cluster nor one per cluster for the %d clusters MULTI_CLUSTER_REFS names",
+			len(names), strings.Join(names, ", "), clusters)
 	}
-	return names
 }
 
 func splitNamespacedRef(ref, fallbackNamespace string) (string, string) {

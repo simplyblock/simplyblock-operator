@@ -54,6 +54,17 @@ type Worker struct {
 	// with 256 GiB may schedule against 250. Its zero value means the planner
 	// was given no node objects.
 	Kube KubeNode
+
+	// Mgmt is the interface the draft names for management, with what the stack
+	// says about it: the physical interfaces underneath a bond or a bridge, the
+	// speed they add up to, and the memory node they sit on. Its name is empty
+	// when the machine presents no interface that would serve.
+	//
+	// The name is part of what makes two workers groupable: a NodeGroup names
+	// one interface for every worker in it, so machines that call theirs
+	// different things describe different groups however identical their disks
+	// are.
+	Mgmt Management
 }
 
 // Addresses is how the draft names this worker's devices, ascending and without
@@ -91,6 +102,11 @@ type Group struct {
 	// Class and Addresses are the device selection they share.
 	Class     DeviceClass
 	Addresses []string
+
+	// MgmtInterface is the interface every worker in the group binds its
+	// management address to, which is why it is on the group rather than on the
+	// workers: a NodeGroup names one.
+	MgmtInterface string
 }
 
 // Grouper puts workers into groups.
@@ -120,11 +136,15 @@ func (GroupByHardware) Group(workers []Worker) []Group {
 
 	for _, worker := range workers {
 		addresses := worker.Addresses()
-		signature := worker.Class.signature(addresses)
+		signature := worker.Class.signature(addresses, worker.Mgmt.Name)
 
 		group, seen := bySignature[signature]
 		if !seen {
-			group = &Group{Class: worker.Class, Addresses: addresses}
+			group = &Group{
+				Class:         worker.Class,
+				Addresses:     addresses,
+				MgmtInterface: worker.Mgmt.Name,
+			}
 			bySignature[signature] = group
 			order = append(order, signature)
 		}
@@ -150,11 +170,17 @@ func (GroupByHardware) Group(workers []Worker) []Group {
 	return groups
 }
 
-// signature is the key two workers must agree on to share a group: the class
-// and the addresses, hashed so that a hundred addresses do not become a
-// hundred-element map key.
-func (c DeviceClass) signature(addresses []string) string {
-	digest := sha256.Sum256([]byte(string(c) + "\x00" + strings.Join(addresses, "\x00")))
+// signature is the key two workers must agree on to share a group: the class,
+// the addresses, and the management interface, hashed so that a hundred
+// addresses do not become a hundred-element map key.
+//
+// The interface is in the key because a NodeGroup names one for every worker it
+// lists. Two machines with identical disks that call their NICs different things
+// cannot be described by one group, and grouping them anyway would write a
+// document that is wrong for whichever of them lost.
+func (c DeviceClass) signature(addresses []string, mgmtInterface string) string {
+	digest := sha256.Sum256([]byte(
+		string(c) + "\x00" + mgmtInterface + "\x00" + strings.Join(addresses, "\x00")))
 	return hex.EncodeToString(digest[:])
 }
 
@@ -164,8 +190,15 @@ func (c DeviceClass) signature(addresses []string) string {
 // what a reviewer edits and "group-1" invites that where a hash does not. The
 // ordering above is what makes the number stable.
 func groupName(index int, group Group) string {
+	size := humanBytes(groupDeviceBytes(group))
+	if groupDeviceBytes(group) == 0 {
+		// Devices the kernel does not present have no size to read, and naming
+		// the group for "0 B" would state a capacity where there is only an
+		// absence of one.
+		size = "unsized"
+	}
 	return fmt.Sprintf("group-%d-%s-%dx%s", index+1, group.Class,
-		len(group.Addresses), humanBytes(groupDeviceBytes(group)))
+		len(group.Addresses), size)
 }
 
 // groupDeviceBytes is the size of one worker's devices in the group, which is
@@ -206,8 +239,27 @@ type SingleNodeSet struct {
 // the racks can see there is nothing to preserve in renaming it.
 const DefaultNodeSetName = "discovered"
 
+// MaxGroupsPerNodeSet is what NodeSet.Groups accepts, mirrored from the API's
+// own marker. A draft that exceeds it is one the API server refuses, and the
+// refusal arrives at the create rather than in anything the run said.
+const MaxGroupsPerNodeSet = 64
+
 func (SingleNodeSet) Name() string { return "single node set" }
 
+// Build puts every group into one node set, and into as few more as the API
+// leaves it no choice about.
+//
+// One set is the intent: a node set is a rack, nothing a probe reports says
+// which rack a worker is in, and a reviewer who knows the racks splits it. The
+// overflow is not a second opinion about topology — it is arithmetic. A block
+// draft names each device by the persistent name only that device carries, so a
+// fleet of real hardware produces one group per worker, and past sixty-four
+// workers the set is larger than the field accepts.
+//
+// The alternative was a run that reports success and writes a document the API
+// server then refuses, for a limit nothing in the run mentioned. A split
+// document is valid, carries every worker, and is as easy to regroup as the
+// single one it would otherwise have been.
 func (b SingleNodeSet) Build(groups []Group) []simplyblockv1alpha2.NodeSet {
 	if len(groups) == 0 {
 		return nil
@@ -218,11 +270,25 @@ func (b SingleNodeSet) Build(groups []Group) []simplyblockv1alpha2.NodeSet {
 		name = DefaultNodeSetName
 	}
 
-	set := simplyblockv1alpha2.NodeSet{Name: name, Groups: make([]simplyblockv1alpha2.NodeGroup, 0, len(groups))}
-	for _, group := range groups {
-		set.Groups = append(set.Groups, nodeGroupOf(group))
+	var sets []simplyblockv1alpha2.NodeSet
+	for chunk := range slices.Chunk(groups, MaxGroupsPerNodeSet) {
+		// The first set keeps the name a fleet that fits has always had, so
+		// nothing about the ordinary draft changes.
+		setName := name
+		if len(sets) > 0 {
+			setName = fmt.Sprintf("%s-%d", name, len(sets)+1)
+		}
+
+		set := simplyblockv1alpha2.NodeSet{
+			Name:   setName,
+			Groups: make([]simplyblockv1alpha2.NodeGroup, 0, len(chunk)),
+		}
+		for _, group := range chunk {
+			set.Groups = append(set.Groups, nodeGroupOf(group))
+		}
+		sets = append(sets, set)
 	}
-	return []simplyblockv1alpha2.NodeSet{set}
+	return sets
 }
 
 // nodeGroupOf renders one group as the API's NodeGroup.
@@ -232,7 +298,11 @@ func nodeGroupOf(group Group) simplyblockv1alpha2.NodeGroup {
 		workers = append(workers, worker.Name)
 	}
 
-	out := simplyblockv1alpha2.NodeGroup{Name: group.Name, Workers: workers}
+	out := simplyblockv1alpha2.NodeGroup{
+		Name:          group.Name,
+		Workers:       workers,
+		MgmtInterface: group.MgmtInterface,
+	}
 	if len(group.Addresses) > 0 {
 		selection := &simplyblockv1alpha2.DeviceSelection{}
 		if group.Class == ClassBlock {

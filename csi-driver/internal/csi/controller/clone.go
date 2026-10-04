@@ -65,12 +65,22 @@ func (cs *Server) handleSnapshotSource(
 	pvcNamespace, pvcNamespaceSelected := params[csicommon.CSIStorageNamespaceKey]
 
 	pvcFullName := pvcName
+	consistencyGroup := ""
 	if pvcNameSelected && pvcNamespaceSelected {
 		pvcFullName = fmt.Sprintf("%s/%s", pvcNamespace, pvcName)
+		// A restore PVC carrying the consistency-group label forms a NEW group
+		// from the clones (design §7.2), so the label rides the clone body
+		// exactly as it rides the create body (design §4.1).
+		if _, pvcLabels, metaErr := cs.fetchPVCMeta(ctx, pvcName, pvcNamespace); metaErr == nil {
+			consistencyGroup = pvcLabels[consistencyGroupLabel]
+		} else {
+			klog.Errorf("failed to read PVC %s/%s labels for the clone: %v", pvcNamespace, pvcName, metaErr)
+		}
 	}
 	// Use raw bytes to avoid decimal/binary unit ambiguity in clone sizing.
 	newSize := strconv.FormatInt(sizeBytes, 10)
-	volumeID, err := sbclient.CloneSnapshot(ctx, sbSnapshot.snapshotID, snapshotName, newSize, pvcFullName)
+	volumeID, err := sbclient.CloneSnapshot(
+		ctx, sbSnapshot.snapshotID, snapshotName, newSize, pvcFullName, consistencyGroup)
 	if err != nil {
 		if !classifyCreateVolumeError(err).IsIdempotent() {
 			klog.Errorf("error cloning snapshot: %v", err)
@@ -85,7 +95,8 @@ func (cs *Server) handleSnapshotSource(
 			vol.VolumeId = fmt.Sprintf("%s:%s:%s", sbclient.ClusterID(), sbclient.PoolID(), existingUUID)
 			return vol, nil
 		}
-		volumeID, err = sbclient.CloneSnapshot(ctx, sbSnapshot.snapshotID, snapshotName, newSize, pvcFullName)
+		volumeID, err = sbclient.CloneSnapshot(
+			ctx, sbSnapshot.snapshotID, snapshotName, newSize, pvcFullName, consistencyGroup)
 		if err != nil {
 			klog.Errorf("error re-cloning snapshot after cleanup: %v", err)
 			return nil, err

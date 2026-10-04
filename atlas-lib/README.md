@@ -62,6 +62,7 @@ atlas/
 │   ├── hugepages.go        HugePages: per size and per NUMA node, allocated and free
 │   ├── netiface.go         Interface: link speed, state, driver, PCI slot, NUMA node
 │   │                       (Inventory.NVMeControllers comes from pci/, see below)
+│   ├── hostos.go           ReadHostOS: the worker's distro, family, version, and architecture
 │   └── environment.go      DetectEnvironment: OpenShift / Talos / K3s / Rancher / Vanilla, with the evidence
 ├── lvm/                    Linux LVM commands + content-based identity
 │   ├── doc.go              Why identity is read from content, and how scoping is decided
@@ -70,10 +71,9 @@ atlas/
 │   ├── volume.go           Create/Activate/Deactivate/Remove a PV, VG, or LV
 │   ├── clone.go            ResolveClonedVolumeGroup (rescan + import + rename)
 │   ├── grow.go             Expand a PV, VG, or LV, read an LV's current size
-│   ├── dm.go               RemoveOrphanedDMNodes
-│   └── vdo/                VDO provisioning handler + the whole per-volume stack lifecycle
-│       ├── volume.go       Registers itself with lvm, UpdateVolume
-│       └── stack.go        CreateOrAttach, ResolveClone, Deactivate, Remove, Grow, SetFeatures
+│   ├── dm.go               RemoveOrphanedDMNodes, HasOrphanedDMNodes
+│   ├── devices.go          ForgetDevice: prune the node's LVM devices file
+│   └── vdo.go              The VDO VolumeProvisioning handler, registered by this package's init
 ├── volstack/               A volume's node-side stack, as ordered layers
 │   ├── layer.go            Layer, State, Artifact, Geometry + the optional interfaces (Composite, Healer, Grower, NodeRequirements, Recorder), Plan
 │   ├── runner.go           Runner: Up / Down / Heal / Grow, and the order they walk the plan in
@@ -87,15 +87,20 @@ atlas/
 │   │   ├── filesystem.go   filesystem: format if blank, mount, refuse anything else
 │   │   └── filesystem_strategy.go  FilesystemLayerStrategy: what each fs type formats, mounts, and resizes with
 │   └── plans/              The plan shapes: one constructor per row of the design's plan table
-│       ├── plans.go        RawBlock / Plain / LVM / Striped + the LVM naming rule
+│       ├── plans.go        RawBlock / Plain / LVM / LVMRawBlock / Striped + the LVM naming rule
 │       └── node.go         NodeConfig: the seams every plan on this host is built over
 ├── lvol/                   Logical-volume identity, control-plane + device resolution
 │   ├── volume.go           VolumeHandle, Volume
+│   ├── handle.go           Handle: a volume handle taken apart; ParseHandle, IsCanonicalUUID
+│   ├── normalized.go       NormalizeHandle: the annotated handle over the field's, §16.4's rule
+│   ├── groupsnapshot.go    GroupSnapshotHandle: a consistency-group generation's CSI id
 │   ├── resolver.go         Resolver: control-plane lookup (info + Connection)
 │   └── mapping.go          Mapper: attached lvol → local nvme.Device
 ├── kube/                   lvol ↔ PV / PVC / VolumeAttachment mapping
 │   ├── names.go            driver name, param/context/label/annotation/finalizer keys, pool label key
+│   ├── derived.go          Formula: bounded, deterministic derived names and labels
 │   ├── identity.go         VolumeHandle↔PV, VolumeContext, pin annotations
+│   ├── normalized.go       NormalizedHandle / NormalizedVolumeHandleFromPV: §16.4's rule on an object
 │   ├── binding.go          Binding: resolved PV+PVC+Node view of an lvol
 │   ├── resolver.go         Resolver iface + ResolveBinding aggregation
 │   ├── storageclass.go     Properties: typed StorageClass provisioning params
@@ -132,15 +137,20 @@ atlas/
 ├── prometheus/             The telemetry simplyblock exports about itself (PromQL)
 │   ├── doc.go              Why this is not part of controlplane, and how fresh a value is
 │   ├── client.go           Provider, New, NewWithAPI (the test seam), query helpers
-│   ├── capacity.go         Capacity + VolumeCapacity / DeviceCapacity (size + sample date)
+│   ├── capacity.go         Capacity + Cluster/Volume/Device/Node/PoolCapacity (size + sample date)
 │   ├── volumeio.go         VolumeIO: per-volume IOPS + throughput
 │   └── latency.go          ClusterLatencies / ClusterLatencySamples (p50/p99), ErrLatencyDataNotReady
 ├── statemachine/           Deterministic state machine declared as data
 │   ├── statemachine.go     Config, StateDef, Machine, Snapshot, deadlines
 │   ├── multiconfig.go      MultiConfig: one graph per action over one state type
-│   └── kubernetes.go       KubeSnapshot + ToKube/FromKube: the CRD form of a Snapshot
+│   ├── abort.go            StateDef.Abortable read three ways: CanAbort + the two graph queries
+│   ├── kubernetes.go       KubeSnapshot + ToKube/FromKube: the CRD form of a Snapshot
+│   └── claim.go            KubeClaim + WithClaim: fire a state's side effect once, under a leased claim
 ├── net/                    Outbound URL validation (SSRF guard)
 ├── ptr/                    Pointer/optional-field helpers for generated + K8s types
+├── bounded/                Hard deadlines for calls no context reaches
+│   ├── bounded.go          Call/Do: a sysfs read, ioctl, or open under a deadline + the stuck-key guard
+│   └── command.go          CombinedOutput/Output: a child process that returns even when it cannot be reaped
 ├── errs/                   Sentinel errors (errors.Is across packages)
 │   └── deferrers/          defer-friendly Close/Run that log instead of dropping errors
 │
@@ -330,12 +340,17 @@ for _, handle := range handles {
 Every value is a scrape, so it is at most one scrape interval old, and
 Prometheus offers no push or watch for samples, so a caller reads at the moment
 it needs a number. A cache adds staleness on top of the scrape interval and has
-no event to invalidate it. `DeviceCapacity` is the same call keyed by device UUID.
+no event to invalidate it. `DeviceCapacity`, `NodeCapacity`, and `PoolCapacity`
+are the same call keyed by device, node, and pool UUID. `ClusterCapacity` is the
+odd one out and hands back a single sample rather than a map: the cluster is the
+scope every one of these queries is already narrowed to, so grouping by it
+yields the one entry the caller asked for.
 
 _Today:_ `operator/internal/metricsapi/storage.go` reads `VolumeCapacity` once
 per cluster per request to serve the measured half of a `LogicalVolumeMetrics`
 reading, and takes the provisioned size from the volume itself.
-`DeviceCapacity` has no caller:
+`operator/internal/metricsapi/poolstorage.go` and `clusterstorage.go` do the
+same with `PoolCapacity` and `ClusterCapacity`. `DeviceCapacity` has no caller:
 `operator/internal/controller/storagedevice_controller.go` still publishes the
 device capacity its subscription cached, which the device stream never updates.
 
@@ -599,10 +614,10 @@ store.SubsystemResolver  // nvme.SubsystemResolver
 #### Inspect a worker before it is given to a cluster
 
 What a discovery run asks before it writes a document: which disks are free,
-what the machine has to run a storage node with, and which distribution
-installed the kubelet. One call, because a run wants all of it about one worker
-and every caller would otherwise repeat the same five reads and the same
-partial-failure handling.
+what the machine has to run a storage node with, which operating system it
+boots, and which distribution installed the kubelet. One call, because a run
+wants all of it about one worker and every caller would otherwise repeat the
+same reads and the same partial-failure handling.
 
 ```go
 inv, err := inventory.Collect(ctx, inventory.Config{
@@ -610,6 +625,7 @@ inv, err := inventory.Collect(ctx, inventory.Config{
     // the mount table is the one that matters: see the warning below.
     SysfsRoot:     "/host/sys",
     ProcRoot:      "/host/proc",
+    HostRoot:      "/host",
     MountinfoPath: "/host/proc/1/mountinfo",
 
     // Omit these and the machine is read without a cluster around it.
@@ -628,6 +644,9 @@ inv.CPU.HyperThreading          // the kernel's own answer where it gives one
 inv.Memory.AvailableBytes       // what a process could get; not the same as FreeBytes
 inv.HugePages.AllocatedBytes()  // what is already set aside, across every size
 inv.Interfaces                  // .SpeedMbps, .Virtual, .PCIAddress, .NUMANode
+inv.HostOS.Distro               // ubuntu / rocky / rhel / talos, as os-release names it
+inv.HostOS.Family               // Debian / RedHat / SUSE / Alpine / Arch; which packaging
+inv.HostOS.Architecture         // uname's machine: x86_64, aarch64
 inv.Environment.Distribution    // OpenShift / Talos / K3s / Rancher / Vanilla
 inv.Environment.Evidence        // what it rested on, for the reviewer who corrects it
 
@@ -665,6 +684,13 @@ bridge, loopback, a disk behind a controller whose bus reports no node — and i
 is absent when everything was. Dropping the unplaceable would make the rollup
 read as the whole inventory while missing part of it.
 
+**Reading a host from inside a pod: name its root filesystem too.** Every
+container image carries an `/etc/os-release` of its own, so a collection that
+leaves `HostRoot` at its default reads the probe image's distribution and
+reports it as the worker's, with nothing about the answer looking wrong. The
+architecture is the exception and needs no mount: `uname` answers for the
+kernel, which is the host's.
+
 **Reading a host from inside a pod: name its mount table.** A pod has its own
 mount namespace, so `/proc/self/mountinfo` lists none of the host's mounts. A
 collection that leaves `MountinfoPath` at its default therefore finds nothing
@@ -673,22 +699,35 @@ one mistake in this whole flow that loses data. The host's table is PID 1's.
 Everything else defaults sensibly; this one does not, and it is a field rather
 than a guess because only the caller knows where it mounted `/proc`.
 
-**A worker's NVMe disks may be invisible to the disk reading entirely.** SPDK
-takes a controller by rebinding it from the kernel's `nvme` driver to
+**A worker's NVMe disks may be invisible to the disk reading entirely.** A
+controller is taken by rebinding it from the kernel's `nvme` driver to
 `uio_pci_generic` or `vfio-pci`, and from that moment the kernel presents no
-block device for it. On the fleet this was developed against, three of four
-workers had four NVMe controllers each on `uio_pci_generic` and not one NVMe
-block device between them — so a `class/block` scan reports "no NVMe disks"
-about a machine with four. `inv.NVMeControllers` is the second half of the
-answer, and `inv.ControllersTakenByUserspace()` is the question worth asking
-whenever a draft came back empty:
+block device for it. SPDK does this, and so does a hypervisor passing a disk
+through to a guest, a DPDK application, and anything else driving hardware from
+userspace. On the fleet this was developed against, three of four workers had
+four NVMe controllers each on `uio_pci_generic` and not one NVMe block device
+between them — so a `class/block` scan reports "no NVMe disks" about a machine
+with four. `inv.NVMeControllers` is the second half of the answer, and
+`inv.ControllersBoundToUserspace()` is the question worth asking whenever a
+draft came back empty.
+
+Which driver is bound comes from sysfs; whether anything is still driving it
+does not, and sysfs exports nothing that changes while a process holds the
+character device — that was measured rather than assumed. `Collect` therefore
+runs `pci.CheckHolders` and reports the answer per controller as `InUse`, and a
+controller it could not check leaves `InUse` false and records why in the error
+it returns. Dropping that error turns unknown into free, which is the one
+mistake here that takes a running guest's disk away:
 
 ```go
 if len(inv.AvailableDevices()) == 0 {
-    if taken := inv.ControllersTakenByUserspace(); len(taken) > 0 {
+    if bound := inv.ControllersBoundToUserspace(); len(bound) > 0 {
         // Not a machine without storage: a machine whose storage something
-        // else is already driving. pci.HeldBy says which process, and
-        // pci.BindTo gives a controller back — refusing while anything holds it.
+        // else has. Which of the two answers applies is per controller —
+        // InUse false is a leftover that pci.BindTo can reclaim, and InUse
+        // true is a disk in service, which may belong to something this
+        // product knows nothing about. pci.HeldBy names the process, and
+        // pci.BindTo refuses while anything holds it either way.
     }
 }
 ```
@@ -729,13 +768,17 @@ switch {
 case err != nil:
     // The device could not be read. Never treat this as an empty device.
 case reading.Content == blockdev.ContentBlank:
-    // Positively all zeros in the first and last mebibyte. The only reading
-    // that permits a format.
+    // Positively all zeros in the first mebibyte, with no signature matched
+    // anywhere. The only reading that permits a format.
 case reading.Content == blockdev.ContentFilesystem:
     // reading.Type names it. Mount it; never re-probe and never hand it to a
     // helper that formats on its own probe.
 case reading.Content == blockdev.ContentStackLayer:
     // An LVM physical-volume label. Activate the stack; do not pvcreate.
+case reading.Content == blockdev.ContentSimplyblock:
+    // This product's own storage superblock, from a deployment that is gone: a
+    // device a storage node is driving is bound to a userspace driver and is
+    // not a block device at all, so one readable here is held by nobody.
 default:
     // ContentForeign: somebody else's data. Refuse, and say what was found
     // through reading.Detail.
@@ -747,7 +790,9 @@ which is the path a node service takes rather than resolving one from `/dev`.
 
 _Today:_ the reading is built and covered by images captured from devices real
 tools formatted (`atlas-lib/blockdev/testdata/images`, regenerated by
-`hack/blockdev/capture-image.sh`). Its consumers are still on the blkid probe:
+`hack/blockdev/capture-image.sh`). The `alceml` image is the exception that has
+to be captured off a device a storage node wrote, since no formatting tool
+produces that superblock and neither blkid nor wipefs knows it. Its consumers are still on the blkid probe:
 the CSI driver's `NodeStageVolume` calls `BlkidProber` through `probeDiskFormat`
 in `csi-driver/internal/csi/node`, and moving it onto `Read` is Phase 1 of
 [`design-device-content-detection.md`](../operator/docs/designs/design-device-content-detection.md).
@@ -1109,8 +1154,11 @@ make on any device before staging it:
 // Refresh, probe the device's own identity, and if it is somebody else's
 // volume group, re-stamp it and rename the logical volume inside. Returns the
 // foreign VolumeGroup it found, or the zero value when there was nothing to
-// resolve.
-previous, err := mgr.ResolveClonedVolumeGroup(ctx, pv, volumeGroup, logicalVolumeName, poolName)
+// resolve. A group without the ownership tag is re-stamped only when the
+// recognizer knows its layout as the driver's from before the tag existed;
+// plans.RecognizeStack is the one the driver uses.
+previous, err := mgr.ResolveClonedVolumeGroup(ctx, pv, volumeGroup, logicalVolumeName,
+    plans.RecognizeStack(poolName), poolName)
 if err != nil {
     handleError(err)
 }
@@ -1131,40 +1179,36 @@ identically in every volume, such as VDO's pool. `ImportClonedVolumeGroup` and
 `RenameLogicalVolume` remain available for a recovery path that needs one step
 alone.
 
-VDO lives in the `lvm/vdo` subpackage rather than in `lvm` itself. It registers
-a provisioning handler at init, and `CreateLogicalVolume` consults the registry
-for the extra `lvcreate` flags a `LogicalVolumeDefinition` implies, so a caller
-asks for compression or deduplication instead of knowing how dm-vdo spells it.
-Importing the subpackage is what makes those flags reachable, and
-`vdo.UpdateVolume` toggles them on a pool that already exists.
+VDO is a built-in `VolumeProvisioning` handler in `lvm` itself (`vdo.go`),
+registered by this package's own `init` rather than requiring a caller to
+import a separate subpackage for the side effect: `CreateLogicalVolume`
+consults the registry for the extra `lvcreate` flags a `LogicalVolumeDefinition`
+asking for compression or deduplication implies, so a caller spells neither
+`--type vdo` nor `y`/`n` itself. A forgotten import used to be how this
+degenerated silently to a plain linear volume; making the registration
+unconditional is what closed that gap.
 
 `RemoveOrphanedDMNodes` is the fallback when the backing device is already gone
 and `RemoveVolumeGroup`/`DeactivateVolumeGroup` can no longer read the metadata
 they need: it clears the live dm nodes directly, retrying across a few passes so
-removing a dependent unblocks what it was blocking.
+removing a dependent unblocks what it was blocking. `HasOrphanedDMNodes` answers
+the same listing without removing anything, for a caller — `volstack`'s own
+`lvmVolumeGroup` layer — that has to tell "the group is gone" from "the group's
+members are gone but it is still mapped" with no member device left to read.
 
-`lvm/vdo` also holds the whole per-volume stack lifecycle a caller actually
-drives, not only the provisioning handler: `CreateOrAttach` (idempotent
-create-or-reactivate), `ResolveClone` (a thin wrapper over
-`ResolveClonedVolumeGroup`, naming VDO's own volume group/pool convention),
-`Deactivate`/`Remove` (each with its own rule for when an unreachable backing
-device falls back to `RemoveOrphanedDMNodes`: `Deactivate` only on that specific
-failure, `Remove` unconditionally, since one is trying to preserve the volume
-and the other is already destroying it), `Grow`, and `SetFeatures` (a
-lvolID-keyed wrapper over `UpdateVolume`). Every one of them is keyed by
-lvolID alone. The volume group/pool naming convention stays internal to this
-package rather than leaking to a caller. None of it references a Kubernetes
-type: it is node-level orchestration that happens to live in a CSI driver
-today, not CSI-shaped logic, and `Logger` (a package-level `*slog.Logger`,
-nil-safe) is how a caller gets its own log format without this package taking
-on a Kubernetes-specific logging dependency.
+`ForgetDevice` runs `lvmdevices --deldev` against one device, which is the only
+thing that prunes an entry from `/etc/lvm/devices/system.devices`. Nothing else
+does, so a node otherwise accumulates one stale entry per device that went away
+without a clean teardown. It is hygiene rather than correctness, and the one
+caller is the release that already had to fall back to the dm-node cleanup
+above, which is the release whose device is gone for good.
 
-_Today:_ `lvm/vdo` is the only in-tree consumer. The CSI driver's client-side
-VDO support (`csi-driver/internal/mount/vdo.go`) is the code this package was
-extracted from, and now just wires `vdo.CreateOrAttach`/`ResolveClone`/
-`Deactivate`/`Remove`/`Grow` into `NodeStageVolume`/`NodeUnstageVolume`/
-`NodeExpandVolume`. A striped LVM volume group across several members would use
-`CreateVolumeGroup`'s variadic device-path list the same way.
+The per-volume stack lifecycle PR #402 originally built as `lvm/vdo`
+(`CreateOrAttach`, `ResolveClone`, `Deactivate`, `Remove`, `Grow`,
+`SetFeatures`) retired once `volstack`'s three LVM layers absorbed it (issue
+#277, below): each of those operations is now one layer's `Ensure`, `Release`,
+`Destroy`, or `Grow`, composed through the runner rather than called directly,
+and the flat package was deleted with nothing left importing it.
 
 #### Bring up a volume's stack
 
@@ -1194,14 +1238,23 @@ runner := volstack.NewRunner(volstack.NewStore("/var/lib/simplyblock/stacks"))
 artifact, err := runner.Up(ctx, handle.String(), plan)
 ```
 
-There are four shapes, and they are the design's plan table: `RawBlock`
+There are five shapes, and they are the design's plan table: `RawBlock`
 (`fabric` alone, which is raw block mode as a shorter plan rather than a flag
 inside a stage function), `Plain` (`fabric` → `filesystem`), `LVM` (`fabric` →
 `lvmPhysicalVolume` → `lvmVolumeGroup` → `lvmLogicalVolume` → `filesystem`, for
-client-side deduplication or compression), and `Striped` (the same four above a
-`members` composite, for a volume assembled over several namespaces). The last
-two take a `LogicalVolumeOptions`, which is the only thing separating a linear
-volume from a VDO or a striped one: one layer, three definitions.
+client-side deduplication or compression), `LVMRawBlock` (the same without the
+filesystem, because what deduplicates a volume is the logical volume rather than
+the filesystem over it), and `Striped` (the LVM layers above a `members`
+composite, for a volume assembled over several namespaces). The last three take
+a `LogicalVolumeOptions`, which is the only thing separating a linear volume
+from a VDO or a striped one: one layer, three definitions.
+
+`LogicalVolumeOptions.PoolName` reaches two layers. The logical-volume layer
+takes it as `lvcreate`'s `<vg>/<pool>` target, and the physical-volume layer
+takes it as a name to leave alone when it resolves a clone: the pool is
+structural and named identically in every volume's group, so a resolution that
+did not know about it would rename the pool instead of the volume carrying the
+source's name.
 
 Deciding which shape a volume gets stays with the consumer, because that answer
 comes from a StorageClass, a volume capability, and the node's role for the
@@ -1218,13 +1271,18 @@ Building a plan reaches nothing. It resolves no device, runs no command, and
 reads no sysfs, so a consumer can unit-test the selection it makes and only the
 runner needs a host.
 
-_Today:_ nothing in the operator or the CSI driver imports `volstack` yet. The
-on-node integration suite (`test/integration/onnode`) is the only caller, and it
-fills the seams with the implementations that ship: nvme-cli, the sysfs
-resolvers, `lvm.Manager`, and `blockdev.Prober`. `NodeStageVolume` still
-assembles its own fabric connect, `mkfs`, and mount in
-`csi-driver/internal/csi/node`, which is the call site the `Plain` and `LVM`
-shapes are meant to replace.
+_Today:_ the CSI node service is the consumer. `csi-driver/internal/csi/node`
+builds the seams once in `stack.go`, selects one of the four single-namespace
+rows per volume in `plan.go`, and every node RPC on the data path is one runner call
+against the result: `NodeStageVolume` is `Up`, `NodeUnstageVolume` is `Down`,
+`NodePublishVolume` and a restage are `Heal`, `NodeExpandVolume` is `Grow`, and
+an unstage of a volume that is being deleted is the one caller of `Destroy`. A
+class asking for client-side compression or deduplication is what selects `LVM`,
+with `LogicalVolumeOptions` carrying the VDO pool name and the capability a node
+has to advertise. The on-node integration suite (`test/integration/onnode`) is
+the other caller, and it fills the seams with the implementations that ship:
+nvme-cli, the sysfs resolvers, `lvm.Manager`, and `blockdev.Prober`. The
+`Striped` shape has no consumer yet.
 
 ### Operator ↔ CSI link
 
@@ -1377,6 +1435,28 @@ defer deferrers.Close(resp.Body)
 defer deferrers.Run(cancelWatch)
 ```
 
+#### Bound a call that blocks in the kernel
+
+A sysfs read, an ioctl, a device open, or the wait for a child process can sit
+in the kernel until a wedged controller is torn down, and no context reaches it.
+Run it under `bounded`, which gives up at the deadline with an error wrapping
+`context.DeadlineExceeded`, and fails at once while an earlier call on the same
+key is still stuck:
+
+```go
+b, err := bounded.Call(path, bounded.ReadTimeout, func() ([]byte, error) {
+    return os.ReadFile(path)
+})
+
+// nvme-cli: the key names the target and never the secrets on the command line.
+out, err := bounded.Output(ctx, bounded.CommandTimeout, "nvme list", "nvme", "list", "-o", "json")
+```
+
+Everything in `nvme` and `nvmeof` that touches the kernel already goes through
+it, so a resolver or a connector never needs wrapping again.
+
+_Today:_ `csi-driver/internal/initiator/initiator.go` (`execNVMeQuery`).
+
 #### Validate user-supplied outbound URLs
 
 Before the operator sends a request to one (e.g., a Prometheus endpoint from a
@@ -1388,7 +1468,7 @@ if err := net.ValidateExternalURL(spec.PrometheusURL); err != nil {
 }
 ```
 
-_Today:_ `operator/internal/controller/simplyblockstoragecluster_controller.go`.
+_Today:_ `operator/internal/controllers/cluster/storagecluster_controller.go`.
 
 ### Testing against the seams
 

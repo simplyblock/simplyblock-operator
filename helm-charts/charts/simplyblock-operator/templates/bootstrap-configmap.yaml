@@ -1,0 +1,37 @@
+# What this installation states about the one discovery run a fresh install
+# performs by itself.
+#
+# The operator raises that run, not this chart, so what the chart renders is a
+# document the operator reads rather than the OperatorOps itself. An object
+# rendered here would be applied in the same pass as the operator Deployment,
+# before the operator's own admission webhook is serving, and `helm uninstall`
+# would delete a finalizer-holding object while deleting the controller that
+# releases it.
+#
+# It renders for every profile, and the profile decides what is in it rather than
+# whether it exists. An absent ConfigMap already means something: an
+# installation predating this file, which keeps the behavior it was installed
+# with. So a managed or empty installation has to say that it raises no run
+# rather than saying nothing.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: simplyblock-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    storage.simplyblock.io/component: bootstrap
+data:
+{{- if eq .Values.deployment.profile "standalone" }}
+  # The chart's own `discovery` values, verbatim: what an administrator writes
+  # here and what the operator parses are one document, so the values schema
+  # validates exactly what is read.
+  bootstrap.yaml: |
+    {{- toYaml .Values.discovery | nindent 4 }}
+{{- else }}
+  # Under managed, the cluster that manages this one raises the discovery run, in
+  # the namespace it chooses for the installation. Under empty, the administrator
+  # writes the cluster. This operator raises no run of its own in either.
+  bootstrap.yaml: |
+    enabled: false
+{{- end }}

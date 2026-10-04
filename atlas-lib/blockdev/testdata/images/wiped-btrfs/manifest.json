@@ -1,0 +1,16 @@
+{
+  "name": "wiped-btrfs",
+  "tool": "mkfs.btrfs",
+  "tool_version": "mkfs.btrfs, part of btrfs-progs v6.14",
+  "command": "mkfs.btrfs -q -f, then wipefs -a",
+  "device_size": 268435456,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-30T16:15:49Z",
+  "captured_on": "Debian GNU/Linux 13 (trixie), kernel 6.12.0-142.el10.x86_64",
+  "blkid": "",
+  "head_sha256": "54220579d2fd473874d6aa16e8a4d8d2a3875877a8866d810003cdc633b60ad8",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "filled": true,
+  "note": "wipefs -a reported: 8 bytes were erased at offset 0x00010040 (btrfs): 5f 42 48 52 66 53 5f 4d. "
+}

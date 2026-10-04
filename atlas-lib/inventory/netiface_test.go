@@ -10,7 +10,14 @@
 
 package inventory
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+)
 
 // netHost carries one 25 GbE NIC that is up, one 10 GbE NIC whose link is down,
 // a CNI bridge, and loopback.
@@ -83,7 +90,7 @@ func byName(t *testing.T, ifaces []Interface, name string) Interface {
 func TestReadInterfacesReportsAPhysicalNICWhole(t *testing.T) {
 	root := netHost().write(t)
 
-	ifaces, err := ReadInterfaces(Config{SysfsRoot: root, ProcRoot: root})
+	ifaces, err := ReadInterfaces(syntheticHost(root))
 	if err != nil {
 		t.Fatalf("read the interfaces: %v", err)
 	}
@@ -99,8 +106,9 @@ func TestReadInterfacesReportsAPhysicalNICWhole(t *testing.T) {
 		Driver:     "mlx5_core",
 		PCIAddress: "0000:3b:00.0",
 		NUMANode:   0,
+		Kind:       LinkPhysical,
 	}
-	if got := byName(t, ifaces, "eth0"); got != want {
+	if got := byName(t, ifaces, "eth0"); !reflect.DeepEqual(got, want) {
 		t.Errorf("read %+v, want %+v", got, want)
 	}
 }
@@ -112,7 +120,7 @@ func TestReadInterfacesReportsNoSpeedForALinkThatIsDown(t *testing.T) {
 	// nobody was going to use.
 	root := netHost().write(t)
 
-	ifaces, err := ReadInterfaces(Config{SysfsRoot: root, ProcRoot: root})
+	ifaces, err := ReadInterfaces(syntheticHost(root))
 	if err != nil {
 		t.Fatalf("read the interfaces: %v", err)
 	}
@@ -135,7 +143,7 @@ func TestReadInterfacesReportsNoSpeedForALinkThatIsDown(t *testing.T) {
 func TestReadInterfacesMarksTheVirtualOnesAsVirtual(t *testing.T) {
 	root := netHost().write(t)
 
-	ifaces, err := ReadInterfaces(Config{SysfsRoot: root, ProcRoot: root})
+	ifaces, err := ReadInterfaces(syntheticHost(root))
 	if err != nil {
 		t.Fatalf("read the interfaces: %v", err)
 	}
@@ -165,7 +173,7 @@ func TestReadInterfacesMarksTheVirtualOnesAsVirtual(t *testing.T) {
 func TestReadInterfacesIsOrderedByName(t *testing.T) {
 	root := netHost().write(t)
 
-	ifaces, err := ReadInterfaces(Config{SysfsRoot: root, ProcRoot: root})
+	ifaces, err := ReadInterfaces(syntheticHost(root))
 	if err != nil {
 		t.Fatalf("read the interfaces: %v", err)
 	}
@@ -185,11 +193,275 @@ func TestReadInterfacesIsOrderedByName(t *testing.T) {
 func TestReadInterfacesReportsNoneRatherThanFailingWithoutTheClassDirectory(t *testing.T) {
 	root := fixture{files: map[string]string{"meminfo": "MemTotal: 1024 kB"}}.write(t)
 
-	ifaces, err := ReadInterfaces(Config{SysfsRoot: root, ProcRoot: root})
+	ifaces, err := ReadInterfaces(syntheticHost(root))
 	if err != nil {
 		t.Fatalf("read the interfaces of a tree without class/net: %v", err)
 	}
 	if len(ifaces) != 0 {
 		t.Errorf("read %d interfaces from a tree with no class/net", len(ifaces))
+	}
+}
+
+// A bridge is read from the directory the kernel exports for one, not guessed
+// from a name: br0 and cni0 and docker0 are conventions, and a fleet is free to
+// name its bridge anything.
+func TestABridgeIsReadFromItsOwnDirectory(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "sys", "class", "net")
+	for _, name := range []string{"eth0", "weird-name"} {
+		if err := os.MkdirAll(filepath.Join(base, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(base, "weird-name", "bridge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ifaces, err := ReadInterfaces(syntheticHost(filepath.Join(root, "sys")))
+	if err != nil {
+		t.Fatalf("read the interfaces: %v", err)
+	}
+
+	byName := map[string]Interface{}
+	for _, iface := range ifaces {
+		byName[iface.Name] = iface
+	}
+	if !byName["weird-name"].Bridge {
+		t.Error("an interface exporting a bridge directory was not read as a bridge")
+	}
+	if byName["eth0"].Bridge {
+		t.Error("an interface with no bridge directory was read as a bridge")
+	}
+}
+
+// The addresses come from the reader rather than from sysfs, which carries none.
+func TestTheAddressesComeFromTheReader(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "sys", "class", "net")
+	for _, name := range []string{"eth0", "eth1"} {
+		if err := os.MkdirAll(filepath.Join(base, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ifaces, err := ReadInterfaces(Config{
+		SysfsRoot: filepath.Join(root, "sys"),
+		InterfaceAddresses: func() (map[string][]string, error) {
+			return map[string][]string{"eth0": {"192.168.10.113", "fe80::1"}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("read the interfaces: %v", err)
+	}
+
+	byName := map[string]Interface{}
+	for _, iface := range ifaces {
+		byName[iface.Name] = iface
+	}
+	if got := byName["eth0"].Addresses; len(got) != 2 || got[0] != "192.168.10.113" {
+		t.Errorf("eth0 carries %v", got)
+	}
+	if got := byName["eth1"].Addresses; len(got) != 0 {
+		t.Errorf("eth1 carries %v, want none", got)
+	}
+}
+
+// A reader that fails costs the addresses and not the interfaces, because a
+// machine whose addresses could not be read still has NICs worth reporting.
+func TestAFailedAddressReadStillReportsTheInterfaces(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sys", "class", "net", "eth0"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ifaces, err := ReadInterfaces(Config{
+		SysfsRoot: filepath.Join(root, "sys"),
+		InterfaceAddresses: func() (map[string][]string, error) {
+			return nil, errors.New("no permission to read the namespace")
+		},
+	})
+	if err != nil {
+		t.Fatalf("read the interfaces: %v", err)
+	}
+	if len(ifaces) != 1 || ifaces[0].Name != "eth0" {
+		t.Fatalf("read %+v, want the one interface", ifaces)
+	}
+	if len(ifaces[0].Addresses) != 0 {
+		t.Errorf("addresses were invented: %v", ifaces[0].Addresses)
+	}
+}
+
+// A reading of a captured tree carries only what the tree declares.
+//
+// sysfs holds no addresses, so the reader supplies them, and its default
+// answers from this process's own network namespace. A test that reads a
+// fixture without naming a reader therefore asserts against whatever the
+// machine running it has configured, and it does so silently: the fixture's
+// interfaces carry the ordinary names, so any host with an `eth0` or a `lo` of
+// its own fills them in. That is how this suite passed on a developer's machine
+// and failed on a runner, which had both.
+func TestAFixtureTakesNoAddressesFromTheRunningHost(t *testing.T) {
+	ifaces, err := ReadInterfaces(syntheticHost(netHost().write(t)))
+	if err != nil {
+		t.Fatalf("read the interfaces: %v", err)
+	}
+	if len(ifaces) == 0 {
+		t.Fatal("the fixture produced no interfaces to check")
+	}
+	for _, iface := range ifaces {
+		if len(iface.Addresses) != 0 {
+			t.Errorf("%s carries %v, which the fixture does not declare and the host does",
+				iface.Name, iface.Addresses)
+		}
+	}
+}
+
+// TestAnOpenShiftWorkerReadsItsNodeBridgeAsVirtual is the reading a real
+// OVN-Kubernetes host produces, and the reason a caller cannot decide what an
+// interface is for from its kind.
+//
+// br-ex carries the address the cluster reaches the machine on. It resolves
+// under devices/virtual and exports no bridge directory, so it reads as virtual,
+// exactly as an unnamed veth does. A caller that refused a virtual device named
+// the fastest physical NIC instead and handed the control plane an address
+// nothing else on the machine answers to (2026-09-20).
+func TestAnOpenShiftWorkerReadsItsNodeBridgeAsVirtual(t *testing.T) {
+	root := hostFixture(t, "okd-worker")
+
+	ifaces, err := ReadInterfaces(syntheticHost(root))
+	if err != nil {
+		t.Fatalf("ReadInterfaces: %v", err)
+	}
+
+	byName := make(map[string]Interface, len(ifaces))
+	for _, iface := range ifaces {
+		byName[iface.Name] = iface
+	}
+
+	brex, ok := byName["br-ex"]
+	if !ok {
+		t.Fatal("br-ex is missing from the reading")
+	}
+	if !brex.Virtual {
+		t.Error("br-ex reads as backed by hardware, and it resolves under devices/virtual")
+	}
+	if brex.Bridge {
+		t.Error("br-ex reads as a bridge, and it exports no bridge directory")
+	}
+	if brex.Kind == LinkBridge {
+		t.Errorf("br-ex is kind %q; nothing in sysfs says bridge, so nothing may conclude it", brex.Kind)
+	}
+
+	// The physical NIC the old rule preferred, for the contrast that makes the
+	// point: it is the one with a device link and a speed, and it is not the one
+	// the node is reached on.
+	nic, ok := byName["enp2s0f0"]
+	if !ok {
+		t.Fatal("enp2s0f0 is missing from the reading")
+	}
+	if nic.Virtual {
+		t.Error("enp2s0f0 reads as virtual, and it resolves under a PCI device")
+	}
+	if nic.SpeedMbps == 0 {
+		t.Error("enp2s0f0 reports no speed, and the capture has one")
+	}
+}
+
+// TestAPeerDeviceIsToldFromAnOtherwiseIdenticalVirtualOne is the reading that
+// separates the two devices sysfs otherwise describes the same way.
+//
+// br-ex and a pod's veth both resolve under devices/virtual, export no bridge
+// directory and carry no driver link, so nothing about what they are separates
+// them. What does is iflink: a veth is one half of a pair and names its peer, so
+// its iflink is the peer's index and not its own. Everything else points at
+// itself.
+//
+// The distinction is load-bearing for anything choosing an interface to bind: a
+// caller that refused every virtual device to keep pod links out also refused
+// the bridge the node's own address lives on (2026-09-20).
+func TestAPeerDeviceIsToldFromAnOtherwiseIdenticalVirtualOne(t *testing.T) {
+	root := hostFixture(t, "okd-worker")
+
+	ifaces, err := ReadInterfaces(syntheticHost(root))
+	if err != nil {
+		t.Fatalf("ReadInterfaces: %v", err)
+	}
+	byName := make(map[string]Interface, len(ifaces))
+	for _, iface := range ifaces {
+		byName[iface.Name] = iface
+	}
+
+	// The captured host's OVN pod links: ifindex 14, iflink 2.
+	veth, ok := byName["3070a31ea98cce0"]
+	if !ok {
+		t.Fatal("the captured host's veth is missing from the reading")
+	}
+	if !veth.Peered {
+		t.Error("a veth does not read as peered, so nothing tells it from the node's own bridge")
+	}
+
+	brex, ok := byName["br-ex"]
+	if !ok {
+		t.Fatal("br-ex is missing from the reading")
+	}
+	if brex.Peered {
+		t.Error("br-ex reads as peered, and its iflink is its own index")
+	}
+	for _, name := range []string{"enp2s0f0", "lo", "genev_sys_6081"} {
+		if iface, ok := byName[name]; ok && iface.Peered {
+			t.Errorf("%s reads as peered, and its iflink is its own index", name)
+		}
+	}
+}
+
+// TestAControllerNothingOwnsIsStillFound is the machine a failed deployment
+// walks away from.
+//
+// Binding an NVMe controller to a userspace driver takes its namespaces from the
+// kernel, and rebinding it to the kernel's own driver is how they come back. A run that unbinds and
+// then fails leaves the controller owned by nothing at all: no kernel driver, no
+// userspace driver, no block device, nothing under /dev. The disk is gone from
+// everything that looks for disks, and stays gone until somebody binds it by
+// hand.
+//
+// The PCI class is what keeps it findable, because the bus says what a device is
+// whoever is driving it. Captured from worker-0 of the lab fleet on 2026-09-20,
+// where two of three controllers had been left that way by the day's failed
+// adds.
+func TestAControllerNothingOwnsIsStillFound(t *testing.T) {
+	root := hostFixture(t, "okd-worker-unbound-nvme")
+
+	// Collect reports what it could not read rather than failing: this host's
+	// process table is not in the transcript, so the holder check has nothing to
+	// answer from. What the controllers are is read from sysfs regardless, and
+	// that is what this is about.
+	inv, err := Collect(context.Background(), syntheticHost(root))
+	if err != nil {
+		t.Logf("the reading reported: %v", err)
+	}
+
+	byAddress := make(map[string]string, len(inv.NVMeControllers))
+	for _, controller := range inv.NVMeControllers {
+		byAddress[controller.Address] = controller.Driver
+	}
+	if len(byAddress) != 3 {
+		t.Fatalf("found %d NVMe controllers, want the machine's 3: %v", len(byAddress), byAddress)
+	}
+
+	if driver := byAddress["0000:02:00.0"]; driver != "nvme" {
+		t.Errorf("the boot controller reads as driver %q, want nvme", driver)
+	}
+	// The two a failed add unbound. Nothing owns them, which is a different
+	// state from a userspace driver owning them and is the one that was
+	// invisible to everything downstream.
+	for _, address := range []string{"0000:01:00.0", "0000:0b:00.0"} {
+		driver, found := byAddress[address]
+		if !found {
+			t.Errorf("the controller at %s is missing, so the disk is gone from the inventory", address)
+			continue
+		}
+		if driver != "" {
+			t.Errorf("%s reads as driven by %q, and the capture has no driver link for it", address, driver)
+		}
 	}
 }

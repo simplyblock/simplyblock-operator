@@ -1,4 +1,10 @@
-{{- if .Values.operator.enabled }}
+{{- /*
+The class names the hostpath provisioner, so it is rendered only where this
+release installs one. A class whose provisioner is absent is advertised by
+`kubectl get storageclass` and binds nothing: a PVC pointed at it waits for a
+provisioner that is never coming, with nothing in the cluster saying why.
+*/}}
+{{- if .Values.controlplane.csiHostpathDriver.enabled }}
 ---
 apiVersion: storage.k8s.io/v1
 kind: StorageClass

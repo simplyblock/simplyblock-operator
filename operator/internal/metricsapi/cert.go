@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	metricsv1alpha2 "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -47,7 +48,7 @@ const metricsCertRotatorController = "metrics-apiserver-cert-rotator"
 //
 // The secrets grant is already held for the webhook certificate; apiservices is
 // new, and is the narrowest form of the grant: the CA bundle is written by
-// patching the one APIService object this operator owns.
+// patching the APIService objects this operator owns, one per served version.
 // +kubebuilder:rbac:groups=apiregistration.k8s.io,resources=apiservices,verbs=get;list;watch;update;patch
 
 // SetupCertificate provisions the aggregated API server's serving certificate
@@ -83,21 +84,49 @@ func SetupCertificate(mgr ctrl.Manager, namespace, certDir string) (chan struct{
 		// that name. controller-runtime rejects a second controller with a name
 		// it has seen, so leaving this empty does not produce a shared rotator:
 		// it fails the manager at startup and takes every reconciler with it.
-		ControllerName: metricsCertRotatorController,
-		SecretKey:      types.NamespacedName{Namespace: namespace, Name: utils.MetricsAPIServerCertName},
-		CertDir:        certDir,
-		CAName:         "simplyblock-operator-metrics-apiserver-ca",
-		CAOrganization: "simplyblock.io",
-		DNSName:        dnsName,
-		ExtraDNSNames:  []string{dnsName + ".cluster.local"},
-		IsReady:        ready,
-		Webhooks: []rotator.WebhookInfo{
-			{Name: utils.MetricsAPIServiceObject, Type: rotator.APIService},
-		},
+		ControllerName:         metricsCertRotatorController,
+		SecretKey:              types.NamespacedName{Namespace: namespace, Name: utils.MetricsAPIServerCertName},
+		CertDir:                certDir,
+		CAName:                 "simplyblock-operator-metrics-apiserver-ca",
+		CAOrganization:         "simplyblock.io",
+		DNSName:                dnsName,
+		ExtraDNSNames:          []string{dnsName + ".cluster.local"},
+		IsReady:                ready,
+		Webhooks:               apiServiceRotationTargets(),
 		RestartOnSecretRefresh: true,
 		RequireLeaderElection:  false,
 	}); err != nil {
 		return nil, fmt.Errorf("add the metrics apiserver cert rotator: %w", err)
 	}
 	return ready, nil
+}
+
+// metricsAPIServiceObjects are the APIService objects that register this group,
+// one per served version, named the way Kubernetes fixes an APIService's name:
+// <version>.<group>.
+//
+// The list is derived from the scheme rather than written down, because the two
+// have to agree. The kube-apiserver trusts the listener per APIService, so a
+// version that is served while its object carries no CA bundle is
+// Available=False and answers nothing. A version added to the scheme therefore
+// gets its bundle injected without anybody remembering to, and the manifest in
+// config/apiservice is what is left to remember.
+func metricsAPIServiceObjects() []string {
+	versions := Scheme.PrioritizedVersionsForGroup(metricsv1alpha2.GroupName)
+	names := make([]string, 0, len(versions))
+	for _, version := range versions {
+		names = append(names, version.Version+"."+version.Group)
+	}
+	return names
+}
+
+// apiServiceRotationTargets is [metricsAPIServiceObjects] in the shape
+// cert-controller takes.
+func apiServiceRotationTargets() []rotator.WebhookInfo {
+	names := metricsAPIServiceObjects()
+	targets := make([]rotator.WebhookInfo, 0, len(names))
+	for _, name := range names {
+		targets = append(targets, rotator.WebhookInfo{Name: name, Type: rotator.APIService})
+	}
+	return targets
 }

@@ -1,0 +1,91 @@
+# Builds simplyblock-upgrade, the API upgrade tool, for the platforms it runs on.
+#
+# It is not in the operator image: the tool is a prerequisite for running the
+# new operator, so shipping it inside that operator's image would put it behind
+# the pull it precedes (design-api-upgrade.md §29.4).
+#
+# It publishes nothing. The binaries are artifacts, and the check is that the
+# tool compiles.
+
+name: "Operator: Upgrade Tool Build"
+
+on:
+  push:
+    branches:
+      - "**"
+    paths:
+      - "operator/cmd/simplyblock-upgrade/**"
+      - "operator/internal/upgrade/**"
+      - "operator/api/**"
+      - "operator/go.mod"
+      - "operator/go.sum"
+      - "atlas-lib/**"
+      - "operator/Makefile"
+      - ".github/workflows/operator_upgrade_tool.yaml"
+  workflow_call:
+
+jobs:
+  build:
+    name: "Build (${{ matrix.goos }}/${{ matrix.goarch }})"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # The tool runs from a workstation or a jump host, so both operating
+        # systems and both architectures are built.
+        goos: [linux, darwin]
+        goarch: [amd64, arm64]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed # v5
+        with:
+          go-version-file: operator/go.mod
+          cache-dependency-path: operator/go.sum
+
+      # Through the Makefile, so a hand build and a CI build are the same build.
+      - name: Build
+        run: |
+          make -C operator build-upgrade \
+            UPGRADE_GOOS=${{ matrix.goos }} UPGRADE_GOARCH=${{ matrix.goarch }}
+
+      - name: Upload the binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: simplyblock-upgrade-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: operator/build/simplyblock-upgrade-${{ matrix.goos }}-${{ matrix.goarch }}
+          retention-days: 7
+
+  # The embedded CRDs are a copy of what controller-gen writes (§11), so they
+  # can go stale. This is operator_manifests.yaml's drift check applied to that
+  # copy.
+  embedded-crds:
+    name: "Embedded CRDs are current"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed # v5
+        with:
+          go-version-file: operator/go.mod
+          cache-dependency-path: operator/go.sum
+
+      - name: Regenerate the manifests and the embedded copy
+        run: make -C operator manifests
+
+      - name: Fail on drift
+        run: |
+          if ! git diff --exit-code -- operator/config/crd/bases operator/internal/upgrade/crds/manifests; then
+            echo "::error::The embedded CRDs are behind the generated ones. Run 'make -C operator manifests' and commit the result."
+            exit 1
+          fi

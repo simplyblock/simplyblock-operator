@@ -199,3 +199,43 @@ func minimalInventory() inventory.Inventory {
 		Devices: []blockdev.Candidate{oneFreeDisk()},
 	}
 }
+
+// The names this formula has always produced, pinned.
+//
+// Two processes compute them without telling each other, and one of the two is
+// a container image that a cluster may still be running from before an operator
+// upgrade. A change here is therefore not a refactor: the probe would write its
+// report under one name while the operator looked for a Job under another, and
+// the run would start a second probe on every worker.
+//
+// It was green before the formula moved to atlas-lib and is green after, which
+// is the whole of what it is for. It cannot be red for a defect, because there
+// is none — it exists to catch one being introduced.
+func TestObjectNameStillProducesTheNamesItAlwaysHas(t *testing.T) {
+	long := strings.Repeat("compute-node-with-a-long-name.", 10) + "worker-3.internal"
+
+	for _, tc := range []struct{ run, node, want string }{
+		{"oops-1", "worker-3", "sb-nodeprobe-oops-1-worker-3-089a1802"},
+		{"oops-1", "ip-10-0-1-23.eu-central-1.compute.internal",
+			"sb-nodeprobe-oops-1-ip-10-0-1-23.eu-central-1.compute-73596ea7"},
+		{"a", "b", "sb-nodeprobe-a-b-59b271ae"},
+		{"discovered-run", "WORKER_3", "sb-nodeprobe-discovered-run-worker-3-4701a101"},
+		{strings.Repeat("run", 40), strings.Repeat("node.", 60),
+			"sb-nodeprobe-runrunrunrunrunrunrunrunrunrunrunrunrunru-ea56b4cc"},
+		{"oops-1", long, "sb-nodeprobe-oops-1-compute-node-with-a-long-name.comp-99504060"},
+	} {
+		if got := ObjectName(tc.run, tc.node); got != tc.want {
+			t.Errorf("ObjectName(%q, ...) is now %q, and was %q", tc.run, got, tc.want)
+		}
+	}
+}
+
+// Every name carries the digest, including the ones that were never near the
+// limit. Sanitization is lossy and the run and the node join on a separator
+// both may contain, so two runs of one deployment can reach the same stem, and
+// the digest is the only thing that separates them.
+func TestObjectNameCarriesTheDigestEvenWhenItFits(t *testing.T) {
+	if a, b := ObjectName("oops-1", "worker-3"), ObjectName("oops", "1-worker-3"); a == b {
+		t.Errorf("run oops-1 on worker-3 and run oops on 1-worker-3 both wrote %q", a)
+	}
+}

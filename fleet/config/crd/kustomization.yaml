@@ -1,0 +1,11 @@
+# The fleet CRDs, as one kustomization. The list is maintained by hand: a kind
+# whose generated file is missing from it is silently absent from every install
+# path, and no gate catches that, because the generator's own output is in sync
+# either way.
+resources:
+- bases/fleet.simplyblock.io_storagefleets.yaml
+- bases/fleet.simplyblock.io_fleetmembers.yaml
+- bases/fleet.simplyblock.io_clusterdeployments.yaml
+- bases/fleet.simplyblock.io_driverdeployments.yaml
+- bases/fleet.simplyblock.io_storageclassdeployments.yaml
+- bases/fleet.simplyblock.io_fleetoperations.yaml

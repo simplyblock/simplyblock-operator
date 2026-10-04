@@ -22,10 +22,11 @@ const (
 )
 
 type mockVolume struct {
-	UUID   string
-	Name   string
-	Size   int64
-	Status string // defaults to "online" when empty
+	UUID    string
+	Name    string
+	Size    int64
+	Status  string // defaults to "online" when empty
+	GroupID string // consistency group id, "" for a non-member
 }
 
 // status returns the volume's reported status, defaulting to `online`.
@@ -49,6 +50,7 @@ type mockSBCLI struct {
 	mu        sync.Mutex
 	volumes   map[string]*mockVolume
 	snapshots map[string]*mockSnapshot
+	groups    map[string]*mockGroup
 
 	// failCreateOnce, when true, makes the next createVolume call respond with
 	// HTTP 500 without persisting the lvol. This mimics the control plane
@@ -107,6 +109,7 @@ func newMockSBCLI() *mockSBCLI {
 	m := &mockSBCLI{
 		volumes:   make(map[string]*mockVolume),
 		snapshots: make(map[string]*mockSnapshot),
+		groups:    make(map[string]*mockGroup),
 	}
 
 	mux := http.NewServeMux()
@@ -144,6 +147,22 @@ func newMockSBCLI() *mockSBCLI {
 	mux.HandleFunc(
 		"DELETE /api/v2/clusters/{clusterID}/storage-pools/{poolID}/snapshots/{snapshotID}/",
 		m.locked(m.handleDeleteSnapshot),
+	)
+	mux.HandleFunc(
+		"GET /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/members",
+		m.locked(m.handleGroupMembers),
+	)
+	mux.HandleFunc(
+		"POST /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/snapshots",
+		m.locked(m.handleTakeGroupSnapshot),
+	)
+	mux.HandleFunc(
+		"GET /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/snapshots/{seq}",
+		m.locked(m.handleGetGroupGeneration),
+	)
+	mux.HandleFunc(
+		"DELETE /api/v2/clusters/{clusterID}/consistency-groups/{groupID}/snapshots/{seq}",
+		m.locked(m.handleDeleteGroupGeneration),
 	)
 
 	m.srv = httptest.NewServer(mux)
@@ -225,6 +244,7 @@ func (m *mockSBCLI) handleGetVolume(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": volume.UUID, "name": volume.Name, "size": volume.Size, "status": volume.status(),
+		"group_id": volume.GroupID,
 	})
 }
 
@@ -426,4 +446,94 @@ func (m *mockSBCLI) createVolume(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Location", fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/",
 		sanityClusterID, sanityPoolUUID, newID))
 	w.WriteHeader(http.StatusCreated)
+}
+
+// --- consistency-group mock state (design §9, §10) ---
+
+type mockGenMember struct {
+	LvolID string
+	SnapID string
+	Ready  bool
+}
+
+type mockGroup struct {
+	UUID    string
+	Members []string // lvol UUIDs with an open epoch
+	LastSeq int
+	Gens    map[int][]mockGenMember
+}
+
+// seedGroup registers a group with the given member lvol UUIDs and stamps each
+// as a group member on its volume record.
+func (m *mockSBCLI) seedGroup(groupID string, memberUUIDs ...string) {
+	m.groups[groupID] = &mockGroup{UUID: groupID, Members: memberUUIDs, Gens: map[int][]mockGenMember{}}
+	for _, id := range memberUUIDs {
+		if v, ok := m.volumes[id]; ok {
+			v.GroupID = sanityClusterID + "/" + groupID
+		} else {
+			m.volumes[id] = &mockVolume{UUID: id, Name: id, Size: 1 << 30, GroupID: sanityClusterID + "/" + groupID}
+		}
+	}
+}
+
+func (m *mockSBCLI) handleGroupMembers(w http.ResponseWriter, r *http.Request) {
+	g := m.groups[r.PathValue("groupID")]
+	if g == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "group not found"})
+		return
+	}
+	rows := make([]map[string]any, 0, len(g.Members))
+	for _, id := range g.Members {
+		rows = append(rows, map[string]any{"lvol_id": id, "joined_seq": 1, "removed_seq": 0, "online": true})
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (m *mockSBCLI) generationJSON(g *mockGroup, seq int) map[string]any {
+	members := g.Gens[seq]
+	rows := make([]map[string]any, 0, len(members))
+	for _, mm := range members {
+		rows = append(rows, map[string]any{"lvol_id": mm.LvolID, "snapshot_id": mm.SnapID, "ready": mm.Ready})
+	}
+	return map[string]any{
+		"group_seq": seq, "created_at": 100, "expected": len(g.Members),
+		"present": len(members), "complete": len(members) >= len(g.Members) && len(g.Members) > 0,
+		"members": rows,
+	}
+}
+
+func (m *mockSBCLI) handleTakeGroupSnapshot(w http.ResponseWriter, r *http.Request) {
+	g := m.groups[r.PathValue("groupID")]
+	if g == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "group not found"})
+		return
+	}
+	g.LastSeq++
+	members := make([]mockGenMember, 0, len(g.Members))
+	for _, id := range g.Members {
+		members = append(members, mockGenMember{LvolID: id, SnapID: uuid.New().String(), Ready: true})
+	}
+	g.Gens[g.LastSeq] = members
+	writeJSON(w, http.StatusOK, m.generationJSON(g, g.LastSeq))
+}
+
+func (m *mockSBCLI) handleGetGroupGeneration(w http.ResponseWriter, r *http.Request) {
+	g := m.groups[r.PathValue("groupID")]
+	seq, _ := strconv.Atoi(r.PathValue("seq"))
+	if g == nil || g.Gens[seq] == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "generation not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, m.generationJSON(g, seq))
+}
+
+func (m *mockSBCLI) handleDeleteGroupGeneration(w http.ResponseWriter, r *http.Request) {
+	g := m.groups[r.PathValue("groupID")]
+	seq, _ := strconv.Atoi(r.PathValue("seq"))
+	if g == nil || g.Gens[seq] == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "generation not found"})
+		return
+	}
+	delete(g.Gens, seq)
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -4,7 +4,7 @@ import (
 	"os"
 
 	"github.com/simplyblock/atlas/ptr"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 const DefaultRebalancerImage = "quay.io/simplyblock-io/simplyblock-rebalancer:latest"
@@ -24,8 +24,8 @@ func defaultRebalancerImage() string {
 	return DefaultRebalancerImage
 }
 
-func GetConfig(spec *simplyblockv1alpha1.VolumeMigrationSettings) simplyblockv1alpha1.VolumeMigrationSettings {
-	return ptr.From(spec, simplyblockv1alpha1.VolumeMigrationSettings{
+func GetConfig(spec *simplyblockv1alpha2.VolumeMigrationSettings) simplyblockv1alpha2.VolumeMigrationSettings {
+	return ptr.From(spec, simplyblockv1alpha2.VolumeMigrationSettings{
 		RebalancerImage: ptr.To(defaultRebalancerImage()),
 	})
 }

@@ -1,0 +1,17 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: discover-filt-11
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    deviceFilter:
+      pcieAllowList:
+      - 0000:5E:00.0
+      - 0000:5F:00.0
+status:
+  environment: K3s
+  step: {}
+  workers:
+  - worker-01

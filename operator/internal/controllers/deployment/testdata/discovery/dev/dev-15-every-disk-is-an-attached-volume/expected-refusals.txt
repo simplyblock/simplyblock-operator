@@ -1,0 +1,4 @@
+worker-01/nvme3n1: declined by simplyblock volume because it is a simplyblock logical volume of cluster c30a691a-1d2e-4f3a-9b8c-5d6e7f809a1b, which this fleet already serves
+worker-01/nvme4n1: declined by simplyblock volume because it is a simplyblock logical volume of cluster c30a691a-1d2e-4f3a-9b8c-5d6e7f809a1b, which this fleet already serves
+worker-01/nvme5n1: declined by simplyblock volume because it is a simplyblock logical volume of cluster c30a691a-1d2e-4f3a-9b8c-5d6e7f809a1b, which this fleet already serves
+worker-01: declined by has devices because no device of it survived the device rules

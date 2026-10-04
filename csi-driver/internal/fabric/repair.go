@@ -426,8 +426,8 @@ func targetsFromConnections(nqn string, conns []*controlplane.LvolConnectResp) [
 // produce a device has no business deciding an endpoint is stale, and the two
 // defects that matter at attach time (a subsystem exporting no namespace, and a
 // duplicate head) need no endpoint comparison at all.
-func RepairAttach(ctx context.Context, subsystemNQN string, nsID int) bool {
-	sel := nvme.DeviceSelector{NQN: subsystemNQN, NSID: nvme.NamespaceID(nsID)}
+func RepairAttach(ctx context.Context, subsystemNQN string, nsID nvme.NamespaceID) bool {
+	sel := nvme.DeviceSelector{NQN: subsystemNQN, NSID: nsID}
 	_, actions := defaultRepairer.healSubsystem(ctx, sel, nil)
 	for _, a := range actions {
 		if a.repaired {

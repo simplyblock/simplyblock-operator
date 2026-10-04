@@ -432,3 +432,52 @@ func TestNodeCapacityIsKeyedByTheSnodeLabel(t *testing.T) {
 		t.Errorf("query %q mixes entity kinds", api.queries[0])
 	}
 }
+
+// A cluster's sample is keyed by the same label every query already filters on,
+// so the family groups to exactly one entry and the caller is handed it rather
+// than a map of size one.
+func TestClusterCapacityReturnsTheOneSample(t *testing.T) {
+	labels := map[string]string{"cluster": testCluster}
+	api := &stubAPI{vector: model.Vector{
+		sample("cluster_size_total", labels, 21474836480),
+		sample("cluster_size_used", labels, 2160066560),
+		sample("cluster_size_free", labels, 19314769920),
+		sample("cluster_size_prov", labels, 32212254720),
+		sample("cluster_size_util", labels, 10),
+		sample("cluster_date", labels, 1788384958),
+	}}
+
+	got, ok, err := NewWithAPI(api).ClusterCapacity(context.Background(), testCluster)
+	if err != nil {
+		t.Fatalf("ClusterCapacity: %v", err)
+	}
+	if !ok {
+		t.Fatal("a cluster with every gauge present should report a reading")
+	}
+	if got.Total != 21474836480 || got.Used != 2160066560 || got.Free != 19314769920 {
+		t.Errorf("sizes = total %d, used %d, free %d", got.Total, got.Used, got.Free)
+	}
+	if got.Provisioned != 32212254720 || got.UtilizationPercent != 10 {
+		t.Errorf("provisioned = %d, util = %d", got.Provisioned, got.UtilizationPercent)
+	}
+	if want := time.Unix(1788384958, 0).UTC(); !got.SampledAt.Equal(want) {
+		t.Errorf("SampledAt = %s, want %s", got.SampledAt, want)
+	}
+	if !strings.Contains(api.queries[0], "cluster_size_total") {
+		t.Errorf("query %q does not ask for the cluster metrics", api.queries[0])
+	}
+}
+
+// An exporter that has never measured the cluster yields no reading, rather
+// than a reading of zero. A zero is what an empty cluster reports.
+func TestClusterCapacityWithNoSeriesHasNoReading(t *testing.T) {
+	api := &stubAPI{}
+
+	_, ok, err := NewWithAPI(api).ClusterCapacity(context.Background(), testCluster)
+	if err != nil {
+		t.Fatalf("ClusterCapacity: %v", err)
+	}
+	if ok {
+		t.Error("a cluster with no series should report no reading")
+	}
+}

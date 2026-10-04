@@ -1,4 +1,3 @@
-{{- if .Values.csiLink.enabled }}
 # The endpoint the CSI node and controller pods dial to reach the operator.
 #
 # The connection runs this way round on purpose: nothing listens on a node, so
@@ -25,4 +24,3 @@ spec:
       port: {{ .Values.csiLink.port }}
       targetPort: csi-link
       protocol: TCP
-{{- end }}

@@ -17,7 +17,12 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
 
-const tb = uint64(1) << 40
+const (
+	mib = uint64(1) << 20
+	gib = uint64(1) << 30
+	tib = uint64(1) << 40
+	tb  = tib
+)
 
 // admit runs one rule and returns its verdict and reason.
 func admit(rule DeviceRule, device nodeprobe.Device) (bool, string) {
@@ -57,7 +62,7 @@ func TestAvailableRuleWaivesOnlyAPartitionTable(t *testing.T) {
 
 func TestClassRuleRefusesADeviceItCannotName(t *testing.T) {
 	nvme := disk("nvme0n1", "0000:5e:00.0", 0, tb)
-	virtio := blockDisk("vda", 0, tb)
+	virtio := blockDisk("vda", tb)
 
 	if ok, _ := admit(ClassRule{Class: ClassNVMe}, nvme); !ok {
 		t.Error("an NVMe run declined an NVMe disk")
@@ -154,12 +159,12 @@ func TestSizeRuleBoundsBothEnds(t *testing.T) {
 
 	if ok, why := admit(rule, small); ok {
 		t.Error("admitted a disk below the range")
-	} else if !strings.Contains(why, "range starts at") {
+	} else if !strings.Contains(why, "starts above it") {
 		t.Errorf("the reason %q does not say which end it missed", why)
 	}
 	if ok, why := admit(rule, large); ok {
 		t.Error("admitted a disk above the range")
-	} else if !strings.Contains(why, "range ends at") {
+	} else if !strings.Contains(why, "ends below it") {
 		t.Errorf("the reason %q does not say which end it missed", why)
 	}
 	if ok, _ := admit(rule, disk("nvme2n1", "0000:af:00.0", 0, 2*tb)); !ok {
@@ -214,8 +219,8 @@ func TestWorkerHasDevicesExplainsAMachineWhoseDisksAreAlreadyDriven(t *testing.T
 	// full of disks.
 	worker := report("worker-1")
 	worker.NVMeControllers = []nodeprobe.Controller{
-		{Address: "0000:00:02.0", Driver: "uio_pci_generic", TakenByUserspace: true},
-		{Address: "0000:00:03.0", Driver: "uio_pci_generic", TakenByUserspace: true},
+		{Address: "0000:00:02.0", Driver: "uio_pci_generic", InUse: ptr.To(true)},
+		{Address: "0000:00:03.0", Driver: "uio_pci_generic", InUse: ptr.To(true)},
 	}
 
 	ok, why := (WorkerHasDevices{}).Admit(worker, nil)
@@ -242,18 +247,18 @@ func TestClassOfDefaultsToNVMe(t *testing.T) {
 		t.Errorf("a run with no filter scans %q, want %q: NVMe is what every "+
 			"deployment before the block class was built out of", got, ClassNVMe)
 	}
-	if got := ClassOf(&simplyblockv1alpha2.DeviceFilter{}); got != ClassNVMe {
-		t.Errorf("an empty filter scans %q, want %q", got, ClassNVMe)
+	if got := ClassOf(&simplyblockv1alpha2.DiscoverSpec{}); got != ClassNVMe {
+		t.Errorf("an empty run scans %q, want %q", got, ClassNVMe)
 	}
-	if got := ClassOf(&simplyblockv1alpha2.DeviceFilter{
+	if got := ClassOf(&simplyblockv1alpha2.DiscoverSpec{
 		EnableLogicalBlockDevices: ptr.To(true),
 	}); got != ClassBlock {
-		t.Errorf("a filter asking for block devices scans %q, want %q", got, ClassBlock)
+		t.Errorf("a run asking for block devices scans %q, want %q", got, ClassBlock)
 	}
-	if got := ClassOf(&simplyblockv1alpha2.DeviceFilter{
+	if got := ClassOf(&simplyblockv1alpha2.DiscoverSpec{
 		EnableLogicalBlockDevices: ptr.To(false),
 	}); got != ClassNVMe {
-		t.Errorf("a filter declining block devices scans %q, want %q", got, ClassNVMe)
+		t.Errorf("a run declining block devices scans %q, want %q", got, ClassNVMe)
 	}
 }
 
@@ -309,6 +314,154 @@ func TestParseSizeRange(t *testing.T) {
 	for _, bad := range []string{"", "2T-100G", "abc-2T", "100G-xyz"} {
 		if _, _, err := ParseSizeRange(bad); err == nil {
 			t.Errorf("parsed %q as a size range", bad)
+		}
+	}
+}
+
+// A controller nothing is using can be reclaimed, and one something is using
+// cannot. The refusal has to say which, because the two ask a reviewer for
+// opposite things: reclaim these disks, or leave that machine alone.
+//
+// The holder need not be simplyblock. vfio-pci is also how a disk is passed
+// through to a guest, so a machine whose controllers are in use may be serving
+// something this product knows nothing about, and a refusal that read as
+// "leftovers, take them" would be an instruction to break it.
+func TestWorkerHasDevicesSeparatesReclaimableFromInUse(t *testing.T) {
+	idle := report("worker-1")
+	idle.NVMeControllers = []nodeprobe.Controller{
+		{Address: "0000:00:02.0", Driver: "uio_pci_generic", InUse: ptr.To(false)},
+		{Address: "0000:00:03.0", Driver: "uio_pci_generic", InUse: ptr.To(false)},
+	}
+
+	_, why := (WorkerHasDevices{}).Admit(idle, nil)
+	if !strings.Contains(why, "nothing is using them") {
+		t.Errorf("an idle binding is not reported as reclaimable: %q", why)
+	}
+
+	busy := report("worker-2")
+	busy.NVMeControllers = []nodeprobe.Controller{
+		{Address: "0000:00:04.0", Driver: "vfio-pci", InUse: ptr.To(true)},
+	}
+
+	_, why = (WorkerHasDevices{}).Admit(busy, nil)
+	if !strings.Contains(why, "in use") {
+		t.Errorf("a held controller is not reported as in use: %q", why)
+	}
+	if strings.Contains(why, "nothing is using them") {
+		t.Errorf("a held controller was offered for reclaiming: %q", why)
+	}
+}
+
+// A local NVMe disk is a logical block device, and a run that was asked for the
+// block class takes one.
+//
+// The class a run scans is stated by the administrator through
+// EnableLogicalBlockDevices, so an NVMe disk reaching a block draft is what was
+// asked for rather than a leak between classes. What the kernel presents at
+// /dev/nvme0n1 is a block device like any other, and refusing it leaves a fleet
+// of NVMe hardware unable to be deployed as logical block devices at all.
+func TestClassRuleAdmitsALocalNVMeDiskOnABlockRun(t *testing.T) {
+	nvme := disk("nvme0n1", "0000:5e:00.0", 0, tb)
+
+	if ok, why := admit(ClassRule{Class: ClassBlock}, nvme); !ok {
+		t.Errorf("a block run declined a local NVMe disk: %s", why)
+	}
+}
+
+// A fabric namespace is the one bus a block run refuses, and every local bus is
+// one it takes.
+//
+// The namespace is a volume something else exported rather than a disk the
+// machine has, so it belongs to neither class. The probe refuses it first, and
+// this is the rule that keeps it out of a block draft on its own terms.
+func TestClassRuleRefusesOnlyAFabricNamespaceOnABlockRun(t *testing.T) {
+	fabric := blockDisk("nvme1n1", tb)
+	fabric.Transport = string(blockdev.TransportNVMeFabric)
+	if ok, why := admit(ClassRule{Class: ClassBlock}, fabric); ok {
+		t.Error("a block run admitted a fabric namespace")
+	} else if !strings.Contains(why, "NVMeFabric") {
+		t.Errorf("the reason %q does not say what bus it is on", why)
+	}
+
+	// Every local bus is what a block run is for, the NVMe one included: the
+	// kernel presents a namespace behind a PCIe controller as an ordinary block
+	// device, and the class reaches every device through the kernel.
+	for _, transport := range []blockdev.Transport{
+		blockdev.TransportVirtio, blockdev.TransportSATA,
+		blockdev.TransportSAS, blockdev.TransportSCSI, blockdev.TransportNVMe,
+	} {
+		device := blockDisk("sda", tb)
+		device.Transport = string(transport)
+		if ok, why := admit(ClassRule{Class: ClassBlock}, device); !ok {
+			t.Errorf("a block run declined a %s disk: %s", transport, why)
+		}
+	}
+}
+
+// A refusal quotes the bound the way the filter wrote it.
+//
+// It used to re-render the parsed number, which is a different string: the
+// renderer prints four significant digits, so a bound of 1920G came back as
+// 1.875T and a reviewer comparing the refusal against their own filter was
+// comparing two spellings of one number. What they wrote is what they can act
+// on, so that is what the refusal says.
+func TestTheRefusalQuotesTheBoundAsItWasWritten(t *testing.T) {
+	rules := BasicDeviceRules(&simplyblockv1alpha2.DiscoverSpec{
+		DeviceFilter: &simplyblockv1alpha2.DeviceFilter{DriveSizeRange: "1920G-4T"},
+	})
+
+	var size SizeRule
+	for _, rule := range rules {
+		if found, is := rule.(SizeRule); is {
+			size = found
+		}
+	}
+	if size.Spec == "" {
+		t.Fatal("the size rule does not carry the range as it was written")
+	}
+
+	_, why := size.Admit(nodeprobe.Report{}, disk("nvme0n1", "0000:5e:00.0", 0, 512*gib))
+	if !strings.Contains(why, "1920G-4T") {
+		t.Errorf("the reason %q does not quote the range the filter carried", why)
+	}
+}
+
+// A size a reviewer reads is never rounded up, because a rendering that reads
+// as more than the device holds is one that says the disk is bigger than it is.
+func TestASizeIsNeverRoundedUp(t *testing.T) {
+	for _, c := range []struct {
+		bytes uint64
+		want  string
+	}{
+		{tib, "1T"},
+		{3 * tib, "3T"},
+		{1536 * gib, "1.5T"},
+		{tib - 1, "1023.99G"},
+		{512 * mib, "512M"},
+		{1023, "1023B"},
+		{0, "0B"},
+	} {
+		if got := humanBytes(c.bytes); got != c.want {
+			t.Errorf("%d bytes renders as %q, want %q", c.bytes, got, c.want)
+		}
+	}
+}
+
+// An exact multiple of a unit is written as that unit, with no decimals and no
+// loss, which is what makes the common sizes readable.
+func TestAnExactSizeIsWrittenExactly(t *testing.T) {
+	for _, size := range []uint64{mib, gib, tib, 3 * tib, 512 * gib, 100 * gib} {
+		rendered := humanBytes(size)
+		if strings.Contains(rendered, ".") {
+			t.Errorf("%d bytes is a whole number of units and renders as %q", size, rendered)
+		}
+		parsed, err := ParseSize(rendered)
+		if err != nil {
+			t.Errorf("%d bytes renders as %q, which the parser refuses: %v", size, rendered, err)
+			continue
+		}
+		if parsed != size {
+			t.Errorf("%d bytes renders as %q, which reads back as %d", size, rendered, parsed)
 		}
 	}
 }

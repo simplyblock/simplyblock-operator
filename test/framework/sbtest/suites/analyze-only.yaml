@@ -1,0 +1,15 @@
+# Judge an existing artifact directory. No components, so nothing is collected and nothing on
+# the cluster is touched — this is what `sbtest analyze` does by default, written out as a
+# suite for when it needs to be said explicitly.
+#
+#   make analyze RUN=../../operator/fio-mig-1787211447 SUITE=analyze-only
+description: >-
+  Judge an existing artifact directory. Nothing is collected and nothing is touched.
+
+# Empty rather than absent: an empty mapping says "no components, deliberately", where a
+# missing key would rely on the reader knowing that components default to off.
+components: {}
+
+# Empty means every registered detector runs on its defaults — detectors default to *on*,
+# because judging is not something you should have to remember to switch on.
+detectors: {}

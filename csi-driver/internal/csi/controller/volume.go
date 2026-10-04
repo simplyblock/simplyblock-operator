@@ -83,10 +83,32 @@ func (cs *Server) CreateVolume(
 		csiVolume.VolumeContext["targetType"] = volType
 	}
 
+	// The node service cannot read whether a volume is encrypted off the volume
+	// itself: the crypto bdev sits under the namespace it exports, so an empty
+	// encrypted volume arrives as pseudo-random plaintext with no signature of
+	// any kind. Forwarding the parameter is what lets the staging guard tell a
+	// volume that is unreadable by construction from one that carries somebody
+	// else's data.
+	if encrypted, err := kube.BoolParam(
+		req.GetParameters(), csicommon.ParamEncryption, false,
+	); err == nil && encrypted {
+		csiVolume.VolumeContext[csicommon.ParamEncryption] = strconv.FormatBool(true)
+	}
+
 	// Merge in DHCHAP's allowed-node segment so its PV gets nodeAffinity too
 	// (issue #403), since resolveClusterSelection only tracks zone and region.
 	topologySegments := copyTopologySegments(selection.topology)
 	if key, val := dhchapAllowedNodeSegment(req); key != "" {
+		if topologySegments == nil {
+			topologySegments = map[string]string{}
+		}
+		topologySegments[key] = val
+	}
+	// Same mechanism for client-side compression/deduplication (issue #277): the
+	// PV is pinned to a vdo-capable node the same way, and for the same reason
+	// neither this nor DHCHAP's segment above is expressed as StorageClass
+	// allowedTopologies (see vdoCapableSegment's own comment).
+	if key, val := vdoCapableSegment(req); key != "" {
 		if topologySegments == nil {
 			topologySegments = map[string]string{}
 		}
@@ -118,7 +140,8 @@ func (cs *Server) CreateVolume(
 	params := req.GetParameters()
 	pvcName, pvcNamespace := params[csicommon.CSIStorageNameKey], params[csicommon.CSIStorageNamespaceKey]
 	if pvcName != "" && pvcNamespace != "" {
-		if rerr := cs.removePVCAnnotations(ctx, pvcName, pvcNamespace, kube.AnnoPlacementHint); rerr != nil {
+		if rerr := cs.removePVCAnnotations(ctx, pvcName, pvcNamespace,
+			kube.Spellings(kube.KeyPlacementHint)...); rerr != nil {
 			klog.Warningf("createVolume: could not clear placement-hint on PVC %s/%s: %v", pvcNamespace, pvcName, rerr)
 		}
 	}
@@ -191,7 +214,7 @@ func (cs *Server) prepareCreateVolumeReq(
 		return nil, false, err
 	}
 
-	encryption, err := kube.BoolParam(params, "encryption", false)
+	encryption, err := kube.BoolParam(params, csicommon.ParamEncryption, false)
 	if err != nil {
 		return nil, false, err
 	}
@@ -204,38 +227,48 @@ func (cs *Server) prepareCreateVolumeReq(
 		pvcFullName = fmt.Sprintf("%s/%s", pvcNamespace, pvcName)
 	}
 
-	var pvcAnns map[string]string
+	var pvcAnns, pvcLabels map[string]string
 	if pvcNameSelected && pvcNamespaceSelected {
-		pvcAnns, err = cs.fetchPVCAnnotations(ctx, pvcName, pvcNamespace)
+		pvcAnns, pvcLabels, err = cs.fetchPVCMeta(ctx, pvcName, pvcNamespace)
 		if err != nil {
 			return nil, false, err
 		}
 	}
 
 	// host_id priority: selected-storage-node (hard pin) → placement-hint (one-shot
-	// hint from the placement webhook) → host-id and its deprecated form (legacy
-	// fallback for pre-existing PVCs).
-	hostID := pvcAnnotation(pvcAnns,
-		kube.AnnoSelectedStorageNode, kube.AnnoPlacementHint, kube.AnnoHostID, kube.DeprecatedAnnoHostID)
+	// hint from the placement webhook) → host-id (legacy fallback for pre-existing
+	// PVCs). Each is expanded into every prefix it has been written under, since a
+	// claim outlives the operator that annotated it (design-crd-model.md §9.4).
+	hostID := pvcAnnotation(pvcAnns, kube.Spellings(
+		kube.KeySelectedStorageNode, kube.KeyPlacementHint, kube.KeyHostID)...)
 	lvolID := pvcAnnotation(pvcAnns, annotationLvolID, deprecatedAnnotationLvolID)
 	podAffinitive, _ := strconv.ParseBool(pvcAnns[annotationPodAffinity])
 
-	// QoS from StorageClass, overridable per-PVC via annotations.
-	maxRWIOPS := params["qos_rw_iops"]
-	maxRWmBytes := params["qos_rw_mbytes"]
-	maxRmBytes := params["qos_r_mbytes"]
-	maxWmBytes := params["qos_w_mbytes"]
+	// QoS from the StorageClass, overridable per claim by an annotation.
+	//
+	// Each ceiling is read through an ordered list of keys rather than one, and
+	// the first key that is set wins. Three generations of names are live at
+	// once and none of them can be retired: a StorageClass's parameters are
+	// immutable in the Kubernetes API, so a class an older operator generated
+	// can never be rewritten into the current vocabulary, and a claim somebody
+	// annotated long ago is still a claim. atlas-lib owns the lists, so the
+	// operator that writes a key and the driver that reads it cannot disagree
+	// about which spellings exist or which of them wins.
+	maxRWIOPS := kube.QoSParam(params, kube.CeilingIOPS)
+	maxRWmBytes := kube.QoSParam(params, kube.CeilingMBytesPerSec)
+	maxRmBytes := kube.QoSParam(params, kube.CeilingReadMBytesPerSec)
+	maxWmBytes := kube.QoSParam(params, kube.CeilingWriteMBytesPerSec)
 	if pvcNameSelected && pvcNamespaceSelected {
-		if v := pvcAnnotation(pvcAnns, annotationQoSRWIOPS, deprecatedAnnotationQoSRWIOPS); v != "" {
+		if v := kube.QoSAnnotation(pvcAnns, kube.CeilingIOPS); v != "" {
 			maxRWIOPS = v
 		}
-		if v := pvcAnnotation(pvcAnns, annotationQoSRWMBps, deprecatedAnnotationQoSRWMBps); v != "" {
+		if v := kube.QoSAnnotation(pvcAnns, kube.CeilingMBytesPerSec); v != "" {
 			maxRWmBytes = v
 		}
-		if v := pvcAnnotation(pvcAnns, annotationQoSRMBps, deprecatedAnnotationQoSRMBps); v != "" {
+		if v := kube.QoSAnnotation(pvcAnns, kube.CeilingReadMBytesPerSec); v != "" {
 			maxRmBytes = v
 		}
-		if v := pvcAnnotation(pvcAnns, annotationQoSWMBps, deprecatedAnnotationQoSWMBps); v != "" {
+		if v := kube.QoSAnnotation(pvcAnns, kube.CeilingWriteMBytesPerSec); v != "" {
 			maxWmBytes = v
 		}
 	}
@@ -256,6 +289,10 @@ func (cs *Server) prepareCreateVolumeReq(
 		LvolID:       lvolID,
 		Namespaced:   maxNamespace > 1,
 		PvcName:      pvcFullName,
+		// Join the volume to its consistency group at creation (design §4.1):
+		// the PVC's storage.simplyblock.io/consistency-group label, forwarded so
+		// the control plane pins placement and opens the member's epoch.
+		ConsistencyGroup: pvcLabels[consistencyGroupLabel],
 	}
 	return &createVolReq, podAffinitive, nil
 }

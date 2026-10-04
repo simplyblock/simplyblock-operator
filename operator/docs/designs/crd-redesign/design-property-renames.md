@@ -1,0 +1,669 @@
+# Property Renames Across the CRD Redesign
+
+The ten designs under this directory each carry a "Migration from the Registered
+API" section, and between them they rename a substantial number of properties on
+CRDs that are already registered and in use. Each design states its own renames
+next to the kind they belong to, which is the right place to decide them and the
+wrong place to execute them: the renames share one mechanism, one deprecation
+window, and one set of upgrade risks, and doing them kind by kind means writing
+that mechanism ten times.
+
+This document is the collected inventory and the migration mechanism. It decides
+nothing about the target shapes — every row here is already settled by the design
+that owns it, and is cited to it. What it adds is the classification that says
+how each row breaks, and therefore what each row's upgrade path has to do.
+
+Every row was verified against `operator/api/v1alpha1` rather than taken from the
+designs alone, because a design describes an intended end state and some of its
+rows describe fields that were never registered.
+
+---
+
+## 1. How a Renamed Property Breaks
+
+The classification matters more than the count, because the rows do not share a
+failure mode and three of the four modes are silent.
+
+**A renamed spec field is silently ignored.** The API server accepts an object
+carrying the old name only if the CRD schema still declares it, and drops it
+otherwise; either way the operator reads the new name, finds nothing, and applies
+a default. A `StoragePool` that sets `dhchap: true` loses authentication. Nothing
+reports that it used to have it. This is the dangerous mode, and every user-authored
+spec row is in it.
+
+**A renamed status field costs nothing.** The operator is the only writer, so the
+old value is overwritten on the first reconcile after the upgrade. The only readers
+outside the operator are dashboards and `kubectl -o jsonpath`, which is a
+documentation problem rather than a migration one.
+
+**A renamed enum value fails loudly, which is the good failure.** A
+`StorageClusterOps` with `action: activate` is rejected at admission once the
+`Enum` marker lists `Activate`. Nobody discovers the rename by finding an operation
+that silently never ran. This is the one class that needs no data migration and
+only a deprecation window for the sake of scripts and runbooks.
+
+**A renamed toggle that also inverts is the worst case**, because the mechanical
+migration produces the opposite of the intended behavior. Two rows are in it, and
+both govern behavior that is on by default: `migrationEnabled` becomes
+`disableMigration`, and the realignment's `enabled` becomes
+`spec.disableDataRealignment`. In each the conversion has to negate a stated value
+and leave an unstated one unstated, because absence is what carries the default on
+both sides.
+
+---
+
+## 2. The Inventory
+
+Rows are grouped by what the migration has to do, not by kind. The `Class` column
+is the failure mode of §1.
+
+### 2.1 Spec field renames, same parent
+
+These change a field's name and nothing else. They are the core of this work.
+
+| Kind                | Registered                  | Target                      | Class  | Owning design                         |
+|---------------------|-----------------------------|-----------------------------|--------|---------------------------------------|
+| `StorageCluster`    | `spec.maxHugePagesSize`     | `spec.minHugePagesSize`     | Silent | `design-storagecluster.md` §12        |
+| `StorageCluster`    | `spec.backup.localEndpoint` | `spec.backup.endpoint`      | Silent | `design-storagecluster.md` Appendix A |
+| `StorageNode`       | `spec.overrides`            | `spec.config`               | Silent | `design-storagenode.md` §15.1         |
+| `StorageNode`       | `spec.socketIndex`          | `spec.slot`                 | Silent | `design-storagenode.md` §15.1         |
+| `StorageNodeOps`    | `spec.storageNodeRef`       | `spec.nodeRef`              | Silent | `design-storagenode.md` §15.2         |
+| `StorageNodeOps`    | `spec.drain`                | `spec.remove`               | Silent | `design-storagenode.md` §15.2         |
+| `StorageClusterOps` | `spec.nodeRollingRestart`   | `spec.rollingRestart`       | Silent | `design-storagecluster.md` §5.3       |
+| `StoragePool`       | `spec.clusterName`          | `spec.clusterRef`           | Silent | `design-storagepool.md` §11           |
+| `StorageBackup`     | `spec.clusterName`          | `spec.clusterRef`           | Silent | `design-storagebackup.md` §13         |
+| `BackupPolicy`      | `spec.clusterName`          | `spec.clusterRef`           | Silent | `design-storagebackup.md` §13         |
+| `BackupRestore`     | `spec.clusterName`          | `spec.clusterRef`           | Silent | `design-storagebackup.md` §13         |
+| `VolumeMigration`   | `spec.pvName`               | `spec.persistentVolumeName` | Silent | `design-persistentvolumeops.md` §10   |
+
+Two Go-side companions travel with these and change no wire format:
+`StorageNodeOverrides` becomes `StorageNodeConfig`, and `NodeRollingRestartSpec`
+becomes `RollingRestartSpec`.
+
+`BackupImport` carries no `clusterName`: it names `sourceClusterName` and
+`targetClusterName`, and the kind is retired rather than renamed
+(`design-storagebackup.md` §13), so it takes no row here.
+
+### 2.2 Status field renames
+
+Free to make, because the operator is the only writer.
+
+| Kind                | Registered                        | Target                  | Owning design                  |
+|---------------------|-----------------------------------|-------------------------|--------------------------------|
+| `StorageClusterOps` | `status.nodeRollingRestartStatus` | `status.rollingRestart` | `design-storagecluster.md` §7  |
+| `BackupPolicy`      | `status.attachedLvols`            | `status.attachedClaims` | `design-storagebackup.md` §4.1 |
+
+`status.nodeRollingRestartStatus` also replaces `pendingNodes` and
+`processedNodes` with `nodes` and `nodeIndex`, which is a re-shaping rather than a
+rename and belongs with the rolling-restart work.
+
+### 2.3 Boolean toggle renames
+
+`design-crd-model.md` §9.6 owns this list. It is stated there as eleven fields
+across five kinds; nine of them are registered, one is registered in two places,
+and one is not registered at all.
+
+| Struct                        | Registered                 | Target                             | Default | Class                   |
+|-------------------------------|----------------------------|------------------------------------|---------|-------------------------|
+| `StorageNodeSpec`             | `skipKubeletConfiguration` | Removed, re-landed per cluster     | off     | Removal                 |
+| `StorageNodeSetSpec`          | `skipKubeletConfiguration` | Removed, re-landed per cluster     | off     | Removal                 |
+| `VolumeAutoPlacementSettings` | `migrationEnabled`         | `disableMigration`                 | on      | Inverting               |
+| `VolumeAutoPlacementSettings` | `latencyBenchmarkEnabled`  | `enableLatencyBenchmark`           | off     | Silent                  |
+| `VolumeAutoPlacementSettings` | `enabled`                  | `spec.enableVolumeAutoPlacement`   | off     | Silent, and moves up    |
+| `DataRealignmentSettings`     | `enabled`                  | `spec.disableDataRealignment`      | on      | Inverting, and moves up |
+| `VolumeMigrationSettings`     | `enabled`                  | Removed                            | on      | Removal                 |
+| `BackupSpec`                  | `withCompression`          | Removed                            | off     | Removal                 |
+| `BackupSpec`                  | `snapshotBackups`          | Removed                            | off     | Removal                 |
+| `BackupSpec`                  | `localTesting`             | Removed                            | off     | Removal                 |
+| `StorageClassParameters`      | `encryption`               | Removed                            | off     | Removal                 |
+| `StoragePoolSpec`             | `dhchap`                   | `spec.volumeDefaults.enableDHCHAP` | off     | Silent, and regroups    |
+
+**`replicate` is in the design's list and not in the API.**
+`design-crd-model.md` §9.6 and `design-storagepool.md` §11 both name
+`replicate` → `enableReplication` on `StorageClassParameters`, and the registered
+struct has no such field. The row is a target-state addition rather than a rename,
+so it is not migrated; it is created named correctly whenever replication becomes
+expressible on a class.
+
+**Six rows are removals rather than renames**, and `design-storagecluster.md`
+§12 gives the reason for the three `BackupSpec` ones: the store is a location, and
+how a copy is taken belongs to the control plane, which keeps accepting these
+values and applies its own defaults once the operator stops sending them.
+`VolumeMigrationSettings.enabled` is removed because migration cannot be turned
+off — a drain, a rebalance, and a device replacement are all performed by moving
+volumes.
+
+**`skipKubeletConfiguration` leaves the node kinds rather than inverting on
+them.** Its only consumer is an environment variable in a DaemonSet pod template,
+and a DaemonSet is one object for every node it schedules, so a per-node field
+never reached it. The toggle re-lands on the cluster as
+`StorageCluster.spec.storageNodes.enableKubeletConfiguration`, positive-formed and
+off by default, and a `ClusterDeploymentConfig` fills it from the Kubernetes
+distribution it names rather than leaving it to be stated node by node
+([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §4.2).
+The registered field is therefore a removal that stashes under
+`storage.simplyblock.io/v1alpha1-spec.overrides.skipKubeletConfiguration` (§3.3),
+and nothing negates, because nothing on the node reads the value again.
+[`design-storagenode.md`](design-storagenode.md) §15.1 owns the move.
+
+**One spelling exists only in the chart.** `multiCluster.enable` in
+`helm-charts/charts/simplyblock-operator/values.yaml` names no API field, so no
+conversion reaches it. It feeds a ConfigMap and a Secret the CSI driver reads. The
+kubelet toggle has no chart spelling at all, because the only template that read
+it was the chart's own storage-node DaemonSet and the operator renders that
+workload.
+
+### 2.4 Regroupings — renames that also move
+
+These change a field's path as well as its name, so the migration reads from one
+place and writes to another. They are listed for completeness and are entangled
+with new types the redesign introduces.
+
+| Kind              | Registered                                        | Target                                   | Owning design                        |
+|-------------------|---------------------------------------------------|------------------------------------------|--------------------------------------|
+| `StorageCluster`  | `spec.hashicorpVaultSettings.baseURL`             | `spec.kms.vault.baseURL`                 | `design-storagecluster.md` §3.1      |
+| `StoragePool`     | `spec.capacityLimit`, `spec.logicalVolumeMaxSize` | `spec.limits.capacity`, `.maxVolumeSize` | `design-storagepool.md` §3.1         |
+| `StoragePool`     | `spec.qos.*`                                      | `spec.limits.{iops,throughput}`          | `design-storagepool.md` §3.1         |
+| `StoragePool`     | `spec.storageClassParameters.*`                   | `spec.volumeDefaults.*`                  | `design-storagepool.md` §3.1         |
+| `StorageNodeOps`  | `spec.targetWorkerNode`, `spec.newSsdPcie`        | `spec.migrate.*`                         | `design-storagenode.md` §6.1         |
+| `ControlPlane`    | `spec.image`                                      | `spec.source.managed.image`              | `design-controlplane.md` §5.1        |
+| `VolumeMigration` | `spec.targetNodeUUID`                             | `spec.migrate.targetNodeRef`             | `design-persistentvolumeops.md` §4.1 |
+
+**`spec.volumeDefaults` is the sharpest of these**, and `design-storagepool.md`
+§11 says why: it is immutable once set, so a pool that applies with the old
+spelling gets an empty `volumeDefaults` that cannot then be corrected without
+deleting the pool.
+
+**`spec.image` is not only a regrouping.** `design-controlplane.md` §11 records
+that the field is inherited by every `StorageNodeSet` that omits
+`spec.clusterImage`, so the move has to send the storage-node default to
+`StorageCluster.spec.storageNodes.image` rather than under
+`spec.source.managed`.
+
+### 2.5 Enum value recasing
+
+`design-crd-model.md` §9.7 owns this list. These fail at admission rather than
+silently.
+
+| Type                      | Registered values                                             | Target                                                           |
+|---------------------------|---------------------------------------------------------------|------------------------------------------------------------------|
+| `StorageClusterOpsAction` | `activate;expand;shutdown;start;restart;node-rolling-restart` | `Activate;Expand;Shutdown;Start;Restart;RollingRestart`          |
+| `StorageNodeOpsAction`    | `shutdown;restart;suspend;resume;remove;migrate`              | `Shutdown;Restart;Suspend;Resume;Remove;Migrate;HostMaintenance` |
+| `MetricsBackend`          | `controlplane;prometheus;uniform`                             | `ControlPlane;Prometheus;Uniform`                                |
+| `ControlPlane` phase      | `Initializing;Ready`                                          | `Available` replaces `Ready` (§3.3)                              |
+| `VolumeMigration` phase   | `Completed`                                                   | `Succeeded`                                                      |
+
+Both action fields are also typed today as a plain `string` and become named enum
+types, which is a Go-side change the recasing carries anyway.
+
+`NodeDrainState.Phase` is in the design's table and needs nothing: it is status
+the operator alone writes, and the kind carrying it is retired.
+
+The two phase rows are status the operator writes, so they are free in the sense
+of §1 and expensive only for whatever reads them.
+
+### 2.6 Renames outside the CRD schemas
+
+These are renames of keys rather than of properties, so they do not move with the
+API types and do not benefit from the mechanism of §3. Each is listed so that no
+reader concludes the property work covered them.
+
+| What                           | Registered                                                     | Target                                                                                  | Owning design                   |
+|--------------------------------|----------------------------------------------------------------|-----------------------------------------------------------------------------------------|---------------------------------|
+| `StorageClass.parameters` keys | `qos_rw_iops`, `qos_rw_mbytes`, `qos_r_mbytes`, `qos_w_mbytes` | `max_iops`, `max_mbytes_per_sec`, `max_read_mbytes_per_sec`, `max_write_mbytes_per_sec` | `design-storagepool.md` §5.1    |
+| Claim QoS annotations          | `simplyblock.io/qos-*`                                         | `storage.simplyblock.io/max-*`                                                          | `design-storagepool.md` §5.1    |
+| Annotation and label prefix    | `simplyblock.io/` on 28 keys                                   | `storage.simplyblock.io/`                                                               | `design-crd-model.md` §9.4      |
+| `StorageCluster` finalizer     | `storage.simplyblock.io/cluster-finalizer`                     | `storage.simplyblock.io/storagecluster-finalizer`                                       | `design-storagecluster.md` §4.5 |
+| `ControlPlane` event reasons   | `FDBReady`, `FDBNotReady`                                      | `ControlPlaneReady`, `ControlPlaneNotReady`                                             | `design-controlplane.md` §11    |
+
+**The `StorageClass` parameter keys never migrate.** `StorageClass.parameters` is
+immutable in the Kubernetes API, so a class an older operator generated can never
+be rewritten. `design-storagepool.md` §5.1 settles this: both generations are read
+indefinitely rather than for a window, the operator writes only the new keys, and
+a class carrying both spellings is reported as a `QoSParameterConflict` rather
+than merged.
+
+**The finalizer rename is the one change here that wedges rather than degrades.**
+An operator that reads only the new key leaves every object created by an older one
+in `Terminating` forever, so both spellings are read for a release and the old one
+is removed after.
+
+The QoS keys reach beyond the operator: `atlas-lib/kube/names.go`,
+`atlas-lib/kube/storageclass.go`, `csi-driver/internal/csi/controller/volume.go`,
+`csi-driver/e2e/params.go`, three chart value files, and
+`operator/internal/controller/simplyblockstoragepool_controller.go` all name them.
+
+### 2.7 Renames blocked on structural work
+
+Listed so they are not attempted as part of a rename sweep.
+
+| Kind             | Registered                         | Target                                | Blocked on                                         |
+|------------------|------------------------------------|---------------------------------------|----------------------------------------------------|
+| `StorageNode`    | `spec.storageNodeSetRef`, required | `spec.clusterRef` plus `spec.nodeSet` | The `StorageNodeSet` retirement, §15.3             |
+| `StorageNodeOps` | `status.subPhase`, a string        | `status.step`, an object              | The `Ops` step machine, `design-crd-model.md` §9.5 |
+| `StorageCluster` | `status.subPhase`, a string        | `status.step`, an object              | The same                                           |
+
+`storageNodeSetRef` is a reparent rather than a rename: the target names a
+different object, and the value cannot be computed until `StorageCluster` owns the
+workload. The two `subPhase` rows are renames whose type also changes from a string
+to an object, and `design-crd-model.md` §9.5 already specifies their conversion —
+the old string reads into `step.state` and leaves `step.deadline` absent, so an
+operation in flight across the upgrade keeps running rather than expiring
+immediately.
+
+---
+
+## 3. The Migration Mechanism
+
+### 3.1 What the group's version allows, and what it does not excuse
+
+The group is at `v1alpha1`, which is the version where a breaking change is
+affordable, and every design leans on that. It is not a license to rename without
+a path. `v1alpha1` says a user is not *entitled* to keep the old spelling; it does
+not say their cluster should silently lose a setting on upgrade. The silent class
+of §1 is the whole problem: the object stays valid, the apply succeeds, and the
+behavior changes.
+
+So the mechanism has to satisfy one requirement. **No upgrade may change the
+effective configuration of an object nobody edited.**
+
+### 3.2 A second version with a conversion webhook
+
+`v1alpha2` is added as the storage version carrying the new names, `v1alpha1`
+stays served and deprecated carrying the old ones, and a conversion webhook
+translates between them. Every object already stored is readable under both
+versions from the moment the webhook is up, which satisfies §3.1 without a
+fallback path in any reconciler: a controller reads `v1alpha2` and never learns
+that an older spelling exists.
+
+**This is the mechanism that scales to the whole inventory rather than to part of
+it.** A read-time fallback handles a field renamed in place, and degrades as soon
+as a rename also moves. The regroupings of §2.4 turn one field into a path under a
+struct that did not exist, and `spec.qos.*` becoming `spec.limits.{iops,throughput}`
+redistributes four fields across two new parents. Expressing that as a per-field
+fallback in a reconciler means the reconciler carrying the old shape and the new
+one at once; expressing it as a conversion function is the ordinary case the
+function signature was designed for. The same holds for the enum recasing of
+§2.5, where the old and new value occupy one field and a fallback has nowhere to
+put the second reading.
+
+**It is also the only mechanism that keeps the old spelling working for a client
+the operator does not control.** A read-time fallback lives in the operator, so it
+covers what the operator reads and nothing else. A conversion webhook lives in the
+API server's path, so `kubectl`, Argo CD, Flux, and anything else applying a
+`v1alpha1` manifest keep working unchanged and unaware.
+
+**Three costs come with it, and none of them is avoidable by care.**
+
+**The webhook is in the read path for every request to these kinds.** A conversion
+webhook that is down does not degrade the group, it makes it unreadable: a
+`kubectl get storagecluster` fails rather than returning the old shape. During an
+upgrade, which is when the webhook's own deployment is being replaced, is when this
+is most likely, and a `failurePolicy` cannot help because there is no meaningful
+answer to fall back to. What contains it is that the webhook is a process of its
+own ([`design-api-upgrade.md`](design-api-upgrade.md) §6.1). It runs no
+controllers, holds no leader-election lease, and reads no converted kind, so the
+custom resources an administrator reads in order to diagnose a failed operator
+stay readable while the operator is down, and its own start-up waits on nothing
+that has to be converted first.
+
+**Conversion has to round-trip, and three rows lose data.**
+`BackupSpec.withCompression`, `snapshotBackups`, `localTesting`, and
+`VolumeMigrationSettings.enabled` are removals rather than renames (§2.3), so a
+`v1alpha1` object carrying them converts to a `v1alpha2` with nowhere to put them,
+and converting back would silently drop what the user wrote. §3.3 says where they
+are stashed.
+
+**Only a kind with a renamed property gains a `v1alpha2`.** A CRD declares its own
+versions, so the group does not have to move as a unit, and a kind with nothing to
+convert would gain a second version, a conversion function, and a webhook in its
+read path in exchange for a copy. Seven kinds gain one: `ControlPlane`,
+`StorageCluster`, `StorageClusterOps`, `StorageNode`, `StorageNodeOps`,
+`StoragePool`, and `StorageBackup`. The group's version therefore depends on which
+kind is being named, which is the cost of not paying the other one.
+
+**A kind that becomes a different kind cannot use this mechanism at all.** A
+conversion webhook converts between versions of one kind, and `BackupPolicy`
+becoming `StorageBackupPolicy`, `BackupRestore` becoming `StorageBackupOps`, and
+`VolumeMigration` becoming `PersistentVolumeOps` are new CRDs (§9.1 of
+[`design-crd-model.md`](design-crd-model.md)). Their property renames —
+`spec.clusterName`, `status.attachedLvols`, `spec.pvName` — land with the successor
+kind, on whatever path that kind takes for its own objects, which
+[`design-persistentvolumeops.md`](design-persistentvolumeops.md) §10 and
+[`design-storagebackup.md`](design-storagebackup.md) §13 both say is draining
+in-flight operations rather than converting them. `BackupImport` and `Task` are
+retired and reworked-not-at-all respectively, and the four replication kinds carry
+no row.
+
+**`StorageNodeSet` stays at `v1alpha1` deliberately**, and §3.6 is why.
+
+### 3.3 The shape of the conversion
+
+**`v1alpha2` is the hub and `v1alpha1` is the spoke.** The hub is the storage
+version and the shape every controller reads, so a conversion is written once per
+kind rather than once per pair. `v1alpha1` implements `ConvertTo` and
+`ConvertFrom`; `v1alpha2` implements the empty `Hub()` marker and nothing else.
+
+**A rename converts by assignment, and the inverting rows negate.** The rows of
+§2.1 and the non-inverting half of §2.3 are a field read on one side and written on
+the other. `skipKubeletConfiguration`, `migrationEnabled`, and the toggles of §2.3
+whose default is on are the exception, and §3.4 is why they need tests of their
+own rather than review.
+
+**A regrouping allocates its parent before writing into it.** `spec.qos` converting
+to `spec.limits` has to leave `spec.limits` absent rather than empty when the source
+is absent, because `spec.volumeDefaults` is immutable once set
+(`design-storagepool.md` §11) and an empty struct written by a conversion is a value
+the user can then never correct.
+
+**A removed field is stashed in an annotation.** The four rows of §2.3 that are
+removals are written to `storage.simplyblock.io/v1alpha1-<field>` on conversion up
+and read back on conversion down. This is the convention Kubernetes uses for lossy
+conversions in its own groups, and it exists so that round-tripping a `v1alpha1`
+object through the API server returns what was applied. It is not a compatibility
+surface: nothing reads these annotations except the conversion, and they disappear
+with `v1alpha1`.
+
+**An enum value converts by table.** `activate` becomes `Activate` going up and
+back going down. A value in neither table is passed through unchanged rather than
+rejected, because a conversion webhook is the wrong place to fail an object: the
+`Enum` marker on each version already rejects what that version does not accept,
+and a conversion that errors makes the object unreadable rather than invalid.
+
+### 3.4 The inverting rows need their own tests
+
+For `migrationEnabled` and the toggles of §2.3 whose default is on, the conversion
+negates rather than copies. Each needs a test that asserts the *behavior* rather
+than the field value: a cluster that set `migrationEnabled: false` must still not
+migrate volumes after the upgrade. Asserting `disableMigration == true` would pass
+against a conversion that got the polarity right and against one that never ran at
+all, since the stored object carries a value either way.
+
+`disableDataRealignment` needs the same test for the same reason, and one more
+besides. It inverts, so a copy would turn realignment off for every cluster that
+turned it on; and the behavior it governs is the one a cluster gets by saying
+nothing, so a test has to exercise the unstated case from both sides rather than
+only the stated one. What proves it is that the hub field stays absent for a
+cluster that never mentioned realignment, because a value written there — either
+value — is a statement the cluster did not make.
+
+The same test has to run in both directions. A conversion that negates going up and
+copies going down is a bug that a one-way test cannot see, and it corrupts on the
+first `kubectl get -o yaml | kubectl apply -f -`.
+
+### 3.5 What the conversion does not cover
+
+The key renames of §2.6 are not properties, so no conversion reaches them. They
+keep the both-spellings treatment stated there: the finalizer is read under both
+names for a release, the annotation prefixes are read under both and the old one
+deprecated in an event, and the `StorageClass` parameter keys are read under both
+indefinitely, because `StorageClass.parameters` is immutable and a class an older
+operator generated can never be rewritten.
+
+The chart's own value names are outside it too. A chart input is not an API field,
+so the conversion never sees one, and a value whose only consumer moves into the
+operator leaves the chart rather than gaining a second spelling in it.
+`skipKubeletConfiguration` took that path (§2.3).
+
+### 3.6 StorageNodeSet keeps one version, and the node reads its parent from its owner
+
+`StorageNodeSet` is retired by
+[`design-crd-model.md`](design-crd-model.md) §9.2, and a kind on its way out does
+not earn a second version. Its one row, `skipKubeletConfiguration`, is dropped
+rather than migrated: the field's replacement is a toggle on the cluster (§2.3), so
+nothing is lost by leaving the retiring kind spelled as it shipped.
+
+**`StorageNode.spec.storageNodeSetRef` has no `v1alpha2` spelling.** The hub names
+its parent directly as `spec.clusterRef` and keeps the set's name as `spec.nodeSet`,
+a label nothing is fetched by (§2.7). The cluster's name is not in the node at all
+(it is in the `StorageNodeSet` the node points at), and a conversion function cannot
+go and read it: conversion runs on every read of the object, has to be a pure
+function of what it was handed, and a conversion that issues API calls turns one
+`kubectl get` into two and fails the read when the second one does.
+
+**The controller owner reference carries the same fact, on the object.** A node
+converting up reads its `StorageCluster` from the reference rather than from a
+field, which is a pure function of the subject and needs no client. What makes the
+reference answer is ordering: the upgrade's reparent-storage-nodes step writes it
+before the storage version moves
+([`design-api-upgrade.md`](design-api-upgrade.md) §20). A node that has not been
+reparented yet converts to an empty `clusterRef` rather than to an error, so the
+object stays readable, which is what a read during an upgrade needs. The field is
+required, so the next write of that node is refused until the reparent has run.
+That is a louder failure than a node silently joining no cluster.
+
+**The workload reparents on the same schedule, not at start-up.** The DaemonSet,
+the Services, the certificates, and the per-node ConfigMaps are owned by the
+`StorageNodeSet` controller today
+([`design-storagenode.md`](design-storagenode.md) §15.3), and moving them is what
+the retirement is. Doing it as a sweep when the operator starts would rewrite
+every owner reference in the fleet in one transaction, at the moment of an upgrade,
+with a garbage collector watching: an owner reference written wrong, or written
+before the new owner exists, deletes a running storage node. Reparenting one node's
+objects as that node is reconciled keeps the blast radius at one node and makes a
+mistake visible before it is fleet-wide.
+
+This is the retirement's business rather than the renames', and it is stated here
+because it is the reason this document leaves one row unconverted.
+
+### 3.7 The trust has to exist before conversion is asked for
+
+A conversion webhook is in the read path of the kinds it converts, so the API
+server has to trust it before anything reads one. What makes the ordering awkward
+is that the material it trusts lives in the cluster the webhook is being started
+in.
+
+**A controller-runtime manager starts its HTTP servers, then its webhook servers,
+then syncs its caches, and only then runs everything else.** The first two orders
+are deliberate and documented in the manager itself: probes and webhooks come
+first *because* a cache sync over a converted kind lists it at the hub version,
+which makes the API server convert every stored object, which calls the webhook.
+What the manager cannot order is anything that is not one of those servers.
+
+**So a CA injected by a Runnable of the converting process arrives too late by
+construction.** The list fails, and the injection that would have fixed it never
+runs, because it sits on the far side of the sync that is failing. That is a
+bootstrap deadlock rather than a race: waiting longer never resolves it.
+
+**The symptom is quieter than a crash, which is what makes it worth stating.**
+The cache sync blocks until the process is canceled rather than giving up, and
+the health probes are served by the HTTP servers that started before it. The pod
+therefore reports Ready and keeps reporting Ready while reconciling nothing. There
+is no restart to notice and no `CrashLoopBackOff` to find: the process looks
+healthy and is inert, which is the hardest shape of failure to attribute.
+
+**The conversion webhook is therefore a process that reads no converted kind.**
+It runs no controllers, holds no leader-election lease, and lists none of the
+kinds it converts, so it has no cache sync to deadlock and can provision its
+serving certificate and inject the CA into the converting CRDs before it answers
+anything. The two kinds that bootstrap touches, `Secret` and
+`CustomResourceDefinition`, are core and apiextensions kinds that no conversion
+webhook stands in front of, so it can always make progress no matter what state
+the converted kinds are in. It ships in the operator image under a second entry
+point, so the conversion code and the API types it converts between are versioned
+with the operator that reads them
+([`design-api-upgrade.md`](design-api-upgrade.md) §6.1, §29.3).
+
+**The operator corrects what the manifests cannot state.** A CRD is cluster-scoped
+and ships in the chart's `crds/` directory, which Helm does not template, so its
+service reference names the namespace of the default install and is wrong for
+every other one. The API server cannot reach a conversion webhook it cannot
+resolve, and the operator is the only party that knows which namespace it is in,
+so it rewrites the reference and re-applies the correction on an interval. That is
+a namespace correction rather than a trust bootstrap, and it is safe to run from
+inside the manager because the operator reads converted kinds only after its own
+caches have synced against a webhook that is already up.
+
+**Reusing existing material matters as much as creating it.** A process that
+issued a fresh CA on every start would invalidate the bundle its CRDs already
+carry, so every restart would open a window in which the API server rejects the
+webhook it was just told to trust. The bootstrap therefore adopts what is already
+stored whenever it is valid for the service's DNS name and not near expiry.
+
+**Shipping the CRDs with `strategy: None` and raising them to `Webhook` once the
+process is serving is not an option.** Under `None` the API server answers a
+hub-version read of a stored spoke object by relabeling the apiVersion and pruning
+every field the new schema does not know, so a reader sees an object with fields
+silently missing, and a controller that writes during that window persists the
+pruned form. A startup failure that is loud and self-correcting is a better trade
+than a data-losing window that is neither.
+
+### 3.8 Which version is stored, and who decides
+
+The storage version is the one format etcd holds. A CRD serves several and stores
+exactly one, and the API server converts between what a client asks for and what
+is stored — which is what the conversion webhook is for. Moving storage is
+therefore a decision about persisted bytes rather than about which shape a
+controller reads.
+
+**The manifests this repository ships store `v1alpha2`, because they are the ones
+a fresh install applies.** A cluster installed today writes every object at the
+storage version from the outset, so nothing is ever converted, and the conversion
+webhook is inert and not deployed. The chart's own custom resources are authored
+at `v1alpha2` for the same reason: a chart that wrote `v1alpha1` would be the one
+client forcing conversion on a cluster where nothing serves it.
+
+**An upgrade applies the same manifests, and storage moves with them.** There is
+one set of CRDs rather than a staged pair: `+kubebuilder:storageversion` sits on
+the `v1alpha2` type, so the chart's copy, the one in `dist/install.yaml`, and the
+one the upgrade tool embeds all declare `v1alpha2` as storage. What makes that
+safe is ordering rather than a held flag. The conversion webhook is deployed,
+awaited, and smoke-tested against a real object before the CRDs are applied
+([`design-api-upgrade.md`](design-api-upgrade.md) §9.1), so there is something to
+convert with by the time storage moves, and the webhook is a process of its own
+(§3.7) rather than part of the operator roll-out the same upgrade is performing.
+
+**Objects change representation as they are next written.** The flag decides what
+a write encodes and nothing else, so an object untouched since the apply stays in
+the `v1alpha1` representation and is converted on every read, and
+`.status.storedVersions` keeps listing `v1alpha1`, which is what stops `v1alpha1`
+from being removed. The rewrite that lists every object and writes it back
+unchanged is what drains the old representation deliberately.
+[`design-api-upgrade.md`](design-api-upgrade.md) §24 owns that sequence and this
+document does not repeat it.
+
+| Path          | Storage after the apply | Conversion invoked                 | Webhook              |
+|---------------|-------------------------|------------------------------------|----------------------|
+| Fresh install | `v1alpha2`              | Never                              | Not deployed         |
+| Upgrade       | `v1alpha2`              | For every object not yet rewritten | Deployed by the tool |
+| After §24     | `v1alpha2`              | Only for `v1alpha1` clients        | Removed by §28       |
+
+**The consequence for this document is that the stored representation is not the
+storage version.** A CRD that stores `v1alpha2` still holds objects encoded as
+`v1alpha1` until each is written again, so anything reasoning about what is in
+etcd asks `.status.storedVersions` rather than the storage flag, and the upgrade
+is not finished when the apply is.
+
+**What this costs is bounded by the direction conversion runs in.** An object
+encoded as `v1alpha1` is converted up on every read until something writes it, and
+that write encodes `v1alpha2`, so information only the hub can state survives from
+the first write onward. The lossy direction is the other one: a `v1alpha1` client
+reading a hub object gets the spoke shape, and a field only the hub can state has
+nowhere to go in it. The four kinds here are renames and regroupings only, so
+nothing is lost, and `hub_roundtrip_test.go` asserts the hub → spoke → hub trip
+that a `v1alpha1` client forces. A genuinely new field needs the annotation stash
+that [`design-api-upgrade.md`](design-api-upgrade.md) §6.2 specifies, and nothing
+here needs it yet.
+
+---
+
+## 4. Sequencing
+
+The conversion webhook has to exist before any kind can move, so the first item is
+infrastructure rather than a rename and everything else waits on it.
+
+**First, the `v1alpha2` package and the webhook wiring.** An empty `v1alpha2` for
+one kind, its `Hub()`, a `ConvertTo`/`ConvertFrom` on `v1alpha1` that copies
+verbatim, the `+kubebuilder:storageversion` marker moving, and the CA bundle
+injected into that CRD. Proving a copy-only conversion serves correctly is what
+de-risks every row after it, and it is the piece that can break `kubectl get`.
+
+**Then one kind at a time, smallest first**, each carrying every row it owns rather
+than each class of row sweeping across every kind. A kind is one `v1alpha2` type
+file, one conversion with its round-trip test, and its controllers moved to read
+the hub, which is a unit that can be reviewed and reverted. Sweeping by class
+would leave every kind half-converted between sweeps, and a half-converted kind is
+one whose controller reads a field the conversion does not yet write.
+
+| Order | Kind                | Rows it carries                                                             |
+|-------|---------------------|-----------------------------------------------------------------------------|
+| 1     | `ControlPlane`      | §2.4 image regrouping, §2.5 phase                                           |
+| 2     | `StorageBackup`     | §2.1 `clusterName`                                                          |
+| 3     | `StorageClusterOps` | §2.1 `nodeRollingRestart`, §2.2 its status twin, §2.5 the action enum       |
+| 4     | `StorageNodeOps`    | §2.1 `storageNodeRef` and `drain`, §2.4 the migrate group, §2.5 action enum |
+| 5     | `StoragePool`       | §2.1 `clusterName`, §2.3 `dhchap` and `encryption`, §2.4 both regroupings   |
+| 6     | `StorageNode`       | §2.1 `overrides` and `socketIndex`, §2.3 the kubelet removal, §3.6's parent |
+| 7     | `StorageCluster`    | §2.1 two rows, §2.3 six toggles, §2.4 the KMS regrouping, §2.5 the backend  |
+
+`ControlPlane` is first because it is the smallest kind that carries both a
+regrouping and an enum, so it proves the two hardest shapes on the least code.
+`StorageCluster` is last because it carries the most rows and the removals of §3.3
+that need the annotation stash.
+
+The key renames of §2.6 share nothing with any of it and can proceed in parallel.
+
+The blocked rows of §2.7 stay blocked, except that §3.6 changes why for one of
+them: `storageNodeSetRef` is read off the controller owner reference rather than
+waiting for the retirement, which puts it behind the upgrade's reparenting step
+instead of behind the `StorageNodeSet` kind.
+
+---
+
+
+## 5. What Each Row Costs Outside the API Types
+
+A rename is not finished when the Go field changes. Every row touches, at minimum,
+the generated CRD manifests and the chart copy of them, and `make -C operator
+manifests generate` plus `make helm-sync` regenerate both. Beyond that:
+
+**`maxHugePagesSize` reaches further than the others and still stops short of a
+full rename.** `design-storagecluster.md` §12 records the boundary: the CRD field
+is the operator's to rename, but `hugepages_mem` belongs to the control-plane API
+and `MAX_HUGE_PAGES_SIZE` is the variable each storage node's configuration is read
+with. The field therefore lands emitting `MAX_HUGE_PAGES_SIZE` unchanged, and the
+mismatch becomes a documented boundary rather than a bug. Four call sites move with
+it: `controllers/cluster/storagecluster_controller.go`,
+`controllers/node/pernodeconfig.go`, three unit tests, and the chart's
+`operator_customresources.yaml`.
+
+**`spec.overrides` is the widest of the spec rows**, because the struct is read
+throughout node provisioning rather than at one call site.
+
+**The chart carries user-facing spellings of its own**, and no webhook migrates
+one. A value the operator takes over is deleted from `values.yaml` with the
+template that read it, which is what `skipKubeletConfiguration` did. A value that
+survives in the chart and also names an API field is the case that needs both
+spellings or a documented break.
+
+---
+
+## 6. Open Questions
+
+**Q1: When `v1alpha1` stops being served.** §3.2 keeps it served and deprecated,
+and nothing here says for how long. Removing it is what ends the conversion's
+maintenance and deletes the annotation stash of §3.3, and keeping it costs a
+conversion function per kind that has to stay correct as `v1alpha2` evolves. The
+answer does not block the work, because every row lands the same way regardless.
+
+**Q2: Whether the three `enabled` toggles are flattened or renamed in place.**
+`design-crd-model.md` §9.6 defers this and `design-storagecluster.md` §3.1 answers
+it for two of the three by moving them to the cluster's top level as
+`spec.enableVolumeAutoPlacement` and `spec.disableDataRealignment`. What is not
+settled is `VolumeMigrationSettings.enabled`, which §12 removes outright, leaving
+`VolumeMigrationSettings` with only its remaining members and no toggle. Whether
+the struct survives that is not decided.
+
+**Q3: Whether stored objects are migrated eagerly.** Settled: the upgrade
+procedure owns it. An object applied as `v1alpha1` stays in that representation
+until something writes it again, so the webhook cannot be retired by waiting, and
+the rewrite that drains the old representation is a stage of the upgrade tool
+rather than a controller in the operator or the `StorageVersionMigration` kind
+([`design-api-upgrade.md`](design-api-upgrade.md) §24). §3.8 states what follows
+from it.
+
+**Q4: What the conversion does when a `v1alpha1` object is invalid.** §3.3 passes
+an unrecognized enum value through rather than failing, on the grounds that a
+conversion that errors makes the object unreadable. That leaves a stored object
+whose value satisfies neither version's `Enum` marker, which is possible today only
+if an object was written before a marker tightened. Whether such an object should
+be reported, and by what, is not settled.

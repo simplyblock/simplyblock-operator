@@ -2,7 +2,7 @@
 
 **Status:** Draft  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-25 (last updated 2026-09-04)  
+**Date:** 2026-08-25 (last updated 2026-09-26)  
 **Related Issues:**
 
 - [#277](https://github.com/simplyblock/simplyblock-operator/issues/277) — client-side compression and deduplication via VDO, whose node-side wiring this design absorbs
@@ -14,20 +14,21 @@
 
 ## Phasing Overview
 
-| Phase                   | Status         | Scope                                                                                                                                                           | Behavior change                                                         |
-|-------------------------|----------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
-| **Phase 1** (§4–§8)     | Built, unwired | The `blockdev` split, the layer contract, the runner, the stack record, the plan shapes, and the `fabric` and `filesystem` layers                               | None. RWO parity with today's node service                              |
-| **Phase 2** (§5.3–§5.5) | Partly built   | The `lvmPhysicalVolume`, `lvmVolumeGroup`, and `lvmLogicalVolume` layers, the VDO call sites migrated onto the stack, the LVM primitives moved into `atlas-lib` | None. VDO parity with PR #402                                           |
-| **Phase 3** (§9)        | Partly built   | `Healer` and `Grower`, so heal, restage, and expand walk the stack                                                                                              | Heal and expand become correct for every layer, not only the bottom one |
-| **Phase 4** (§10)       | Planned        | Node requirements derived from the plan on the controller side                                                                                                  | Topology gating stops being hand-written per feature                    |
+| Phase                   | Status       | Scope                                                                                                                                                           | Behavior change                                                         |
+|-------------------------|--------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
+| **Phase 1** (§4–§8)     | Built, wired | The `blockdev` split, the layer contract, the runner, the stack record, the plan shapes, and the `fabric` and `filesystem` layers                               | None. RWO parity with today's node service                              |
+| **Phase 2** (§5.3–§5.5) | Partly built | The `lvmPhysicalVolume`, `lvmVolumeGroup`, and `lvmLogicalVolume` layers, the VDO call sites migrated onto the stack, the LVM primitives moved into `atlas-lib` | None. VDO parity with PR #402                                           |
+| **Phase 3** (§9)        | Built, wired | `Healer` and `Grower`, so heal, restage, and expand walk the stack                                                                                              | Heal and expand become correct for every layer, not only the bottom one |
+| **Phase 4** (§10)       | Planned      | Node requirements derived from the plan on the controller side                                                                                                  | Topology gating stops being hand-written per feature                    |
 
 What "built" means here is that the layers, the runner, and the record live in
 `atlas-lib/volstack` and are covered by unit tests and by the on-node integration
-suite. What it does not mean is that anything calls them: neither the CSI driver
-nor the operator imports the package yet, so none of this is on a data path. Phase
-2 is partly built because the three LVM layers exist and the VDO call sites have
-not moved onto them; Phase 3 because every `Grower` is implemented and `Healer` is
-implemented on `fabric`, `members`, and `filesystem` alone.
+suite. What "wired" adds is that the CSI node service drives them: `csi-driver`'s
+`internal/csi/node` selects a plan per volume and every node RPC on the data path
+is a runner call against it (§7.5). Phase 2 is partly built because the three LVM
+layers exist and the VDO call sites have not moved onto them. Phase 3 carries
+`Healer` on `fabric`, `members`, and `filesystem` alone, which is every layer
+that can go bad under a live stack today.
 
 Phase 1 is shippable on its own because it changes no observable behavior: the
 existing RWO plan is `fabric` → `filesystem`, and the runner performs exactly the
@@ -728,6 +729,60 @@ disappears.
 
 ---
 
+### 5.7 Ownership Tags
+
+Every volume group the three LVM layers make carries the LVM tag
+`storage.simplyblock.io`, written by the `vgcreate` that makes it, and so does
+the logical volume inside it, written by its `lvcreate`. The tag lives in the
+group's own metadata, so it survives a node reboot, follows the volume to
+whichever node stages it next, and is copied into a clone by `vgimportclone`. It
+is what says a group is the driver's. A name says nothing of the kind: it is
+derived from a UUID anybody can read off a device.
+
+**Every mutation `atlas-lib/lvm` performs on a group requires the tag first.**
+Activation, deactivation, removal, extension, creation of a volume inside,
+removal, extension, and renaming of that volume, and the marker operations of
+§5.5 all read the group's tags before they issue anything, and a group without
+the tag is refused with `lvm.ErrNotOwned`, unchanged. A command that addresses a
+device rather than a group (`pvremove`, `pvresize`, `vgimportclone`) reads the
+device's group the same way, and passes a device that carries no group at all,
+because the removals behind it are convergent and the layer above has already
+decided what may be labeled. Two operations cannot check and say so where they
+are `pvcreate`, because the device carries no group yet, which is why
+`lvmPhysicalVolume` decides from the device's content (§5.3), and the
+device-mapper force path of §5.4, which unmaps nodes on this host after LVM has
+stopped answering and changes nothing on the device. A refusal is not device
+loss: `lvmVolumeGroup`'s release reaches the force path only when LVM could not
+answer, and returns the refusal without unmapping anything.
+
+**A group from before the tag is adopted by its shape, and only by its shape.**
+The one shape nothing makes by accident is a complete stack under the driver's
+names: a group named `vol-<uuid>` holding a volume named `lv-<uuid>` from the same
+UUID, and beside it nothing but the structural volumes the stack makes for itself
+(§5.3's preserved names). A stranger beside the volume makes the group one nobody
+can vouch for, since adoption tags every volume in it. `lvmVolumeGroup` meets that case on the group it is named for and adopts it
+before it touches anything else, which puts the tag on the group and on its
+volumes. `lvmPhysicalVolume` meets it on a clone whose source predates the tag,
+where the group still carries the source's name, and recognizes it through
+`plans.RecognizeStack` before the re-identification of §5.3 runs. Adoption tags the
+volumes first and the group last, so the group's tag is the commit: an adoption
+that dies between the two is retried whole. A group under
+the driver's name that holds anything else, and a group under any other name that
+the recognizer does not know, are somebody's, and both are refused with what was
+found in the message. A refusal is the only outcome that leaves no way to lose a
+volume, and the message is what keeps it from being a stage retried forever with
+LVM's own words.
+
+**The interrupted-create marker of §5.5 shares the namespace**, as
+`storage.simplyblock.io/creating`, and so do three informational tags the group
+carries for whoever reads a node: `storage.simplyblock.io/lvol=<uuid>`,
+`storage.simplyblock.io/pv=<name>`, and
+`storage.simplyblock.io/pvc=<namespace>/<name>`, the last two when the node
+service was told them through the volume context. `lvmVolumeGroup` makes them
+match on every bring-up, because a claim can be rebound and a clone arrives
+carrying its source's. They decide nothing. The owner tag alone does, since a
+claim's identity is not evidence of anything about the bytes.
+
 ## 6. The Stack Record
 
 Every volume with a plan has one file on the host:
@@ -958,14 +1013,14 @@ nothing about the state a released layer is in, and removes the record either wa
 
 ### 7.5 Which RPC calls what
 
-| RPC or path                    | Runner call             | Notes                                                                                                                    |
-|--------------------------------|-------------------------|--------------------------------------------------------------------------------------------------------------------------|
-| `NodeStageVolume`              | `Up`                    | Acts on the top artifact's `Path`, or `Devices[0].Path` for raw block                                                    |
-| `NodeUnstageVolume`            | `Down`                  | `Release` only. `Destroy` is never reached from here                                                                     |
-| `NodePublishVolume`            | `Heal`, then bind-mount | kubelet skips `NodeStage` when the volume is still referenced on the node, so publish is where a heal has to happen (§9) |
-| `NodeExpandVolume`             | `Grow`                  | Bottom to top, skipping layers that implement no `Grower`                                                                |
-| `restageVolume`                | `Heal`                  | Never `Up`, because the data exists and nothing may be formatted                                                         |
-| `DeleteVolume`, `DeleteExport` | `Down`, then `Destroy`  | The only callers of `Destroy`                                                                                            |
+| RPC or path                        | Runner call             | Notes                                                                                                                              |
+|------------------------------------|-------------------------|------------------------------------------------------------------------------------------------------------------------------------|
+| `NodeStageVolume`                  | `Up`                    | Acts on the top artifact's `Path`, or `Devices[0].Path` for raw block                                                              |
+| `NodeUnstageVolume`                | `Down`                  | `Release` only, except on the deletion row below                                                                                   |
+| `NodePublishVolume`                | `Heal`, then bind-mount | kubelet skips `NodeStage` when the volume is still referenced on the node, so publish is where a heal has to happen (§9)           |
+| `NodeExpandVolume`                 | `Grow`                  | Bottom to top, skipping layers that implement no `Grower`                                                                          |
+| `restageVolume`                    | `Heal`                  | Never `Up`, because the data exists and nothing may be formatted                                                                   |
+| A deletion, at `NodeUnstageVolume` | `Down`, then `Destroy`  | The only caller of `Destroy`. `DeleteVolume` runs in the controller plugin, which reaches neither the record nor the host (§17 Q4) |
 
 ---
 
@@ -1328,6 +1383,13 @@ nothing infers a plan from `client_compression` or `client_deduplication`. A
 cluster tracking `main` between the two merges is the only way to reach a VDO
 stack with no record, and such a volume is restaged rather than inferred.
 
+**Volumes made before the ownership tag need no action.** The tag of §5.7 is
+written by the creates from the release that introduces it, and a volume from
+before it is adopted on its next bring-up by the one shape the driver makes and
+nothing else does: a complete stack under the driver's names. Nothing is
+restaged for it, and a group that is not that shape is refused rather than
+guessed at.
+
 **Phase 3 removes the special cases it replaces.** `healVolumeBeforePublish`,
 `ensureDeviceConnected`, `restageVolume`, and `NodeExpandVolume`'s block-device
 branch become runner calls, and the VDO conditionals PR #402 added to
@@ -1342,14 +1404,14 @@ stays valid and no PV is rewritten.
 
 ## 17. Open Questions
 
-| #   | Question                                                                                                                                                                                                                                                                                                                                                                            | Owner        |
-|-----|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------|
-| 1   | **Package name.** `atlas-lib/volstack/` is provisional. The existing package names in `atlas-lib` are short concrete nouns (`nvme`, `nvmeof`, `lvol`, `nqn`), and this one is neither short nor a noun anybody uses out loud                                                                                                                                                        | —            |
-| 2   | **Whether the LVM layers share one lock key or hold two.** [Appendix B](#appendix-b-lockscope) proposes the mechanism. What decides the granularity is empirical: concurrent `pvscan` and `vgchange` on one host is unexercised rather than proven safe, and the answer is a load-test result (§15). Until it is taken, the runner locks per volume                                 | —            |
-| 3   | **Where the stack record lives.** Host-local (§6) works when the operator is unreachable and needs no RPC on the unstage path. Operator-side over csi-link is visible cluster-wide and finds orphans without a host sweep. Phase 1 takes the host-local file, and whether the operator-side record is an addition or a replacement is open                                          | —            |
-| 4   | **Whether `Destroy` is reachable from a node RPC at all.** For an LVM stack the metadata dies with the logical volume the control plane deletes, so `Destroy` would only ever remove node-local remnants. For a pNFS export it does not, and `DeleteExport` genuinely destroys. If the answer is "only a deletion path," the node RPCs get a narrower contract than §4.1 gives them | —            |
-| 5   | **`nfsExport` and `nfsMount` as layers.** §5 asserts they fit the contract. That is a claim this design cannot verify, because it does not build them. The pNFS designs are where it is settled, and a verb they cannot express is a finding against §4.1                                                                                                                           | pNFS designs |
-| 6   | **Whether Phase 4 ships.** It is planned, not committed. The cost of leaving it out is a third hand-written copy of the topology pattern when pNFS lands                                                                                                                                                                                                                            | —            |
+| #   | Question                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Owner        |
+|-----|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------|
+| 1   | **Package name.** `atlas-lib/volstack/` is provisional. The existing package names in `atlas-lib` are short concrete nouns (`nvme`, `nvmeof`, `lvol`, `nqn`), and this one is neither short nor a noun anybody uses out loud                                                                                                                                                                                                                                                                                                                              | —            |
+| 2   | **Whether the LVM layers share one lock key or hold two.** [Appendix B](#appendix-b-lockscope) proposes the mechanism. What decides the granularity is empirical: concurrent `pvscan` and `vgchange` on one host is unexercised rather than proven safe, and the answer is a load-test result (§15). Until it is taken, the runner locks per volume                                                                                                                                                                                                       | —            |
+| 3   | **Where the stack record lives.** Host-local (§6) works when the operator is unreachable and needs no RPC on the unstage path. Operator-side over csi-link is visible cluster-wide and finds orphans without a host sweep. Phase 1 takes the host-local file, and whether the operator-side record is an addition or a replacement is open                                                                                                                                                                                                                | —            |
+| 4   | **Whether `Destroy` is reachable from a node RPC at all.** Settled by where the plugins run: `DeleteVolume` is the controller plugin's, and the record and the objects are the node's, so the controller cannot call it. `NodeUnstageVolume` is the node RPC that runs last on a volume, and it calls `Destroy` when the volume is going away for good, which it reads from the `PersistentVolume`'s reclaim policy and the claim's deletion. What stays open is the pNFS `DeleteExport`, whose objects are the MDS host's rather than any staging node's | —            |
+| 5   | **`nfsExport` and `nfsMount` as layers.** §5 asserts they fit the contract. That is a claim this design cannot verify, because it does not build them. The pNFS designs are where it is settled, and a verb they cannot express is a finding against §4.1                                                                                                                                                                                                                                                                                                 | pNFS designs |
+| 6   | **Whether Phase 4 ships.** It is planned, not committed. The cost of leaving it out is a third hand-written copy of the topology pattern when pNFS lands                                                                                                                                                                                                                                                                                                                                                                                                  | —            |
 
 ---
 

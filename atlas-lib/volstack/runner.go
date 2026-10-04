@@ -89,19 +89,42 @@ func (r *Runner) unwind(ctx context.Context, brought Plan) {
 // layer legitimately leaves its device present when the subsystem is shared. So
 // this asserts nothing about the state a released layer is in, and removes the
 // record either way.
+//
+// A survey that cannot complete is no reason to leave the stack up, which is the
+// reasoning unwind already carries and the case this one meets more often.
+// Total path loss takes the device out from under a live stack: the mount above
+// it answers EIO, and the filesystem layer reports that as an error rather than
+// as a state, so the survey fails on the very teardown every layer's force path
+// was written for. What the failed survey costs is the input each layer sits on
+// and the knowledge of which layers are already gone — neither of which a
+// release needs, since a layer resolves the object it owns from its own
+// parameters and Release on an absent one is a no-op.
 func (r *Runner) Down(ctx context.Context, handle string, plan Plan) error {
 	attempted := r.attempted(handle, len(plan))
 
 	inputs, states, err := r.survey(ctx, plan)
 	if err != nil {
-		return err
+		inputs, states = make([]Artifact, len(plan)), nil
 	}
 
 	for i := len(plan) - 1; i >= 0; i-- {
 		if attempted != nil && !attempted[i] {
 			continue
 		}
-		if states[i] == StateAbsent {
+		// Already down, so a release has nothing to do to it. Absent is nothing
+		// of the layer being there at all, and Inactive is the state Release
+		// itself leaves behind: complete, and not mapped on this host. A
+		// teardown resuming over a stack something already took part of down
+		// meets both, and acting on either is work against an object that is in
+		// the state the caller is asking for.
+		//
+		// Said out loud, because otherwise it cannot be told apart from the
+		// teardown that did the work: both return the same nothing.
+		//
+		// Partial is not among them, and must not be. A fabric device that is
+		// present and cannot serve is still the device a release has to detach.
+		if states != nil && (states[i] == StateAbsent || states[i] == StateInactive) {
+			Infof("volstack: release %s skipped, already down (%s)", plan[i].Name(), states[i])
 			continue
 		}
 		if err := plan[i].Release(ctx, inputs[i]); err != nil {
@@ -115,6 +138,17 @@ func (r *Runner) Down(ctx context.Context, handle string, plan Plan) error {
 //
 // It never recreates: the data already exists, which is why this and not Up is
 // what a restage runs.
+//
+// A layer that cannot be observed is one to repair rather than one to report,
+// where it can repair itself. That is the case this verb exists for: total path
+// loss removes the device, the mount above it answers EIO, and the filesystem
+// layer's Observe reports that as an error rather than as a state — while its
+// Healthy answers "not healthy" for the same mount precisely so that a heal
+// runs. Reading the Observe error as fatal defeats the layer's own intent, and
+// what it costs is the restage: the volume is never republished and the
+// workload stays down. A layer that implements no Healer keeps the old
+// behavior, because nothing in the plan can repair it and the layers above it
+// would be walked against a reading nobody has.
 func (r *Runner) Heal(ctx context.Context, handle string, plan Plan) error {
 	below := Artifact{}
 	for _, layer := range plan {
@@ -122,7 +156,20 @@ func (r *Runner) Heal(ctx context.Context, handle string, plan Plan) error {
 		// build the layers it passes through on the way there.
 		_, own, err := layer.Observe(ctx, below)
 		if err != nil {
-			return fmt.Errorf("volstack: observe %s while healing: %w", layer.Name(), err)
+			healer, ok := layer.(Healer)
+			if !ok {
+				return fmt.Errorf("volstack: observe %s while healing: %w", layer.Name(), err)
+			}
+			if err := healer.Heal(ctx, below, Artifact{}); err != nil {
+				return fmt.Errorf("volstack: heal %s: %w", layer.Name(), err)
+			}
+			// Read it again, because the layers above this one sit on what it
+			// exposes and a heal that worked is one that can now be read.
+			if _, own, err = layer.Observe(ctx, below); err != nil {
+				return fmt.Errorf("volstack: observe %s after healing it: %w", layer.Name(), err)
+			}
+			below = own
+			continue
 		}
 
 		healer, ok := layer.(Healer)
@@ -169,14 +216,49 @@ func (r *Runner) Grow(ctx context.Context, plan Plan) error {
 	return nil
 }
 
+// Observe walks a live stack bottom to top without changing any of it, and
+// returns what the topmost layer currently exposes.
+//
+// It is the read behind an operation that acts on a staged volume rather than
+// building one: a raw block volume is bind-mounted from the device its fabric
+// layer exposes, and a publish may not converge the stack on the way to finding
+// it. Up would, and on a volume whose paths are gone it would block doing so.
+func (r *Runner) Observe(ctx context.Context, plan Plan) (Artifact, error) {
+	below := Artifact{}
+	for _, layer := range plan {
+		_, own, err := layer.Observe(ctx, below)
+		if err != nil {
+			return Artifact{}, fmt.Errorf("volstack: observe %s: %w", layer.Name(), err)
+		}
+		below = own
+	}
+	return below, nil
+}
+
 // Destroy removes the plan's durable objects, top to bottom, so a layer goes
 // before what it sits on. Only a deletion path calls it, never an unstage.
 func (r *Runner) Destroy(ctx context.Context, handle string, plan Plan) error {
-	inputs, _, err := r.survey(ctx, plan)
+	inputs, states, err := r.survey(ctx, plan)
 	if err != nil {
 		return err
 	}
 	for i := len(plan) - 1; i >= 0; i-- {
+		// Nothing of this layer is there, so there is nothing of it to remove.
+		// The same rule Down applies to Release, for the same reason and read
+		// off the same survey: an absent layer's object is already in the state
+		// the caller is asking for.
+		//
+		// It is not a corner case on this path, it is the normal one. The only
+		// caller destroys after releasing, and releasing is what detaches the
+		// fabric, so every layer standing on that fabric is absent by the time
+		// this walk reaches it. Destroying one anyway means removing an object
+		// whose metadata lives on a device that is no longer attached, which
+		// cannot work: on an LVM stack it surfaced as `lvremove: Volume group
+		// "vol-..." not found`, failing the RPC for a volume that had in fact
+		// been torn down correctly.
+		if states[i] == StateAbsent {
+			continue
+		}
 		if err := plan[i].Destroy(ctx, inputs[i]); err != nil {
 			return fmt.Errorf("volstack: destroy %s: %w", plan[i].Name(), err)
 		}

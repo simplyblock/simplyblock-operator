@@ -11,10 +11,18 @@
 // Nothing here blocks. A step that is not finished requeues, and the step it is
 // on is in the status, so a controller restart resumes rather than restarts.
 //
-// The run changes nothing it did not create. It reads nodes, creates probe Jobs
-// and reads the ConfigMaps they write, and creates one ClusterDeploymentConfig
-// in Draft. Whether that document becomes a cluster is the reviewer's decision
-// and a different controller's job.
+// The run creates nothing in the cluster it does not own: it reads nodes,
+// creates probe Jobs and reads the ConfigMaps they write, and creates one
+// ClusterDeploymentConfig in Draft. Whether that document becomes a cluster is
+// the reviewer's decision and a different controller's job.
+//
+// It does change the workers. A probe hands back every NVMe controller a dead
+// deployment left on a userspace driver, because a controller SPDK took
+// presents no block device and a run that only looked would report machine
+// after machine with no storage on it. The controller stays on the kernel
+// driver afterward, so that the disk the draft names still exists when the
+// node is added, and each probe reports what it took in its report's Reclaimed
+// list. What a running deployment is driving is never touched.
 //
 // It also deletes nothing, and holds no verb to. The Jobs and the reports both
 // carry an owner reference to the run, so deleting the run collects them and a
@@ -26,6 +34,7 @@ package deployment
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -37,13 +46,17 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/simplyblock/atlas/inventory"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/atlas/ptr"
+	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+
+	"github.com/simplyblock/simplyblock-operator/internal/bootstrap"
 	discoverypkg "github.com/simplyblock/simplyblock-operator/internal/discovery"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
@@ -68,6 +81,43 @@ const (
 	clusterNameSuffix = "-cluster"
 )
 
+// The reasons a discovery run emits. They are constants rather than literals at
+// the call site because a reason is an API: it is what somebody greps a cluster's
+// events for and what an alert matches on, and a literal typed twice is two
+// reasons nobody can tell apart from the outside.
+const (
+	// The run's own lifecycle.
+	OperationStarted   = "OperationStarted"
+	OperationSucceeded = "OperationSucceeded"
+	OperationAborted   = "OperationAborted"
+	OperationFailed    = "OperationFailed"
+
+	// What Inspecting concluded about a worker, and about the cluster.
+	WorkerDeclined            = "WorkerDeclined"
+	ControlPlaneNodeIncluded  = "ControlPlaneNodeIncluded"
+	EnvironmentPartiallyRead  = "EnvironmentPartiallyRead"
+	DiscoveryStepDeadlineGone = "StepDeadlineExceeded"
+
+	// What Probing found.
+	DeviceInspectionFailed = "DeviceInspectionFailed"
+	ReportUnreadable       = "ReportUnreadable"
+
+	// What Writing produced, and what it left out.
+	ConfigWritten  = "ConfigWritten"
+	ConfigExists   = "ConfigExists"
+	DeviceDeclined = "DeviceDeclined"
+
+	// ConfigRefused is a fleet the run inspected and could not draft a document
+	// for. It is not a device or a worker being declined, which leaves a smaller
+	// draft: it is the whole document, and the run fails.
+	//
+	// It carries the reason because a run that produced nothing is otherwise a
+	// phase and a message, and the message is one line: the event is where the
+	// worker, the shape of its disks, and the field that would change the answer
+	// fit.
+	ConfigRefused = "ConfigRefused"
+)
+
 // OperatorOpsReconciler runs operations against the operator itself.
 type OperatorOpsReconciler struct {
 	client.Client
@@ -90,6 +140,12 @@ type OperatorOpsReconciler struct {
 	// nothing else. Empty is DefaultNodeProbeServiceAccount, which is what the
 	// chart creates.
 	ProbeServiceAccount string
+
+	// Namespace is the operator's own, which is where the installation's
+	// bootstrap ConfigMap lives. A run may be anywhere -- a cluster managing this
+	// one raises runs in the namespace it chooses -- so the configuration is not
+	// looked for beside the run.
+	Namespace string
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=operatorops,verbs=get;list;watch;create;update;patch;delete
@@ -146,36 +202,141 @@ func (r *OperatorOpsReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	log.Info("advancing discovery", "step", ops.Status.Step.State, "phase", ops.Status.Phase)
+	return r.advance(ctx, &ops)
+}
 
-	switch simplyblockv1alpha2.OperatorOpsStep(ops.Status.Step.State) {
-	case "":
-		return r.startInspecting(ctx, &ops)
-	case simplyblockv1alpha2.OperatorOpsStepInspecting:
-		return r.inspect(ctx, &ops)
-	case simplyblockv1alpha2.OperatorOpsStepProbing:
-		return r.probe(ctx, &ops)
-	case simplyblockv1alpha2.OperatorOpsStepWriting:
-		return r.write(ctx, &ops)
+// advance runs the graph of the run's action forward by at most one step.
+//
+// The graph decides the order and the deadlines, and this decides nothing: the
+// step to perform is where the machine is, the step that follows is the edge out
+// of it, and a step that is not finished requeues against the same position.
+// That is the whole of what replacing the switch bought — the ordering is
+// declared in one place rather than spread across the returns of three methods.
+func (r *OperatorOpsReconciler) advance(
+	ctx context.Context, ops *simplyblockv1alpha2.OperatorOps,
+) (ctrl.Result, error) {
+	graph, declared := operatorOpsGraphs()[statemachine.Action(ops.Spec.Action)]
+	if !declared {
+		// Admission's enum refuses an unknown action, so reaching here means an
+		// older CRD served the object or the schema was bypassed.
+		return r.fail(ctx, ops, fmt.Sprintf("action %q declares no state graph", ops.Spec.Action))
+	}
+
+	machine, err := statemachine.NewFromSnapshot(ctx, graph,
+		statemachine.FromKube[discoveryStep](ops.Status.Step))
+	if err != nil {
+		// An unrecognized step is a downgrade, a hand-edited object, or a rename
+		// that shipped without a conversion, and none of them resolve by
+		// reconciling again.
+		return r.fail(ctx, ops, fmt.Sprintf("the run cannot be resumed: %v", err))
+	}
+	defer machine.Close()
+
+	// A machine is born already in its initial state, so that state's entry hook
+	// never runs and no deadline is set for it. Recording the birth here is what
+	// stops the first step being the one step that cannot time out, and it is
+	// also the run's own start: a crash between this write and the work is
+	// visible as a run that started rather than as one that never did.
+	if ops.Status.Step.State == "" {
+		return r.begin(ctx, ops, machine.CurrentState())
+	}
+
+	current := machine.CurrentState()
+	if machine.TimeoutReached() {
+		expired := discoveryTimeoutMessage(current)
+		r.event(ops, corev1.EventTypeWarning, DiscoveryStepDeadlineGone, expired)
+		return r.fail(ctx, ops, expired)
+	}
+
+	done, err := r.performStep(ctx, ops, current)
+	if err != nil {
+		var refusal *refusedError
+		if errors.As(err, &refusal) {
+			r.event(ops, corev1.EventTypeWarning, refusal.reason, refusal.Error())
+			return r.fail(ctx, ops, refusal.Error())
+		}
+		return ctrl.Result{}, err
+	}
+	if !done {
+		// The step wrote whatever it concluded and is waiting on something
+		// outside this reconcile. Probing is the only one that does.
+		return ctrl.Result{RequeueAfter: probingRequeue}, nil
+	}
+
+	if machine.IsTerminal() {
+		return ctrl.Result{}, r.succeed(ctx, ops)
+	}
+
+	next, ok := nextDiscoveryStep(machine)
+	if !ok {
+		return r.fail(ctx, ops, fmt.Sprintf("step %s declares no successor and is not terminal", current))
+	}
+	if err := machine.TransitionTo(ctx, next); err != nil {
+		return ctrl.Result{}, fmt.Errorf("enter step %s: %w", next, err)
+	}
+	return r.enter(ctx, ops, next, statemachine.ToKube(machine.Snapshot()).Deadline)
+}
+
+// performStep runs one step and reports whether it has finished.
+func (r *OperatorOpsReconciler) performStep(
+	ctx context.Context, ops *simplyblockv1alpha2.OperatorOps, current discoveryStep,
+) (bool, error) {
+	switch current {
+	case stepInspecting:
+		return r.inspect(ctx, ops)
+	case stepProbing:
+		return r.probe(ctx, ops)
+	case stepWriting:
+		return r.write(ctx, ops)
 	default:
-		return r.fail(ctx, &ops, fmt.Sprintf("step %q is not one this action has", ops.Status.Step.State))
+		return false, fmt.Errorf("step %s belongs to no run this operator performs", current)
 	}
 }
 
-// startInspecting records that the run has begun before it does anything, so
-// that a crash between the two is visible as a run that started rather than one
-// that never did.
-func (r *OperatorOpsReconciler) startInspecting(
-	ctx context.Context,
-	ops *simplyblockv1alpha2.OperatorOps,
+// begin records that the run has started, in the step the graph begins at and
+// with that step's budget.
+//
+// It writes before anything is done, so a crash between the two is visible as a
+// run that started rather than as one that never did.
+func (r *OperatorOpsReconciler) begin(
+	ctx context.Context, ops *simplyblockv1alpha2.OperatorOps, initial discoveryStep,
 ) (ctrl.Result, error) {
 	now := metav1.Now()
+	deadline := metav1.NewTime(now.Add(initialDiscoveryDeadline))
 	ops.Status.Phase = simplyblockv1alpha2.OperatorOpsPhaseRunning
 	ops.Status.StartedAt = &now
-	ops.Status.Step.State = string(simplyblockv1alpha2.OperatorOpsStepInspecting)
+	ops.Status.Step.State = string(initial)
+	ops.Status.Step.Deadline = &deadline
 	ops.Status.Message = "reading the cluster's workers"
-	r.event(ops, corev1.EventTypeNormal, "OperationStarted", "discovery started")
+	r.event(ops, corev1.EventTypeNormal, OperationStarted, "discovery started")
 
 	return ctrl.Result{Requeue: true}, r.status(ctx, ops)
+}
+
+// enter records the step the machine has moved into, with the deadline its
+// entry hook set.
+func (r *OperatorOpsReconciler) enter(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.OperatorOps,
+	next discoveryStep,
+	deadline *metav1.Time,
+) (ctrl.Result, error) {
+	ops.Status.Step.State = string(next)
+	ops.Status.Step.Deadline = deadline
+	return ctrl.Result{Requeue: true}, r.status(ctx, ops)
+}
+
+// succeed ends a run that reached the end of its graph.
+func (r *OperatorOpsReconciler) succeed(
+	ctx context.Context, ops *simplyblockv1alpha2.OperatorOps,
+) error {
+	now := metav1.Now()
+	ops.Status.Phase = simplyblockv1alpha2.OperatorOpsPhaseSucceeded
+	ops.Status.CompletedAt = &now
+	ops.Status.Step.Deadline = nil
+	r.event(ops, corev1.EventTypeNormal, OperationSucceeded, ops.Status.Message)
+	observeRun(ops, ops.Status.Phase)
+	return r.status(ctx, ops)
 }
 
 // inspect settles what the run is about: which workers, and which distribution.
@@ -187,10 +348,15 @@ func (r *OperatorOpsReconciler) startInspecting(
 func (r *OperatorOpsReconciler) inspect(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.OperatorOps,
-) (ctrl.Result, error) {
+) (bool, error) {
 	spec := ops.Spec.Discover
 	if spec == nil {
 		spec = &simplyblockv1alpha2.DiscoverSpec{}
+	}
+
+	// Refused before a single worker is probed. See refuseUnreadableFilter.
+	if err := refuseUnreadableFilter(spec); err != nil {
+		return false, err
 	}
 
 	var nodes corev1.NodeList
@@ -199,21 +365,49 @@ func (r *OperatorOpsReconciler) inspect(
 		options = append(options, client.MatchingLabels(spec.NodeSelector))
 	}
 	if err := r.List(ctx, &nodes, options...); err != nil {
-		return ctrl.Result{}, err
+		return false, err
+	}
+
+	// A named set is filtered here rather than fetched one node at a time, so
+	// that everything after this point sees one node list however the run chose
+	// its machines. A name matching nothing is announced: the run was told to
+	// consider that machine, and a draft quietly missing it is the case the
+	// declined events below exist for.
+	if len(spec.Workers) > 0 {
+		nodes.Items = r.namedWorkers(ops, spec.Workers, nodes.Items)
 	}
 
 	taken, err := r.workersAlreadyTaken(ctx, ops.Namespace)
 	if err != nil {
-		return ctrl.Result{}, err
+		return false, err
 	}
 
+	// A worker that looked fine and was not used owes the run a reason. Both
+	// exclusions below are silent otherwise, and a draft missing three machines
+	// somebody expected is a draft they have no way to ask about.
+	useControlPlane := ptr.BoolFromOrFalse(spec.EnableControlPlaneNodes)
 	workers := make([]string, 0, len(nodes.Items))
 	for _, node := range nodes.Items {
-		if !schedulable(node) {
-			continue
-		}
 		if _, already := taken[node.Name]; already {
 			continue
+		}
+		// The role is not derivable from the taints. Kubernetes taints its
+		// control-plane nodes and OpenShift usually does not taint its
+		// infrastructure ones, so an infra node passes every check the run had
+		// before this one and its being the storage tier went unnoticed.
+		role := discoverypkg.RoleOf(node)
+		if !UsableWorker(node, useControlPlane) {
+			r.event(ops, corev1.EventTypeNormal, WorkerDeclined,
+				fmt.Sprintf("%s is not used: %s", node.Name, declinedBecause(node, role)))
+			continue
+		}
+		if !role.HoldsStorageNodes() {
+			// The reviewer asked for these and still has to see which machines
+			// they got, because the draft's control-plane node set is otherwise
+			// just another block of hostnames.
+			r.event(ops, corev1.EventTypeWarning, ControlPlaneNodeIncluded, fmt.Sprintf(
+				"%s is %s and is in the draft because spec.discover.enableControlPlaneNodes is set",
+				node.Name, role.Describe()))
 		}
 		workers = append(workers, node.Name)
 	}
@@ -225,25 +419,24 @@ func (r *OperatorOpsReconciler) inspect(
 	if err != nil {
 		// Half the evidence still yields a conclusion, and the field is one a
 		// reviewer corrects, so this is recorded and not fatal.
-		r.event(ops, corev1.EventTypeWarning, "EnvironmentPartiallyRead",
+		r.event(ops, corev1.EventTypeWarning, EnvironmentPartiallyRead,
 			fmt.Sprintf("the API groups could not be listed, so the distribution was concluded from the nodes alone: %v", err))
 	}
 
 	if len(workers) == 0 {
-		return r.fail(ctx, ops,
-			"no schedulable worker is free: every node either carries a StorageNode already, "+
-				"is unschedulable, or does not match the run's selector")
+		return false, refusef(OperationFailed,
+			"no worker is free: every node either carries a StorageNode already, is "+
+				"unschedulable, is reserved for the control plane or for infrastructure, "+
+				"or does not match the run's selector")
 	}
 
 	ops.Status.Workers = workers
 	ops.Status.Environment = simplyblockv1alpha2.KubernetesEnvironment(environment.Distribution)
-	ops.Status.Step.State = string(simplyblockv1alpha2.OperatorOpsStepProbing)
-	deadline := metav1.NewTime(time.Now().Add(probingDeadline))
-	ops.Status.Step.Deadline = &deadline
+	observeWorkersFound(ops.Namespace, len(workers))
 	ops.Status.Message = fmt.Sprintf("probing %d worker(s) of a %s cluster",
 		len(workers), orUnknown(string(environment.Distribution)))
 
-	return ctrl.Result{Requeue: true}, r.status(ctx, ops)
+	return true, r.status(ctx, ops)
 }
 
 // workersAlreadyTaken is the set of workers a StorageNode already runs on.
@@ -256,7 +449,7 @@ func (r *OperatorOpsReconciler) workersAlreadyTaken(
 	ctx context.Context,
 	namespace string,
 ) (map[string]struct{}, error) {
-	var nodes simplyblockv1alpha1.StorageNodeList
+	var nodes simplyblockv1alpha2.StorageNodeList
 	if err := r.List(ctx, &nodes, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
@@ -277,13 +470,12 @@ func (r *OperatorOpsReconciler) workersAlreadyTaken(
 func (r *OperatorOpsReconciler) probe(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.OperatorOps,
-) (ctrl.Result, error) {
+) (bool, error) {
 	log := logf.FromContext(ctx)
 
-	if deadline, has := ops.Status.Step.KubeDeadline(); has && time.Now().After(deadline) {
-		return r.fail(ctx, ops, fmt.Sprintf(
-			"the probes did not all finish within %s; the reports that did arrive are in the "+
-				"ConfigMaps labelled for this run", probingDeadline))
+	spec := ops.Spec.Discover
+	if spec == nil {
+		spec = &simplyblockv1alpha2.DiscoverSpec{}
 	}
 
 	owner := metav1.NewControllerRef(ops,
@@ -291,7 +483,7 @@ func (r *OperatorOpsReconciler) probe(
 
 	reports, err := r.reportsFor(ctx, ops)
 	if err != nil {
-		return ctrl.Result{}, err
+		return false, err
 	}
 
 	waiting, failed := 0, []string{}
@@ -307,21 +499,26 @@ func (r *OperatorOpsReconciler) probe(
 			Image:              r.ProbeImage,
 			ServiceAccountName: r.probeServiceAccount(),
 			Owner:              owner,
+			// A probe is pinned with spec.nodeName, which bypasses the
+			// scheduler and not the taints: a tainted worker keeps the pod off
+			// or evicts it, so a run against a dedicated storage plane that
+			// tolerates nothing inspects nothing.
+			Tolerations: spec.Tolerations,
 		})
 		if err != nil {
-			return r.fail(ctx, ops, fmt.Sprintf("a probe Job could not be built: %v", err))
+			return false, refusef(OperationFailed, "a probe Job could not be built: %v", err)
 		}
 
 		var existing batchv1.Job
 		switch err := r.Get(ctx, client.ObjectKeyFromObject(job), &existing); {
 		case apierrors.IsNotFound(err):
 			if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
-				return ctrl.Result{}, err
+				return false, err
 			}
 			log.Info("created a probe Job", "worker", worker, "job", job.Name)
 			waiting++
 		case err != nil:
-			return ctrl.Result{}, err
+			return false, err
 		case existing.Status.Failed > 0 && jobExhausted(&existing):
 			// A Job that has used its retries and written no report is a
 			// worker this run cannot describe. It does not fail the run: the
@@ -336,43 +533,45 @@ func (r *OperatorOpsReconciler) probe(
 	if waiting > 0 {
 		ops.Status.Message = fmt.Sprintf("%d of %d worker(s) reported; waiting for %d",
 			len(reports), len(ops.Status.Workers), waiting)
-		if err := r.status(ctx, ops); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: probingRequeue}, nil
+		return false, r.status(ctx, ops)
 	}
 
 	if len(reports) == 0 {
-		return r.fail(ctx, ops, fmt.Sprintf(
-			"no worker reported: every one of the %d probe Jobs failed", len(ops.Status.Workers)))
+		return false, refusef(OperationFailed,
+			"no worker reported: every one of the %d probe Jobs failed", len(ops.Status.Workers))
 	}
 	for _, worker := range failed {
-		r.event(ops, corev1.EventTypeWarning, "DeviceInspectionFailed",
+		r.event(ops, corev1.EventTypeWarning, DeviceInspectionFailed,
 			fmt.Sprintf("the probe on %s failed, so it is not in the draft", worker))
 	}
 
-	ops.Status.Step.State = string(simplyblockv1alpha2.OperatorOpsStepWriting)
-	ops.Status.Step.Deadline = nil
 	ops.Status.Message = fmt.Sprintf("%d worker(s) reported; writing the draft", len(reports))
-	return ctrl.Result{Requeue: true}, r.status(ctx, ops)
+	return true, r.status(ctx, ops)
 }
 
 // write turns the reports into a ClusterDeploymentConfig in Draft.
 func (r *OperatorOpsReconciler) write(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.OperatorOps,
-) (ctrl.Result, error) {
+) (bool, error) {
 	spec := ops.Spec.Discover
 	if spec == nil {
 		spec = &simplyblockv1alpha2.DiscoverSpec{}
 	}
 
+	// Asked again at the step that applies the filter, so that the guard sits
+	// where the value is used and not only where the run was settled.
+	if err := refuseUnreadableFilter(spec); err != nil {
+		return false, err
+	}
+
 	reports, err := r.reportsFor(ctx, ops)
 	if err != nil {
-		return ctrl.Result{}, err
+		return false, err
 	}
 	if len(reports) == 0 {
-		return r.fail(ctx, ops, "the probe reports are gone, so there is nothing to write")
+		return false, refusef(OperationFailed,
+			"the probe reports are gone, so there is nothing to write")
 	}
 
 	collected := make([]nodeprobe.Report, 0, len(reports))
@@ -387,51 +586,120 @@ func (r *OperatorOpsReconciler) write(
 	// memory is reporting something truer than a copy taken minutes ago.
 	kubeNodes, err := r.kubeNodesFor(ctx, ops)
 	if err != nil {
-		return ctrl.Result{}, err
+		return false, err
 	}
 
-	filter := spec.DeviceFilter
-	planner := discoverypkg.Planner{
-		Class:     discoverypkg.ClassOf(filter),
-		KubeNodes: kubeNodes,
-	}
-	plan := planner.Plan(collected, filter)
+	planner := discoverypkg.Planner{KubeNodes: kubeNodes}
+	plan := planner.Plan(collected, spec)
 
 	if len(plan.NodeSets) == 0 {
-		return r.fail(ctx, ops, fmt.Sprintf(
-			"no worker has a device this run would use: %s", plan.Summary()))
+		// The rules worked out why every machine was dropped, and a run that
+		// reported only how many were dropped would throw that away: a reviewer
+		// reading "78 refusal(s)" cannot tell a fleet with no disks from a fleet
+		// whose disks are held by a driver they could reclaim. The refusals go
+		// out as events, and the worker-level ones go into the message as well,
+		// because the message is what `kubectl get operatorops` shows.
+		for _, refusal := range plan.RefusalLines() {
+			r.event(ops, corev1.EventTypeNormal, DeviceDeclined, refusal)
+		}
+		if len(plan.Explain()) == 0 {
+			// No machine was refused by name, so the run had no worker to refuse.
+			return false, refusef(OperationFailed,
+				"no worker has a device this run would use: %s", plan.Summary())
+		}
+		// Counted rather than listed per worker, because this message is carried
+		// by an event and an event is refused past 1024 characters. The
+		// per-worker detail is not lost: every device refusal above went out as
+		// its own DeviceDeclined event.
+		return false, refusef(OperationFailed,
+			"no worker has a device this run would use: %s",
+			plan.ExplainWithin(maxEventMessage-len(refusalPreamble)))
 	}
 
-	config, notes := r.draftFor(ops, spec, plan)
+	// Read here rather than at startup: the draft half of the configuration is
+	// spent minutes after the operator came up, and an installation that corrected
+	// a number between the install and this step meant the correction. A document
+	// that cannot be read is reported once and then treated as absent, which
+	// leaves every number to what this run found.
+	//
+	// A configuration that could not be read is not the same as one that is not
+	// there, and this step cannot proceed through it. The document it is about to
+	// write is the one the next reconcile finds already present and leaves alone,
+	// so a draft written without the installation's seed keeps the numbers this
+	// run found for good: the API recovering afterward restores nothing. The
+	// error requeues instead, which is what the read being transient asks for.
+	installation, err := bootstrap.Load(ctx, r.Client, r.Namespace)
+	switch {
+	case errors.Is(err, bootstrap.ErrUnreadable):
+		return false, err
+	case err != nil:
+		logf.FromContext(ctx).Error(err, "the installation's bootstrap configuration "+
+			"could not be parsed; the draft states what this run found")
+	}
+
+	config, notes, err := r.draftFor(ops, spec, plan, installation)
+	if err != nil {
+		// A fleet the run read and cannot draft a document for. The reason names
+		// the worker and the shape of its disks, and the run's own message is one
+		// line, so it goes out as an event as well: a run that produced nothing
+		// is otherwise a phase, and a phase is not something anybody can act on.
+		r.event(ops, corev1.EventTypeWarning, ConfigRefused, err.Error())
+		return false, refusef(OperationFailed, "no document could be drafted: %v", err)
+	}
+
 	if err := r.Create(ctx, config); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
-			return ctrl.Result{}, err
+			return false, err
 		}
 		// A run whose name was reused, or one that crashed after creating the
 		// document and before recording it. The document is what matters and
 		// it exists, so the run adopts it rather than failing.
-		r.event(ops, corev1.EventTypeNormal, "ConfigExists",
+		r.event(ops, corev1.EventTypeNormal, ConfigExists,
 			fmt.Sprintf("%s already existed and was left as it is", config.Name))
 	}
 
 	for _, note := range notes {
-		r.event(ops, corev1.EventTypeNormal, "ConfigWritten", note)
+		r.event(ops, corev1.EventTypeNormal, ConfigWritten, note)
 	}
-	r.event(ops, corev1.EventTypeNormal, "ConfigWritten",
+	r.event(ops, corev1.EventTypeNormal, ConfigWritten,
 		fmt.Sprintf("wrote %s in Draft: %s", config.Name, plan.Summary()))
 	for _, refusal := range plan.RefusalLines() {
-		r.event(ops, corev1.EventTypeNormal, "DeviceDeclined", refusal)
+		r.event(ops, corev1.EventTypeNormal, DeviceDeclined, refusal)
 	}
 
-	now := metav1.Now()
 	ops.Status.ConfigRef = config.Name
-	ops.Status.Phase = simplyblockv1alpha2.OperatorOpsPhaseSucceeded
-	ops.Status.CompletedAt = &now
-	ops.Status.Step.Deadline = nil
 	ops.Status.Message = fmt.Sprintf("wrote %s awaiting approval: %s", config.Name, plan.Summary())
-	r.event(ops, corev1.EventTypeNormal, "OperationSucceeded", ops.Status.Message)
+	observeDevicesFound(ops.Namespace, plan.DeviceCount())
+	return true, r.status(ctx, ops)
+}
 
-	return ctrl.Result{}, r.status(ctx, ops)
+// refuseUnreadableFilter refuses a run whose device filter names a size range
+// nothing can read.
+//
+// An unreadable range builds no size rule, which widens the filter to every
+// disk on every worker rather than narrowing it to none, and the refusal has no
+// device to attach itself to so it reaches neither the refusal list nor the
+// run's explanation. The draft that results is indistinguishable from one a run
+// meant to write.
+//
+// The admission webhook refuses such a run at the request, so reaching this
+// means the webhook is not installed or was bypassed. Both steps that read the
+// filter ask, because the one that settles the run should not probe a fleet for
+// a draft that cannot be right, and the one that applies it should not depend on
+// the other having asked.
+func refuseUnreadableFilter(spec *simplyblockv1alpha2.DiscoverSpec) error {
+	filter := spec.DeviceFilter
+	if filter == nil || filter.DriveSizeRange == "" {
+		return nil
+	}
+	if _, _, err := discoverypkg.ParseSizeRange(filter.DriveSizeRange); err != nil {
+		return refusef(OperationFailed,
+			"spec.discover.deviceFilter.driveSizeRange is %q, which cannot be read: %v. "+
+				"A run whose range cannot be read applies no size filter at all, so the draft "+
+				"would name every disk on every worker rather than the ones asked for",
+			filter.DriveSizeRange, err)
+	}
+	return nil
 }
 
 // draftFor builds the document, and the notes explaining the numbers in it that
@@ -440,10 +708,24 @@ func (r *OperatorOpsReconciler) draftFor(
 	ops *simplyblockv1alpha2.OperatorOps,
 	spec *simplyblockv1alpha2.DiscoverSpec,
 	plan discoverypkg.Plan,
-) (*simplyblockv1alpha2.ClusterDeploymentConfig, []string) {
+	installation *bootstrap.Config,
+) (*simplyblockv1alpha2.ClusterDeploymentConfig, []string, error) {
 	name := spec.ConfigName
 	if name == "" {
 		name = configNamePrefix + ops.Name
+	}
+
+	// The installation's stated layout applies to the run the operator raised for
+	// it and to no other. A run somebody wrote months later describes whatever the
+	// fleet has become, and re-applying an install-time decision over it would be
+	// a correction nobody made and nothing records.
+	seed := (*simplyblockv1alpha2.ClusterTemplate)(nil)
+	var images *simplyblockv1alpha2.DeploymentImages
+	var edge *bool
+	if ops.Labels[InitialDiscoveryLabel] == "true" {
+		seed = installation.Seed()
+		images = installation.DraftImages()
+		edge = installation.Draft.EdgeCluster
 	}
 
 	config := &simplyblockv1alpha2.ClusterDeploymentConfig{
@@ -463,11 +745,23 @@ func (r *OperatorOpsReconciler) draftFor(
 			// worst behavior available.
 			Approved:    false,
 			Environment: ops.Status.Environment,
+			EdgeCluster: edge,
+			Images:      images,
 			NodeSets:    plan.NodeSets,
 		},
 	}
 
 	var notes []string
+
+	// What the probes read of the workers' own operating system, stated only
+	// when they agree: one document becomes one storage-node DaemonSet, which
+	// carries one host OS for every worker it schedules, so a fleet that
+	// disagrees has no answer to state and the note says which worker runs
+	// what.
+	hostOS, hostOSNotes := discoverypkg.HostOSFor(plan)
+	config.Spec.HostOS = hostOS
+	notes = append(notes, hostOSNotes...)
+
 	if spec.ClusterRef != "" {
 		// A growth document: the cluster's layout is settled, and naming a
 		// template beside a reference is what admission refuses.
@@ -475,11 +769,38 @@ func (r *OperatorOpsReconciler) draftFor(
 		notes = append(notes, fmt.Sprintf(
 			"the draft grows the existing cluster %s, so it proposes no cluster layout", spec.ClusterRef))
 	} else {
-		template := discoverypkg.ClusterTemplateFor(name+clusterNameSuffix, plan)
+		// The cluster's name outlives every other thing this document produces
+		// and cannot be changed, so a stated one is taken over the one derived
+		// from the draft's own name.
+		clusterName := name + clusterNameSuffix
+		if seed != nil && seed.Name != "" {
+			clusterName = seed.Name
+		}
+
+		template, err := discoverypkg.ClusterTemplateFor(clusterName, plan,
+			discoverypkg.TemplateOptions{
+				Seed:               seed,
+				ForceJournalDevice: ptr.BoolFromOrFalse(spec.ForceJournalDevice),
+			})
+		if err != nil {
+			return nil, notes, err
+		}
 		config.Spec.Cluster = template.Template
 		notes = append(notes, template.Notes...)
+
+		// The taints this run was allowed to probe through are the taints the
+		// storage nodes have to live with, so the draft states them rather than
+		// leaving a reviewer to discover that the DaemonSet schedules nowhere.
+		if len(spec.Tolerations) > 0 {
+			config.Spec.Cluster.Tolerations = spec.Tolerations
+			notes = append(notes, fmt.Sprintf(
+				"tolerations are the %d this run probed with, because a worker whose taint "+
+					"a probe had to tolerate is one a storage node has to tolerate as well. "+
+					"This is the line to correct if the fleet's taints are not the cluster's",
+				len(spec.Tolerations)))
+		}
 	}
-	return config, notes
+	return config, notes, nil
 }
 
 // kubeNodesFor reads what Kubernetes says about the workers this run settled
@@ -528,7 +849,7 @@ func (r *OperatorOpsReconciler) reportsFor(
 	for i := range maps.Items {
 		report, err := nodeprobe.ReportFromConfigMap(&maps.Items[i])
 		if err != nil {
-			r.event(ops, corev1.EventTypeWarning, "ReportUnreadable", err.Error())
+			r.event(ops, corev1.EventTypeWarning, ReportUnreadable, err.Error())
 			continue
 		}
 		if !slices.Contains(ops.Status.Workers, report.Node) {
@@ -550,8 +871,13 @@ func (r *OperatorOpsReconciler) probeServiceAccount() string {
 	return nodeProbeServiceAccount()
 }
 
-// abort stops a run at its next step. Discovery changes nothing, so there is
-// nothing to unwind beyond the Jobs it started.
+// abort stops a run at its next step.
+//
+// Nothing in the cluster has to be unwound beyond the Jobs it started: a run
+// creates one document and creates it last. What an abort cannot take back is
+// on the workers, where a probe that already ran has handed idle controllers
+// back to the kernel, and the message says so rather than promising a machine
+// untouched.
 func (r *OperatorOpsReconciler) abort(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.OperatorOps,
@@ -560,8 +886,10 @@ func (r *OperatorOpsReconciler) abort(
 	ops.Status.Phase = simplyblockv1alpha2.OperatorOpsPhaseAborted
 	ops.Status.CompletedAt = &now
 	ops.Status.Step.Deadline = nil
-	ops.Status.Message = "aborted; discovery changes nothing, so nothing was undone"
-	r.event(ops, corev1.EventTypeNormal, "OperationAborted", ops.Status.Message)
+	ops.Status.Message = "aborted; nothing was created to undo, and a worker whose " +
+		"probe already ran keeps the NVMe controllers it handed back to the kernel"
+	r.event(ops, corev1.EventTypeNormal, OperationAborted, ops.Status.Message)
+	observeRun(ops, ops.Status.Phase)
 	return ctrl.Result{}, r.status(ctx, ops)
 }
 
@@ -603,18 +931,58 @@ func (r *OperatorOpsReconciler) fail(
 	ops.Status.CompletedAt = &now
 	ops.Status.Step.Deadline = nil
 	ops.Status.Message = reason
-	r.event(ops, corev1.EventTypeWarning, "OperationFailed", reason)
+	r.event(ops, corev1.EventTypeWarning, OperationFailed, reason)
+	observeRun(ops, ops.Status.Phase)
 	return ctrl.Result{}, r.status(ctx, ops)
 }
 
 // status writes the run's status, stamping the generation it was computed from
 // so that a stale status can be told from a current one.
+// status persists what the step concluded, retrying a write that lost a race.
+//
+// A step does its work and then records it, so a recording that fails leaves the
+// step not having happened as far as the next pass is concerned — and the next
+// pass does the work again. Writing's work is creating a document and telling a
+// reviewer about it. The document survives being created twice, because the
+// create is idempotent by name and says so; the events do not, and a run that
+// wrote one document reported writing it twice and reported finding it already
+// there, which describes to a reviewer a race that nobody had.
+//
+// So the write is a patch against a fresh read rather than an update of the
+// object the reconcile started from, and a conflict is retried here rather than
+// paid for by the step. It is the same shape the deployment config's own status
+// write uses, for the same reason.
 func (r *OperatorOpsReconciler) status(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.OperatorOps,
 ) error {
 	ops.Status.ObservedGeneration = ops.Generation
-	return r.Status().Update(ctx, ops)
+	desired := *ops.Status.DeepCopy()
+
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var fresh simplyblockv1alpha2.OperatorOps
+		if err := r.Get(ctx, client.ObjectKeyFromObject(ops), &fresh); err != nil {
+			return err
+		}
+
+		patch := client.MergeFromWithOptions(fresh.DeepCopy(),
+			client.MergeFromWithOptimisticLock{})
+		fresh.Status = desired
+		fresh.Status.ObservedGeneration = fresh.Generation
+		if err := r.Status().Patch(ctx, &fresh, patch); err != nil {
+			return err
+		}
+
+		// The caller goes on using its own object, so it has to carry the
+		// version the patch produced or its next write conflicts with itself.
+		ops.Status = fresh.Status
+		ops.ResourceVersion = fresh.ResourceVersion
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("record the run's status: %w", err)
+	}
+	return nil
 }
 
 // event records one, when there is a recorder to record it with.
@@ -632,7 +1000,7 @@ func (r *OperatorOpsReconciler) event(
 	if action == "" {
 		action = string(ops.Spec.Action)
 	}
-	r.Recorder.Eventf(ops, nil, eventType, reason, action, "%s", message)
+	r.Recorder.Eventf(ops, nil, eventType, reason, action, "%s", boundEventMessage(message))
 }
 
 // schedulable reports whether a node is one work can be placed on.
@@ -640,6 +1008,46 @@ func (r *OperatorOpsReconciler) event(
 // A cordoned node and a node carrying a NoSchedule taint are both excluded: a
 // probe Job is pinned with spec.nodeName and would run on either, and a worker
 // the cluster is not scheduling to is not one to hand to a storage cluster.
+// UsableWorker reports whether a discovery run would inspect this machine.
+//
+// It is exported so that the one thing deciding whether a run is worth raising at
+// all reads the same predicate the run itself applies. A bootstrap that raised a
+// run against a cluster with nothing to inspect would create an object whose only
+// outcome is to fail, and on a namespace delete that object holds a finalizer the
+// operator may no longer be alive to clear.
+func UsableWorker(node corev1.Node, useControlPlane bool) bool {
+	if !schedulable(node) {
+		return false
+	}
+	role := discoverypkg.RoleOf(node)
+	return role.HoldsStorageNodes() || useControlPlane
+}
+
+// declinedBecause says why UsableWorker refused the machine, so the event a
+// reviewer reads names the condition rather than only the outcome.
+func declinedBecause(node corev1.Node, role discoverypkg.NodeRole) string {
+	if !schedulable(node) {
+		return unschedulableReason(node)
+	}
+	return fmt.Sprintf("it is %s; set spec.discover.enableControlPlaneNodes to include it",
+		role.Describe())
+}
+
+// unschedulableReason says which of the two conditions excluded the node, so an
+// administrator reads "it is cordoned" rather than a bare refusal.
+func unschedulableReason(node corev1.Node) string {
+	if node.Spec.Unschedulable {
+		return "it is cordoned"
+	}
+	for _, taint := range node.Spec.Taints {
+		if taint.Effect == corev1.TaintEffectNoSchedule || taint.Effect == corev1.TaintEffectNoExecute {
+			return fmt.Sprintf("it carries the taint %s=%s:%s",
+				taint.Key, taint.Value, taint.Effect)
+		}
+	}
+	return "it is not schedulable"
+}
+
 func schedulable(node corev1.Node) bool {
 	if node.Spec.Unschedulable {
 		return false
@@ -684,4 +1092,64 @@ func (r *OperatorOpsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&batchv1.Job{}).
 		Named("operatorops").
 		Complete(r)
+}
+
+// refusalPreamble is what every refusal of this kind opens with, and what the
+// explanation has to fit inside the event alongside.
+const refusalPreamble = "no worker has a device this run would use: "
+
+// maxEventMessage is what the Kubernetes event API takes. A longer message is
+// not truncated by the API server, it is refused, and the recorder does not
+// retry, so the bound is this side's to keep.
+const maxEventMessage = 1024
+
+// boundEventMessage cuts a message to what an event carries.
+//
+// It is the last guard rather than the design: a message built from a list is
+// written to stay within the bound, and this is what keeps the one that was not
+// from being dropped in silence. The cut says it happened, because a reader who
+// cannot see that the text ends early will read a truncated list as the whole
+// list.
+func boundEventMessage(message string) string {
+	if len(message) <= maxEventMessage {
+		return message
+	}
+	const ellipsis = " […]"
+	return message[:maxEventMessage-len(ellipsis)] + ellipsis
+}
+
+// namedWorkers keeps the nodes a run named, in the order the API server
+// returned them, and announces each name that matched nothing.
+//
+// The announcement is the point. Being asked to inspect a machine that is not
+// there is either a typo or a node that has not joined, and both are worth one
+// event: the alternative is a draft short of the machines somebody listed, with
+// nothing anywhere saying which or why.
+func (r *OperatorOpsReconciler) namedWorkers(
+	ops *simplyblockv1alpha2.OperatorOps,
+	named []string,
+	nodes []corev1.Node,
+) []corev1.Node {
+	wanted := make(map[string]bool, len(named))
+	for _, name := range named {
+		wanted[name] = false
+	}
+
+	kept := make([]corev1.Node, 0, len(nodes))
+	for i := range nodes {
+		if _, ok := wanted[nodes[i].Name]; !ok {
+			continue
+		}
+		wanted[nodes[i].Name] = true
+		kept = append(kept, nodes[i])
+	}
+
+	for _, name := range named {
+		if !wanted[name] {
+			r.event(ops, corev1.EventTypeWarning, WorkerDeclined,
+				fmt.Sprintf("%s is named in spec.discover.workers and there is no node "+
+					"by that name", name))
+		}
+	}
+	return kept
 }

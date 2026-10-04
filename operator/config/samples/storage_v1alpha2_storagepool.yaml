@@ -1,0 +1,24 @@
+# A StoragePool carving a cluster into one tenancy unit, with both kinds of
+# ceiling so the pairing is readable: the pool may do 200,000 IOPS and each
+# volume in it defaults to 20,000, so ten busy volumes saturate it. That
+# relationship is what the spec grouping exists to state.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StoragePool
+metadata:
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: storagepool-sample
+spec:
+  clusterRef: sample-cluster
+  limits:
+    capacity: 10T
+    maxVolumeSize: 2T
+    iops: 200000
+    throughput:
+      readWrite: 4096
+  volumeDefaults:
+    iops: 20000
+    throughput:
+      readWrite: 512
+    filesystem: xfs

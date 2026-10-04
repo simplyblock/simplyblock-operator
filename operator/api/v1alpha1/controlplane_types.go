@@ -24,9 +24,11 @@ import (
 // created by the Helm chart.
 type ControlPlaneSpec struct {
 	// Image is the container image used for all simplyblock control-plane and
-	// storage-node workloads (e.g. quay.io/simplyblock-io/simplyblock:26.2.2).
+	// storage-node workloads (e.g., `quay.io/simplyblock-io/simplyblock:26.2.2`).
 	// StorageNodeSet CRs that omit spec.clusterImage inherit this value.
-	// Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
+	// Must reference one of the trusted registries (`quay.io/simplyblock-io`,
+	// `docker.io/simplyblock`, `public.ecr.aws/simply-block`). Digest pinning
+	// (@sha256:...) is recommended.
 	// +optional
 	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	Image string `json:"image,omitempty"`
@@ -41,7 +43,7 @@ type ControlPlaneStatus struct {
 	Phase string `json:"phase,omitempty"`
 
 	// Message contains a human-readable explanation of the current phase,
-	// for example the FDB error returned by the health endpoint.
+	// for example, the FDB error returned by the health endpoint.
 	Message string `json:"message,omitempty"`
 
 	// LastChecked is the timestamp of the most recent FDB health probe.
@@ -50,7 +52,11 @@ type ControlPlaneStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced
+// The short name is repeated from v1alpha2 rather than declared only there.
+// shortNames is a resource-level property and both versions of a kind feed one
+// CRD, so two +kubebuilder:resource markers that disagree leave controller-gen
+// picking one per run and the generated CRD differing from itself.
+// +kubebuilder:resource:scope=Namespaced,shortName=cp
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase",description="Initializing while FDB is not ready; Ready once the control plane is operational"
 // +kubebuilder:printcolumn:name="Message",type="string",JSONPath=".status.message",description="Human-readable status detail"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"

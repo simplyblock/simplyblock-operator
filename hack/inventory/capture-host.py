@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+# Captures a machine's sysfs into the transcript atlas-lib/inventory's tests
+# replay, so a reading can be checked against what a host actually exports.
+#
+# It is run by hand on a machine worth keeping a transcript of, not in CI:
+#
+#     oc debug node/<node> --quiet --no-stdin=false --no-tty=true \
+#         -- chroot /host python3 - \
+#         < hack/inventory/capture-host.py \
+#         | gzip -9 > atlas-lib/inventory/testdata/hosts/<name>.json.gz
+#
+# --no-stdin=false is what sends this script to the node. `oc debug` passes
+# stdin only when it is starting a shell, so a command given after -- gets none
+# and the capture writes an empty file with no error to say why.
+#
+# Only the trees the readers walk are taken, and a symlink into /sys/devices is
+# followed a little way so the class directories have the attributes behind them.
+# The output is one JSON document of three maps -- directories, file contents,
+# and symlink targets -- with every path relative to /sys, plus the udev links,
+# the two files that say which distribution the host runs, and the machine name
+# uname gives.
+
+import json
+import os
+import platform
+
+SYS = "/sys"
+DEV = "/dev"
+
+# The seeds are the readers' own entry points: interfaces, NVMe controllers,
+# block devices, the PCI bus, CPU topology, NUMA, and huge pages.
+SEEDS = [
+    "class/net",
+    "class/nvme",
+    "block",
+    "bus/pci/devices",
+    "devices/system/cpu",
+    "devices/system/node",
+    "kernel/mm/hugepages",
+]
+
+# The udev link directories worth keeping, and the ones that are not.
+#
+# by-id, by-partuuid, and by-path name a device: by-id from what the device says
+# it is (a serial, a WWN, or the identification page a driver exposes instead),
+# by-partuuid from the identifier a partition carries in its own partition
+# table, by-path from where it is attached. All three survive a reboot, which
+# the kernel name does not -- sd letters are handed out in probe order, so the
+# disk that was sdb comes back as sdc and a document naming the first now names
+# the second.
+#
+# All three are taken although the reader prefers one of them, because a capture
+# is evidence and the alternatives are what make the preference readable: a
+# transcript holding only the winning link would let the ranking be checked
+# against a tree that offered it no choice. by-path in particular is taken to be
+# ignored: it survives a reboot and moves to the replacement when a disk is
+# swapped, which is the one failure a persistent name exists to prevent.
+#
+# by-uuid and by-label are deliberately not taken. They name the filesystem a
+# device carries rather than the device, so they are content: they change when
+# somebody reformats a disk that is otherwise the same one, and a transcript of
+# what a machine *is* should not turn over when its data does.
+DEV_LINK_DIRS = [
+    "disk/by-id",
+    "disk/by-partuuid",
+    "disk/by-path",
+]
+
+# The files read from the host's own root filesystem rather than from /sys.
+#
+# They are what the OS reading takes: the distribution's ID, version, and the
+# family its ID_LIKE places it in. Both are captured because /etc/os-release is
+# usually a symlink into /usr/lib and a transcript stores contents rather than
+# following links at replay time.
+ROOT_FILES = [
+    "etc/os-release",
+    "usr/lib/os-release",
+]
+
+MAX_FILE_BYTES = 64 * 1024
+MAX_DEPTH = 8
+# A device a class entry points at is walked, but only a little way: the whole
+# device tree reached from one link is most of the machine.
+MAX_DEVICE_DEPTH = 4
+
+dirs = set()
+files = {}
+links = {}
+seen = set()
+
+
+def relative(path):
+    return os.path.relpath(path, SYS)
+
+
+def walk(start, depth=0):
+    if depth > MAX_DEPTH or start in seen:
+        return
+    seen.add(start)
+    try:
+        entries = sorted(os.listdir(start))
+    except OSError:
+        return
+    dirs.add(relative(start))
+    for name in entries:
+        path = os.path.join(start, name)
+        if os.path.islink(path):
+            try:
+                links[relative(path)] = os.readlink(path)
+            except OSError:
+                continue
+            target = os.path.realpath(path)
+            if target.startswith(SYS + "/devices") and depth < MAX_DEVICE_DEPTH:
+                walk(target, depth + 1)
+        elif os.path.isdir(path):
+            walk(path, depth + 1)
+        elif os.path.isfile(path):
+            # Most of sysfs refuses a read for a reason that is not an error: an
+            # attribute that does not apply to this device, a link with no
+            # carrier, a file the kernel answers only for root. What was
+            # readable is what the transcript carries.
+            try:
+                if os.stat(path).st_size > MAX_FILE_BYTES:
+                    continue
+                with open(path, "rb") as handle:
+                    files[relative(path)] = handle.read(MAX_FILE_BYTES).decode("utf-8", "replace")
+            except OSError:
+                continue
+
+
+for seed in SEEDS:
+    walk(os.path.join(SYS, seed))
+
+# The readers take one root for both trees, so the few procfs files they read
+# are carried in the same transcript: the memory reading and the affinity mask
+# come from there rather than from sysfs.
+for rel, path in (("meminfo", "/proc/meminfo"), ("swaps", "/proc/swaps"),
+                  ("self/status", "/proc/self/status"),
+                  ("self/mountinfo", "/proc/self/mountinfo")):
+    try:
+        with open(path) as handle:
+            files[rel] = handle.read()
+    except OSError:
+        continue
+dirs.add("self")
+
+# The udev links, in a section of their own.
+#
+# dirs, files, and links stay what they were: paths under /sys, plus the handful
+# of procfs files the readers take from the same root. These are neither, and
+# they do not ride in those maps under a dev/ prefix, because /sys/dev is itself
+# a real directory -- /sys/dev/block and /sys/dev/char. Nothing seeds it today,
+# so nothing collides today, and a prefix that is safe only until somebody adds
+# a seed is a prefix that will be unsafe silently.
+#
+# Paths are relative to /dev, which is what blockdev.ScanConfig.DevRoot is
+# pointed at, and the value is the link's target as the kernel wrote it --
+# usually ../../sda. Only the link and its target are taken, never the device
+# node behind it: the target is what answers which kernel name a stable name
+# resolves to, and a transcript carrying device nodes would be one nobody could
+# materialize without root.
+#
+# Additive on purpose. A transcript written before this has no devlinks at all,
+# which decodes to an empty map and reads as a host whose udev made no links --
+# which is what the committed fixtures need it to mean.
+devlinks = {}
+for link_dir in DEV_LINK_DIRS:
+    absolute = os.path.join(DEV, link_dir)
+    try:
+        names = os.listdir(absolute)
+    except OSError:
+        continue
+    for name in names:
+        path = os.path.join(absolute, name)
+        try:
+            if os.path.islink(path):
+                devlinks[os.path.join(link_dir, name)] = os.readlink(path)
+        except OSError:
+            continue
+
+# The host's own root filesystem, in a section of its own for the reason the
+# udev links are in theirs: etc/ and usr/ are paths under / and not under /sys,
+# and a capture that put them in files would have a reader unable to tell which
+# root a path belonged to. A machine that has neither file, which is a machine
+# with no os-release at all, captures an empty section, and a transcript
+# written before this existed has none, both of which replay as a host whose
+# distribution cannot be read.
+root_files = {}
+for rel in ROOT_FILES:
+    try:
+        with open(os.path.join("/", rel)) as handle:
+            root_files[rel] = handle.read(MAX_FILE_BYTES)
+    except OSError:
+        continue
+
+# The architecture, which is a system call and not a file: nothing in the trees
+# above says what uname -m would.
+machine = platform.machine()
+
+print(json.dumps(
+    {"dirs": sorted(dirs), "files": dict(sorted(files.items())),
+     "links": dict(sorted(links.items())), "devlinks": dict(sorted(devlinks.items())),
+     "root": dict(sorted(root_files.items())), "machine": machine},
+    indent=1, sort_keys=True))

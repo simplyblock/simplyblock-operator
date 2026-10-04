@@ -31,32 +31,35 @@ func (c *Cluster) kubectl(ctx context.Context, timeout time.Duration, args ...st
 	return string(out), nil
 }
 
-// Apply pipes a manifest to kubectl apply.
-func (c *Cluster) Apply(ctx context.Context, manifest string) error {
+// KubectlStdin runs kubectl with a manifest on standard input and returns
+// combined output. It exists because a caller sometimes needs flags before the
+// subcommand, impersonation among them, which Apply and Delete do not take.
+func (c *Cluster) KubectlStdin(ctx context.Context, stdin string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "kubectl", "--kubeconfig", c.kubeconfig, "apply", "-f", "-") //nolint:gosec // fixed binary
-	cmd.Stdin = strings.NewReader(manifest)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("apply: %w: %s", err, strings.TrimSpace(string(out)))
+	full := append([]string{"--kubeconfig", c.kubeconfig}, args...)
+	cmd := exec.CommandContext(ctx, "kubectl", full...) //nolint:gosec // fixed binary, structured args
+	cmd.Stdin = strings.NewReader(stdin)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("kubectl %s: %w: %s",
+			strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
-	return nil
+	return string(out), nil
+}
+
+// Apply pipes a manifest to kubectl apply.
+func (c *Cluster) Apply(ctx context.Context, manifest string) error {
+	_, err := c.KubectlStdin(ctx, manifest, "apply", "-f", "-")
+	return err
 }
 
 // Delete removes a manifest's objects, ignoring ones already gone so it is safe
 // from a deferred cleanup.
 func (c *Cluster) Delete(ctx context.Context, manifest string) error {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "kubectl", "--kubeconfig", c.kubeconfig, //nolint:gosec // fixed binary
-		"delete", "--ignore-not-found", "-f", "-")
-	cmd.Stdin = strings.NewReader(manifest)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("delete: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
+	_, err := c.KubectlStdin(ctx, manifest, "delete", "--ignore-not-found", "-f", "-")
+	return err
 }
 
 // Nodes returns the cluster's node names, in the order the API reports them.

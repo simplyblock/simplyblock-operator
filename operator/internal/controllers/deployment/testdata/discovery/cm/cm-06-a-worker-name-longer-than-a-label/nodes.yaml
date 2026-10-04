@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Node
+metadata:
+  name: ip-10-0-1-23.eu-central-1.compute.internal.a-very-long-suffix-nobody-shortened
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.1
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""

@@ -1,14 +1,15 @@
 # Design Document: The ControlPlane and Its Operations
 
-**Status:** Draft  
+**Status:** Implemented, with the exceptions §12 records  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-29  
+**Date:** 2026-08-29 (last updated 2026-09-24)  
 **Test Plan:** [`tests/test-plan-controlplane.md`](../../tests/test-plan-controlplane.md)
 
-This document specifies the target model. `ControlPlane` is registered and in a
-shape that predates the conventions of
-[`design-crd-model.md`](design-crd-model.md), `ControlPlaneOps` does not exist,
-and §11 is the single record of what the rework changes against what ships.
+This document specifies the model both kinds now carry. `ControlPlane` moved to
+`storage.simplyblock.io/v1alpha2` with a `v1alpha1` spoke and a conversion between
+them, `ControlPlaneOps` is born there, and both are reconciled in
+`operator/internal/controllers/controlplane/`. §11 remains the record of what
+changed against the registered API.
 
 ---
 
@@ -93,7 +94,7 @@ value needed a home.
 ### Goals
 
 - Specify a `ControlPlane` that says which control plane it means, so that
-  reusing an external one is a field rather than an environment variable (§3, §5).
+  reusing one elsewhere is a field rather than an environment variable (§3, §5).
 - Specify the two modes as siblings under one block, so that choosing between
   them is expressible and setting both is rejected (§5).
 - Specify what the operator installs when it installs, and what it does not touch
@@ -116,10 +117,10 @@ value needed a home.
 - **Not the CSI driver.** Its deployment, its phases, and the version skew
   against this kind are [`design-simplyblockdriver.md`](design-simplyblockdriver.md). This
   document publishes `status.version` and stops there.
-- **Not multi-control-plane.** One `ControlPlane` per namespace, named
-  `simplyblock`, which is what ships and what §3.1 keeps. Whether that limit
-  should be lifted is §12 Q1, and lifting it changes kinds this document does not
-  own.
+- **Not multi-control-plane.** One `ControlPlane` per Kubernetes cluster, named
+  `simplyblock`, which is what §3.1 keeps. Lifting that limit would change kinds
+  this document does not own, since nothing else in the group carries a reference
+  to a control plane and nothing would know which one it meant.
 - **Not the API group's conventions.** The entity and action split, the enum
   casing, the lock, and the observed generation belong to
   [`design-crd-model.md`](design-crd-model.md) and are cited rather than restated.
@@ -134,14 +135,30 @@ more.
 
 ### 3.1 The singleton
 
-`ControlPlane` is one object per namespace, named `simplyblock`. The controller
-ignores any other name, which is enforcement by convention rather than by the API
-server. §12 Q1 is whether one per namespace is the right limit at all, which is
-the question that enforcement is downstream of.
+`ControlPlane` is one object per Kubernetes cluster, named `simplyblock`. The
+controller ignores any other name, which is enforcement by convention rather than
+by the API server.
 
-A namespace is the unit because a namespace is one simplyblock deployment: its own
-control plane, its own clusters, its own CSI credentials. Two namespaces are two
-deployments that share a Kubernetes cluster and nothing else.
+**The Kubernetes cluster is the unit because the operator is.** One operator
+deployment reconciles the group, and it is itself one per Kubernetes cluster:
+its ClusterRole, its `APIService`, and its two webhook configurations are
+cluster-scoped objects at fixed names, so a second install contends with the first
+over all of them. A control plane per namespace under one operator would give that
+operator several backends to choose between on every reconcile, and nothing in the
+group carries the reference that would let it choose
+([`design-crd-model.md`](design-crd-model.md) §5).
+
+**Several backend clusters do not need several control planes.** A `ControlPlane`
+fronts every `StorageCluster` beneath it, and the CSI driver's configuration
+carries one entry per cluster against the single endpoint
+([`design-simplyblockdriver.md`](design-simplyblockdriver.md) §4.1), so a
+deployment grows by adding clusters rather than by adding control planes.
+
+**The `SimplyblockDriver` carries the matching limit** and enforces it at
+admission rather than by convention
+([`design-simplyblockdriver.md`](design-simplyblockdriver.md) §3.4). The two kinds
+differ in what a second object does: a `ControlPlane` under another name is
+ignored and sits inert, and a second `SimplyblockDriver` is reconciled.
 
 ### 3.2 Spec
 
@@ -151,21 +168,38 @@ management and for the same reason: two modes as siblings make the choice
 expressible, where two top-level fields make it a convention.
 
 ```go
-// Source selects where the control plane comes from. Exactly one member is set.
-// +kubebuilder:validation:XValidation:rule="(has(self.managed) ? 1 : 0) + (has(self.external) ? 1 : 0) == 1",message="set exactly one of managed or external"
-// +kubebuilder:validation:Required
-// +k8s:immutable
-Source ControlPlaneSource `json:"source"`
+// ControlPlaneSource selects whether this cluster hosts its control plane or is
+// managed by one elsewhere. Exactly one member is set, and which one it is
+// cannot change afterward.
+// +kubebuilder:validation:XValidation:rule="(has(self.local) ? 1 : 0) + (has(self.managed) ? 1 : 0) == 1",message="set exactly one of local or managed"
+// +kubebuilder:validation:XValidation:rule="has(self.local) == has(oldSelf.local) && has(self.managed) == has(oldSelf.managed)",message="spec.source is immutable"
+type ControlPlaneSource struct {
+	Local   *LocalControlPlane   `json:"local,omitempty"`
+	Managed *ManagedControlPlane `json:"managed,omitempty"`
+}
 ```
 
-**The block is immutable, not its members.** Switching a live deployment from a
-control plane the operator installed to one it did not is not a reconfiguration,
-it is a different deployment: the clusters, their UUIDs, and their volumes live in
-the FoundationDB behind the old one. Making the block immutable says that in the
-schema rather than in a runbook.
+`spec.source.local` is a control plane this cluster hosts, installed and owned by
+the operator (§5.1), and `spec.source.managed` is one somewhere else, which this
+cluster's storage is managed by rather than hosting (§5.2). The word "managed" is
+about what administers the storage clusters rather than about who runs the
+operator: a deployment in that mode registers its clusters with a control plane it
+does not host, so the fleet is administered from there.
 
-`spec.managed` is what the operator installs (§5.1). `spec.external` is where an
-existing control plane already is (§5.2).
+**What is frozen is the choice between the two members, not the block.**
+Switching a live deployment from a control plane the operator installed to one it
+did not is not a reconfiguration, it is a different deployment: the clusters,
+their UUIDs, and their volumes live in the FoundationDB behind the old one. The
+members themselves stay editable, because editing `spec.source.local.image` is an
+ordinary change and it is what an `Upgrade` performs (§6). Freezing the block
+instead would emit `self == oldSelf` over the whole struct, which freezes the
+image with it and makes that operation impossible to complete.
+
+**Both rules sit on the type rather than on the field that carries it.**
+controller-gen emits a single field's marker-derived rules and its injected
+immutability rule into one list in an order that varies between runs, so a field
+carrying both produces a CRD that differs from itself and a drift check that fails
+at random. Two rules of the same kind on a type are emitted in source order.
 
 ### 3.3 Status
 
@@ -185,11 +219,12 @@ and a change to it reaches every reader without a Deployment rollout.
 `status.components` is the per-component readiness §4.3 derives the phase from:
 each component's desired count, its ready count, and whether it is essential. It
 is what makes the phase explainable, and it is the only place an administrator
-learns which of eleven workloads is the one restarting.
+learns which of the eight workloads is the one restarting.
 
 `status.version` is the management API's reported version, which is what a
 `ControlPlaneOps` upgrade moves and what [`design-simplyblockdriver.md`](design-simplyblockdriver.md) §5
-compares a driver against.
+compares a driver against. It is unwritten wherever the endpoint that serves it
+does not exist, which is every control plane today (§8).
 `status.lastChecked` is when the readiness probe last ran, and
 `status.activeOpsRef` is the operation lock
 ([`design-crd-model.md`](design-crd-model.md) §3.2).
@@ -203,14 +238,14 @@ paraphrase of it.
 A control plane the operator installs, which is what a fresh deployment gets:
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: ControlPlane
 metadata:
   name: simplyblock
   namespace: simplyblock
 spec:
   source:
-    managed:
+    local:
       image: quay.io/simplyblock-io/simplyblock:26.2.8
       foundationDB:
         replicas: 3
@@ -227,7 +262,7 @@ A control plane that already exists, running outside the Kubernetes cluster:
 ```yaml
 spec:
   source:
-    external:
+    managed:
       endpoint: https://sb-control.example.com:5000
       credentialsSecretRef:
         name: simplyblock-control-plane
@@ -238,7 +273,7 @@ status:
   observedGeneration: 1
 ```
 
-`status.endpoint` repeats `spec.source.external.endpoint` in the second case and
+`status.endpoint` repeats `spec.source.managed.endpoint` in the second case and
 is derived in the first. That is the point: a reader and a controller ask
 `status.endpoint` either way, and neither has to know which mode the deployment
 is in.
@@ -270,8 +305,8 @@ status:
 │   ┌──────────────────────────────────────────────────────┐   │
 │   │                ControlPlaneReconciler                │   │
 │   │  1. Name is "simplyblock"? Otherwise ignore          │   │
-│   │  2. spec.source.external → resolve and probe (§5.2)  │   │
-│   │  3. spec.source.managed  → the install machine (§5.1)│   │
+│   │  2. spec.source.managed → resolve and probe (§5.2)   │   │
+│   │  3. spec.source.local   → the install machine (§5.1) │   │
 │   │  4. Available: probe, publish endpoint and version   │   │
 │   └──────────────────────────────────────────────────────┘   │
 │  ControlPlane CR   spec.source   status.phase   status.step  │
@@ -295,13 +330,16 @@ declares one graph, because it has no `spec.action` to key a `MultiConfig` on.
   spec.source.managed
     │
     ▼
+  ApplyingDatastore     ← the document store the management API needs, and the
+    │                      bucket configuration the Prometheus pods mount
+    ▼
   ApplyingFoundationDB  ← the FoundationDBCluster and its RBAC
     │
     ▼
   AwaitingFoundationDB  ← wait for the cluster to report available
     │
     ▼
-  ApplyingDatastore     ← the document store the management API needs
+  BuildingIndices       ← the database's secondary indices are declared ready
     │
     ▼
   ApplyingAPI           ← the management API workload, Services, certificates
@@ -313,11 +351,66 @@ declares one graph, because it has no `spec.action` to key a `MultiConfig` on.
   phase: Available
 ```
 
-**Every step is an apply, so re-entering one is a no-op.** The objects are
-server-side applied with the `ControlPlane` as their owner, which means a step
+**Every applying step is an apply, so re-entering one is a no-op.** The objects
+are server-side applied with the `ControlPlane` as their owner, which means a step
 recorded whose apply never landed re-applies to the same result. That is what
 lets the machine carry no `triggered` flag, exactly as an `Ops` kind does
-([`design-crd-model.md`](design-crd-model.md) §3.1).
+([`design-crd-model.md`](design-crd-model.md) §3.1). `BuildingIndices` is the one
+step that reads before it writes, for the reason below.
+
+**`BuildingIndices` runs the control plane's own index backfill as a Job, and
+holds until Kubernetes reports it complete.** The control plane answers every
+lookup that is not by primary key from a declared secondary index, and readers
+trust an index only once it has been walked and declared `ready`. Until then they
+fall back to a full scan of the table, which is correct and grows slower with
+every record. The walk is the control plane's code and lives in its image, so the
+operator runs `sbctl cluster build-indices` there, as an administrator would. It
+sits directly after the database becomes available because the index keyspace
+belongs to the deployment rather than to a cluster, so nothing has to exist yet
+for the backfill to run, and a database with no records is the one moment where
+every declared index is complete the instant it is declared ready.
+
+The work is a `Job` named `simplyblock-build-indices`, owned by the
+`ControlPlane` and running the image of `spec.source.local`. A `Job`'s pod
+template is immutable, so the step reads the `Job` before it writes: a pass that
+finds none creates it, a pass that finds one leaves it as it is, and only its
+`Complete` condition advances the step. The `Job` is not among the objects §4.3
+re-applies, and nothing runs it on an upgrade: the installation machine is
+entered once, and an index a later release declares reaches an existing
+deployment through the control plane's own upgrade path.
+
+**The `Job` names nothing the install has not created yet**, which is the price
+of the position it holds. The service account, the shared `ConfigMap`, and the
+management API's serving certificate all belong to `ApplyingAPI`, two steps
+later, and a pod naming one of them does not fail: a missing account means no pod
+is ever created, a missing `ConfigMap` key holds the container in
+`CreateContainerConfigError`, and a missing `Secret` holds it in
+`ContainerCreating`. In each the `Job` stays active with neither condition and the
+step waits on it forever. So the backfill claims no account, since `sbctl cluster
+build-indices` speaks to FoundationDB and to nothing in Kubernetes, and carries
+its log level literally rather than from the `ConfigMap` a one-shot `Job` has no
+reason to be able to reload. Where the database demands a client certificate the
+backfill presents `simplyblock-foundationdb-tls`, issued by the step that created
+the database, rather than the management API's serving certificate: FoundationDB's
+TLS is mutual, so a client reaching coordinators advertised with `:tls` presents
+material or does not connect, and the material it presents has to be material
+that already exists. What is left is the cluster file, which the FoundationDB
+operator writes and `AwaitingFoundationDB` is what waits for.
+
+**A `Failed` condition fails the installation**, and the `Job` carries two ways
+of reaching one. It runs the backfill three times before Kubernetes reports
+`BackoffLimitExceeded`, and it carries an `activeDeadlineSeconds` inside the
+step's own budget, which is what reports `DeadlineExceeded` for a backfill that
+never started at all — attempts are counted from pods that ran and failed, so a
+pod that is never created counts against nothing. Either way the machine emits
+`InstallationFailed` (§9.1), writes the failure to `status.message` with the
+phase still `Installing`, and schedules no requeue, because nothing a timer finds
+would differ. The message names which of the two happened, since a `Job` that ran
+and refused sends its reader to the pods' logs and a `Job` that ran out of clock
+sends them to whether a pod exists. The reconcile moves again on the two changes
+the message asks for. A spec naming another image replaces the failed `Job`,
+since the administrator changed the thing that failed and a `Job` cannot be
+patched, and deleting the `Job` by hand makes the next pass create it again.
 
 **`AwaitingFoundationDB` is the step that can take the longest and the one whose
 deadline matters.** A three-coordinator FoundationDB on slow storage is minutes,
@@ -329,9 +422,10 @@ install names the coordinator rather than the operator.
 ### 4.3 Steady state
 
 With `phase: Available`, the controller re-applies what §5.1 installs, probes
-readiness, and republishes the endpoint and version. Re-applying is what keeps an
-object somebody deleted or edited from staying that way, and it is why no operation
-exists for checking the install (§6). The probe is a direct `GET` rather than a streamed value, because it
+readiness, and republishes the endpoint and version. The index backfill `Job` of
+§4.2 is not re-applied, since a backfill that ran once has nothing left to do.
+Re-applying is what keeps an object somebody deleted or edited from staying that
+way, and it is why no operation exists for checking the install (§6). The probe is a direct `GET` rather than a streamed value, because it
 is the check that the stream itself can be established
 ([`design-crd-model.md`](design-crd-model.md) §7.7 makes the stream the way state
 arrives, and this is the one read that cannot depend on it).
@@ -347,15 +441,22 @@ the two that carry their own operator it is that resource's own report, because 
 `FoundationDBCluster` at two of three coordinators is serving and a replica count
 cannot say so.
 
-| Component                                                                                                                | Readiness is                         | Essential |
-|--------------------------------------------------------------------------------------------------------------------------|--------------------------------------|-----------|
-| `simplyblock-webappapi`                                                                                                  | Ready against desired replicas       | Yes       |
-| `simplyblock-fdb-cluster`                                                                                                | The `FoundationDBCluster` health     | Yes       |
-| `simplyblock-mongo`                                                                                                      | The `MongoDBCommunity` member report | Yes       |
-| `simplyblock-fdb-controller-manager`                                                                                     | Ready against desired replicas       | No        |
-| `simplyblock-tasks`                                                                                                      | Ready against desired replicas       | No        |
-| `simplyblock-minio`, `simplyblock-admin-control`                                                                         | Ready against desired replicas       | §12 Q5    |
-| `simplyblock-monitoring`, `simplyblock-graylog`, `simplyblock-thanos`, `simplyblock-grafana`, `simplyblock-fdb-exporter` | Ready against desired replicas       | No        |
+| Component                            | Readiness is                     | Essential |
+|--------------------------------------|----------------------------------|-----------|
+| `simplyblock-webappapi`              | Ready against desired replicas   | Yes       |
+| `simplyblock-fdb-cluster`            | The `FoundationDBCluster` health | Yes       |
+| `simplyblock-fdb-controller-manager` | Ready against desired replicas   | No        |
+| `simplyblock-tasks`                  | Ready against desired replicas   | No        |
+| `simplyblock-monitoring`             | Ready against desired replicas   | No        |
+| `simplyblock-admin-control`          | Ready against desired replicas   | §12 Q5    |
+| `simplyblock-minio`                  | Ready against desired replicas   | §12 Q5    |
+| `simplyblock-fdb-exporter`           | Ready against desired replicas   | No        |
+
+**The table is exactly the set the install applies**, which is what makes it
+watchable: a component the operator does not own is one it cannot report a count
+for. The observability workloads the chart still renders are therefore absent from
+it rather than reported as missing (§12 Q2), and there is no document store in it
+because a base deployment runs none (§5.1).
 
 **Essential means the work stops, not that it slows down.** A component is
 essential when its absence loses work or stops the control plane answering.
@@ -424,11 +525,11 @@ that is serving and should not be
 idea across the group is worth more than a word chosen to fit each kind slightly
 better.
 
-**An external control plane never reaches `Degraded`.** The operator installs
+**A managed control plane never reaches `Degraded`.** The operator installs
 nothing and owns no components there (§5.2), so `status.components` is empty, the
-probe is the only signal, and its phase is `Available` or `Unavailable`. That is a real difference in
-what the two sources can report rather than a gap to be filled, since the pods
-behind somebody else's endpoint are not the operator's to watch.
+probe is the only signal, and its phase is `Available` or `Unavailable`. That is a
+real difference in what the two sources can report rather than a gap to be filled,
+since the pods behind somebody else's endpoint are not the operator's to watch.
 
 **Events are emitted on transition, not on every probe.** A thirty-second probe
 that emitted on every failure would produce two thousand events a day from one
@@ -439,12 +540,12 @@ keeps.
 
 The finalizer is `storage.simplyblock.io/controlplane-finalizer`.
 
-**Deleting a `ControlPlane` with `spec.source.managed` deletes a database.** The
+**Deleting a `ControlPlane` with `spec.source.local` deletes a database.** The
 finalizer therefore refuses while any `StorageCluster` in the namespace still
 exists, emits `ClustersStillPresent`, and requeues. That is a hold rather than a
 failure: removing the clusters resolves it, and nothing else can.
 
-With `spec.source.external` the operator installed nothing, so deletion removes
+With `spec.source.managed` the operator installed nothing, so deletion removes
 the object and touches neither the endpoint nor its data. The same
 `StorageCluster` hold still applies, because a namespace whose clusters have no
 control plane to reach is a namespace of objects nothing can reconcile.
@@ -459,17 +560,17 @@ everything downstream asks the same question of it: where is the control plane,
 and is it ready. Which of the two produced the answer is this kind's business and
 nobody else's.
 
-### 5.1 Managed
+### 5.1 Local
 
-The operator applies what the chart applies today: the `FoundationDBCluster` and
-its RBAC, the document store, the management API's workload, its Services, and
-its serving certificates. They become children of the `ControlPlane` by
-controller reference, so the ownership spine starts at a real edge rather than at
-a Helm release.
+The operator applies the base control plane: the `FoundationDBCluster` and its
+RBAC, the object store, the management API's workload, and the Services beside
+it. They become children of the `ControlPlane` by controller reference, so the
+ownership spine starts at a real edge rather than at a Helm release.
 
 ```go
-// ManagedControlPlane is a control plane the operator installs and owns.
-type ManagedControlPlane struct {
+// LocalControlPlane is a control plane this cluster hosts, installed and owned
+// by the operator.
+type LocalControlPlane struct {
 	// Image is the management API and control-plane image.
 	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +kubebuilder:validation:Required
@@ -478,38 +579,45 @@ type ManagedControlPlane struct {
 }
 ```
 
-#### Four components may already be in the cluster
+#### What the install depends on, and who answers for it
 
-The management API's workload is the operator's to install. Reaching it needs four
-things that are not: a FoundationDB operator to reconcile the
-`FoundationDBCluster`, a MongoDB operator to reconcile the document store, an
-issuer for the serving certificates, and a `StorageClass` for the volumes both
-databases claim. Each is a component a cluster may already run, and each is
-detected by asking the API server what it serves.
+The management API's workload is the operator's to install. Reaching it needs
+things that are not, and each is settled by who is able to answer for it rather
+than by one detection rule.
 
-| Component             | Detected by                                                  | Where it is absent                                             |
-|-----------------------|--------------------------------------------------------------|----------------------------------------------------------------|
-| FoundationDB operator | `apps.foundationdb.org/v1beta2` is served                    | The operator applies the CRDs and the controller               |
-| MongoDB operator      | `mongodbcommunity.mongodb.com/v1` is served                  | §12 Q6                                                         |
-| Certificate issuer    | `cert-manager.io/v1` is served, or the platform is OpenShift | `Installing` holds, and `status.message` names what is missing |
-| `StorageClass`        | A default `StorageClass` exists                              | §12 Q7                                                         |
+| Dependency                 | How it is settled                                                                                   |
+|----------------------------|-----------------------------------------------------------------------------------------------------|
+| `FoundationDBCluster` CRDs | A prerequisite. `Installing` holds and names it where `apps.foundationdb.org/v1beta2` is not served |
+| FoundationDB controller    | Always applied, under the name the chart gave it, in the `ControlPlane`'s namespace                 |
+| Document store             | None. A base deployment runs no MongoDB, and the object store takes the step's place                |
+| Certificate issuer         | `spec.source.local.tls.provider`, declared rather than detected, and defaulting to cert-manager     |
+| `StorageClass`             | Not detected. An unset class falls to the cluster's default (§12 Q7)                                |
 
-**A detected component is used and never re-applied.** A cluster running the
-FoundationDB operator for something else runs one operator afterward, and the
-`FoundationDBCluster` this design creates is reconciled by it.
+**The CRDs and the controller are split because the API server cannot tell them
+apart.** Whether `apps.foundationdb.org/v1beta2` is served says the CRDs are
+installed, and says nothing about whether a controller is reconciling them: the
+CRDs ship in the chart's `crds/` directory, which Helm applies on install and
+never removes, so the group is served on every deployment either way. Creating a
+`FoundationDBCluster` against a group the API server does not know is an error
+rather than a wait, so the group is a prerequisite the install holds on. The
+controller is applied instead, which leaves a cluster that also runs a
+FoundationDB operator of its own in the position it was in before the install
+moved.
 
-**An installed component is cluster-scoped and carries no controller reference**,
-for the reason
+**An installed component that is cluster-scoped carries no controller
+reference**, for the reason
 [`design-simplyblockdriver.md`](design-simplyblockdriver.md) §4.1 gives for the
 snapshot controller: deleting a CRD deletes every object of that kind in the
 cluster, including the ones another deployment created.
 
-**The certificate issuer is detected rather than declared.** The chart takes it as
-`tls.provider`, one of `openshift` or `cert-manager`, which is a fact about the
-cluster written down by hand. The API answers it: OpenShift is identifiable from
-the markers its distribution leaves
-([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §8.1),
-and cert-manager from the group it registers.
+**The step that installs a document store installs an object store instead.**
+What keeps documents in a MongoDB is Graylog rather than the management API, and
+the chart renders one only with observability enabled, so the reference deployment
+reaches `Available` with no MongoDB at all. What a base deployment does need is
+somewhere to keep what outlives a process, which is the metric history the control
+plane keeps and the backups it writes, and that is an object store. The bucket is
+made by a sidecar beside the server, which is where it can wait for the store to
+answer.
 
 **The management API runs two instances by default, and the number is
 load-bearing.** A second instance is what lets a pod be replaced while the control
@@ -533,18 +641,21 @@ version becomes a field the operator reconciles rather than a value baked into a
 release, which is the same argument [`design-simplyblockdriver.md`](design-simplyblockdriver.md) §8
 makes for the CSI driver and the reason
 [`design-crd-model.md`](design-crd-model.md) §6 draws the edge at all. §12 Q2 is
-the transition, which cannot be a flag day.
+what the chart still renders, and the transition for a deployment already running
+a chart-installed control plane.
 
-### 5.2 External
+### 5.2 Managed
 
-An external control plane is an endpoint and a credential.
+A managed control plane is an endpoint and, where it needs one, a credential.
 
 ```go
-// ExternalControlPlane is a control plane that already exists. The operator
-// installs nothing and owns nothing; it resolves, probes, and reports.
-type ExternalControlPlane struct {
-	// Endpoint is the management API's base URL. Rejected unless it resolves to
-	// an external address, which is the SSRF guard atlas-lib/net carries.
+// ManagedControlPlane is a control plane somewhere else, which this cluster's
+// storage is managed by rather than hosting. The operator installs nothing and
+// owns nothing here: it resolves the endpoint, probes it, and reports.
+type ManagedControlPlane struct {
+	// Endpoint is the management API's base URL. It is validated against the
+	// same outbound-URL guard every other outbound endpoint in this group uses,
+	// so a loopback or link-local address is rejected.
 	// +kubebuilder:validation:Pattern=`^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$`
 	// +kubebuilder:validation:Required
 	Endpoint string `json:"endpoint"`
@@ -556,12 +667,19 @@ type ExternalControlPlane struct {
 and because a token in a spec is a token in every `kubectl get -o yaml`, every
 GitOps repository, and every audit log entry that records the object.
 
-**No `ControlPlaneOps` action applies to an external control plane** (§6).
-Restarting and upgrading are both operations on a workload, and the operator
-installed no workload here. What it does for an external control plane is resolve
-the endpoint, probe it, and report what it says.
+**It is optional, and absent means the endpoint is reached without one.** The
+in-cluster case is what makes that necessary: a control plane the chart installed
+answers on a `ClusterIP` Service in this namespace and carries no static token for
+the readiness read, so a deployment pointing at it has no Secret to name. Naming a
+Secret that does not exist stays an error, because naming one is a statement that
+the control plane needs it.
 
-**An external control plane may be shared, and the operator must assume it is.**
+**No `ControlPlaneOps` action applies to a managed control plane** (§6).
+Restarting and upgrading are both operations on a workload, and the operator
+installed no workload here. What it does instead is resolve the endpoint, probe
+it, and report what it says.
+
+**A managed control plane may be shared, and the operator must assume it is.**
 Another Kubernetes cluster, or another namespace, may hold clusters in the same
 FoundationDB. Nothing this operator does may assume it is the only writer, which
 is a property every controller already needs for a different reason: the control
@@ -572,7 +690,7 @@ involvement ([`design-crd-model.md`](design-crd-model.md) §7.7).
 
 ## 6. ControlPlaneOps
 
-Declared in `operator/api/v1alpha1/controlplaneops_types.go`, short name `cpops`,
+Declared in `operator/api/v1alpha2/controlplaneops_types.go`, short name `cpops`,
 and reconciled by `ControlPlaneOpsReconciler` in
 `operator/internal/controllers/controlplane/controlplaneops_controller.go`, beside
 the entity's own. The type is Appendix B.
@@ -583,9 +701,9 @@ object somebody edited by hand is put back by the next reconcile (§4.3). What i
 left is what this kind carries, and it is three things: recycling a workload,
 moving it to a new version, and asking FoundationDB for a backup.
 
-**Every action requires a managed control plane.** Each acts on what the operator
+**Every action requires a local control plane.** Each acts on what the operator
 installed: `Restart` recycles a workload, `Upgrade` replaces its image, and
-`Backup` asks the `FoundationDBCluster` the operator applied. An external control
+`Backup` asks the `FoundationDBCluster` the operator applied. A managed control
 plane is an endpoint and a credential (§5.2), owning none of those, so there is
 nothing for any of the three to act on.
 
@@ -594,12 +712,11 @@ nothing for any of the three to act on.
 type ControlPlaneOpsAction string
 ```
 
-| Action     | Steps                                                            | What it is for                                                    | Source  |
-|------------|------------------------------------------------------------------|-------------------------------------------------------------------|---------|
-| `Restart`  | `Draining` → `Restarting` → `Awaiting`                           | A workload is wedged and has to be recycled                       | Managed |
-| `Upgrade`  | `Preflight` → `Draining` → `Applying` → `Awaiting` → `Verifying` | Moving the control plane to a new version                         | Managed |
-| `Backup`   | `Requesting` → `Awaiting`                                        | Asking FoundationDB for a backup outside whatever schedule exists | Managed |
-| `Rollback` | `Requesting` → `Awaiting`                                        | <desc>                                                            | Managed |
+| Action    | Steps                                                            | What it is for                                                    | Source |
+|-----------|------------------------------------------------------------------|-------------------------------------------------------------------|--------|
+| `Restart` | `Draining` → `Restarting` → `Awaiting`                           | A workload is wedged and has to be recycled                       | Local  |
+| `Upgrade` | `Preflight` → `Draining` → `Applying` → `Awaiting` → `Verifying` | Moving the control plane to a new version                         | Local  |
+| `Backup`  | `Requesting` → `Awaiting`                                        | Asking FoundationDB for a backup outside whatever schedule exists | Local  |
 
 **`Restart` takes a component scope.** `spec.restart.components` names entries
 from §4.3's table, and an empty list recycles the whole control plane. Restarting
@@ -610,8 +727,9 @@ workload names.
 **An operation that recycles a workload drains first.** The management API is
 what every controller in the operator talks to, so replacing or restarting it
 mid-flight fails whatever is in flight. `Draining` holds while any
-`StorageClusterOps`, `StorageNodeOps`, or `PersistentVolumeOps` in the namespace
-is `Running`, emits `OperationsInFlight`, and proceeds when the last one finishes.
+`StorageClusterOps`, `StorageNodeOps`, or `StoragePoolOps` in the namespace is
+`Running`, which is every `Ops` kind that reaches the control plane over HTTP. It
+emits `OperationsInFlight` and proceeds when the last one finishes.
 It does not cancel them, because an operation canceled to make a restart
 convenient is a worse outcome than a restart that waited.
 
@@ -634,18 +752,18 @@ is skipped otherwise. A task-runner restart is the case worth naming: it skips t
 drain, because its queue is what makes the interruption a delay rather than a lost
 operation.
 
-**An operation naming an external control plane is rejected at creation.**
+**An operation naming a managed control plane is rejected at creation.**
 `ControlPlaneOpsValidator`, in
 `operator/internal/webhook/controlplaneops_validator.go`, resolves
 `spec.controlPlaneRef` on `create` and denies the request when it names no
-`ControlPlane` or names an external one. `ReplicationOpsValidator` carries the
+`ControlPlane` or names one that is not local. `ReplicationOpsValidator` carries the
 same shape for the same reason: an operation that can only fail belongs in an
 error message on the terminal that wrote it.
 
 **Admission is where the check can live because the answer cannot move.**
 `spec.controlPlaneRef` is immutable (Appendix B) and `ControlPlane.spec.source` is
-immutable (§3.2), so a control plane admitted as managed stays managed for the
-life of the operation. What can still happen is the target being deleted, and an
+immutable (§3.2), so a control plane admitted as local stays local for the life
+of the operation. What can still happen is the target being deleted, and an
 operation whose target has vanished is a missing-target failure every `Ops` kind
 in the group handles.
 
@@ -660,9 +778,21 @@ rolling a Deployment to its current image produces no change to verify. A restar
 has neither precondition, since recycling a wedged workload is what it is for.
 
 **`Verifying` is what makes an upgrade more than an image bump.** It re-probes
-readiness, compares the reported version against what was asked for, and fails
-the operation when they disagree, so a rollout that started and did not finish is
-a `Failed` operation rather than an `Available` control plane running the old version.
+readiness, compares the reported version against what was asked for, and fails the
+operation when they disagree, so a rollout that started and did not finish is a
+`Failed` operation rather than an `Available` control plane running the old
+version.
+
+**Where no version is served, the step passes and says that it did not compare.**
+§8 records that `/_meta/version` does not exist yet, and an upgrade that could
+never succeed against a control plane answering every other read is a worse
+outcome than one whose record says the comparison was skipped. The step therefore
+distinguishes three answers rather than two: a version that matches is a success,
+a version that disagrees is a failure, and no version at all is a success carrying
+a note that the rollout finished unverified. The note is on the operation rather
+than in a log, because what it costs is exactly that an administrator reading the
+operation afterward cannot tell a completed upgrade from a rollout that fell back,
+and that has to be legible where the answer is read.
 
 **`Backup` asks rather than implements.** `Requesting` creates or updates a
 `FoundationDBBackup` naming the cluster and the destination from
@@ -717,10 +847,11 @@ The release path this kind adds is the finalizer
 
 ## 8. Backend API Requirements
 
-| Method | Endpoint                | Notes                                                                                            |
-|--------|-------------------------|--------------------------------------------------------------------------------------------------|
-| `GET`  | `/api/v2/_meta/ready`   | The readiness probe, and the one read that cannot come from the stream because it establishes it |
-| `GET`  | `/api/v2/_meta/version` | The reported version. Not provided today, and a prerequisite for §6 and §9.2                     |
+| Method | Endpoint                      | Notes                                                                                                                                                                                   |
+|--------|-------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `GET`  | `/api/v2/_meta/ready`         | The readiness probe, and the one read that cannot come from the stream because it establishes it                                                                                        |
+| `GET`  | `/api/v2/_meta/version`       | The reported version. Not provided today, and a prerequisite for §6 and §9.2                                                                                                            |
+| CLI    | `sbctl cluster build-indices` | The backfill §4.2 runs as a `Job`. Idempotent, takes no cluster id, and exits non-zero when an index could not be completed. An image without it holds the install in `BuildingIndices` |
 
 **`/_meta/version` does not exist, and three things in this document wait on it.**
 `status.version` has nothing to publish (§3.3), the `Upgrade` action's `Verifying`
@@ -728,11 +859,22 @@ step degenerates into a readiness probe that cannot tell a completed upgrade fro
 a rollout that failed back (§6), and the version-skew pair against the CSI driver
 has one half ([`design-simplyblockdriver.md`](design-simplyblockdriver.md) §5).
 
-**It is a prerequisite rather than a degradation to design around.** An `Upgrade`
-that cannot verify is an operation reporting success on the evidence that
-something answered, which is the failure the step exists to catch. The endpoint is
-the control plane's to add, and the work that depends on it is sequenced behind
-it rather than built to cope without it.
+**Each of the three copes with its absence rather than waiting for it.**
+`status.version` stays unwritten, because a field declared and never written
+reports a definite-looking nothing
+([`design-crd-model.md`](design-crd-model.md) §7.9) and an absent version is what
+this one has to say. `simplyblock_controlplane_version_info` is deferred on the
+same grounds (§9.2). `Upgrade` ships and its `Verifying` step reports what it
+could and could not establish (§6).
+
+**What that costs is stated on the operation rather than hidden in the phase.** An
+upgrade verified against no version is an operation reporting success on the
+evidence that something answered, which is the failure the step exists to catch.
+The alternative is refusing every upgrade of a control plane that serves no
+version, which is every control plane today, so the choice is between an
+unverified upgrade that says so and no upgrade at all. The endpoint is the control
+plane's to add, and the step tightens to a comparison the moment it exists,
+without any of the three needing to change shape.
 
 ---
 
@@ -753,10 +895,11 @@ Events land on the object an administrator has open. For this kind that is the
 | The readiness probe failed and the phase became `Unavailable`          | `Warning` | `ControlPlaneNotReady` | `ControlPlane`    |
 | A component is below its desired count and the phase became `Degraded` | `Warning` | `ControlPlaneDegraded` | `ControlPlane`    |
 | The readiness probe recovered                                          | `Normal`  | `ControlPlaneReady`    | `ControlPlane`    |
-| An installation step is waiting on FoundationDB                        | `Normal`  | `AwaitingDependency`   | `ControlPlane`    |
+| An installation step is waiting on FoundationDB or on the index `Job`  | `Normal`  | `AwaitingDependency`   | `ControlPlane`    |
 | An installation step's deadline expired                                | `Warning` | `StepDeadlineExceeded` | `ControlPlane`    |
+| The index `Job` used up its attempts and the installation stopped      | `Warning` | `InstallationFailed`   | `ControlPlane`    |
 | A deletion is held because clusters still exist                        | `Warning` | `ClustersStillPresent` | `ControlPlane`    |
-| The external endpoint could not be resolved or reached                 | `Warning` | `EndpointUnreachable`  | `ControlPlane`    |
+| A managed endpoint could not be resolved or reached                    | `Warning` | `EndpointUnreachable`  | `ControlPlane`    |
 | The credentials Secret is missing or malformed                         | `Warning` | `CredentialsError`     | `ControlPlane`    |
 | A `Backup` run created a `FoundationDBBackup`                          | `Normal`  | `BackupRequested`      | `ControlPlaneOps` |
 | A `Backup` run triggered the one already configured                    | `Normal`  | `BackupTriggered`      | `ControlPlaneOps` |
@@ -776,7 +919,7 @@ event on one object.
 **`ControlPlaneDegraded` fires while every request is still being served** (§4.3),
 so it reaches an administrator before an outage rather than during one, and
 nothing holds on it. It names the component and its two counts, because one reason
-covering eleven workloads sends a reader to `status.components` anyway.
+covering every watched workload sends a reader to `status.components` anyway.
 
 The registered controller's `FDBReady` and `FDBNotReady` become
 `ControlPlaneReady` and `ControlPlaneNotReady`, because FoundationDB is one of
@@ -794,7 +937,7 @@ the things that can be unready and the probe does not distinguish them.
 | `simplyblock_controlplane_install_step_duration_seconds` | `namespace`, `step`                   | Histogram of per-step installation duration (§4.2)                                                                               |
 | `simplyblock_controlplane_operations_total`              | `namespace`, `action`, `result`       | Operations reaching a terminal phase                                                                                             |
 | `simplyblock_controlplane_operation_duration_seconds`    | `namespace`, `action`                 | Histogram of operation durations                                                                                                 |
-| `simplyblock_controlplane_version_info`                  | `namespace`, `version`                | Gauge, 1 for the reported version, so a skew against the driver is graphable                                                     |
+| `simplyblock_controlplane_version_info`                  | `namespace`, `version`                | Gauge, 1 for the reported version, so a skew against the driver is graphable. Deferred with the endpoint that serves it (§8)     |
 
 **`simplyblock_controlplane_version_info` is half of a pair.** Its other half is
 `simplyblock_simplyblockdriver_version_info`, in
@@ -833,12 +976,14 @@ applies a `FoundationDBCluster` and waits on an operator this repository does no
 build. Proving that `AwaitingFoundationDB` reports what it is waiting for, and
 that a FoundationDB which never reaches quorum expires the step rather than
 hanging, needs `envtest` with the FoundationDB CRDs installed and a real cluster
-for the timing.
+for the timing. `BuildingIndices` is unit-testable up to the `Job`'s conditions,
+which a fake client sets by hand, and only a live deployment proves that the
+image's `sbctl cluster build-indices` reaches the database and returns.
 
-The external mode's risk is different and smaller: it is a URL, a Secret, and a
-probe, and all three are unit-testable. What is not is a shared external control
-plane with a second writer, which is the scenario §5.2 says the operator must
-assume and nothing exercises.
+The managed mode's risk is different and smaller: it is a URL, a Secret, and a
+probe, and all three are unit-testable. What is not is a shared control plane with
+a second writer, which is the scenario §5.2 says the operator must assume and
+nothing exercises.
 
 ---
 
@@ -846,10 +991,10 @@ assume and nothing exercises.
 
 | Registered                                    | This design                                 | Cost                                                                                                                                                                                                                             |
 |-----------------------------------------------|---------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `spec.image`                                  | `spec.source.managed.image` (§5.1)          | Spec regrouping, and the field stops doubling as the storage-node default (see below)                                                                                                                                            |
-| No way to name an external control plane      | `spec.source.external` (§5.2)               | Additive, and it is the half of `design-crd-model.md` §6 that does not exist today                                                                                                                                               |
+| `spec.image`                                  | `spec.source.local.image` (§5.1)            | Spec regrouping, and the field stops doubling as the storage-node default (see below)                                                                                                                                            |
+| No way to name a control plane elsewhere      | `spec.source.managed` (§5.2)                | Additive, and it is the half of `design-crd-model.md` §6 that does not exist today                                                                                                                                               |
 | The endpoint is `SIMPLYBLOCK_WEBAPI_BASE_URL` | `status.endpoint` (§3.3)                    | Behavioral. Every caller of `webapi.NewClient()` moves, which is every controller in the operator                                                                                                                                |
-| The chart installs the control plane          | The operator installs it (§5.1)             | The largest piece of work here, and it cannot be a flag day (§12, Q2)                                                                                                                                                            |
+| The chart installs the control plane          | The operator installs it (§5.1)             | The largest piece of work here. `deployment.profile` is the chart's flag and it selects the mode rather than the installer. Adopting a control plane the chart already installed is the open half (§12, Q2)                      |
 | `status.phase` untyped, two values            | `ControlPlanePhase`, four values (§3.3)     | `Degraded` and `Unavailable` are both new, and together they separate a control plane that is impaired from one that is not answering. `Ready` becomes `Available`, which is the opposite of `Unavailable` where `Ready` was not |
 | No step field                                 | `status.step` (§4.2)                        | Additive. A stalled install currently reports one message and no position                                                                                                                                                        |
 | No `observedGeneration`                       | Present (§3.3)                              | Required by `design-crd-model.md` §7.9                                                                                                                                                                                           |
@@ -860,8 +1005,8 @@ assume and nothing exercises.
 
 **The `spec.image` move is not only a regrouping.** The field is inherited by
 every `StorageNodeSet` that omits `spec.clusterImage`, so moving it under
-`spec.source.managed` would leave the external mode with no storage-node default
-at all, which is wrong: the storage-node image has nothing to do with where the
+`spec.source.local` would leave the managed mode with no storage-node default at
+all, which is wrong: the storage-node image has nothing to do with where the
 control plane runs. It belongs with the other fleet defaults, in
 `StorageCluster.spec.storageNodes.image`
 ([`design-storagenode.md`](design-storagenode.md) §5.1), whose doc comment
@@ -877,33 +1022,81 @@ checker covers it.
 
 ## 12. Open Questions
 
-**Q1: Whether one control plane per namespace is the right limit.** §3.1 makes a
-namespace one simplyblock deployment, so serving several tenants means several
-namespaces with one control plane in each. Whether that covers what a
-per-customer deployment needs, or whether one namespace has to hold two backends,
-is not settled, and the answer decides everything else about the singleton: a name
-the controller merely ignores is worth tightening into a webhook or a CEL rule
-only once the limit is agreed.
+Q1 is settled and its number is retired rather than reused, since it is cited
+from review history. §3.1 is where the answer went: a Kubernetes cluster holds one
+`ControlPlane`, which is the limit the operator's own cluster-scoped objects
+already impose on the operator.
 
-The cost of lifting it does not fall on this kind. Nothing else in the group names
-a control plane, because there is only ever one to name: every controller reads
-`status.endpoint` from the object in its own namespace (§3.3), and
-`ControlPlaneOps` is the only kind carrying a `controlPlaneRef` (§6). A second
-control plane in one namespace puts that reference on every entity that reaches a
-backend, or makes it inherited down the ownership spine
-([`design-crd-model.md`](design-crd-model.md) §5), which is an API-wide change
-rather than one this document could make.
+**Q2 is settled for a fresh install and open for an existing one.**
+`deployment.profile` is the chart flag, and it names the mode rather than the
+installer: `standalone` renders a `ControlPlane` with `spec.source.local`, and
+`managed` renders one with `spec.source.managed` pointing at a control plane
+elsewhere. `empty` renders no `ControlPlane` at all, and the administrator
+writes it after the install. Whichever way the object arrives, the operator is
+what installs, and the templates that used to install a control plane locally
+are gone rather than gated. There is no flag that hands them back, because a
+deployment that needs something the spec cannot express is a deployment the
+spec has to grow a field for.
 
-What would settle it is a deployment that a namespace per tenant cannot express,
-and whether one exists is a question for the field rather than for the code.
+What is open is the transition for a deployment already running a chart-installed
+control plane. The chart refuses to upgrade over one without an explicit
+annotation saying to keep it, which turns a silent adoption into a decision, and
+the operator's apply is a server-side apply under a stable field manager, so it
+takes over the objects a Helm release created rather than failing on them. What
+nothing does yet is verify the handover or strip the release's claim afterward,
+and §5.1's ownership spine is only real once it has. That is the shape
+[`design-simplyblockdriver.md`](design-simplyblockdriver.md) §4.3 gives the CSI
+driver's adoption, and it is the half of this question still to answer.
 
-**Q2: How the install moves from the chart to the operator.** §5.1 has the
-operator apply what the chart applies today, and both cannot own the same objects
-at once. The candidates are a chart flag that stops rendering the templates once
-the operator is capable of applying them, an adoption pass where the operator
-takes ownership of objects the chart already created, and leaving the chart in
-place for existing deployments while new ones use the operator. Nothing here
-settles it, and it is the reason §5.1's work is larger than its specification.
+**The install covers a base control plane rather than everything the chart
+renders.** What it applies is the FoundationDB half, the object store, and the
+management API with the services beside it, which is what the chart renders with
+observability disabled. Graylog, Grafana, Thanos, the document store behind them,
+and the log collector stay with the chart: none appears in a step of §4.2's
+machine, every one is non-essential in §4.3's table, and they are gated behind one
+chart value this kind has no field for.
+
+**TLS is `spec.source.local.tls`, and it is on by default.** The block is
+`DriverTLS`'s three fields under `DriverTLS`'s names — `enableTLS`,
+`enableMutualTLS`, and `provider` — because they are the same three decisions
+about the same connection seen from its two ends. What differs is the default:
+the CSI driver's fields describe deployments that already existed and default
+off, and these default on. An installed control plane holds every cluster
+definition, node registration, and volume record, and is reached over the pod
+network by the operator, the CSI driver, and the metrics scrape alike, so
+plaintext is a decision to state rather than the one a deployment reaches by
+leaving the block out.
+
+The install turns it into the environment the control-plane image has always
+spoken — `SB_TLS_SERVE`, `SB_TLS_PROVIDER`, `SB_TLS_CONNECT`,
+`SB_TLS_CLIENT_AUTH`, and FoundationDB's `FDB_TLS_*` — on every pod of the
+install rather than only the one that serves. The task and monitoring pools are
+clients of the management API, and a plaintext pool cannot reach an API that
+requires a certificate.
+
+The serving certificate is the install's too. It was rendered beside the Service
+it certifies, and the install that replaced the chart took the Service and left
+the certificate, so every pod mounted a Secret nothing produced. The two issuers
+produce it differently and neither is a choice this makes: cert-manager takes a
+`Certificate` naming the Service's DNS names, and the OpenShift service CA takes
+an annotation on the Service.
+
+The chart renders the block from `tls.enabled` and `tls.mutual_enabled` rather
+than leaving it out, so a release gets the answer its values state rather than
+this kind's default. Both of those values are on as well, which makes TLS what a
+plain `helm install` produces. It has a prerequisite: cert-manager issues the
+certificates, and the chart refuses to render where `cert-manager.io/v1` is not
+served rather than installing something quieter than what the values say. The
+refusal names both ways out, because a deployment reaching it did not ask for the
+thing it is being refused.
+
+FoundationDB's own connections are the second listener, and they follow the
+client-certificate decision rather than the serving one: peer TLS between
+database processes has no anonymous mode, so every process authenticates to every
+other or none of them do. `mainContainer.enableTls` is what turns those listeners
+over, and it is a field on the cluster rather than an environment variable --
+processes carrying a current certificate, key, and CA and no `enableTls` talk to
+each other in the clear while every mount looks right.
 
 **Q3: Whether backup belongs to the action or to the spec.**
 `FoundationDBBackup` describes a continuous backup, carrying a `backupState` and a
@@ -933,21 +1126,43 @@ this document should make on the control plane's behalf. They take the
 non-essential default meanwhile, so a wrong answer under-reports rather than
 halting a fleet.
 
-**Q6: What supplies the MongoDB operator where a cluster has none.** §5.1 has the
-document store applied as a `MongoDBCommunity` object, and the chart ships that
-CRD while installing no operator to reconcile it, so a cluster without one accepts
-the object and does nothing with it. The candidates are installing the community
-operator alongside the FoundationDB one, replacing the document store with
-something the management API already carries, and holding the install with a named
-prerequisite. The first two are the control plane's to choose between, since what
-it stores where is its own.
+Q6 is settled by measurement and its number is retired rather than reused, since
+it is cited from review history. §5.1 is where the answer went: the base install
+applies no document store at all, because what keeps documents in a
+`MongoDBCommunity` is Graylog rather than the management API, and the reference
+deployment reaches `Available` without one. What the step applies instead is an
+object store.
 
-**Q7: Whether the operator installs a `StorageClass`.** §5.1 detects a default
-one. The chart applies a `hostpath.csi.k8s.io` provisioner and a `local-hostpath`
-class, which suits a laptop and a single-node test. A FoundationDB whose volumes
+**Q7: Whether the operator installs a `StorageClass`.** It does not, and it does
+not detect one either: an unset `storageClassName` falls to whatever the cluster's
+default is. The chart applies a `hostpath.csi.k8s.io` provisioner and a
+`local-hostpath` class, which suits a laptop and a single-node test. A FoundationDB whose volumes
 are host paths keeps its data on one machine, so the install either refuses
 without a class, names the hostpath path as a development mode, or keeps applying
 it.
+
+**Q8: Where the event-log alert rules belong for a standalone install.** The
+chart provisioned seven Grafana rules that read the control plane's cluster event
+log through an Infinity data source, covering the transitions Thanos cannot see: a
+node leaving online, a device becoming unavailable or being removed, a cluster
+degrading, suspending, or reaching capacity, and the two journal-manager faults.
+They were removed from the chart because the chart cannot build them. A data
+source carries one cluster's credential, so the rules iterate the clusters, and
+the chart learns a cluster's UUID and secret only when somebody writes them back
+into the values after `cluster create`, which is the loop
+[`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md)
+replaced.
+
+The operator holds both. The `StorageCluster` reconciler knows every cluster's
+UUID and secret and already upserts them into `simplyblock-csi-secret-v2`
+([`design-simplyblockdriver.md`](design-simplyblockdriver.md) §4.3), so the
+provisioning belongs to whatever reconciles the observability stack rather than
+to a values file. Q2 leaves Grafana and Thanos with the chart while the base
+control plane moves to the operator, which is why this has no home yet.
+
+Until it has one, a standalone deployment alerts on what Thanos scrapes and on
+nothing the event log carries. The Thanos-derived rules are unaffected: they need
+no per-cluster credential, which is the property that separates the two halves.
 
 ---
 
@@ -970,7 +1185,7 @@ const (
 	// ControlPlanePhaseDegraded is one whose readiness probe passes while a
 	// management API or FoundationDB pod is restarting. It answers every
 	// request, so nothing holds on it and it exists to be read by a person. A
-	// control plane the operator does not manage never reaches it, because the
+	// control plane this cluster does not host never reaches it, because the
 	// operator owns no pods there to watch.
 	ControlPlanePhaseDegraded ControlPlanePhase = "Degraded"
 	// ControlPlanePhaseUnavailable is one whose readiness probe fails: it
@@ -983,15 +1198,19 @@ const (
 
 // ControlPlaneStep is one step of the installation path. There is one graph
 // rather than a MultiConfig, because an entity has no spec.action to key one on.
-// +kubebuilder:validation:Enum=ApplyingFoundationDB;AwaitingFoundationDB;ApplyingDatastore;ApplyingAPI;AwaitingAPI
+// +kubebuilder:validation:Enum=ApplyingFoundationDB;AwaitingFoundationDB;BuildingIndices;ApplyingDatastore;ApplyingAPI;AwaitingAPI
 type ControlPlaneStep string
 
 const (
 	ControlPlaneStepApplyingFoundationDB ControlPlaneStep = "ApplyingFoundationDB"
 	ControlPlaneStepAwaitingFoundationDB ControlPlaneStep = "AwaitingFoundationDB"
-	ControlPlaneStepApplyingDatastore    ControlPlaneStep = "ApplyingDatastore"
-	ControlPlaneStepApplyingAPI          ControlPlaneStep = "ApplyingAPI"
-	ControlPlaneStepAwaitingAPI          ControlPlaneStep = "AwaitingAPI"
+	// ControlPlaneStepBuildingIndices runs the control plane's own index
+	// backfill against the database that just became available, and holds until
+	// it reports success.
+	ControlPlaneStepBuildingIndices   ControlPlaneStep = "BuildingIndices"
+	ControlPlaneStepApplyingDatastore ControlPlaneStep = "ApplyingDatastore"
+	ControlPlaneStepApplyingAPI       ControlPlaneStep = "ApplyingAPI"
+	ControlPlaneStepAwaitingAPI       ControlPlaneStep = "AwaitingAPI"
 )
 
 // FoundationDBSpec is the sizing of the FoundationDB the operator installs.
@@ -1014,10 +1233,10 @@ type FoundationDBSpec struct {
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
-// ManagedControlPlane is a control plane the operator installs and owns. Its
-// objects carry a controller reference to the ControlPlane, so the ownership
-// spine starts at a real edge rather than at a Helm release.
-type ManagedControlPlane struct {
+// LocalControlPlane is a control plane this cluster hosts, installed and owned
+// by the operator. Its objects carry a controller reference to the ControlPlane,
+// so the ownership spine starts at a real edge rather than at a Helm release.
+type LocalControlPlane struct {
 	// Image is the management API and control-plane image.
 	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +kubebuilder:validation:Required
@@ -1049,13 +1268,25 @@ type ManagedControlPlane struct {
 	// plane.
 	// +optional
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// NodeSelector pins every pod the operator installs for the control plane.
+	// It is a selector rather than an affinity term because that is what the
+	// chart it replaces took, and a deployment migrating off the chart has the
+	// value already written down.
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 }
 
-// ExternalControlPlane is a control plane that already exists. The operator
-// installs nothing and owns nothing: it resolves, probes, and reports.
-type ExternalControlPlane struct {
+// ManagedControlPlane is a control plane somewhere else, which this cluster's
+// storage is managed by rather than hosting. The operator installs nothing and
+// owns nothing here: it resolves the endpoint, probes it, and reports.
+//
+// The word is about what manages the storage clusters rather than about who runs
+// the operator. A deployment in this mode registers its clusters with a control
+// plane it does not host, so the fleet is administered from there.
+type ManagedControlPlane struct {
 	// Endpoint is the management API's base URL. It is validated against the
-	// same outbound-URL guard every other external endpoint in this group uses,
+	// same outbound-URL guard every other outbound endpoint in this group uses,
 	// so a loopback or link-local address is rejected.
 	// +kubebuilder:validation:Pattern=`^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$`
 	// +kubebuilder:validation:Required
@@ -1064,8 +1295,14 @@ type ExternalControlPlane struct {
 	// CredentialsSecretRef names a Secret in this namespace holding the bearer
 	// token the operator authenticates with. It is a reference rather than a
 	// field because a token in a spec is a token in every kubectl get -o yaml.
-	// +kubebuilder:validation:Required
-	CredentialsSecretRef corev1.LocalObjectReference `json:"credentialsSecretRef"`
+	//
+	// Absent means the endpoint is reached without one, which is the in-cluster
+	// case: a control plane the Helm chart installed answers on a ClusterIP
+	// Service in this namespace and does not require a token for the readiness
+	// read. Naming a Secret that does not exist stays an error, because naming
+	// one is a statement that the control plane needs it.
+	// +optional
+	CredentialsSecretRef *corev1.LocalObjectReference `json:"credentialsSecretRef,omitempty"`
 
 	// CABundleSecretRef names a Secret holding the CA certificate the endpoint
 	// is verified against. Absent means the system trust store.
@@ -1073,29 +1310,45 @@ type ExternalControlPlane struct {
 	CABundleSecretRef *corev1.LocalObjectReference `json:"caBundleSecretRef,omitempty"`
 }
 
-// ControlPlaneSource selects where the control plane comes from. Exactly one
-// member is set, which is what makes the two modes siblings rather than two
-// unrelated top-level fields.
+// ControlPlaneSource selects whether this cluster hosts its control plane or is
+// managed by one elsewhere. Exactly one member is set, which is what makes the
+// two modes siblings rather than two unrelated top-level fields, and which
+// member it is cannot change afterward.
+//
+// Both rules are declared here rather than on the field that carries the block,
+// for two separate reasons.
+//
+// The immutability is the interesting one. What is frozen is the choice between
+// the two modes and not the block, because the members have to stay editable:
+// changing spec.source.local.image is an ordinary edit, and it is what a
+// ControlPlaneOps upgrade performs. Spelling it +k8s:immutable on the field would
+// emit self == oldSelf over the whole struct, which freezes the image with it and
+// makes that operation impossible to complete.
+//
+// The placement is the dull one. controller-gen emits a single field's
+// marker-derived rules and its injected immutability rule into one list in an
+// order that varies between runs, so a field carrying both produces a CRD that
+// differs from itself and a drift check that fails at random. Two rules of the
+// same kind on a type are emitted in source order.
+// +kubebuilder:validation:XValidation:rule="(has(self.local) ? 1 : 0) + (has(self.managed) ? 1 : 0) == 1",message="set exactly one of local or managed"
+// +kubebuilder:validation:XValidation:rule="has(self.local) == has(oldSelf.local) && has(self.managed) == has(oldSelf.managed)",message="spec.source is immutable: a control plane the operator installed and one it did not are different deployments, and the clusters and their volumes live in the FoundationDB behind the old one"
 type ControlPlaneSource struct {
-	// Managed is a control plane the operator installs.
+	// Local is a control plane the operator installs.
+	// +optional
+	Local *LocalControlPlane `json:"local,omitempty"`
+
+	// Managed is a control plane that already exists.
 	// +optional
 	Managed *ManagedControlPlane `json:"managed,omitempty"`
-
-	// External is a control plane that already exists.
-	// +optional
-	External *ExternalControlPlane `json:"external,omitempty"`
 }
 
 // ControlPlaneSpec is the desired state of the simplyblock control plane for one
 // namespace.
 type ControlPlaneSpec struct {
-	// Source selects where the control plane comes from. Immutable: switching a
-	// live deployment between an installed control plane and an existing one is
-	// not a reconfiguration, because the clusters and their volumes live in the
-	// FoundationDB behind the old one.
-	// +kubebuilder:validation:XValidation:rule="(has(self.managed) ? 1 : 0) + (has(self.external) ? 1 : 0) == 1",message="set exactly one of managed or external"
+	// Source selects where the control plane comes from. Which member is set is
+	// frozen by the rules on ControlPlaneSource; the member's own contents stay
+	// editable.
 	// +kubebuilder:validation:Required
-	// +k8s:immutable
 	Source ControlPlaneSource `json:"source"`
 }
 
@@ -1135,12 +1388,12 @@ type ControlPlaneStatus struct {
 	Phase ControlPlanePhase `json:"phase,omitempty"`
 
 	// Step is the position of the installation machine within Installing.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['ApplyingFoundationDB','AwaitingFoundationDB','ApplyingDatastore','ApplyingAPI','AwaitingAPI']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['ApplyingFoundationDB','AwaitingFoundationDB','BuildingIndices','ApplyingDatastore','ApplyingAPI','AwaitingAPI']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
-	// Endpoint is the resolved management API base URL, derived in the managed
-	// case and echoed in the external one. It is what every controller in the
+	// Endpoint is the resolved management API base URL, derived in the local
+	// case and echoed in the managed one. It is what every controller in the
 	// operator reads to reach the control plane, so that one object answers
 	// where it is.
 	// +optional
@@ -1155,8 +1408,8 @@ type ControlPlaneStatus struct {
 	LastChecked *metav1.Time `json:"lastChecked,omitempty"`
 
 	// Components is the per-component readiness the phase is derived from
-	// (§4.3), one entry per workload the managed install applies. It is empty
-	// for an external control plane, which has no components the operator owns.
+	// (§4.3), one entry per workload the local install applies. It is empty for
+	// a managed control plane, which has no components the operator owns.
 	// Without it a Degraded phase says that something is wrong and not what.
 	// +optional
 	// +listType=map
@@ -1190,9 +1443,9 @@ type ControlPlaneStatus struct {
 // +kubebuilder:printcolumn:name="Message",type=string,JSONPath=".status.message",priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
-// ControlPlane is the simplyblock control plane for one namespace: FoundationDB
-// together with the management API, either installed by the operator or already
-// existing. It is a singleton named "simplyblock", and it is the root of the
+// ControlPlane is the simplyblock control plane for one Kubernetes cluster:
+// FoundationDB together with the management API, either installed by the operator
+// or already existing. It is a singleton named "simplyblock", and it is the root of the
 // ownership spine: nothing else in this API group reconciles meaningfully before
 // it reports Available.
 type ControlPlane struct {
@@ -1219,8 +1472,8 @@ type ControlPlaneList struct {
 
 ```go
 // ControlPlaneOpsAction is the operation a ControlPlaneOps performs. Every action
-// acts on what the operator installed, so every action requires a managed control
-// plane, and the validating webhook of §6 rejects an operation naming an external
+// acts on what the operator installed, so every action requires a local control
+// plane, and the validating webhook of §6 rejects an operation naming a managed
 // one at creation rather than letting it be created and fail.
 // +kubebuilder:validation:Enum=Restart;Upgrade;Backup
 type ControlPlaneOpsAction string

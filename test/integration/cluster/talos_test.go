@@ -109,3 +109,61 @@ func TestWithTeardownIsTheCreateFailureAlone(t *testing.T) {
 		t.Errorf("a clean teardown changed the error: %v", err)
 	}
 }
+
+// TestLineWriterSplitsOnBothTerminators covers the reason this type exists.
+// talosctl redraws its progress in place, so a carriage return ends a line as
+// much as a newline does, and treating only newlines as terminators delivers a
+// whole cluster creation as one line at the end.
+func TestLineWriterSplitsOnBothTerminators(t *testing.T) {
+	var got []string
+	w := &lineWriter{emit: func(format string, args ...any) {
+		got = append(got, args[0].(string))
+	}}
+
+	// Deliberately split mid-line across writes, because that is what a pipe
+	// delivers and a writer that assumes whole lines loses the seam.
+	for _, chunk := range []string{"downloading", " image\rbooting", " nodes\nwaiting"} {
+		if _, err := w.Write([]byte(chunk)); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	w.flush()
+
+	want := []string{"downloading image", "booting nodes", "waiting"}
+	if len(got) != len(want) {
+		t.Fatalf("emitted %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d is %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestLineWriterDropsEmptyLines keeps a redraw from emitting a blank line for
+// every frame it paints.
+func TestLineWriterDropsEmptyLines(t *testing.T) {
+	emitted := 0
+	w := &lineWriter{emit: func(string, ...any) { emitted++ }}
+
+	if _, err := w.Write([]byte("\r\n   \r\n\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	w.flush()
+
+	if emitted != 0 {
+		t.Errorf("emitted %d lines from whitespace alone, want 0", emitted)
+	}
+}
+
+// TestDefaultConfigNarrates pins the default this package chose. Silence is the
+// wrong default for an operation measured in minutes, so a Config that names no
+// logger still gets one.
+func TestDefaultConfigNarrates(t *testing.T) {
+	cfg := Config{}
+	cfg.applyDefaults()
+
+	if cfg.Logf == nil {
+		t.Error("a defaulted Config discards talosctl's output, so a create is silent until it returns")
+	}
+}

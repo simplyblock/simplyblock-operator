@@ -62,8 +62,6 @@ spec:
           value: "{{ .Values.storagenode.spdkProxyImage }}"
         - name: FORMAT4K
           value: "{{ .Values.storagenode.format4k }}"
-        - name: HAJMCOUNT
-          value: "{{ .Values.storagenode.haJMCount }}"
         - name: NAMESPACE
           valueFrom:
             fieldRef:

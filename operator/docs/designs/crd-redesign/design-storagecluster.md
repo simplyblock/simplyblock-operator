@@ -1,15 +1,16 @@
 # Design Document: The StorageCluster and Its Operations
 
-**Status:** Draft  
+**Status:** Implemented, with the exceptions §12.1 records  
 **Authors:** Christoph Engelbert (noctarius), Israel Geoffrey (`StorageClusterOps`)  
-**Date:** 2026-08-28 (last updated 2026-09-08)  
+**Date:** 2026-08-28 (last updated 2026-09-17)  
 **Supersedes:** `design-storageclusterops.md`, removed in the same change  
 **Test Plan:** [`tests/test-plan-storagecluster.md`](../../tests/test-plan-storagecluster.md)
 
-This document specifies the target model. Both kinds and both controllers exist in
-a shape that predates the conventions of
-[`design-crd-model.md`](design-crd-model.md), and §12 is the single record of what
-the rework changes against them.
+This document specifies the model both kinds now carry. Both moved to
+`storage.simplyblock.io/v1alpha2` with a `v1alpha1` spoke and a conversion
+between them, and both controllers were rewritten against this specification in
+`operator/internal/controllers/cluster/`. §12 remains the record of what the
+rework changed, and §12.1 is what it did not reach.
 
 ---
 
@@ -114,7 +115,7 @@ accepts the edit, which is not the same as the cluster tolerating it.
 
 ## 3. StorageCluster: API
 
-Declared in `operator/api/v1alpha1/storagecluster_types.go`, short name `stc`.
+Declared in `operator/api/v1alpha2/storagecluster_types.go`, short name `stc`.
 **The type is Appendix A**, whole and as it is to be written. What follows quotes
 the field an argument turns on and no more, so that one copy of each type exists
 and it is the one an implementation is written against.
@@ -139,10 +140,37 @@ cluster's volume encryption keys, and is a block rather than a field, which is
 the last part of this section. `enableFailureDomains` opts the cluster into
 failure-domain mode, where every node must label the fault group it belongs to
 ("rack-b") so the control plane can spread chunks across independent ones
-([`design-storagenode.md`](design-storagenode.md) §3.1). `enableNodeAffinity` selects
-affinity-based placement for storage components. `deviceClass` names the one class
+([`design-storagenode.md`](design-storagenode.md) §3.1). `enableNodeAffinity` has the data
+plane serve an erasure-coded volume's I/O from the local node's own devices
+before crossing the network, and is not Kubernetes affinity
+([`design-primary-node-placement.md`](../design-primary-node-placement.md)
+§`EnableNodeAffinity` is unrelated to Tier 1). `deviceClass` names the one class
 of backend storage the cluster is built out of. All nine are enforced immutable, in
 two spellings that mean the same thing (§3.2).
+
+**`stripe` is one of seven schemes, and the schema is what says so.** simplyblock
+supports 1+0, 1+1, 2+1, 4+1, 1+2, 2+2, and 4+2, which is the set the control
+plane holds in `SUPPORTED_ERASURE_CODING_SCHEMES` and refuses a cluster create
+outside of. A type-level CEL rule on `StripeSpec` states the same set, so the
+refusal arrives at the apply rather than from a cluster create that runs several
+steps — and, for a cluster a deployment config produced, one irreversible
+approval — later
+([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §5.1).
+An unstated half is 1, which is what the control plane defaults each field to.
+
+**Each scheme also has a storage-node count below which it must not be used, and
+the activation gate is where that is enforced.** The minimum is `ndcs+npcs` nodes
+to place a stripe across plus one spare per tolerated failure to rebuild onto: 1
+for 1+0, 3 for 1+1, 4 for 2+1, 6 for 4+1, 5 for 1+2, 6 for 2+2, and 8 for 4+2.
+Nothing below the operator enforces it — the control plane's own activation gate
+counts devices, `ndcs+npcs+1` of them, and never nodes — so a cluster of four
+nodes configured 4+2 activates today and loses data on the second failure it was
+configured to survive. It cannot be a rule on this type, because the nodes are
+objects of their own and a cluster is created before any of them exists, so
+`Activate` holds on it instead and says why under `StripeNodesNotReady` (§6.3).
+The hold is placed after the "already active" check, so a re-activation of a
+cluster that is already serving is never held: the gate exists to stop a layout
+being brought up wrong, and a live cluster's layout is already a fact.
 
 **A cluster is built out of one class of device, and `deviceClass` is which.**
 NVMe devices are the class simplyblock has always accepted and logical block
@@ -194,8 +222,12 @@ MaxSubsystemCount *int32 `json:"maxSubsystemCount"`
 // This is an explicit core count, not a percentage. Required: the core layout
 // it produces must match across the cluster, so it is stated rather than left
 // to a per-node heuristic.
+//
+// The floor is 4 rather than a hardware limit: a node must carry one core
+// beyond this budget for the system, and the control plane's core layout
+// assigns no NVMe-oF poller core at all for a 2-vCPU budget.
 // +kubebuilder:validation:Required
-// +kubebuilder:validation:Minimum=6
+// +kubebuilder:validation:Minimum=4
 VCPUCount *int32 `json:"vcpuCount"`
 ```
 
@@ -275,7 +307,7 @@ whether it came from the auto-rebalancer, a manual migration, or a drain, so it
 cannot sit under the rebalancing policy that is only one of its three sources.
 
 **`spec.backup` is where the cluster's backups live, and setting it is what makes
-them visible.** It names an S3 endpoint, a bucket, an optional prefix, and the Secret
+them visible.** It names an S3 endpoint, a bucket, and the Secret
 holding the credentials, and it is the one location the control plane writes copies to
 and the operator reads them from. Setting it at creation and setting it a year later are
 the same operation, which is why it is one of the few mutable fields here: a cluster
@@ -289,13 +321,23 @@ a store swapped for another leaves the first store's backups where they are and 
 representing them. Unsetting the field is the same statement with an empty answer.
 
 **Each policy's on-off switch is a field of the spec, and there are two of them.**
-`spec.enableDataRealignment` and `spec.enableVolumeAutoPlacement` sit beside the blocks
+`spec.disableDataRealignment` and `spec.enableVolumeAutoPlacement` sit beside the blocks
 they govern rather than inside them, because a toggle named for its subject repeats
 itself when the subject is also its parent:
 `spec.volumeAutoPlacement.enableVolumeAutoPlacement` says the same word twice. Only the
 switches move up. Each block keeps its tuning fields, so the grouping §3.1 is built on
 survives and the thing a reader turns on is one field at the top rather than one buried
 in each block.
+
+**The two are spelled differently because their defaults differ**, and
+[`design-crd-model.md`](design-crd-model.md) §7.5 makes the form follow the default.
+Auto-placement is off until a cluster asks for it, so it is `enable`-formed. Realignment
+is on until a cluster refuses it, so it is `disable`-formed: realignment restores the
+fault-tolerance and node-affinity guarantees every volume move invalidates, and a cluster
+that never says the word should get them back rather than accumulate unaligned structures
+it never agreed to. Turning it off is for a cluster that migrates continuously, where a
+run that blocks migrations for tens of minutes costs more than the delay in realigning,
+and `minMoves` below is the gentler answer to that same problem.
 
 **There is no switch for volume migration, because migration cannot be turned off.**
 The registered `volumeMigrationSettings.enabled` implies a cluster that refuses to move
@@ -344,14 +386,29 @@ from wherever the field sits, so this is a Kubernetes-side regrouping only.
 
 ### 3.2 Immutability
 
-Nine spec fields are enforced immutable. Eight of them are optional, and the
+Eleven spec fields are enforced immutable. Ten of them are optional, and the
 enforcement is immutable once set: the field may be filled in later, and from that
 point it can be neither changed nor removed.
 
-| Spelling                                         | Fields                                                                       |
-|--------------------------------------------------|------------------------------------------------------------------------------|
-| `+k8s:immutable` on the field                    | `enableNodeAffinity`, `enableFailureDomains`, `deviceClass`                  |
-| Type-level `+kubebuilder:validation:XValidation` | `fabricType`, `kms`, `stripe`, `nvmfBasePort`, `rpcBasePort`, `snodeApiPort` |
+| Spelling                                         | Fields                                                                                                                   |
+|--------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
+| `+k8s:immutable` on the field                    | `enableNodeAffinity`, `enableFailureDomains`, `deviceClass`, `storageNodes.mgmtInterface`, `storageNodes.dataInterfaces` |
+| Type-level `+kubebuilder:validation:XValidation` | `fabricType`, `kms`, `stripe`, `nvmfBasePort`, `rpcBasePort`, `snodeApiPort`                                             |
+
+**The two node-facing interface fields are immutable because the control plane
+spends them once.** `storageNodes.mgmtInterface` and `storageNodes.dataInterfaces`
+are the node-add's `interface_name` and `data_nics`, and the control plane resolves
+both into the node's own record at that point. Nothing re-reads the cluster field
+afterward, so an edit reconfigures no node that already joined and leaves the
+object describing a network no node is on.
+[`design-storagenode.md`](design-storagenode.md) §5.1 states the pair against the
+group they live in.
+
+**`clientDataIfname` is not one of them, although it reads like one.** It is a
+client-side knob rather than a node-side one: the control plane keeps it on the
+cluster record and renders it as `--host-iface=` into every `nvme connect` the CSI
+driver runs, for the whole life of the cluster. Editing it is how a fleet is moved
+onto a different client data network, and it takes effect on the next attach.
 
 `+k8s:immutable` generates two rules. controller-gen v0.21.0 emits a field-level
 `self == oldSelf`, and for a field outside `required` a parent-level
@@ -420,6 +477,19 @@ machine's position, both specified with the creation lock in §4.2.
 
 `status.tasks` is what the backend is currently busy with, specified in §3.4.
 
+`status.failureDomains` maps each failure-domain label the cluster's nodes declare
+to the integer the control plane identifies that domain by. The labels are this
+API's (`rack-b`), and the control plane's field is an index. A
+`ClusterDeploymentConfig` writes the mapping in `CreatingNodes`, for the cluster it
+creates and for the one it grows
+([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §4.2).
+An entry is never changed or removed once written, because the control plane has
+placed nodes under that index. New labels are indexed in name order from the
+lowest free index, except that a numeric label claims its own number when the
+number is free: before the mapping existed a numeric label was sent as that
+number, and a cluster built then already has nodes under it. The list holds at
+most 256 entries, and a deployment that would exceed it is refused at validation.
+
 **Four registered status fields are removed rather than carried forward.**
 `mgmtNodes`, `storageNodes`, `lastUpdated`, and `created` are declared on the
 registered kind, carry `FIXME` comments naming a possible API dependency, and are never
@@ -439,21 +509,28 @@ belongs in its status.
 
 ```go
 // Tasks are the control plane's own asynchronous jobs, as of the last stream
-// frame: running and pending only, newest first, and capped. It is a window on
-// the backend rather than a record: a task that finishes leaves the list, and
-// what remains of it is the event that says it did (§10.1).
+// frame: running and pending only, capped, and in the order the control plane
+// reports them. It is a window on the backend rather than a record: a task that
+// finishes leaves the list, and what remains of it is the event that says it
+// did (§10.1).
 // +kubebuilder:validation:MaxItems=20
 // +optional
 Tasks []ClusterTask `json:"tasks,omitempty"`
 ```
 
 **Twenty is a window onto a cluster's work.** A busy cluster runs more than twenty
-tasks, and the field shows what fits in a status somebody reads: ordered newest first,
-so the twenty most recent running or pending tasks are visible and the rest stay in the
-control plane. The
-cap is what keeps an object bounded whose subject is not, which is the constraint any
-status list has to answer to
-([`design-crd-model.md`](design-crd-model.md) §3.1).
+tasks, and the field shows what fits in a status somebody reads. The cap is what
+keeps an object bounded whose subject is not, which is the constraint any status
+list has to answer to ([`design-crd-model.md`](design-crd-model.md) §3.1).
+
+**The window's order is the control plane's own**, because ordering it is not
+something this operator can do. The `TaskDTO` carries no creation date and no
+progress figure, so a newest-first window cannot be built from what is on the
+wire, and `ClusterTask` declares neither `createdAt` nor `progress` rather than
+declaring fields nothing can write
+([`design-crd-model.md`](design-crd-model.md) §7.9). What it carries instead is
+`retry`, which the schema does report and which is the one number separating a
+task that is slow from one that is failing.
 
 **Only running and pending tasks appear.** A completed or canceled task is not
 current state, so it leaves the list, and the object stops describing it. That is what
@@ -477,7 +554,7 @@ The smallest valid `StorageCluster` is the two required sizing fields and nothin
 else. Everything the control plane can default, it defaults.
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageCluster
 metadata:
   name: production
@@ -491,7 +568,7 @@ A cluster that sets the layout, the tenancy thresholds, key storage, and both
 migration policies:
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageCluster
 metadata:
   name: production
@@ -531,11 +608,9 @@ spec:
   backup:
     endpoint: https://s3.example.com
     bucket: simplyblock-backups
-    prefix: production/
     credentialsSecretRef:
       name: backup-credentials
 
-  enableDataRealignment: true
   enableVolumeAutoPlacement: true
 
   volumeMigrationSettings:
@@ -599,7 +674,7 @@ steady-state only.
 │                  Kubernetes Control Plane                    │
 │   ┌──────────────────────────────────────────────────────┐   │
 │   │              StorageClusterReconciler                │   │
-│   │  1. Get the CR from the API server, not the cache    │   │
+│   │  1. Get the CR through the manager's cache           │   │
 │   │  2. Deletion: backend DELETE, then finalizer         │   │
 │   │  3. Ensure the finalizer                             │   │
 │   │  4. status.uuid != ""  → syncStatus                  │   │
@@ -617,10 +692,14 @@ steady-state only.
 └──────────────────────────────────────────────────────────────┘
 ```
 
-The CR is fetched with a direct read rather than from the informer cache. A
-cached read can still return `status.uuid == ""` immediately after
-`Status().Patch` has persisted a UUID, and acting on that stale value is a second
-`POST` and a second backend cluster.
+The CR is read through the manager's cache, so a reconcile can observe
+`status.uuid == ""` immediately after `Status().Patch` has persisted a UUID. What
+keeps that from becoming a second `POST` and a second backend cluster is the claim
+rather than the read. §4.2's optimistic-lock patch returns 409 to a reconciler
+holding a stale `resourceVersion`, and a pass that does get through re-enters
+adoption, which finds the cluster by name and is idempotent. A direct read would
+narrow the window without closing it, because the gap between reading and posting
+is not the part that races.
 
 ### 4.2 Creation, and the lock that makes it single-shot
 
@@ -670,7 +749,7 @@ response lost after the backend committed.
 
 ```go
 // StorageClusterPhase is where the operator has got to with this cluster.
-// +kubebuilder:validation:Enum=Pending;Creating;Online;Degraded;Unavailable;Suspended
+// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Rebalancing;Degraded;Unavailable;Suspended
 type StorageClusterPhase string
 
 // StorageClusterStep is one step of the creation path. There is one graph rather
@@ -678,6 +757,43 @@ type StorageClusterPhase string
 // +kubebuilder:validation:Enum=Claiming;CheckingControlPlane;ResolvingConfig;Creating;Adopting;Persisting
 type StorageClusterStep string
 ```
+
+**The phase is the operator's creation path until the cluster exists, and the
+control plane's lifecycle afterward.** `Pending` and `Creating` are the operator's
+own. Every other value is a reading of the string the control plane reports, and
+the mapping is stated once rather than left to be inferred from a switch:
+
+| Control plane reports                                 | Phase          |
+|-------------------------------------------------------|----------------|
+| nothing yet                                           | `Pending`      |
+| `in_creation`, `in_expansion`, `unready`              | `Provisioning` |
+| `in_activation`                                       | `Activating`   |
+| `active`                                              | `Online`       |
+| `active`, `degraded`, or `read_only` with a rebalance | `Rebalancing`  |
+| `degraded`, `read_only`                               | `Degraded`     |
+| `suspended`                                           | `Suspended`    |
+| anything else                                         | `Unavailable`  |
+
+**`Rebalancing` is read from the flag, over the serving statuses only.** The
+control plane reports a rebalance as `is_re_balancing` beside the status rather
+than as a status, because a cluster is active and rebalancing, or degraded and
+rebalancing, at once. The phase reads the flag over `active`, `degraded`, and
+`read_only`, since a rebalance is what makes most operations on the cluster
+unavailable and the phase is the one column `kubectl get` shows. It never
+replaces a phase that is not serving: a suspended cluster with a rebalance task
+still queued is suspended first. `status.status` keeps the control plane's own
+word beside it, and `status.rebalancing` the flag, which is how a rebalance on a
+degraded cluster is told from one on an active cluster.
+
+`Provisioning` and `Activating` exist because a cluster being built is not a
+cluster that is broken. Without them `unready` and `in_activation` both read as
+`Unavailable`, which reports a fault for the ordinary course of a deployment and
+leaves the phase unable to say that the control plane was asked for something and
+is doing it. `Activating` is separate from `Provisioning` rather than its last
+step, because an expansion ends in an activation and so does recovery from a
+suspension, long after anything was being built. `Unavailable` keeps its meaning
+as the residue: a status this operator has no reading for, rather than every
+cluster that is not currently serving.
 
 `Adopting` is reached from two states rather than one: the upgrade Secret diverts
 before any `POST`, and a `POST` that failed against an existing cluster diverts
@@ -746,7 +862,7 @@ immediately.
 
 ## 5. StorageClusterOps: API
 
-Declared in `operator/api/v1alpha1/storageclusterops_types.go`, short name
+Declared in `operator/api/v1alpha2/storageclusterops_types.go`, short name
 `scops`. The type is Appendix B.
 
 ### 5.1 Spec
@@ -771,7 +887,7 @@ the class [`design-crd-model.md`](design-crd-model.md) §7.5 leaves outside the
 `enableXyz`/`disableXyz` rule.
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageClusterOps
 metadata:
   name: roll-the-fleet
@@ -806,7 +922,7 @@ wrong.
 An operation that is one call and one wait, in flight:
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageClusterOps
 metadata:
   name: activate-production
@@ -830,7 +946,7 @@ the machine has got to within one node, and `rollingRestart` is which node that 
 (§7).
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageClusterOps
 metadata:
   name: roll-the-fleet
@@ -974,7 +1090,7 @@ to exercise, is caught by any test that builds a machine at all.
   Lock free?         ← held by another ops → stay Pending, requeue after 10s
     │  free or ours
     ▼
-  Acquire the lock   ← optimistic-lock patch; 409 → requeue immediately
+  Acquire the lock   ← optimistic-lock patch; 409 → requeue after 5s
     │
     ▼
   Pending → Running  ← stamp startedAt
@@ -992,6 +1108,17 @@ Watching only `StorageClusterOps` would leave a queued operation waiting up to
 its 10-second requeue after the lock frees. `clusterToOpsRequests` maps a
 `StorageCluster` event back to every operation targeting it, so a release wakes
 the queue immediately.
+
+**The two unsuccessful outcomes of an acquisition are waited on differently, and
+neither wait is zero.** A lock another operation visibly holds frees when that
+operation's work finishes, which is what the 10-second backstop is sized for. A
+409 is not that: the object moved between this pass's read and its write, so who
+holds the lock now is one read away, and the pass backs off by 5 seconds instead.
+Requeueing a refused patch immediately would be a spin — it burns a pass to
+re-read a value that has not settled, and it does so fastest exactly when
+contention is highest. The creation claim of §4.2 backs off by the same 5 seconds
+and for the same reason, since it is the same kind of refusal on a different
+object.
 
 ### 6.2 The persisted position is the write-ahead record
 
@@ -1247,13 +1374,16 @@ makes that wait a measurement rather than an anecdote.
 | `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/restart`  | Per-node, in the rolling restart walk                                                                                                                 |
 
 **The three `?watch=true` rows are Server-Sent-Events subscriptions rather than
-requests that return**, and they arrive with the control plane's SSE work rather
-than with this design. `design-sse-push-notifications.md`, on the `sse` branch,
-owns the wire contract and the subscription manager, and
-[`design-crd-model.md`](design-crd-model.md) §7.7 is the rule that makes every
-controller here read streamed state rather than poll for it. They are the external
-dependency this design cannot satisfy on its own, and §12 records them against the
-polling they replace.
+requests that return**, and all three are served.
+`design-sse-push-notifications.md` owns the wire contract and the subscription
+manager, `internal/cpinformer/subscriptions` holds one subscription per row,
+and [`design-crd-model.md`](design-crd-model.md) §7.7 is the rule that makes
+every controller here read streamed state rather than poll for it. §12.1 is
+what each replaced.
+
+The plain `GET` beside each of them is still made, and not as a leftover: a
+cache is read only once its scope reports synced, and until then the same route
+without `?watch=true` is what answers.
 
 **Two calls the control plane does not provide at all.** There is no cluster
 restart, which is why `Restart` is a client-side sequence (§6.4). A server-side
@@ -1328,6 +1458,7 @@ behavior, and without an event it is indistinguishable from a stalled controller
 | `simplyblock_storagecluster_operation_active_state`                 | `cluster`                     | Gauge, 1 while `status.activeOpsRef` is set, so a lock held by a finished operation is visible |
 | `simplyblock_storagecluster_rolling_restart_peer_hold_seconds`      | `cluster`                     | Histogram of time the rolling restart held for a peer node to come back online                 |
 | `simplyblock_storagecluster_rolling_restart_node_index_count`       | `cluster`                     | Gauge of `nodeIndex`, against the `nodes` length, so walk progress is graphable                |
+| `simplyblock_storagecluster_rolling_restart_node_count`             | `cluster`                     | Gauge of how many nodes the running walk covers, which is the length the index is read against |
 | `simplyblock_storagecluster_phase_state`                            | `cluster`, `phase`            | Gauge, 1 for the cluster's current phase (§4.2), so a cluster stuck in `Creating` is alertable |
 
 Every metric carries `cluster`, matching the rebalancer's existing convention, so
@@ -1342,6 +1473,45 @@ measurement rather than an anecdote, which is what decides whether it should
 eventually carry a timeout. `step_deadline_exceeded_total` is the counter that
 distinguishes an operation still working from one that stopped, which is the
 distinction `status.message` cannot express.
+
+### 10.3 `StorageClusterMetrics`, the reading served on demand
+
+The gauges of §10.2 are about the operator: what it did to a cluster and how
+long it took. How full the cluster is, is about the cluster, and it is served
+as a resource rather than exported as a gauge.
+
+**It is an aggregated API kind and not a status field**, for the reason
+[`design-storagepool.md`](design-storagepool.md) §9.2 gives for the pool's:
+occupancy moves with every write to every volume, and putting it in `status`
+charges one etcd write and one wake-up of every watcher of the kind for a
+number nothing reconciles toward. So it is computed from Prometheus when a
+client asks and never persisted. `metrics.simplyblock.io/v1alpha2` already
+serves the volume's, the device's, and the pool's, and this is the fourth.
+
+**What it answers that the other three cannot is the whole-cluster question.** A
+pool's reading is bounded by the capacity that pool was carved out with, and a
+device's by one device; neither says whether the cluster underneath them is
+about to run out, which is the number a capacity plan is made against. The
+reading carries the cluster's erasure-coding scheme beside its total for the
+same reason: a raw total means something different at `2x1` than at `4x2`, and
+reading one without the other invites the wrong plan.
+
+**The confinement is ordinary namespaced RBAC.** The object is named after the
+`StorageCluster` it measures and lives in that object's namespace, so a backend
+cluster with no object is not listed: it has no name in this API and no
+namespace to be authorized against. The kind joins the three already aggregated
+into the built-in `view` ClusterRole, which reaches whoever administers the
+namespace the cluster's own resources are in rather than a tenant.
+
+**A deployment with no reachable Prometheus serves no cluster readings at all**,
+rather than readings of zero. Every field of this one is a measurement, unlike
+a volume's, which keeps its provisioned size because that is known without
+measuring.
+
+The samples are `atlas-lib`'s `prometheus.ClusterCapacity`, which is the same
+five gauges the other three families export under their own prefixes. It is the
+one of the four that returns a single sample rather than a map, because the
+cluster is the scope every one of those queries is already narrowed to.
 
 ---
 
@@ -1386,11 +1556,11 @@ has to carry it.
 | No `spec.storageNodes`                                                              | The workload group (Appendix A)                                           | Additive, and required by the `StorageNodeSet` retirement. `design-storagenode.md` §5 specifies it                                                                                                                                                                                                                                                                        |
 | No device class anywhere                                                            | `spec.deviceClass`, defaulted to `NVMe` (§3.1)                            | Additive, and inert for every cluster that exists: `NVMe` is the only class the backend accepted before 26.4, so the default describes the registered fleet and the immutability rule starts holding from the first write                                                                                                                                                 |
 | Six misnamed boolean toggles                                                        | `enableXyz` or `disableXyz` (`design-crd-model.md` §7.5)                  | Spec renames, owned by `design-crd-model.md` §9.6, and §3.1 for the two this kind names                                                                                                                                                                                                                                                                                   |
-| `volumeMigrationSettings.dataRealignment.enabled`                                   | `spec.enableDataRealignment` (§3.1)                                       | Spec rename and a move up one level, and the `enable` form fixes the default at off                                                                                                                                                                                                                                                                                       |
+| `volumeMigrationSettings.dataRealignment.enabled`                                   | `spec.disableDataRealignment` (§3.1)                                      | Spec rename, a move up one level, and an inversion. The behavior is on by default, and the `disable` form is what keeps an unset field meaning that                                                                                                                                                                                                                       |
 | `volumeAutoPlacement.enabled`                                                       | `spec.enableVolumeAutoPlacement` (§3.1)                                   | The same, and it is the choice `design-crd-model.md` §9.6 deferred to this kind                                                                                                                                                                                                                                                                                           |
 | `volumeMigrationSettings.enabled`                                                   | Removed (§3.1)                                                            | Behavioral. Migration cannot be turned off, because a drain, a rebalance, and a device replacement are performed by moving volumes                                                                                                                                                                                                                                        |
 | `spec.backup`, typed `BackupSpec`                                                   | The same field, typed `BackupStoreSpec` (Appendix A)                      | Type rename. `design-controlplane.md` declares a different `BackupSpec` in the same package, and two cannot coexist                                                                                                                                                                                                                                                       |
-| `spec.backup.localEndpoint`                                                         | `endpoint`, plus `bucket`, `prefix`, and `region` (Appendix A)            | Field rename and three additions. The registered type had no bucket, so nothing in the store could be located                                                                                                                                                                                                                                                             |
+| `spec.backup.localEndpoint`                                                         | `endpoint`, plus `bucket` and `region` (Appendix A)                       | Field rename and two additions. The registered type had no bucket, so nothing in the store could be located                                                                                                                                                                                                                                                               |
 | `spec.backup.withCompression`, `snapshotBackups`, `secondaryTarget`, `localTesting` | Removed (Appendix A)                                                      | Spec removals. The store is a location, and how a copy is taken is the control plane's: it keeps accepting these values, so what changes is that the operator stops sending them and the backend's defaults apply                                                                                                                                                         |
 | `spec.backup` as a write target only                                                | Also the inventory backups are discovered from (§3.1)                     | Behavioral, and it is what retires backup import and export                                                                                                                                                                                                                                                                                                               |
 | No `status.tasks`                                                                   | Present, capped at twenty (§3.4)                                          | Additive, and what the retired task mirror becomes                                                                                                                                                                                                                                                                                                                        |
@@ -1444,6 +1614,97 @@ The rows above are audited by
 deadline, and the `Aborted` phase are conventions of
 [`design-crd-model.md`](design-crd-model.md) §3.1 that no checker covers.
 
+### 12.1 What the rework did not reach
+
+**A cluster adopted by name has no credential, and the adoption holds rather
+than finishing.** `ClusterDTO.secret` is write-only in the control plane's own
+schema, so the cluster list carries none, and the two routes that read it — a
+`POST` that lost its race and a name lookup — have nothing to write into the
+per-cluster Secret or the CSI credentials entry. Persisting an empty one would
+mark a cluster configured that the CSI driver cannot reach, so the step reports
+instead, and the remedy is the upgrade Secret of §4.3. What would remove the
+hold is a control-plane call that returns the secret for an existing cluster.
+
+**Deleting a running operation removes its finalizer.** §8 gives the finalizer
+one job, which is releasing the lock, and it does that on every path. What it
+does not do is refuse the delete: a `kubectl delete` on an operation part-way
+through a shutdown discards the record while the cluster is still moving, and
+nothing afterward is driving it. `StorageBackupOps` refuses such a delete at
+admission, and the same treatment here would need a validating webhook this
+kind does not have and this document does not ask for. It is left as a
+question rather than answered quietly: see §13, Q3.
+
+Five things this document specifies are not in the shipped kinds, and each is
+waiting on something outside it rather than on a decision.
+
+**`spec.storageNodes` carries the workload settings the node kinds gave up.**
+Its type is [`design-storagenode.md`](design-storagenode.md) Appendix C. The
+fields in it, `enableKubeletConfiguration` among them, are per-DaemonSet rather
+than per-node, because a DaemonSet is one object for every node it schedules, and
+they landed here with the workload's move onto the cluster.
+
+**All three `?watch=true` subscriptions of §9 are served by the control-plane
+informer.** The storage-node stream was already there; the cluster stream and
+the task stream arrive with this work, as `ClusterSubscription` and
+`TaskSubscription` in `internal/cpinformer/subscriptions`.
+
+**The cluster stream is the only subscription in the group with no scope.** The
+control plane serves every cluster from one route, so one stream covers the
+whole installation and serves every `StorageCluster` in every namespace. That
+is what `cpinformer.Scope`'s own documentation already reserved the empty scope
+for, and it is the reason no reconciler opens it: there is no object whose
+arrival would. It is added once at startup. The task stream is scoped per
+cluster and is opened and closed with the node stream, by the `StorageCluster`
+reconciler, for the reason that one is: a task belongs to a cluster, and the
+cluster is the only object that knows when one exists.
+
+**Every read the two replace was asked once per pass.** A steady-state
+reconcile read the cluster and its tasks; an operation read the cluster on
+every pass of every step, so a shutdown that takes twenty minutes was eighty
+reads of one object. Both controllers now read the caches, and both attach the
+streams' trigger channels, so a cluster whose status moved is reconciled when
+it moves rather than within the next interval.
+
+**A cache is read only once its scope reports synced**, and the control plane
+answers until then. An unsynced cache is empty, and empty is not the same
+statement as an answer: read as one it would report a live cluster gone, a
+shutdown complete, and — worst of the three — every `CancelTask` finished the
+moment it was issued, because that action's completion condition is the task's
+absence.
+
+**What the streams did not change is any predicate.** A step completes on
+current state rather than on an observed transition (§6.3), which reads the
+same whichever way the state arrived, so each stream replaced one read function
+and no step.
+
+One thing the task stream settles rather than provides. The control plane's
+`TaskDTO` carries no creation date and no progress figure, so a newest-first
+window is not orderable and neither `progress` nor `createdAt` can be written.
+`ClusterTask` therefore declares neither: a field declared and never written
+reports a definite-looking nothing, which is what
+[`design-crd-model.md`](design-crd-model.md) §7.9 rules out and what §3.3 removed
+four registered fields for. §3.4 states what the window carries instead.
+
+**`CancelTask` has nothing to call.** The v2 API lists tasks and reads one by
+ID, and offers no cancel (§9). The action is served — it takes the lock, waits
+for the task to leave the window, and treats a task already gone as success —
+and its one call reports whatever the control plane answers, which today is a
+refusal. `status.tasks` is filled from `GET /tasks/` on the steady-state pass,
+so the ID the action names is addressable before the endpoint exists.
+
+**`Expand` skips nothing.** Every other action's call is skipped when the
+cluster is already where the call would put it, and an expansion has no such
+state: a cluster is active before it and active after it, so the persisted step
+is the only guard. That is §13, Q1 unanswered rather than a gap in the
+implementation.
+
+**Two fields of the shipped spec are not in Appendix A**, because they were
+added after it was written: `enableChecksumValidation` and
+`enableAtomic4kWrites`. Both describe on-disk layout — the control plane bakes
+the checksum method into each device at creation and never re-applies it — so
+both joined the immutable group of §3.2, and a CEL rule on the spec keeps the
+second meaningless without the first.
+
 ---
 
 ## 13. Open Questions
@@ -1478,6 +1739,21 @@ implies the second, takes a parameter asking for it, or leaves it to the auto-re
 to notice. The last is what happens today by default, which means the answer is
 currently "whenever the rebalancer next runs" rather than a decision this design made.
 
+**Q3: Whether a running operation may be deleted.** The finalizer releases the
+cluster's lock on every path, so a deleted operation never wedges its target.
+What is unresolved is whether the delete should be refused at all while the
+operation is mid-flight. A `Shutdown` at its `Awaiting` step has told the
+control plane to shut the cluster down; deleting the record then leaves the
+cluster moving with nothing tracking it, and the next operation to take the
+lock inherits a cluster in a state its own first predicate did not expect.
+[`design-storagebackup.md`](design-storagebackup.md) answers the same question
+for its own `Ops` kind by refusing the delete at admission from the steps whose
+work cannot be taken back, which is the shape available here too. Against it:
+an operation that cannot be deleted is one an administrator cannot get rid of
+when the control plane is wedged, and every step here already carries a
+deadline that ends it. The choice is between the two, and it is a decision
+about what an administrator is allowed to do rather than about mechanism.
+
 **Q2: Whether this kind adopts the shared retention setting.** Nothing deletes a
 terminal `StorageClusterOps`, so the audit record grows without bound.
 [`design-persistentvolumeops.md`](design-persistentvolumeops.md) §11.2 specifies the
@@ -1503,7 +1779,7 @@ against the same conventions it audits the shipped types against.
 // StorageClusterPhase is where the operator has got to with this cluster. The
 // first two values are the operator's own creation path; the rest are its reading
 // of the lifecycle status.status carries in the control plane's own spelling.
-// +kubebuilder:validation:Enum=Pending;Creating;Online;Degraded;Unavailable;Suspended
+// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Rebalancing;Degraded;Unavailable;Suspended
 type StorageClusterPhase string
 
 const (
@@ -1513,8 +1789,25 @@ const (
 	// Creating: the creation machine of §4.2 is running.
 	StorageClusterPhaseCreating StorageClusterPhase = "Creating"
 
+	// Provisioning: the cluster exists in the control plane and is being built
+	// up, either by its first nodes joining or by an expansion adding more. It
+	// is not serving and there is nothing wrong with it, which is the
+	// distinction Unavailable cannot carry.
+	StorageClusterPhaseProvisioning StorageClusterPhase = "Provisioning"
+
+	// Activating: the control plane is activating the cluster. It is a phase of
+	// its own rather than part of Provisioning because it is not only the last
+	// step of a deployment: an expansion ends in one, and so does recovering
+	// from a suspension, long after anything was being built.
+	StorageClusterPhaseActivating StorageClusterPhase = "Activating"
+
 	// Online: the control plane reports the cluster active and serving.
 	StorageClusterPhaseOnline StorageClusterPhase = "Online"
+
+	// Rebalancing: serving, and moving data between its nodes or devices. It
+	// replaces Online and Degraded while a rebalance runs, and no phase that
+	// is not serving.
+	StorageClusterPhaseRebalancing StorageClusterPhase = "Rebalancing"
 
 	// Degraded: serving, with less than the redundancy it was built for.
 	StorageClusterPhaseDegraded StorageClusterPhase = "Degraded"
@@ -1606,11 +1899,6 @@ type BackupStoreSpec struct {
 	// +kubebuilder:validation:Required
 	Bucket string `json:"bucket"`
 
-	// Prefix narrows the store to one key prefix, so that several clusters can
-	// share a bucket without each walking the others' backups.
-	// +optional
-	Prefix string `json:"prefix,omitempty"`
-
 	// Region is the bucket's region, for endpoints that do not imply one.
 	// +optional
 	Region string `json:"region,omitempty"`
@@ -1658,8 +1946,12 @@ type StorageClusterSpec struct {
 	// because it describes the host that node runs on. Required: the core layout
 	// it produces must match across the cluster in steady state, so it is stated
 	// rather than left to a per-node heuristic.
+	//
+	// The floor is 4 rather than a hardware limit: a node must carry one core
+	// beyond this budget for the system, and the control plane's core layout
+	// assigns no NVMe-oF poller core at all for a 2-vCPU budget.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Minimum=6
+	// +kubebuilder:validation:Minimum=4
 	VCPUCount *int32 `json:"vcpuCount"`
 
 	// MinHugePagesSize is the smallest huge-page allocation each storage node
@@ -1684,26 +1976,37 @@ type StorageClusterSpec struct {
 	FabricType string `json:"fabricType,omitempty"`
 
 	// ClientDataIfname is the network interface clients reach the data plane on.
+	// It is mutable: the control plane reads it on every connect rather than once
+	// at cluster-add, so an edit moves the next attach onto the named interface.
 	// +optional
 	ClientDataIfname string `json:"clientDataIfname,omitempty"`
 
 	// NvmfBasePort is the base of the NVMe-oF port range every node binds.
+	//
+	// The default is the control plane's own, which is what it applies to a
+	// cluster that sends none, so the field states the number the cluster
+	// actually runs with rather than leaving a reader to know the backend.
 	// +kubebuilder:validation:Minimum=1024
 	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=4420
 	// +optional
 	// +k8s:immutable
 	NvmfBasePort *int32 `json:"nvmfBasePort,omitempty"`
 
-	// RpcBasePort is the base of the RPC port range every node binds.
+	// RpcBasePort is the base of the RPC port range every node binds. Its
+	// default is the control plane's, as NvmfBasePort's is.
 	// +kubebuilder:validation:Minimum=1024
 	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=8080
 	// +optional
 	// +k8s:immutable
 	RpcBasePort *int32 `json:"rpcBasePort,omitempty"`
 
-	// SnodeApiPort is the port each node's storage-node API listens on.
+	// SnodeApiPort is the port each node's storage-node API listens on. Its
+	// default is the control plane's, as NvmfBasePort's is.
 	// +kubebuilder:validation:Minimum=1024
 	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=50001
 	// +optional
 	// +k8s:immutable
 	SnodeApiPort *int32 `json:"snodeApiPort,omitempty"`
@@ -1715,7 +2018,18 @@ type StorageClusterSpec struct {
 	// +k8s:immutable
 	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
 
-	// EnableNodeAffinity selects affinity-based placement for storage components.
+	// EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
+	// from the local node's own devices where it can, before crossing the
+	// network.
+	//
+	// It is not Kubernetes affinity, and the name is the one place this API
+	// invites that reading: nothing about it schedules a pod, labels a worker,
+	// or places a volume's primary node. The control plane carries it into the
+	// cluster map it pushes to each node, where it sets the local node's index,
+	// and what changes is which copy of a chunk is read.
+	// design-primary-node-placement.md §"EnableNodeAffinity is unrelated to
+	// Tier 1" is the longer account, and the co-location of a workload with its
+	// primary node is the separate mechanism described there.
 	// +optional
 	// +k8s:immutable
 	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
@@ -1769,14 +2083,19 @@ type StorageClusterSpec struct {
 	// +optional
 	StorageNodes *StorageNodesSpec `json:"storageNodes,omitempty"`
 
-	// EnableDataRealignment turns on the post-migration data realignment. It is a
-	// field of the spec rather than of the block it governs, because
-	// volumeMigrationSettings.dataRealignment.enableDataRealignment says the same
-	// word twice (§3.1). There is no EnableVolumeMigration beside it: migration
+	// DisableDataRealignment turns off the post-migration data realignment, which
+	// runs by default. It is spelled as a disable because the behavior it governs
+	// is on: realignment restores the fault-tolerance and node-affinity guarantees
+	// every volume move invalidates, so a cluster that says nothing gets them back
+	// rather than silently accumulating unaligned structures.
+	//
+	// It is a field of the spec rather than of the block it governs, because
+	// volumeMigrationSettings.dataRealignment.disableDataRealignment says the same
+	// word twice (§3.1). There is no DisableVolumeMigration beside it: migration
 	// cannot be turned off, since a drain, a rebalance, and a device replacement
 	// are all performed by moving volumes.
 	// +optional
-	EnableDataRealignment *bool `json:"enableDataRealignment,omitempty"`
+	DisableDataRealignment *bool `json:"disableDataRealignment,omitempty"`
 
 	// EnableVolumeAutoPlacement turns on automatic, latency-driven rebalancing.
 	// +optional
@@ -1815,16 +2134,34 @@ type ClusterTask struct {
 	// +optional
 	Status string `json:"status,omitempty"`
 
-	// Progress is how far along the task is, where the control plane reports it.
+	// Retry is how many times the control plane has restarted this task, and
+	// it is the one number that separates a task that is slow from one that is
+	// failing.
+	//
+	// It stands where a progress figure and a creation date were specified.
+	// The control plane's TaskDTO carries neither, so neither could ever be
+	// written, and a field declared and never written is what §7.9 of
+	// design-crd-model.md rules out (§12.1).
 	// +kubebuilder:validation:Minimum=0
-	// +kubebuilder:validation:Maximum=100
 	// +optional
-	Progress *int32 `json:"progress,omitempty"`
+	Retry int32 `json:"retry,omitempty"`
+}
 
-	// CreatedAt is when the control plane started the task, which is what the
-	// list is ordered by, newest first.
-	// +optional
-	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
+// FailureDomainIndex is one failure-domain label and the control plane's index
+// for it.
+type FailureDomainIndex struct {
+	// Name is the failure-domain label, as StorageNode.spec.config.failureDomain
+	// spells it ("rack-b").
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Index is the integer sent to the control plane for every node in the
+	// domain.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Required
+	Index int32 `json:"index"`
 }
 
 // StorageClusterStatus is the observed state of one backend cluster.
@@ -1900,13 +2237,30 @@ type StorageClusterStatus struct {
 	// +optional
 	LastDataRealignmentAt *metav1.Time `json:"lastDataRealignmentAt,omitempty"`
 
-	// Tasks are the control plane's running and pending jobs, newest first and
-	// capped at twenty (§3.4). Completed and canceled tasks are not here: they
-	// leave the list and become events, so the length tracks concurrency rather
-	// than history.
+	// Tasks are the control plane's running and pending jobs, capped at twenty
+	// and in the order the control plane reports them (§3.4). Completed and
+	// canceled tasks are not here: they leave the list and become events, so
+	// the length tracks concurrency rather than history.
 	// +kubebuilder:validation:MaxItems=20
 	// +optional
 	Tasks []ClusterTask `json:"tasks,omitempty"`
+
+	// ProvisioningSlots are the workers whose node add is outstanding. The list
+	// is the metadata of the Provisioning phase, and it is also the mutex that
+	// caps concurrent adds at spec.storageNodes.nodeProvisioningBudget: taking a
+	// slot is an optimistic-locked patch of this one field, so exactly one node
+	// wins a given resourceVersion (design-storagenode.md §4.2).
+	// +kubebuilder:validation:MaxItems=64
+	// +optional
+	ProvisioningSlots []ProvisioningSlot `json:"provisioningSlots,omitempty"`
+
+	// FailureDomains maps each failure-domain label the cluster's nodes declare
+	// to the integer the control plane identifies that domain by (§3.3).
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=256
+	// +optional
+	FailureDomains []FailureDomainIndex `json:"failureDomains,omitempty"`
 
 	// ActiveOpsRef names the StorageClusterOps currently allowed to operate on
 	// this cluster. Empty when none is running.
@@ -1936,7 +2290,7 @@ type StorageClusterStatus struct {
 // +kubebuilder:printcolumn:name="Status",type=string,JSONPath=".status.status"
 // +kubebuilder:printcolumn:name="EC",type=string,JSONPath=".status.erasureCodingScheme"
 // +kubebuilder:printcolumn:name="FTT",type=integer,JSONPath=".status.maxFaultTolerance",priority=1
-// +kubebuilder:printcolumn:name="UUID",type=string,JSONPath=".status.uuid",priority=1
+// +kubebuilder:printcolumn:name="UUID",type=string,JSONPath=".status.uuid"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // StorageCluster is one simplyblock backend cluster. It owns the storage nodes

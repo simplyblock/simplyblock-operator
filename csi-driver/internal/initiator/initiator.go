@@ -14,8 +14,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -23,12 +23,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/simplyblock/atlas/bounded"
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nqn"
+	"github.com/simplyblock/atlas/nvme"
+	"github.com/simplyblock/atlas/nvmeof"
 	"k8s.io/klog"
 
 	"github.com/simplyblock/csi-driver/internal/clusters"
 	"github.com/simplyblock/csi-driver/internal/controlplane"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"github.com/simplyblock/csi-driver/internal/fabric"
 )
 
@@ -67,14 +71,6 @@ const (
 	// anaStateOptimized is the ANA state nvme-cli reports for the path the
 	// kernel prefers for I/O.
 	ANAStateOptimized = "optimized"
-
-	// nvmeQueryTimeoutSeconds bounds read-only `nvme list` and `nvme list-subsys`
-	// queries. MonitorConnection is a single, sequential loop with no
-	// concurrency of its own. Without this timeout, a stuck nvme-cli or kernel
-	// call would block that goroutine forever, silently disabling path
-	// recovery and guardian broken-lvol detection for the rest of the
-	// process's life.
-	nvmeQueryTimeoutSeconds = 10
 )
 
 // devByIDPartitionSuffix matches the partition suffix udev appends to the by-id
@@ -141,8 +137,10 @@ func New(volumeContext map[string]string) (Initiator, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert namespace ID %s to integer: %w", volumeContext["nsId"], err)
 	}
-	if nsId < 1 {
-		return nil, fmt.Errorf("namespace ID must be greater than zero")
+	// Bounded to what an NVMe namespace id can hold, which is what lets the
+	// fabric repair take it as one without a conversion that could wrap.
+	if uint64(nsId) > math.MaxUint32 {
+		return nil, fmt.Errorf("namespace ID %d is larger than an NVMe namespace id can hold", nsId)
 	}
 	switch targetType {
 	case TargetTypeTCP, TargetTypeRDMA:
@@ -162,7 +160,7 @@ func New(volumeContext map[string]string) (Initiator, error) {
 			hostIface:      volumeContext["hostIface"],
 			hostNQN:        volumeContext["hostNQN"],
 			poolID:         volumeContext["poolID"],
-			clusterID:      volumeContext["cluster_id"],
+			clusterID:      volumeContext[csicommon.ParamClusterID],
 			lvolID:         srcLvolID,
 			deviceLvolID:   deviceLvolID,
 		}, nil
@@ -192,8 +190,14 @@ func execWithTimeoutRetry(ctx context.Context, cmdLine []string, timeout, retry 
 // So a failed device lookup is diagnosed rather than simply returned, and if the
 // fabric could be repaired the attach is tried once more. See nvmerepair.go.
 func (nvmf *initiatorNVMf) Connect(ctx context.Context) (string, error) {
+	if nvmf.nsId < 1 {
+		return "", fmt.Errorf("namespace ID must be greater than zero")
+	}
 	devicePath, err := nvmf.connectOnce(ctx)
-	if err != nil && fabric.RepairAttach(ctx, nvmf.nqn, nvmf.nsId) {
+	// The namespace id is bounded at construction, which is what makes the
+	// narrowing safe: New refuses anything below one and anything an NVMe
+	// namespace id cannot hold.
+	if err != nil && fabric.RepairAttach(ctx, nvmf.nqn, nvme.NamespaceID(nvmf.nsId)) {
 		klog.Infof("Connect: retrying attach of %s after a fabric repair", nvmf.nqn)
 		devicePath, err = nvmf.connectOnce(ctx)
 	}
@@ -493,17 +497,14 @@ func waitForDeviceGone(ctx context.Context, deviceGlob string, attempts int, pol
 	return fmt.Errorf("timed out waiting device gone: %s", deviceGlob)
 }
 
-// exec shell command with timeout(in seconds)
+// execWithTimeout runs a command and returns once it finishes or timeout
+// seconds pass, even when the process cannot be reaped (see bounded).
 func execWithTimeout(ctx context.Context, cmdLine []string, timeout int) error {
-	execCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
-	defer cancel()
+	klog.Infof("running command: %v", redactCommand(cmdLine))
+	output, err := bounded.CombinedOutput(ctx, time.Duration(timeout)*time.Second,
+		commandKey(cmdLine), cmdLine[0], cmdLine[1:]...)
 
-	klog.Infof("running command: %v", cmdLine)
-	//nolint:gosec // execWithTimeout assumes valid cmd arguments
-	cmd := exec.CommandContext(execCtx, cmdLine[0], cmdLine[1:]...)
-	output, err := cmd.CombinedOutput()
-
-	if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return errors.New("timed out")
 	}
 	if output != nil {
@@ -515,19 +516,41 @@ func execWithTimeout(ctx context.Context, cmdLine []string, timeout int) error {
 	return err
 }
 
-// execNVMeQuery runs a read-only `nvme` CLI query (`list`, `list-subsys`) bounded
-// by nvmeQueryTimeoutSeconds, so a stuck nvme-cli/kernel call can never block
-// a caller forever, notably the single-threaded reconnect monitor loop,
-// which has no other goroutine to pick up the work if this one wedges.
-func execNVMeQuery(ctx context.Context, cmdLine ...string) ([]byte, error) {
-	execCtx, cancel := context.WithTimeout(ctx, nvmeQueryTimeoutSeconds*time.Second)
-	defer cancel()
+// commandKey names a command line for the stuck-call guard without the
+// arguments that can carry DHCHAP secrets.
+func commandKey(cmdLine []string) string {
+	if len(cmdLine) > 0 && cmdLine[0] == "nvme" {
+		return nvmeof.CommandKey(cmdLine[1:])
+	}
+	return cmdLine[0]
+}
 
-	//nolint:gosec // execNVMeQuery assumes valid cmd arguments
-	cmd := exec.CommandContext(execCtx, cmdLine[0], cmdLine[1:]...)
-	output, err := cmd.Output()
-	if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
-		return nil, fmt.Errorf("timed out running %v", cmdLine)
+// redactCommand is cmdLine with the value of every DHCHAP secret flag replaced,
+// for logging. The control plane hands the secrets over inside the connect
+// command line, so the line is a credential as it stands.
+func redactCommand(cmdLine []string) []string {
+	out := make([]string, len(cmdLine))
+	for i, arg := range cmdLine {
+		out[i] = arg
+		for _, flag := range []string{"--dhchap-secret=", "--dhchap-ctrl-secret="} {
+			if strings.HasPrefix(arg, flag) {
+				out[i] = flag + "<redacted>"
+			}
+		}
+	}
+	return out
+}
+
+// execNVMeQuery runs a read-only `nvme` CLI query (`list`, `list-subsys`) under
+// bounded.CommandTimeout, so a stuck nvme-cli/kernel call can never block a
+// caller, notably the single-threaded reconnect monitor loop, which has no other
+// goroutine to pick up the work if this one wedges. The bound holds even when
+// the process cannot be reaped.
+func execNVMeQuery(ctx context.Context, cmdLine ...string) ([]byte, error) {
+	output, err := bounded.Output(ctx, bounded.CommandTimeout, strings.Join(cmdLine, " "),
+		cmdLine[0], cmdLine[1:]...)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return nil, fmt.Errorf("timed out running %v: %w", cmdLine, err)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute %v: %w", cmdLine, err)
@@ -584,8 +607,10 @@ func disconnectDevicePath(ctx context.Context, devicePath string) error {
 // like `/dev/nvme0n2`.
 // Returns an empty string if the file is absent, unreadable, or not a valid UUID.
 func logicalVolumeIdByDevicePath(devicePath string) string {
-	name := filepath.Base(devicePath)
-	data, err := os.ReadFile(filepath.Join("/sys/block", name, "uuid"))
+	path := filepath.Join("/sys/block", filepath.Base(devicePath), "uuid")
+	data, err := bounded.Call(path, bounded.ReadTimeout, func() ([]byte, error) {
+		return os.ReadFile(path)
+	})
 	if err != nil {
 		return ""
 	}

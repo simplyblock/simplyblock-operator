@@ -77,6 +77,9 @@ func Run(conf *config.Config) {
 	if conf.IsControllerServer {
 		cd.AddControllerServiceCapabilities(controllerCaps)
 		cd.AddVolumeCapabilityAccessModes(volumeModes)
+		// The controller serves the GroupController service (VolumeGroupSnapshot,
+		// design §9); advertise it so the csi-snapshotter routes group snapshots here.
+		cd.EnableGroupController()
 	}
 
 	ids = identity.New(cd)
@@ -108,6 +111,13 @@ func Run(conf *config.Config) {
 		if err != nil {
 			klog.Fatalf("failed to create controller server: %s", err)
 		}
+		// The membership label is live for the volume's whole life (design
+		// §4.5): a PVC watcher joins a volume when the label is added and
+		// detaches it when the label is removed. Degrades to a logged no-op
+		// without a Kubernetes client, like the other kube-backed features.
+		watcherCtx, watcherCancel := context.WithCancel(context.Background())
+		defer watcherCancel()
+		controller.StartConsistencyGroupLabelWatcher(watcherCtx, kubeClient, conf.DriverName)
 	}
 
 	// The link to the operator, when enabled. It is independent of the CSI
@@ -206,7 +216,19 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 
 	go reconnect.MonitorConnection(markBroken(podGuardian), manager, cd.GetName(), nodeName)
 
+	go advertiseVDOCapability(kubeClient, nodeName)
+
 	return ns, nil
+}
+
+// advertiseVDOCapability runs once in the background, same as the guardian
+// above: a failure here degrades to "not yet advertised" rather than
+// blocking node plugin startup.
+func advertiseVDOCapability(kubeClient kubernetes.Interface, nodeName string) {
+	err := node.AdvertiseVDOCapability(context.Background(), kubeClient, nodeName)
+	if err != nil {
+		klog.Errorf("failed to advertise vdo-capable for node %s: %v", nodeName, err)
+	}
 }
 
 // markBroken is the monitor's hook into the guardian, tolerant of there being

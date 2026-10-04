@@ -17,6 +17,7 @@ import (
 	"github.com/simplyblock/atlas/kube"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -79,6 +80,9 @@ func newPVCValidator(t *testing.T, apiURL string) *PersistentVolumeClaimValidato
 	if err := simplyblockv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add v1alpha1: %v", err)
 	}
+	if err := simplyblockv1alpha2.AddToScheme(scheme); err != nil {
+		t.Fatalf("add v1alpha2: %v", err)
+	}
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: vpvcPVName},
 		Spec: corev1.PersistentVolumeSpec{
@@ -87,9 +91,9 @@ func newPVCValidator(t *testing.T, apiURL string) *PersistentVolumeClaimValidato
 			},
 		},
 	}
-	cluster := &simplyblockv1alpha1.StorageCluster{
+	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "sb"},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: vpvcCluster},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: vpvcCluster},
 	}
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pv, cluster).Build()
 	return &PersistentVolumeClaimValidator{Client: cl, APIClient: webapi.NewClient(apiURL)}

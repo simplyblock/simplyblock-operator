@@ -22,9 +22,23 @@ const (
 	CSIStorageNameKey      = CSIStorageBaseKey + "/name"
 	CSIStorageNamespaceKey = CSIStorageBaseKey + "/namespace"
 
+	// CSIStoragePVNameKey is how external-provisioner names the PersistentVolume
+	// in the same context. The node service writes it, with the claim's two
+	// keys above, into the volume's LVM metadata as informational tags.
+	CSIStoragePVNameKey = "csi.storage.k8s.io/pv/name"
+
 	// ParamClusterID names the simplyblock cluster a StorageClass provisions
 	// into.
 	ParamClusterID = "cluster_id"
+
+	// ParamEncryption names the StorageClass parameter that asks for an
+	// encrypted volume, and the volume-context key the controller sends it on
+	// under. Both halves are the same word because they are one fact read
+	// at two moments: the control plane consumes the parameter at creation, and
+	// the node service needs the answer at every stage, where the bytes on an
+	// encrypted volume mean nothing and the guard against formatting somebody's
+	// data has to defer to the record instead.
+	ParamEncryption = "encryption"
 
 	// The topology keys the node service reports and the controller service
 	// places against. The beta zone key is still read because clusters upgraded

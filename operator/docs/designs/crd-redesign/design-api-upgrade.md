@@ -1,8 +1,8 @@
 # Design Document: API Upgrade and Resource-Model Migration
 
-**Status:** Draft  
+**Status:** Partially Implemented  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-09-09  
+**Date:** 2026-09-10 (last updated 2026-09-17)  
 **Related designs:** [`design-crd-model.md`](design-crd-model.md) §9 is the migration inventory this document delivers  
 **Test Plan:** [`test-plan-api-upgrade.md`](../../tests/test-plan-api-upgrade.md), not yet written
 
@@ -66,6 +66,37 @@ and CRD validation ratcheting is on by default from 1.30 (§19.9). The envtest
 assets the unit suites run against are newer, being derived from the
 `k8s.io/api` version in `operator/go.mod`, so a unit suite proves nothing about
 the floor.
+
+---
+
+## Requirements Marked in the Other Designs
+
+A design that specifies a kind also specifies what moving an existing deployment
+onto that kind costs, and the cost is this document's to pay rather than the
+kind's. Those obligations are marked where they arise, so that they can be swept
+for rather than remembered:
+
+```bash
+grep -rn '\*\*Upgrade tool:\*\*' operator/docs/designs/
+```
+
+**The marker is the words `Upgrade tool`, in bold, followed by a colon, at the
+head of a paragraph.** The paragraph then says what this tool has to do and what
+breaks if it does not. The bold is part of the token rather than decoration: a
+design that merely mentions the upgrade tool in prose is not stating a
+requirement, and a sweep that matched those would return a list nobody trusts.
+This paragraph spells the token out rather than showing it, so that defining the
+convention does not add a hit to the sweep it defines.
+
+**The sweep is the index, and this document holds no copy of it.** A list here
+would be a second place to update and the one that goes stale, since the
+requirement is discovered while the kind is being designed and belongs beside
+the decision that created it.
+
+**A marked paragraph is a requirement, not a suggestion.** Each names a concrete
+failure: an object pruned, a spec defaulted to something immutable and wrong, a
+CRD absent when the chart that needs it renders. Where the tool cannot satisfy
+one, the answer is to stop the upgrade and say so, which is what §25 is for.
 
 ---
 
@@ -302,10 +333,22 @@ annotation keyed `storage.simplyblock.io/conversion-<field>` on the way down and
 restores it on the way up, so a `v1alpha1` client that reads and writes an object
 back does not truncate it.
 
-`skipKubeletConfiguration` is the one field whose conversion is not a copy. It
-becomes `enableKubeletConfiguration`, which inverts the sense, so a mechanical
-rename produces the wrong behavior and the conversion negates the value in both
-directions (`design-crd-model.md` §9.6).
+`migrationEnabled` and the realignment's `enabled` are the two fields whose
+conversion is not a copy. They become `disableMigration` and
+`spec.disableDataRealignment`, which invert the sense, so a mechanical rename
+produces the wrong behavior and the conversion negates a stated value in both
+directions while leaving an unstated one unstated, since both spellings mean the
+same thing when absent (`design-property-renames.md` §3.4).
+
+Neither needs a stash. Each governs behavior that is on by default on both sides,
+and the negative spelling is what keeps an absent field saying so, which leaves
+nothing the stored shape cannot express.
+
+`skipKubeletConfiguration` is not a conversion at all. The toggle left the node
+kinds for `StorageCluster.spec.storageNodes.enableKubeletConfiguration`, which is
+a different kind, so the registered field is a removal that stashes under
+`storage.simplyblock.io/v1alpha1-spec.overrides.skipKubeletConfiguration` and
+restores from it (`design-storagenode.md` §15.1).
 
 ### 6.3 What Conversion Can and Cannot Carry
 
@@ -316,10 +359,10 @@ the upgrade needs two phases rather than a webhook.
 
 | Change                                                                             | Carried by         | Reason                                                                                                                                                                        |
 |------------------------------------------------------------------------------------|--------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Boolean toggle renames, eleven fields across five kinds                            | Conversion         | Same kind, both spellings expressible                                                                                                                                         |
+| Boolean toggle renames, eleven fields across five kinds                            | Conversion, partly | Same kind, both spellings expressible, except the kubelet toggle, which moves to another kind and is stashed rather than converted                                            |
 | Enum recasing, `StorageClusterOpsAction`, `StorageNodeOpsAction`, `MetricsBackend` | Conversion         | Same kind, value maps one to one                                                                                                                                              |
 | `status.subPhase` string becoming `status.step` object                             | Conversion         | The old string reads into `step.state`, leaving `step.deadline` absent, which restores as a step with no deadline, so an operation in flight across the upgrade keeps running |
-| `StorageNode.spec.storageNodeSetRef` becoming a cluster reference                  | Conversion, partly | The field converts, but the value it should hold is only known once §20 has reparented the node                                                                               |
+| `StorageNode.spec.storageNodeSetRef` becoming a cluster reference                  | Conversion, partly | The hub reads its parent off the controller owner reference, which §20 writes. A node converted before that carries an empty `spec.clusterRef` until the reparent has run     |
 | `BackupPolicy` becoming `StorageBackupPolicy`                                      | `migrate`          | A different kind is a different CRD, and no conversion webhook is invoked across kinds                                                                                        |
 | `VolumeMigration` absorbed into `PersistentVolumeOps`                              | `migrate`          | Different kind, and the target is cluster-scoped while the source is namespaced                                                                                               |
 | `BackupRestore` absorbed into `StorageBackupOps`                                   | `migrate`          | Different kind                                                                                                                                                                |
@@ -370,7 +413,7 @@ The Delta column cites the design that owns the change.
 |---------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------|
 | `StorageCluster`    | `maxHugePagesSize` → `minHugePagesSize`, `hashicorpVaultSettings` → `kms.vault`, six toggles renamed, `backup.localEndpoint` → `endpoint`, and five spec removals. `design-storagecluster.md` §12 | `v1alpha1`, `v1alpha2` |
 | `StorageClusterOps` | `nodeRollingRestart` → `rollingRestart`, six action values recased, `status.triggered` removed. `design-storagecluster.md` §12                                                                    | `v1alpha1`, `v1alpha2` |
-| `StorageNode`       | `storageNodeSetRef` → `clusterRef` and `nodeSet`, `overrides` → `config`, `socketIndex` → `slot`, `skipKubeletConfiguration` inverted, four dead fields removed. `design-storagenode.md` §15.1    | `v1alpha1`, `v1alpha2` |
+| `StorageNode`       | `storageNodeSetRef` → `clusterRef` and `nodeSet`, `overrides` → `config`, `socketIndex` → `slot`, five dead fields stashed and removed. `design-storagenode.md` §15.1                             | `v1alpha1`, `v1alpha2` |
 | `StorageNodeOps`    | `storageNodeRef` → `nodeRef`, `drain` → `remove`, six action values recased, `status.triggered` removed. `design-storagenode.md` §15.2                                                            | `v1alpha1`, `v1alpha2` |
 | `StoragePool`       | `clusterName` → `clusterRef`, `dhchap` → `volumeDefaults.enableDHCHAP`, `encryption` and `replicate` renamed, `spec.action` and `spec.status` removed. `design-storagepool.md` §11                | `v1alpha1`, `v1alpha2` |
 | `ControlPlane`      | `spec.image` → `spec.source.managed.image`, and `status.phase` becomes a four-value typed phase. `design-controlplane.md` §11                                                                     | `v1alpha1`, `v1alpha2` |
@@ -405,6 +448,14 @@ registers `v1alpha2` as its only version: the ten additions of
 `StoragePoolOps`, `PersistentVolumeOps`, `StorageBackupOps`, and `NFSExport`,
 plus `StorageBackupPolicy`, which is `BackupPolicy` under its new name.
 
+Ten of the eleven are registered. `NFSExport` is specified on another branch
+([`design-pnfs-rwx.md`](../design-pnfs-rwx.md) §7.1) and is born with the work
+that owns it rather than with this migration, which changes nothing here: a kind
+with no CRD is a kind the installer does not apply. `VolumeGroupSnapshotOps`
+joined the group from [`design-consistency-groups.md`](../design-consistency-groups.md)
+after this document was written and is on the same footing as the ten: born at
+`v1alpha2`, with no conversion function and no place in the storage rewrite.
+
 None of them needs a conversion function, and none appears in the storage
 rewrite, because nothing was ever persisted at an older version of them.
 
@@ -414,10 +465,12 @@ installed before the controller that reconciles it exists, which is inert: a
 registered kind with no controller and no objects does nothing until the
 operator carrying its controller is running.
 
-### 7.4 The Staging
+### 7.4 What the Manifests Declare
 
-Each of the seven converting CRDs is installed with both versions served and
-`v1alpha1` retained as the storage version:
+There is one set of CRD manifests rather than a staged pair. Each of the seven
+converting CRDs serves both versions and stores `v1alpha2` from the moment it is
+applied, because `+kubebuilder:storageversion` sits on the `v1alpha2` type and
+controller-gen writes the flag from there:
 
 ```yaml
 # operator/config/crd/bases/storage.simplyblock.io_storageclusters.yaml
@@ -430,58 +483,76 @@ spec:
   versions:
     - name: v1alpha1
       served: true
-      storage: true
+      storage: false
     - name: v1alpha2
       served: true
-      storage: false
+      storage: true
   conversion:
     strategy: Webhook
     webhook:
       conversionReviewVersions: ["v1"]
       clientConfig:
         service:
-          namespace: simplyblock
+          namespace: simplyblock-operator-system
           name: simplyblock-operator-conversion-webhook-service
           path: /convert
           port: 443
 ```
 
-The `conversion` stanza is not written by hand. `operator/config/crd/kustomization.yaml`
-carries the `+kubebuilder:scaffold:crdkustomizewebhookpatch` marker and a
-commented `patches` block, and `operator/config/default/kustomization.yaml`
-carries `+kubebuilder:scaffold:crdkustomizecainjectionns` and
-`crdkustomizecainjectionname` with a comment stating that the markers exist so
-`kubebuilder create webhook --conversion` can wire up a future conversion
-webhook. That scaffold is the intended entry point, and the one deviation from
-what it generates is the CA bundle: the scaffold injects it with cert-manager's
-`cert-manager.io/inject-ca-from` annotation, and this repository provisions
-webhook certificates at runtime instead (§8).
+**One set of manifests is what a fresh install needs.** A cluster installed today
+has no `v1alpha1` object to convert, so it writes `v1alpha2` from the first write,
+converts nothing, and deploys no webhook. Holding storage at `v1alpha1` in the
+shipped manifests would make the ordinary install the exceptional case: every
+object would be stored in a version nothing reads, behind a webhook that exists
+only for upgrades.
 
-**The patch is applied per CRD and not to the whole `crd/bases` directory.** Ten
-of the seventeen keep `strategy: None`, and a `conversion` stanza pointing at a
-webhook on a CRD with one version is a dependency on a Deployment that has no
-reason to exist for that kind, which is what §27 eventually removes.
+**The `conversion` stanza is written into the base rather than patched over it.**
+`operator/hack/apply-conversion-webhook.sh` runs after controller-gen, which
+regenerates each base from the Go types and has no marker for `spec.conversion`,
+and writes the stanza into every CRD named by
+`operator/config/crd/converted-kinds.txt`. That file is the single list three
+consumers have to agree on (the script, the webhook registration in
+`internal/webhook/conversion.go`, and the CA injection in
+`internal/webhook/cert.go`), and `TestConvertedKindsMatchTheManifestList` asserts
+two of them against each other. A Kustomize patch would reach `make install` and
+the installer and miss the chart, which copies `config/crd/bases` verbatim into
+its own `crds/` directory and does not template it, and the chart is what
+installs these CRDs on a cluster.
 
-The staging exists so that five things can fail separately:
+**The ten single-version CRDs keep `strategy: None`.** A `conversion` stanza on a
+kind with one version is a dependency on a Deployment that has no reason to exist
+for it, which is what §28 eventually removes for the seven.
+
+**The stanza ships pointing at a Service the chart does not deploy, and the
+namespace in it is a default rather than a fact.** A CRD is cluster-scoped and
+lands in `crds/`, so the namespace cannot be templated, and the operator patches
+the service reference and the CA bundle together at runtime because it is the only
+party that knows which namespace it is running in. Leaving the strategy at `None`
+until the operator raises it is the worse trade: under `None` the API server
+answers a `v1alpha2` read of a stored `v1alpha1` object by relabeling the
+apiVersion and pruning every field the new schema does not know, which is silently
+wrong data rather than a failed read.
+
+Five things still fail separately, and what separates them is ordering rather than
+a held flag:
 
 1. Introducing the new API.
 2. Proving conversion works.
 3. Upgrading the operator.
 4. Migrating the application resource model.
-5. Changing the persisted storage representation.
+5. Changing the persisted representation of each object.
 
-Once the new operator is verified and the application-level migration has run,
-storage switches on those same seven:
+§9.1 is that order. The conversion webhook is deployed, awaited, and smoke-tested
+against a real object before `apply-crds` runs, so there is something to convert
+with at the moment storage moves. The operator upgrade follows the CRDs, and the
+resource-model migration follows the operator.
 
-```yaml
-versions:
-  - name: v1alpha1
-    served: true
-    storage: false
-  - name: v1alpha2
-    served: true
-    storage: true
-```
+**The apply moves storage, and it does not move the objects.** The flag decides
+what a write encodes, so an object untouched since the apply stays in the
+`v1alpha1` representation, is converted up on every read, and keeps
+`.status.storedVersions` listing `v1alpha1`. §24 is the rewrite that drains it,
+and until that has run an upgraded cluster is one where the storage version and
+the stored representations disagree.
 
 `v1alpha1` becomes `served: false` on the seven under §28's conditions. Its
 readers are the operator's own reconcilers and webhooks under
@@ -647,9 +718,9 @@ The smoke test verifies that:
 - The conversion webhook is reachable.
 - Conversion succeeds for each of the seven converting kinds that has at least
   one object (§7.2).
-- The fields whose conversion is not a copy are correct, which means at minimum
-  a recased action enum, a renamed boolean toggle, and the.
-  `skipKubeletConfiguration` inversion (§6.2).
+- The fields whose conversion is not a copy are correct, which means at minimum a
+  recased action enum, a renamed boolean toggle, the `migrationEnabled` inversion,
+  and a field the hub removed reading back from its stash (§6.2).
 - A `v1alpha2` read followed by a `v1alpha1` read returns the original
   representation.
 
@@ -682,6 +753,31 @@ installed is a write that can only introduce risk.
 
 The whole set is embedded in the installer binary so that the version of the
 CRDs always matches the version of the conversion code that converts them.
+`go:embed` cannot reach outside the directory of the file that declares it, so
+the CRDs controller-gen writes into `config/crd/bases` are copied into
+`internal/upgrade/crds/manifests` by the `crd-embed` target that
+`make -C operator manifests` runs, and the copy is committed. It is the
+arrangement the Helm chart's copy of the same files already uses.
+
+**Which of the three groups a CRD is in is read from the CRD rather than from a
+table**, since a list of kinds is a second place to edit when a kind is added
+and the two disagree the first time one of them is edited. A CRD declaring more
+than one version is converting and a CRD declaring one is not, and the untouched
+ten are the ones the comparison below finds nothing to do for.
+
+**A CRD is written only where it differs from what is installed.** The
+comparison is of the parsed `spec` rather than of the file's bytes, because the
+API server returns a `spec.conversion` of `{strategy: None}` where the file
+declared nothing. That is the only field it defaults: every other part of a
+controller-gen CRD, whole CEL validation blocks included, is returned exactly as
+it was written. So the installer normalizes that one field and compares the rest
+exactly, and a Kubernetes version that defaults something further shows as every
+CRD wanting an update on every run, which the plan reports rather than hides.
+
+A CRD whose conversion webhook has had a CA bundle injected into it keeps that
+bundle. The bundle is written by whatever issues the webhook's certificate (§8)
+rather than by the generated file, so a CRD written straight from the file
+carries an empty one, and conversion then fails for every object of the kind.
 
 The installer MUST wait until each applied CRD is established, which means
 checking `.status.conditions` for `Established` and `NamesAccepted` and
@@ -690,9 +786,17 @@ expects for that CRD's part of the set. A CRD in the second group is verified
 against a different expectation from one in the first, and checking every CRD
 against "both versions are served" is how a new kind reports a false failure.
 
+The installer MUST refuse to write a CRD that no longer declares a version
+`.status.storedVersions` still names. The API server accepts such a CRD and then
+fails every read of the kind, so the refusal names the version and the kind
+instead, and §24's storage-version rewrite is what resolves it.
+
 The installer MUST NOT proceed to the operator upgrade if the API server has not
 accepted every new CRD. A partially applied CRD set is the state that leaves the
-operator reconciling one kind at `v1alpha2` and another at `v1alpha1`.
+operator reconciling one kind at `v1alpha2` and another at `v1alpha1`. Applying
+and verifying are therefore two steps of §9.1 rather than one: the requirement
+is about the set, and the second step is what refuses to go on when any member
+of it did not take.
 
 ---
 
@@ -722,15 +826,15 @@ The current chart renders 110 objects at default values, and fifteen of them are
 the operator and its RBAC. The other ninety-five are the release's blast
 radius:
 
-| Group               | Objects                                                                                                                                                                                                                                                                                                            | Adopted by                                              |
-|---------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------|
-| Control plane       | `FoundationDBCluster/simplyblock-fdb-cluster`, the `simplyblock-webappapi`, `admin-control`, `monitoring`, `tasks`, `fdb-controller-manager`, and `fdb-exporter` Deployments, `StatefulSet/simplyblock-minio`, their Services, and the `simplyblock-config`, `prometheus-config`, and `objstore-config` ConfigMaps | `ControlPlane`, `design-controlplane.md` §5.1           |
-| CSI driver          | `CSIDriver/csi.simplyblock.io`, `StatefulSet/simplyblock-csi-controller`, `DaemonSet/simplyblock-csi-node`, the `csi-cm` and `csi-nodeservercm` ConfigMaps, the `csi-secret` and `csi-secret-v2` Secrets, and `VolumeSnapshotClass/simplyblock-csi-snapshotclass`                                                  | `SimplyblockDriver`, `design-simplyblockdriver.md` §4.1 |
-| The adopter itself  | `ControlPlane/simplyblock`, which the chart renders from `templates/controlplane_cr.yaml`                                                                                                                                                                                                                          | Nothing. It is the adopter (§12.2)                      |
-| Ecosystem subcharts | The Prometheus `StatefulSet`, its two Services and its ConfigMap, `Deployment/simplyblock-reloader`, and the MongoDB and OpenSearch releases where `controlplane.observability.enabled` is set                                                                                                                     | Undecided (§32, Q5)                                     |
-| Unattributed        | `StorageClass/local-hostpath`, `DaemonSet/simplyblock-numa-resource-plugin` and its ConfigMap, and `ConfigMap/simplyblock-caching-node-restart-script-cm`                                                                                                                                                          | Undecided (§32, Q5)                                     |
-| Already kept        | The three `snapshot.storage.k8s.io` CRDs and `Deployment/simplyblock-snapshot-controller`                                                                                                                                                                                                                          | Helm already leaves them (§12.2)                        |
-| The operator        | `Deployment/simplyblock-operator`, its webhook Service and two webhook configurations, its metrics Service and `APIService`, and its RBAC                                                                                                                                                                          | The new chart renders these                             |
+| Group               | Objects                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Adopted by                                              |
+|---------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------|
+| Control plane       | `FoundationDBCluster/simplyblock-fdb-cluster`, the `simplyblock-webappapi`, `admin-control`, `monitoring`, `tasks`, `fdb-controller-manager`, and `fdb-exporter` Deployments, `StatefulSet/simplyblock-minio`, their Services, and the `simplyblock-config`, `prometheus-config`, and `objstore-config` ConfigMaps                                                                                                                                                                             | `ControlPlane`, `design-controlplane.md` §5.1           |
+| CSI driver          | `CSIDriver/csi.simplyblock.io`, `StatefulSet/simplyblock-csi-controller`, `DaemonSet/simplyblock-csi-node`, their two ServiceAccounts and five ClusterRole and ClusterRoleBinding pairs, the `simplyblock-csi-cm` and `simplyblock-csi-nodeservercm` ConfigMaps, and `VolumeSnapshotClass/simplyblock-csi-snapshotclass`. `simplyblock-csi-secret-v2` is not in the set: the StorageCluster reconciler writes it and the driver only mounts it. `simplyblock-csi-secret` is mounted by nothing | `SimplyblockDriver`, `design-simplyblockdriver.md` §4.3 |
+| The adopter itself  | `ControlPlane/simplyblock`, which the chart renders from `templates/controlplane_cr.yaml`                                                                                                                                                                                                                                                                                                                                                                                                      | Nothing. It is the adopter (§12.2)                      |
+| Ecosystem subcharts | The Prometheus `StatefulSet`, its two Services and its ConfigMap, `Deployment/simplyblock-reloader`, and the MongoDB and OpenSearch releases where `controlplane.observability.enabled` is set                                                                                                                                                                                                                                                                                                 | Undecided (§32, Q5)                                     |
+| Unattributed        | `StorageClass/local-hostpath`, `DaemonSet/simplyblock-numa-resource-plugin` and its ConfigMap, and `ConfigMap/simplyblock-caching-node-restart-script-cm`                                                                                                                                                                                                                                                                                                                                      | Undecided (§32, Q5)                                     |
+| Already kept        | The three `snapshot.storage.k8s.io` CRDs and `Deployment/simplyblock-snapshot-controller`                                                                                                                                                                                                                                                                                                                                                                                                      | Helm already leaves them (§12.2)                        |
+| The operator        | `Deployment/simplyblock-operator`, its webhook Service and two webhook configurations, its metrics Service and `APIService`, and its RBAC                                                                                                                                                                                                                                                                                                                                                      | The new chart renders these                             |
 
 **The set is per-cluster, so it is computed and never read from a table.** Two
 subcharts are conditional on values, and a cluster with observability enabled
@@ -849,10 +953,9 @@ has meant until now, so `upgrade` says so in its closing report.
 helm upgrade <release> helm-charts/charts/simplyblock-operator
 ```
 
-The chart carries the same field names the API does, so it moves with the API.
-`values.yaml` holds `skipKubeletConfiguration` under the storage-node settings,
-and `multiCluster.enable` is a spelling that exists only there. Two consequences
-follow.
+The chart carries the same field names the API does, so it moves with the API,
+and it carries spellings of its own that name no API field at all, of which
+`multiCluster.enable` is one. Two consequences follow.
 
 **A user's existing values file may not validate against the new chart.**
 `helm-charts/charts/simplyblock-operator/values.schema.json` sets
@@ -1054,11 +1157,29 @@ the phase writes the rows below that line instead.
 
 **Resolve and report.** Every `PersistentVolume` and `VolumeSnapshotContent`
 whose pool segment is not a canonical UUID is listed with the name it carries and
-the UUID that name resolves to, through `lvol.Resolver` against the control
-plane. A pool name resolving to nothing is a finding: the handle names a pool
-that no longer exists, and the migration reports it and does not proceed. This
-part is a read, so it belongs to `preflight` (§19.10) and runs long before the
-migration does.
+the UUID that name resolves to. A pool name resolving to nothing is a finding:
+the handle names a pool that no longer exists, and the migration reports it and
+does not proceed. This part is a read, so it belongs to `preflight` (§19.10) and
+runs long before the migration does — it is the step's own `Validate`, which the
+framework runs in the preflight and again before applying.
+
+The lookup is `PoolResolver`, an interface on the run's `Scope`, and not
+`lvol.Resolver`: that interface answers where a volume is and how to reach it,
+and has no pool listing in it. The implementation lists a cluster's pools once
+and answers from that, through the credentials the cluster keeps beside its own
+object — an installation holds several clusters, each with its own secret, and a
+pool called `production` exists in two of them, so asking the wrong one returns a
+UUID that looks normalized and names a pool the volume is not in. The cluster a
+handle names is found by the UUID a `StorageCluster` reports rather than by what
+one is called.
+
+**The endpoint is given rather than discovered.** The model being upgraded
+records it nowhere a tool running outside the cluster can read: the operator
+takes it from its own environment, and a `v1alpha1` `ControlPlane` carries no
+endpoint at all. So it is `--control-plane`, and without it the step refuses and
+names the flag. That refusal is the right outcome rather than a gap — a cluster
+whose volumes were all provisioned after the boundary has no pool name to
+resolve and never reaches it.
 
 **Rewrite the records the migration owns.** Anywhere the operator has written a
 handle into a field it controls, a custom resource's status or a `ConfigMap`, the
@@ -1087,8 +1208,27 @@ otherwise.** Consistency is exact: the annotation's cluster and volume segments
 MUST equal the field's, and only the pool segment may differ. A reader finding
 any other difference ignores the annotation and reports it, so a hand-edited
 annotation cannot redirect a volume to another cluster. That rule is one
-function in `atlas-lib`, beside `ParseHandle`, and no call site implements it
-twice.
+function in `atlas-lib`, `lvol.NormalizeHandle`, beside `ParseHandle`, and no
+call site implements it twice.
+
+It compares two handles and knows nothing about Kubernetes, which is what lets
+both kinds share it. Where the two strings come from is the other half, and it
+is `kube.NormalizedHandle`, which takes a handle and an object's annotations:
+`VolumeSnapshotContent` belongs to the external snapshotter's module, and
+`atlas-lib` does not take a dependency on it for a map lookup.
+`kube.NormalizedVolumeHandleFromPV` is the same thing for the kind that is in
+the core API.
+
+**`kube.VolumeHandleFromPV` stays, and stays the field's own answer.** The two
+questions differ the way `ParseHandle` and `Split` differ: which pool a volume
+is in is what a caller reaching for the control plane wants, and what an
+object's spec literally says is what the migration wants, since that is how it
+finds the volumes whose spelling is legacy at all.
+
+A `VolumeSnapshotContent` names one of two things and both are the same three
+segments, so whichever it carries is normalized: a pre-existing snapshot names
+itself in `spec.source.snapshotHandle`, and a dynamically taken one names the
+volume it came from in `spec.source.volumeHandle`.
 
 **This is what makes the normalized pool reachable without the control plane.**
 The CSI driver already indexes `PersistentVolume` objects by the lvol id in
@@ -1128,9 +1268,27 @@ StorageCluster cluster-a
           └── StorageNode node-c
 ```
 
-Discovery is namespace-wide rather than cluster-wide by default, because every
-kind in the group except the cluster-scoped additions is `Namespaced` and a
-cluster may hold several independent installations.
+**Discovery reads the group's kinds from every namespace, because that is where
+the operator reconciles them.** The manager is built with its cache restricted
+to no namespace and its RBAC is a `ClusterRole`, so one operator serves the
+whole cluster and a `StorageCluster` in `default` belongs to an operator running
+in `simplyblock`. `WATCH_NAMESPACE` is set by
+`helm-charts/charts/simplyblock-operator/templates/simplyblock-operator.yaml`
+and read nowhere in the Go, so it bounds nothing. Two independent installations
+in one cluster is therefore not a state this product reaches: the second
+operator would watch the first's objects and fight it.
+
+**The workload a `StorageNodeSet` owns is read only where the group's objects
+are.** Those objects are created in the set's namespace rather than the
+operator's, so they follow the custom resources, and they are kinds a cluster
+holds thousands of. Listing every `ConfigMap` and `Secret` in a large cluster
+costs a great deal and returns almost nothing this migration is about, so
+discovery runs in two passes and the second reads only the namespaces the first
+found the group in.
+
+The operator's own namespace still matters, and it is what `--namespace` names:
+the Helm release, the conversion webhook of §9, the `ControlPlane` the chart
+installs, and the migration record of §22.1.
 
 ---
 
@@ -1202,22 +1360,25 @@ from the object it is written on.
 
 ### 19.2 The Label Cases
 
-Eight labels are built from a name a user chose. Every row is live today.
+Seven labels are built from a name a user chose. Every row is live today.
 
-| What is built                                                      | Breaks when                                                                    | Longest input that works    | Fix               |
-|--------------------------------------------------------------------|--------------------------------------------------------------------------------|-----------------------------|-------------------|
-| `simplyblock.io/pool.<ns>.<cluster>.<pool>`, a key                 | The namespace, cluster, and pool names together exceed 56 characters           | A 27-character pool name    | Truncate and hash |
-| `io.simplyblock.node-type` = `simplyblock-storage-plane-<cluster>` | The cluster name exceeds 37 characters, or ends in `-`, `.`, or `_`            | A 37-character cluster name | Bound the input   |
-| `storage.simplyblock.io/cluster` on a `StorageClass`               | The cluster name exceeds 63 characters                                         | A 63-character cluster name | Use a UUID        |
-| `storage.simplyblock.io/pool` on a `StorageClass`                  | The `StoragePool` name exceeds 63 characters                                   | A 63-character pool name    | Use a UUID        |
-| `io.simplyblock.storagenodeset`                                    | The `StorageNodeSet` name exceeds 63 characters                                | A 63-character set name     | Bound the input   |
-| `storage.simplyblock.io/worker`                                    | The `Node` name exceeds 63 characters                                          | A 63-character node name    | Truncate and hash |
-| `simplyblock.io/drain-node`                                        | Character 63 is `-` or `.`, which a label value may not end on                 | A 62-character node name    | Truncate and hash |
-| `simplyblock.io/storage-node-uuid.<clusterUUID>.<n>`, a key        | The socket index needs nine digits or more, the rest of the key being 55 bytes | An 8-digit socket index     | None needed       |
+| What is built                                               | Breaks when                                                                    | Longest input that works    | Fix               |
+|-------------------------------------------------------------|--------------------------------------------------------------------------------|-----------------------------|-------------------|
+| `simplyblock.io/pool.<ns>.<cluster>.<pool>`, a key          | The namespace, cluster, and pool names together exceed 56 characters           | A 27-character pool name    | Use a UUID        |
+| `storage.simplyblock.io/cluster` on a `StorageClass`        | The cluster name exceeds 63 characters                                         | A 63-character cluster name | Bound the input   |
+| `storage.simplyblock.io/pool` on a `StorageClass`           | The `StoragePool` name exceeds 63 characters                                   | A 63-character pool name    | Bound the input   |
+| `io.simplyblock.storagenodeset`                             | The `StorageNodeSet` name exceeds 63 characters                                | A 63-character set name     | Bound the input   |
+| `storage.simplyblock.io/worker`                             | The `Node` name exceeds 63 characters                                          | A 63-character node name    | Truncate and hash |
+| `simplyblock.io/drain-node`                                 | Character 63 is `-` or `.`, which a label value may not end on                 | A 62-character node name    | Truncate and hash |
+| `simplyblock.io/storage-node-uuid.<clusterUUID>.<n>`, a key | The socket index needs nine digits or more, the rest of the key being 55 bytes | An 8-digit socket index     | None needed       |
 
-The `node-type` row is the tightest limit in the product: 63 less a
-26-character prefix leaves **37 characters for a `StorageCluster` name**, where
-the API server allows 253.
+The `pool` key is the tightest row, and it is the only one that binds three
+names at once: 63 less a five-character prefix and two separators leaves the
+namespace, the cluster, and the pool **56 characters between them**, where the
+API server allows each of the three 253.
+
+**Nothing bounds a `StorageCluster` name below the 63 bytes a label value
+allows**, and both rows that bind it there are §19.5's use-a-UUID cases.
 
 The `worker` row is the one whose input this repository does not own.
 `storage.simplyblock.io/worker` is written through `sanitiseDNSLabel`
@@ -1246,25 +1407,65 @@ These are the roomier half of the problem, and they are still reachable: a
 `ReplicationSlot` joins two names that Kubernetes each allows to be 253
 characters long.
 
-### 19.4 One Field Closes Most of the List
+### 19.4 Bounding the Cluster Reference
 
-`spec.clusterName` carries no maximum length and no pattern on either
-`StoragePoolSpec` (`storagepool_types.go:115`) or `StorageNodeSetSpec`
-(`storagenodeset_types.go:40`), and it feeds four of the eight labels and three
-of the object names above. **A `+kubebuilder:validation:MaxLength=37` on it
-closes more of this list than any other one-line change**, and 37 is what
-§19.2's tightest row leaves. The marker lands on `v1alpha2`'s
-`spec.clusterRef`, because §7.2 renames the field and retires `StorageNodeSet`,
-and never on `v1alpha1` (§19.9).
+**A `+kubebuilder:validation:MaxLength=63` on a cluster reference is what turns
+an overlong one into a rejected create rather than a reconcile that retries
+forever.** The markers land on `v1alpha2` and never on `v1alpha1` (§19.9).
 
-**The 37 characters belong to the cluster's own name, which no `MaxLength` can
-reach.** `metadata.name` is one of the two metadata fields a CRD validation rule
-can see (§19.7), so the name itself is bounded by a type-level rule and the
+**The bound on a reference follows from the bound on the name, so it is the same
+number on every kind that carries one.** A reference longer than a
+`StorageCluster` name may be names nothing that can exist, which makes the
+question of what the referring kind does with it beside the point: eight fields
+across seven kinds carry a cluster's name, and a bound applied to the ones
+somebody remembered is not a bound. Two of the eight are not references at all
+but names — `ClusterDeploymentConfig.spec.cluster.name` becomes a
+`StorageCluster`'s `metadata.name`, so admitting more there is a document the API
+server accepts and a `CreatingCluster` step that can never succeed.
+
+A `status` carrying the same reference is deliberately left unbounded. It records
+what the operator resolved, copied from an input this rule already bounds, so a
+maximum there could catch no mistake and could only turn a status write into one
+the API server refuses.
+
+**63 is a label's limit and not a budget the marker can guarantee.** A row that
+shares its 63 bytes with a namespace and a pool name still overflows when the
+other two are long. What the marker closes is the rows where the cluster name
+stands alone.
+
+**The cluster's own name is bounded by a type-level rule, which no `MaxLength`
+can reach.** `metadata.name` is one of the two metadata fields a CRD validation
+rule can see (§19.7), so the name itself is bounded by the rule and the
 reference by the marker:
 
 ```go
-// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 37",message="a StorageCluster name is at most 37 characters, because it is written into a node label behind a 26-character prefix"
+// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63",message="a StorageCluster name is at most 63 characters, because it is written into label values on StorageClasses, StorageDevices, and worker Nodes"
 ```
+
+**Three kinds carry that rule, not one.** The cluster's name is the one §19.2
+measured, but the target model writes two more names into label values, and both
+were found by asking the same question of the kinds around it rather than by
+re-deriving the table:
+
+| Kind             | Written into                                                          |
+|------------------|-----------------------------------------------------------------------|
+| `StorageCluster` | `storage.simplyblock.io/cluster`, and `io.simplyblock.storagenodeset` |
+| `StoragePool`    | `storage.simplyblock.io/pool`                                         |
+| `StorageNode`    | `storage.simplyblock.io/node`                                         |
+
+The pool's row is the one with a second failure behind it. That label is also the
+selector a pool lists its own classes with, so an overlong pool name is not only a
+write the API server refuses but a read: the pool would never find a class it had
+been given.
+
+The node's row is the one where the bound is the smaller half of the fix. A
+`StorageNode` is named by the operator rather than by a user, from the formula in
+`expansion.go`, and that formula was declared against an object name's 253 bytes
+while its output travels into a label — the mistake §19.1 exists to name. A
+regional cluster name and a worker a cloud named after its fully qualified domain
+name are 68 bytes between them, so the overflow was what ordinary inputs
+produced. The formula carries the label's limit now, and the rule on the type is
+what holds a node somebody authored to the same bound.
 
 ### 19.5 The Three Fixes
 
@@ -1272,8 +1473,20 @@ Every row above resolves one of three ways, and which one applies follows from
 who owns the name rather than from how long it is.
 
 **Use a UUID.** When a stable identifier is already at hand, nothing reads the
-current value, and the label exists to be selected on rather than read. The two
-`StorageClass` labels are this case.
+current value, and the label exists to be selected on rather than read.
+
+The row this turned out to fit is the per-pool key on a worker `Node`, which the
+target model writes as `storage.simplyblock.io/storage-pool.<poolUUID>`: it is
+the tightest row of §19.2, it is read by the CSI node plugin as a prefix match
+rather than by its parts, and a UUID retires the whole of its budget problem
+along with §19.8's ambiguous concatenation.
+
+The two `StorageClass` labels were assumed to be this case and are not.
+`storage.simplyblock.io/cluster` and `storage.simplyblock.io/pool` are the
+assignment itself — they are how a person assigns a class they wrote to a pool —
+so a value nobody can type is a contract nobody can enter. Those two rows resolve
+by bounding the input instead, which is what makes §19.4's rule on three kinds
+rather than one load-bearing.
 
 **Bound the input.** When the long name is this API's to refuse. A field
 somebody types has no business being 200 characters, so the answer is no at
@@ -1307,9 +1520,15 @@ adopt rather than a new invention:
 - **The Helm chart** names every resource literally rather than building names
   from the release name.
 
-`nodeprobe.ObjectName` lands with the discovery work, so the shared helper is
-extracted from it rather than written twice, into `atlas-lib/kube/names.go`
-beside the formulas it bounds.
+`nodeprobe.ObjectName` landed with the discovery work, the shared helper was
+extracted from it rather than written twice, into `atlas-lib/kube/derived.go`
+beside the formulas it bounds, and the reference call site now derives its names
+through it. What the extraction had to carry over is that the digest is
+unconditional there: the run and the node join on a separator both of them may
+contain, so two runs of one deployment reach one stem without either being long
+enough to truncate. Where a formula's parts are unambiguous the digest stays
+conditional and the name stays readable, so `Formula.AlwaysDigest` is what the
+two cases differ in.
 
 ### 19.7 Where a Rule Is Enforced
 
@@ -1332,6 +1551,21 @@ The webhook races itself. Two creates admitted concurrently each see a free
 derived name, so the reconciler treats a collision as a terminal condition with
 an event rather than as something admission prevented.
 
+**In the target model that fallback is the whole of the answer, and no
+uniqueness webhook is built.** The row above is written for the current model,
+where four routes take two resources to one derived name (§19.8), and the target
+model closes three of them by construction: every kind but
+`PersistentVolumeOps` is namespaced, and the names they derive are unique within
+the namespace their inputs are unique in. What is left is the default
+`StorageClass`, which is cluster-scoped and named `simplyblock-<ns>-<cluster>`.
+The pool's reconcile already answers that one the way this row prescribes — it
+adopts the name only when the occupant is recognizably the class it would have
+written, and otherwise emits `StorageClassNameTaken` and leaves the pool without
+a default. A fail-closed webhook in front of that would refuse a legal cluster
+over a class that is not required for the cluster to work, which is worse than
+the condition it replaces. The remaining two routes of §19.8 are what an upgrade
+introduces rather than what a write can, and they stay the preflight's.
+
 The last row is the one this document turns on: every mechanism above it runs on
 a write, and the objects an upgrade has to survive were written before the rule
 existed.
@@ -1347,9 +1581,9 @@ Four routes take two resources to one derived name:
   in one namespace. The `simplyblock.io/pool.<ns>.<cluster>.<pool>` label key
   has the same defect with dots.
 - **A cluster-scoped derived name drops the namespace.** The
-  `io.simplyblock.node-type` value carries the cluster name and nothing else, so
-  two `StorageCluster` objects of the same name in two namespaces claim the same
-  worker nodes.
+  `io.simplyblock.storagenodeset` value carries the `StorageNodeSet` name and
+  nothing else, and it is written on the `Node` object, so two sets of the same
+  name in two namespaces claim the same worker nodes.
 - **The `StorageNodeSet` retirement re-derives from the cluster what is derived
   from the set today.** The `DaemonSet`, the per-node `ConfigMap`, and the
   `EndpointSlice` are named per set precisely so several sets can coexist in one
@@ -1368,7 +1602,7 @@ preflight exists.
 ### 19.9 The Rules Go on `v1alpha2` Only
 
 Tightening a served version's schema rejects updates to the objects that already
-violate the new rule. Adding `MaxLength=37` to `v1alpha1` would therefore start
+violate the new rule. Adding `MaxLength=63` to `v1alpha1` would therefore start
 failing writes on exactly the clusters that are about to be upgraded, before the
 upgrade had offered them anything. So `v1alpha1` keeps its schema until it is
 retired (§7), `v1alpha2` carries the rules, and the preflight covers the objects
@@ -1423,11 +1657,11 @@ Every violation names the object, the derived value, the limit, and the change
 that resolves it:
 
 ```text
-ERROR  StorageCluster simplyblock/production-cluster-eu-central-1-primary
-       name is 41 characters, the maximum is 37
-       derived: Node label io.simplyblock.node-type
-                = simplyblock-storage-plane-production-cluster-eu-central-1-primary
-                  (67 bytes, a label value stops at 63)
+ERROR  StorageNodeSet simplyblock/production-storage-nodes-eu-central-1-primary-rack-14-socket-01a
+       name is 64 characters, the maximum is 63
+       derived: Node label io.simplyblock.storagenodeset
+                = production-storage-nodes-eu-central-1-primary-rack-14-socket-01a
+                  (64 bytes, a label value stops at 63)
 
 ERROR  StoragePool simplyblock/prod-gold with pool tier, and
        StoragePool simplyblock/prod with pool gold-tier,
@@ -1641,19 +1875,24 @@ process has to stay alive for the migration to be recoverable.
 
 ## 24. Storage-Version Migration
 
-Changing the storage version is separate from application-level migration. For
-each CRD:
+Draining the old storage representation is separate from application-level
+migration, and by the time this stage runs the storage version has already moved:
+`apply-crds` installed manifests that declare `v1alpha2` as storage (§7.4).
+
+What the flag did not do is touch what is already in etcd. Objects that have not
+been written since the apply still exist in the old representation, and
+`.status.storedVersions` still lists `v1alpha1`:
 
 ```text
-v1alpha1 storage=true      v1alpha1 storage=false
-v1alpha2 storage=false  →  v1alpha2 storage=true
+CRD:      v1alpha1 storage=false, v1alpha2 storage=true
+etcd:     object A encoded v1alpha1   ← until something writes it
+          object B encoded v1alpha2   ← written since the apply
+storedVersions: ["v1alpha1", "v1alpha2"]
 ```
 
-After the switch, objects that have not been written since still exist in etcd
-in the old representation, and `.status.storedVersions` still lists
-`v1alpha1`. Until that list holds `v1alpha2` alone, `v1alpha1` cannot be
-removed from the CRD, because the API server refuses to drop a version it still
-has stored objects in.
+Until that list holds `v1alpha2` alone, `v1alpha1` cannot be removed from the
+CRD, because the API server refuses to drop a version it still has stored
+objects in.
 
 **The migration rewrites the objects itself.** The Kubernetes
 `StorageVersionMigration` API is not used: it is served at
@@ -1665,7 +1904,8 @@ alpha feature gate is not a migration path.
 
 The rewrite is:
 
-1. Switch the CRD to the new storage version.
+1. Confirm the CRD stores `v1alpha2`, which `verify-crd-versions` already
+   established and this stage re-reads rather than assumes.
 2. List every object of that kind, in every namespace.
 3. Write each object back unchanged.
 4. Verify the write.
@@ -1933,9 +2173,20 @@ custom resource.
 
 ### 29.4 The Migration Tool
 
-`operator/cmd/simplyblock-upgrade/`, also built into the operator image, so that
-it can run either from a workstation against a kubeconfig or as a Job in the
-cluster.
+`operator/cmd/simplyblock-upgrade/`, built on its own and **not** shipped in the
+operator image. `make -C operator build-upgrade` builds it, for the
+`UPGRADE_GOOS` and `UPGRADE_GOARCH` it is given, and
+`.github/workflows/operator_upgrade_tool.yaml` runs that target for the four
+platforms it is administered from.
+
+The operator image is the wrong carrier for it. The tool is a prerequisite for
+running the new operator, so shipping it inside that operator's image puts it
+behind the pull it precedes, and reaching it from a workstation means extracting
+a binary out of a container. Where it is released from instead is Q6. The
+workflow publishes nothing and keeps the binaries as artifacts.
+
+It reaches a cluster through a kubeconfig, or through the in-cluster
+configuration when it is run as a Job.
 
 ```text
 simplyblock-upgrade preflight    # read-only: the checks and the plan (§27)
@@ -1956,7 +2207,209 @@ Shared primitives belong in `atlas-lib` rather than here: Kubernetes object
 correlation, error classification, locks, and the state machine of §23 are
 already there (`atlas-lib/README.md`).
 
-### 29.5 What Each Command Owes
+### 29.5 The Extension Framework
+
+`operator/internal/upgrade` is the framework the three commands are assembled
+out of. Nothing in it is a switch over a fixed list, because the set of units
+grows with every API version: a later upgrade brings new rules to check, new
+names to bound, and new objects to transform. Each kind of unit is an interface
+with one registry behind it, so adding a rule to the product is writing one
+value and putting it in one catalog.
+
+| Unit             | Interface                                                  | Lives in                            |
+|------------------|------------------------------------------------------------|-------------------------------------|
+| `Discoverer`     | `Requires() []ID`, `Discover(ctx, *Scope) error`           | `internal/upgrade/discover/`        |
+| `Check`          | `Stages() []Stage`, `Check(ctx, *Scope) (Findings, error)` | `internal/upgrade/check/`           |
+| `Derivation`     | `Formula`, `Written`, `Model`, `Fix`, `Space`, `Inputs`    | `internal/upgrade/derive/`          |
+| `Step`           | five methods over one subject, §29.6                       | `internal/upgrade/steps/`           |
+| `Transformation` | `Source`, `Target`, `Applies`, `Transform`                 | `internal/upgrade/keys/` and beside |
+
+Every unit is a `Rule`: a stable kebab-case `ID` and a one-sentence
+`Description`. The identity is what a report names, what `--skip` takes, and
+what `simplyblock-upgrade rules` lists.
+
+`internal/upgrade/catalog/catalog.go` is the single place the shipped tool's
+units are registered, in the order they run in. It is one file so that the
+answer to what `migrate` actually does is a list somebody can read, and so that
+a test can build a catalog holding one rule without the other forty deciding
+the outcome. The framework holds no global state and no `init` function
+registers anything.
+
+`Scope` is what every unit is handed: the `client.Client` (one that refuses
+writes in the preflight), the `Namespace` the operator's own furniture lives in,
+the cluster-wide `Graph` discovery built, the `Stage`, the run's `Options`, a
+`Log` for diagnosis, and a `Reporter` for the person watching. The log and the
+reporter are separate on purpose, and user-facing output goes to the reporter.
+
+### 29.6 The Step Contract
+
+A step answers five questions about **one subject**, and the runner asks them of
+every subject a run has.
+
+```go
+type Step interface {
+    Rule
+
+    Stage() Stage       // which command it belongs to
+    Phase() Phase       // the migrate state it runs in, ignored elsewhere
+    Requires() []ID     // steps that must have completed first
+
+    Describe(ctx context.Context, s *Scope, subject Subject) (*Action, error)
+    Done(ctx context.Context, s *Scope, subject Subject) (bool, error)
+    Validate(ctx context.Context, s *Scope, subject Subject) error
+    Apply(ctx context.Context, s *Scope, subject Subject) error
+    Verify(ctx context.Context, s *Scope, subject Subject) error
+}
+```
+
+The five are not one question in disguise. §22 states idempotency per object
+rather than per step, and §20 orders the reparenting the same way: a
+`StorageNode` owned by its set is transferred, one already owned by the cluster
+is already migrated and continues, and each move is verified before the next. A
+step that answered once for a whole kind would collapse three nodes into one
+all-or-nothing decision, which is the wrong answer for a run killed after the
+second of them.
+
+**`Describe` returns nil for two different reasons, and both are silence.** The
+subject is not one this step is about, or the subject is already in the state
+the step exists to put it in. So the plan is the outstanding work by
+construction: a rerun's plan shrinks as the migration completes rather than
+restating the work already done. It is also what makes a rerun
+self-healing, since a subject whose state is not what a previous run left behind
+describes an action again.
+
+**`Done` tells the two silences apart.** A subject no step describes is either
+finished or one nothing has taken responsibility for, and those are very
+different answers to whether the migration is complete. `Covered` walks a step
+over every subject and sorts them into `Outstanding`, `Finished`, and
+`Untouched`. A subject every step leaves `Untouched` is a gap in the
+migration.
+
+Five rules hold, and breaking one breaks a guarantee the design makes:
+
+- `Describe` and `Validate` MUST NOT write. Both run in the preflight, where
+  nothing changes.
+- `Describe` MUST be a pure function of its subject and the graph. It runs in
+  the preflight and again in the migration, and a different answer applies
+  something the user was never shown.
+- `Describe` and `Done` MUST derive their answers from the subject rather than
+  from the record of §22.1, so a run killed anywhere resumes correctly.
+- `Apply` is called only where `Describe` returned an action and `Validate`
+  passed.
+- `Verify` runs after `Apply`, and does not run on a subject `Describe`
+  declined.
+
+A step that can describe its work and cannot yet perform it implements
+`Blocked`, whose `BlockedBy()` says what is missing and names the design section
+that would supply it. The runner refuses a stage holding one **before applying
+anything**, because a stage that stops at its fifth step leaves the cluster
+halfway through an upgrade nothing can finish. The set of blocked steps is
+therefore the remaining work, and `preflight` prints it.
+
+### 29.7 Subjects
+
+A subject is what a step is asked about.
+
+```go
+type Subject struct {
+    Ref    ObjectRef     // what a plan line and a finding print
+    Object client.Object // nil when the subject is the upgrade itself
+}
+```
+
+`Scope.Subjects()` is the upgrade first, then the graph's objects with kinds
+sorted and objects in discovery order within a kind. The upgrade comes first
+because the steps that act on it come first: nothing is migrated before the
+cluster can run the operator that migrates it.
+
+**The steps of §9.1 act on the upgrade itself**, which is what `TheUpgrade`
+supplies. Deploying the conversion webhook and upgrading the operator change the
+installation rather than anything in it. The upgrade is a subject like any
+other, so there is one contract, one runner path, and one walk. Such a step
+opens with `if !subject.IsUpgrade() { return nil, nil }`.
+
+**A step whose subjects are not in the graph implements `Enumerator`.**
+
+```go
+type Enumerator interface {
+    Subjects(ctx context.Context, s *Scope) ([]Subject, error)
+}
+```
+
+The graph holds what the cluster has, so a step that creates something acts on a
+subject no discovery can find. §11 is the case: the CRD for a kind that is new
+in `v1alpha2` is exactly the one that is not installed yet. The `Object` such a
+step carries is the object as it is to be written rather than one the cluster
+already holds, and the step reads the live one itself. That is what keeps the
+step's twenty objects on the page instead of behind one line about the
+upgrade.
+
+The runner resolves the two through `SubjectsFor(ctx, s, step)`, so a step that
+does not enumerate is asked about the run's subjects. An enumerating step still
+receives whatever subjects it is handed, and declines the ones that are not its
+own rather than assuming.
+
+### 29.8 The Plan
+
+`Plan` is a hierarchy because the execution is one: `Plan` holds `Task`s, one
+per step, and a `Task` holds `Subtasks`, one `Action` per subject the step
+described work for. The hierarchy is what keeps which step is responsible for a
+change and how many objects one step touches, which is the difference between
+"annotate the release's survivors" and the ninety-five annotations that is.
+
+An `Action` carries the step's `ID`, a `Verb`, the `ObjectRef`, and a `Detail`.
+The verb set is closed (`CREATE`, `UPDATE`, `DELETE`, `REPARENT`, `ANNOTATE`,
+`REWRITE`, `AWAIT`, and `VERIFY`), because a step that cannot describe its work
+as one of these is doing something the plan cannot show a user.
+
+**`Detail` is the data and not a description of the step.** An old value, an
+arrow, and a new one. A step's own explanation belongs in its source, where it
+is read once, rather than in a line printed on every run. A step with nothing
+concrete to say leaves it empty, and `Task.Collapsed()` reports a task whose
+subtasks say nothing the task line does not.
+
+The plan is computed by the same walk that would perform it, with the writes
+left out, which is what makes §27's promise hold.
+
+### 29.9 Writing a Step
+
+The recipe, in order:
+
+1. **Give it an identity** as a `const` beside the others in the package, in
+   kebab case, naming the change rather than the mechanism: `reparent-storage-nodes`,
+   not `owner-reference-updater`.
+2. **Decide what it acts on.** An object the graph holds needs nothing extra.
+   The upgrade itself is `TheUpgrade`. Anything else means `Enumerator`, and the
+   reason belongs in the file's opening comment.
+3. **Write `Describe` first, completely.** It is the half that has to be right
+   before anything is applied, and it is worth having on its own: a step whose
+   `Apply` is a TODO still tells a user exactly what the upgrade owes, per
+   object. `Describe` returning nil where the work is already done is what makes
+   the plan shrink on a rerun.
+4. **Write `Done`** as the positive statement of the same inspection, so a
+   coverage check can tell a finished subject from an abandoned one.
+5. **Write `Validate`, `Apply`, and `Verify`.** `Validate` is the step's own
+   precondition, distinct from the graph-wide checks. `Verify` re-reads and
+   confirms rather than trusting the write.
+6. **Register it** in `internal/upgrade/catalog/catalog.go`. Order within a
+   stage comes from `Requires()` rather than from the slice, so a step added in
+   the wrong place still runs in the right one.
+7. **Test it red first.** Every behavior the step relies on is worth breaking
+   deliberately to watch the test fail, per `AGENTS.md`.
+
+`operator/internal/upgrade/steps/crds.go` is the worked example, and it is the
+one to read before writing another: it enumerates its own subjects, describes a
+create and an update differently, declines a subject that is already what it
+would write, validates a precondition the API server would otherwise accept and
+then fail on, and verifies against the conditions §11 names. `steps/ownership.go`
+is the example for a step over graph objects, and `steps/upgrade.go` holds the
+ones that act on the upgrade itself.
+
+Prose does not belong in a plan line, and a step's reasoning does not belong in
+its `Detail`. Both belong in the file's opening comment and in a `TODO` beside
+the part that is not written yet.
+
+### 29.10 What Each Command Owes
 
 `upgrade` walks §9.1 and MUST NOT perform application-level migration.
 `migrate` walks the graph of §23 and MUST be idempotent (§22).
@@ -1986,8 +2439,9 @@ is proven red before the fix.
 
 Every field mapping, renamed field, moved field, default value, removed field,
 enum change, type change, nested object, list, map, and nil or empty value.
-`skipKubeletConfiguration` gets its own test for the inversion, and each of the
-three recased action enums gets a test per value.
+`migrationEnabled` and `disableDataRealignment` each get their own test for the
+inversion, each field the hub removed one for the stash it round-trips through, and
+each of the three recased action enums a test per value.
 
 ### 30.2 Round-Trip Tests
 
@@ -2119,26 +2573,30 @@ prose, its check is here and not repeated in both places.
 
 **Volume handles (§16.4)**
 
-- [ ] Every legacy handle is reported with the UUID its pool name resolves to,
+- [x] Every legacy handle is reported with the UUID its pool name resolves to,
       and an unresolvable one fails the preflight.
-- [ ] A `PersistentVolume` is replaced only under `Retain`, one at a time, and
-      never while a pod has the claim mounted.
-- [ ] The normalized handle is written to
+- [x] No `PersistentVolume` is replaced at all. The field keeps the spelling it
+      was provisioned with and the annotation carries the identity, so the
+      replacement this row guarded against does not arise.
+- [x] The normalized handle is written to
       `storage.simplyblock.io/volume-handle` on every `PersistentVolume` and
       `VolumeSnapshotContent` whose field carries a pool name.
-- [ ] One `atlas-lib` function decides between the annotation and the field, and
+- [x] One `atlas-lib` function decides between the annotation and the field, and
       it rejects an annotation whose cluster or volume segment differs.
-- [ ] `lvol.ParseHandle` stays tolerant for objects with no annotation.
+- [x] `lvol.ParseHandle` stays tolerant for objects with no annotation.
 
 **Names (§19)**
 
 - [ ] Every name and label of §19.2 and §19.3 has a bounded derivation.
-- [ ] `metadata.name` on the `v1alpha2` `StorageCluster` is bounded at 37 by an
-      `XValidation` rule, and `StoragePoolSpec.clusterRef` by `MaxLength`.
+- [x] `metadata.name` is bounded at 63 by an `XValidation` rule on the `v1alpha2`
+      `StorageCluster`, `StoragePool`, and `StorageNode`, and every field
+      carrying a cluster's name by `MaxLength` (§19.4).
 - [ ] The truncate-and-hash helper is extracted from `nodeprobe.ObjectName` into
       `atlas-lib/kube`, and no call site rolls its own.
-- [ ] §19.8's uniqueness rules are enforced at admission, and a collision that
-      races admission is terminal with an event.
+- [x] §19.8's uniqueness rules are enforced where a write can still break one.
+      The target model leaves the default `StorageClass` as the only case, and
+      the pool's reconcile is where it is terminal with an event (§19.7); the
+      remaining routes are an upgrade's and stay the preflight's.
 
 **The tool**
 
@@ -2157,3 +2615,4 @@ prose, its check is here and not repeated in both places.
 | Q3  | Does `MaxLength` join the marker set the `api-design` skill owns, and does `check-crds.py` audit a name-bearing field that carries none? No field in the seventeen kinds carries one today, so every one of them is a finding on the audit's first run                                                                                                                                                           | Operator team |
 | Q4  | May the migration rewrite a derived name into the truncate-and-hash form on a user's behalf? It resolves the violation without a data migration, and it changes a string a runbook or a dashboard may select on. §19.5 says the value has to keep working when it is already inside live `PersistentVolume` objects, which is the case that decides this                                                         | Operator team |
 | Q5  | Who owns the objects §12.1 leaves unattributed: the Prometheus and Reloader subcharts, MongoDB and OpenSearch where observability is enabled, `StorageClass/local-hostpath`, the NUMA resource plugin, and the caching-node restart script. Each is either adopted by a custom resource, left to the user to install separately, or annotated and abandoned, and the third produces an orphan nothing reconciles | Operator team |
+| Q6  | Where is `simplyblock-upgrade` released from, now that it is not in the operator image (§29.4)? A GitHub release attaching the four binaries, an image of its own for the in-cluster Job, or both, and the answer decides how a user obtains it before the operator they are upgrading to exists                                                                                                                 | Operator team |

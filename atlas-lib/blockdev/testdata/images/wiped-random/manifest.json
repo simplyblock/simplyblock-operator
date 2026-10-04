@@ -1,0 +1,16 @@
+{
+  "name": "wiped-random",
+  "tool": "dd and wipefs",
+  "tool_version": "wipefs from util-linux 2.41.5",
+  "command": "dd if=/dev/urandom, then wipefs -a",
+  "device_size": 8388608,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-30T16:18:37Z",
+  "captured_on": "Debian GNU/Linux 13 (trixie), kernel 6.12.0-142.el10.x86_64",
+  "blkid": "",
+  "head_sha256": "ea2173249cb8aea591cd81b19fcb4dfea18b776c2ad03899ddd425762bf3aea8",
+  "tail_sha256": "cb8b85d0759e8aafb4100a26285576665aec3e16df8a13a7b9b2acaf2dbdb38a",
+  "filled": true,
+  "note": "eight megabytes of random bytes that wipefs reported clean: it had no signature to remove and removed none, and every byte of the data is still there"
+}

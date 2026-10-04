@@ -1,5 +1,6 @@
-// Growing the filesystem on an already-staged volume. The controller side of
-// the same operation, growing the volume itself, is in the controller service.
+// Growing an already-staged volume onto the capacity it gained. The controller
+// side of the same operation, growing the volume itself, is in the controller
+// service and has already run by the time this does.
 package node
 
 import (
@@ -21,50 +22,29 @@ func (ns *Server) NodeExpandVolume(
 	unlock := ns.volumeLocks.Lock(volumeID)
 	defer unlock()
 
-	volumeMountPath := req.GetVolumePath()
-
 	stagingParentPath := req.GetStagingTargetPath()
 	volumeContext, err := lookupVolumeContext(stagingParentPath)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to retrieve volume context for volume %s: %v", volumeID, err)
 	}
 
-	devicePath, ok := volumeContext["devicePath"]
-	if !ok || devicePath == "" {
-		return nil, status.Errorf(codes.Internal, "could not find device path for volume %s", volumeID)
-	}
-
-	// For raw block volumes, the block device has already been resized at the
-	// storage layer, so neither resize tool should be invoked. resize2fs (ext4)
-	// can operate on an unmounted raw device, which is why it worked by
-	// accident. xfs_growfs requires a mounted filesystem path and cannot
-	// operate on a raw block device at all.
-	if cap := req.GetVolumeCapability(); cap != nil && cap.GetBlock() != nil {
-		klog.Infof("NodeExpandVolume: volume %s is a block device, skipping filesystem resize", volumeID)
-		return &csi.NodeExpandVolumeResponse{}, nil
-	}
-
-	needsResize, err := ns.mounter.NeedsResize(devicePath, volumeMountPath)
+	plan, err := ns.attachPlan(ctx, volumeID, getStagingTargetPath(req), volumeContext, req.GetVolumeCapability())
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to check if volume %s needs resizing: %v", volumeID, err)
+		return nil, status.Errorf(codes.Internal, "failed to build the stack plan for volume %s: %v", volumeID, err)
 	}
 
-	if needsResize {
-		resized, err := ns.mounter.Resize(devicePath, volumeMountPath)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to resize volume %s: %v", volumeID, err)
-		}
-		if resized {
-			klog.Infof(
-				"Successfully resized volume %s (device: %s, mount path: %s)",
-				volumeID,
-				devicePath,
-				volumeMountPath,
-			)
-		} else {
-			klog.Warningf("Volume %s did not require resizing", volumeID)
-		}
+	// Bottom to top, skipping the layers that cannot grow. A raw block volume's
+	// plan has none of those, so its expansion is a walk that changes nothing:
+	// the block device was already resized at the storage layer, and neither
+	// resize tool has anything to do with a device carrying no filesystem.
+	//
+	// Convergent, because kubelet reissues this after one that already
+	// succeeded: both resize tools take the whole of what is now underneath them
+	// and report success when that is where they already are.
+	if err := ns.stack.runner.Grow(ctx, plan); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to grow volume %s: %v", volumeID, err)
 	}
 
+	klog.Infof("grew the stack of volume %s onto its new capacity", volumeID)
 	return &csi.NodeExpandVolumeResponse{}, nil
 }

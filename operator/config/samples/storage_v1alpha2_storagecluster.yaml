@@ -1,0 +1,38 @@
+# One simplyblock backend cluster. The two sizing fields are the only required
+# ones, and everything else the control plane can default, it defaults.
+#
+# The layout group below is immutable once set: a stripe, a fabric, a port
+# range, a key store, and a device class describe what is already on disk and
+# on the wire, and none of them can change under a cluster holding data.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: sample-cluster
+spec:
+  # Cluster-wide storage-node sizing — required, and applies to every storage
+  # node in the cluster. maxSubsystemCount must not exceed the backend's
+  # MAX_SUBSYSTEMS_PER_NODE (75); vcpuCount is an explicit core count.
+  maxSubsystemCount: 50
+  vcpuCount: 8
+
+  # Where the cluster's backups live. It is a location and nothing else: how a
+  # copy is taken belongs to the control plane. Setting it is also what makes
+  # the backups already in that bucket visible as StorageBackup objects.
+  backup:
+    endpoint: http://10.10.11.10:9000
+    bucket: simplyblock-backups
+    prefix: sample-cluster/
+    credentialsSecretRef:
+      name: sample-cluster-backup
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sample-cluster-backup
+type: Opaque
+stringData:
+  access_key_id: username
+  secret_access_key: password

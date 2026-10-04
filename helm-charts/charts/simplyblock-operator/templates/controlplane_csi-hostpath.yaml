@@ -1,4 +1,4 @@
-{{- if and .Values.operator.enabled .Values.controlplane.csiHostpathDriver.enabled }}
+{{- if .Values.controlplane.csiHostpathDriver.enabled }}
 apiVersion: storage.k8s.io/v1
 kind: CSIDriver
 metadata:
@@ -132,7 +132,7 @@ spec:
                 fieldPath: metadata.name
           securityContext:
             # This is necessary only for systems with SELinux, where
-            # non-privileged sidecar containers cannot access unix domain socket
+            # non-privileged sidecar containers cannot access Unix domain socket
             # created by privileged CSI driver container.
             privileged: true
           volumeMounts:
@@ -145,7 +145,7 @@ spec:
             - -csi-address=/csi/csi.sock
           securityContext:
             # This is necessary only for systems with SELinux, where
-            # non-privileged sidecar containers cannot access unix domain socket
+            # non-privileged sidecar containers cannot access Unix domain socket
             # created by privileged CSI driver container.
             privileged: true
           volumeMounts:
@@ -160,7 +160,7 @@ spec:
             - --kubelet-registration-path=/var/lib/kubelet/plugins/csi-hostpath/csi.sock
           securityContext:
             # This is necessary only for systems with SELinux, where
-            # non-privileged sidecar containers cannot access unix domain socket
+            # non-privileged sidecar containers cannot access Unix domain socket
             # created by privileged CSI driver container.
             privileged: true
           env:

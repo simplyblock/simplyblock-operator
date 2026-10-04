@@ -43,7 +43,9 @@ func SetupWebhookCertificate(mgr ctrl.Manager, namespace, tlsProvider string) (c
 
 	// Both configurations are served by the same webhook server (same DNS name),
 	// so they share one serving certificate and CA — only the CA-bundle injection
-	// targets differ.
+	// targets differ. The converting CRDs are not here: conversion runs as its own
+	// Deployment with its own certificate (design-api-upgrade.md §6.1), and this
+	// operator neither serves it nor injects its trust.
 	webhooks := []rotator.WebhookInfo{
 		{Name: utils.WebhookConfigurationName, Type: rotator.Mutating},
 		{Name: utils.WebhookValidatingConfigurationName, Type: rotator.Validating},

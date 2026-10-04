@@ -1,0 +1,18 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: discover-host-01
+  namespace: simplyblock
+spec:
+  action: Discover
+status:
+  environment: K3s
+  step: {}
+  workers:
+  - githubactions-exra-node-1
+  - githubactions-storage-node-1
+  - githubactions-storage-node-2
+  - githubactions-storage-node-3
+  - githubactions-storage-node-4
+  - githubactions-storage-node-5
+  - githubactions-storage-node-6

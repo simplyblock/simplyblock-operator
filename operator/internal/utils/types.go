@@ -1,13 +1,28 @@
 package utils
 
+// BackupCredentials is the key pair a backup store is reached with.
+type BackupCredentials struct {
+	AccessKeyID     string `json:"access_key_id"`
+	SecretAccessKey string `json:"secret_access_key"`
+}
+
+// BackupConfig is where a cluster's backups live and how to reach them. It is
+// a location and nothing else: how a copy is taken is the control plane's, and
+// the four fields that described that are gone from the CRD
+// (design-storagecluster.md §12), so the operator stops sending them and the
+// backend's defaults apply. They stay declared here because the endpoint still
+// accepts them and a future caller may have reason to.
+//
+// Every key must be declared by UnresolvedBackupConfig in shared/openapi.json,
+// which TestBackupConfigKeysAreDeclared checks.
 type BackupConfig struct {
-	AccessKeyID     string `json:"access_key_id,omitempty"`
-	SecretAccessKey string `json:"secret_access_key,omitempty"`
-	LocalEndpoint   string `json:"local_endpoint,omitempty"`
-	SnapshotBackups *bool  `json:"snapshot_backups,omitempty"`
-	WithCompression *bool  `json:"with_compression,omitempty"`
-	SecondaryTarget *int32 `json:"secondary_target,omitempty"`
-	LocalTesting    *bool  `json:"local_testing,omitempty"`
+	Credentials     *BackupCredentials `json:"credentials,omitempty"`
+	Endpoint        string             `json:"endpoint,omitempty"`
+	BucketName      string             `json:"bucket_name,omitempty"`
+	Region          string             `json:"region,omitempty"`
+	SnapshotBackups *bool              `json:"snapshot_backups,omitempty"`
+	WithCompression *bool              `json:"with_compression,omitempty"`
+	SecondaryTarget *int32             `json:"secondary_target,omitempty"`
 }
 
 type HashicorpVaultConfig struct {
@@ -41,6 +56,16 @@ type ClusterAddParams struct {
 	SpdkVcpuCount       int   `json:"spdk_vcpu_count,omitempty"`
 	HugepagesMem        int64 `json:"hugepages_mem,omitempty"`
 	MaxSubsys           uint  `json:"max_subsys,omitempty"`
+	// InlineChecksum enables inline CRC checksum validation for silent-data-error protection.
+	// Wire key must match the /api/v2/clusters/ endpoint from sbcli.
+	InlineChecksum bool `json:"inline_checksum,omitempty"`
+	// Atomic4k declares 4K write atomicity on devices with a <4K logical block size.
+	// Only meaningful when InlineChecksum is true.
+	Atomic4k bool `json:"atomic_4k,omitempty"`
+	// DeviceMode selects "nvme" (default) or "lblk" device attachment for the whole
+	// cluster. Requires sbcli with lblk support (simplyblock/sbcli#1224) — sending
+	// "lblk" against an unpatched backend is rejected.
+	DeviceMode string `json:"device_mode,omitempty"`
 }
 
 type ClusterUpdateParams struct {
@@ -121,4 +146,7 @@ type StorageNodeSetAddParams struct {
 	FailureDomain *int `json:"failure_domain,omitempty"`
 	// Expand signals that this node is being added to expand an already-active cluster.
 	Expand bool `json:"expand,omitempty"`
+	// ForceFormat wipes partitioned lblk devices at add-node time; node_configure.py
+	// --force-format only marks them selectable, this flag does the actual wipe.
+	ForceFormat bool `json:"force_format,omitempty"`
 }

@@ -1,0 +1,48 @@
+# Narrowed to the one question: did this run lose or corrupt data?
+#
+# Everything that measures *quality* is off, so a FAIL from this suite means data — not
+# latency, not a slow cutover, not a timed-out migration. That makes it the suite to bisect
+# with, where a verdict has to mean exactly one thing.
+#
+#   make analyze RUN=<dir> SUITE=corruption-hunt
+description: >-
+  Narrowed to the data-integrity question, for a bisect or a quick verdict.
+
+components:
+  ana.sample:
+    # 1s rather than 2: the freeze count is only as sharp as the interval measuring it, and
+    # the count is this suite's primary signal.
+    interval_s: 1.0
+  logs.stream:
+    containers:
+      - spdk-container
+  nvme.snapshot: true
+
+detectors:
+  ana.freeze-count: true
+  ana.split-brain: true
+  fio.checksum: true
+  fio.job-error: true
+
+  logs.pattern:
+    patterns:
+      # SPDK's own admission that the delta copy began before in-flight I/O had drained.
+      # This is the root cause the corruption RCA landed on, so it is worth matching
+      # verbatim rather than inferring from the ANA side-effects.
+      - id: spdk.undrained-transfer
+        regex: "still have outstanding io|Task transfer timeout with outstanding"
+        logs: ["spdk-*"]
+        severity: critical
+        note: the delta copy started before in-flight I/O was drained
+
+  # Off: these measure how *well* it went, not whether data survived. Keeping them on would
+  # make a bisect ambiguous — a slow cutover would fail the same run a lost write does.
+  ana.cutover-pause: false
+  ana.path-churn: false
+  ana.unserved-after-cutover: false
+  fio.outage: false
+  fio.throughput-outlier: false
+  migration.outcomes: false
+  migration.errors: false
+  nvme.stale-controllers: false
+  nvme.loss-timeout: false

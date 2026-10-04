@@ -34,24 +34,12 @@ const (
 	// StorageNodeSet in the cluster.
 	LabelSimplyblockCluster = "simplyblock-cluster"
 
-	// LabelNodeType marks a worker Node as part of a cluster's storage plane.
-	// Its value is NodeTypeStoragePlaneValue(clusterName). It is cluster-scoped,
-	// so do not use it to select a single StorageNodeSet's workers. Use
-	// LabelStorageNodeSet for that.
-	LabelNodeType = "io.simplyblock.node-type"
-
 	// LabelStorageNodeSet scopes a worker Node, pod, and DaemonSet to a single
 	// StorageNodeSet (value = the StorageNodeSet name). It is the storage-node
 	// DaemonSet's node selector, letting multiple StorageNodeSets coexist in one
 	// cluster.
 	LabelStorageNodeSet = "io.simplyblock.storagenodeset"
 )
-
-// NodeTypeStoragePlaneValue is the LabelNodeType value marking a worker as part
-// of the given cluster's storage plane.
-func NodeTypeStoragePlaneValue(clusterName string) string {
-	return "simplyblock-storage-plane-" + clusterName
-}
 
 // PoolNodeLabelKey is the label key identifying one storage pool.
 func PoolNodeLabelKey(poolUUID string) string {
@@ -77,7 +65,29 @@ const (
 	ParamMaxNamespacePerSubsys = "max_namespace_per_subsys"
 	ParamEncryption            = "encryption"
 
-	// QoS limits. Empty/absent means unset (0).
+	// The three a StoragePool's volume defaults reach the class under and that
+	// nothing consumes yet. They are written because the pool's contract is that
+	// its defaults appear in the class's parameters, and a class's parameters
+	// are immutable: a key omitted now cannot be added to a class later, so the
+	// pool that wanted compression would need replacing rather than editing.
+	// What the driver does with a parameter is its own concern.
+	ParamCompression   = "compression"
+	ParamReplication   = "replicate"
+	ParamPriorityClass = "priority_class"
+
+	// ParamClientCompression and ParamClientDeduplication opt a volume into
+	// client-side (VDO) compression and deduplication, independently of each
+	// other and of the server-side ParamCompression above. Either one being
+	// true is what the CSI driver and the topology gate key off (see
+	// LabelVDOCapable).
+	ParamClientCompression   = "client_compression"
+	ParamClientDeduplication = "client_deduplication"
+
+	// The QoS limits' older spelling. Empty or absent means unset (0). These are
+	// read for as long as a class carrying them exists, which is indefinitely: a
+	// class's parameters are immutable, so one an older operator generated can
+	// never be rewritten. The current spellings and the resolver that prefers
+	// them are in qos.go.
 	ParamQoSRWIOPS   = "qos_rw_iops"
 	ParamQoSRWMBytes = "qos_rw_mbytes"
 	ParamQoSRMBytes  = "qos_r_mbytes"
@@ -101,46 +111,84 @@ const (
 )
 
 // Labels, annotations, and finalizers atlas-managed objects carry.
+//
+// Each is the spelling that is written, which is the API group's own prefix.
+// The spellings an object written before the move carries are in keys.go beside
+// the Key that reads them, and a caller that reads one of these off an object
+// reads it through that Key rather than through the constant — the constant
+// alone would stop understanding every claim, volume, and node that predates
+// the move (design-crd-model.md §9.4).
 const (
 	// LabelVolumeHandle lets selectors find the K8s objects for a logical
-	// volume.
-	LabelVolumeHandle = "simplyblock.io/volume-handle"
+	// volume. Nothing writes it, and nothing can: a handle is 110 bytes
+	// normalized and a label value stops at 63, so AnnoVolumeHandle carries
+	// this instead.
+	LabelVolumeHandle = "storage.simplyblock.io/volume-handle"
+
+	// AnnoVolumeHandle records a volume's handle with its pool segment
+	// normalized to a UUID, on the PersistentVolume and the
+	// VolumeSnapshotContent whose own field cannot be changed.
+	//
+	// A handle provisioned before the v2 API migration encodes the pool's
+	// name rather than its id, and the field it lives in is immutable:
+	// ValidatePersistentVolumeUpdate rejects any change to
+	// spec.persistentVolumeSource. Metadata is writable where spec is not, so
+	// the field keeps the spelling it was provisioned with and this carries
+	// the identity every reader wants.
+	//
+	// A reader takes it when it is present and consistent with the field, and
+	// the field otherwise. Consistency is exact: the cluster and volume
+	// segments must match, and only the pool segment may differ, so a
+	// hand-edited annotation cannot redirect a volume to another cluster.
+	AnnoVolumeHandle = "storage.simplyblock.io/volume-handle"
 	// AnnoPool records the source pool on the PV for observability.
-	AnnoPool = "simplyblock.io/pool"
+	AnnoPool = "storage.simplyblock.io/pool"
 	// LabelPoolPrefix opens the per-pool label the operator puts on every node in
 	// a StoragePool's AllowedNodes
 	LabelPoolPrefix  = "storage.simplyblock.io/storage-pool."
 	LabelPoolAllowed = "allowed"
+	// LabelVDOCapable marks a node whose kernel loaded dm-vdo, self-probed and
+	// self-applied by the CSI node plugin. A volume requesting either client-side
+	// parameter is pinned to a node carrying this label (see
+	// ParamClientCompression, ParamClientDeduplication).
+	LabelVDOCapable = "storage.simplyblock.io/vdo-capable"
+	// AnnoVDOCapableManagedBy stamps every LabelVDOCapable value the node
+	// plugin's own probe writes, with AnnoVDOCapableManagedByAutoDetect. A label
+	// carrying this annotation is the probe's to overwrite on its next run; one
+	// without it — an operator's hand-set override — is left alone.
+	AnnoVDOCapableManagedBy = "storage.simplyblock.io/vdo-capable-managed-by"
+	// AnnoVDOCapableManagedByAutoDetect is AnnoVDOCapableManagedBy's one value.
+	AnnoVDOCapableManagedByAutoDetect = "auto-detect"
 	// AnnoSelectedStorageNode pins a PVC's logical volume to a specific storage
 	// node. It is the canonical placement/pin annotation: the operator's pin
 	// controller, drain, and rebalancer key off it, and the CSI controller reads
 	// it in CreateVolume as the primary host_id source.
-	AnnoSelectedStorageNode = "simplyblock.io/selected-storage-node"
+	AnnoSelectedStorageNode = "storage.simplyblock.io/selected-storage-node"
 	// AnnoSelectedStorageNodeApplied records the pinned-volume target the PVC
 	// controller has already acted on. It is the strict change-diff marker: the
 	// controller only requests a migration when AnnoSelectedStorageNode differs
 	// from this value, so its own writes do not re-trigger a migration.
-	AnnoSelectedStorageNodeApplied = "simplyblock.io/selected-storage-node-applied"
+	AnnoSelectedStorageNodeApplied = "storage.simplyblock.io/selected-storage-node-applied"
 	// AnnoSelectedStorageNodeRejected records the last pinned-volume value the PVC
 	// controller's backstop validation rejected as an unknown storage node. It
 	// suppresses duplicate warning events while the invalid value remains in place.
-	AnnoSelectedStorageNodeRejected = "simplyblock.io/selected-storage-node-rejected"
+	AnnoSelectedStorageNodeRejected = "storage.simplyblock.io/selected-storage-node-rejected"
 	// AnnoPlacementHint is a one-shot creation-time placement hint: the volume-
 	// placement webhook writes it with the least-loaded node it picked, the CSI
 	// controller sends it as host_id at CreateVolume, and then removes it once the
 	// volume exists. Unlike AnnoSelectedStorageNode it is not a pin, and the
 	// volume stays eligible for rebalancing.
-	AnnoPlacementHint = "simplyblock.io/placement-hint"
+	AnnoPlacementHint = "storage.simplyblock.io/placement-hint"
 	// AnnoHostID is the legacy per-PVC placement annotation. It is honored by the
 	// CSI controller as a lowest-priority host_id fallback for pre-existing PVCs,
 	// but is never rewritten or removed by the provisioner. The volume-placement
 	// webhook rewrites a user-supplied host-id into AnnoSelectedStorageNode (a pin,
 	// matching its pre-migration behavior) on new PVCs.
-	AnnoHostID = "simplyblock.io/host-id"
+	AnnoHostID = "storage.simplyblock.io/host-id"
 	// DeprecatedAnnoHostID is the pre-rename form of AnnoHostID, still
 	// honored for backward compatibility.
 	DeprecatedAnnoHostID = "simplybk/host-id"
 	// Finalizer guards a PV/PVC from deletion until the backing logical
 	// volume is released.
-	Finalizer = "simplyblock.io/lvol-protection"
+	Finalizer = "storage.simplyblock.io/lvol-protection"
 )

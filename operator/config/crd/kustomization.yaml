@@ -7,6 +7,8 @@ resources:
 - bases/storage.simplyblock.io_storagepools.yaml
 - bases/storage.simplyblock.io_tasks.yaml
 - bases/storage.simplyblock.io_storagebackups.yaml
+- bases/storage.simplyblock.io_storagebackuppolicies.yaml
+- bases/storage.simplyblock.io_storagebackupops.yaml
 - bases/storage.simplyblock.io_backuprestores.yaml
 - bases/storage.simplyblock.io_backuppolicies.yaml
 - bases/storage.simplyblock.io_volumemigrations.yaml
@@ -22,6 +24,12 @@ resources:
 - bases/storage.simplyblock.io_storagedevices.yaml
 - bases/storage.simplyblock.io_clusterdeploymentconfigs.yaml
 - bases/storage.simplyblock.io_operatorops.yaml
+- bases/storage.simplyblock.io_volumegroupsnapshotops.yaml
+- bases/storage.simplyblock.io_simplyblockdrivers.yaml
+- bases/storage.simplyblock.io_storagepoolops.yaml
+- bases/storage.simplyblock.io_persistentvolumeops.yaml
+- bases/storage.simplyblock.io_controlplaneops.yaml
+- bases/storage.simplyblock.io_storagedeviceops.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches: []

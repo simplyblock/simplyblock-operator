@@ -1,0 +1,3 @@
+worker-01/nvme0n1p1: declined by whole disk because it is a Partition rather than a whole disk
+worker-01/nvme0n1p2: declined by whole disk because it is a Partition rather than a whole disk
+worker-01: declined by has devices because no device of it survived the device rules

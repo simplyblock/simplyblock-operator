@@ -1,0 +1,959 @@
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-32
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.32
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-31
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.31
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-30
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.30
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-29
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.29
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-28
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.28
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-27
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.27
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-26
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.26
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-25
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.25
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-24
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.24
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-23
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.23
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-22
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.22
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-21
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.21
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-20
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.20
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-19
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.19
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-18
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.18
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-17
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.17
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-16
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.16
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-15
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.15
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-14
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.14
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-13
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.13
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-12
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.12
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-11
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.11
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-10
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.10
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-09
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.9
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-08
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.8
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-07
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.7
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-06
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.6
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-05
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.5
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-04
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.4
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-03
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.3
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-02
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.2
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-01
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.1
+    type: InternalIP
+  allocatable:
+    cpu: 31500m
+    memory: 250Gi
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""

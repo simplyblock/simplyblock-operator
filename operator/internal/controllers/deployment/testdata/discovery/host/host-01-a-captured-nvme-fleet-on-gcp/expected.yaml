@@ -1,0 +1,36 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+    storage.simplyblock.io/nodeprobe-run: discover-host-01
+  name: discovered-discover-host-01
+  namespace: simplyblock
+spec:
+  approved: false
+  cluster:
+    enableDriveFormat: true
+    maxSubsystemCount: 30
+    name: discovered-discover-host-01-cluster
+    stripe:
+      dataChunks: 2
+      parityChunks: 1
+    vcpuCount: 4
+  environment: K3s
+  nodeSets:
+  - groups:
+    - devices:
+        nvme:
+        - "0000:00:04.0"
+      mgmtInterface: eth0
+      name: group-1-nvme-1x750G
+      workers:
+      - githubactions-storage-node-1
+      - githubactions-storage-node-2
+      - githubactions-storage-node-3
+      - githubactions-storage-node-4
+      - githubactions-storage-node-5
+      - githubactions-storage-node-6
+    name: discovered
+status:
+  step: {}

@@ -49,6 +49,9 @@
 //	                whether retrying can help.
 //	errs/deferrers  Deferred cleanup that logs its error instead of dropping it.
 //	locks           Scope a mutex to one function call, always unlocked by defer.
+//	bounded         Hard deadlines for calls no context reaches: a sysfs read,
+//	                an ioctl, a device open, a child process that cannot be
+//	                reaped.
 //	statemachine    Deterministic state machine declared as data, with entry
 //	                hooks and context deadlines.
 //	net             Reject URLs that are unsafe to forward to the backend.

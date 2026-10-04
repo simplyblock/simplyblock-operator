@@ -97,7 +97,7 @@ type ClusterAPI interface {
 	CreateSnapshot(ctx context.Context, lvolID, snapshotName string) (string, error)
 	ListSnapshots(ctx context.Context) ([]*SnapshotResp, error)
 	DeleteSnapshot(ctx context.Context, snapshotID string) error
-	CloneSnapshot(ctx context.Context, snapshotID, cloneName, newSize, pvcName string) (string, error)
+	CloneSnapshot(ctx context.Context, snapshotID, cloneName, newSize, pvcName, consistencyGroup string) (string, error)
 }
 
 // StoragePool represents a simplyblock storage pool returned by the cluster API.
@@ -457,18 +457,22 @@ func (client APIClient) cloneVolume(
 // cloneSnapshot creates a new volume from a snapshot, returning the new volume's UUID
 func (client APIClient) cloneSnapshot(
 	ctx context.Context,
-	poolID, snapshotID, cloneName, newSize, pvcName string,
+	poolID, snapshotID, cloneName, newSize, pvcName, consistencyGroup string,
 ) (string, error) {
 	params := struct {
 		Name       string `json:"name"`
 		SnapshotID string `json:"snapshot_id"`
 		Size       string `json:"size,omitempty"`
 		PVCName    string `json:"pvc_name,omitempty"`
+		// The restore PVC's consistency-group label: the clones form a NEW
+		// group at provisioning when it is set (design §7.2).
+		ConsistencyGroup string `json:"consistency_group,omitempty"`
 	}{
-		Name:       cloneName,
-		SnapshotID: snapshotID,
-		Size:       newSize,
-		PVCName:    pvcName,
+		Name:             cloneName,
+		SnapshotID:       snapshotID,
+		Size:             newSize,
+		PVCName:          pvcName,
+		ConsistencyGroup: consistencyGroup,
 	}
 
 	klog.V(5).Infof("cloneSnapshot size: %s", newSize)

@@ -92,19 +92,43 @@ File: `atlas-lib/volstack/runner_test.go` (new)
 
 File: `atlas-lib/volstack/layers/state_test.go` (new)
 
-| #    | Scenario                                                                                                                                                           | Type       | Test |
-|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|------|
-| U-30 | A device carrying no LVM signature classifies as `StateAbsent`                                                                                                     | Positive   | —    |
-| U-31 | A volume group with its logical volume present classifies as `StateReady`                                                                                          | Positive   | —    |
-| U-32 | A volume group present but reporting zero logical volumes classifies as `StatePartial`, not `StateReady`                                                           | Boundary   | —    |
-| U-33 | A volume group present, complete, and not activated classifies as `StateInactive`, not `StateAbsent`                                                               | Boundary   | —    |
-| U-34 | A device whose on-disk volume group belongs to another volume classifies as `StateForeign`                                                                         | Negative   | —    |
-| U-35 | `Ensure` on `StateInactive` activates and issues no `vgcreate`, `lvcreate`, or `mkfs`, asserted by the command runner's recorded calls                             | Negative   | —    |
-| U-36 | `Ensure` on `StateForeign` re-identifies before activating, asserted by the order of the recorded calls                                                            | Positive   | —    |
-| U-37 | `Ensure` on `StatePartial` completes the object and does not recreate the volume group                                                                             | Positive   | —    |
-| U-38 | An LVM probe whose output carries a `WARNING:` line ahead of the field value still classifies correctly, which a byte-level clone produces (pins PR #402 defect 7) | Regression | —    |
-| U-39 | A probe that fails outright classifies as `StateAbsent` rather than propagating an error, matching the "nothing to resolve" reading                                | Boundary   | —    |
-| U-40 | An unformatted device classifies as `StateAbsent` for the filesystem layer, and a formatted one as `StateInactive` when unmounted                                  | Positive   | —    |
+| #     | Scenario                                                                                                                                                                                                                                               | Type       | Test                                                                                                               |
+|-------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------------------------------------------------------------------|
+| U-30  | A device carrying no LVM signature classifies as `StateAbsent`                                                                                                                                                                                         | Positive   | —                                                                                                                  |
+| U-31  | A volume group with its logical volume present classifies as `StateReady`                                                                                                                                                                              | Positive   | —                                                                                                                  |
+| U-32  | A volume group present but reporting zero logical volumes classifies as `StatePartial`, not `StateReady`                                                                                                                                               | Boundary   | —                                                                                                                  |
+| U-33  | A volume group present, complete, and not activated classifies as `StateInactive`, not `StateAbsent`                                                                                                                                                   | Boundary   | —                                                                                                                  |
+| U-34  | A device whose on-disk volume group belongs to another volume classifies as `StateForeign`                                                                                                                                                             | Negative   | —                                                                                                                  |
+| U-35  | `Ensure` on `StateInactive` activates and issues no `vgcreate`, `lvcreate`, or `mkfs`, asserted by the command runner's recorded calls                                                                                                                 | Negative   | —                                                                                                                  |
+| U-36  | `Ensure` on `StateForeign` re-identifies before activating, asserted by the order of the recorded calls                                                                                                                                                | Positive   | —                                                                                                                  |
+| U-37  | `Ensure` on `StatePartial` completes the object and does not recreate the volume group                                                                                                                                                                 | Positive   | —                                                                                                                  |
+| U-38  | An LVM probe whose output carries a `WARNING:` line ahead of the field value still classifies correctly, which a byte-level clone produces (pins PR #402 defect 7)                                                                                     | Regression | —                                                                                                                  |
+| U-39  | A probe that fails outright classifies as `StateAbsent` rather than propagating an error, matching the "nothing to resolve" reading                                                                                                                    | Boundary   | —                                                                                                                  |
+| U-40  | An unformatted device classifies as `StateAbsent` for the filesystem layer, and a formatted one as `StateInactive` when unmounted                                                                                                                      | Positive   | —                                                                                                                  |
+| U-86  | A create tags the volume group `simplyblock.creating` before `lvcreate` and removes the tag after it, asserted by the order of the recorded calls (pins the 2026-09-26 interrupted `lvcreate --type vdo`, e2e run 36219557238)                         | Regression | `TestLVMVolumeCreateMarksTheGroupAroundLvcreate`                                                                   |
+| U-87  | `Ensure` on `StatePartial` over a group holding only the pool, under the marker, removes the pool before rerunning `lvcreate`, and takes the marker off only after the create                                                                          | Regression | `TestLVMVolumeRecoversItsOwnInterruptedPoolCreate`                                                                 |
+| U-88  | `Ensure` on `StatePartial` over a pool without the marker refuses, names the pool, and issues neither `lvremove` nor `lvcreate`                                                                                                                        | Regression | `TestLVMVolumeRefusesAPoolWithoutItsMarker`                                                                        |
+| U-89  | `Ensure` on `StatePartial` over the pool beside another volume refuses even with the marker present, names the other volume, and removes nothing                                                                                                       | Regression | `TestLVMVolumeRefusesAPoolBesideAnotherVolume`                                                                     |
+| U-90  | `Ensure` on `StatePartial` over a group holding a volume that is not this one, for a plain type, refuses and issues no `lvcreate`                                                                                                                      | Regression | `TestLVMVolumeRefusesAForeignVolumeInItsGroup`                                                                     |
+| U-91  | `Ensure` on `StateInactive` or `StateReady` over a group still carrying the marker clears it and creates nothing, so a failed `--deltag` after a successful `lvcreate` cannot leave stale permission behind                                            | Regression | `TestLVMVolumeClearsAStaleMarkerFromACompleteGroup`                                                                |
+| U-92  | Every mutation on a group (activate, deactivate, remove, extend, create a volume, remove, extend, and rename it, the marker operations, the informational tags) refuses a group without `storage.simplyblock.io` with `ErrNotOwned` and issues nothing | Negative   | `TestMutationsRefuseAGroupWithoutTheOwnerTag`                                                                      |
+| U-93  | A device-addressed mutation passes a device carrying no group, or no label at all, since there is nothing to protect and the removal behind it is convergent                                                                                           | Boundary   | `TestDeviceMutationsPassAnOrphanOrBlankDevice`                                                                     |
+| U-94  | A removal asked for a group that is not there stays convergent: the ownership check does not turn it into an error                                                                                                                                     | Boundary   | `TestRemovalsStayConvergentWhenTheGroupIsGone`                                                                     |
+| U-95  | `vgcreate` and `lvcreate` carry `--addtag storage.simplyblock.io`, so no group or volume of the driver's exists without the tag                                                                                                                        | Positive   | `TestManager_CreateVolumeGroup`, `TestManager_CreateLogicalVolume_NoPoolTargetsTheVolumeGroup`                     |
+| U-96  | Adoption tags the group and the volumes in it, and issues nothing else                                                                                                                                                                                 | Positive   | `TestAdoptVolumeGroupTagsTheGroupAndItsVolumes`                                                                    |
+| U-97  | The informational tags converge on what was asked: a stale claim is removed, a missing one added, other tags untouched, and a group already right issues nothing                                                                                       | Positive   | `TestReconcileInformationalTags`                                                                                   |
+| U-98  | A clone whose untagged source the recognizer knows is adopted on its device and then imported, and one it does not know is refused with nothing issued against it                                                                                      | Negative   | `TestResolveClonedVolumeGroupRecognizesOrRefusesAnUntaggedSource`                                                  |
+| U-99  | `lvmVolumeGroup` adopts an untagged group under its name that holds the volume under its name, tagging it before activating, and creates nothing                                                                                                       | Positive   | `TestLVMVolumeGroupAdoptsACompleteGroupMadeBeforeTheTag`                                                           |
+| U-100 | `lvmVolumeGroup` refuses an untagged group under its name that does not hold its volume, and neither activates, adopts, nor creates                                                                                                                    | Negative   | `TestLVMVolumeGroupRefusesAnUntaggedGroupWithoutItsVolume`                                                         |
+| U-101 | `lvmVolumeGroup` makes the informational tags current on every bring-up: the rebound claim is written and the stale one removed                                                                                                                        | Positive   | `TestLVMVolumeGroupKeepsItsInformationalTagsCurrent`                                                               |
+| U-102 | `lvmPhysicalVolume` refuses to re-identify a foreign group that carries no tag and that the recognizer does not know, issuing no `vgimportclone`, `lvrename`, or `pvcreate`                                                                            | Negative   | `TestLVMPVRefusesToReidentifyAGroupThatIsNotTheDrivers`                                                            |
+| U-103 | `lvmPhysicalVolume` adopts and re-identifies an untagged clone the recognizer knows                                                                                                                                                                    | Positive   | `TestLVMPVAdoptsAndReidentifiesARecognizedUntaggedClone`                                                           |
+| U-104 | `plans.RecognizeStack` accepts `vol-<uuid>` holding `lv-<uuid>` and nothing else                                                                                                                                                                       | Boundary   | —                                                                                                                  |
+| U-105 | The node service carries the PersistentVolume and claim names from the volume context into the plan's volume, and leaves them empty when the context names none                                                                                        | Positive   | `TestStackVolumeCarriesThePVAndClaimNames`                                                                         |
+| U-106 | `lvmVolumeGroup`'s release returns `ErrNotOwned` without reaching the device-mapper force path, since a refusal is not device loss                                                                                                                     | Negative   | `TestLVMVolumeGroupReleaseDoesNotUnmapAGroupThatIsNotItsOwn`                                                       |
+| U-107 | `lvmVolumeGroup` refuses to adopt an untagged group holding a foreign volume beside its own, tagging nothing                                                                                                                                           | Negative   | `TestLVMVolumeGroupRefusesToAdoptAGroupHoldingAForeignVolumeBesideItsOwn`                                          |
+| U-108 | Adoption tags the volumes before the group, and a clone's adoption does both on its device, so the group's tag is the commit of a retried adoption                                                                                                     | Positive   | `TestAdoptVolumeGroupTagsTheGroupAndItsVolumes`, `TestResolveClonedVolumeGroupRecognizesOrRefusesAnUntaggedSource` |
+| U-109 | A listing's value is read past the notices LVM prints first, so a `Please remove the lvm.conf filter` line never reads as a group without the tag                                                                                                      | Regression | `TestListingsSkipTheNoticesLVMPrintsFirst`                                                                         |
 
 ### Artifact and Geometry Propagation (design §4.3)
 
@@ -124,19 +148,45 @@ File: `atlas-lib/volstack/artifact_test.go` (new)
 
 File: `atlas-lib/volstack/record_test.go` (new)
 
-| #    | Scenario                                                                                                                                   | Type     | Test |
-|------|--------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-48 | The record is written before the first `Ensure` runs, asserted by the fakes observing the file already present                             | Positive | —    |
-| U-49 | The record holds layer parameters and no device path, so a reconnect that renames the device leaves it valid                               | Positive | —    |
-| U-50 | A per-layer marker is written before that layer's `Ensure`, not after                                                                      | Positive | —    |
-| U-51 | The record is removed only after the last `Release` succeeds                                                                               | Positive | —    |
-| U-52 | A `Release` that fails leaves the record in place, so the stack stays discoverable                                                         | Negative | —    |
-| U-53 | An absent record resolves to the legacy plan `fabric` → `filesystem`                                                                       | Negative | —    |
-| U-54 | A record naming an unknown layer fails the unstage with the layer named, rather than skipping the layer                                    | Negative | —    |
-| U-55 | A truncated or malformed record fails with an error and does not resolve to the legacy plan, because a partial record is not an absent one | Boundary | —    |
-| U-56 | Two volumes from two `StorageCluster`s produce distinct record filenames, because the volume handle carries the cluster ID                 | Positive | —    |
-| U-57 | The same PVC name in two namespaces produces distinct record filenames and distinct LVM names                                              | Positive | —    |
-| U-58 | A record filename is filesystem-safe for every volume handle the driver accepts                                                            | Boundary | —    |
+| #    | Scenario                                                                                                                                   | Type     | Test                                        |
+|------|--------------------------------------------------------------------------------------------------------------------------------------------|----------|---------------------------------------------|
+| U-48 | The record is written before the first `Ensure` runs, asserted by the fakes observing the file already present                             | Positive | —                                           |
+| U-49 | The record holds layer parameters and no device path, so a reconnect that renames the device leaves it valid                               | Positive | —                                           |
+| U-50 | A per-layer marker is written before that layer's `Ensure`, not after                                                                      | Positive | —                                           |
+| U-51 | The record is removed only after the last `Release` succeeds                                                                               | Positive | —                                           |
+| U-52 | A `Release` that fails leaves the record in place, so the stack stays discoverable                                                         | Negative | —                                           |
+| U-53 | An absent record resolves to the legacy plan `fabric` → `filesystem`                                                                       | Negative | `TestTeardownPlanFallsBackToTheLegacyShape` |
+| U-54 | A record naming an unknown layer fails the unstage with the layer named, rather than skipping the layer                                    | Negative | —                                           |
+| U-55 | A truncated or malformed record fails with an error and does not resolve to the legacy plan, because a partial record is not an absent one | Boundary | —                                           |
+| U-56 | Two volumes from two `StorageCluster`s produce distinct record filenames, because the volume handle carries the cluster ID                 | Positive | —                                           |
+| U-57 | The same PVC name in two namespaces produces distinct record filenames and distinct LVM names                                              | Positive | —                                           |
+| U-58 | A record filename is filesystem-safe for every volume handle the driver accepts                                                            | Boundary | —                                           |
+
+### Volumes This Driver Did Not Stage (design §6)
+
+File: `csi-driver/internal/csi/node/legacy_test.go`
+
+An upgraded host carries volumes with no stack record. Most of them have their
+stashed volume context, because the previous node service wrote one as the last
+step of every stage it finished; the rest are what a service that died in that
+window left, and they name themselves nowhere at all.
+
+| #    | Scenario                                                                                                                                | Type       | Test                                                     |
+|------|-----------------------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------|
+| U-86 | No record and no stashed context: the namespace is read off the host and the legacy plan is built                                       | Positive   | `TestTeardownNamesALegacyVolumeFromTheHost`              |
+| U-87 | The host cannot name it either: the refusal stands, and says what is missing                                                            | Negative   | `TestTeardownRefusesAVolumeTheHostCannotName`            |
+| U-88 | A stashed context that names the volume is used, and the host is never read                                                             | Boundary   | `TestTeardownPrefersTheStashOverTheHost`                 |
+| U-89 | A host reading naming a subsystem and no namespace is refused, because a zero NSID selects every namespace in it                        | Regression | `TestTeardownRefusesAHostReadingWithNoNamespace`         |
+| U-90 | A UUID alone, or an NQN beside a namespace id, each name one namespace and are accepted                                                 | Positive   | `TestTeardownAcceptsEitherWayOfNamingOneNamespace`       |
+| U-91 | The adapter reads the namespace off sysfs by device number and copies NQN, NSID, and UUID from what it found                            | Regression | `TestStagedIdentityReadsTheNamespaceOffSysfs`            |
+| U-92 | A staging path no namespace backs is an error rather than an empty connection                                                           | Negative   | `TestStagedIdentityFailsWhenNoNamespaceCarriesTheNumber` |
+| U-93 | A stash as the previous node service wrote it, with no record: the plan is derived from it, and releases the namespace its `nsId` names | Positive   | `TestALegacyStashIsDerivedIntoATeardownPlan`             |
+| U-94 | The same stash naming no filesystem, which is every volume of that era, still yields a plan that releases                               | Boundary   | `TestALegacyStashWithoutAFilesystemStillReleases`        |
+
+`U-89` and `U-91` are marked `Regression` for defects this work introduced and
+review caught: an identity resolved by comparing device paths, which finds
+nothing for a volume mounted from its by-id link, and a reading accepted while
+it named only a subsystem.
 
 ### LVM Naming and Primitives (design §5.3, §5.4)
 
@@ -185,6 +235,37 @@ File: `atlas-lib/volstack/optional_test.go` (new)
 | U-84 | `Grow` stops and reports when a lower layer's grow fails, and does not attempt the layers above it                                 | Negative | —    |
 | U-85 | `Heal` never calls `Ensure`, asserted by a zero call count, because the data already exists                                        | Negative | —    |
 
+### Bounded Kernel I/O and Device Presence
+
+Files: `atlas-lib/bounded/bounded_test.go`, `atlas-lib/internal/sysfs/sysfs_test.go`,
+`atlas-lib/nvme/identify_linux_test.go`, `atlas-lib/nvmeof/timeouts_test.go`,
+`csi-driver/internal/initiator/timeouts_test.go`, and
+`csi-driver/internal/initiator/presence_test.go` (all new)
+
+The regression cases pin two defects from run `lblk_outage_matrix_k8s-20261003-080237`:
+the reconnect monitor on worker-3 stopped at 08:56:59 and never reported a namespace
+the kernel removed at 08:58:45 (`2026-10-04-unbounded-nvme-io`), and devices the
+kernel still held were reported removed at 08:56:43 because `nvme list` left them out
+(`2026-10-04-presence-from-nvme-list`). A FIFO with no writer plays the stuck kernel
+call, and a fake `nvme` first on `PATH` plays the nvme-cli that cannot be reaped.
+
+| #     | Scenario                                                                                                                                  | Type       | Test                                               |
+|-------|-------------------------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------|
+| U-110 | A sysfs attribute read that never answers returns an error wrapping `context.DeadlineExceeded` within its budget                          | Regression | `TestReadAttrGivesUpOnAnAttributeThatNeverAnswers` |
+| U-111 | An Identify against a controller device that never answers returns a timeout within its budget (Linux only)                               | Regression | `TestIdentifyGivesUpOnAControllerThatNeverAnswers` |
+| U-112 | Opening a namespace device that never opens returns a timeout within its budget                                                           | Regression | `TestOpenDeviceGivesUpOnADeviceThatNeverOpens`     |
+| U-113 | An nvme-cli call returns by its deadline when a process it left behind holds the output pipe                                              | Regression | `TestRunCommandReturnsWhenTheProcessDoesNot`       |
+| U-114 | The monitor's device listing returns by its deadline when nvme-cli never releases its output                                              | Regression | `TestNVMeDevicesReturnsWhenNVMeCLIDoesNot`         |
+| U-115 | A `list-subsys` query still running after the query budget is given up on                                                                 | Regression | `TestSubsystemsForDeviceGivesUpOnASlowQuery`       |
+| U-116 | A second call on a key whose earlier call is still stuck fails at once and starts nothing, and the key clears once the stuck call returns | Negative   | `TestCallFailsAtOnceWhileTheSameKeyIsStuck`        |
+| U-117 | Concurrent calls on one healthy key all succeed, since only abandoned calls count as stuck                                                | Positive   | `TestConcurrentCallsOnAKeyAreNotStuck`             |
+| U-118 | A recorded device sysfs still has is not reported gone                                                                                    | Regression | `TestPruneKeepsADeviceSysfsStillHas`               |
+| U-119 | A recorded device sysfs no longer has is reported once, with its lvol                                                                     | Positive   | `TestPruneReportsADeviceSysfsNoLongerHasOnce`      |
+| U-120 | A sysfs scan that cannot be read reports nothing and keeps the record, so a later readable scan still reports the removal                 | Negative   | `TestPruneReportsNothingWhenSysfsCannotBeRead`     |
+| U-121 | A command killed at its deadline, or whose output a child still holds, returns an error wrapping `context.DeadlineExceeded`               | Regression | `TestCombinedOutputKillsAProcessAtTheDeadline`     |
+| U-122 | A device recorded by an attach while the presence scan runs is not reported gone by that scan                                             | Regression | `TestPruneLeavesADeviceRecordedDuringTheScan`      |
+| U-123 | A monitor tick whose path repair fails still reports the devices the kernel removed                                                       | Regression | `TestTickReportsGoneDevicesWhenPathRepairFails`    |
+
 ---
 
 ## 2. Integration Tests
@@ -211,17 +292,42 @@ File: `atlas-lib/volstack/resume_test.go` (new)
 | I-09 | Two records for the same volume handle cannot exist, and a second `Up` reuses the first                                                             | Boundary | —    |
 | I-10 | 100 records on one host are enumerated and classified without exceeding the enumeration's bound, and the time is recorded                           | Boundary | —    |
 
+### Naming a Staged Volume on a Real Kernel (design §6)
+
+File: `test/integration/onnode/legacy_identity_test.go`
+
+What a fake cannot answer: whether the reading the fallback makes is the reading
+the kernel gives, for a volume mounted the way the previous node service mounted
+one, which is from the by-id link its initiator handed back rather than from the
+path sysfs records.
+
+| #    | Scenario                                                                                                                  | Type       | Test                                               |
+|------|---------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------|
+| I-16 | A stack staged by hand with no record is released by a plan rebuilt from the connection, and the record and mount both go | Positive   | `TestALegacyStackIsReleasedByAReconstructedPlan`   |
+| I-17 | A volume mounted from its by-id link is named from its staging path                                                       | Regression | `TestTheHostNamesAVolumeMountedByItsByIDPath`      |
+| I-18 | A raw block volume is named from its device file, which is the other shape a staged volume takes                          | Positive   | `TestTheHostNamesARawBlockVolumeFromItsDeviceFile` |
+
+`I-16` covers the release half of `E-23`. The image swap that row describes is
+still uncovered: the suite deploys one driver image, so nothing stages with the
+previous one and unstages with this one.
+
 ### Verb Contract Under a Dead Foundation (design §7.4)
 
 File: `atlas-lib/volstack/deadfoundation_test.go` (new)
 
-| #    | Scenario                                                                                                                                                           | Type       | Test |
-|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|------|
-| I-11 | Every layer's `Release` succeeds when the layer below reports `StateAbsent`                                                                                        | Positive   | —    |
-| I-12 | `lvmVolume`'s `Release` falls back to the device-mapper force path when the LVM command fails on every retry, and the fallback is recorded (pins PR #402 defect 8) | Regression | —    |
-| I-13 | `filesystem`'s `Release` unmounts a dead mount rather than erroring on it                                                                                          | Positive   | —    |
-| I-14 | A layer with no force path whose command depends on a dead foundation reports the failure and leaves the record in place                                           | Negative   | —    |
-| I-15 | `Down` over a stack whose every layer is already gone completes and removes the record                                                                             | Boundary   | —    |
+| #    | Scenario                                                                                                                                                                                                                                        | Type       | Test                                                    |
+|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|---------------------------------------------------------|
+| I-11 | Every layer's `Release` succeeds when the layer below reports `StateAbsent`                                                                                                                                                                     | Positive   | —                                                       |
+| I-12 | `lvmVolume`'s `Release` falls back to the device-mapper force path when the LVM command fails on every retry, and the fallback is recorded (pins PR #402 defect 8)                                                                              | Regression | —                                                       |
+| I-13 | `filesystem`'s `Release` unmounts a dead mount rather than erroring on it                                                                                                                                                                       | Positive   | —                                                       |
+| I-14 | A layer with no force path whose command depends on a dead foundation reports the failure and leaves the record in place                                                                                                                        | Negative   | —                                                       |
+| I-15 | `Down` over a stack whose every layer is already gone completes and removes the record                                                                                                                                                          | Boundary   | —                                                       |
+| I-16 | Every layer's `Observe` reports a state rather than an error when the layer below exposes no device, which is what `Destroy` surveys after `Down` has detached the fabric (pins the unstage that retried forever and never released the volume) | Regression | `TestObserveWithNoDeviceBelowReportsAbsentWithoutError` |
+| I-17 | `filesystem`'s `Observe` still reports the mount total path loss left behind, so the release that clears it is not skipped                                                                                                                      | Negative   | `TestObserveWithNoDeviceBelowStillReportsALiveMount`    |
+| I-18 | `Absent` from that reading is never permission to format, because `Ensure` refuses an empty artifact before it observes anything                                                                                                                | Negative   | `TestEnsureRefusesAnEmptyArtifactBeforeObserving`       |
+| I-19 | On a node: a group the driver makes carries the owner tag and its lvol tag, and so does the volume inside it (`test/integration/onnode/ownership_test.go`)                                                                                      | Positive   | `TestLVMStackTagsWhatItMakes`                           |
+| I-20 | On a node: a volume made before the tag, stripped of every tag, is adopted on its next bring-up, serves its data, and carries the tag afterward                                                                                                 | Positive   | `TestLVMStackAdoptsAVolumeMadeBeforeTheTag`             |
+| I-21 | On a node: a hand-made group under the driver's name holding somebody's volume, and one under another name, are both refused, and each reads back unchanged with its bytes intact                                                               | Negative   | `TestLVMStackRefusesAGroupThatIsNotItsOwn`              |
 
 ---
 
@@ -398,16 +504,20 @@ nobody will release.
 
 | Class          | Scenarios | Covered | Not covered                           |
 |----------------|-----------|---------|---------------------------------------|
-| Unit           | 85        | 3       | U-01 … U-70, U-73 … U-76, U-78 … U-85 |
-| Integration    | 15        | 0       | I-01 … I-15                           |
+| Unit           | 109       | 27      | U-01 … U-70, U-73 … U-76, U-78 … U-85 |
+| Integration    | 21        | 3       | I-01 … I-18                           |
 | E2E            | 27        | 10      | E-11 … E-27                           |
 | Unit — Phase 4 | 7         | 0       | U-P4-01 … U-P4-07                     |
 | Manual         | 4         | 0       | M-01 … M-04                           |
 
-The three covered unit scenarios are existing tests whose behavior this design
-preserves rather than introduces: `TestDisconnectGlobOnLastNamespace` (U-71),
-`TestDisconnectGlobOnRealNode` (U-72), and
-`TestMatchNamespaceDeviceRejectsNeighbouringNamespaces` (U-77). The ten covered
+Three of the covered unit scenarios are existing tests whose behavior this
+design preserves rather than introduces: `TestDisconnectGlobOnLastNamespace`
+(U-71), `TestDisconnectGlobOnRealNode` (U-72), and
+`TestMatchNamespaceDeviceRejectsNeighbouringNamespaces` (U-77). Six more
+(U-86 … U-91) pin the interrupted-create recovery of 2026-09-26 and are in
+`atlas-lib/volstack/layers/lvmvolume_test.go`, and eighteen (U-92 … U-109) cover the ownership tags of design §5.7 across `atlas-lib/lvm`, the
+layers, and the node service. The three covered integration scenarios are the
+on-node ownership cases in `test/integration/onnode/ownership_test.go`. The ten covered
 end-to-end scenarios are the existing suite, which is the assertion that Phase 1
 changes nothing observable (design §16).
 

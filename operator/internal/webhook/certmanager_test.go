@@ -16,6 +16,14 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
+// The serving material the fake secret carries, so that an assertion says which
+// of the three it is looking at.
+const (
+	testCAData   = "CA-DATA"
+	testCertData = "CRT-DATA"
+	testKeyData  = "KEY-DATA"
+)
+
 func newProvisioner(t *testing.T, objs ...client.Object) *certManagerProvisioner {
 	t.Helper()
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(objs...).Build()
@@ -59,7 +67,7 @@ func validatingWebhookConfig() *admissionregistrationv1.ValidatingWebhookConfigu
 }
 
 func TestReconcileCertWritesFilesAndInjectsCA(t *testing.T) {
-	p := newProvisioner(t, servingSecret("CA-DATA", "CRT-DATA", "KEY-DATA"), webhookConfig(), validatingWebhookConfig())
+	p := newProvisioner(t, servingSecret(testCAData, testCertData, testKeyData), webhookConfig(), validatingWebhookConfig())
 
 	if err := p.reconcileCert(context.Background()); err != nil {
 		t.Fatalf("reconcileCert: %v", err)
@@ -80,8 +88,8 @@ func TestReconcileCertWritesFilesAndInjectsCA(t *testing.T) {
 	if err := p.client.Get(context.Background(), types.NamespacedName{Name: utils.WebhookConfigurationName}, &whc); err != nil {
 		t.Fatalf("get webhook config: %v", err)
 	}
-	if got := string(whc.Webhooks[0].ClientConfig.CABundle); got != "CA-DATA" {
-		t.Fatalf("caBundle = %q, want %q", got, "CA-DATA")
+	if got := string(whc.Webhooks[0].ClientConfig.CABundle); got != testCAData {
+		t.Fatalf("caBundle = %q, want %q", got, testCAData)
 	}
 
 	// caBundle also injected into the validating configuration.
@@ -89,11 +97,11 @@ func TestReconcileCertWritesFilesAndInjectsCA(t *testing.T) {
 	if err := p.client.Get(context.Background(), types.NamespacedName{Name: utils.WebhookValidatingConfigurationName}, &vwhc); err != nil {
 		t.Fatalf("get validating webhook config: %v", err)
 	}
-	if got := string(vwhc.Webhooks[0].ClientConfig.CABundle); got != "CA-DATA" {
-		t.Fatalf("validating caBundle = %q, want %q", got, "CA-DATA")
+	if got := string(vwhc.Webhooks[0].ClientConfig.CABundle); got != testCAData {
+		t.Fatalf("validating caBundle = %q, want %q", got, testCAData)
 	}
 
-	// readiness signalled.
+	// readiness signaled.
 	select {
 	case <-p.ready:
 	default:
