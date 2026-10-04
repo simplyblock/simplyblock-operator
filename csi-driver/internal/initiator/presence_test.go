@@ -18,9 +18,15 @@ import (
 type sysfsDevices struct {
 	paths []string
 	err   error
+	// duringScan runs inside List, after the snapshot is taken, which is where
+	// an attach running beside the monitor lands.
+	duringScan func()
 }
 
 func (s sysfsDevices) List(context.Context) ([]atlasnvme.Device, error) {
+	if s.duringScan != nil {
+		defer s.duringScan()
+	}
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -58,6 +64,7 @@ func withSysfs(t *testing.T, devices sysfsDevices) {
 		presenceMu.Lock()
 		clear(devicePresent)
 		clear(deviceLvolID)
+		clear(deviceGen)
 		presenceMu.Unlock()
 	})
 }
@@ -110,5 +117,32 @@ func TestPruneReportsNothingWhenSysfsCannotBeRead(t *testing.T) {
 	missing := PruneMissingDevices(context.Background())
 	if len(missing) != 1 || missing[0].LvolID != "edb5ab15-4417-46f0-b99a-3610034e6917" {
 		t.Fatalf("after the scan recovered, PruneMissingDevices = %v, want the removed device reported", missing)
+	}
+}
+
+// An attach can record its device after the scan took its snapshot, and that
+// device is in the record and not in the snapshot only because it is newer than
+// the snapshot. Reading it as removed marks a volume broken the moment it was
+// staged.
+//
+// Regression: 2026-10-04-presence-from-nvme-list — the Copilot review of #628
+// found the record and the scan were not ordered against each other.
+func TestPruneLeavesADeviceRecordedDuringTheScan(t *testing.T) {
+	withSysfs(t, sysfsDevices{
+		paths: []string{"/dev/nvme0n1"},
+		duringScan: func() {
+			MarkDevicePresent("/dev/nvme5n1", "c677ce00-027e-4379-8358-bf136ebd7b85")
+		},
+	})
+	MarkDevicePresent("/dev/nvme0n1", "4e8f8a42-01b6-4e36-8f6e-885d6f7a50f9")
+
+	if missing := PruneMissingDevices(context.Background()); len(missing) != 0 {
+		t.Fatalf("PruneMissingDevices reported %v gone, a device recorded while it scanned", missing)
+	}
+
+	// The next scan sees it, and still does not report it.
+	presenceDevices = sysfsDevices{paths: []string{"/dev/nvme0n1", "/dev/nvme5n1"}}
+	if missing := PruneMissingDevices(context.Background()); len(missing) != 0 {
+		t.Fatalf("PruneMissingDevices reported %v gone on the scan after it was recorded", missing)
 	}
 }

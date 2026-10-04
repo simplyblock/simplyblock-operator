@@ -32,6 +32,14 @@ var (
 	devicePresent = make(map[string]bool)
 	deviceLvolID  = make(map[string]string)
 
+	// presenceGen counts records, and deviceGen holds the count at which each
+	// device was last recorded. A prune compares a record only against a scan
+	// that began after it, because an attach running beside the monitor can
+	// record a device after the scan's snapshot was taken, and that device is
+	// missing from the snapshot for no other reason than being newer than it.
+	presenceGen uint64
+	deviceGen   = make(map[string]uint64)
+
 	// presenceDevices answers which namespace devices the kernel has. A
 	// variable so tests can stand in for sysfs.
 	presenceDevices atlasnvme.DeviceResolver = atlasnvme.NewSysfsDeviceResolver(atlasnvme.SysfsConfig{})
@@ -52,6 +60,8 @@ func MarkDevicePresent(devicePath, lvolID string) {
 	defer presenceMu.Unlock()
 	devicePresent[devicePath] = true
 	deviceLvolID[devicePath] = lvolID
+	presenceGen++
+	deviceGen[devicePath] = presenceGen
 }
 
 // ForgetDevice drops devicePath from the record, for a teardown this node
@@ -62,6 +72,7 @@ func ForgetDevice(devicePath string) {
 	defer presenceMu.Unlock()
 	delete(devicePresent, devicePath)
 	delete(deviceLvolID, devicePath)
+	delete(deviceGen, devicePath)
 }
 
 // PruneMissingDevices compares the record against the namespace devices sysfs
@@ -72,7 +83,14 @@ func ForgetDevice(devicePath string) {
 // A scan that fails, including one that timed out, reports nothing and keeps the
 // record as it is. A scan that cannot be read says nothing about what is gone,
 // and reading it as "no devices" would report every volume on the node broken.
+//
+// A device recorded while the scan ran is left for the next one, which is the
+// first scan able to have seen it.
 func PruneMissingDevices(ctx context.Context) []MissingDevice {
+	presenceMu.Lock()
+	scanGen := presenceGen
+	presenceMu.Unlock()
+
 	devices, err := presenceDevices.List(ctx)
 	if err != nil {
 		klog.Warningf("presence: cannot read the namespace devices from sysfs, checking again next tick: %v", err)
@@ -88,12 +106,13 @@ func PruneMissingDevices(ctx context.Context) []MissingDevice {
 
 	var missing []MissingDevice
 	for devicePath := range devicePresent {
-		if current[devicePath] {
+		if current[devicePath] || deviceGen[devicePath] > scanGen {
 			continue
 		}
 		lvolID := deviceLvolID[devicePath]
 		delete(devicePresent, devicePath)
 		delete(deviceLvolID, devicePath)
+		delete(deviceGen, devicePath)
 		if lvolID != "" {
 			missing = append(missing, MissingDevice{DevicePath: devicePath, LvolID: lvolID})
 		}

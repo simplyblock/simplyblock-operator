@@ -262,6 +262,9 @@ call, and a fake `nvme` first on `PATH` plays the nvme-cli that cannot be reaped
 | U-118 | A recorded device sysfs still has is not reported gone                                                                                    | Regression | `TestPruneKeepsADeviceSysfsStillHas`               |
 | U-119 | A recorded device sysfs no longer has is reported once, with its lvol                                                                     | Positive   | `TestPruneReportsADeviceSysfsNoLongerHasOnce`      |
 | U-120 | A sysfs scan that cannot be read reports nothing and keeps the record, so a later readable scan still reports the removal                 | Negative   | `TestPruneReportsNothingWhenSysfsCannotBeRead`     |
+| U-121 | A command killed at its deadline, or whose output a child still holds, returns an error wrapping `context.DeadlineExceeded`               | Regression | `TestCombinedOutputKillsAProcessAtTheDeadline`     |
+| U-122 | A device recorded by an attach while the presence scan runs is not reported gone by that scan                                             | Regression | `TestPruneLeavesADeviceRecordedDuringTheScan`      |
+| U-123 | A monitor tick whose path repair fails still reports the devices the kernel removed                                                       | Regression | `TestTickReportsGoneDevicesWhenPathRepairFails`    |
 
 ---
 
