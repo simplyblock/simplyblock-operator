@@ -13,6 +13,7 @@ package v1alpha1
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -189,5 +190,46 @@ func TestStorageNodeOpsRoundTripsThroughTheHub(t *testing.T) {
 
 	if diff := cmp.Diff(obj, &back); diff != "" {
 		t.Errorf("round trip changed the object (-before +after):\n%s", diff)
+	}
+}
+
+// Regression: 2026-10-02-removal-status-lost-in-conversion (PR #612 review): the
+// removal's progress record is hub-only and was not stashed, so a hub to v1alpha1
+// to hub round trip dropped it. A v1alpha1 status write then reset the progress
+// baseline and granted a stalled removal another full budget.
+func TestStorageNodeOpsKeepsTheRemovalRecordThroughV1Alpha1(t *testing.T) {
+	progressed := metav1.NewTime(metav1.Now().Rfc3339Copy().Time)
+	retried := metav1.NewTime(progressed.Add(-time.Minute))
+	hub := &v1alpha2.StorageNodeOps{
+		ObjectMeta: metav1.ObjectMeta{Name: "remove-1", Namespace: "sb"},
+		Spec: v1alpha2.StorageNodeOpsSpec{
+			NodeRef: "node-1", Action: v1alpha2.StorageNodeOpsActionRemove,
+		},
+		Status: v1alpha2.StorageNodeOpsStatus{
+			Phase: v1alpha2.StorageNodeOpsPhaseRunning,
+			Removal: &v1alpha2.RemovalStatus{
+				NodeStatus:       "migrating_devices",
+				Devices:          map[string]string{"dev-a": "failed_and_migrated", "dev-b": "failed"},
+				LastProgressTime: &progressed,
+				PrepareAttempts:  1,
+				LastPrepareTime:  &retried,
+			},
+		},
+	}
+
+	var old StorageNodeOps
+	if err := old.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StorageNodeOps
+	if err := old.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if diff := cmp.Diff(hub.Status.Removal, back.Status.Removal); diff != "" {
+		t.Errorf("the removal record changed through v1alpha1 (-before +after):\n%s", diff)
+	}
+	if len(back.Annotations) != 0 {
+		t.Errorf("the conversion left annotations behind: %v", back.Annotations)
 	}
 }

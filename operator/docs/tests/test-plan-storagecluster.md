@@ -99,17 +99,18 @@ File: `operator/internal/controllers/cluster/storagecluster_controller_test.go`
 
 File: `operator/internal/controllers/cluster/storagecluster_controller_test.go`
 
-| #    | Scenario                                                                                      | Type     | Test                                                                                       |
-|------|-----------------------------------------------------------------------------------------------|----------|--------------------------------------------------------------------------------------------|
-| U-21 | Backend reports the same status, NQN, and rebalancing flag: no patch issued                   | Boundary | —                                                                                          |
-| U-22 | Backend status changed: status patched and requeued                                           | Positive | `TestTheEffectiveRestartLimitIsClampedToTheFaultTolerance`                                 |
-| U-23 | Backend read fails: requeue, status left untouched                                            | Negative | —                                                                                          |
-| U-24 | Per-cluster Secret missing: sync proceeds without the credentials upsert                      | Boundary | `TestTheTaskWindowHoldsOnlyWhatIsRunning`                                                  |
-| U-69 | `status.phase` follows the control plane's lifecycle string                                   | Positive | `TestThePhaseFollowsTheControlPlanesStatus`                                                |
-| U-99 | A rebalance is read as the phase over `active` and `degraded`, and over no not-serving status | Positive | `TestARebalancingClusterReportsItsPhase`, `TestARebalanceIsReadOverTheServingStatusesOnly` |
-| U-70 | `status.tasks` holds running and pending only, capped at 20, in the control plane's order     | Boundary | `TestTheTaskWindowHoldsOnlyWhatIsRunning`                                                  |
-| U-71 | A task that leaves the window emits `TaskCompleted`                                           | Positive | `TestATaskLeavingTheWindowEmitsAnEvent`                                                    |
-| U-72 | The task read fails: the recorded window is kept rather than emptied                          | Negative | `TestAFailedTaskReadLeavesTheWindowAlone`                                                  |
+| #     | Scenario                                                                                                     | Type       | Test                                                                                       |
+|-------|--------------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------------------------------------------|
+| U-21  | Backend reports the same status, NQN, and rebalancing flag: no patch issued                                  | Boundary   | —                                                                                          |
+| U-22  | Backend status changed: status patched and requeued                                                          | Positive   | `TestTheEffectiveRestartLimitIsClampedToTheFaultTolerance`                                 |
+| U-23  | Backend read fails: requeue, status left untouched                                                           | Negative   | —                                                                                          |
+| U-24  | Per-cluster Secret missing: sync proceeds without the credentials upsert                                     | Boundary   | `TestTheTaskWindowHoldsOnlyWhatIsRunning`                                                  |
+| U-69  | `status.phase` follows the control plane's lifecycle string                                                  | Positive   | `TestThePhaseFollowsTheControlPlanesStatus`                                                |
+| U-99  | A rebalance is read as the phase over `active` and `degraded`, and over no not-serving status                | Positive   | `TestARebalancingClusterReportsItsPhase`, `TestARebalanceIsReadOverTheServingStatusesOnly` |
+| U-100 | A removal in progress is read as `Shrinking` over `active` and `degraded`, and over a rebalance (2026-10-02) | Regression | `TestAShrinkingClusterReportsItsPhase`, `TestARemovalInProgressReadsAsShrinking`           |
+| U-70  | `status.tasks` holds running and pending only, capped at 20, in the control plane's order                    | Boundary   | `TestTheTaskWindowHoldsOnlyWhatIsRunning`                                                  |
+| U-71  | A task that leaves the window emits `TaskCompleted`                                                          | Positive   | `TestATaskLeavingTheWindowEmitsAnEvent`                                                    |
+| U-72  | The task read fails: the recorded window is kept rather than emptied                                         | Negative   | `TestAFailedTaskReadLeavesTheWindowAlone`                                                  |
 
 `U-72` is the row worth reading twice. An empty `status.tasks` means nothing is
 running, and a failed read does not say that, so a control plane that cannot be
@@ -528,32 +529,33 @@ Files: `operator/internal/cpinformer/subscriptions/cluster_test.go`,
 `.../task_test.go`, and
 `operator/internal/controllers/cluster/streams_test.go`.
 
-| #       | Scenario                                                                                              | Type     | Test                                                   |
-|---------|-------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------------|
-| U-CP-01 | An `updated` cluster event enqueues exactly one reconcile for the matching `StorageCluster`           | Positive | `TestAClusterUpdateMovesTheCacheAndTriggers`           |
-| U-CP-02 | An event for a cluster UUID no CR references enqueues nothing                                         | Negative | `TestAnUnregisteredClusterIsCachedButNotTriggered`     |
-| U-CP-03 | Status is written from the streamed DTO without a read of the control plane                           | Positive | `TestTheEntityReadsTheClusterStream`                   |
-| U-CP-04 | Streamed state identical to `status`: no patch issued                                                 | Boundary | —                                                      |
-| U-CP-05 | A step whose predicate is already satisfied by the first snapshot advances without waiting            | Boundary | `TestAnOperationReadsTheClusterStream`                 |
-| U-CP-06 | Coalesced delivery skipping `offline` and `in_restart`: a step waiting for `offline` accepts `online` | Boundary | `TestAnAlreadyOfflineNodeIsNotShutDownAgain`           |
-| U-CP-07 | Coalesced delivery skipping past `rebalancing`: the walk advances to the next node                    | Boundary | `TestTheRebalancingWaitReadsTheClusterStream`          |
-| U-CP-08 | A reconnect snapshot replaces its scope rather than merging into it                                   | Boundary | `TestAClusterSnapshotReplacesRatherThanMerges`         |
-| U-CP-09 | An unsynced scope is not read: the control plane answers until the snapshot lands                     | Boundary | `TestAnUnsyncedClusterCacheFallsBackToTheControlPlane` |
-| U-CP-10 | `AwaitingPod` still uses pod readiness rather than a stream, because a pod is a Kubernetes object     | Boundary | —                                                      |
-| U-CP-11 | Cluster creation still probes `/_meta/ready` directly, because no stream carries readiness            | Boundary | `TestAControlPlaneThatIsNotReadyHoldsTheCreation`      |
-| U-CP-12 | Two `StorageCluster` CRs in different namespaces served by the one root-scoped subscription           | Boundary | —                                                      |
-| U-CP-13 | `status.tasks` is filled from the task stream rather than from a read per pass                        | Positive | `TestTheTaskWindowIsBuiltFromTheTaskStream`            |
-| U-CP-14 | The cluster stream takes no path parameter and its scope is empty                                     | Positive | `TestTheClusterStreamIsRootScoped`                     |
-| U-CP-15 | A cluster snapshot caches every cluster and marks the one scope synced                                | Positive | `TestAClusterSnapshotCachesAndSyncs`                   |
-| U-CP-16 | Unregistering a cluster stops the subscription naming its object                                      | Negative | `TestUnregisteringAClusterStopsItsTriggers`            |
-| U-CP-17 | The task stream is scoped per cluster                                                                 | Positive | `TestTheTaskStreamIsScopedPerCluster`                  |
-| U-CP-18 | A task snapshot caches every task and marks the cluster's scope synced                                | Positive | `TestATaskSnapshotCachesAndSyncs`                      |
-| U-CP-19 | Only `done` and a canceled flag finish a task; `suspended` is one that is waiting                     | Boundary | `TestOnlyDoneAndCanceledTasksAreFinished`              |
-| U-CP-20 | A task reaching a terminal status still triggers, because leaving the window is a change              | Positive | `TestATaskReachingDoneStillTriggers`                   |
-| U-CP-21 | A task of an unadopted cluster is cached and not triggered                                            | Negative | `TestTasksOfAnUnregisteredClusterAreNotTriggered`      |
-| U-CP-22 | A reconnect snapshot drops a task that ended while the stream was down                                | Boundary | `TestATaskSnapshotReplacesRatherThanMerges`            |
-| U-CP-23 | A `CancelTask` reads the task stream, and does not finish on a suspended task                         | Boundary | `TestCancelTaskReadsTheTaskStream`                     |
-| U-CP-24 | An unsynced task cache is not read as "no task is running"                                            | Boundary | `TestAnUnsyncedTaskCacheFallsBackToTheControlPlane`    |
+| #       | Scenario                                                                                              | Type       | Test                                                                                 |
+|---------|-------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------------------------------------|
+| U-CP-01 | An `updated` cluster event enqueues exactly one reconcile for the matching `StorageCluster`           | Positive   | `TestAClusterUpdateMovesTheCacheAndTriggers`                                         |
+| U-CP-02 | An event for a cluster UUID no CR references enqueues nothing                                         | Negative   | `TestAnUnregisteredClusterIsCachedButNotTriggered`                                   |
+| U-CP-03 | Status is written from the streamed DTO without a read of the control plane                           | Positive   | `TestTheEntityReadsTheClusterStream`                                                 |
+| U-CP-04 | Streamed state identical to `status`: no patch issued                                                 | Boundary   | —                                                                                    |
+| U-CP-05 | A step whose predicate is already satisfied by the first snapshot advances without waiting            | Boundary   | `TestAnOperationReadsTheClusterStream`                                               |
+| U-CP-06 | Coalesced delivery skipping `offline` and `in_restart`: a step waiting for `offline` accepts `online` | Boundary   | `TestAnAlreadyOfflineNodeIsNotShutDownAgain`                                         |
+| U-CP-07 | Coalesced delivery skipping past `rebalancing`: the walk advances to the next node                    | Boundary   | `TestTheRebalancingWaitReadsTheClusterStream`                                        |
+| U-CP-08 | A reconnect snapshot replaces its scope rather than merging into it                                   | Boundary   | `TestAClusterSnapshotReplacesRatherThanMerges`                                       |
+| U-CP-09 | An unsynced scope is not read: the control plane answers until the snapshot lands                     | Boundary   | `TestAnUnsyncedClusterCacheFallsBackToTheControlPlane`                               |
+| U-CP-10 | `AwaitingPod` still uses pod readiness rather than a stream, because a pod is a Kubernetes object     | Boundary   | —                                                                                    |
+| U-CP-11 | Cluster creation still probes `/_meta/ready` directly, because no stream carries readiness            | Boundary   | `TestAControlPlaneThatIsNotReadyHoldsTheCreation`                                    |
+| U-CP-12 | Two `StorageCluster` CRs in different namespaces served by the one root-scoped subscription           | Boundary   | —                                                                                    |
+| U-CP-13 | `status.tasks` is filled from the task stream rather than from a read per pass                        | Positive   | `TestTheTaskWindowIsBuiltFromTheTaskStream`                                          |
+| U-CP-14 | The cluster stream takes no path parameter and its scope is empty                                     | Positive   | `TestTheClusterStreamIsRootScoped`                                                   |
+| U-CP-15 | A cluster snapshot caches every cluster and marks the one scope synced                                | Positive   | `TestAClusterSnapshotCachesAndSyncs`                                                 |
+| U-CP-25 | A cluster reporting `is_shrinking` decodes it, from the stream and from the detail read (2026-10-02)  | Regression | `TestAClusterReadsTheShrinkingFlag`, `TestParseClusterResponseReadsTheShrinkingFlag` |
+| U-CP-16 | Unregistering a cluster stops the subscription naming its object                                      | Negative   | `TestUnregisteringAClusterStopsItsTriggers`                                          |
+| U-CP-17 | The task stream is scoped per cluster                                                                 | Positive   | `TestTheTaskStreamIsScopedPerCluster`                                                |
+| U-CP-18 | A task snapshot caches every task and marks the cluster's scope synced                                | Positive   | `TestATaskSnapshotCachesAndSyncs`                                                    |
+| U-CP-19 | Only `done` and a canceled flag finish a task; `suspended` is one that is waiting                     | Boundary   | `TestOnlyDoneAndCanceledTasksAreFinished`                                            |
+| U-CP-20 | A task reaching a terminal status still triggers, because leaving the window is a change              | Positive   | `TestATaskReachingDoneStillTriggers`                                                 |
+| U-CP-21 | A task of an unadopted cluster is cached and not triggered                                            | Negative   | `TestTasksOfAnUnregisteredClusterAreNotTriggered`                                    |
+| U-CP-22 | A reconnect snapshot drops a task that ended while the stream was down                                | Boundary   | `TestATaskSnapshotReplacesRatherThanMerges`                                          |
+| U-CP-23 | A `CancelTask` reads the task stream, and does not finish on a suspended task                         | Boundary   | `TestCancelTaskReadsTheTaskStream`                                                   |
+| U-CP-24 | An unsynced task cache is not read as "no task is running"                                            | Boundary   | `TestAnUnsyncedTaskCacheFallsBackToTheControlPlane`                                  |
 
 `U-CP-09` and `U-CP-24` are the rows with teeth. An unsynced cache is empty,
 and empty is not an answer: read as one it reports a live cluster gone, a

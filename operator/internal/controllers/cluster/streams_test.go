@@ -113,6 +113,37 @@ func TestARebalancingClusterReportsItsPhase(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-02-cluster-shrinking-reads-degraded: a cluster whose node
+// was being removed showed Degraded and Rebalancing in turn on the reconciled
+// object, rather than the removal that caused both.
+func TestAShrinkingClusterReportsItsPhase(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		want   simplyblockv1alpha2.StorageClusterPhase
+	}{
+		{"active", simplyblockv1alpha2.StorageClusterPhaseShrinking},
+		{"degraded", simplyblockv1alpha2.StorageClusterPhaseShrinking},
+		{"suspended", simplyblockv1alpha2.StorageClusterPhaseSuspended},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			api := &fakeControlPlane{}
+			refuseClusterReads(t, api)
+			r := newClusterReconciler(t, api, &recorder{}, newTestCluster())
+			r.Clusters = streamedCluster(func(dto *subscriptions.ClusterDTO) {
+				dto.Status = tc.status
+				dto.Rebalancing = true
+				dto.Shrinking = true
+			})
+
+			cluster := reconcileCluster(t, r, 1)
+			if cluster.Status.Phase != tc.want {
+				t.Errorf("phase = %q for a shrinking %s cluster, want %q",
+					cluster.Status.Phase, tc.status, tc.want)
+			}
+		})
+	}
+}
+
 // An unsynced cache is not read. A cluster missing from one and a cluster the
 // control plane has forgotten look identical, and reading the first as the
 // second would report a live cluster as gone.

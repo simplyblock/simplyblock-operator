@@ -942,6 +942,7 @@ func (r *StorageClusterOpsReconciler) clusterReading(
 		NQN:               response.NQN,
 		Status:            response.Status,
 		Rebalancing:       response.Rebalancing,
+		Shrinking:         response.Shrinking,
 		NDCS:              response.NDCS,
 		NPCS:              response.NPCS,
 		MaxFaultTolerance: response.MaxFaultTolerance,

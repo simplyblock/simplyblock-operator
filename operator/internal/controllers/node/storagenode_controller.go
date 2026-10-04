@@ -1065,10 +1065,17 @@ func phaseOf(reading NodeReading) simplyblockv1alpha2.StorageNodePhase {
 			return simplyblockv1alpha2.StorageNodePhaseDegraded
 		}
 		return simplyblockv1alpha2.StorageNodePhaseOnline
-	case nodeStatusSuspended, nodeStatusOffline:
+	case nodeStatusSuspended, nodeStatusOffline, nodeStatusInShutdown:
+		// A shutdown in progress is read as where it is going, the same way a
+		// restart in progress is read as Provisioning.
 		return simplyblockv1alpha2.StorageNodePhaseOffline
 	case nodeStatusInCreation, nodeStatusInRestart:
 		return simplyblockv1alpha2.StorageNodePhaseProvisioning
+	case nodeStatusPendingRemoval, nodeStatusMigratingDevices,
+		nodeStatusMigratingLvols, nodeStatusInRemoval:
+		return simplyblockv1alpha2.StorageNodePhaseRemoving
+	case nodeStatusRemoved:
+		return simplyblockv1alpha2.StorageNodePhaseRemoved
 	default:
 		// unreachable and timeout, plus anything the control plane adds later. A
 		// value this operator does not know is a node it cannot vouch for.
@@ -1719,6 +1726,7 @@ func (r *StorageNodeReconciler) observePhase(node *simplyblockv1alpha2.StorageNo
 		simplyblockv1alpha2.StorageNodePhaseProvisioning,
 		simplyblockv1alpha2.StorageNodePhaseOnline,
 		simplyblockv1alpha2.StorageNodePhaseRemoving,
+		simplyblockv1alpha2.StorageNodePhaseRemoved,
 		simplyblockv1alpha2.StorageNodePhaseOffline,
 		simplyblockv1alpha2.StorageNodePhaseDegraded,
 		simplyblockv1alpha2.StorageNodePhaseFailed,

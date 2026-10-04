@@ -915,7 +915,7 @@ sufficient.
 // StorageNodePhase is where the operator has got to with this node. The first two
 // values are the operator's own provisioning path; the rest are its reading of the
 // lifecycle status.status carries in the control plane's own spelling.
-// +kubebuilder:validation:Enum=Pending;Provisioning;Online;Removing;Offline;Degraded;Failed
+// +kubebuilder:validation:Enum=Pending;Provisioning;Online;Removing;Removed;Offline;Degraded;Failed
 type StorageNodePhase string
 
 // StorageNodeStep is one step of the provisioning path. There is one graph
@@ -923,6 +923,14 @@ type StorageNodePhase string
 // +kubebuilder:validation:Enum=CheckingHost;CheckingConfig;AwaitingSlot;Posting;Resolving;Adopting;AwaitingWorker
 type StorageNodeStep string
 ```
+
+The lifecycle half of the phase reads the control plane's status. `online` and
+`active` are `Online`, or `Degraded` with devices missing. `suspended`,
+`offline`, and `in_shutdown` are `Offline`, a shutdown in progress being read as
+where it is going. `in_creation` and `in_restart` are `Provisioning`. The four
+statuses of a removal in progress (`pending_removal`, `migrating_devices`,
+`migrating_lvols`, `in_removal`) are `Removing`, and `removed` is the terminal
+`Removed`. Anything else, `unreachable` and `timeout` among it, is `Failed`.
 
 `Adopting` is reached from two states rather than one, matching the cluster's
 creation machine: an upgrade Secret diverts before the config check, and a
@@ -1340,7 +1348,7 @@ the `MultiConfig` form: one graph per action over one step type.
 ```go
 // StorageNodeOpsStep is the union of every action's steps; which steps belong to
 // which action is declared by the graph rather than by this type.
-// +kubebuilder:validation:Enum=Requesting;Departing;Awaiting;Validating;Suspending;MigratingVolumes;Verifying;Removing;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
+// +kubebuilder:validation:Enum=Requesting;Departing;Awaiting;Validating;MigratingDevices;MigratingVolumes;Verifying;Removing;AwaitingRemoval;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
 type StorageNodeOpsStep string
 ```
 
@@ -1376,7 +1384,8 @@ Restart (§7.3)
     Requesting ──► Departing ──► Awaiting
 
 Remove (§8)
-    Validating ──► Suspending ──► MigratingVolumes ──► Verifying ──► Removing
+    Validating ──► ShuttingDown ──► MigratingDevices ──► MigratingVolumes
+               ──► Verifying ──► Removing ──► AwaitingRemoval
 
 Migrate (§9)
     Preparing ──► Relocating ──► AwaitingNode ──► Promoting
@@ -1534,8 +1543,8 @@ supposed to prevent.
 controller asks the machine to move to `Aborted` and reads what comes back. A
 refusal names the step the operation was in, which tells the controller that
 nothing reached the control plane from there, and an accepted transition runs the
-step's unwind. That is why the resume call is part of the abort path for a
-`Remove` past `Suspending` and is not needed before it (§8.3).
+step's unwind. A `Remove` is abortable only in `Validating`, which has changed
+nothing, so its abort has no unwind (§8.3).
 
 ### 7.3 The four single-step actions
 
@@ -1636,67 +1645,156 @@ data nothing in Kubernetes is tracking.
 ### 8.2 The steps
 
 ```
-    Validating ──► Suspending ──► MigratingVolumes ──► Verifying ──► Removing
+    Validating ──► ShuttingDown ──► MigratingDevices ──► MigratingVolumes
+               ──► Verifying ──► Removing ──► AwaitingRemoval
 ```
 
-| Step               | Side effect on entry                                                                     | Complete when                             |
-|--------------------|------------------------------------------------------------------------------------------|-------------------------------------------|
-| `Validating`       | None                                                                                     | No pinned and no unmanaged volumes remain |
-| `Suspending`       | `POST /storage-nodes/{node}/suspend`, skipped if the node is already suspended or beyond | The node is `suspended`                   |
-| `MigratingVolumes` | One `PersistentVolumeOps` per PV-managed volume, to peers chosen round-robin             | Every migration is `Succeeded`            |
-| `Verifying`        | Deletes any remaining system volumes                                                     | The node reports no volumes at all        |
-| `Removing`         | `DELETE /storage-nodes/{node}?force_remove=false`                                        | The call returns 200, 204, or 404         |
+The operator shuts the node down first, and the control plane then carries out
+the removal in three calls, which the operator drives in order.
+`prepare-removal` admits the node and rebuilds its devices onto the peers. The
+operator moves the volumes, and `verify-drained` closes that half. The node
+DELETE takes the node apart.
 
-**Validation runs before the suspend, and that ordering is the design.** A
-suspended node accepts no new volume placement, so suspending one whose drain
-cannot complete takes capacity out of the cluster and leaves it out for as long as
-the blocker goes unnoticed. Blocking first leaves the node fully operational while
-somebody decides what to do about the pinned claim.
+| Step               | Side effect on entry                                                                                                             | Complete when                                                                |
+|--------------------|----------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
+| `Validating`       | None                                                                                                                             | No pinned and no unmanaged volumes remain                                    |
+| `ShuttingDown`     | `POST /storage-nodes/{node}/shutdown`, sent only to a node that is `online` or `suspended`                                       | The call returns 202, or the node is not running                             |
+| `MigratingDevices` | `POST /storage-nodes/{node}/prepare-removal` once the node is `offline`, and again on every pass from `migrating_devices` on     | `GET /storage-nodes/{node}/prepare-removal` reports `done`                   |
+| `MigratingVolumes` | One `PersistentVolumeOps` per PV-managed volume, to peers chosen round-robin                                                     | Every migration is `Succeeded`                                               |
+| `Verifying`        | Deletes any remaining system volumes, then `POST /storage-nodes/{node}/verify-drained`                                           | The node reports no volumes, and `verify-drained` reports it drained         |
+| `Removing`         | `DELETE /storage-nodes/{node}?force_remove=false`, skipped once the node is `in_removal` or later, and while it is `in_shutdown` | The call returns 200, 204, or 404, or the node reports `in_removal` or later |
+| `AwaitingRemoval`  | None                                                                                                                             | The node reports `removed`, or 404                                           |
+
+**Validation runs before the shutdown, and that ordering is the design.** From
+the shutdown on there is no way back, so a drain that cannot complete is held
+while the node is still fully operational, and somebody decides what to do about
+the pinned claim.
 
 **`Validating` holds rather than fails.** It has a deadline like every other step,
 but a blocked drain is a correct outcome waiting on a human, so the deadline is
 long and expiry is reported rather than treated as an error (§16, Q2).
 
-**Migration targets are chosen round-robin over the online peers**, which spreads
-the drained node's volumes rather than concentrating them on whichever peer sorts
-first. A drain with no online peer to move to is a stall, not a failure, and emits
-`NoMigrationTarget`: the condition is resolved by another node coming back, and
-failing the operation would only mean starting it again afterward.
+**The shutdown is the node's own, and comes first.** `prepare-removal` would shut
+a running node down itself, but inside its request: it blocked for longer than
+the client waits, and on a slow SPDK kill reported the shutdown failed although
+SPDK was gone, which left the node `pending_removal` with no rebuild. The node's
+`shutdown` answers at once and runs in the background, and with the node down
+`prepare-removal` has no shutdown of its own to run. Only a node still running
+is shut down: one already `offline` is not shut down again, one `in_shutdown` is
+under a shutdown already, and one in a removal status is past the step. A 4xx is
+a refusal with the node still serving, so the operation fails. A timeout or a
+5xx is retried, and the next pass reads the node.
+
+**Admission follows the shutdown.** `MigratingDevices` waits for the node to be
+`offline`, and a node still running a whole shutdown budget after its shutdown
+was accepted fails the operation with nothing changed. `prepare-removal` on the
+`offline` node is the control plane's admission (fault-tolerance headroom,
+failure-domain balance, replica relocation). A refusal fails the operation and
+leaves the node offline, because nothing in a removal brings a node back, and
+the failure says so: a `Restart` operation returns it to service.
+
+**`MigratingDevices` is the control plane's rebuild.** From `migrating_devices`
+on, every pass sends `prepare-removal` again, which the control plane treats as a no-op while the
+rebuild runs and as a restart of it after a control-plane restart, and reads the
+rebuild's progress. A rebuild the control plane gave up on fails the operation.
+
+**A node stuck in `pending_removal` gets `prepare-removal` again.** The control
+plane marks the node `pending_removal` before it shuts the node down, and leaves
+it there when the shutdown fails, with no rebuild started. Nothing is sent while
+the shutdown may still be running. The step sends `prepare-removal` again when
+the control plane reports the step failed (a minute after the previous attempt),
+or when the node's status has not moved for longer than the 15-minute shutdown
+budget, because the control plane can fail the shutdown without saying so. The
+attempts are counted in `status.removal.prepareAttempts` before each is sent, and
+after three the operation fails with the control plane's message.
+
+**Migration targets are chosen round-robin over the online peers that hold none
+of the volume's replicas.** The control plane lists a volume's replica nodes, and
+a node already holding one is never a target: the control plane refuses the
+move, and while the volume's primary is shut down for its removal that replica is
+what serves the volume. Round-robin over the rest spreads the drained node's
+volumes rather than concentrating them on whichever peer sorts first. A drain
+with no online peer to move to, or a volume whose replicas cover every online
+peer, is a stall, not a failure, and emits `NoMigrationTarget`: the condition is
+resolved by another node coming back, and failing the operation would only mean
+starting it again afterward.
+
+**`Verifying` closes on the control plane's word.** The census walks the pools
+for volumes and does not see snapshots, and the node DELETE refuses a node that
+still holds either, so the step finishes only when `verify-drained` reports the
+node drained, and holds naming what is left otherwise.
 
 **`Verifying` deletes system volumes rather than migrating them.** They are
 per-node benchmark artifacts, so moving one to a peer would produce a benchmark
 volume measuring the wrong node. A delete the control plane rejects for a reason
-other than "already gone" fails the operation through the resume path, because a
-volume that cannot be deleted and cannot be migrated is a volume the removal
-would destroy.
+other than "already gone" fails the operation, because a volume that cannot be
+deleted and cannot be migrated is a volume the removal would destroy.
 
 **`Removing` treats 404 as success.** A node the control plane no longer knows
 about is a node that has been removed, and a retry after a lost response is the
 common way to arrive there.
 
-### 8.3 Resume is the failure path
+**Only an answer is a refusal.** A 4xx to the DELETE fails the operation. A
+timeout or a 5xx is retried, and the retry reads the node first. `in_removal`,
+`removed`, and `removed_failed` say the teardown has begun, and get no second
+DELETE. The preparation statuses do not: `prepare-removal` leaves the node
+`migrating_lvols` before the DELETE is ever sent, so a node in one of them gets
+the DELETE, which the control plane answers with the running removal when one
+is already in flight. `in_shutdown` is waited on.
 
-A node past `Suspending` is not serving, and an operation that fails there and
-stops would leave it that way. Every terminal outcome from `Suspending` onward,
-whether a failure or an abort, resumes the node first.
+**`AwaitingRemoval` is the control plane's teardown.** The DELETE rewires the
+node's replicas and removes its devices before the node reports `removed`. The
+step completes on `removed` and fails on `removed_failed`, which is the control
+plane giving up on the removal.
 
-| Condition                         | Step               | Result                                                 |
-|-----------------------------------|--------------------|--------------------------------------------------------|
-| Pinned or unmanaged volumes       | `Validating`       | Hold, emit, requeue. The node is untouched             |
-| No online peer to migrate to      | `MigratingVolumes` | Hold, emit, requeue                                    |
-| A `PersistentVolumeOps` failed    | `MigratingVolumes` | Delete it and retry with a fresh target                |
-| Non-system volumes remain         | `Verifying`        | Hold, emit, requeue                                    |
-| A system volume cannot be deleted | `Verifying`        | Resume, then `Failed`                                  |
-| The removal call was rejected     | `Removing`         | Resume, then `Failed`                                  |
-| A step's deadline expired         | Any                | Resume, then `Failed`                                  |
-| `spec.abort` set                  | Any post-suspend   | Abort the in-flight migrations, resume, then `Aborted` |
-| `spec.abort` set                  | `Validating`       | `Aborted` directly, since nothing has been done        |
+**`MigratingDevices` and `AwaitingRemoval` have budgets without progress.** Each
+pass records the node's status and the status of each of its `StorageDevice`s in
+`status.removal`, and any change moves the step's deadline a whole budget out
+from that moment, through the state machine's `Extend`. `migrating_devices` is
+one node status for a rebuild that can run for hours, and what changes during it
+is the devices, one at a time as each one's data lands on the peers. Either step
+is therefore failed only once a whole budget, seven hours, passes with nothing
+changing.
 
-**The resume is best-effort and the failure is recorded either way.** A resume
-that itself fails leaves the node suspended, which is visible in
-`status.status` and in the `NodeResumeFailed` event, and retrying it forever would
-mean an operation that can never reach a terminal phase. §16, Q3 is whether that
-is the right trade.
+**Each call is made under a claim on the step.** A pass that read the operation
+from a cache one write behind would otherwise send the shutdown,
+`prepare-removal`, or the DELETE a second time. The claim is a one-minute lease on
+the stored step, so `prepare-removal`, sent again on every pass of
+`MigratingDevices`, goes out at most once a minute. Every write of the step from
+the machine keeps the claim the stored step carries, because the machine's
+snapshot has none, and dropping it would let the next pass send the call again.
+
+### 8.3 There is no way back
+
+Nothing in a removal resumes the node. `Validating` changes nothing, and from
+the shutdown on the node is being taken out of the cluster: it is shut down, its
+devices are rebuilt onto the peers, and every later status only moves forward. A removal that fails from there leaves the node to
+the control plane, which reports it `removed_failed` when it gives up and
+accepts the removal being driven again.
+
+`Validating` is therefore the only abortable step, and the only one whose
+operation can be deleted while it runs.
+
+| Condition                         | Step               | Result                                              |
+|-----------------------------------|--------------------|-----------------------------------------------------|
+| Pinned or unmanaged volumes       | `Validating`       | Hold, emit, requeue. The node is untouched          |
+| The shutdown was refused          | `ShuttingDown`     | `Failed`, the node still serving                    |
+| The shutdown got no answer        | `ShuttingDown`     | Retry, reading the node first                       |
+| The shutdown never landed         | `MigratingDevices` | `Failed` after 15 minutes, the node still serving   |
+| `prepare-removal` was refused     | `MigratingDevices` | `Failed`, the node left offline                     |
+| The shutdown failed or stalled    | `MigratingDevices` | `prepare-removal` again, three times, then `Failed` |
+| The device rebuild gave up        | `MigratingDevices` | `Failed`                                            |
+| No online peer to migrate to      | `MigratingVolumes` | Hold, emit, requeue                                 |
+| A `PersistentVolumeOps` failed    | `MigratingVolumes` | Delete it and retry with a fresh target             |
+| Non-system volumes remain         | `Verifying`        | Hold, emit, requeue                                 |
+| `verify-drained` sees something   | `Verifying`        | Hold, emit, requeue, naming what is left            |
+| A system volume cannot be deleted | `Verifying`        | `Failed`                                            |
+| The removal call was rejected     | `Removing`         | `Failed`                                            |
+| The removal call got no answer    | `Removing`         | Retry, reading the node first                       |
+| The control plane gave up         | `AwaitingRemoval`  | `Failed`                                            |
+| A step's deadline expired         | Any                | `Failed`                                            |
+| `spec.abort` set                  | `Validating`       | `Aborted` directly, since nothing has been done     |
+| `spec.abort` set                  | Any later step     | Refused; the operation runs on                      |
 
 ### 8.4 PersistentVolumeOps lifecycle
 
@@ -1900,8 +1998,9 @@ path only — the graph is a chain with no edge from a failing step to it — so
 window that fails on a deadline or is aborted runs the same teardown from its
 terminal transition. A budget at `maxUnavailable: 0` outliving the window that
 raised it makes the worker undrainable by anything, forever, with nothing left
-saying why. The teardown is best-effort for the reason the suspend's unwind is,
-and a `MaintenanceMarkersLeft` event is what says a worker needs a hand.
+saying why. The teardown is best-effort, because retrying it forever would leave
+an operation that can never end, and a `MaintenanceMarkersLeft` event is what
+says a worker needs a hand.
 
 **An uncordon is answered.** A window still at `Holding`, or raised and not yet
 admitted at all, has done nothing to the node, so the cordon being undone calls it
@@ -1957,9 +2056,10 @@ group rule reading this kind's graph
 case: the promote has activated the target host's devices, failed the origin's, and
 re-homed the logical volumes, so there is nothing to unwind and the operation is
 what finishes the relocation (§9). The record is what carries the topology
-re-point that is still owed, so admission keeps it. A `Remove` past
-`Suspending` is the other shape, and there a delete is admitted, because the abort
-edge exists and its unwind is the resume the graph already performs (§8.3).
+re-point that is still owed, so admission keeps it. A `Remove` past `Validating`
+is refused the same way: from `prepare-removal` on the control plane is taking
+the node out of the cluster, and the record is what watches the removal finish
+(§8.3).
 
 **The node lock and the cluster lock are independent, and neither implies the
 other.** A `StorageClusterOps` rolling restart walks every node of the cluster and
@@ -1974,18 +2074,21 @@ block node operations directly is §16, Q5.
 
 ## 12. Backend API Requirements
 
-| Method   | Endpoint                                                             | Notes                                                                                          |
-|----------|----------------------------------------------------------------------|------------------------------------------------------------------------------------------------|
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes`                           | Adds every socket of one worker at once, and is not idempotent, which is why §4.2 claims first |
-| `GET`    | `/api/v2/clusters/{cluster}/storage-nodes/?watch=true`               | The node stream every status write and completion check reads (§4.4). Scoped per cluster       |
-| `DELETE` | `/api/v2/clusters/{cluster}/storage-nodes/{node}?force_remove=false` | The drain's last step. 404 is success, since a node already gone is a node removed             |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/suspend`            | Must tolerate a repeat, because a step recorded without its call having fired re-issues it     |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/resume`             | The unwind for every failure past `Suspending` (§8.3)                                          |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/shutdown`           | Used by `Shutdown` and by `HostMaintenance`                                                    |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/restart`            | Takes `node_address`, `force`, `reattach_volume`, and `new_ssd_pcie`. Used by three actions    |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/promote`            | The migration's last control-plane call, and the one that cannot be undone (§9)                |
-| `GET`    | `/api/v2/clusters/{cluster}/storage-pools/{pool}/volumes/`           | Lists a node's volumes for the drain's classification and verification (§8)                    |
-| `DELETE` | `/api/v2/clusters/{cluster}/storage-pools/{pool}/volumes/{vol}/`     | Deletes system volumes during verification. 404 is success                                     |
+| Method   | Endpoint                                                             | Notes                                                                                            |
+|----------|----------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes`                           | Adds every socket of one worker at once, and is not idempotent, which is why §4.2 claims first   |
+| `GET`    | `/api/v2/clusters/{cluster}/storage-nodes/?watch=true`               | The node stream every status write and completion check reads (§4.4). Scoped per cluster         |
+| `DELETE` | `/api/v2/clusters/{cluster}/storage-nodes/{node}?force_remove=false` | The drain's last step. 404 is success, since a node already gone is a node removed               |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/suspend`            | Used by `Suspend`. Must tolerate a repeat, because a step recorded without its call re-issues it |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/resume`             | Used by `Resume`                                                                                 |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/prepare-removal`    | The removal's first step on a node already down: admits it and rebuilds its devices (§8.2)       |
+| `GET`    | `/api/v2/clusters/{cluster}/storage-nodes/{node}/prepare-removal`    | The device rebuild's progress, read by `MigratingDevices`                                        |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/verify-drained`     | Whether the node still holds a volume or a snapshot, which closes `Verifying` (§8.2)             |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/shutdown`           | Used by `Shutdown`, `HostMaintenance`, and `Remove`                                              |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/restart`            | Takes `node_address`, `force`, `reattach_volume`, and `new_ssd_pcie`. Used by three actions      |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/promote`            | The migration's last control-plane call, and the one that cannot be undone (§9)                  |
+| `GET`    | `/api/v2/clusters/{cluster}/storage-pools/{pool}/volumes/`           | Lists a node's volumes for the drain's classification and verification (§8)                      |
+| `DELETE` | `/api/v2/clusters/{cluster}/storage-pools/{pool}/volumes/{vol}/`     | Deletes system volumes during verification. 404 is success                                       |
 
 **The `?watch=true` row is a Server-Sent-Events subscription rather than a request
 that returns**, and it arrives with the control plane's SSE work rather than with
@@ -2046,13 +2149,13 @@ starts and the operation's name is not something they know yet.
 | The operation finished successfully                             | `Normal`  | `OperationSucceeded`   | `StorageNodeOps` |
 | The operation failed                                            | `Warning` | `OperationFailed`      | `StorageNodeOps` |
 | The operation was canceled                                      | `Normal`  | `OperationAborted`     | `StorageNodeOps` |
+| `spec.abort` arrived at a step that cannot be stopped           | `Warning` | `AbortRefused`         | `StorageNodeOps` |
 | A step's deadline expired                                       | `Warning` | `StepDeadlineExceeded` | `StorageNodeOps` |
 | A drain is blocked by pinned volumes                            | `Warning` | `DrainBlocked`         | `StorageNodeOps` |
 | A drain is blocked by unmanaged volumes                         | `Warning` | `DrainBlocked`         | `StorageNodeOps` |
 | A drain has no online peer to migrate to                        | `Warning` | `NoMigrationTarget`    | `StorageNodeOps` |
 | A volume migration failed and is being retried                  | `Warning` | `MigrationRetried`     | `StorageNodeOps` |
 | Every volume has been migrated off the node                     | `Normal`  | `DrainCompleted`       | `StorageNodeOps` |
-| The node could not be resumed after a failure                   | `Warning` | `NodeResumeFailed`     | `StorageNodeOps` |
 | The maintenance window is holding for another worker            | `Normal`  | `MaintenanceQueued`    | `StorageNodeOps` |
 
 **`OperationSucceeded` is one reason for all seven actions rather than one each.**
@@ -2246,11 +2349,6 @@ direction: a node holding a hundred large volumes drains for hours, so its
 deadline has to be generous enough not to fail a working drain and tight enough to
 catch a stalled one, and no number is known to satisfy both.
 
-**Q3: Whether a failed resume should retry forever.** The unwind of §8.3 is
-best-effort, so a resume that fails leaves a node suspended and out of service,
-visible only in an event. Retrying until it succeeds means an operation that
-cannot reach a terminal phase and a lock that is never released.
-
 **Q4: A positive signal that a restart has begun.** §9's `Relocating` completes on
 the node having left `online`, which a coalescing stream can fail to deliver. A
 restart generation or any monotonic counter on the node object would make the
@@ -2313,7 +2411,7 @@ against the same conventions it audits the shipped types against.
 // StorageNodePhase is where the operator has got to with this node. The first two
 // values are the operator's own provisioning path; the rest are its reading of the
 // lifecycle status.status carries in the control plane's own spelling.
-// +kubebuilder:validation:Enum=Pending;Provisioning;Online;Removing;Offline;Degraded;Failed
+// +kubebuilder:validation:Enum=Pending;Provisioning;Online;Removing;Removed;Offline;Degraded;Failed
 type StorageNodePhase string
 
 const (
@@ -2326,8 +2424,13 @@ const (
 	// Online: the control plane reports the node online and carrying its share.
 	StorageNodePhaseOnline StorageNodePhase = "Online"
 
-	// Removing: a StorageNodeOps with action Remove is draining it (§8).
+	// Removing: the control plane is removing the node, from the removal being
+	// accepted until its devices and volumes have moved off (§8).
 	StorageNodePhaseRemoving StorageNodePhase = "Removing"
+
+	// Removed: the control plane has removed the node. It is the last phase a
+	// node reaches.
+	StorageNodePhaseRemoved StorageNodePhase = "Removed"
 
 	// Offline: out of service and reachable, which is where Shutdown, Suspend,
 	// and a host maintenance window leave it (§10).
@@ -2852,7 +2955,7 @@ const (
 // StorageNodeOpsStep is one step of a running node operation. The enum is the
 // union of every action's steps; which steps belong to which action is declared
 // by the graph rather than by this type.
-// +kubebuilder:validation:Enum=Requesting;Departing;Awaiting;Validating;Suspending;MigratingVolumes;Verifying;Removing;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
+// +kubebuilder:validation:Enum=Requesting;Departing;Awaiting;Validating;MigratingDevices;MigratingVolumes;Verifying;Removing;AwaitingRemoval;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
 type StorageNodeOpsStep string
 
 const (
@@ -2862,10 +2965,11 @@ const (
 
 	// Remove.
 	StorageNodeOpsStepValidating       StorageNodeOpsStep = "Validating"
-	StorageNodeOpsStepSuspending       StorageNodeOpsStep = "Suspending"
+	StorageNodeOpsStepMigratingDevices StorageNodeOpsStep = "MigratingDevices"
 	StorageNodeOpsStepMigratingVolumes StorageNodeOpsStep = "MigratingVolumes"
 	StorageNodeOpsStepVerifying        StorageNodeOpsStep = "Verifying"
 	StorageNodeOpsStepRemoving         StorageNodeOpsStep = "Removing"
+	StorageNodeOpsStepAwaitingRemoval  StorageNodeOpsStep = "AwaitingRemoval"
 
 	// Migrate.
 	StorageNodeOpsStepPreparing    StorageNodeOpsStep = "Preparing"
@@ -2964,6 +3068,35 @@ type DrainStatus struct {
 	VolumesMigrated int32 `json:"volumesMigrated"`
 }
 
+// RemovalStatus is the control plane's progress through a node removal it has
+// accepted, as the operation last read it while waiting in AwaitingRemoval. Any
+// change in it counts as progress and moves the step's deadline a whole budget
+// out.
+type RemovalStatus struct {
+	// NodeStatus is the node's status as the control plane last reported it.
+	// +optional
+	NodeStatus string `json:"nodeStatus,omitempty"`
+
+	// Devices is the control-plane status each of the node's StorageDevices
+	// last reported, keyed by the StorageDevice's name.
+	// +optional
+	Devices map[string]string `json:"devices,omitempty"`
+
+	// LastProgressTime is when NodeStatus or any of Devices last changed.
+	// +optional
+	LastProgressTime *metav1.Time `json:"lastProgressTime,omitempty"`
+
+	// PrepareAttempts is how many times the removal's first step was sent
+	// again for a node that stayed pending_removal.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	PrepareAttempts int32 `json:"prepareAttempts,omitempty"`
+
+	// LastPrepareTime is when the removal's first step was last sent again.
+	// +optional
+	LastPrepareTime *metav1.Time `json:"lastPrepareTime,omitempty"`
+}
+
 // StorageNodeOpsStatus is the observed state of one node operation.
 type StorageNodeOpsStatus struct {
 	// Phase is the operation's own progress.
@@ -2973,7 +3106,7 @@ type StorageNodeOpsStatus struct {
 	// Step is the position of the running action's state machine, as the shared
 	// statemachine.KubeSnapshot (design-crd-model.md §3.1). The rule is what an
 	// Enum marker would do if a marker could reach a field of a shared type.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Departing','Awaiting','Validating','Suspending','MigratingVolumes','Verifying','Removing','Preparing','Relocating','AwaitingNode','Promoting','Holding','ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Departing','Awaiting','Validating','MigratingDevices','MigratingVolumes','Verifying','Removing','AwaitingRemoval','Preparing','Relocating','AwaitingNode','Promoting','Holding','ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
@@ -2986,6 +3119,11 @@ type StorageNodeOpsStatus struct {
 	// Remove.
 	// +optional
 	Drain *DrainStatus `json:"drain,omitempty"`
+
+	// Removal is the control plane's progress through the removal, written by
+	// a Remove while it waits in AwaitingRemoval.
+	// +optional
+	Removal *RemovalStatus `json:"removal,omitempty"`
 
 	// ObservedGeneration is the generation the rest of this status was computed
 	// from, so a stale status can be told from a current one.

@@ -64,6 +64,10 @@ const (
 	OperationFailed    = "OperationFailed"
 	OperationAborted   = "OperationAborted"
 
+	// AbortRefused says spec.abort arrived at a step that cannot be stopped,
+	// and that the operation is running on.
+	AbortRefused = "AbortRefused"
+
 	// StepDeadlineExceeded distinguishes an operation still working from one
 	// that stopped, which is the distinction status.message cannot express.
 	StepDeadlineExceeded = "StepDeadlineExceeded"
@@ -86,11 +90,6 @@ const (
 
 	// DrainCompleted says every volume has been migrated off the node.
 	DrainCompleted = "DrainCompleted"
-
-	// NodeResumeFailed is the one that cannot be retried away. The unwind of §8.3
-	// is best-effort, so a resume that fails leaves a node suspended and out of
-	// service, and this event is the only place that is visible.
-	NodeResumeFailed = "NodeResumeFailed"
 
 	// MaintenanceQueued says a maintenance window is holding for another worker,
 	// which is correct behavior and looks like a stalled controller without it.
