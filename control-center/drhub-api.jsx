@@ -85,7 +85,12 @@ const drCondOK = (o, type) => { const c = drCond(o, type); return c ? (c.status 
 const drConds = o => (((o.status || {}).conditions) || []).map(c => ({type: c.type, status: c.status, reason: c.reason, message: c.message, since: c.lastTransitionTime}));
 const nsName = (ns, name) => ns ? `${ns}/${name}` : name;
 const splitRef = s => { const i = String(s || "").indexOf("/"); return i < 0 ? {namespace: "", name: s || ""} : {namespace: s.slice(0, i), name: s.slice(i + 1)}; };
-const refName = r => (r && r.name) || "";
+// A reference is a plain name (DRPath/ProtectedApplication planRef, every
+// pathRef) or a LocalRef object ({name}): both read as the name.
+const refName = r => typeof r === "string" ? r : (r && r.name) || "";
+// Kinds that name an application and no path: Restart acts where it runs,
+// Resume and Revert on the move Ramen is still carrying out.
+const PATHLESS_KINDS = ["Restart", "Resume", "Revert"];
 const worstVerdict = vs => vs.reduce((w, v) => (VERDICT_RANK[v] || 0) > (VERDICT_RANK[w] || 0) ? v : w, vs[0] || "Unknown");
 const isSyncType = t => /^sync/.test(t || "");
 const durMs = (a, b) => a && b ? Math.max(0, Date.parse(b) - Date.parse(a)) : a ? Math.max(0, Date.now() - Date.parse(a)) : null;
@@ -111,6 +116,10 @@ function normPPlan(o) {
     status: ready === true ? "Ready" : ready === false ? "NotReady" : "Unknown",
     sites, siteNames: sites.map(s => s.name), methods, sync: methods.length > 0 && methods.every(m => isSyncType(m.type)),
     storageProfile: sp.storageProfile || {}, s3Profile: refName(sp.s3Profile), s3Profiles: sp.s3Profiles || [],
+    // dr-hub's probe of each site store (list, write, delete): ok, or the
+    // S3 service's own error code and message.
+    s3Stores: Object.fromEntries((st.s3Stores || []).map(x => [x.site, {ok: !!x.ok, step: x.step || "", code: x.code || "",
+      message: x.message || "", checkedAt: x.checkedAt || ""}])),
     autoRestart: sp.autoRestart || null, veleroNamespace: sp.veleroNamespace || "", pairs,
     pathNames: pairs.flatMap(p => p.paths), drPolicies: pairs.flatMap(p => p.drPolicies),
     counts: {sites: sites.length, methods: methods.length, paths: pairs.reduce((n, p) => n + p.paths.length, 0),
@@ -133,10 +142,22 @@ function normDRPath(o) {
 
 function normPApp(o) {
   const sp = o.spec || {}, st = o.status || {};
+  // A path is active when it starts where the application runs: only along it
+  // can an action move the application now. The other path (the way back) is
+  // evaluated by the hub too and fails at-path-source, which is not a problem
+  // of the application -- it must not make the application "not ready". The
+  // hub's own at-path-source check decides it: a path's from is a site name,
+  // currentCluster a cluster name, and they only coincide when sites are named
+  // after their clusters.
+  const atSource = p => !(((p.readiness || {}).checks) || []).some(c => c.name === "at-path-source" && c.status === "Fail");
   const paths = (st.paths || []).map(p => ({name: p.name, from: p.from, to: p.to, actions: p.actions || [],
-    verdict: ((p.readiness || {}).verdict) || "Unknown", checks: ((p.readiness || {}).checks) || [], since: (p.readiness || {}).lastTransitionTime}));
+    active: atSource(p),
+    verdict: ((p.readiness || {}).verdict) || "Unknown", checks: ((p.readiness || {}).checks) || [], since: (p.readiness || {}).lastTransitionTime}))
+    .sort((x, y) => (y.active ? 1 : 0) - (x.active ? 1 : 0));
   const protectedOK = drCondOK(o, "Protected");
-  const verdict = paths.length ? worstVerdict(paths.map(p => p.verdict)) : (protectedOK === false ? "NotReady" : "Unknown");
+  const activePaths = paths.filter(p => p.active);
+  const verdict = activePaths.length ? worstVerdict(activePaths.map(p => p.verdict))
+    : paths.length ? "Unknown" : (protectedOK === false ? "NotReady" : "Unknown");
   const anns = drMeta(o).annotations || {};
   return reg(Object.assign(base(o, "papp"), {
     status: verdict, verdict, protected: protectedOK, bound: drCondOK(o, "Bound"),
@@ -144,6 +165,11 @@ function normPApp(o) {
     managed: sp.managed || null, discovered: sp.discovered || null, drpcRef: refName(sp.drpcRef),
     probes: (sp.health || {}).probes || [], tiers: sp.tiers || [], externalHooks: sp.externalHooks || {}, dependsOn: sp.dependsOn || [],
     drpc: st.drpc || "", placement: st.placement || "", drPolicy: st.drPolicy || "", zoneBinding: st.zoneBinding || "", currentCluster: st.currentCluster || "",
+    // a Relocate or Failover Ramen is still carrying out (dr-hub status.move);
+    // Resume and Revert act on it
+    move: st.move ? {action: st.move.action || "", from: st.move.from || "", to: st.move.to || "", phase: st.move.phase || "InProgress",
+      since: st.move.since || null, progression: st.move.progression || "", blocking: st.move.blocking || "",
+      revertible: !!st.move.revertible, revertBlocked: st.move.revertBlocked || ""} : null,
     paths, siteMapping: st.siteMapping || "Unknown", recipe: st.recipe || null, suggestedTiers: st.suggestedTiers || [], lastAction: st.lastAction ? splitRef(st.lastAction) : null,
     // site mapper (ADR 0020): VM network findings and guest addresses, resolved per declared path
     mapping: st.mapping ? {site: st.mapping.site || "", findings: st.mapping.findings || [], guests: st.mapping.guests || [], counts: st.mapping.counts || {open: 0, resolved: 0}} : null,
@@ -367,14 +393,14 @@ const drhub = {
   runAction: ({kind, target, path, override, timeout}) => k8s.create("RecoveryAction", {
     apiVersion: DR_API_GROUP, kind: "RecoveryAction",
     metadata: {name: dns63(`${kind}-${target.name}-${stamp()}`), namespace: target.namespace},
-    spec: Object.assign({kind}, kind !== "Restart" && path ? {pathRef: {name: path}} : {},
+    spec: Object.assign({kind}, !PATHLESS_KINDS.includes(kind) && path ? {pathRef: path} : {},
       target.kind === "rplan" ? {planRef: {name: target.name}} : {applicationRef: {name: target.name}},
       override ? {override: {reason: override}} : {}, timeout ? {timeout} : {})
   }, {namespace: target.namespace}),
   runTest: ({target, path, cloneSource, holdFor, maxLifetime}) => k8s.create("TestBubble", {
     apiVersion: DR_API_GROUP, kind: "TestBubble",
     metadata: {name: dns63(`test-${target.name}-${stamp()}`), namespace: target.namespace},
-    spec: Object.assign({pathRef: {name: path}}, target.kind === "rplan" ? {planRef: {name: target.name}} : {applicationRef: {name: target.name}},
+    spec: Object.assign({pathRef: path}, target.kind === "rplan" ? {planRef: {name: target.name}} : {applicationRef: {name: target.name}},
       cloneSource ? {cloneSource} : {}, holdFor ? {holdFor} : {}, maxLifetime ? {maxLifetime} : {})
   }, {namespace: target.namespace}),
   abortTest: t => k8s.patch("TestBubble", t.name, {spec: {abort: true}}, {namespace: t.namespace}),
@@ -386,7 +412,7 @@ const drhub = {
   }, {namespace: app.namespace}),
   createSchedule: ({name, namespace, schedule, target, path, cloneSource, keepLast, keepFor, suspend}) => k8s.create("TestSchedule", {
     apiVersion: DR_API_GROUP, kind: "TestSchedule", metadata: {name: dns63(name), namespace},
-    spec: Object.assign({schedule, template: Object.assign({pathRef: {name: path}}, target.kind === "rplan" ? {planRef: {name: target.name}} : {applicationRef: {name: target.name}},
+    spec: Object.assign({schedule, template: Object.assign({pathRef: path}, target.kind === "rplan" ? {planRef: {name: target.name}} : {applicationRef: {name: target.name}},
       cloneSource ? {cloneSource} : {})}, {retention: Object.assign({}, keepLast ? {keepLast: Number(keepLast)} : {}, keepFor ? {keepFor} : {})}, suspend ? {suspend: true} : {})
   }, {namespace}),
   suspendSchedule: (s, suspend) => k8s.patch("TestSchedule", s.name, {spec: {suspend: !!suspend}}, {namespace: s.namespace}),
@@ -435,5 +461,5 @@ Object.assign(GETTER, {pplan: drhub.plan, drpath: drhub.path, papp: drhub.app, r
   tbubble: drhub.test, tsched: drhub.schedule, restore: drhub.restoreAction, siteprofile: drhub.siteProfile, drconfig: drhub.config, dhcpserver: drhub.dhcpServer,
   sitedeploy: drhub.siteDeploy});
 
-Object.assign(window, {drhub, DR_KINDS, DR_ANN, VERDICT_RANK, ACTION_TERMINAL, TEST_TERMINAL, worstVerdict, fmtSecs, drCond, drCondOK, splitRef, kvToObj, csv, dns63, openFindings,
+Object.assign(window, {drhub, PATHLESS_KINDS, DR_KINDS, DR_ANN, VERDICT_RANK, ACTION_TERMINAL, TEST_TERMINAL, worstVerdict, fmtSecs, drCond, drCondOK, splitRef, kvToObj, csv, dns63, openFindings,
   normPPlan, normDRPath, normPApp, normRPlan, normRAction, normTBubble, normTSched, normRestore, normSiteProfile, normDRConfig, normDHCPServer, normSiteDeploy});

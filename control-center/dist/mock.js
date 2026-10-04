@@ -10652,6 +10652,17 @@ window.SB_DR = {
         drPolicies: ["fra-primary-5m", "fra-vault-15m"],
         peerClassesResolved: true
       }],
+      s3Stores: [{
+        site: "fra-a",
+        bucket: "dr-fra-a",
+        ok: true,
+        checkedAt: new Date(Date.now() - 120000).toISOString()
+      }, {
+        site: "fra-b",
+        bucket: "dr-fra-b",
+        ok: true,
+        checkedAt: new Date(Date.now() - 120000).toISOString()
+      }],
       conditions: [cond("Derived", true, "Derived", "DRClusters, DRPolicies and classes applied"), cond("InventoryReady", true, "Reported", "both sites reported"), cond("S3ProfileResolved", true, "Resolved", "profiles sb-3f9a, sb-71c0"), cond("Ready", true, "Ready", "")]
     }
   }));
@@ -10701,15 +10712,82 @@ window.SB_DR = {
     }
   }));
 
+  // A plan whose store on lab-b the S3 service refuses: dr-hub's probe keeps
+  // the service's own answer, per site.
+  store.ProtectionPlan.push(Object.assign(api("ProtectionPlan"), {
+    metadata: meta("lab"),
+    spec: {
+      sites: [{
+        name: "lab-a",
+        cluster: "cluster-a"
+      }, {
+        name: "lab-b",
+        cluster: "cluster-b"
+      }],
+      storageProfile: {
+        storageClassSelector: {
+          matchLabels: {
+            "simplyblock.io/dr": "true"
+          }
+        },
+        consistencyGroups: "Disabled"
+      },
+      methods: [{
+        name: "primary",
+        type: "async",
+        schedulingInterval: "5m"
+      }],
+      s3Profiles: [{
+        site: "lab-a",
+        bucket: "dr-lab-a",
+        endpoint: "https://s3.eu-central-1.amazonaws.com",
+        region: "eu-central-1",
+        secretRef: "ramen-s3-secret"
+      }, {
+        site: "lab-b",
+        bucket: "dr-lab-b",
+        endpoint: "https://s3.eu-central-1.amazonaws.com",
+        region: "eu-central-1",
+        secretRef: "ramen-s3-secret"
+      }]
+    },
+    status: {
+      observedGeneration: 1,
+      sites: [{
+        name: "lab-a",
+        classesApplied: false,
+        agentAvailable: true
+      }, {
+        name: "lab-b",
+        classesApplied: false,
+        agentAvailable: true
+      }],
+      pairs: [],
+      s3Stores: [{
+        site: "lab-a",
+        bucket: "dr-lab-a",
+        ok: true,
+        checkedAt: new Date(Date.now() - 60000).toISOString()
+      }, {
+        site: "lab-b",
+        bucket: "dr-lab-b",
+        ok: false,
+        step: "list",
+        code: "NoSuchBucket",
+        message: "The specified bucket does not exist (HTTP 404, request id 7Q2X9K1M)",
+        checkedAt: new Date(Date.now() - 60000).toISOString()
+      }],
+      conditions: [cond("Derived", false, "NoPaths", "no valid DRPath connects two sites of the plan"), cond("InventoryReady", true, "Reported", ""), cond("S3ProfileResolved", false, "S3StoreRejected", "the S3 store refused: lab-b (bucket dr-lab-b, eu-central-1): NoSuchBucket: The specified bucket does not exist (HTTP 404, request id 7Q2X9K1M) (list)"), cond("Ready", false, "Waiting", "waiting for Derived, S3ProfileResolved")]
+    }
+  }));
+
   // ---- paths ---------------------------------------------------------------
   const path = (name, from, to, plan, actions, extra, status) => Object.assign(api("DRPath"), {
     metadata: meta(name),
     spec: Object.assign({
       from,
       to,
-      planRef: {
-        name: plan
-      },
+      planRef: plan,
       actions,
       announcementHandover: false
     }, extra || {}),
@@ -10765,9 +10843,7 @@ window.SB_DR = {
   const app = (name, ns, plan, source, target, kind, extra, paths, status) => Object.assign(api("ProtectedApplication"), {
     metadata: meta(name, ns, (extra || {}).meta),
     spec: Object.assign({
-      planRef: {
-        name: plan
-      },
+      planRef: plan,
       source,
       target,
       kind
@@ -11120,6 +11196,61 @@ window.SB_DR = {
       hash: "0b77aa"
     }
   }));
+  // a consistency-group relocate stuck in the target's restore (2026-10-03): Ramen keeps retrying, the action ended
+  store.ProtectedApplication.push(app("wiki", OPS, "fra", "fra-a", "fra-b", "discovered", {
+    spec: {
+      method: "primary",
+      discovered: {
+        protectedNamespaces: ["wiki"],
+        pvcSelector: {
+          matchLabels: {
+            app: "wiki"
+          }
+        }
+      }
+    }
+  }, [{
+    name: "fra-a-to-fra-b",
+    from: "fra-a",
+    to: "fra-b",
+    actions: ["Failover", "Relocate", "Test"],
+    readiness: {
+      verdict: "NotReady",
+      checks: readyChecks(true).concat([check("move-settled", "Fail", true, "MoveStuck", "relocate fra-a→fra-b since 2026-10-03T23:17:24Z is stuck: ClusterDataReady: Failed to restore PVs/PVCs: destination volume ID is empty for VGRC vgrcontent-a5b8. Resume it once its cause is fixed, or Revert it to fra-a")]),
+      lastTransitionTime: agoIso(40)
+    }
+  }, {
+    name: "fra-b-to-fra-a",
+    from: "fra-b",
+    to: "fra-a",
+    actions: ["Relocate"],
+    readiness: {
+      verdict: "NotReady",
+      checks: [check("at-path-source", "Fail", true, "NotAtSource", "application runs on cluster-a")],
+      lastTransitionTime: agoIso(40)
+    }
+  }], {
+    drpc: `${OPS}/wiki`,
+    drPolicy: "fra-primary-5m",
+    recipe: {
+      name: "wiki",
+      namespace: OPS,
+      generated: true,
+      hash: "51aa0e"
+    },
+    lastAction: `${OPS}/relocate-wiki-1`,
+    move: {
+      action: "Relocate",
+      from: "fra-a",
+      to: "fra-b",
+      phase: "Stuck",
+      since: agoIso(55),
+      progression: "WaitForReadiness",
+      blocking: "ClusterDataReady: Failed to restore PVs/PVCs: destination volume ID is empty for VGRC vgrcontent-a5b8",
+      revertible: true
+    },
+    conditions: [cond("Bound", true, "Bound", ""), cond("Protected", false, "Error", "VolumeReplicationGroup on cluster-b is reporting errors", 40)]
+  }));
   store.ProtectedApplication.push(app("vm-erp", OPS, "metro", "metro-1a", "metro-1c", "discovered", {
     spec: {
       discovered: {
@@ -11196,9 +11327,7 @@ window.SB_DR = {
   store.RecoveryPlan.push(Object.assign(api("RecoveryPlan"), {
     metadata: meta("tier-1", OPS),
     spec: {
-      pathRef: {
-        name: "fra-a-to-fra-b"
-      },
+      pathRef: "fra-a-to-fra-b",
       applications: [{
         name: "ledger",
         priority: 1
@@ -11239,9 +11368,7 @@ window.SB_DR = {
     }),
     spec: {
       kind: "Relocate",
-      pathRef: {
-        name: "fra-b-to-fra-a"
-      },
+      pathRef: "fra-b-to-fra-a",
       applicationRef: {
         name: "ledger"
       },
@@ -11289,9 +11416,7 @@ window.SB_DR = {
     }),
     spec: {
       kind: "Failover",
-      pathRef: {
-        name: "fra-a-to-fra-b"
-      },
+      pathRef: "fra-a-to-fra-b",
       applicationRef: {
         name: "payments"
       },
@@ -11346,9 +11471,7 @@ window.SB_DR = {
     }),
     spec: {
       kind: "Relocate",
-      pathRef: {
-        name: "fra-a-to-fra-b"
-      },
+      pathRef: "fra-a-to-fra-b",
       applicationRef: {
         name: "shop"
       },
@@ -11374,9 +11497,7 @@ window.SB_DR = {
       creationTimestamp: agoIso(60 * 30 + 25)
     }),
     spec: {
-      pathRef: {
-        name: "fra-a-to-fra-b"
-      },
+      pathRef: "fra-a-to-fra-b",
       applicationRef: {
         name: "shop"
       },
@@ -11448,9 +11569,7 @@ window.SB_DR = {
       creationTimestamp: agoIso(40)
     }),
     spec: {
-      pathRef: {
-        name: "fra-a-to-fra-b"
-      },
+      pathRef: "fra-a-to-fra-b",
       applicationRef: {
         name: "payments"
       },
@@ -11492,9 +11611,7 @@ window.SB_DR = {
     spec: {
       schedule: "0 3 * * 0",
       template: {
-        pathRef: {
-          name: "fra-a-to-fra-b"
-        },
+        pathRef: "fra-a-to-fra-b",
         applicationRef: {
           name: "shop"
         },
@@ -11951,6 +12068,25 @@ window.SB_DR = {
       err: "metadata.name is required",
       reason: "Invalid"
     };
+    // The API server's schema: these references are plain names, not {name}
+    // objects. Rejected the way the real server rejects them, so a form that
+    // sends the wrong shape fails here too (2026-10-03, DRPath planRef).
+    const sp = body.spec || {};
+    const mustBeName = {
+      DRPath: ["planRef"],
+      ProtectedApplication: ["planRef"],
+      RecoveryPlan: ["pathRef"],
+      RecoveryAction: ["pathRef"],
+      TestBubble: ["pathRef"]
+    }[kind] || [];
+    if (kind === "RecoveryAction" && ["Restart", "Resume", "Revert"].includes(sp.kind) && sp.pathRef !== undefined) return {
+      err: `RecoveryAction.dr.simplyblock.io "${m.name}" is invalid: spec: a Restart, Resume or Revert names an application and no path`,
+      reason: "Invalid"
+    };
+    for (const f of mustBeName) if (sp[f] !== undefined && typeof sp[f] !== "string") return {
+      err: `${kind}.dr.simplyblock.io "${m.name}" is invalid: spec.${f}: Invalid value: "object": spec.${f} in body must be of type string: "object"`,
+      reason: "Invalid"
+    };
     if (findRef(kind, m.namespace, m.name)) return {
       err: `${kind.toLowerCase()}s "${m.name}" already exists`,
       reason: "AlreadyExists"
@@ -11972,10 +12108,21 @@ window.SB_DR = {
         reason: "Forbidden"
       };
       const app = body.spec.applicationRef && findRef("ProtectedApplication", m.namespace, body.spec.applicationRef.name);
-      if (app && body.spec.kind !== "Restart") {
-        const p = (app.status.paths || []).find(x => x.name === (body.spec.pathRef || {}).name);
+      // Resume and Revert act on the application's in-flight move, not on a path (dr-hub's webhook)
+      if (app && (body.spec.kind === "Resume" || body.spec.kind === "Revert")) {
+        if (!app.status.move) return {
+          err: `admission webhook denied the request: ProtectedApplication ${app.metadata.name} has no move in progress to ${body.spec.kind.toLowerCase()}`,
+          reason: "Forbidden"
+        };
+        if (body.spec.kind === "Revert" && !app.status.move.revertible) return {
+          err: `admission webhook denied the request: the move cannot be reverted: ${app.status.move.revertBlocked}`,
+          reason: "Forbidden"
+        };
+      }
+      if (app && !["Restart", "Resume", "Revert"].includes(body.spec.kind)) {
+        const p = (app.status.paths || []).find(x => x.name === body.spec.pathRef);
         if (!p) return {
-          err: `application ${app.metadata.name} is not on path ${(body.spec.pathRef || {}).name}`,
+          err: `application ${app.metadata.name} is not on path ${body.spec.pathRef}`,
           reason: "Invalid"
         };
         if (p.readiness.verdict === "NotReady" && !body.spec.override) return {
@@ -11988,7 +12135,7 @@ window.SB_DR = {
         phase: "Pending",
         startTime: obj.metadata.creationTimestamp,
         sourceCluster: "cluster-a",
-        targetCluster: body.spec.kind === "Restart" ? "cluster-a" : "cluster-b",
+        targetCluster: body.spec.kind === "Restart" || body.spec.kind === "Revert" ? "cluster-a" : "cluster-b",
         steps: [],
         conditions: []
       };
@@ -12101,7 +12248,7 @@ window.SB_DR = {
       err: `${kind.toLowerCase()}s "${name}" not found`,
       reason: "NotFound"
     };
-    const inUse = kind === "ProtectionPlan" ? store.DRPath.some(p => p.spec.planRef.name === name) : kind === "DRPath" ? store.ProtectedApplication.some(a => (a.status.paths || []).some(p => p.name === name)) : false;
+    const inUse = kind === "ProtectionPlan" ? store.DRPath.some(p => p.spec.planRef === name) : kind === "DRPath" ? store.ProtectedApplication.some(a => (a.status.paths || []).some(p => p.name === name)) : false;
     if (inUse && (o.metadata.annotations || {})["dr.simplyblock.io/confirm-delete"] !== "true") return {
       err: `admission webhook denied the request: ${kind} ${name} is still in use; annotate dr.simplyblock.io/confirm-delete=true to confirm`,
       reason: "Forbidden"

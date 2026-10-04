@@ -3629,7 +3629,12 @@ const splitRef = s => {
     name: s.slice(i + 1)
   };
 };
-const refName = r => r && r.name || "";
+// A reference is a plain name (DRPath/ProtectedApplication planRef, every
+// pathRef) or a LocalRef object ({name}): both read as the name.
+const refName = r => typeof r === "string" ? r : r && r.name || "";
+// Kinds that name an application and no path: Restart acts where it runs,
+// Resume and Revert on the move Ramen is still carrying out.
+const PATHLESS_KINDS = ["Restart", "Resume", "Revert"];
 const worstVerdict = vs => vs.reduce((w, v) => (VERDICT_RANK[v] || 0) > (VERDICT_RANK[w] || 0) ? v : w, vs[0] || "Unknown");
 const isSyncType = t => /^sync/.test(t || "");
 const durMs = (a, b) => a && b ? Math.max(0, Date.parse(b) - Date.parse(a)) : a ? Math.max(0, Date.now() - Date.parse(a)) : null;
@@ -3691,6 +3696,15 @@ function normPPlan(o) {
     storageProfile: sp.storageProfile || {},
     s3Profile: refName(sp.s3Profile),
     s3Profiles: sp.s3Profiles || [],
+    // dr-hub's probe of each site store (list, write, delete): ok, or the
+    // S3 service's own error code and message.
+    s3Stores: Object.fromEntries((st.s3Stores || []).map(x => [x.site, {
+      ok: !!x.ok,
+      step: x.step || "",
+      code: x.code || "",
+      message: x.message || "",
+      checkedAt: x.checkedAt || ""
+    }])),
     autoRestart: sp.autoRestart || null,
     veleroNamespace: sp.veleroNamespace || "",
     pairs,
@@ -3731,17 +3745,27 @@ function normDRPath(o) {
 function normPApp(o) {
   const sp = o.spec || {},
     st = o.status || {};
+  // A path is active when it starts where the application runs: only along it
+  // can an action move the application now. The other path (the way back) is
+  // evaluated by the hub too and fails at-path-source, which is not a problem
+  // of the application -- it must not make the application "not ready". The
+  // hub's own at-path-source check decides it: a path's from is a site name,
+  // currentCluster a cluster name, and they only coincide when sites are named
+  // after their clusters.
+  const atSource = p => !((p.readiness || {}).checks || []).some(c => c.name === "at-path-source" && c.status === "Fail");
   const paths = (st.paths || []).map(p => ({
     name: p.name,
     from: p.from,
     to: p.to,
     actions: p.actions || [],
+    active: atSource(p),
     verdict: (p.readiness || {}).verdict || "Unknown",
     checks: (p.readiness || {}).checks || [],
     since: (p.readiness || {}).lastTransitionTime
-  }));
+  })).sort((x, y) => (y.active ? 1 : 0) - (x.active ? 1 : 0));
   const protectedOK = drCondOK(o, "Protected");
-  const verdict = paths.length ? worstVerdict(paths.map(p => p.verdict)) : protectedOK === false ? "NotReady" : "Unknown";
+  const activePaths = paths.filter(p => p.active);
+  const verdict = activePaths.length ? worstVerdict(activePaths.map(p => p.verdict)) : paths.length ? "Unknown" : protectedOK === false ? "NotReady" : "Unknown";
   const anns = drMeta(o).annotations || {};
   return reg(Object.assign(base(o, "papp"), {
     status: verdict,
@@ -3765,6 +3789,19 @@ function normPApp(o) {
     drPolicy: st.drPolicy || "",
     zoneBinding: st.zoneBinding || "",
     currentCluster: st.currentCluster || "",
+    // a Relocate or Failover Ramen is still carrying out (dr-hub status.move);
+    // Resume and Revert act on it
+    move: st.move ? {
+      action: st.move.action || "",
+      from: st.move.from || "",
+      to: st.move.to || "",
+      phase: st.move.phase || "InProgress",
+      since: st.move.since || null,
+      progression: st.move.progression || "",
+      blocking: st.move.blocking || "",
+      revertible: !!st.move.revertible,
+      revertBlocked: st.move.revertBlocked || ""
+    } : null,
     paths,
     siteMapping: st.siteMapping || "Unknown",
     recipe: st.recipe || null,
@@ -4245,10 +4282,8 @@ const drhub = {
     },
     spec: Object.assign({
       kind
-    }, kind !== "Restart" && path ? {
-      pathRef: {
-        name: path
-      }
+    }, !PATHLESS_KINDS.includes(kind) && path ? {
+      pathRef: path
     } : {}, target.kind === "rplan" ? {
       planRef: {
         name: target.name
@@ -4281,9 +4316,7 @@ const drhub = {
       namespace: target.namespace
     },
     spec: Object.assign({
-      pathRef: {
-        name: path
-      }
+      pathRef: path
     }, target.kind === "rplan" ? {
       planRef: {
         name: target.name
@@ -4356,9 +4389,7 @@ const drhub = {
     spec: Object.assign({
       schedule,
       template: Object.assign({
-        pathRef: {
-          name: path
-        }
+        pathRef: path
       }, target.kind === "rplan" ? {
         planRef: {
           name: target.name
@@ -4564,6 +4595,7 @@ Object.assign(GETTER, {
 });
 Object.assign(window, {
   drhub,
+  PATHLESS_KINDS,
   DR_KINDS,
   DR_ANN,
   VERDICT_RANK,
@@ -23246,6 +23278,18 @@ const ACTION_KIND_META = {
     c: "var(--warn)",
     desc: "Restart in place after a storage recovery. No path: the application stays where it is."
   },
+  Resume: {
+    label: "Resume",
+    icon: "play",
+    c: "var(--info)",
+    desc: "Follow the move Ramen is still carrying out to its end: no new Ramen action, the blocking error in the journal, the target's probes once Ramen finishes. Use it after fixing what blocked the move."
+  },
+  Revert: {
+    label: "Revert",
+    icon: "swap",
+    c: "var(--warn)",
+    desc: "Point the move back at the site it started from: Ramen demotes the half-restored target and promotes the source again. Only while the target was never placed."
+  },
   Test: {
     label: "Test",
     icon: "camera",
@@ -23514,8 +23558,22 @@ const runActionDialog = (target, kind, ctx) => {
     done: `${m.label} submitted — RecoveryAction created`,
     desc: m.desc,
     fields: v => {
-      const verdict = kind === "Restart" ? "Ready" : verdictOf(v.path);
-      return [kind !== "Restart" && {
+      const pathless = PATHLESS_KINDS.includes(kind);
+      const verdict = pathless ? "Ready" : verdictOf(v.path);
+      const mv = target.move;
+      return [mv && (kind === "Resume" || kind === "Revert") && {
+        k: "nm",
+        type: "note",
+        label: `${mv.action} ${mv.from} → ${mv.to}, ${mv.phase === "Stuck" ? "stuck" : "in progress"}${mv.progression ? ` (Ramen: ${mv.progression})` : ""}${mv.blocking ? `. Blocked by: ${mv.blocking}` : ""}.`
+      }, mv && kind === "Revert" && {
+        k: "nr",
+        type: "note",
+        label: `Ramen relocates the application back to ${mv.from} along the declared path ${mv.to} → ${mv.from}. Nothing ran on ${mv.to}, so nothing written there is lost.`
+      }, mv && kind === "Resume" && {
+        k: "nu",
+        type: "note",
+        label: `No new Ramen action: the run waits for Ramen to finish the move to ${mv.to}, then checks the application's probes there. Fix what blocks the move first, or the run times out like the move did.`
+      }, !pathless && {
         k: "path",
         label: "DR path",
         type: "select",
@@ -23528,17 +23586,17 @@ const runActionDialog = (target, kind, ctx) => {
           };
         }),
         empty: `No declared DRPath offers ${m.label} for this ${target.kind === "rplan" ? "plan" : "application"}. Declaring a direction is a dr-admin decision, not an override.`
-      }, kind !== "Restart" && verdict === "NotReady" && {
+      }, !pathless && verdict === "NotReady" && {
         k: "n1",
         type: "note",
         label: `Readiness on this path is NotReady: ${blockingChecks(target, v.path).join(", ") || "blocking checks failed"}. Running anyway needs a reason and the "override" verb on recoveryactions (dr-admin). The run is audited with the reason.`
-      }, kind !== "Restart" && verdict === "NotReady" && {
+      }, !pathless && verdict === "NotReady" && {
         k: "override",
         label: "Override reason (10–1024 characters)",
         type: "text",
         required: true,
         placeholder: "why this action must run despite the verdict"
-      }, kind !== "Restart" && verdict === "Degraded" && {
+      }, !pathless && verdict === "Degraded" && {
         k: "n2",
         type: "note",
         label: "Readiness is Degraded: only advisory checks failed. The action runs without an override."
@@ -23710,9 +23768,13 @@ const METHOD_TYPES = [{
   v: "sync-s3-backup",
   l: "sync + s3-backup"
 }];
-const parseSites = txt => String(txt || "").split(/[\n;]+/).map(l => l.trim()).filter(Boolean).map(l => {
-  // name=cluster[/zone][@region]
-  const [name, rest] = l.split("=").map(x => x.trim());
+// name=cluster[/zone][@region] entries. Blanks are insignificant anywhere:
+// around "=", "/", "@" and between entries, which may be separated by ";",
+// "," or newlines -- or by blanks alone ("site-a=a site-b=b"). Site, cluster,
+// zone and region names never contain blanks, so all of them are dropped
+// (a blank kept in a name made the plan's S3 stores never match its sites).
+const parseSites = txt => String(txt || "").replace(/\s*([=/@])\s*/g, "$1").split(/[\s;,]+/).filter(Boolean).map(l => {
+  const [name, rest] = l.split("=");
   const [clusterZone, region] = (rest || "").split("@");
   const [cluster, zone] = (clusterZone || "").split("/");
   return Object.assign({
@@ -23724,7 +23786,21 @@ const parseSites = txt => String(txt || "").split(/[\n;]+/).map(l => l.trim()).f
     region
   } : {});
 });
+// The plan's per-site S3 stores must name every site of the plan: said here
+// with the site that is missing, rather than as the API server's generic
+// "s3Profiles needs a store for every site".
+const checkStores = (sites, stores) => {
+  if (!stores.length) return;
+  const have = new Set(stores.map(s => s.site));
+  const missing = sites.map(s => s.name).filter(n => !have.has(n));
+  const unknown = stores.map(s => s.site).filter(n => !sites.some(x => x.name === n));
+  if (missing.length || unknown.length) throw new Error([missing.length && `No S3 store for site ${missing.join(", ")}`, unknown.length && `S3 store for ${unknown.join(", ")}, which is not a site of the plan`].filter(Boolean).join("; ") + `. Sites: ${sites.map(s => s.name).join(", ")}.`);
+};
 // ---- form <-> spec helpers for the editable parts of the DR objects --------
+// The secret a store names when the row leaves it empty: the one the DR hub
+// chart creates in Ramen's namespace. Pre-filling it in the row looked like a
+// placeholder and was typed a second time ("ramen-s3-secretramen-s3-secret").
+const DEFAULT_S3_SECRET = "ramen-s3-secret";
 const S3_COLS = [{
   k: "site",
   label: "Site",
@@ -23747,7 +23823,7 @@ const S3_COLS = [{
   flex: 1
 }, {
   k: "secretRef",
-  label: "Secret",
+  label: "Secret (empty: ramen-s3-secret)",
   placeholder: "ramen-s3-secret",
   flex: 1
 }];
@@ -23759,15 +23835,15 @@ const s3Rows = profiles => (profiles || []).map(p => ({
   secretRef: typeof p.secretRef === "string" ? p.secretRef : (p.secretRef || {}).name || ""
 }));
 const s3Profiles = rows => (rows || []).filter(r => (r.site || "").trim() && (r.bucket || "").trim()).map(r => Object.assign({
-  site: r.site.trim(),
+  site: r.site.replace(/\s+/g, ""),
   bucket: r.bucket.trim()
 }, r.endpoint && r.endpoint.trim() ? {
   endpoint: r.endpoint.trim()
 } : {}, r.region && r.region.trim() ? {
   region: r.region.trim()
-} : {}, r.secretRef && r.secretRef.trim() ? {
-  secretRef: r.secretRef.trim()
-} : {}));
+} : {}, {
+  secretRef: (r.secretRef || "").trim() || DEFAULT_S3_SECRET
+}));
 
 // Tiers: one row per tier. The selector is either labels (k=v, k2=v2) or
 // resource types (configmaps, secrets); the ready gates are a short list:
@@ -24051,7 +24127,7 @@ const newPlanDialog = () => ({
       bucket: "",
       endpoint: rows.length ? rows[rows.length - 1].endpoint : "",
       region: rows.length ? rows[rows.length - 1].region : "",
-      secretRef: rows.length ? rows[rows.length - 1].secretRef : "ramen-s3-secret"
+      secretRef: rows.length ? rows[rows.length - 1].secretRef : ""
     }),
     hint: "The secret (access key id / secret access key) must exist in Ramen's namespace on the hub. Leave empty to name one existing profile below instead."
   }, {
@@ -24090,8 +24166,10 @@ const newPlanDialog = () => ({
     } : {});
     const sc = kvToObj(v.sc);
     const stores = s3Profiles(v.s3);
+    const sites = parseSites(v.sites);
+    checkStores(sites, stores);
     const spec = Object.assign({
-      sites: parseSites(v.sites),
+      sites,
       methods: [method],
       storageProfile: Object.assign({
         storageClassSelector: Object.keys(sc).length ? {
@@ -24145,7 +24223,7 @@ const editPlanS3Dialog = p => ({
       bucket: "",
       endpoint: rows.length ? rows[rows.length - 1].endpoint : "",
       region: rows.length ? rows[rows.length - 1].region : "",
-      secretRef: rows.length ? rows[rows.length - 1].secretRef : "ramen-s3-secret"
+      secretRef: rows.length ? rows[rows.length - 1].secretRef : ""
     })
   }, {
     k: "velero",
@@ -24153,10 +24231,14 @@ const editPlanS3Dialog = p => ({
     type: "text",
     def: p.veleroNamespace || "velero"
   }],
-  run: v => drhub.patchPlan(p, {
-    s3Profiles: s3Profiles(v.s3),
-    veleroNamespace: v.velero && v.velero.trim() ? v.velero.trim() : null
-  })
+  run: v => {
+    const stores = s3Profiles(v.s3);
+    checkStores(p.sites, stores);
+    return drhub.patchPlan(p, {
+      s3Profiles: stores,
+      veleroNamespace: v.velero && v.velero.trim() ? v.velero.trim() : null
+    });
+  }
 });
 const newPathDialog = plans => ({
   title: "Declare a DR path",
@@ -24241,9 +24323,7 @@ const newPathDialog = plans => ({
     spec: Object.assign({
       from: v.from,
       to: v.to,
-      planRef: {
-        name: v.plan
-      },
+      planRef: v.plan,
       actions: v.actions,
       announcementHandover: !!v.handover
     }, v.actions.includes("Test") ? {
@@ -24392,9 +24472,7 @@ const protectAppDialogDR = (plans, cfg) => ({
     const tiers = tiersSpec(v.tiers),
       probes = probesSpec(v.probes);
     const spec = Object.assign({
-      planRef: {
-        name: v.plan
-      },
+      planRef: v.plan,
       source: v.source,
       target: v.target,
       kind: v.appKind
@@ -24545,9 +24623,7 @@ const newRPlanDialog = (paths, apps) => ({
       name: v.name.trim(),
       namespace: v.namespace,
       spec: {
-        pathRef: {
-          name: v.path
-        },
+        pathRef: v.path,
         applications: v.apps.map(a => ({
           name: a,
           priority: prio[a] || 1
@@ -24912,6 +24988,20 @@ Object.assign(ACTIONS, {
     op: "restart",
     dialog: runActionDialog(a, "Restart")
   }, {
+    label: "Resume move",
+    icon: "play",
+    op: "relocate",
+    dialog: runActionDialog(a, "Resume"),
+    disabled: !a.move,
+    hint: "No move is in progress"
+  }, {
+    label: a.move ? `Revert to ${a.move.from}` : "Revert move",
+    icon: "swap",
+    op: "relocate",
+    dialog: runActionDialog(a, "Revert"),
+    disabled: !(a.move && a.move.revertible),
+    hint: a.move ? a.move.revertBlocked || "This move cannot be reverted" : "No move is in progress"
+  }, {
     label: "Test",
     icon: "camera",
     op: "test",
@@ -25253,12 +25343,14 @@ function PAppTile({
   }, /*#__PURE__*/React.createElement("i", null, "site mapping"), "resolved")), /*#__PURE__*/React.createElement("div", {
     className: "mlist"
   }, a.paths.map(p => /*#__PURE__*/React.createElement("div", {
-    className: "mrow" + (p.verdict === "NotReady" ? " bad" : ""),
+    className: "mrow" + (p.active && p.verdict === "NotReady" ? " bad" : ""),
     key: p.name
-  }, /*#__PURE__*/React.createElement(VerdictBadge, {
+  }, p.active ? /*#__PURE__*/React.createElement(VerdictBadge, {
     v: p.verdict,
     sm: true
-  }), /*#__PURE__*/React.createElement("b", null, p.name), /*#__PURE__*/React.createElement("span", {
+  }) : /*#__PURE__*/React.createElement("span", {
+    className: "chip"
+  }, "inactive"), /*#__PURE__*/React.createElement("b", null, p.name), /*#__PURE__*/React.createElement("span", {
     className: "spacer"
   }), /*#__PURE__*/React.createElement("span", {
     className: "mono"
@@ -25898,7 +25990,15 @@ function PPlanDetail({
   }, /*#__PURE__*/React.createElement(Icon, {
     n: "alert",
     s: 15
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "The plan is not ready."), " ", (p.conditions.find(c => c.type === "Ready") || {}).message || "See the conditions below.")), /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "The plan is not ready."), " ", (p.conditions.find(c => c.type === "Ready") || {}).message || "See the conditions below.")), (() => {
+    const s3c = p.conditions.find(c => c.type === "S3ProfileResolved");
+    return s3c && s3c.status === "False" && /*#__PURE__*/React.createElement("div", {
+      className: "banner"
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "alert",
+      s: 15
+    }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, s3c.reason === "S3StoreRejected" ? "An S3 store refused dr-hub's probe." : "The S3 stores are not ready."), " ", s3c.message));
+  })(), /*#__PURE__*/React.createElement("div", {
     className: "stats"
   }, /*#__PURE__*/React.createElement(Stat, {
     k: "Sites",
@@ -26011,11 +26111,29 @@ function PPlanDetail({
   }, p.s3Profile ? /*#__PURE__*/React.createElement(Props, {
     rows: [["Ramen S3 profile", /*#__PURE__*/React.createElement(Mono, null, p.s3Profile)]]
   }) : /*#__PURE__*/React.createElement(Table, {
-    cols: ["Site", "Bucket", "Endpoint", "Region", "Secret"],
+    cols: ["Site", "Bucket", "Endpoint", "Region", "Secret", "Probe"],
     empty: "No S3 store declared \u2014 backup methods need one per site.",
-    rows: p.s3Profiles.map(s => [/*#__PURE__*/React.createElement("b", null, s.site), /*#__PURE__*/React.createElement(Mono, null, s.bucket), /*#__PURE__*/React.createElement(Mono, null, s.endpoint), /*#__PURE__*/React.createElement(Mono, null, s.region), /*#__PURE__*/React.createElement(Mono, {
-      dim: true
-    }, refName2(s.secretRef))])
+    rows: p.s3Profiles.map(s => {
+      const pr = p.s3Stores[s.site];
+      const probe = !pr ? /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: "var(--dim2)"
+        }
+      }, "not probed yet") : pr.ok ? /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: "var(--ok)"
+        },
+        title: pr.checkedAt ? "checked " + pr.checkedAt : ""
+      }, "accepts list, write, delete") : /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: "var(--bad)"
+        },
+        title: pr.checkedAt ? "checked " + pr.checkedAt : ""
+      }, /*#__PURE__*/React.createElement("b", null, pr.code), pr.step ? ` on ${pr.step}` : "", pr.message ? ": " + pr.message : "");
+      return [/*#__PURE__*/React.createElement("b", null, s.site), /*#__PURE__*/React.createElement(Mono, null, s.bucket), /*#__PURE__*/React.createElement(Mono, null, s.endpoint), /*#__PURE__*/React.createElement(Mono, null, s.region), /*#__PURE__*/React.createElement(Mono, {
+        dim: true
+      }, refName2(s.secretRef)), probe];
+    })
   }))), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("h3", null, "Derived pairs"), /*#__PURE__*/React.createElement("div", {
@@ -26249,12 +26367,17 @@ function PAppDetail({
     key: r.id,
     label: `${r.action || "Test"} ${r.name}`,
     onClick: () => nav.detail(r)
-  })))), a.verdict === "NotReady" && /*#__PURE__*/React.createElement("div", {
+  })))), a.move && /*#__PURE__*/React.createElement("div", {
+    className: "banner" + (a.move.phase === "Stuck" ? "" : " info")
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: a.move.phase === "Stuck" ? "alert" : "move",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, a.move.action, " ", a.move.from, " \u2192 ", a.move.to, " ", a.move.phase === "Stuck" ? "is stuck" : "in progress", a.move.since ? ` since ${fmtAgo(a.move.since)}` : "", "."), a.move.blocking ? /*#__PURE__*/React.createElement(React.Fragment, null, " Ramen reports: ", /*#__PURE__*/React.createElement(Mono, null, a.move.blocking), ".") : a.move.progression ? ` Ramen: ${a.move.progression}.` : "", a.move.phase === "Stuck" && /*#__PURE__*/React.createElement(React.Fragment, null, " Use \u22EE \u2192 ", /*#__PURE__*/React.createElement("b", null, "Resume move"), " once its cause is fixed", a.move.revertible ? /*#__PURE__*/React.createElement(React.Fragment, null, ", or ", /*#__PURE__*/React.createElement("b", null, "Revert to ", a.move.from)) : /*#__PURE__*/React.createElement(React.Fragment, null, " \u2014 it cannot be reverted: ", a.move.revertBlocked), "."))), !a.move && a.verdict === "NotReady" && /*#__PURE__*/React.createElement("div", {
     className: "banner"
   }, /*#__PURE__*/React.createElement(Icon, {
     n: "alert",
     s: 15
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Not ready on at least one path."), " The run-action controls need an override with a reason on that path; the failing checks are listed under Readiness.")), a.awaitingRestore && /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Not ready on the path it can move along."), " The run-action controls need an override with a reason on that path; the failing checks are listed under Readiness.")), a.awaitingRestore && /*#__PURE__*/React.createElement("div", {
     className: "banner",
     style: {
       color: "var(--warn)",
@@ -26340,7 +26463,8 @@ function PAppDetail({
     className: "card",
     key: p.name,
     style: {
-      marginTop: 10
+      marginTop: 10,
+      opacity: p.active ? 1 : 0.7
     }
   }, /*#__PURE__*/React.createElement("h3", {
     style: {
@@ -26351,10 +26475,13 @@ function PAppDetail({
   }, /*#__PURE__*/React.createElement("span", null, p.name), /*#__PURE__*/React.createElement(PathArrow, {
     from: p.from,
     to: p.to
-  }), /*#__PURE__*/React.createElement(VerdictBadge, {
+  }), p.active ? /*#__PURE__*/React.createElement(VerdictBadge, {
     v: p.verdict,
     sm: true
-  }), /*#__PURE__*/React.createElement("span", {
+  }) : /*#__PURE__*/React.createElement("span", {
+    className: "chip",
+    title: "Readiness of this path counts once the application runs on its source site"
+  }, "inactive \xB7 runs on ", a.currentCluster), /*#__PURE__*/React.createElement("span", {
     className: "spacer",
     style: {
       flex: 1
@@ -26366,9 +26493,13 @@ function PAppDetail({
     }
   }, p.actions.join(" · "), p.since ? ` · since ${fmtAgo(p.since)}` : "")), /*#__PURE__*/React.createElement("div", {
     className: "bd"
-  }, /*#__PURE__*/React.createElement(CheckTable, {
+  }, p.active ? /*#__PURE__*/React.createElement(CheckTable, {
     checks: p.checks
-  })))), !a.paths.length && /*#__PURE__*/React.createElement("div", {
+  }) : /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "var(--dim2)"
+    }
+  }, "The application runs on ", a.currentCluster, "; this path starts at ", p.from, ". It becomes the path to act on after a move to ", p.from, " \u2014 its checks are evaluated then.")))), !a.paths.length && /*#__PURE__*/React.createElement("div", {
     className: "empty"
   }, /*#__PURE__*/React.createElement(Icon, {
     n: "swap",

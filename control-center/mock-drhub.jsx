@@ -33,6 +33,8 @@
       autoRestart: {enabled: true, stableFor: "2m"}},
     status: {observedGeneration: 1, sites: [{name: "fra-a", drCluster: "cluster-a", classesApplied: true, agentAvailable: true}, {name: "fra-b", drCluster: "cluster-b", classesApplied: true, agentAvailable: true}],
       pairs: [{sites: ["fra-a", "fra-b"], paths: ["fra-a-to-fra-b", "fra-b-to-fra-a"], drPolicies: ["fra-primary-5m", "fra-vault-15m"], peerClassesResolved: true}],
+      s3Stores: [{site: "fra-a", bucket: "dr-fra-a", ok: true, checkedAt: new Date(Date.now() - 120000).toISOString()},
+        {site: "fra-b", bucket: "dr-fra-b", ok: true, checkedAt: new Date(Date.now() - 120000).toISOString()}],
       conditions: [cond("Derived", true, "Derived", "DRClusters, DRPolicies and classes applied"), cond("InventoryReady", true, "Reported", "both sites reported"), cond("S3ProfileResolved", true, "Resolved", "profiles sb-3f9a, sb-71c0"), cond("Ready", true, "Ready", "")]}
   }));
   store.ProtectionPlan.push(Object.assign(api("ProtectionPlan"), {
@@ -45,9 +47,26 @@
       conditions: [cond("Derived", true, "Derived", "stretch plan: no Ramen objects derived"), cond("InventoryReady", true, "Reported", ""), cond("Ready", false, "AgentUnavailable", "dr-agent on stretch/eu-central-1c has not reported for 12m", 12)]}
   }));
 
+  // A plan whose store on lab-b the S3 service refuses: dr-hub's probe keeps
+  // the service's own answer, per site.
+  store.ProtectionPlan.push(Object.assign(api("ProtectionPlan"), {
+    metadata: meta("lab"),
+    spec: {sites: [{name: "lab-a", cluster: "cluster-a"}, {name: "lab-b", cluster: "cluster-b"}],
+      storageProfile: {storageClassSelector: {matchLabels: {"simplyblock.io/dr": "true"}}, consistencyGroups: "Disabled"},
+      methods: [{name: "primary", type: "async", schedulingInterval: "5m"}],
+      s3Profiles: [{site: "lab-a", bucket: "dr-lab-a", endpoint: "https://s3.eu-central-1.amazonaws.com", region: "eu-central-1", secretRef: "ramen-s3-secret"},
+        {site: "lab-b", bucket: "dr-lab-b", endpoint: "https://s3.eu-central-1.amazonaws.com", region: "eu-central-1", secretRef: "ramen-s3-secret"}]},
+    status: {observedGeneration: 1, sites: [{name: "lab-a", classesApplied: false, agentAvailable: true}, {name: "lab-b", classesApplied: false, agentAvailable: true}], pairs: [],
+      s3Stores: [{site: "lab-a", bucket: "dr-lab-a", ok: true, checkedAt: new Date(Date.now() - 60000).toISOString()},
+        {site: "lab-b", bucket: "dr-lab-b", ok: false, step: "list", code: "NoSuchBucket", message: "The specified bucket does not exist (HTTP 404, request id 7Q2X9K1M)", checkedAt: new Date(Date.now() - 60000).toISOString()}],
+      conditions: [cond("Derived", false, "NoPaths", "no valid DRPath connects two sites of the plan"), cond("InventoryReady", true, "Reported", ""),
+        cond("S3ProfileResolved", false, "S3StoreRejected", "the S3 store refused: lab-b (bucket dr-lab-b, eu-central-1): NoSuchBucket: The specified bucket does not exist (HTTP 404, request id 7Q2X9K1M) (list)"),
+        cond("Ready", false, "Waiting", "waiting for Derived, S3ProfileResolved")]}
+  }));
+
   // ---- paths ---------------------------------------------------------------
   const path = (name, from, to, plan, actions, extra, status) => Object.assign(api("DRPath"), {metadata: meta(name),
-    spec: Object.assign({from, to, planRef: {name: plan}, actions, announcementHandover: false}, extra || {}),
+    spec: Object.assign({from, to, planRef: plan, actions, announcementHandover: false}, extra || {}),
     status: Object.assign({drPolicies: plan === "fra" ? ["fra-primary-5m", "fra-vault-15m"] : [], profileConsistency: "Consistent",
       profileComparison: ["inventory-reported", "logical-networks", "guest-networks", "address-pools", "domains", "registry-mirror", "storage-classes", "zones", "test-target"].map(f => ({field: f, status: "Pass", message: ""})),
       conditions: [cond("Valid", true, "Valid", "")]}, status || {})});
@@ -65,7 +84,7 @@
     check("test-prereqs", test ? "Pass" : "NotApplicable", true, test ? "Ready" : "NoTest", ""), check("test-recent", test ? "Pass" : "NotApplicable", false, test ? "Recent" : "NoTest", test ? "passed 30m ago" : ""),
     check("profile-consistent", "Pass", false, "Consistent", "")].concat(extra || []);
   const app = (name, ns, plan, source, target, kind, extra, paths, status) => Object.assign(api("ProtectedApplication"), {metadata: meta(name, ns, (extra || {}).meta),
-    spec: Object.assign({planRef: {name: plan}, source, target, kind}, (extra || {}).spec || {}),
+    spec: Object.assign({planRef: plan, source, target, kind}, (extra || {}).spec || {}),
     status: Object.assign({currentCluster: source === "fra-a" ? "cluster-a" : source === "fra-b" ? "cluster-b" : "stretch", paths, conditions: [cond("Bound", true, "Bound", ""), cond("Protected", true, "Protected", "")]}, status || {})});
   store.ProtectedApplication.push(app("shop", OPS, "fra", "fra-a", "fra-b", "discovered",
     {spec: {method: "primary", discovered: {protectedNamespaces: ["shop"], pvcSelector: {matchLabels: {app: "shop"}}}, tiers: [{name: "db", selector: {resourceTypes: ["statefulsets"], matchLabels: {tier: "db"}}, ready: [{type: "statefulSetsReady"}]}, {name: "web", selector: {resourceTypes: ["deployments"]}, ready: [{type: "deploymentsReady"}]}],
@@ -101,6 +120,16 @@
     [{name: "fra-a-to-fra-b", from: "fra-a", to: "fra-b", actions: ["Failover", "Relocate", "Test"], readiness: {verdict: "Ready", checks: readyChecks(true).map(c => c.name === "storage-replicating" ? check("storage-replicating", "Pass", false, "Replicating", "lag 42s") : c), lastTransitionTime: agoIso(3000)}},
      {name: "fra-b-to-fra-a", from: "fra-b", to: "fra-a", actions: ["Relocate"], readiness: {verdict: "NotReady", checks: [check("at-path-source", "Fail", true, "NotAtSource", "application runs on cluster-a")], lastTransitionTime: agoIso(3000)}}],
     {drpc: "payments/payments", placement: "payments/payments", drPolicy: "fra-primary-5m", recipe: {name: "payments", namespace: "payments", generated: true, hash: "0b77aa"}}));
+  // a consistency-group relocate stuck in the target's restore (2026-10-03): Ramen keeps retrying, the action ended
+  store.ProtectedApplication.push(app("wiki", OPS, "fra", "fra-a", "fra-b", "discovered",
+    {spec: {method: "primary", discovered: {protectedNamespaces: ["wiki"], pvcSelector: {matchLabels: {app: "wiki"}}}}},
+    [{name: "fra-a-to-fra-b", from: "fra-a", to: "fra-b", actions: ["Failover", "Relocate", "Test"], readiness: {verdict: "NotReady",
+      checks: readyChecks(true).concat([check("move-settled", "Fail", true, "MoveStuck", "relocate fra-a→fra-b since 2026-10-03T23:17:24Z is stuck: ClusterDataReady: Failed to restore PVs/PVCs: destination volume ID is empty for VGRC vgrcontent-a5b8. Resume it once its cause is fixed, or Revert it to fra-a")]), lastTransitionTime: agoIso(40)}},
+     {name: "fra-b-to-fra-a", from: "fra-b", to: "fra-a", actions: ["Relocate"], readiness: {verdict: "NotReady", checks: [check("at-path-source", "Fail", true, "NotAtSource", "application runs on cluster-a")], lastTransitionTime: agoIso(40)}}],
+    {drpc: `${OPS}/wiki`, drPolicy: "fra-primary-5m", recipe: {name: "wiki", namespace: OPS, generated: true, hash: "51aa0e"}, lastAction: `${OPS}/relocate-wiki-1`,
+      move: {action: "Relocate", from: "fra-a", to: "fra-b", phase: "Stuck", since: agoIso(55), progression: "WaitForReadiness",
+        blocking: "ClusterDataReady: Failed to restore PVs/PVCs: destination volume ID is empty for VGRC vgrcontent-a5b8", revertible: true},
+      conditions: [cond("Bound", true, "Bound", ""), cond("Protected", false, "Error", "VolumeReplicationGroup on cluster-b is reporting errors", 40)]}));
   store.ProtectedApplication.push(app("vm-erp", OPS, "metro", "metro-1a", "metro-1c", "discovered",
     {spec: {discovered: {protectedNamespaces: ["erp"], pvcSelector: {matchLabels: {"kubevirt.io/domain": "erp"}}}, tiers: [{name: "vm", selector: {resourceTypes: ["virtualmachines"]}, ready: [{type: "vmRunning"}]}]}},
     [{name: "metro-1a-to-1c", from: "metro-1a", to: "metro-1c", actions: ["Relocate", "Failover"], readiness: {verdict: "NotReady", checks: [check("path-declared", "Pass", true, "Declared", ""), check("zone-protected", "Pass", true, "Bound", "zone binding eu-central-1a"), check("executor-ready", "Fail", true, "AgentUnavailable", "dr-agent on stretch has not reported for 12m"), check("recipe-valid", "Pass", true, "Valid", "")], lastTransitionTime: agoIso(12)}}],
@@ -112,31 +141,31 @@
 
   // ---- recovery plan --------------------------------------------------------
   store.RecoveryPlan.push(Object.assign(api("RecoveryPlan"), {metadata: meta("tier-1", OPS),
-    spec: {pathRef: {name: "fra-a-to-fra-b"}, applications: [{name: "ledger", priority: 1}, {name: "shop", priority: 2, dependsOn: ["ledger"]}], gates: {betweenPriorities: "allHealthy"}},
+    spec: {pathRef: "fra-a-to-fra-b", applications: [{name: "ledger", priority: 1}, {name: "shop", priority: 2, dependsOn: ["ledger"]}], gates: {betweenPriorities: "allHealthy"}},
     status: {readiness: {verdict: "NotReady", checks: [check("plan-order", "Pass", true, "Valid", ""), check("app/ledger", "Fail", true, "NotReady", "ramen-healthy failed"), check("app/shop", "Warn", false, "Degraded", "storage-replicating")]}, conditions: [cond("Valid", true, "Valid", "")]}}));
 
   // ---- runs -----------------------------------------------------------------------
   const step = (name, result, startMin, durS, message, logRef) => ({name, result, startTime: agoIso(startMin), endTime: result === "Running" ? undefined : iso(Date.now() - startMin * 60000 + durS * 1000), message, logRef, idempotencyKey: U().hex(8)});
   store.RecoveryAction.push(Object.assign(api("RecoveryAction"), {metadata: meta("relocate-ledger-1", OPS, {annotations: {"dr.simplyblock.io/created-by": "alice@example.com"}, creationTimestamp: agoIso(60 * 24 * 9 + 20)}),
-    spec: {kind: "Relocate", pathRef: {name: "fra-b-to-fra-a"}, applicationRef: {name: "ledger"}, timeout: "30m"},
+    spec: {kind: "Relocate", pathRef: "fra-b-to-fra-a", applicationRef: {name: "ledger"}, timeout: "30m"},
     status: {phase: "Completed", startTime: agoIso(60 * 24 * 9 + 20), completionTime: agoIso(60 * 24 * 9), sourceCluster: "cluster-b", targetCluster: "cluster-a",
       steps: [step("pre-flight", "Succeeded", 60 * 24 * 9 + 20, 4, "Ready"), step("pre-source hooks", "Succeeded", 60 * 24 * 9 + 19, 41, "quiesce-db ok", "cluster-b/simplyblock-dr-agent/task-4f1a"), step("ramen relocate", "Succeeded", 60 * 24 * 9 + 18, 612, "DRPC Relocated"),
         step("target starting", "Succeeded", 60 * 24 * 9 + 8, 210, "tiers db, web ready"), step("post-target hooks", "Succeeded", 60 * 24 * 9 + 4, 12, ""), step("confirming", "Succeeded", 60 * 24 * 9 + 3, 30, "probes passed")],
       report: {operator: "alice@example.com", rtoSeconds: 1190, achievedRPOSeconds: 0, probes: [{name: "ledger-api", passed: true, message: "200 in 140ms", time: agoIso(60 * 24 * 9)}], hooks: [{point: "preSource", name: "quiesce-db", result: "Succeeded", durationSeconds: 41}], warnings: [], preFlight: {verdict: "Ready", checks: readyChecks(false)}},
       reportKey: "dr/reports/ramen-ops/recoveryaction/2026/09/20260920T101200Z-relocate-ledger-1-8f2a1c0d.json", conditions: [cond("Completed", true, "Completed", "", 60 * 24 * 9)]}}));
   store.RecoveryAction.push(Object.assign(api("RecoveryAction"), {metadata: meta("failover-payments-x7", "payments", {annotations: {"dr.simplyblock.io/created-by": "bob@example.com"}, creationTimestamp: agoIso(60 * 24 * 2)}),
-    spec: {kind: "Failover", pathRef: {name: "fra-a-to-fra-b"}, applicationRef: {name: "payments"}, override: {reason: "storage-replicating advisory only; site A network partitioned, business decision to fail over"}, timeout: "30m"},
+    spec: {kind: "Failover", pathRef: "fra-a-to-fra-b", applicationRef: {name: "payments"}, override: {reason: "storage-replicating advisory only; site A network partitioned, business decision to fail over"}, timeout: "30m"},
     status: {phase: "Failed", startTime: agoIso(60 * 24 * 2), completionTime: agoIso(60 * 24 * 2 - 14), sourceCluster: "cluster-a", targetCluster: "cluster-b",
       steps: [step("pre-flight", "Succeeded", 60 * 24 * 2, 3, "Degraded, overridden"), step("ramen failover", "Succeeded", 60 * 24 * 2 - 1, 480, "DRPC FailedOver"), step("target starting", "Failed", 60 * 24 * 2 - 9, 300, "tier web: deployment payments-web not ready after 5m (ImagePullBackOff: registry mirror not bound on fra-b)")],
       report: {operator: "bob@example.com", overrideReason: "storage-replicating advisory only; site A network partitioned, business decision to fail over", rtoSeconds: null, achievedRPOSeconds: 240, probes: [], hooks: [], warnings: ["registry mirror role unbound on target site profile"], preFlight: {verdict: "Degraded", checks: readyChecks(true)},
         guests: [{vm: "payments/pay-vm-0", network: "backend", expectedIP: "192.168.210.40", observedIP: "192.168.210.40", match: true}, {vm: "payments/pay-vm-1", network: "backend", expectedIP: "192.168.210.41", observedIP: "192.168.210.133", match: false}]},
       reportKey: "dr/reports/payments/recoveryaction/2026/09/20260927T091500Z-failover-payments-x7-1a2b3c4d.json", conditions: [cond("Completed", false, "Failed", "target starting failed", 60 * 24 * 2 - 14)]}}));
   store.RecoveryAction.push(Object.assign(api("RecoveryAction"), {metadata: meta("relocate-shop-live", OPS, {annotations: {"dr.simplyblock.io/created-by": "alice@example.com"}, creationTimestamp: agoIso(6)}),
-    spec: {kind: "Relocate", pathRef: {name: "fra-a-to-fra-b"}, applicationRef: {name: "shop"}, timeout: "30m"},
+    spec: {kind: "Relocate", pathRef: "fra-a-to-fra-b", applicationRef: {name: "shop"}, timeout: "30m"},
     status: {phase: "TargetStarting", startTime: agoIso(6), sourceCluster: "cluster-a", targetCluster: "cluster-b",
       steps: [step("pre-flight", "Succeeded", 6, 3, "Degraded"), step("pre-source hooks", "Succeeded", 6, 20, ""), step("ramen relocate", "Succeeded", 5, 200, "DRPC Relocated"), step("target starting", "Running", 2, 0, "tier db ready; waiting for tier web")], conditions: []}}));
   store.TestBubble.push(Object.assign(api("TestBubble"), {metadata: meta("test-shop-w4", OPS, {labels: {"dr.simplyblock.io/schedule": "shop-weekly"}, annotations: {"dr.simplyblock.io/created-by": "system:serviceaccount:simplyblock-dr:dr-hub"}, creationTimestamp: agoIso(60 * 30 + 25)}),
-    spec: {pathRef: {name: "fra-a-to-fra-b"}, applicationRef: {name: "shop"}, cloneSource: "latest-replicated-snapshot", maxLifetime: "24h"},
+    spec: {pathRef: "fra-a-to-fra-b", applicationRef: {name: "shop"}, cloneSource: "latest-replicated-snapshot", maxLifetime: "24h"},
     status: {phase: "Completed", testID: "w4-7f21", sourceCluster: "cluster-a", targetCluster: "cluster-b", startTime: agoIso(60 * 30 + 25), clonesReadyTime: agoIso(60 * 30 + 21), completionTime: agoIso(60 * 30),
       applications: [{name: "shop", priority: 1, phase: "Restored", readyTime: agoIso(60 * 30 + 12)}], bubbleNamespaces: ["dr-test-w4-7f21-shop"],
       steps: [step("clone volumes", "Succeeded", 60 * 30 + 25, 240, "3 PVCs cloned from replicated snapshot"), step("restore objects", "Succeeded", 60 * 30 + 21, 300, "Velero restore from capture 19"), step("validate", "Succeeded", 60 * 30 + 16, 200, "tiers ready, probes passed"), step("tear down", "Succeeded", 60 * 30 + 3, 180, "")],
@@ -145,13 +174,13 @@
       report: {operator: "system:serviceaccount:simplyblock-dr:dr-hub", outcome: "Passed", testPoint: agoIso(60 * 30 + 30), achievedRPOSeconds: 300, estimatedRTOSeconds: 720, consistency: "crash-consistent", coverage: {exercised: ["volumes", "kube-objects", "tiers", "probes"], notExercised: ["external hooks", "announcement hand-over"]}, warnings: []},
       reportKey: "dr/reports/ramen-ops/testbubble/2026/09/20260928T031500Z-test-shop-w4-77aa11bb.json", conditions: [cond("Outcome", true, "Passed", "", 60 * 30), cond("Completed", true, "Completed", "", 60 * 30)]}}));
   store.TestBubble.push(Object.assign(api("TestBubble"), {metadata: meta("test-payments-hold", "payments", {annotations: {"dr.simplyblock.io/created-by": "carol@example.com"}, creationTimestamp: agoIso(40)}),
-    spec: {pathRef: {name: "fra-a-to-fra-b"}, applicationRef: {name: "payments"}, cloneSource: "latest-replicated-snapshot", holdFor: "2h", maxLifetime: "24h"},
+    spec: {pathRef: "fra-a-to-fra-b", applicationRef: {name: "payments"}, cloneSource: "latest-replicated-snapshot", holdFor: "2h", maxLifetime: "24h"},
     status: {phase: "Holding", testID: "h1-0c9d", sourceCluster: "cluster-a", targetCluster: "cluster-b", startTime: agoIso(40), clonesReadyTime: agoIso(36),
       applications: [{name: "payments", priority: 1, phase: "Restored", readyTime: agoIso(28)}], bubbleNamespaces: ["dr-test-h1-0c9d-payments"],
       steps: [step("clone volumes", "Succeeded", 40, 200, ""), step("restore objects", "Succeeded", 36, 280, ""), step("validate", "Succeeded", 31, 150, ""), step("hold", "Running", 28, 0, "held for manual verification until 2h")],
       invariants: [{object: "ramendr.openshift.io/DRPlacementControl payments/payments", field: "status.phase", before: "Deployed", after: "Deployed"}], checks: [{name: "tiers-ready", status: "Pass", message: ""}], conditions: []}}));
   store.TestSchedule.push(Object.assign(api("TestSchedule"), {metadata: meta("shop-weekly", OPS),
-    spec: {schedule: "0 3 * * 0", template: {pathRef: {name: "fra-a-to-fra-b"}, applicationRef: {name: "shop"}, cloneSource: "latest-replicated-snapshot"}, retention: {keepLast: 8, keepFor: "1440h"}},
+    spec: {schedule: "0 3 * * 0", template: {pathRef: "fra-a-to-fra-b", applicationRef: {name: "shop"}, cloneSource: "latest-replicated-snapshot"}, retention: {keepLast: 8, keepFor: "1440h"}},
     status: {lastScheduleTime: agoIso(60 * 30 + 25), lastSuccessfulTime: agoIso(60 * 30), conditions: [cond("Valid", true, "Valid", "")]}}));
   store.RestoreAction.push(Object.assign(api("RestoreAction"), {metadata: meta("restore-archive-1", OPS, {creationTimestamp: agoIso(200)}),
     spec: {applicationRef: {name: "archive"}, timeout: "30m"},
@@ -228,18 +257,33 @@
   const create = kind => body => {
     const m = body.metadata || {};
     if (!m.name) return {err: "metadata.name is required", reason: "Invalid"};
+    // The API server's schema: these references are plain names, not {name}
+    // objects. Rejected the way the real server rejects them, so a form that
+    // sends the wrong shape fails here too (2026-10-03, DRPath planRef).
+    const sp = body.spec || {};
+    const mustBeName = {DRPath: ["planRef"], ProtectedApplication: ["planRef"], RecoveryPlan: ["pathRef"], RecoveryAction: ["pathRef"], TestBubble: ["pathRef"]}[kind] || [];
+    if (kind === "RecoveryAction" && ["Restart", "Resume", "Revert"].includes(sp.kind) && sp.pathRef !== undefined)
+      return {err: `RecoveryAction.dr.simplyblock.io "${m.name}" is invalid: spec: a Restart, Resume or Revert names an application and no path`, reason: "Invalid"};
+    for (const f of mustBeName)
+      if (sp[f] !== undefined && typeof sp[f] !== "string")
+        return {err: `${kind}.dr.simplyblock.io "${m.name}" is invalid: spec.${f}: Invalid value: "object": spec.${f} in body must be of type string: "object"`, reason: "Invalid"};
     if (findRef(kind, m.namespace, m.name)) return {err: `${kind.toLowerCase()}s "${m.name}" already exists`, reason: "AlreadyExists"};
     const obj = Object.assign({}, body, {metadata: Object.assign({}, m, {uid: uid(), creationTimestamp: iso(Date.now()), generation: 1,
       annotations: Object.assign({}, m.annotations || {}, ["RecoveryAction", "TestBubble"].includes(kind) ? {"dr.simplyblock.io/created-by": "you@example.com"} : {})}), status: {}});
     if (kind === "RecoveryAction") {
       if (body.spec.override && viewer() !== "admin") return {err: 'admission webhook "vrecoveryaction.dr.simplyblock.io" denied the request: a readiness override needs the "override" verb on recoveryactions, which only dr-admin has', reason: "Forbidden"};
       const app = body.spec.applicationRef && findRef("ProtectedApplication", m.namespace, body.spec.applicationRef.name);
-      if (app && body.spec.kind !== "Restart") {
-        const p = (app.status.paths || []).find(x => x.name === (body.spec.pathRef || {}).name);
-        if (!p) return {err: `application ${app.metadata.name} is not on path ${(body.spec.pathRef || {}).name}`, reason: "Invalid"};
+      // Resume and Revert act on the application's in-flight move, not on a path (dr-hub's webhook)
+      if (app && (body.spec.kind === "Resume" || body.spec.kind === "Revert")) {
+        if (!app.status.move) return {err: `admission webhook denied the request: ProtectedApplication ${app.metadata.name} has no move in progress to ${body.spec.kind.toLowerCase()}`, reason: "Forbidden"};
+        if (body.spec.kind === "Revert" && !app.status.move.revertible) return {err: `admission webhook denied the request: the move cannot be reverted: ${app.status.move.revertBlocked}`, reason: "Forbidden"};
+      }
+      if (app && !["Restart", "Resume", "Revert"].includes(body.spec.kind)) {
+        const p = (app.status.paths || []).find(x => x.name === body.spec.pathRef);
+        if (!p) return {err: `application ${app.metadata.name} is not on path ${body.spec.pathRef}`, reason: "Invalid"};
         if (p.readiness.verdict === "NotReady" && !body.spec.override) return {err: `admission webhook denied the request: readiness on ${p.name} is NotReady (${p.readiness.checks.filter(c => c.blocking && c.status === "Fail").map(c => c.name).join(", ")}); an override with a reason is required`, reason: "Forbidden"};
       }
-      obj.__sim = true; obj.status = {phase: "Pending", startTime: obj.metadata.creationTimestamp, sourceCluster: "cluster-a", targetCluster: body.spec.kind === "Restart" ? "cluster-a" : "cluster-b", steps: [], conditions: []};
+      obj.__sim = true; obj.status = {phase: "Pending", startTime: obj.metadata.creationTimestamp, sourceCluster: "cluster-a", targetCluster: body.spec.kind === "Restart" || body.spec.kind === "Revert" ? "cluster-a" : "cluster-b", steps: [], conditions: []};
     }
     if (kind === "TestBubble") { obj.__sim = true; obj.status = {phase: "Pending", testID: U().hex(6), startTime: obj.metadata.creationTimestamp, sourceCluster: "cluster-a", targetCluster: "cluster-b", applications: [{name: (body.spec.applicationRef || body.spec.planRef).name, priority: 1, phase: "Pending"}], bubbleNamespaces: [], steps: [], invariants: [], checks: [], conditions: []}; }
     if (kind === "RestoreAction") obj.status = {phase: "Pending", startTime: obj.metadata.creationTimestamp, steps: [], checks: [], volumes: []};
@@ -271,7 +315,7 @@
   const remove = kind => (name, ns) => {
     const o = findRef(kind, ns, name);
     if (!o) return {err: `${kind.toLowerCase()}s "${name}" not found`, reason: "NotFound"};
-    const inUse = kind === "ProtectionPlan" ? store.DRPath.some(p => p.spec.planRef.name === name) : kind === "DRPath" ? store.ProtectedApplication.some(a => (a.status.paths || []).some(p => p.name === name)) : false;
+    const inUse = kind === "ProtectionPlan" ? store.DRPath.some(p => p.spec.planRef === name) : kind === "DRPath" ? store.ProtectedApplication.some(a => (a.status.paths || []).some(p => p.name === name)) : false;
     if (inUse && (o.metadata.annotations || {})["dr.simplyblock.io/confirm-delete"] !== "true") return {err: `admission webhook denied the request: ${kind} ${name} is still in use; annotate dr.simplyblock.io/confirm-delete=true to confirm`, reason: "Forbidden"};
     if ((kind === "RecoveryAction" || kind === "TestBubble") && !["Completed", "Failed", "RolledBack"].includes(o.status.phase)) return {err: "a running run cannot be deleted; abort it first", reason: "Forbidden"};
     store[kind] = store[kind].filter(x => x !== o);

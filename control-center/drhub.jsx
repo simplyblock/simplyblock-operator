@@ -11,6 +11,8 @@ const ACTION_KIND_META = {
   Failover: {label: "Failover", icon: "shield", c: "var(--bad)", desc: "Unplanned move: the target takes over from the last replicated state. The source is assumed lost or fenced."},
   Relocate: {label: "Relocate", icon: "move", c: "var(--info)", desc: "Planned move: the application is stopped at the source, replication drains, the target starts. Failback is a Relocate along the opposite path."},
   Restart: {label: "Restart", icon: "refresh", c: "var(--warn)", desc: "Restart in place after a storage recovery. No path: the application stays where it is."},
+  Resume: {label: "Resume", icon: "play", c: "var(--info)", desc: "Follow the move Ramen is still carrying out to its end: no new Ramen action, the blocking error in the journal, the target's probes once Ramen finishes. Use it after fixing what blocked the move."},
+  Revert: {label: "Revert", icon: "swap", c: "var(--warn)", desc: "Point the move back at the site it started from: Ramen demotes the half-restored target and promotes the source again. Only while the target was never placed."},
   Test: {label: "Test", icon: "camera", c: "var(--accent)", desc: "Rehearsal in an isolated bubble on the target, from the latest replicated snapshot. Production is untouched."}
 };
 const VerdictBadge = ({v, sm}) => <TrafficLight status={v || "Unknown"} sm={sm} />;
@@ -78,14 +80,19 @@ const runActionDialog = (target, kind, ctx) => {
     done: `${m.label} submitted — RecoveryAction created`,
     desc: m.desc,
     fields: v => {
-      const verdict = kind === "Restart" ? "Ready" : verdictOf(v.path);
+      const pathless = PATHLESS_KINDS.includes(kind);
+      const verdict = pathless ? "Ready" : verdictOf(v.path);
+      const mv = target.move;
       return [
-        kind !== "Restart" && {k: "path", label: "DR path", type: "select", required: true,
+        mv && (kind === "Resume" || kind === "Revert") && {k: "nm", type: "note", label: `${mv.action} ${mv.from} → ${mv.to}, ${mv.phase === "Stuck" ? "stuck" : "in progress"}${mv.progression ? ` (Ramen: ${mv.progression})` : ""}${mv.blocking ? `. Blocked by: ${mv.blocking}` : ""}.`},
+        mv && kind === "Revert" && {k: "nr", type: "note", label: `Ramen relocates the application back to ${mv.from} along the declared path ${mv.to} → ${mv.from}. Nothing ran on ${mv.to}, so nothing written there is lost.`},
+        mv && kind === "Resume" && {k: "nu", type: "note", label: `No new Ramen action: the run waits for Ramen to finish the move to ${mv.to}, then checks the application's probes there. Fix what blocks the move first, or the run times out like the move did.`},
+        !pathless && {k: "path", label: "DR path", type: "select", required: true,
           options: paths.map(p => { const pp = target.kind === "papp" ? target.paths.find(x => x.name === p) : null; return {v: p, l: pp ? `${p}  (${pp.from} → ${pp.to}, ${pp.verdict})` : p}; }),
           empty: `No declared DRPath offers ${m.label} for this ${target.kind === "rplan" ? "plan" : "application"}. Declaring a direction is a dr-admin decision, not an override.`},
-        kind !== "Restart" && verdict === "NotReady" && {k: "n1", type: "note", label: `Readiness on this path is NotReady: ${blockingChecks(target, v.path).join(", ") || "blocking checks failed"}. Running anyway needs a reason and the "override" verb on recoveryactions (dr-admin). The run is audited with the reason.`},
-        kind !== "Restart" && verdict === "NotReady" && {k: "override", label: "Override reason (10–1024 characters)", type: "text", required: true, placeholder: "why this action must run despite the verdict"},
-        kind !== "Restart" && verdict === "Degraded" && {k: "n2", type: "note", label: "Readiness is Degraded: only advisory checks failed. The action runs without an override."},
+        !pathless && verdict === "NotReady" && {k: "n1", type: "note", label: `Readiness on this path is NotReady: ${blockingChecks(target, v.path).join(", ") || "blocking checks failed"}. Running anyway needs a reason and the "override" verb on recoveryactions (dr-admin). The run is audited with the reason.`},
+        !pathless && verdict === "NotReady" && {k: "override", label: "Override reason (10–1024 characters)", type: "text", required: true, placeholder: "why this action must run despite the verdict"},
+        !pathless && verdict === "Degraded" && {k: "n2", type: "note", label: "Readiness is Degraded: only advisory checks failed. The action runs without an override."},
         {k: "timeout", label: "Timeout", type: "text", def: "30m", placeholder: "30m"},
         opposite && {k: "n3", type: "note", label: `The application currently runs on ${target.currentCluster}. A Relocate along a path whose target is the current cluster is refused by the hub.`}
       ].filter(Boolean);
@@ -142,25 +149,48 @@ const KIND_LABEL_DR = {pplan: "protection plan", drpath: "DR path", papp: "prote
 
 const METHOD_TYPES = [{v: "async", l: "async — block replication per interval"}, {v: "sync", l: "sync — stretch cluster, RPO 0"},
   {v: "s3-backup", l: "s3-backup — snapshot backups to S3 only"}, {v: "async-s3-backup", l: "async + s3-backup"}, {v: "sync-s3-backup", l: "sync + s3-backup"}];
-const parseSites = txt => String(txt || "").split(/[\n;]+/).map(l => l.trim()).filter(Boolean).map(l => {
-  // name=cluster[/zone][@region]
-  const [name, rest] = l.split("=").map(x => x.trim());
-  const [clusterZone, region] = (rest || "").split("@");
-  const [cluster, zone] = (clusterZone || "").split("/");
-  return Object.assign({name, cluster: cluster || name}, zone ? {zone} : {}, region ? {region} : {});
-});
+// name=cluster[/zone][@region] entries. Blanks are insignificant anywhere:
+// around "=", "/", "@" and between entries, which may be separated by ";",
+// "," or newlines -- or by blanks alone ("site-a=a site-b=b"). Site, cluster,
+// zone and region names never contain blanks, so all of them are dropped
+// (a blank kept in a name made the plan's S3 stores never match its sites).
+const parseSites = txt => String(txt || "")
+  .replace(/\s*([=/@])\s*/g, "$1")
+  .split(/[\s;,]+/).filter(Boolean).map(l => {
+    const [name, rest] = l.split("=");
+    const [clusterZone, region] = (rest || "").split("@");
+    const [cluster, zone] = (clusterZone || "").split("/");
+    return Object.assign({name, cluster: cluster || name}, zone ? {zone} : {}, region ? {region} : {});
+  });
+// The plan's per-site S3 stores must name every site of the plan: said here
+// with the site that is missing, rather than as the API server's generic
+// "s3Profiles needs a store for every site".
+const checkStores = (sites, stores) => {
+  if (!stores.length) return;
+  const have = new Set(stores.map(s => s.site));
+  const missing = sites.map(s => s.name).filter(n => !have.has(n));
+  const unknown = stores.map(s => s.site).filter(n => !sites.some(x => x.name === n));
+  if (missing.length || unknown.length)
+    throw new Error([missing.length && `No S3 store for site ${missing.join(", ")}`,
+      unknown.length && `S3 store for ${unknown.join(", ")}, which is not a site of the plan`].filter(Boolean).join("; ") +
+      `. Sites: ${sites.map(s => s.name).join(", ")}.`);
+};
 // ---- form <-> spec helpers for the editable parts of the DR objects --------
+// The secret a store names when the row leaves it empty: the one the DR hub
+// chart creates in Ramen's namespace. Pre-filling it in the row looked like a
+// placeholder and was typed a second time ("ramen-s3-secretramen-s3-secret").
+const DEFAULT_S3_SECRET = "ramen-s3-secret";
 const S3_COLS = [
   {k: "site", label: "Site", placeholder: "site-a", flex: 1},
   {k: "bucket", label: "Bucket", placeholder: "dr-site-a", flex: 1.4},
   {k: "endpoint", label: "Endpoint", placeholder: "https://s3.eu-central-1.amazonaws.com", flex: 2},
   {k: "region", label: "Region", placeholder: "eu-central-1", flex: 1},
-  {k: "secretRef", label: "Secret", placeholder: "ramen-s3-secret", flex: 1}
+  {k: "secretRef", label: "Secret (empty: ramen-s3-secret)", placeholder: "ramen-s3-secret", flex: 1}
 ];
 const s3Rows = profiles => (profiles || []).map(p => ({site: p.site || "", bucket: p.bucket || "", endpoint: p.endpoint || "", region: p.region || "", secretRef: typeof p.secretRef === "string" ? p.secretRef : (p.secretRef || {}).name || ""}));
 const s3Profiles = rows => (rows || []).filter(r => (r.site || "").trim() && (r.bucket || "").trim()).map(r => Object.assign(
-  {site: r.site.trim(), bucket: r.bucket.trim()}, r.endpoint && r.endpoint.trim() ? {endpoint: r.endpoint.trim()} : {},
-  r.region && r.region.trim() ? {region: r.region.trim()} : {}, r.secretRef && r.secretRef.trim() ? {secretRef: r.secretRef.trim()} : {}));
+  {site: r.site.replace(/\s+/g, ""), bucket: r.bucket.trim()}, r.endpoint && r.endpoint.trim() ? {endpoint: r.endpoint.trim()} : {},
+  r.region && r.region.trim() ? {region: r.region.trim()} : {}, {secretRef: (r.secretRef || "").trim() || DEFAULT_S3_SECRET}));
 
 // Tiers: one row per tier. The selector is either labels (k=v, k2=v2) or
 // resource types (configmaps, secrets); the ready gates are a short list:
@@ -253,7 +283,7 @@ const newPlanDialog = () => ({
     {k: "scPool", label: "…from the pool (empty: the storage cluster's default pool)", type: "text", placeholder: ""},
     {k: "scFs", label: "…with the filesystem", type: "text", def: "xfs"},
     {k: "s3", label: "S3 stores — one per site (Ramen's metadata store and Velero's backups)", type: "rows", cols: S3_COLS, max: 8, addLabel: "Add store",
-      add: rows => ({site: "", bucket: "", endpoint: rows.length ? rows[rows.length - 1].endpoint : "", region: rows.length ? rows[rows.length - 1].region : "", secretRef: rows.length ? rows[rows.length - 1].secretRef : "ramen-s3-secret"}),
+      add: rows => ({site: "", bucket: "", endpoint: rows.length ? rows[rows.length - 1].endpoint : "", region: rows.length ? rows[rows.length - 1].region : "", secretRef: rows.length ? rows[rows.length - 1].secretRef : ""}),
       hint: "The secret (access key id / secret access key) must exist in Ramen's namespace on the hub. Leave empty to name one existing profile below instead."},
     {k: "velero", label: "Velero namespace on the sites", type: "text", def: "velero", placeholder: "velero"},
     {k: "s3Profile", label: "Ramen S3 profile (single store, instead of per-site stores)", type: "text", placeholder: "existing profile name"},
@@ -266,7 +296,9 @@ const newPlanDialog = () => ({
       /backup/.test(type) ? {s3Backup: {interval: v.bInterval.trim(), retention: Number(v.bRetention) || 24}} : {});
     const sc = kvToObj(v.sc);
     const stores = s3Profiles(v.s3);
-    const spec = Object.assign({sites: parseSites(v.sites), methods: [method],
+    const sites = parseSites(v.sites);
+    checkStores(sites, stores);
+    const spec = Object.assign({sites, methods: [method],
       storageProfile: Object.assign({storageClassSelector: Object.keys(sc).length ? {matchLabels: sc} : {}}, {consistencyGroups: v.cg ? "Enabled" : "Disabled"},
         v.scName && v.scName.trim() ? {provision: Object.assign({name: v.scName.trim()}, v.scPool && v.scPool.trim() ? {pool: v.scPool.trim()} : {}, v.scFs && v.scFs.trim() ? {fsType: v.scFs.trim()} : {})} : {})},
       stores.length ? {s3Profiles: stores} : {}, v.velero && v.velero.trim() ? {veleroNamespace: v.velero.trim()} : {},
@@ -279,10 +311,14 @@ const editPlanS3Dialog = p => ({
   desc: "Ramen keeps its metadata and Velero its backups in one S3 store per site. Changing a store re-derives the DRClusters; applications keep their protection.",
   fields: [
     {k: "s3", label: "S3 stores — one per site", type: "rows", cols: S3_COLS, max: 8, addLabel: "Add store", def: s3Rows(p.s3Profiles),
-      add: rows => ({site: "", bucket: "", endpoint: rows.length ? rows[rows.length - 1].endpoint : "", region: rows.length ? rows[rows.length - 1].region : "", secretRef: rows.length ? rows[rows.length - 1].secretRef : "ramen-s3-secret"})},
+      add: rows => ({site: "", bucket: "", endpoint: rows.length ? rows[rows.length - 1].endpoint : "", region: rows.length ? rows[rows.length - 1].region : "", secretRef: rows.length ? rows[rows.length - 1].secretRef : ""})},
     {k: "velero", label: "Velero namespace on the sites", type: "text", def: p.veleroNamespace || "velero"}
   ],
-  run: v => drhub.patchPlan(p, {s3Profiles: s3Profiles(v.s3), veleroNamespace: v.velero && v.velero.trim() ? v.velero.trim() : null})
+  run: v => {
+    const stores = s3Profiles(v.s3);
+    checkStores(p.sites, stores);
+    return drhub.patchPlan(p, {s3Profiles: stores, veleroNamespace: v.velero && v.velero.trim() ? v.velero.trim() : null});
+  }
 });
 
 const newPathDialog = plans => ({
@@ -303,7 +339,7 @@ const newPathDialog = plans => ({
       {k: "handover", label: "Announcement hand-over on move", type: "checkbox", def: false}
     ].filter(Boolean);
   },
-  run: v => drhub.createPath({name: v.name.trim(), spec: Object.assign({from: v.from, to: v.to, planRef: {name: v.plan}, actions: v.actions, announcementHandover: !!v.handover},
+  run: v => drhub.createPath({name: v.name.trim(), spec: Object.assign({from: v.from, to: v.to, planRef: v.plan, actions: v.actions, announcementHandover: !!v.handover},
     v.actions.includes("Test") ? {test: Object.assign({mode: "bubble", isolatedNad: v.nad.trim()}, v.cap ? {quotas: {maxCloneCapacity: v.cap.trim()}} : {}, v.recent ? {recentWithin: v.recent.trim()} : {})} : {})})
 });
 const protectAppDialogDR = (plans, cfg) => ({
@@ -337,7 +373,7 @@ const protectAppDialogDR = (plans, cfg) => ({
     const pvc = kvToObj(v.pvc);
     const sel = Object.keys(pvc).length ? {matchLabels: pvc} : {};
     const tiers = tiersSpec(v.tiers), probes = probesSpec(v.probes);
-    const spec = Object.assign({planRef: {name: v.plan}, source: v.source, target: v.target, kind: v.appKind},
+    const spec = Object.assign({planRef: v.plan, source: v.source, target: v.target, kind: v.appKind},
       v.method ? {method: v.method} : {}, tiers.length ? {tiers} : {}, probes.length ? {health: {probes}} : {},
       v.appKind === "managed" ? {managed: {placementRef: {name: v.placement.trim()}, pvcSelector: sel}}
         : {discovered: Object.assign({protectedNamespaces: csv(v.namespaces), pvcSelector: sel}, v.recipe && v.recipe.trim() ? {recipeRef: {name: v.recipe.trim()}} : {})});
@@ -375,7 +411,7 @@ const newRPlanDialog = (paths, apps) => ({
   },
   run: v => {
     const prio = Object.fromEntries(csv(v.priorities).map(x => x.split("=")).filter(x => x.length === 2).map(([k, p]) => [k, Number(p) || 1]));
-    return drhub.createRPlan({name: v.name.trim(), namespace: v.namespace, spec: {pathRef: {name: v.path}, applications: v.apps.map(a => ({name: a, priority: prio[a] || 1})),
+    return drhub.createRPlan({name: v.name.trim(), namespace: v.namespace, spec: {pathRef: v.path, applications: v.apps.map(a => ({name: a, priority: prio[a] || 1})),
       gates: {betweenPriorities: v.gate || "allHealthy"}, continueOnFailure: !!v.cont}});
   }
 });
@@ -495,6 +531,9 @@ Object.assign(ACTIONS, {
     {label: "Failover", icon: "shield", op: "failover", danger: true, dialog: runActionDialog(a, "Failover"), disabled: !a.paths.some(p => p.actions.includes("Failover")), hint: "No declared path allows Failover"},
     {label: "Relocate", icon: "move", op: "relocate", dialog: runActionDialog(a, "Relocate"), disabled: !a.paths.some(p => p.actions.includes("Relocate")), hint: "No declared path allows Relocate"},
     {label: "Restart in place", icon: "refresh", op: "restart", dialog: runActionDialog(a, "Restart")},
+    {label: "Resume move", icon: "play", op: "relocate", dialog: runActionDialog(a, "Resume"), disabled: !a.move, hint: "No move is in progress"},
+    {label: a.move ? `Revert to ${a.move.from}` : "Revert move", icon: "swap", op: "relocate", dialog: runActionDialog(a, "Revert"),
+      disabled: !(a.move && a.move.revertible), hint: a.move ? (a.move.revertBlocked || "This move cannot be reverted") : "No move is in progress"},
     {label: "Test", icon: "camera", op: "test", dialog: runTestDialog(a), disabled: !a.paths.some(p => p.actions.includes("Test")), hint: "No declared path allows Test"},
     {label: "Schedule tests", icon: "clock", op: "create", dialog: newScheduleDialog(a), disabled: !a.paths.some(p => p.actions.includes("Test")), hint: "No declared path allows Test"},
     {label: "Restore from backup", icon: "cloud", op: "drrestore", dialog: restoreDialog(a)},
@@ -605,8 +644,8 @@ function PAppTile({o: a, nav}) {
         {a.siteMapping === "Resolved" && <span className="lab"><i>site mapping</i>resolved</span>}
       </div>
       <div className="mlist">
-        {a.paths.map(p => <div className={"mrow" + (p.verdict === "NotReady" ? " bad" : "")} key={p.name}>
-          <VerdictBadge v={p.verdict} sm /><b>{p.name}</b><span className="spacer"></span>
+        {a.paths.map(p => <div className={"mrow" + (p.active && p.verdict === "NotReady" ? " bad" : "")} key={p.name}>
+          {p.active ? <VerdictBadge v={p.verdict} sm /> : <span className="chip">inactive</span>}<b>{p.name}</b><span className="spacer"></span>
           <span className="mono">{p.actions.join(" · ")}</span>
         </div>)}
         {!a.paths.length && <div className="nolim" style={{padding: "6px 9px"}}>No declared path covers this application yet.</div>}
@@ -849,6 +888,8 @@ function PPlanDetail({o: p, nav}) {
     <div>
       <DetailHead obj={p} title={p.name} sub={<span className="mono" style={{color: "var(--dim)"}}>ProtectionPlan · {p.sync ? "stretch cluster (sync)" : "cross-cluster"}</span>} badge={<span className="badge">plan</span>} />
       {p.status === "NotReady" && <div className="banner"><Icon n="alert" s={15} /><span><b>The plan is not ready.</b> {(p.conditions.find(c => c.type === "Ready") || {}).message || "See the conditions below."}</span></div>}
+      {(() => { const s3c = p.conditions.find(c => c.type === "S3ProfileResolved"); return s3c && s3c.status === "False" &&
+        <div className="banner"><Icon n="alert" s={15} /><span><b>{s3c.reason === "S3StoreRejected" ? "An S3 store refused dr-hub's probe." : "The S3 stores are not ready."}</b> {s3c.message}</span></div>; })()}
       <div className="stats">
         <Stat k="Sites" v={p.counts.sites} s={`${p.counts.agentsAvailable} with dr-agent available`} c={p.counts.agentsAvailable < p.counts.sites ? "var(--warn)" : null} />
         <Stat k="Methods" v={p.counts.methods} s={p.methods.map(m => m.type).join(", ")} />
@@ -888,7 +929,13 @@ function PPlanDetail({o: p, nav}) {
       <div className="dcols">
         <div className="card"><h3>S3 stores</h3><div className="bd">
           {p.s3Profile ? <Props rows={[["Ramen S3 profile", <Mono>{p.s3Profile}</Mono>]]} />
-            : <Table cols={["Site", "Bucket", "Endpoint", "Region", "Secret"]} empty="No S3 store declared — backup methods need one per site." rows={p.s3Profiles.map(s => [<b>{s.site}</b>, <Mono>{s.bucket}</Mono>, <Mono>{s.endpoint}</Mono>, <Mono>{s.region}</Mono>, <Mono dim>{refName2(s.secretRef)}</Mono>])} />}
+            : <Table cols={["Site", "Bucket", "Endpoint", "Region", "Secret", "Probe"]} empty="No S3 store declared — backup methods need one per site." rows={p.s3Profiles.map(s => {
+                const pr = p.s3Stores[s.site];
+                const probe = !pr ? <span style={{color: "var(--dim2)"}}>not probed yet</span>
+                  : pr.ok ? <span style={{color: "var(--ok)"}} title={pr.checkedAt ? "checked " + pr.checkedAt : ""}>accepts list, write, delete</span>
+                  : <span style={{color: "var(--bad)"}} title={pr.checkedAt ? "checked " + pr.checkedAt : ""}><b>{pr.code}</b>{pr.step ? ` on ${pr.step}` : ""}{pr.message ? ": " + pr.message : ""}</span>;
+                return [<b>{s.site}</b>, <Mono>{s.bucket}</Mono>, <Mono>{s.endpoint}</Mono>, <Mono>{s.region}</Mono>, <Mono dim>{refName2(s.secretRef)}</Mono>, probe];
+              })} />}
         </div></div>
         <div className="card"><h3>Derived pairs</h3><div className="bd">
           <Table cols={["Sites", "Paths", "DRPolicies", "peerClasses"]} empty="No pair derived yet — a pair exists once a DR path uses it." rows={p.pairs.map((x, i) => [<Mono>{x.sites.join(" ↔ ")}</Mono>, <Mono>{x.paths.join(", ")}</Mono>, <Mono dim>{x.drPolicies.join(", ")}</Mono>,
@@ -964,7 +1011,12 @@ function PAppDetail({o: a, nav}) {
         badge={<><span className="badge">{a.appKind}</span>{a.method && <span className="badge">{a.method}</span>}{a.protected === false && <span className="badge" style={{color: "var(--bad)"}}>not protected</span>}</>} />
       {!!running.length && <div className="banner" style={{color: "var(--info)", borderColor: "color-mix(in srgb,var(--info) 35%,transparent)", background: "color-mix(in srgb,var(--info) 8%,var(--panel))"}}><Icon n="refresh" s={15} />
         <span><b>{running.length} run{running.length === 1 ? "" : "s"} in progress:</b> {running.map(r => <Ref key={r.id} label={`${r.action || "Test"} ${r.name}`} onClick={() => nav.detail(r)} />)}</span></div>}
-      {a.verdict === "NotReady" && <div className="banner"><Icon n="alert" s={15} /><span><b>Not ready on at least one path.</b> The run-action controls need an override with a reason on that path; the failing checks are listed under Readiness.</span></div>}
+      {a.move && <div className={"banner" + (a.move.phase === "Stuck" ? "" : " info")}><Icon n={a.move.phase === "Stuck" ? "alert" : "move"} s={15} /><span>
+        <b>{a.move.action} {a.move.from} → {a.move.to} {a.move.phase === "Stuck" ? "is stuck" : "in progress"}{a.move.since ? ` since ${fmtAgo(a.move.since)}` : ""}.</b>
+        {a.move.blocking ? <> Ramen reports: <Mono>{a.move.blocking}</Mono>.</> : a.move.progression ? ` Ramen: ${a.move.progression}.` : ""}
+        {a.move.phase === "Stuck" && <> Use ⋮ → <b>Resume move</b> once its cause is fixed{a.move.revertible ? <>, or <b>Revert to {a.move.from}</b></> : <> — it cannot be reverted: {a.move.revertBlocked}</>}.</>}
+      </span></div>}
+      {!a.move && a.verdict === "NotReady" && <div className="banner"><Icon n="alert" s={15} /><span><b>Not ready on the path it can move along.</b> The run-action controls need an override with a reason on that path; the failing checks are listed under Readiness.</span></div>}
       {a.awaitingRestore && <div className="banner" style={{color: "var(--warn)", borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)", background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"}}><Icon n="cloud" s={15} /><span><b>Awaiting restore.</b> The DR state was restored onto a rebuilt site; the volumes come back from the newest S3 capture when a dr-admin creates a RestoreAction.</span></div>}
       {a.siteMapping === "Open" && tab !== "mapping" && <div className="banner" style={{color: "var(--warn)", borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)", background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"}}><Icon n="link" s={15} /><span><b>Site mapping open: {a.counts.openFindings} VM network or guest address cannot be carried to a target.</b> <Ref label="See the findings" onClick={() => setTab("mapping")} /></span></div>}
       <div className="stats">
@@ -980,9 +1032,12 @@ function PAppDetail({o: a, nav}) {
         {k: "binding", label: "Binding & recipe", icon: "link"}, {k: "schedules", label: "Schedules & restores", icon: "camera", n: scheds.length + restores.length}]} active={tab} onChange={setTab} />
       {tab === "mapping" && <MappingPanel a={a} />}
       {tab === "readiness" && <>
-        {a.paths.map(p => <div className="card" key={p.name} style={{marginTop: 10}}>
-          <h3 style={{display: "flex", alignItems: "center", gap: 10}}><span>{p.name}</span><PathArrow from={p.from} to={p.to} /><VerdictBadge v={p.verdict} sm /><span className="spacer" style={{flex: 1}}></span><span style={{textTransform: "none", letterSpacing: 0}}>{p.actions.join(" · ")}{p.since ? ` · since ${fmtAgo(p.since)}` : ""}</span></h3>
-          <div className="bd"><CheckTable checks={p.checks} /></div>
+        {a.paths.map(p => <div className="card" key={p.name} style={{marginTop: 10, opacity: p.active ? 1 : 0.7}}>
+          <h3 style={{display: "flex", alignItems: "center", gap: 10}}><span>{p.name}</span><PathArrow from={p.from} to={p.to} />
+            {p.active ? <VerdictBadge v={p.verdict} sm /> : <span className="chip" title="Readiness of this path counts once the application runs on its source site">inactive · runs on {a.currentCluster}</span>}
+            <span className="spacer" style={{flex: 1}}></span><span style={{textTransform: "none", letterSpacing: 0}}>{p.actions.join(" · ")}{p.since ? ` · since ${fmtAgo(p.since)}` : ""}</span></h3>
+          <div className="bd">{p.active ? <CheckTable checks={p.checks} />
+            : <span style={{color: "var(--dim2)"}}>The application runs on {a.currentCluster}; this path starts at {p.from}. It becomes the path to act on after a move to {p.from} — its checks are evaluated then.</span>}</div>
         </div>)}
         {!a.paths.length && <div className="empty"><Icon n="swap" s={22} /><b>No declared path</b><span>Declare a DRPath between {a.source} and {a.target} on plan {a.planName}. Readiness is computed per declared path.</span></div>}
       </>}
