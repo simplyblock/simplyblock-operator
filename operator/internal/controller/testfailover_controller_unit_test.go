@@ -1200,7 +1200,7 @@ func TestFailoverStepDeadlineFailsTheDrill(t *testing.T) {
 // drill places is CreateOnly now, and the namespace is in its own work.
 func TestFailoverPlacingPlacesEverythingCreateOnly(t *testing.T) {
 	tf := atPlacing()
-	tf.Spec.BubbleNamespace = "app-drtest-1"
+	tf.Spec.BubbleNamespace = bubbleNS
 	r, cl := newTestFailoverReconciler(t, tf)
 	if _, err := r.Reconcile(context.Background(), testFailoverRequest(tf)); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -1238,10 +1238,10 @@ func TestFailoverPlacingPlacesEverythingCreateOnly(t *testing.T) {
 // namespace work and does not fail; one work owns the namespace.
 func TestFailoverPlacingSharesOneNamespaceWork(t *testing.T) {
 	a := atPlacing()
-	a.Spec.BubbleNamespace = "app-drtest-1"
+	a.Spec.BubbleNamespace = bubbleNS
 	b := atPlacing()
 	b.Name, b.UID = "drill-2", "uid-2"
-	b.Spec.BubbleNamespace = "app-drtest-1"
+	b.Spec.BubbleNamespace = bubbleNS
 	b.Spec.SourceRef = "other-data"
 	r, cl := newTestFailoverReconciler(t, a, b)
 	for _, tf := range []*simplyblockv1alpha2.TestFailover{a, b} {
@@ -1312,7 +1312,7 @@ func TestFailoverDeletionRemovesTheNamespaceWorkWithTheLastDrill(t *testing.T) {
 	mk := func(name, uid string, deleting bool) *simplyblockv1alpha2.TestFailover {
 		tf := sampleTestFailover()
 		tf.Name, tf.UID = name, types.UID(uid)
-		tf.Spec.BubbleNamespace = "app-drtest-1"
+		tf.Spec.BubbleNamespace = bubbleNS
 		tf.Finalizers = []string{finalizerTestFailover}
 		if deleting {
 			now := metav1.Now()
@@ -1350,3 +1350,6 @@ func TestFailoverDeletionRemovesTheNamespaceWorkWithTheLastDrill(t *testing.T) {
 		t.Errorf("namespace work still present after the last drill: %v", err)
 	}
 }
+
+// bubbleNS is the bubble namespace the binding tests place their clones in.
+const bubbleNS = "app-drtest-1"
