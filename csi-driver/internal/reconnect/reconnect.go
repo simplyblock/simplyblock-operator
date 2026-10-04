@@ -89,8 +89,22 @@ func isManagedLvol(manager *sbkube.Manager, lvolID, driver string) bool {
 	return pv.Spec.CSI != nil && pv.Spec.CSI.Driver == driver
 }
 
+// reconnectSubsystems runs one tick of the monitor: it repairs the paths of the
+// subsystems it can see, then reports the volumes whose device the kernel
+// removed.
+//
+// The report runs whatever the repair did. It reads sysfs rather than nvme-cli,
+// so a device listing that failed or timed out does not hide a removal.
 func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager, driver, nodeName string) error {
 	ctx := context.Background()
+	err := reconcilePaths(ctx, manager, driver, nodeName)
+	reportGoneDevices(ctx, markBroken)
+	return err
+}
+
+// reconcilePaths reconnects the missing paths of every managed subsystem that
+// is short of the redundancy it was published with.
+func reconcilePaths(ctx context.Context, manager *sbkube.Manager, driver, nodeName string) error {
 
 	// Resolved once per tick rather than once per degraded subsystem: it's
 	// the same value for every lvol on this node (see NodeHostNQN), and this
@@ -103,16 +117,12 @@ func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager
 		return fmt.Errorf("failed to get NVMe device paths: %v", err)
 	}
 
-	currentDevices := make(map[string]bool)
-
 	for _, device := range devices {
 		subsystems, err := initiator.SubsystemsForDevice(ctx, device.DevicePath)
 		if err != nil {
 			klog.Errorf("failed to get subsystems for device %s: %v", device.DevicePath, err)
 			continue
 		}
-
-		currentDevices[device.DevicePath] = true
 
 		for _, host := range subsystems {
 			for _, subsystem := range host.Subsystems {
@@ -170,8 +180,15 @@ func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager
 		}
 	}
 
-	var goneLvols []string
-	for _, missing := range initiator.PruneMissingDevices(currentDevices) {
+	return nil
+}
+
+// reportGoneDevices reports every recorded device the kernel no longer has to
+// markBroken, the guardian's entry point for a volume that lost every path.
+func reportGoneDevices(ctx context.Context, markBroken func(lvolID string)) {
+	missingDevices := initiator.PruneMissingDevices(ctx)
+	goneLvols := make([]string, 0, len(missingDevices))
+	for _, missing := range missingDevices {
 		klog.Errorf(
 			"Device %s is no longer present — all NVMe-oF connections were lost and the kernel removed the device (lvolID=%s)",
 			missing.DevicePath,
@@ -185,8 +202,6 @@ func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager
 			markBroken(lvolID)
 		}
 	}
-
-	return nil
 }
 
 func isAnyConnReachable(ctx context.Context, conns []*controlplane.LvolConnectResp) bool {

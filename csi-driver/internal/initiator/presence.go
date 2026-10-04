@@ -3,8 +3,8 @@
 //
 // The record exists because a device that disappears is the only evidence the
 // node has that a volume lost every one of its paths: the kernel removes the
-// device and nothing else reports it. Diffing a fresh scan against what was
-// there before is what turns that silence into an event.
+// device and nothing else reports it. Comparing the record against the devices
+// the kernel has now is what turns that silence into an event.
 //
 // Both halves of the data path write to it. An attach registers its device
 // immediately rather than waiting for the monitor's next poll, because a volume
@@ -13,17 +13,28 @@
 // why the record lives here, in the package both halves already depend on,
 // behind an API rather than as three package-level variables.
 //
-// TODO: replace this with a live sysfs scan via atlas nvme.SysfsDeviceResolver
-// once the atlas connector is sufficiently tested, since it duplicates what atlas
-// already reads from /sys.
+// What the kernel has now is read from sysfs, never from `nvme list`. nvme-cli
+// leaves out a namespace it cannot query, and a namespace whose paths are all in
+// error recovery is exactly that: on lblk_outage_matrix_k8s-20261003-080237 two
+// devices the kernel still held were reported removed a minute before they were.
 package initiator
 
-import "sync"
+import (
+	"context"
+	"sync"
+
+	atlasnvme "github.com/simplyblock/atlas/nvme"
+	"k8s.io/klog"
+)
 
 var (
 	presenceMu    sync.Mutex
 	devicePresent = make(map[string]bool)
 	deviceLvolID  = make(map[string]string)
+
+	// presenceDevices answers which namespace devices the kernel has. A
+	// variable so tests can stand in for sysfs.
+	presenceDevices atlasnvme.DeviceResolver = atlasnvme.NewSysfsDeviceResolver(atlasnvme.SysfsConfig{})
 )
 
 // MissingDevice is a device that was present when last seen and is not present
@@ -53,11 +64,25 @@ func ForgetDevice(devicePath string) {
 	delete(deviceLvolID, devicePath)
 }
 
-// PruneMissingDevices diffs the record against the devices present now and
-// returns those that vanished, dropping them from the record as it goes. A
-// device whose logical volume was never resolved is dropped silently: without
-// an lvol ID there is nothing a caller could act on.
-func PruneMissingDevices(current map[string]bool) []MissingDevice {
+// PruneMissingDevices compares the record against the namespace devices sysfs
+// shows now and returns those that vanished, dropping them from the record as
+// it goes. A device whose logical volume was never resolved is dropped silently:
+// without an lvol ID there is nothing a caller could act on.
+//
+// A scan that fails, including one that timed out, reports nothing and keeps the
+// record as it is. A scan that cannot be read says nothing about what is gone,
+// and reading it as "no devices" would report every volume on the node broken.
+func PruneMissingDevices(ctx context.Context) []MissingDevice {
+	devices, err := presenceDevices.List(ctx)
+	if err != nil {
+		klog.Warningf("presence: cannot read the namespace devices from sysfs, checking again next tick: %v", err)
+		return nil
+	}
+	current := make(map[string]bool, len(devices))
+	for _, d := range devices {
+		current[d.Namespace.DevicePath] = true
+	}
+
 	presenceMu.Lock()
 	defer presenceMu.Unlock()
 
