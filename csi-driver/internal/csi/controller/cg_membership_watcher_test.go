@@ -32,6 +32,45 @@ type fakeMembership struct {
 
 	joined   [][2]string // {groupID, lvolID}
 	detached [][2]string
+
+	plan        *controlplane.JoinPlan
+	planErr     error
+	colocateErr error
+	colocated   [][2]string
+	swapReady   []bool
+}
+
+func (f *fakeMembership) PlanConsistencyGroupJoin(
+	_ context.Context, _, _ string,
+) (*controlplane.JoinPlan, error) {
+	if f.planErr != nil {
+		return nil, f.planErr
+	}
+	if f.plan == nil {
+		return &controlplane.JoinPlan{Steps: []string{controlplane.JoinStepJoin}}, nil
+	}
+	return f.plan, nil
+}
+
+func (f *fakeMembership) ColocateConsistencyGroupMember(
+	_ context.Context, groupID, lvolID string, clientSwapReady bool,
+) error {
+	f.colocated = append(f.colocated, [2]string{groupID, lvolID})
+	f.swapReady = append(f.swapReady, clientSwapReady)
+	return f.colocateErr
+}
+
+// fakeMigrations records the VolumeMigrations the watcher requests and
+// reports a scripted phase for them.
+type fakeMigrations struct {
+	phase    string
+	err      error
+	requests [][3]string // {name, pvName, target}
+}
+
+func (f *fakeMigrations) Ensure(_ context.Context, name, pvName, target string) (string, error) {
+	f.requests = append(f.requests, [3]string{name, pvName, target})
+	return f.phase, f.err
 }
 
 func (f *fakeMembership) GetVolumeGroupID(_ context.Context, lvolID string) (string, error) {
@@ -252,4 +291,128 @@ func TestConflictingLabelIsSurfacedNotActedOn(t *testing.T) {
 		t.Fatal("a group conflict must not produce membership calls")
 	}
 	requireEvent(t, recorder, "ConsistencyGroupConflict")
+}
+
+func offPinFixture(t *testing.T, phase string) (
+	*cgMembershipWatcher, *corev1.PersistentVolumeClaim, *record.FakeRecorder,
+	*fakeMembership, *fakeMigrations,
+) {
+	t.Helper()
+	membership := &fakeMembership{
+		groupIDByLvol: map[string]string{},
+		groupsByName: map[string]*controlplane.ConsistencyGroupSummary{
+			"db-group": {ID: "gid-1", Name: "db-group"},
+		},
+		joinErr: controlplane.ErrMembershipRefused,
+		plan: &controlplane.JoinPlan{
+			Steps:          []string{controlplane.JoinStepMigrate, controlplane.JoinStepJoin},
+			TargetNodeID:   "node-pin",
+			MigrateLvolIDs: []string{testLvol, "sibling"},
+		},
+	}
+	migrations := &fakeMigrations{phase: phase}
+	watcher, pvc, recorder := watcherFixture(t,
+		map[string]string{consistencyGroupLabel: "db-group"}, testDriver, membership)
+	watcher.migrations = migrations
+	return watcher, pvc, recorder, membership, migrations
+}
+
+func TestOffPinJoinRequestsThePreJoinMigration(t *testing.T) {
+	watcher, pvc, recorder, membership, migrations := offPinFixture(t, "")
+	if err := watcher.reconcile(context.Background(), pvc); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(migrations.requests) != 1 ||
+		migrations.requests[0] != [3]string{"cg-join-" + testLvol, "pv-data", "node-pin"} {
+		t.Fatalf("expected one VolumeMigration of pv-data to node-pin, got %v", migrations.requests)
+	}
+	if len(membership.joined) != 0 {
+		t.Fatalf("no join may happen before the volume is on the pin, got %v", membership.joined)
+	}
+	requireEvent(t, recorder, "ConsistencyGroupMigrating")
+}
+
+func TestACompletedPreJoinMigrationIsReportedAndTheJoinFollowsOnTheNextPass(t *testing.T) {
+	watcher, pvc, recorder, _, migrations := offPinFixture(t, migrationCompleted)
+	if err := watcher.reconcile(context.Background(), pvc); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	requireEvent(t, recorder, "ConsistencyGroupMigrated")
+	if len(migrations.requests) != 1 {
+		t.Fatalf("the existing request is read, not duplicated: %v", migrations.requests)
+	}
+}
+
+func TestAFailedPreJoinMigrationIsAWarning(t *testing.T) {
+	watcher, pvc, recorder, _, _ := offPinFixture(t, migrationFailed)
+	if err := watcher.reconcile(context.Background(), pvc); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	requireEvent(t, recorder, "ConsistencyGroupMigrationFailed")
+}
+
+func TestAJoinThatCanNeverSucceedIsNotMigrated(t *testing.T) {
+	watcher, pvc, recorder, membership, migrations := offPinFixture(t, "")
+	membership.planErr = controlplane.ErrMembershipRefused
+	if err := watcher.reconcile(context.Background(), pvc); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(migrations.requests) != 0 {
+		t.Fatalf("a refused plan must not request a migration: %v", migrations.requests)
+	}
+	requireEvent(t, recorder, "ConsistencyGroupJoinRefused")
+}
+
+func TestWithoutTheMigrationRequesterAnOffPinJoinStaysRefused(t *testing.T) {
+	watcher, pvc, recorder, _, _ := offPinFixture(t, "")
+	watcher.migrations = nil
+	if err := watcher.reconcile(context.Background(), pvc); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	requireEvent(t, recorder, "ConsistencyGroupJoinRefused")
+}
+
+func TestColocationRunsAfterAJoinOnlyWhenEnabled(t *testing.T) {
+	membership := &fakeMembership{
+		groupIDByLvol: map[string]string{},
+		groupsByName: map[string]*controlplane.ConsistencyGroupSummary{
+			"db-group": {ID: "gid-1", Name: "db-group"},
+		},
+	}
+	watcher, pvc, recorder := watcherFixture(t,
+		map[string]string{consistencyGroupLabel: "db-group"}, testDriver, membership)
+	if err := watcher.reconcile(context.Background(), pvc); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(membership.colocated) != 0 {
+		t.Fatalf("co-location is off by default, got %v", membership.colocated)
+	}
+	requireEvent(t, recorder, "ConsistencyGroupJoined")
+
+	membership.joined = nil
+	watcher.colocate, watcher.clientSwapReady = true, true
+	if err := watcher.reconcile(context.Background(), pvc); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(membership.colocated) != 1 || !membership.swapReady[0] {
+		t.Fatalf("expected one co-location with the client swap asserted, got %v %v",
+			membership.colocated, membership.swapReady)
+	}
+}
+
+func TestARefusedColocationIsANormalEvent(t *testing.T) {
+	membership := &fakeMembership{
+		groupIDByLvol: map[string]string{testLvol: "gid-1"},
+		groupsByID: map[string]*controlplane.ConsistencyGroupSummary{
+			"gid-1": {ID: "gid-1", Name: "db-group"},
+		},
+		colocateErr: controlplane.ErrColocationRefused,
+	}
+	watcher, pvc, recorder := watcherFixture(t,
+		map[string]string{consistencyGroupLabel: "db-group"}, testDriver, membership)
+	watcher.colocate = true
+	if err := watcher.reconcile(context.Background(), pvc); err != nil {
+		t.Fatalf("a refused co-location is not an error: %v", err)
+	}
+	requireEvent(t, recorder, "ConsistencyGroupColocationDeferred")
 }

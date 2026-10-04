@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -287,7 +288,32 @@ func (ns *Server) attachPlan(
 	}
 	node := ns.stack.node(hostNQN, ns.priorFormat(volumeID, vc))
 	volume := stackVolume(stagingTargetPath, vc, volCap)
-	return planFor(node, connection, volume, vdoOptions(vc), shapeFor(vc, volCap)), nil
+	shape := ns.attachShape(volumeID, shapeFor(vc, volCap))
+	return planFor(node, connection, volume, vdoOptions(vc), shape), nil
+}
+
+// attachShape decides whether a stage or heal builds the dmLinear indirection.
+// A volume's stack never gains or loses the layer under a staged consumer:
+// with a stack record the record decides (the layer is there or it is not),
+// and only a fresh stage, which has none, follows SPDKCSI_DM_INDIRECTION. A
+// record that cannot be read keeps the shape without the layer, which is what
+// every volume staged before the indirection existed is.
+func (ns *Server) attachShape(volumeID string, shape stackShape) stackShape {
+	record, err := ns.stack.store.Load(volumeID)
+	switch {
+	case errors.Is(err, volstack.ErrNoRecord):
+		if dmIndirectionEnabled() {
+			return indirect(shape)
+		}
+		return shape
+	case err != nil:
+		klog.Warningf("volume %s: stack record unreadable (%v); staging without the dm indirection", volumeID, err)
+		return shape
+	}
+	if slices.Contains(recordedLayers(record), layerDMLinear) {
+		return indirect(shape)
+	}
+	return shape
 }
 
 // teardownPlan is the plan an unstage walks, which is the shape that was built

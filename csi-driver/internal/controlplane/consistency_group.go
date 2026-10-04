@@ -283,3 +283,79 @@ func (c *ClusterClient) JoinConsistencyGroupMember(ctx context.Context, groupID,
 func (c *ClusterClient) DetachConsistencyGroupMember(ctx context.Context, groupID, lvolID string) error {
 	return c.API.detachConsistencyGroupMember(ctx, groupUUID(groupID), lvolID)
 }
+
+// Join plan step names (sbcli cg_colocation, docs/consistency-group-colocation.md).
+const (
+	JoinStepMigrate  = "migrate"
+	JoinStepJoin     = "join"
+	JoinStepColocate = "colocate"
+)
+
+// ErrColocationRefused wraps a backend 409 on a co-location step: namespace
+// moves are disabled, or a host is connected and the client cannot swap
+// paths. Like a membership refusal it is a standing state, not a fault.
+var ErrColocationRefused = errors.New("consistency-group co-location refused")
+
+// JoinPlan is what joining an existing volume to a group takes: a live
+// migration of MigrateLvolIDs to TargetNodeID first (the volume is off the
+// group's pinned node/LVS), the join, and a namespace move into TargetNQN.
+type JoinPlan struct {
+	Steps          []string `json:"steps"`
+	TargetNodeID   string   `json:"target_node_id"`
+	MigrateLvolIDs []string `json:"migrate_lvol_ids"`
+	TargetNQN      string   `json:"target_nqn"`
+}
+
+// Has reports whether the plan contains step.
+func (p *JoinPlan) Has(step string) bool {
+	for _, s := range p.Steps {
+		if s == step {
+			return true
+		}
+	}
+	return false
+}
+
+func (client APIClient) planConsistencyGroupJoin(ctx context.Context, gid, lvolID string) (*JoinPlan, error) {
+	body := map[string]string{"lvol_id": lvolID}
+	raw, err := client.do(ctx, http.MethodPost, client.v2consistencyGroupMembers(gid)+"/plan", body)
+	if err != nil {
+		if isHTTPStatus(err, http.StatusConflict) {
+			return nil, fmt.Errorf("%w: %s", ErrMembershipRefused, err.Error())
+		}
+		return nil, err
+	}
+	var plan JoinPlan
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		return nil, fmt.Errorf("unexpected response for join plan: %w", err)
+	}
+	return &plan, nil
+}
+
+func (client APIClient) colocateConsistencyGroupMember(
+	ctx context.Context, gid, lvolID string, clientSwapReady bool,
+) error {
+	body := map[string]bool{"client_swap_ready": clientSwapReady}
+	_, err := client.do(ctx, http.MethodPost, client.v2consistencyGroupMember(gid, lvolID)+"/colocate", body)
+	if err != nil && isHTTPStatus(err, http.StatusConflict) {
+		return fmt.Errorf("%w: %s", ErrColocationRefused, err.Error())
+	}
+	return err
+}
+
+// PlanConsistencyGroupJoin asks the backend which steps joining lvolID to the
+// group takes, without taking any. A join that can never succeed (another
+// group, another pool, another group's subsystem siblings) is
+// ErrMembershipRefused.
+func (c *ClusterClient) PlanConsistencyGroupJoin(ctx context.Context, groupID, lvolID string) (*JoinPlan, error) {
+	return c.API.planConsistencyGroupJoin(ctx, groupUUID(groupID), lvolID)
+}
+
+// ColocateConsistencyGroupMember moves a member's namespace into its group's
+// subsystem. clientSwapReady asserts the client stages the volume behind the
+// device-mapper indirection and swaps paths itself.
+func (c *ClusterClient) ColocateConsistencyGroupMember(
+	ctx context.Context, groupID, lvolID string, clientSwapReady bool,
+) error {
+	return c.API.colocateConsistencyGroupMember(ctx, groupUUID(groupID), lvolID, clientSwapReady)
+}
