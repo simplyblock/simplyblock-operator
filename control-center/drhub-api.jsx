@@ -347,7 +347,49 @@ const dns63 = s => String(s).toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(
 const kvToObj = rows => Object.fromEntries((rows || []).filter(r => r.k).map(r => [r.k.trim(), (r.v || "").trim()]));
 const csv = s => String(s || "").split(/[,\s]+/).map(x => x.trim()).filter(Boolean);
 
+// ---- on-demand probes (dr-hub ADR 0021) -------------------------------------
+// The console never reaches S3 or a managed cluster: a Test button creates a
+// request the hub answers in its status, reads it until it is answered and
+// deletes it. A hub without the request kinds answers 404 on the create.
+const PROBE_POLL_MS = 1000, PROBE_WAIT_MS = 150000;
+const probeErr = (e, what, role) => {
+  if (e && e.status === 404) return new Error(`This DR hub cannot ${what} on demand yet (dr-hub before on-demand probes); the result shows on the saved object instead.`);
+  if (e && e.status === 403) return new Error(`Testing needs ${role}: create on ${what === "probe an S3 store" ? "s3proberequests" : "healthproberequests"} in dr.simplyblock.io.`);
+  return e;
+};
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function runProbe(kind, namespace, spec, what, role) {
+  const name = `console-${stamp()}-${Math.random().toString(36).slice(2, 6)}`;
+  try {
+    await k8s.create(kind, {apiVersion: DR_API_GROUP, kind, metadata: {name, namespace, labels: {"app.kubernetes.io/created-by": "console"}}, spec}, {namespace});
+  } catch (e) { throw probeErr(e, what, role); }
+  const until = Date.now() + PROBE_WAIT_MS;
+  try {
+    for (;;) {
+      await sleep(PROBE_POLL_MS);
+      const o = await k8s.get(kind, name, {namespace});
+      const st = (o && o.status) || {};
+      if (["Passed", "Failed", "Error"].includes(st.phase)) return st;
+      if (Date.now() > until) throw new Error(`dr-hub did not answer within ${PROBE_WAIT_MS / 1000}s${st.message ? ` (${st.message})` : ""}. Is dr-hub running?`);
+    }
+  } finally {
+    // dr-hub deletes an answered request after a while anyway
+    await k8s.remove(kind, name, {namespace}).catch(() => {});
+  }
+}
+// One S3 store as a plan row names it: {site, bucket, endpoint, region, secretRef}.
+const probeS3 = store => runProbe("S3ProbeRequest", DR_NS(), Object.assign({bucket: store.bucket, endpoint: store.endpoint, secretRef: store.secretRef},
+  store.site ? {site: store.site} : {}, store.region ? {region: store.region} : {}), "probe an S3 store", "the dr-admin role");
+// Health probes: of an application where it runs ({app}), or on a plan's site
+// for one not protected yet ({plan, site, namespaces}); probes default to the
+// application's own.
+const probeHealth = ({app, plan, site, namespaces, probes}) => runProbe("HealthProbeRequest", app ? app.namespace : DR_NS(),
+  Object.assign({}, app ? {applicationRef: {name: app.name}} : {}, plan ? {planRef: plan} : {}, site ? {site} : {},
+    namespaces && namespaces.length ? {namespaces} : {}, probes && probes.length ? {probes} : {}),
+  "run health probes", "the dr-operator role");
+
 const drhub = {
+  probeS3, probeHealth,
   plans: () => drList("pplan"), plan: drById("pplan"),
   paths: () => drList("drpath"), path: drById("drpath"),
   apps: () => drList("papp"), app: drById("papp"),

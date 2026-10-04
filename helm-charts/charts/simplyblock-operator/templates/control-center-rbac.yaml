@@ -138,6 +138,10 @@ rules:
   - apiGroups: ["dr.simplyblock.io"]
     resources: ["recoveryactions"]
     verbs: ["override"]
+  # the forms' Test buttons: dr-hub probes an S3 store, dr-agent health probes, on demand
+  - apiGroups: ["dr.simplyblock.io"]
+    resources: ["s3proberequests", "healthproberequests"]
+    verbs: ["get", "create", "delete"]
   - apiGroups: ["sitemap.simplyblock.io"]
     resources: ["siteprofiles", "dhcpservers"]
     verbs: ["get", "list", "watch"]

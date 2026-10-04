@@ -72,6 +72,10 @@ const RESOURCES = {
   RestoreAction:        {plural: "restoreactions",        short: "rsa",      core: DR_API_GROUP, namespaced: true, dr: true},
   SiteProfile:          {plural: "siteprofiles",          short: "sprof",    core: SITEMAP_API_GROUP, namespaced: false, dr: true},
   DHCPServer:           {plural: "dhcpservers",           short: "dhcps",    core: SITEMAP_API_GROUP, namespaced: false, dr: true},
+  // on-demand probes behind the forms' Test buttons (dr-hub ADR 0021): created,
+  // read until answered, deleted; never listed in a view
+  S3ProbeRequest:       {plural: "s3proberequests",       short: "s3probe",  core: DR_API_GROUP, namespaced: true, dr: true},
+  HealthProbeRequest:   {plural: "healthproberequests",   short: "hprobe",   core: DR_API_GROUP, namespaced: true, dr: true},
   // Ramen and OCM objects the hub derives — instances only, read-only here
   DRPolicy:              {plural: "drpolicies",             core: RAMEN_API_GROUP, namespaced: false},
   DRCluster:             {plural: "drclusters",             core: RAMEN_API_GROUP, namespaced: false},
