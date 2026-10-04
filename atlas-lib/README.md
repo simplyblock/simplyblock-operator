@@ -148,6 +148,9 @@ atlas/
 │   └── claim.go            KubeClaim + WithClaim: fire a state's side effect once, under a leased claim
 ├── net/                    Outbound URL validation (SSRF guard)
 ├── ptr/                    Pointer/optional-field helpers for generated + K8s types
+├── bounded/                Hard deadlines for calls no context reaches
+│   ├── bounded.go          Call/Do: a sysfs read, ioctl, or open under a deadline + the stuck-key guard
+│   └── command.go          CombinedOutput/Output: a child process that returns even when it cannot be reaped
 ├── errs/                   Sentinel errors (errors.Is across packages)
 │   └── deferrers/          defer-friendly Close/Run that log instead of dropping errors
 │
@@ -1431,6 +1434,28 @@ size := ptr.ClampToInt(sizeBytes, false)           // saturates, never wraps
 defer deferrers.Close(resp.Body)
 defer deferrers.Run(cancelWatch)
 ```
+
+#### Bound a call that blocks in the kernel
+
+A sysfs read, an ioctl, a device open, or the wait for a child process can sit
+in the kernel until a wedged controller is torn down, and no context reaches it.
+Run it under `bounded`, which gives up at the deadline with an error wrapping
+`context.DeadlineExceeded`, and fails at once while an earlier call on the same
+key is still stuck:
+
+```go
+b, err := bounded.Call(path, bounded.ReadTimeout, func() ([]byte, error) {
+    return os.ReadFile(path)
+})
+
+// nvme-cli: the key names the target and never the secrets on the command line.
+out, err := bounded.Output(ctx, bounded.CommandTimeout, "nvme list", "nvme", "list", "-o", "json")
+```
+
+Everything in `nvme` and `nvmeof` that touches the kernel already goes through
+it, so a resolver or a connector never needs wrapping again.
+
+_Today:_ `csi-driver/internal/initiator/initiator.go` (`execNVMeQuery`).
 
 #### Validate user-supplied outbound URLs
 

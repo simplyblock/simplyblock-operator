@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/simplyblock/atlas/bounded"
 	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/nvme"
 )
@@ -222,7 +223,9 @@ func deviceIdentity(d nvme.Device) (string, error) {
 	if d.Namespace.DevicePath == "" {
 		return "", fmt.Errorf("namespace %q has neither dev nor device path: %w", d.Namespace.Name, errs.ErrNotFound)
 	}
-	resolved, err := filepath.EvalSymlinks(d.Namespace.DevicePath)
+	resolved, err := bounded.Call("resolve "+d.Namespace.DevicePath, bounded.ReadTimeout, func() (string, error) {
+		return filepath.EvalSymlinks(d.Namespace.DevicePath)
+	})
 	if err != nil {
 		return "", fmt.Errorf("resolving %s: %w", d.Namespace.DevicePath, err)
 	}
@@ -255,10 +258,15 @@ func ready(d nvme.Device) error {
 // which costs the device nothing and is the only way to learn that it is really
 // there. A test's device path is a real file, so this answers for a fake exactly
 // as it does for a namespace.
+//
+// The open runs under bounded.ReadTimeout: opening a namespace whose paths are
+// all in error recovery can block until the kernel gives the namespace up.
 func openDevice(path string) error {
-	f, err := os.OpenFile(path, os.O_RDONLY, 0)
-	if err != nil {
-		return err
-	}
-	return f.Close()
+	return bounded.Do("open "+path, bounded.ReadTimeout, func() error {
+		f, err := os.OpenFile(path, os.O_RDONLY, 0)
+		if err != nil {
+			return err
+		}
+		return f.Close()
+	})
 }
