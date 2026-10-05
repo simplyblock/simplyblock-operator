@@ -360,6 +360,7 @@ function ClusterLogPanel({cluster}) {
           <input value={q} placeholder="Search message, node, status…" onChange={e => setQ(e.target.value)} /></div>
         <div className="spacer"></div>
         <span className="count">{rows.length} / {all.length}</span>
+        <LogsLink label="Shipped logs" params={cluster.site ? {site: cluster.site, range: "1h"} : {q: `"${cluster.id}"`, range: "24h"}} />
         <CopyBtn get={() => rows.map(l => [l.ts, l.nodeId || "None", l.event, l.level, l.message,
           l.storageId === null || l.storageId === undefined ? "None" : l.storageId, l.vuid || "None", l.recordStatus].join(" | ")).join("\n")} />
         <span className="live"><i></i>live</span>
@@ -445,25 +446,36 @@ function ControlPlanePanel() {
             </div>
           </div>
         ))}
-      {name && <ContainerLogs names={list.map(c => c.name)} name={name} setName={setSel} />}
+      {name && <ContainerLogs names={list.map(c => c.name)} containersOf={Object.fromEntries(list.map(c => [c.name, c.containers || []]))} name={name} setName={setSel} />}
     </>
   );
 }
 
-function ContainerLogs({names, name, setName}) {
+function ContainerLogs({names, containersOf, name, setName}) {
   const [q, setQ] = useState("");
   const [lvl, setLvl] = useState("");
-  const {data, loading, error, reload} = useResource("clog|" + name, () => agent.containerLogs(name), 4000);
+  const cs = (containersOf || {})[name] || [];
+  const [ctr, setCtr] = useState("");
+  // a pod with several containers needs one named; default to the first
+  const container = cs.length > 1 ? (cs.includes(ctr) ? ctr : cs[0]) : "";
+  const {data, loading, error, reload} = useResource("clog|" + name + "|" + container, () => agent.containerLogs(name, container), 4000);
   const lines = (data || []).filter(l => (!lvl || l.level === lvl) && (!q || l.msg.toLowerCase().includes(q.toLowerCase())));
+  const toExplorer = () => window.__nav && window.__nav.logs({pod: name, container: container || undefined, range: "1h"});
   return (
     <>
-      <div className="sech"><h2>Container logs</h2><span className="ln"></span><SourceTag what="kubectl logs" /></div>
+      <div className="sech"><h2>Container logs</h2><span className="ln"></span>
+        <SourceTag what={upstreamOn("operator") ? "operator agent" : `live tail, last ${POD_LOG_TAIL} lines`} />
+        {window.__nav && <button className="chip" style={{marginLeft: 8}} onClick={toExplorer} title="Shipped logs: any time range, keyword search, oldest first">
+          <Icon n="search" s={11} />Search shipped logs</button>}</div>
       <div className="card">
         <LogStream lines={lines} loading={loading} error={error} onRetry={reload} tools={
           <div className="ptools">
-            <select className="sel" value={name} onChange={e => setName(e.target.value)}>
+            <select className="sel" value={name} onChange={e => { setName(e.target.value); setCtr(""); }}>
               {names.map(n => <option key={n} value={n}>{n}</option>)}
             </select>
+            {cs.length > 1 && <select className="sel" value={container} onChange={e => setCtr(e.target.value)} title="container">
+              {cs.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>}
             <select className="sel" value={lvl} onChange={e => setLvl(e.target.value)}>
               <option value="">All levels</option>{["DEBUG", "INFO", "WARN", "ERROR"].map(l => <option key={l} value={l}>{l}</option>)}
             </select>
@@ -602,7 +614,8 @@ function NodeLogPanel({node}) {
   const lines = (data || []).filter(l => (!lvl || l.level === lvl) && (!q || l.msg.toLowerCase().includes(q.toLowerCase())));
   return (
     <>
-      <div className="sech"><h2>Live log stream</h2><span className="ln"></span><SourceTag what="node agent" /></div>
+      <div className="sech"><h2>Live log stream</h2><span className="ln"></span><SourceTag what="node agent" />
+        <span style={{marginLeft: 8}}><LogsLink label="Shipped logs of this node" params={{source: String(node.hostname || "").split("_")[0], range: "1h"}} /></span></div>
       <div className="card">
         <LogStream lines={lines} loading={loading} error={error} onRetry={reload} height={420} tools={
           <div className="ptools">
@@ -719,4 +732,4 @@ function CpClusters({nav}) {
   );
 }
 
-Object.assign(window, {StoragePlaneLogPanel, OperationsPanel, OpMachine, Tabs, LogStream, CopyBtn, TasksPanel, AlertsPanel, ClusterLogPanel, ControlPlanePanel, FdbPanel, SpdkThreadsPanel, NodeLogPanel, SmartCard, AllocBar, ControlPlaneView, CpClusters});
+Object.assign(window, {StoragePlaneLogPanel, OperationsPanel, OpMachine, Tabs, LogStream, CopyBtn, LEVEL_C, shortTs, TasksPanel, AlertsPanel, ClusterLogPanel, ControlPlanePanel, FdbPanel, SpdkThreadsPanel, NodeLogPanel, SmartCard, AllocBar, ControlPlaneView, CpClusters});

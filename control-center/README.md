@@ -239,6 +239,7 @@ written by a controller.
 |---|---|---|
 | Kubernetes API | `k8sBase` | CRDs in `storage.simplyblock.io/v1alpha1`; core objects (Node, Pod, PV, PVC, StorageClass, Secret, Event); pod logs |
 | Operator API | `operatorBase` | `/releases` compatibility matrix, SSE watch, and `/proposed/*` for kinds v1alpha1 does not model yet |
+| Log store | `graylogBase` | Graylog's universal search (`/search/universal/absolute`, oldest first): the Logs view. Without it the view tails a pod's log from the Kubernetes API |
 | Helm | `helmBase` | release, revision, chart, values |
 | Control plane API (read-only) | `cpBase` | storage clusters, nodes, devices, pools, volumes, snapshots, tasks, logs and alerts where they are not CRDs here (a hub managing sites); GET only, credentials scrubbed by the proxy (`deploy/redact.js`) |
 
