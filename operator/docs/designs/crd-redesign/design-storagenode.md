@@ -1767,7 +1767,9 @@ node drained, and holds naming what is left otherwise.
 per-node benchmark artifacts, so moving one to a peer would produce a benchmark
 volume measuring the wrong node. A delete the control plane rejects for a reason
 other than "already gone" fails the operation, because a volume that cannot be
-deleted and cannot be migrated is a volume the removal would destroy.
+deleted and cannot be migrated is a volume the removal would destroy. A delete
+that got no answer, a timeout or a 5xx, is retried after the claim's lease: it
+may have landed, and the census drops a volume once its deletion is accepted.
 
 **`Removing` treats 404 as success.** A node the control plane no longer knows
 about is a node that has been removed, and a retry after a lost response is the
@@ -1814,30 +1816,31 @@ accepts the removal being driven again.
 `Validating` is therefore the only abortable step, and the only one whose
 operation can be deleted while it runs.
 
-| Condition                         | Step                           | Result                                              |
-|-----------------------------------|--------------------------------|-----------------------------------------------------|
-| Pinned or unmanaged volumes       | `Validating`                   | Hold, emit, requeue. The node is untouched          |
-| The shutdown cannot run yet (409) | `ShuttingDown`                 | Hold, emit, ask again once a minute                 |
-| The shutdown was refused          | `ShuttingDown`                 | `Failed`, the node still serving                    |
-| The shutdown got no answer        | `ShuttingDown`                 | Retry, reading the node first                       |
-| The shutdown never landed         | `MigratingDevices`             | `Failed` after 15 minutes, the node still serving   |
-| `prepare-removal` was refused     | `MigratingDevices`             | `Failed`, the node left offline                     |
-| A refusal that passes by itself   | `MigratingDevices`, `Removing` | Hold, emit, ask again once a minute                 |
-| The shutdown failed or stalled    | `MigratingDevices`             | `prepare-removal` again, three times, then `Failed` |
-| The device rebuild gave up        | `MigratingDevices`             | `Failed`                                            |
-| No online peer to migrate to      | `MigratingVolumes`             | Hold, emit, requeue                                 |
-| A `PersistentVolumeOps` failed    | `MigratingVolumes`             | Keep it and retry against a peer not ruled out      |
-| Every eligible peer ruled out     | `MigratingVolumes`             | Hold, emit, requeue, naming the targets tried       |
-| A `PersistentVolumeOps` aborted   | `MigratingVolumes`             | Delete it and re-issue it, ruling nothing out       |
-| Non-system volumes remain         | `Verifying`                    | Hold, emit, requeue                                 |
-| `verify-drained` sees something   | `Verifying`                    | Hold, emit, requeue, naming what is left            |
-| A system volume cannot be deleted | `Verifying`                    | `Failed`                                            |
-| The removal call was rejected     | `Removing`                     | `Failed`                                            |
-| The removal call got no answer    | `Removing`                     | Retry, reading the node first                       |
-| The control plane gave up         | `AwaitingRemoval`              | `Failed`                                            |
-| A step's deadline expired         | Any                            | `Failed`                                            |
-| `spec.abort` set                  | `Validating`                   | `Aborted` directly, since nothing has been done     |
-| `spec.abort` set                  | Any later step                 | Refused; the operation runs on                      |
+| Condition                            | Step                           | Result                                              |
+|--------------------------------------|--------------------------------|-----------------------------------------------------|
+| Pinned or unmanaged volumes          | `Validating`                   | Hold, emit, requeue. The node is untouched          |
+| The shutdown cannot run yet (409)    | `ShuttingDown`                 | Hold, emit, ask again once a minute                 |
+| The shutdown was refused             | `ShuttingDown`                 | `Failed`, the node still serving                    |
+| The shutdown got no answer           | `ShuttingDown`                 | Retry, reading the node first                       |
+| The shutdown never landed            | `MigratingDevices`             | `Failed` after 15 minutes, the node still serving   |
+| `prepare-removal` was refused        | `MigratingDevices`             | `Failed`, the node left offline                     |
+| A refusal that passes by itself      | `MigratingDevices`, `Removing` | Hold, emit, ask again once a minute                 |
+| The shutdown failed or stalled       | `MigratingDevices`             | `prepare-removal` again, three times, then `Failed` |
+| The device rebuild gave up           | `MigratingDevices`             | `Failed`                                            |
+| No online peer to migrate to         | `MigratingVolumes`             | Hold, emit, requeue                                 |
+| A `PersistentVolumeOps` failed       | `MigratingVolumes`             | Keep it and retry against a peer not ruled out      |
+| Every eligible peer ruled out        | `MigratingVolumes`             | Hold, emit, requeue, naming the targets tried       |
+| A `PersistentVolumeOps` aborted      | `MigratingVolumes`             | Delete it and re-issue it, ruling nothing out       |
+| Non-system volumes remain            | `Verifying`                    | Hold, emit, requeue                                 |
+| `verify-drained` sees something      | `Verifying`                    | Hold, emit, requeue, naming what is left            |
+| A system volume cannot be deleted    | `Verifying`                    | `Failed`                                            |
+| A system volume delete got no answer | `Verifying`                    | Retry after the claim's lease                       |
+| The removal call was rejected        | `Removing`                     | `Failed`                                            |
+| The removal call got no answer       | `Removing`                     | Retry, reading the node first                       |
+| The control plane gave up            | `AwaitingRemoval`              | `Failed`                                            |
+| A step's deadline expired            | Any                            | `Failed`                                            |
+| `spec.abort` set                     | `Validating`                   | `Aborted` directly, since nothing has been done     |
+| `spec.abort` set                     | Any later step                 | Refused; the operation runs on                      |
 
 ### 8.4 PersistentVolumeOps lifecycle
 
