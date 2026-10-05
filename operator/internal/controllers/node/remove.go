@@ -577,7 +577,7 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 		coveredVolumes[migration.PVName] = struct{}{}
 	}
 	var missing []managedVolume
-	for _, move := range subsystemMoves(census.Managed) {
+	for _, move := range subsystemMoves(census.Managed, census.subsystemReplicas) {
 		if _, ok := covered[subsystemKey(move.NQN, move.PVName)]; ok {
 			continue
 		}
