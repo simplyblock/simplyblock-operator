@@ -1742,11 +1742,22 @@ volume the control plane reports under no subsystem is a move of its own.
 
 **Migration targets are chosen round-robin over the online peers that hold none
 of the replicas of any volume in the subsystem, and that the subsystem has not
-already failed on (§8.4).** The control plane lists a volume's replica nodes, and
-a node already holding one is never a target: the control plane refuses the
-move, and while the volume's primary is shut down for its removal that replica is
-what serves the volume. Round-robin over the rest spreads the drained node's
-volumes rather than concentrating them on whichever peer sorts first. A drain
+already failed on (§8.4).** A node already holding one of the volume's replicas
+is never a target: the control plane refuses the move, and while the volume's
+primary is shut down for its removal that replica is what serves the volume. The
+holders are the nodes the volume lists and the drained node's own secondary and
+tertiary, read from the node stream. A volume whose primary is the drained node
+has its replicas on those two, and a volume created by replication lists no
+tertiary. Round-robin over the rest spreads the drained node's volumes rather than
+concentrating them on whichever peer sorts first.
+
+**A peer that replicates onto the drained node is used last.** A move builds the
+volume on the target's own secondary and tertiary as well, so a peer whose
+secondary or tertiary is the drained node puts the node that is leaving on both
+sides of the copy. The control plane skips a departing replica when it builds, so
+such a peer works, with one replica fewer until the removal re-places it. It is
+chosen only when no other eligible peer is left: on a small cluster every peer may
+replicate onto the drained node, and draining beats holding. A drain
 with no online peer to move to, a volume whose replicas cover every online peer,
 or a subsystem that has already failed on every peer left, is a stall, not a
 failure, and emits `NoMigrationTarget`, naming the targets tried. The condition is

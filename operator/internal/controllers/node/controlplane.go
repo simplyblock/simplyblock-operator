@@ -65,6 +65,13 @@ type NodeReading struct {
 	// the digits: the control plane's own vocabulary is what it is, and the
 	// operator does not invent a name the control plane never said (§3.3).
 	FailureDomain int `json:"failure_domain"`
+
+	// SecondaryNodeID and TertiaryNodeID are the nodes holding this node's
+	// lvstore replicas, empty when it has none. A volume whose primary is this
+	// node has its replicas there, and a volume created on this node is built
+	// there as well.
+	SecondaryNodeID string `json:"secondary_node_id"`
+	TertiaryNodeID  string `json:"tertiary_node_id"`
 }
 
 // The lifecycle values the control plane reports, in its own spelling. They are
