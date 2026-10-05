@@ -1436,21 +1436,83 @@ const runCheck = (fn, set) => {
   Promise.resolve().then(fn).then(set, e => set({status: "bad", text: (e && e.message) || "the check failed"}));
 };
 
-function Field({f, val, setVal, vals}) {
+function Field({f, val, setVal, vals, setAll}) {
   const [opts, setOpts] = useState(f.options || null);
   const [loading, setLoading] = useState(!!f.load);
   const [checks, setChecks] = useState({});
+  // f.sync keeps a value in step with the others (one S3 row per declared
+  // site, say): it returns the value the field should hold now.
+  useEffect(() => {
+    if (!f.sync) return;
+    const n = f.sync(val, vals || {});
+    if (n !== undefined && JSON.stringify(n) !== JSON.stringify(val)) setVal(n);
+  });
+  // f.syncAll proposes values of other fields when this one changes (the PVC
+  // selector for the chosen namespaces): a patch, applied when it differs.
+  useEffect(() => {
+    if (!f.syncAll || !setAll) return;
+    const p = f.syncAll(vals || {});
+    if (p && Object.keys(p).some(k => JSON.stringify(p[k]) !== JSON.stringify((vals || {})[k]))) setAll(p);
+  });
   useEffect(() => {
     if (f.load) f.load().then(o => { setOpts(o); setLoading(false); if (o.length && f.type !== "multiselect" && (val === undefined || val === "")) setVal(o[0].v); }).catch(() => setLoading(false));
-    else if (f.options && f.options.length && f.type !== "multiselect" && val === undefined) setVal(f.options[0].v);
+    else if (f.options && f.options.length && f.type === "select" && val === undefined && !f.sync) setVal(f.options[0].v);
   }, []);
   // conditional forms can swap the option set out from under a chosen value
   useEffect(() => {
-    if (!f.options || f.type === "multiselect") return;
+    if (!f.options || f.type !== "select") return;
     setOpts(f.options);
     if (f.options.length && !f.options.some(o => o.v === val)) setVal(f.options[0].v);
-  }, [f.options && f.options.map(o => o.v).join("|")]);
-  if (f.type === "note") return <div className="fnote"><Icon n="alert" s={12} />{f.label}</div>;
+  }, [f.options && f.options.map(o => o.v + "=" + o.l).join("|")]);
+  if (f.type === "note") return <div className={"fnote" + (f.tone ? " " + f.tone : "")}><Icon n={f.icon || "alert"} s={12} />{f.label}</div>;
+  // A button that fills other fields from a proposal (f.apply returns the
+  // values to set); nothing is applied until it is pressed.
+  if (f.type === "apply") {
+    const r = checks.all;
+    return (
+      <div className="field">
+        <span className="flabel">{f.label}</span>
+        <div style={{display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap"}}>
+          <button type="button" className="btn" disabled={!!(f.disabled && f.disabled(vals || {}))}
+            onClick={() => {
+              try {
+                const patch = f.apply(vals || {});
+                if (patch && setAll) setAll(patch);
+                setChecks({all: {status: "ok", text: f.done || "Applied: review the fields below before saving."}});
+              } catch (e) { setChecks({all: {status: "bad", text: e.message}}); }
+            }}>
+            <Icon n="check" s={11} />{f.button || "Apply"}</button>
+          {f.hint && <span className="fhint" style={{marginTop: 0, color: "var(--dim)"}}>{typeof f.hint === "function" ? f.hint(vals || {}) : f.hint}</span>}
+        </div>
+        <CheckResult r={r} />
+      </div>
+    );
+  }
+  // Priority lanes (a recovery plan's applications): items picked from
+  // f.items into lanes 1..n, moved by drag and drop between lanes and before
+  // one another, or by the priority stepper on each item. The value is
+  // [{v, priority}] in order.
+  if (f.type === "lanes") return <LanesField f={f} val={val} setVal={setVal} vals={vals} />;
+  // Items picked one by one from a list (a namespace each), shown as chips.
+  if (f.type === "chips") {
+    const sel = val || [];
+    const opts2 = (f.options || []).filter(o => !sel.includes(o.v));
+    const verr = f.validate && f.validate(val, vals || {});
+    return (
+      <div className="field">
+        <span className="flabel">{f.label} <em>({sel.length})</em></span>
+        <div className="chipbox" style={{display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center"}}>
+          {sel.map(x => <span key={x} className="chip mono">{x}<button type="button" className="kebab" title={`Remove ${x}`} onClick={() => setVal(sel.filter(y => y !== x))}><Icon n="x" s={10} /></button></span>)}
+          <select className="finput sm chipadd" value="" onChange={e => e.target.value && setVal(sel.concat(e.target.value))}>
+            <option value="">{opts2.length ? (f.addLabel || "— add —") : (f.empty || "nothing more to add")}</option>
+            {opts2.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+          </select>
+        </div>
+        {verr ? <span className="fhint" style={{color: "var(--bad)"}}>{verr}</span>
+          : f.hint && <span className="fhint" style={{color: "var(--dim)"}}>{typeof f.hint === "function" ? f.hint(val, vals || {}) : f.hint}</span>}
+      </div>
+    );
+  }
   if (f.type === "check") {
     const r = checks.all;
     return (
@@ -1471,22 +1533,25 @@ function Field({f, val, setVal, vals}) {
   if (f.type === "kv") {
     const rows = val || [];
     const set = (i, k, x) => setVal(rows.map((r, j) => j === i ? Object.assign({}, r, {[k]: x}) : r));
+    const off = !!(f.disabled && f.disabled(vals || {}));
+    const verr = f.validate && f.validate(val, vals || {});
     return (
       <label className="field">
         <span className="flabel">{f.label} <em>({rows.length} of {f.max || 50})</em></span>
-        <div className="schedbox">
+        <div className="schedbox" style={off ? {opacity: 0.5} : undefined}>
           {rows.map((r, i) => (
             <div className="schedrow" key={i}>
-              <input className="finput sm" placeholder="key" value={r.k} onChange={e => set(i, "k", e.target.value)} />
+              <input className="finput sm" placeholder="key" value={r.k} disabled={off} onChange={e => set(i, "k", e.target.value)} />
               <span className="sl">=</span>
-              <input className="finput sm" placeholder="value" value={r.v} onChange={e => set(i, "v", e.target.value)} />
-              <button type="button" className="kebab" title="Remove tag" onClick={() => setVal(rows.filter((_, j) => j !== i))}><Icon n="x" s={11} /></button>
+              <input className="finput sm" placeholder="value" value={r.v} disabled={off} onChange={e => set(i, "v", e.target.value)} />
+              <button type="button" className="kebab" title="Remove tag" disabled={off} onClick={() => setVal(rows.filter((_, j) => j !== i))}><Icon n="x" s={11} /></button>
             </div>
           ))}
-          <button type="button" className="schedadd" disabled={rows.length >= (f.max || 50)} onClick={() => setVal(rows.concat({k: "", v: ""}))}>
+          <button type="button" className="schedadd" disabled={off || rows.length >= (f.max || 50)} onClick={() => setVal(rows.concat({k: "", v: ""}))}>
             <Icon n="plus" s={11} />Add tag</button>
         </div>
-        {f.hint && <span className="fhint">{f.hint}</span>}
+        {verr && <span className="fhint" style={{color: "var(--bad)"}}>{verr}</span>}
+        {f.hint && <span className="fhint">{typeof f.hint === "function" ? f.hint(val, vals || {}) : f.hint}</span>}
       </label>
     );
   }
@@ -1498,42 +1563,70 @@ function Field({f, val, setVal, vals}) {
       setChecks(c => { const n = Object.assign({}, c); delete n[i]; return n; });
     };
     const ra = f.rowAction;
+    const off = !!(f.disabled && f.disabled(vals || {}));
+    const fixed = !!f.fixed;
+    const move = (i, d) => { const j = i + d; if (j < 0 || j >= rows.length) return; const n = rows.slice(); [n[i], n[j]] = [n[j], n[i]]; setVal(n); setChecks({}); };
     const cell = (r, i, c) => {
       const w = {flex: c.flex || 1, minWidth: 0};
-      if (c.type === "select") {
-        const opts = c.options || [];
+      if (c.readonly) return <span key={c.k} className="finput sm mono rocell" style={Object.assign({}, w, {background: "transparent", border: "none", alignSelf: "center"})} title={c.label}>{(c.show ? c.show(r) : r[c.k]) || "—"}</span>;
+      if (c.type === "select" || c.type === "multi") {
+        const opts = (typeof c.options === "function" ? c.options(r, i, vals || {}) : c.options) || [];
+        if (c.type === "multi") {
+          const cur = r[c.k] || [];
+          const rest = opts.filter(o => !cur.includes(o.v));
+          return <span key={c.k} style={Object.assign({}, w, {display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center"})}>
+            {cur.map(x => <span key={x} className="chip mono" style={{fontSize: 10.5}}>{(opts.find(o => o.v === x) || {l: x}).l}
+              <button type="button" className="kebab" disabled={off} title={`Remove ${x}`} onClick={() => set(i, c.k, cur.filter(y => y !== x))}><Icon n="x" s={9} /></button></span>)}
+            <select className="finput sm" value="" disabled={off || !rest.length} onChange={e => e.target.value && set(i, c.k, cur.concat(e.target.value))}>
+              <option value="">{rest.length ? (c.addLabel || "+ add") : (c.empty || "—")}</option>
+              {rest.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}</select>
+          </span>;
+        }
         const cur = r[c.k] || "";
         const known = opts.some(o => o.v === cur);
-        return <select key={c.k} className="finput sm" style={w} value={cur} onChange={e => set(i, c.k, e.target.value)}>
-          {c.blank !== undefined && <option value="">{c.blank}</option>}
+        return <select key={c.k} className="finput sm" style={w} value={cur} disabled={off} onChange={e => set(i, c.k, e.target.value)}>
+          {c.blank !== undefined && <option value="">{typeof c.blank === "function" ? c.blank(r) : c.blank}</option>}
           {!known && cur && <option value={cur}>{c.unknown ? c.unknown(cur) : cur}</option>}
           {opts.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}</select>;
       }
-      return <input key={c.k} className="finput sm" style={w} type={c.type === "number" ? "number" : "text"} placeholder={c.placeholder || ""} value={r[c.k] == null ? "" : r[c.k]} onChange={e => set(i, c.k, e.target.value)} />;
+      const sug = c.suggest ? c.suggest(r, i, vals || {}) || [] : [];
+      const listId = sug.length ? `sug-${f.k}-${i}-${c.k}` : undefined;
+      return <React.Fragment key={c.k}>
+        <input className="finput sm" style={w} type={c.type === "number" ? "number" : "text"} placeholder={c.placeholder || ""} value={r[c.k] == null ? "" : r[c.k]}
+          disabled={off || !!(c.disabled && c.disabled(r))} list={listId} onChange={e => set(i, c.k, e.target.value)} />
+        {listId && <datalist id={listId}>{sug.map(x => <option key={x} value={x} />)}</datalist>}
+      </React.Fragment>;
     };
     return (
       <label className="field">
         <span className="flabel">{f.label} <em>({rows.length}{f.max ? ` of ${f.max}` : ""})</em></span>
-        <div className="schedbox">
-          <div className="schedrow head">{f.cols.map(c => <span key={c.k} className="sl" style={{flex: c.flex || 1}}>{c.label}</span>)}{ra && <span style={{width: 52}}></span>}<span style={{width: 24}}></span></div>
-          {rows.map((r, i) => (
-            <React.Fragment key={i}>
-              <div className="schedrow">
-                {f.cols.map(c => cell(r, i, c))}
-                {ra && <button type="button" className="chip rowact" style={{width: 52, justifyContent: "center"}} title={ra.title || ra.label}
-                  disabled={!!(checks[i] && checks[i].status === "busy")}
-                  onClick={() => runCheck(() => ra.run(r, vals || {}), x => setChecks(c => Object.assign({}, c, {[i]: x})))}>{ra.label || "Test"}</button>}
-                <button type="button" className="kebab" title="Remove" onClick={() => { setVal(rows.filter((_, j) => j !== i)); setChecks({}); }}><Icon n="x" s={11} /></button>
-              </div>
-              {checks[i] && <div style={{padding: "0 0 4px 2px"}}><CheckResult r={checks[i]} /></div>}
-              {f.rowError && f.rowError(r, i, rows) && <div className="fhint" style={{color: "var(--bad)", margin: "0 0 4px 2px"}}>{f.rowError(r, i, rows)}</div>}
-            </React.Fragment>
-          ))}
-          <button type="button" className="schedadd" disabled={f.max && rows.length >= f.max} onClick={() => setVal(rows.concat(f.add ? f.add(rows) : {}))}>
-            <Icon n="plus" s={11} />{f.addLabel || "Add"}</button>
+        <div className="schedbox" style={off ? {opacity: 0.5} : undefined}>
+          <div className="schedrow head">{f.cols.map(c => <span key={c.k} className="sl" style={{flex: c.flex || 1}}>{c.label}</span>)}{ra && <span style={{width: 52}}></span>}{f.reorder && <span style={{width: 44}}></span>}{!fixed && <span style={{width: 24}}></span>}</div>
+          {rows.map((r, i) => {
+            const rerr = f.rowError && f.rowError(r, i, rows, vals || {});
+            const rinfo = !rerr && f.rowInfo && f.rowInfo(r, i, rows, vals || {});
+            return (
+              <React.Fragment key={i}>
+                <div className="schedrow">
+                  {f.cols.map(c => cell(r, i, c))}
+                  {ra && <button type="button" className="chip rowact" style={{width: 52, justifyContent: "center"}} title={ra.title || ra.label}
+                    disabled={off || !!(checks[i] && checks[i].status === "busy")}
+                    onClick={() => runCheck(() => ra.run(r, vals || {}, i), x => setChecks(c => Object.assign({}, c, {[i]: x})))}>{ra.label || "Test"}</button>}
+                  {f.reorder && <span style={{width: 44, display: "flex"}}>
+                    <button type="button" className="kebab rowup" title="Move up" disabled={off || i === 0} onClick={() => move(i, -1)}>↑</button>
+                    <button type="button" className="kebab rowdown" title="Move down" disabled={off || i === rows.length - 1} onClick={() => move(i, 1)}>↓</button></span>}
+                  {!fixed && <button type="button" className="kebab rowdel" title="Remove" disabled={off} onClick={() => { setVal(rows.filter((_, j) => j !== i)); setChecks({}); }}><Icon n="x" s={11} /></button>}
+                </div>
+                {checks[i] && <div style={{padding: "0 0 4px 2px"}}><CheckResult r={checks[i]} /></div>}
+                {rerr && <div className="fhint rowerr" style={{color: "var(--bad)", margin: "0 0 4px 2px"}}>{rerr}</div>}
+                {rinfo && <div className="fhint rowinfo" style={{color: "var(--dim)", margin: "0 0 4px 2px"}}>{rinfo}</div>}
+              </React.Fragment>);
+          })}
+          {!fixed && <button type="button" className="schedadd" disabled={off || (f.max && rows.length >= f.max)} onClick={() => setVal(rows.concat(f.add ? f.add(rows, vals || {}) : {}))}>
+            <Icon n="plus" s={11} />{f.addLabel || "Add"}</button>}
         </div>
         {f.validate && f.validate(val, vals || {}) && <span className="fhint" style={{color: "var(--bad)"}}>{f.validate(val, vals || {})}</span>}
-        {f.hint && <span className="fhint">{f.hint}</span>}
+        {f.hint && <span className="fhint">{typeof f.hint === "function" ? f.hint(val, vals || {}) : f.hint}</span>}
       </label>
     );
   }
@@ -1589,12 +1682,14 @@ function Field({f, val, setVal, vals}) {
   }
   if (f.type === "multiselect") {
     const sel = val || [];
+    const verr = f.validate && f.validate(val, vals || {});
     return (
       <label className="field">
         <span className="flabel">{f.label} <em>({sel.length} selected)</em></span>
+        {verr && <span className="fhint" style={{color: "var(--bad)"}}>{verr}</span>}
         {loading ? <div className="fskel"></div>
-          : !opts || !opts.length ? <div className="fempty">{f.empty || "No options available"}</div>
-          : <div className="msbox">{opts.map(o => (
+          : !(f.options || opts) || !(f.options || opts).length ? <div className="fempty">{f.empty || "No options available"}</div>
+          : <div className="msbox">{(f.options || opts).map(o => (
               <button type="button" key={o.v} className={"msrow" + (sel.includes(o.v) ? " on" : "")}
                 onClick={() => setVal(sel.includes(o.v) ? sel.filter(x => x !== o.v) : sel.concat(o.v))}>
                 <span className="msbox-i">{sel.includes(o.v) && <Icon n="check" s={10} />}</span>
@@ -1627,6 +1722,57 @@ function Field({f, val, setVal, vals}) {
   );
 }
 
+function LanesField({f, val, setVal, vals}) {
+  const chosen = val || [];
+  const items = f.items || [];
+  const meta = v => items.find(x => x.v === v) || {v, l: v};
+  const drag = useRef(null);
+  const lanes = Math.max(1, ...chosen.map(c => c.priority)) + 1;
+  const rest = items.filter(x => !chosen.some(c => c.v === x.v));
+  const put = (v, priority, before) => {
+    const n = chosen.filter(c => c.v !== v);
+    const at = before ? n.findIndex(c => c.v === before) : -1;
+    const item = {v, priority};
+    if (at >= 0) n.splice(at, 0, item); else n.push(item);
+    // lanes stay contiguous: an emptied lane closes up
+    const used = [...new Set(n.map(c => c.priority))].sort((a, b) => a - b);
+    setVal(n.map(c => Object.assign({}, c, {priority: used.indexOf(c.priority) + 1})));
+  };
+  const verr = f.validate && f.validate(val, vals || {});
+  const warn = f.warn && f.warn(val, vals || {});
+  return (
+    <div className="field lanes">
+      <span className="flabel">{f.label} <em>({chosen.length} of {items.length})</em></span>
+      {!items.length ? <div className="fempty">{f.empty || "Nothing to choose from."}</div> : <>
+        <select className="finput sm laneadd" value="" onChange={e => e.target.value && put(e.target.value, Math.max(1, lanes - 1))}>
+          <option value="">{rest.length ? (f.addLabel || "— add —") : "everything is in a lane"}</option>
+          {rest.map(x => <option key={x.v} value={x.v}>{x.l}{x.sub ? ` — ${x.sub}` : ""}</option>)}
+        </select>
+        <div style={{display: "flex", flexDirection: "column", gap: 6, marginTop: 6}}>
+          {Array.from({length: lanes}, (_, i) => i + 1).map(p => (
+            <div key={p} className="lane" data-priority={p} style={{border: "1px dashed var(--line)", borderRadius: 6, padding: 6, minHeight: 30}}
+              onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (drag.current) put(drag.current, p); drag.current = null; }}>
+              <div className="sl" style={{fontSize: 10.5, marginBottom: 4}}>{p === lanes ? `priority ${p} — drop here for a new lane` : `priority ${p}${p === 1 ? " (first)" : ""}`}</div>
+              <div style={{display: "flex", gap: 6, flexWrap: "wrap"}}>
+                {chosen.filter(c => c.priority === p).map(c => { const m = meta(c.v); return (
+                  <span key={c.v} className="chip laneitem" draggable data-v={c.v} title={m.sub || ""}
+                    onDragStart={() => { drag.current = c.v; }}
+                    onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); e.stopPropagation(); if (drag.current && drag.current !== c.v) put(drag.current, p, c.v); drag.current = null; }}>
+                    <b>{m.l}</b>{m.sub && <span className="dim" style={{marginLeft: 4, fontSize: 10.5}}>{m.sub}</span>}
+                    <select className="finput sm prio" value={c.priority} title="Priority" onChange={e => put(c.v, Number(e.target.value))}>
+                      {Array.from({length: lanes}, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}</option>)}</select>
+                    <button type="button" className="kebab" title={`Remove ${m.l}`} onClick={() => setVal(chosen.filter(x => x.v !== c.v))}><Icon n="x" s={10} /></button>
+                  </span>); })}
+              </div>
+            </div>))}
+        </div></>}
+      {verr ? <span className="fhint" style={{color: "var(--bad)"}}>{verr}</span>
+        : warn ? <span className="fhint" style={{color: "var(--warn)"}}>{warn}</span>
+        : f.hint && <span className="fhint" style={{color: "var(--dim)"}}>{f.hint}</span>}
+    </div>
+  );
+}
+
 // spec.prepare, when set, loads what the fields need first (the DHCP servers
 // a binding may name, say); the fields are then fields(values, prepared).
 function Dialog({spec, obj, removes, onClose}) {
@@ -1647,7 +1793,9 @@ function Dialog({spec, obj, removes, onClose}) {
   const allFields = prep ? resolve(vals, prep) : [];
   const fields = allFields.filter(f => f.type !== "note");
   const invalid = !prep || fields.some(f => (f.required && (vals[f.k] === undefined || vals[f.k] === "" || (Array.isArray(vals[f.k]) && !vals[f.k].length)))
-    || (f.match && vals[f.k] !== f.match) || (f.validate && f.validate(vals[f.k], vals)));
+    || (f.match && vals[f.k] !== f.match) || (f.validate && f.validate(vals[f.k], vals))
+    // a row error blocks saving when the field says so (a selector that matches nothing)
+    || (f.rowsBlock && f.rowError && (vals[f.k] || []).some((r, i, rows) => f.rowError(r, i, rows, vals))));
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
@@ -1673,7 +1821,8 @@ function Dialog({spec, obj, removes, onClose}) {
           {!prep && <div className="fskel"></div>}
           {allFields.map(f => f.type === "note"
             ? <Field key={f.k || f.label} f={f} />
-            : <Field key={f.k} f={f} val={vals[f.k]} vals={vals} setVal={v => setVals(s => Object.assign({}, s, {[f.k]: v}))} />)}
+            : <Field key={f.k} f={f} val={vals[f.k]} vals={vals} setVal={v => setVals(s => Object.assign({}, s, {[f.k]: v}))}
+                setAll={patch => setVals(s => Object.assign({}, s, patch))} />)}
           {err && <div className="banner" style={{marginTop: 10, marginBottom: 0}}><Icon n="alert" s={14} />{err}</div>}
         </div>
         <div className="mfoot">

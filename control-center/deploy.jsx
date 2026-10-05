@@ -34,13 +34,28 @@ const discoveryDialog = (k, prev) => ({
 });
 
 // "Deploy cluster" from the clusters overview: pick a discovered Kubernetes cluster
+// Two ways to a storage cluster: onto a Kubernetes cluster the operator
+// discovered, or onto a managed site of the DR hub, discovered there and
+// approved from the hub (StorageSiteDeployment).
 const deployFromDialog = nav => ({
   title: "Deploy a storage cluster", confirm: "Continue",
-  desc: "A storage cluster is deployed onto the worker nodes of a discovered Kubernetes cluster. Undiscovered clusters are not offered — run discovery on them first.",
-  fields: [{k: "kid", label: "Kubernetes cluster", type: "select", required: true,
-    load: () => api.k8sClusters().then(ks => ks.filter(k => k.discovered).map(k => ({v: k.id, l: `${k.name} · discovered ${fmtAgo(k.discoveredAt)}`}))),
-    empty: "No Kubernetes cluster has been discovered yet."}],
-  run: v => { nav.deployWizard(v.kid); return Promise.resolve({}); }
+  desc: "A storage cluster is deployed onto the worker nodes of a discovered Kubernetes cluster, or onto a managed site, whose nodes are discovered there and approved from the hub.",
+  fields: v => [
+    {k: "how", label: "Deploy", type: "select", def: "k8s", options: [{v: "k8s", l: "onto a discovered Kubernetes cluster"}, {v: "site", l: "on a managed site (hub-approved discovery)"}]},
+    v.how !== "site" && {k: "kid", label: "Kubernetes cluster", type: "select", required: true,
+      load: () => api.k8sClusters().then(ks => ks.filter(k => k.discovered).map(k => ({v: k.id, l: `${k.name} · discovered ${fmtAgo(k.discoveredAt)}`}))),
+      empty: "No Kubernetes cluster has been discovered yet."},
+    v.how === "site" && {k: "n0", type: "note", icon: "check", label: "Continue opens the site deployment: choose the managed site, then review and approve its discovered nodes under Clusters → Site storage."}
+  ].filter(Boolean),
+  run: v => {
+    if (v.how === "site") {
+      nav.siteStorage();
+      return Promise.all([drhub.managedClusters(), drhub.siteProfiles().catch(() => []), drhub.siteDeploys()]).then(([mcs, sps, sds]) =>
+        setTimeout(() => window.__ui.dialog(deploySiteDialog(mcs.length ? mcs.map(m => m.metadata.name) : sps.map(s => s.name), sds.map(d => d.site)), {kind: "sitedeploy", id: "new"}), 50));
+    }
+    nav.deployWizard(v.kid);
+    return Promise.resolve({});
+  }
 });
 
 const FilterProps = ({f}) => (

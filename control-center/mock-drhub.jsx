@@ -20,7 +20,7 @@
   const OPS = "ramen-ops";
 
   const store = {ProtectionPlan: [], DRPath: [], ProtectedApplication: [], RecoveryPlan: [], RecoveryAction: [], TestBubble: [], TestSchedule: [], RestoreAction: [], SiteProfile: [], DRConfig: [], DHCPServer: [], StorageSiteDeployment: [],
-    S3ProbeRequest: [], HealthProbeRequest: []};
+    S3ProbeRequest: [], HealthProbeRequest: [], DHCPProbeRequest: [], LabelRequest: [], ManagedCluster: [], ManagedClusterView: []};
   const api = (kind, group) => ({apiVersion: group || "dr.simplyblock.io/v1alpha1", kind});
 
   // ---- plans ---------------------------------------------------------------
@@ -207,6 +207,78 @@
   store.DHCPServer.push(dhcp("dhcp-cluster-a", "cluster-a", "dhcp", "sitemap-hosts", 3, "5e5e5e"));
   store.DHCPServer.push(dhcp("dhcp-cluster-b", "cluster-b", "dhcp", "sitemap-hosts", 3, "91ab00"));
 
+  // ---- managed clusters and what their dr-agents report (the forms' choices) ----
+  const mc = (name, region, zone, available) => Object.assign(api("ManagedCluster", "cluster.open-cluster-management.io/v1"), {metadata: meta(name, null, {labels: {name, cloud: "Amazon"}}),
+    spec: {hubAcceptsClient: true}, status: {clusterClaims: [{name: "region.open-cluster-management.io", value: region}].concat(zone ? [{name: "topology.kubernetes.io/zone", value: zone}] : []),
+      conditions: [cond("ManagedClusterConditionAvailable", available !== false, available !== false ? "ManagedClusterAvailable" : "ManagedClusterLeaseUpdateStopped", "")]}});
+  store.ManagedCluster.push(mc("cluster-a", "eu-central-1"), mc("cluster-b", "eu-central-1"), mc("stretch", "eu-central-1"), mc("cluster-c", "eu-west-1", null, false));
+  const wl = (kind, name, labels, objectLabels) => ({kind, name, labels, objectLabels});
+  const pvc = (name, labels) => ({name, labels, storageClass: "sb-dr"});
+  const svc = (name, ...ports) => ({name, ports: ports.map(p => ({name: p[0], port: p[1], protocol: "TCP"}))});
+  const nsw = (namespace, prot, workloads, services, pvcs) => ({namespace, protected: prot, workloads, services: services.map(s => s.name), serviceDetails: services, pvcs});
+  const tierL = t => ({"dr.simplyblock.io/tier": t});
+  const agentStatus = (cluster, o) => ({cluster, version: "c4395f0", heartbeat: agoIso(1), veleroNamespace: o.velero,
+    inventory: {storageClasses: o.classes, site: {zones: o.zones, regions: ["eu-central-1"], nodes: o.zones.map((z, i) => ({name: `${cluster}-w${i}`, zone: z, region: "eu-central-1", ready: true})), nads: o.nads}},
+    workloads: o.workloads, virtualMachines: o.vms || [], dhcpServers: o.dhcp || []});
+  const STATUS = {
+    "cluster-a": agentStatus("cluster-a", {velero: "velero", zones: ["eu-central-1a"],
+      classes: [{name: "sb-dr", driver: "csi.simplyblock.io", labels: {"simplyblock.io/dr": "true", "simplyblock.io/replicated": "true"}}, {name: "sb-fast", driver: "csi.simplyblock.io"}],
+      nads: [{namespace: "apps", name: "backend", type: "macvlan", master: "bond0.120", vlan: 120}, {namespace: "apps", name: "mgmt", type: "macvlan", master: "bond0.130", vlan: 130},
+        {namespace: "dr-test", name: "isolated", type: "bridge", bridge: "br-test", ipamType: "static"}],
+      workloads: [
+        nsw("shop", true, [wl("StatefulSet", "shop-db", {app: "shop-db"}, Object.assign({app: "shop"}, {tier: "db"})), wl("Deployment", "shop-web", {app: "shop-web"}, {app: "shop"}), wl("Deployment", "shop-tools", {app: "shop-tools"}, {app: "shop-tools"})],
+          [svc("shop-db", ["pg", 5432]), svc("shop", ["http", 80])], [pvc("data-shop-db-0", {app: "shop"})]),
+        nsw("erp", true, [wl("VirtualMachine", "erp-db", {"kubevirt.io/domain": "erp-db"}, Object.assign({app: "erp"}, tierL("db"))), wl("VirtualMachine", "erp-app", {"kubevirt.io/domain": "erp-app"}, Object.assign({app: "erp"}, tierL("app")))],
+          [svc("erp-db", ["mysql", 3306])], [pvc("erp-db-disk", {app: "erp"}), pvc("erp-app-disk", {app: "erp"})]),
+        // not protected yet: what a new protection is chosen from
+        nsw("crm", false, [wl("Deployment", "crm-tools", {app: "crm-tools"}, {app: "crm-tools"}),
+          wl("VirtualMachine", "crm-db", {"kubevirt.io/domain": "crm-db"}, Object.assign({app: "crm"}, tierL("db"))), wl("VirtualMachine", "crm-web", {"kubevirt.io/domain": "crm-web"}, Object.assign({app: "crm"}, tierL("web")))],
+          [svc("crm-db", ["pg", 5432]), svc("crm-web", ["http", 80], ["metrics", 9100])],
+          [pvc("crm-db-data", {app: "crm", "storage.simplyblock.io/consistency-group": "crm"}), pvc("crm-web-data", {app: "crm", "storage.simplyblock.io/consistency-group": "crm"}), pvc("scratch", {app: "crm-scratch"})]),
+        nsw("ledger", true, [wl("StatefulSet", "ledger", {app: "ledger"}, {app: "ledger"})], [svc("ledger", ["http", 8080])], [pvc("data-ledger-0", {app: "ledger"})]),
+        nsw("wiki", true, [wl("Deployment", "wiki", {app: "wiki"}, {app: "wiki"})], [svc("wiki", ["http", 80])], [pvc("wiki-data", {app: "wiki"})])],
+      vms: [{namespace: "erp", name: "erp-db", running: true, networks: [{name: "backend", index: 1, networkName: "apps/backend", nad: "apps/backend", mac: "52:54:00:a1:b2:01", ips: ["192.168.110.21"]}]},
+        {namespace: "erp", name: "erp-app", running: true, networks: [{name: "backend", index: 1, networkName: "apps/backend", nad: "apps/backend", ips: ["192.168.110.22"]}, {name: "mgmt", index: 2, networkName: "mgmt", nad: "apps/mgmt", ips: ["10.130.0.40"]}]},
+        {namespace: "crm", name: "crm-db", running: true, networks: [{name: "app", index: 1, networkName: "apps/backend", nad: "apps/backend", mac: "52:54:00:c0:00:01", ips: ["192.168.110.31"]}]}],
+      dhcp: [{namespace: "dhcp", pod: "dnsmasq-6d9f-x2k", owner: "Deployment/dnsmasq", software: "dnsmasq", nads: [{nad: "dhcp/dnsmasq-backend", interface: "app0", ips: ["192.168.110.2"]}],
+        ranges: ["192.168.110.100,192.168.110.199,255.255.255.0,1h"], hostsConfigMap: "sitemap-hosts", hostsKey: "sitemap.hosts", configMaps: ["dnsmasq-config", "sitemap-hosts"]},
+        {namespace: "dhcp-mgmt", pod: "dnsmasq-mgmt-0", owner: "StatefulSet/dnsmasq-mgmt", software: "dnsmasq", nads: [{nad: "apps/mgmt", interface: "net1", ips: ["10.130.0.2"]}],
+          ranges: ["10.130.0.100,10.130.0.200,12h"], hostsConfigMap: "mgmt-hosts", hostsKey: "hosts", configMaps: ["mgmt-hosts"]}]}),
+    "cluster-b": agentStatus("cluster-b", {velero: "velero", zones: ["eu-central-1b"],
+      classes: [{name: "sb-dr", driver: "csi.simplyblock.io", labels: {"simplyblock.io/dr": "true"}}],
+      nads: [{namespace: "apps", name: "vlan210-backend", type: "macvlan", master: "bond0.210", vlan: 210, ipamType: "whereabouts", ipamRanges: ["192.168.210.0/24"]},
+        {namespace: "apps", name: "vlan220-mgmt", type: "macvlan", master: "bond0.220", vlan: 220}, {namespace: "dr-test", name: "isolated", type: "bridge", bridge: "br-test", ipamType: "static"}],
+      workloads: [nsw("crm-drtest-crm10051200", false, [], [], [])],
+      vms: [{namespace: "erp", name: "erp-db", running: false, networks: [{name: "backend", index: 1, networkName: "apps/vlan210-backend", nad: "apps/vlan210-backend", ips: []}]}]}),
+    "stretch": agentStatus("stretch", {velero: "openshift-adp", zones: ["eu-central-1a", "eu-central-1c"], classes: [{name: "sb-stretch", driver: "csi.simplyblock.io", labels: {"simplyblock.io/stretch": "true"}}],
+      nads: [], workloads: [nsw("erp", true, [], [], [pvc("erp-disk", {"kubevirt.io/domain": "erp"})])]})
+  };
+  Object.entries(STATUS).forEach(([cluster, st]) => store.ManagedClusterView.push(Object.assign(api("ManagedClusterView", "view.open-cluster-management.io/v1beta1"),
+    {metadata: meta("dr-agent-status", cluster), spec: {scope: {kind: "ConfigMap", name: "dr-agent-status", namespace: "dr-agent"}},
+      status: {result: {apiVersion: "v1", kind: "ConfigMap", metadata: {name: "dr-agent-status", namespace: "dr-agent"}, data: {"status.json": JSON.stringify(st)}}}})));
+  // what a gate test answers: an exec gate passes when its pod and the
+  // service:port it reaches exist; a kind gate when its selector matches
+  const gateAnswer = (cluster, ns, g, i) => {
+    const st = STATUS[cluster] || {workloads: []};
+    const w = (st.workloads || []).find(x => x.namespace === ns);
+    const sel = g.selector || {};
+    const match = labels => Object.entries(sel).every(([k, v]) => (labels || {})[k] === v);
+    if (!w) return {index: i, type: g.type, passed: false, message: `namespace ${ns} is not on ${cluster}`};
+    if (g.type === "exec") {
+      const pod = w.workloads.find(x => match(x.labels));
+      if (!pod) return {index: i, type: g.type, passed: false, message: `no running pod in ${ns} matches ${Object.entries(sel).map(([k, v]) => `${k}=${v}`).join(",")} (0 pods match, none running)`};
+      const cmd = g.command || [], text = cmd.join(" ");
+      const hit = (w.serviceDetails || []).some(s => s.ports.some(p => text.includes(s.name) && text.includes(String(p.port))));
+      const code = hit ? 0 : 1;
+      return {index: i, type: g.type, passed: hit, pod: `${ns}/${pod.name}-5d9-x`, exitCode: code, durationMillis: hit ? 41 : 3012,
+        output: hit ? "" : `nc: ${cmd[cmd.length - 2] || "host"} (${cmd[cmd.length - 1] || "?"}): Connection refused`, message: `${text} exited ${code} in ${ns}/${pod.name}-5d9-x`};
+    }
+    const kind = {vmRunning: "VirtualMachine", deploymentsReady: "Deployment", statefulSetsReady: "StatefulSet"}[g.type] || "Pod";
+    const objs = w.workloads.filter(x => x.kind === kind && match(kind === "Pod" ? x.labels : x.objectLabels));
+    return objs.length ? {index: i, type: g.type, passed: true, message: `${objs.length} ${kind}s in ${ns} are ready`}
+      : {index: i, type: g.type, passed: false, message: `no ${kind} in ${ns} matches ${Object.entries(sel).map(([k, v]) => `${k}=${v}`).join(",")}`};
+  };
+
   // ---- site storage (StorageSiteDeployment, storage.simplyblock.io/v1alpha2) ----
   const nodeSets = hosts => [{name: "default", groups: [{name: "all", workers: hosts}]}];
   const tpl = name => ({name, vcpuCount: 8, minHugePagesSize: "8G", maxSubsystemCount: 30, stripe: {dataChunks: 1, parityChunks: 1}, enableDriveFormat: true});
@@ -291,6 +363,11 @@
         if (!cluster) return done("Error", "the application does not run anywhere yet (no current cluster); name the site to probe");
         site = (plan.spec.sites.find(x => x.cluster === cluster) || {}).name || "";
       }
+      if (sp.gates && sp.gates.length) {
+        const nss = sp.namespaces && sp.namespaces.length ? sp.namespaces : app ? ((app.spec.discovered || {}).protectedNamespaces || [app.metadata.namespace]) : [];
+        const gates = sp.gates.map((g, i) => gateAnswer(cluster, g.namespace || nss[0], g, i)), failed = gates.filter(g => !g.passed).length;
+        return done(failed ? "Failed" : "Passed", failed ? `${failed} of ${gates.length} checks failed on ${cluster}` : `${gates.length} checks passed on ${cluster}`, {site, cluster, gates});
+      }
       const probes = (sp.probes && sp.probes.length ? sp.probes : app ? ((app.spec.health || {}).probes || []) : []);
       if (!probes.length) return done("Error", "the application has no health probes", {site, cluster});
       const res = probes.map(probeOne), failed = res.filter(r => !r.passed).length;
@@ -298,11 +375,50 @@
     });
   };
 
+  const answerDHCP = t => store.DHCPProbeRequest.filter(o => !o.status.completedAt && t - Date.parse(o.metadata.creationTimestamp) > 1500).forEach(o => {
+    const at = iso(t), sp = o.spec;
+    if (!STATUS[sp.cluster]) { o.status = {phase: "Error", message: `ManagedCluster ${sp.cluster} is not managed by this hub`, completedAt: at}; return; }
+    // apps/backend answers from the in-cluster dnsmasq, apps/mgmt from a corporate server outside the cluster
+    const offers = {"apps/backend": [{serverID: "192.168.110.2", address: "192.168.110.142", subnet: "255.255.255.0", dns: ["192.168.110.2"], domain: "app.lan", leaseSeconds: 3600}],
+      "apps/mgmt": [{serverID: "10.130.0.250", address: "10.130.0.77", subnet: "255.255.255.0", router: ["10.130.0.1"], dns: ["10.0.0.53"], domain: "corp.example", leaseSeconds: 86400}]}[sp.nad] || [];
+    o.status = offers.length ? {phase: "Passed", message: `${offers.length} DHCP servers answered on ${sp.nad}`, completedAt: at, offers}
+      : {phase: "Failed", message: `no DHCP server answered on ${sp.nad} within 6s`, completedAt: at};
+  });
+
+  // a LabelRequest relabels the site's reported objects, as dr-agent would
+  const LABEL_ALLOW = {StorageClass: ["simplyblock.io/replicated", "simplyblock.io/dr", "simplyblock.io/stretch"], Node: ["topology.kubernetes.io/zone", "topology.kubernetes.io/region"],
+    PersistentVolumeClaim: ["app", "storage.simplyblock.io/consistency-group"], VirtualMachine: ["app", "dr.simplyblock.io/tier"], Deployment: ["app", "dr.simplyblock.io/tier"], StatefulSet: ["app", "dr.simplyblock.io/tier"]};
+  const answerLabels = t => store.LabelRequest.filter(o => !o.status.completedAt && t - Date.parse(o.metadata.creationTimestamp) > 1200).forEach(o => {
+    const at = iso(t), st = STATUS[o.spec.cluster];
+    if (!st) { o.status = {phase: "Error", message: `ManagedCluster ${o.spec.cluster} is not managed by this hub`, completedAt: at}; return; }
+    const bad = o.spec.changes.map((c, i) => (LABEL_ALLOW[c.kind] || []).includes(c.key) ? null : `change ${i}: ${c.key} on a ${c.kind}`).filter(Boolean);
+    if (bad.length) { o.status = {phase: "Error", message: `refused: ${bad.join("; ")}`, completedAt: at}; return; }
+    const results = o.spec.changes.map((c, i) => {
+      let obj = null;
+      if (c.kind === "StorageClass") obj = (st.inventory.storageClasses || []).find(s => s.name === c.name);
+      else if (c.kind === "PersistentVolumeClaim") obj = ((st.workloads.find(n => n.namespace === c.namespace) || {}).pvcs || []).find(p => p.name === c.name);
+      else if (c.kind !== "Node") { const w = ((st.workloads.find(n => n.namespace === c.namespace) || {}).workloads || []).find(x => x.kind === c.kind && x.name === c.name); if (w) { w.objectLabels = w.objectLabels || {}; obj = {get labels() { return w.objectLabels; }, set labels(x) { w.objectLabels = x; }}; } }
+      else { const n = st.inventory.site.nodes.find(x => x.name === c.name); if (n) obj = {labels: {}, node: n}; }
+      if (!obj) return {index: i, result: "Failed", message: `${c.kind} ${c.namespace ? c.namespace + "/" : ""}${c.name} not found`};
+      if (obj.node) { const f = c.key.endsWith("zone") ? "zone" : "region"; const prev = obj.node[f] || ""; if (c.remove) delete obj.node[f]; else obj.node[f] = c.value; return {index: i, result: "Applied", previous: prev, message: c.remove ? `removed ${c.key}` : `set ${c.key}=${c.value}`}; }
+      const labels = Object.assign({}, obj.labels || {}); const prev = labels[c.key] || "";
+      if (c.remove) delete labels[c.key]; else labels[c.key] = c.value;
+      obj.labels = labels;
+      return {index: i, result: "Applied", previous: prev, message: (c.remove ? `removed ${c.key}` : `set ${c.key}=${c.value}`) +
+        (c.kind === "PersistentVolumeClaim" && c.key === "storage.simplyblock.io/consistency-group" && !c.remove ? "; the volume exists already: the consistency group is a late join, which takes effect only where the volume is on the group's storage node already, or after a live migration" : "")};
+    });
+    const view = store.ManagedClusterView.find(v => v.metadata.namespace === o.spec.cluster);
+    if (view) view.status.result.data["status.json"] = JSON.stringify(st);
+    const failed = results.filter(r => r.result === "Failed").length;
+    o.status = {phase: failed ? "Failed" : "Passed", message: failed ? `${failed} of ${results.length} changes failed on ${o.spec.cluster}` : `${results.length} of ${results.length} changes applied or unchanged`,
+      completedAt: at, results, requestedBy: ((o.metadata.annotations || {})["dr.simplyblock.io/created-by"]) || ""};
+  });
+
   const KINDS = Object.keys(store);
   const strip = o => { const c = JSON.parse(JSON.stringify(o)); delete c.__sim; return c; };
   window.DR_MOCK = {
     has: kind => KINDS.includes(kind),
-    list: kind => { advance(); answerProbes(Date.now()); return store[kind].map(strip); }
+    list: kind => { advance(); answerProbes(Date.now()); answerDHCP(Date.now()); answerLabels(Date.now()); return store[kind].map(strip); }
   };
   const viewer = () => (localStorage.getItem("sb.viewas") || "").includes("reader") ? "viewer" : "admin";
   const findRef = (kind, ns, name) => store[kind].find(o => o.metadata.name === name && (!ns || o.metadata.namespace === ns));
@@ -320,6 +436,7 @@
       if (sp[f] !== undefined && typeof sp[f] !== "string")
         return {err: `${kind}.dr.simplyblock.io "${m.name}" is invalid: spec.${f}: Invalid value: "object": spec.${f} in body must be of type string: "object"`, reason: "Invalid"};
     if (findRef(kind, m.namespace, m.name)) return {err: `${kind.toLowerCase()}s "${m.name}" already exists`, reason: "AlreadyExists"};
+    if (kind === "DHCPProbeRequest" && (!sp.cluster || !/^[a-z0-9-]+\/[a-z0-9.-]+$/.test(sp.nad || ""))) return {err: `DHCPProbeRequest.dr.simplyblock.io "${m.name}" is invalid: spec.cluster and spec.nad (<namespace>/<name>) are required`, reason: "Invalid"};
     if (kind === "S3ProbeRequest" || kind === "HealthProbeRequest") {
       if (viewer() !== "admin") return {err: `${kind.toLowerCase()}s.dr.simplyblock.io is forbidden: User "reader@example.com" cannot create resource "${kind.toLowerCase()}s"`, reason: "Forbidden"};
       if (kind === "S3ProbeRequest" && (!sp.bucket || !sp.endpoint || !sp.secretRef)) return {err: `S3ProbeRequest.dr.simplyblock.io "${m.name}" is invalid: spec.bucket, spec.endpoint and spec.secretRef are required`, reason: "Invalid"};
@@ -350,7 +467,7 @@
     if (kind === "ProtectedApplication") obj.status = {paths: [], conditions: [cond("Bound", false, "Binding", "waiting for the DRPC", 0), cond("Protected", false, "Binding", "", 0)]};
     if (kind === "RecoveryPlan") obj.status = {readiness: {verdict: "Unknown", checks: []}, conditions: [cond("Valid", true, "Valid", "", 0)]};
     if (kind === "DHCPServer") obj.status = {reservations: 0, conditions: []};
-    if (kind === "S3ProbeRequest" || kind === "HealthProbeRequest") obj.status = {phase: "Running"};
+    if (kind === "S3ProbeRequest" || kind === "HealthProbeRequest" || kind === "DHCPProbeRequest" || kind === "LabelRequest") obj.status = {phase: "Running"};
     if (kind === "StorageSiteDeployment") obj.status = {phase: "Discovering", message: `waiting for site ${body.spec.cluster} to write draft simplyblock/site-draft`, conditions: [cond("Delivered", false, "Pending", "the work is not applied on the site yet", 0)]};
     store[kind].push(obj);
     return {obj: strip(obj)};
