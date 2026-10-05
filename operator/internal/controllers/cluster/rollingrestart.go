@@ -14,6 +14,12 @@
 // when the walk reaches it. Both follow from a rolling restart being over the
 // fleet it was started against, and neither is a failure.
 //
+// A node leaving the cluster belongs to its removal, which is why the walk
+// never touches one: it is not planned, it is skipped when its removal starts
+// mid-walk, and only a removal still in progress or given up holds the walk's
+// peer check. A removed node's record stays in the control plane's list with
+// the status removed, and it holds nothing.
+//
 // design-storagecluster.md §7 is the specification.
 
 package cluster
@@ -76,6 +82,15 @@ func (r *StorageClusterOpsReconciler) performNodeStep(
 		return false, err
 	}
 
+	// A node the control plane stopped listing, or one that started leaving
+	// the cluster after the walk was planned, has nothing the walk may do to
+	// it. Shutting a leaving node down writes over its removal's status, and
+	// restarting it brings it back into service mid-removal, so every step of
+	// it is finished as it stands.
+	if status, listed := nodeStatus(nodes, nodeID); !listed || utils.NodeIsLeaving(status) {
+		return true, nil
+	}
+
 	switch current {
 	case stepCheckingPeers:
 		return r.checkPeers(ops, nodes, nodeID)
@@ -110,6 +125,9 @@ func (r *StorageClusterOpsReconciler) planWalk(
 	}
 	planned := make([]string, 0, len(nodes))
 	for _, node := range nodes {
+		if utils.NodeIsLeaving(lower(node.Status)) {
+			continue
+		}
 		planned = append(planned, node.UUID)
 	}
 	rollingRestartNodeCount.WithLabelValues(ops.Spec.ClusterRef).Set(float64(len(planned)))
@@ -172,7 +190,10 @@ func (r *StorageClusterOpsReconciler) checkPeers(
 ) (bool, error) {
 	var offline []string
 	for _, node := range nodes {
-		if node.UUID == nodeID {
+		// A removed node is gone from the cluster, whatever its record says,
+		// and nothing it could report would ever satisfy the check. A removal
+		// still running, or one the control plane gave up on, does hold it.
+		if node.UUID == nodeID || lower(node.Status) == utils.NodeStatusRemoved {
 			continue
 		}
 		if lower(node.Status) != utils.NodeStatusOnline {

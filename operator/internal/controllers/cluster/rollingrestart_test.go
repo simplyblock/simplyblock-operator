@@ -328,3 +328,96 @@ func TestAnUnsyncedNodeCacheFallsBackToTheControlPlane(t *testing.T) {
 		t.Errorf("the node was shut down %d times, want 1", api.shutdownNodeCalls)
 	}
 }
+
+// walkUntilNode reconciles until the walk is on the node at index, or fails the
+// test after a bounded number of passes.
+func walkUntilNode(t *testing.T, r *StorageClusterOpsReconciler, index int32) {
+	t.Helper()
+	for range 40 {
+		ops, _ := reconcileOps(t, r, 1)
+		if ops.Status.RollingRestart != nil && ops.Status.RollingRestart.NodeIndex >= index {
+			return
+		}
+	}
+	t.Fatalf("the walk never reached node %d", index)
+}
+
+// Regression: 2026-10-05-rolling-restart-holds-on-removed-node — the control
+// plane keeps a removed node's record, with the status removed, and the walk
+// planned it and held every other node for it to come back online, which a
+// removed node never does.
+func TestARemovedNodeNeitherJoinsNorHoldsTheWalk(t *testing.T) {
+	fleet := newRollingFleet(nodeA, nodeB)
+	fleet.status[nodeB] = utils.NodeStatusRemoved
+	api := rollingAPI(fleet)
+	r := newOpsReconciler(t, api, &recorder{},
+		newTestCluster(), newTestOps(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart))
+
+	ops, _ := reconcileOps(t, r, 20)
+	if ops.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseSucceeded {
+		t.Fatalf("phase = %q, want Succeeded (step %q, message %q)",
+			ops.Status.Phase, ops.Status.Step.State, ops.Status.Message)
+	}
+	if diff := cmp.Diff([]string{nodeA}, ops.Status.RollingRestart.Nodes); diff != "" {
+		t.Errorf("the walk planned a removed node (-want +got):\n%s", diff)
+	}
+}
+
+// Regression: 2026-10-05-rolling-restart-touches-removal — a node in the
+// middle of its removal was planned like any other, so once its peers had been
+// walked the rolling restart would shut it down and restart it back into the
+// cluster. Its removal holds the walk, because restarting a node while another
+// is being rebuilt away is two nodes' data at risk at once, and once removed it
+// is not walked at all.
+func TestANodeBeingRemovedHoldsTheWalkAndIsNeverRestarted(t *testing.T) {
+	fleet := newRollingFleet(nodeA, nodeB)
+	fleet.status[nodeB] = utils.NodeStatusMigratingLvols
+	api := rollingAPI(fleet)
+	rec := &recorder{}
+	r := newOpsReconciler(t, api, rec,
+		newTestCluster(), newTestOps(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart))
+
+	ops, _ := reconcileOps(t, r, 6)
+	if got := ops.Status.Step.State; got != string(stepCheckingPeers) || api.shutdownNodeCalls != 0 {
+		t.Fatalf("step = %q after %d shutdown(s), want the walk holding before node A while B is "+
+			"being removed", got, api.shutdownNodeCalls)
+	}
+	if !rec.has(PeerNodeNotOnline) {
+		t.Error("the walk held for the removal and said nothing")
+	}
+
+	fleet.status[nodeB] = utils.NodeStatusRemoved
+	ops, _ = reconcileOps(t, r, 20)
+	if ops.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseSucceeded {
+		t.Fatalf("phase = %q, want Succeeded once the removal finished (step %q, message %q)",
+			ops.Status.Phase, ops.Status.Step.State, ops.Status.Message)
+	}
+	if api.shutdownNodeCalls != 1 || api.restartNodeCalls != 1 {
+		t.Errorf("shutdown=%d restart=%d, want node A alone restarted",
+			api.shutdownNodeCalls, api.restartNodeCalls)
+	}
+}
+
+// Regression: 2026-10-05-rolling-restart-touches-removal — a removal that
+// starts while the walk is on its node takes the node over. The walk skips it
+// rather than shutting it down, which would write over the removal's status,
+// or restarting it, which would bring it back into service mid-removal.
+func TestANodeWhoseRemovalStartsMidWalkIsSkipped(t *testing.T) {
+	fleet := newRollingFleet(nodeA, nodeB)
+	api := rollingAPI(fleet)
+	r := newOpsReconciler(t, api, &recorder{},
+		newTestCluster(), newTestOps(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart))
+
+	walkUntilNode(t, r, 1)
+	fleet.status[nodeB] = utils.NodeStatusMigratingDevices
+
+	ops, _ := reconcileOps(t, r, 20)
+	if ops.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseSucceeded {
+		t.Fatalf("phase = %q, want Succeeded (step %q, message %q)",
+			ops.Status.Phase, ops.Status.Step.State, ops.Status.Message)
+	}
+	if api.shutdownNodeCalls != 1 || api.restartNodeCalls != 1 {
+		t.Errorf("shutdown=%d restart=%d, want node A alone: node B belongs to its removal",
+			api.shutdownNodeCalls, api.restartNodeCalls)
+	}
+}

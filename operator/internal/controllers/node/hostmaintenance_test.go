@@ -695,3 +695,33 @@ func TestTheTerminalTeardownAnnouncesANodeItCannotRead(t *testing.T) {
 		t.Error("a teardown that could not read its node said nothing about the markers")
 	}
 }
+
+// Regression: 2026-10-05-maintenance-touches-removal — a removal that failed
+// releases the node's lock with the node left removed_failed, and a
+// maintenance window on its worker then shut it down and restarted it back
+// into service. A node leaving the cluster belongs to its removal: the window
+// still guards and releases the worker, and sends the node nothing.
+func TestAMaintenanceWindowSendsNothingToANodeLeavingTheCluster(t *testing.T) {
+	for _, status := range []string{
+		nodeStatusPendingRemoval, nodeStatusMigratingLvols, nodeStatusRemovedFailed,
+	} {
+		t.Run(status, func(t *testing.T) {
+			api := aControlPlane().reporting(status)
+			r, _ := anOpsWorld(t, api, aReadyStoragePod(opsWorker))
+
+			for _, at := range []step{stepShuttingDown, stepRestarting} {
+				done, err := performing(t, r, aWindow("a-window"), at)
+				if err != nil {
+					t.Fatalf("%s: %v", at, err)
+				}
+				if !done {
+					t.Errorf("%s did not finish against a node its removal owns", at)
+				}
+			}
+			if shut, restarted := api.asked("ShutdownNode"), api.asked("RestartNode"); shut+restarted != 0 {
+				t.Errorf("shutdown=%d restart=%d sent to a node leaving the cluster, want none",
+					shut, restarted)
+			}
+		})
+	}
+}

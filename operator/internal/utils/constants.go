@@ -74,6 +74,16 @@ const (
 	NodeStatusUnreachable = "unreachable"
 	NodeStatusRemoved     = "removed"
 
+	// The statuses of a node leaving the cluster, in the order a removal moves
+	// it through them, and the one it ends in when the control plane gives up.
+	// The removal owns a node in any of them: nothing else shuts it down or
+	// restarts it.
+	NodeStatusPendingRemoval   = "pending_removal"
+	NodeStatusMigratingDevices = "migrating_devices"
+	NodeStatusMigratingLvols   = "migrating_lvols"
+	NodeStatusInRemoval        = "in_removal"
+	NodeStatusRemovedFailed    = "removed_failed"
+
 	ENDPOINT       = "http://simplyblock-webappapi:5000"
 	CSIProvisioner = "csi.simplyblock.io"
 
@@ -144,3 +154,18 @@ const (
 	LabelRole          = "role"
 	LabelSpdkProxyRole = "simplyblock-storage-node"
 )
+
+// NodeIsLeaving reports whether a control-plane node status, lowercased, is one
+// of a node leaving the cluster: any step of a removal, the removed node whose
+// record the control plane keeps, and a removal the control plane gave up on.
+// A node in any of them belongs to its removal, and nothing else shuts it down
+// or restarts it.
+func NodeIsLeaving(status string) bool {
+	switch status {
+	case NodeStatusPendingRemoval, NodeStatusMigratingDevices, NodeStatusMigratingLvols,
+		NodeStatusInRemoval, NodeStatusRemoved, NodeStatusRemovedFailed:
+		return true
+	default:
+		return false
+	}
+}

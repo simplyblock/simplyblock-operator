@@ -191,33 +191,36 @@ cluster whose fleet is too small for its stripe activates and serves from it
 
 File: `operator/internal/controllers/cluster/rollingrestart_test.go`
 
-| #        | Scenario                                                                                      | Type     | Test                                                     |
-|----------|-----------------------------------------------------------------------------------------------|----------|----------------------------------------------------------|
-| ~~U-57~~ | First reconcile sets `triggered` and transitions to `Running`. Design §6.2 removed the flag   | —        | —                                                        |
-| U-58     | The walk is planned once from the node list, in the order it will restart them                | Positive | `TestARollingRestartWalksEveryNodeAndFinishes`           |
-| U-59     | A peer node is not `online`: the walk holds, no shutdown issued, `PeerNodeNotOnline` emitted  | Negative | `TestARollingRestartHoldsWhileAPeerIsOffline`            |
-| U-60     | All peers `online`: shutdown issued for the node at `nodeIndex`                               | Positive | `TestARollingRestartWalksEveryNodeAndFinishes`           |
-| U-61     | Node already `in_shutdown`, `offline`, or `in_restart`: shutdown call skipped                 | Boundary | `TestAnAlreadyOfflineNodeIsNotShutDownAgain`             |
-| U-62     | `refreshSNodeAPI` false: `RefreshingPod` and `AwaitingPod` skipped entirely                   | Boundary | `TestARollingRestartWalksEveryNodeAndFinishes`           |
-| U-63     | `refreshSNodeAPI` true: pod deleted, then awaited `Ready` before `RestartingNode`             | Positive | —                                                        |
-| U-64     | `Rebalancing` completes: `nodeIndex` increments and the machine resets                        | Positive | `TestARollingRestartWalksEveryNodeAndFinishes`           |
-| U-65     | A cluster with no nodes: phase becomes `Succeeded` with nothing shut down                     | Boundary | `TestARollingRestartOfAnEmptyClusterSucceeds`            |
-| U-66     | Single-node cluster: the walk has no peers to check and completes                             | Boundary | `TestAnAlreadyOfflineNodeIsNotShutDownAgain`             |
-| ~~U-67~~ | `phaseTriggered` already true: the irreversible call is not repeated. Superseded by `U-SM-23` | —        | —                                                        |
-| U-80     | The peer hold resolves without intervention once the peer returns                             | Positive | `TestARollingRestartResumesWhenThePeerComesBack`         |
-| U-81     | A node added mid-walk is not restarted                                                        | Boundary | `TestANodeAddedMidWalkIsNotRestarted`                    |
-| U-82     | A node removed mid-walk is skipped rather than waited on                                      | Boundary | `TestANodeRemovedMidWalkIsSkipped`                       |
-| U-83     | `status.message` locates the walk as `Node n/m (uuid): Step`                                  | Positive | `TestTheWalkReportsItsPosition`                          |
-| U-85     | The walk reads the storage-node stream's cache rather than the control plane                  | Positive | `TestTheWalkReadsTheNodeStreamRatherThanTheControlPlane` |
-| U-86     | An unsynced node cache is not read: the control plane answers until the snapshot lands        | Boundary | `TestAnUnsyncedNodeCacheFallsBackToTheControlPlane`      |
-| U-87     | The rebalancing wait reads the cluster stream rather than the node list                       | Positive | `TestTheRebalancingWaitReadsTheClusterStream`            |
-| U-88     | No step between a node's shutdown and its restart is abortable                                | Negative | `TestAnAbortIsRefusedWhileTheNodeIsDown`                 |
-| U-89     | A step that has taken nothing down is abortable                                               | Positive | `TestAnAbortIsHonoredWhereNothingIsDown`                 |
-| U-90     | A conflicted lock release is reported rather than swallowed                                   | Negative | `TestAConflictedReleaseIsReportedRatherThanSwallowed`    |
-| U-91     | Adoption by name does not persist an empty credential or mark the cluster configured          | Negative | `TestAdoptionByNameDoesNotPersistAnEmptyCredential`      |
-| U-92     | A backup store with no bucket is refused, naming the conversion annotation                    | Negative | `TestABackupStoreWithNoBucketIsRefused`                  |
-| U-93     | The creation machine resumes from every step it declares, and from no other                   | Boundary | `TestTheCreationMachineRestoresFromEveryDeclaredStep`    |
-| U-94     | A step is never persisted without the deadline that bounds it                                 | Negative | `TestAStepIsNeverPersistedWithoutItsDeadline`            |
+| #        | Scenario                                                                                                                                                | Type       | Test                                                     |
+|----------|---------------------------------------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------|
+| ~~U-57~~ | First reconcile sets `triggered` and transitions to `Running`. Design §6.2 removed the flag                                                             | —          | —                                                        |
+| U-58     | The walk is planned once from the node list, in the order it will restart them                                                                          | Positive   | `TestARollingRestartWalksEveryNodeAndFinishes`           |
+| U-59     | A peer node is not `online`: the walk holds, no shutdown issued, `PeerNodeNotOnline` emitted                                                            | Negative   | `TestARollingRestartHoldsWhileAPeerIsOffline`            |
+| U-60     | All peers `online`: shutdown issued for the node at `nodeIndex`                                                                                         | Positive   | `TestARollingRestartWalksEveryNodeAndFinishes`           |
+| U-61     | Node already `in_shutdown`, `offline`, or `in_restart`: shutdown call skipped                                                                           | Boundary   | `TestAnAlreadyOfflineNodeIsNotShutDownAgain`             |
+| U-62     | `refreshSNodeAPI` false: `RefreshingPod` and `AwaitingPod` skipped entirely                                                                             | Boundary   | `TestARollingRestartWalksEveryNodeAndFinishes`           |
+| U-63     | `refreshSNodeAPI` true: pod deleted, then awaited `Ready` before `RestartingNode`                                                                       | Positive   | —                                                        |
+| U-64     | `Rebalancing` completes: `nodeIndex` increments and the machine resets                                                                                  | Positive   | `TestARollingRestartWalksEveryNodeAndFinishes`           |
+| U-65     | A cluster with no nodes: phase becomes `Succeeded` with nothing shut down                                                                               | Boundary   | `TestARollingRestartOfAnEmptyClusterSucceeds`            |
+| U-66     | Single-node cluster: the walk has no peers to check and completes                                                                                       | Boundary   | `TestAnAlreadyOfflineNodeIsNotShutDownAgain`             |
+| ~~U-67~~ | `phaseTriggered` already true: the irreversible call is not repeated. Superseded by `U-SM-23`                                                           | —          | —                                                        |
+| U-80     | The peer hold resolves without intervention once the peer returns                                                                                       | Positive   | `TestARollingRestartResumesWhenThePeerComesBack`         |
+| U-81     | A node added mid-walk is not restarted                                                                                                                  | Boundary   | `TestANodeAddedMidWalkIsNotRestarted`                    |
+| U-82     | A node removed mid-walk is skipped rather than waited on                                                                                                | Boundary   | `TestANodeRemovedMidWalkIsSkipped`                       |
+| U-101    | A removed node's record neither joins the walk nor holds its peer check (2026-10-05-rolling-restart-holds-on-removed-node)                              | Regression | `TestARemovedNodeNeitherJoinsNorHoldsTheWalk`            |
+| U-102    | A node mid-removal is not planned, holds the peer check while it runs, and is never shut down or restarted (2026-10-05-rolling-restart-touches-removal) | Regression | `TestANodeBeingRemovedHoldsTheWalkAndIsNeverRestarted`   |
+| U-103    | A planned node whose removal starts mid-walk is skipped at every step                                                                                   | Regression | `TestANodeWhoseRemovalStartsMidWalkIsSkipped`            |
+| U-83     | `status.message` locates the walk as `Node n/m (uuid): Step`                                                                                            | Positive   | `TestTheWalkReportsItsPosition`                          |
+| U-85     | The walk reads the storage-node stream's cache rather than the control plane                                                                            | Positive   | `TestTheWalkReadsTheNodeStreamRatherThanTheControlPlane` |
+| U-86     | An unsynced node cache is not read: the control plane answers until the snapshot lands                                                                  | Boundary   | `TestAnUnsyncedNodeCacheFallsBackToTheControlPlane`      |
+| U-87     | The rebalancing wait reads the cluster stream rather than the node list                                                                                 | Positive   | `TestTheRebalancingWaitReadsTheClusterStream`            |
+| U-88     | No step between a node's shutdown and its restart is abortable                                                                                          | Negative   | `TestAnAbortIsRefusedWhileTheNodeIsDown`                 |
+| U-89     | A step that has taken nothing down is abortable                                                                                                         | Positive   | `TestAnAbortIsHonoredWhereNothingIsDown`                 |
+| U-90     | A conflicted lock release is reported rather than swallowed                                                                                             | Negative   | `TestAConflictedReleaseIsReportedRatherThanSwallowed`    |
+| U-91     | Adoption by name does not persist an empty credential or mark the cluster configured                                                                    | Negative   | `TestAdoptionByNameDoesNotPersistAnEmptyCredential`      |
+| U-92     | A backup store with no bucket is refused, naming the conversion annotation                                                                              | Negative   | `TestABackupStoreWithNoBucketIsRefused`                  |
+| U-93     | The creation machine resumes from every step it declares, and from no other                                                                             | Boundary   | `TestTheCreationMachineRestoresFromEveryDeclaredStep`    |
+| U-94     | A step is never persisted without the deadline that bounds it                                                                                           | Negative   | `TestAStepIsNeverPersistedWithoutItsDeadline`            |
 
 ### Creation State Machine (design §4.2)
 
@@ -476,11 +479,11 @@ against a real API server under real concurrency.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 179       | 163     | 16          |
+| Unit        | 182       | 166     | 16          |
 | Integration | 32        | 13      | 19          |
 | E2E         | 13        | 0       | 13          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **227**   | **176** | **51**      |
+| **Total**   | **230**   | **179** | **51**      |
 
 The unit count excludes the six struck-through rows, which the rework removed
 rather than left uncovered, and includes the `U-CM-`, `U-SM-`, `U-CP-`, and

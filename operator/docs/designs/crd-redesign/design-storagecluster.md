@@ -1293,6 +1293,13 @@ node added to the cluster mid-walk is not restarted and a node removed mid-walk 
 skipped when the walk reaches it. Both follow from a rolling restart being over the
 fleet it was started against, and neither is a failure.
 
+**A node leaving the cluster is never walked.** A node in any removal status
+(`pending_removal`, `migrating_devices`, `migrating_lvols`, `in_removal`, `removed`,
+or `removed_failed`) belongs to its removal: a shutdown writes over the removal's
+status, and a restart brings the node back into service mid-removal. Such a node is
+left out of `nodes`, and a planned node whose removal starts mid-walk is skipped at
+every step, the same as one the control plane stops listing.
+
 ### 7.2 The steps
 
 `RefreshingPod` and `AwaitingPod` are entered only when
@@ -1324,7 +1331,11 @@ arrives by stream or by poll (`design-crd-model.md` §7.7).
 node down while another is already offline can exceed the cluster's fault tolerance
 and lose data, so `CheckingPeers` gates every shutdown on all peers being online and
 the walk holds there rather than proceeding. Holding is reported in `status.message`
-as `waiting for peer nodes`. The step's deadline is what distinguishes a walk holding
+as `waiting for peer nodes`. A removal still running, or one the control plane gave up
+on, is a peer that is not online and holds the walk, because restarting a node while
+another is being rebuilt away puts two nodes' data at risk at once. A removed node does
+not: the control plane keeps its record with the status `removed`, and it is gone from
+the cluster whatever the record says. The step's deadline is what distinguishes a walk holding
 because the cluster is degraded from one holding because of a bug.
 
 ### 7.3 Progress
