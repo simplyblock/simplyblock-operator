@@ -2114,6 +2114,13 @@ detection mechanism rather than a recovery one.
 `maxUnavailable` is set high and the budget is the throttle instead, which keeps
 one mechanism responsible for concurrency rather than two that have to agree.
 
+**A node leaving the cluster is sent nothing.** A removal that failed releases the
+node's lock with the node `removed_failed`, so a window can reach a node its removal
+still owns. The window guards and releases the worker as it always does, and
+`ShuttingDown` and `Restarting` finish without a call: a shutdown writes over the
+removal's status, and a restart returns the node to service, which is the removal's
+to drive again rather than the window's.
+
 ---
 
 ## 11. Mutual Exclusion

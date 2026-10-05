@@ -525,6 +525,7 @@ Files: `operator/internal/controllers/node/drain_test.go`, `peertargets_test.go`
 | U-470 | A step past its deadline fails while a refused abort stays set (PR #612 review)                                                                             | Regression | `TestARefusedAbortStillLetsTheDeadlineFail`                                                                                                             |
 | U-472 | A pass that records progress writes the extended deadline in the same patch, so a lost write loses both or neither (PR #612 review)                         | Regression | `TestProgressAndItsDeadlineAreWrittenTogether`                                                                                                          |
 | U-479 | A waiting pass keeps the claim its call took, so a second pass within the lease sends nothing                                                               | Regression | `TestAWaitingPassKeepsTheClaimItsCallTook`                                                                                                              |
+| U-504 | A maintenance window on a node leaving the cluster guards the worker and sends the node no shutdown and no restart (2026-10-05-maintenance-touches-removal) | Regression | `TestAMaintenanceWindowSendsNothingToANodeLeavingTheCluster`                                                                                            |
 | U-493 | A DELETE refused without a reason while the cluster is rebalancing or not active holds with `RemovalDeferred` (2026-10-05-removal-refusal-read-as-final)    | Regression | `TestADeleteRefusedWhileTheClusterIsBusyWaits`                                                                                                          |
 | U-494 | A DELETE refused without a reason on a settled cluster fails the operation                                                                                  | Negative   | `TestABareDeleteRefusalOnASettledClusterIsFinal`                                                                                                        |
 | U-495 | A DELETE refused for a reason that passes by itself (an active task, a peer down) holds, naming the reason                                                  | Regression | `TestADeleteRefusedForAReasonThatPassesWaits`                                                                                                           |
@@ -1010,17 +1011,17 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 426       | 321     | 105         |
+| Unit        | 427       | 322     | 105         |
 | Integration | 54        | 0       | 54          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **511**   | **321** | **190**     |
+| **Total**   | **512**   | **322** | **190**     |
 
 Eight further scenarios are struck through: they describe a system this one no
 longer is, and each names the row that replaced it. They are excluded from the
 counts.
 
-Two hundred and forty-one distinct test functions cover the three hundred and twenty-one
+Two hundred and forty-two distinct test functions cover the three hundred and twenty-two
 covered scenarios, because a table-driven test satisfies one identifier per
 subtest and several rows are two halves of one assertion.
 

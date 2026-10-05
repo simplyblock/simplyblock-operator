@@ -28,6 +28,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -296,6 +297,9 @@ func (r *StorageClusterOpsReconciler) advance(
 	}
 
 	done, err := r.perform(ctx, ops, current)
+	if errors.Is(err, errNodeSkipped) {
+		return r.advanceWalk(ctx, ops, machine, true)
+	}
 	if err != nil {
 		var reverted *activationRevertedError
 		if errors.As(err, &reverted) {
@@ -319,7 +323,7 @@ func (r *StorageClusterOpsReconciler) advance(
 		// A rolling restart's terminal step ends one node rather than the
 		// operation. Every other action is finished when its graph is.
 		if ops.Spec.Action == simplyblockv1alpha2.StorageClusterOpsActionRollingRestart {
-			return r.advanceWalk(ctx, ops, machine)
+			return r.advanceWalk(ctx, ops, machine, false)
 		}
 		return r.finish(ctx, ops, simplyblockv1alpha2.StorageClusterOpsPhaseSucceeded,
 			r.successMessage(ops))
@@ -881,7 +885,13 @@ func (r *StorageClusterOpsReconciler) successMessage(
 	ops *simplyblockv1alpha2.StorageClusterOps,
 ) string {
 	if ops.Spec.Action == simplyblockv1alpha2.StorageClusterOpsActionRollingRestart {
-		return fmt.Sprintf("all %d nodes restarted", len(walkOf(ops).Nodes))
+		walk := walkOf(ops)
+		if len(walk.Skipped) == 0 {
+			return fmt.Sprintf("all %d nodes restarted", len(walk.Nodes))
+		}
+		return fmt.Sprintf("%d of %d nodes restarted; skipped %s, which left the cluster after "+
+			"the walk was planned", len(walk.Nodes)-len(walk.Skipped), len(walk.Nodes),
+			strings.Join(walk.Skipped, ", "))
 	}
 	return fmt.Sprintf("the %s completed on cluster %s",
 		ops.Spec.Action, ops.Spec.ClusterRef)
