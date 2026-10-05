@@ -12,6 +12,7 @@ package node
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -209,5 +210,32 @@ func TestFailedMovesAreReapedWhenTheNodeHoldsNothingMovable(t *testing.T) {
 	}
 	if len(mover.deleted) != 1 {
 		t.Errorf("%d failed moves were reaped, want the one left over", len(mover.deleted))
+	}
+}
+
+// Regression: 2026-10-06-drain-inherits-another-drains-failures — moves are
+// found by the drained node's label, so a drain of a node an earlier drain had
+// given up on inherited that drain's failed moves: their targets were ruled
+// out and their attempts counted for a drain that had never tried them. A
+// failed move another drain raised is that drain's record, and it is reaped.
+func TestAnotherDrainsFailedMovesAreNeitherRememberedNorKept(t *testing.T) {
+	api := aControlPlane().
+		withPeer(opsPeerID, nodeStatusOnline).
+		withPeer(otherPeerID, nodeStatusOnline).
+		holding(onNode("volume-1", "pvc-1"))
+	earlier := failedMove(migrationName(opsNodeID, "pv-1"), true, "the copy failed")
+	earlier.CreatorUID = "uid-of-an-earlier-drain"
+	mover := &scriptedMover{moves: []vmigration.Move{earlier}}
+	r, _ := aDraining(t, api, mover, aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false))
+
+	if err := retrying(t, r, 2); err != nil {
+		t.Fatalf("migrating: %v", err)
+	}
+	if !slices.Contains(mover.deleted, earlier.Name) {
+		t.Error("the earlier drain's failed move was kept as if it were this drain's record")
+	}
+	if len(mover.started) != 1 || mover.started[0].TargetNodeUUID != opsPeerID {
+		t.Errorf("moves raised = %+v, want one headed for %s, which this drain has never tried",
+			mover.started, opsPeerID)
 	}
 }

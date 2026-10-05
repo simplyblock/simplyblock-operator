@@ -393,12 +393,10 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 		return false, err
 	}
 
-	// An aborted move was called off rather than failed, so it is re-issued
-	// and blames nobody.
-	if reissued, err := r.reissueAbortedMigrations(ctx, ops, migrations); err != nil {
+	// Moves that are no part of this drain's record go first, and the pass
+	// after the deletes reads the fan-out again.
+	if cleared, err := r.clearForeignMoves(ctx, ops, migrations); err != nil || cleared > 0 {
 		return false, err
-	} else if reissued > 0 {
-		return false, nil
 	}
 
 	census, err := r.classify(ctx, ops, clusterID, nodeID)
@@ -464,38 +462,7 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 	}
 
 	if len(missing) > 0 {
-		histories := failureHistories(census, failed)
-		ruledOut := make(map[string][]string, len(missing))
-		for _, move := range missing {
-			if history := histories[subsystemKey(move.NQN, move.PVName)]; history != nil {
-				ruledOut[move.PVName] = history.ruledOut
-			}
-		}
-		targets, err := r.peerTargets(ctx, clusterID, nodeID, missing, ruledOut)
-		if err != nil {
-			return false, err
-		}
-		for _, move := range missing {
-			attempt := 0
-			history := histories[subsystemKey(move.NQN, move.PVName)]
-			if history != nil {
-				attempt = history.attempts
-			}
-			name := retryName(nodeID, move.PVName, attempt, taken)
-			target := targets[move.PVName]
-			if err := r.createMigration(ctx, ops, name, nodeID, move, target); err != nil {
-				log.Error(err, "a volume's migration could not be created",
-					"volume", move.VolumeUUID, "persistentVolume", move.PVName)
-				continue
-			}
-			if history != nil {
-				r.emit(ctx, ops, corev1.EventTypeWarning, MigrationRetried, fmt.Sprintf(
-					"The migration of %s failed %d %s, last on node %s (%s); it is retried against node %s",
-					move.PVName, history.attempts, plural(history.attempts, "time", "times"),
-					history.last.TargetNodeUUID, history.last.Message, target))
-			}
-		}
-		return false, nil
+		return false, r.raiseMoves(ctx, ops, clusterID, nodeID, census, missing, failed, taken)
 	}
 
 	// Progress is counted in volumes. A move carries every volume of its
@@ -527,6 +494,66 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 		}
 	}
 	return false, nil
+}
+
+// raiseMoves raises a move for every subsystem in missing, aimed at a peer its
+// failed moves have not ruled out and named by its attempt, and announces each
+// replacement of a move that failed.
+func (r *StorageNodeOpsReconciler) raiseMoves(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageNodeOps,
+	clusterID, nodeID string,
+	census volumeCensus,
+	missing []managedVolume,
+	failed []vmigration.Move,
+	taken map[string]struct{},
+) error {
+	log := logf.FromContext(ctx)
+	histories := failureHistories(census, failed)
+	ruledOut := make(map[string][]string, len(missing))
+	for _, move := range missing {
+		if history := histories[subsystemKey(move.NQN, move.PVName)]; history != nil {
+			ruledOut[move.PVName] = history.ruledOut
+		}
+	}
+	targets, err := r.peerTargets(ctx, clusterID, nodeID, missing, ruledOut)
+	if err != nil {
+		return err
+	}
+	for _, move := range missing {
+		attempt := 0
+		history := histories[subsystemKey(move.NQN, move.PVName)]
+		if history != nil {
+			attempt = history.attempts
+		}
+		name := retryName(nodeID, move.PVName, attempt, taken)
+		target := targets[move.PVName]
+		if err := r.createMigration(ctx, ops, name, nodeID, move, target); err != nil {
+			log.Error(err, "a volume's migration could not be created",
+				"volume", move.VolumeUUID, "persistentVolume", move.PVName)
+			continue
+		}
+		if history != nil {
+			r.emit(ctx, ops, corev1.EventTypeWarning, MigrationRetried, fmt.Sprintf(
+				"The migration of %s failed %d %s, last on node %s (%s); it is retried against node %s",
+				move.PVName, history.attempts, plural(history.attempts, "time", "times"),
+				history.last.TargetNodeUUID, history.last.Message, target))
+		}
+	}
+	return nil
+}
+
+// clearForeignMoves deletes the moves that are no part of this drain's record
+// and reports how many: an aborted move, which is re-issued and blames nobody,
+// and a failed move another drain of this node raised.
+func (r *StorageNodeOpsReconciler) clearForeignMoves(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, migrations []vmigration.Move,
+) (int, error) {
+	reissued, err := r.reissueAbortedMigrations(ctx, ops, migrations)
+	if err != nil || reissued > 0 {
+		return reissued, err
+	}
+	return r.reapAnotherDrainsFailures(ctx, ops, migrations)
 }
 
 // recordDrainProgress writes how many volumes have moved. The total stays as
@@ -813,6 +840,35 @@ func (r *StorageNodeOpsReconciler) mover() vmigration.Mover {
 		return r.Mover
 	}
 	return vmigration.NewMover(r.Client, r.Scheme, false)
+}
+
+// reapAnotherDrainsFailures deletes every failed migration another drain raised
+// and reports how many.
+//
+// The fan-out is found by the drained node's label, which every drain of that
+// node shares, while the failed moves are one drain's memory of where its
+// subsystems could not go. A drain that inherited them would rule out targets
+// it never tried and count attempts it never made, so a failed move whose
+// creator is a different drain, typically one that ended without finishing, is
+// removed rather than read. A move that records no creator is taken as this
+// drain's own.
+func (r *StorageNodeOpsReconciler) reapAnotherDrainsFailures(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageNodeOps,
+	migrations []vmigration.Move,
+) (int, error) {
+	reaped := 0
+	for _, migration := range migrations {
+		if migration.Phase != vmigration.MoveFailed || migration.CreatorUID == "" ||
+			migration.CreatorUID == string(ops.UID) {
+			continue
+		}
+		if err := r.mover().Delete(ctx, migration); err != nil {
+			return reaped, fmt.Errorf("delete another drain's failed migration %s: %w", migration.Name, err)
+		}
+		reaped++
+	}
+	return reaped, nil
 }
 
 // reissueAbortedMigrations deletes every migration that was aborted and reports
