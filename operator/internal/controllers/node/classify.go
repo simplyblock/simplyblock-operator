@@ -79,6 +79,13 @@ type volumeCensus struct {
 	// a sibling is still reported on it: the subsystem is how the sibling is
 	// known to be covered.
 	subsystems map[string]string
+
+	// subsystemReplicas are the nodes holding a replica of any volume of a
+	// subsystem, keyed by NQN, from every pool-listed volume whatever node its
+	// primary is on. A move carries every member, so its target may hold none
+	// of their replicas, and a member off the drained node mid-cutover still
+	// has replicas the census would otherwise never see.
+	subsystemReplicas map[string][]string
 }
 
 // subsystemOf is the subsystem a PersistentVolume's volume is published under,
@@ -137,7 +144,7 @@ func (r *StorageNodeOpsReconciler) classify(
 		return volumeCensus{}, err
 	}
 
-	census := volumeCensus{subsystems: map[string]string{}}
+	census := volumeCensus{subsystems: map[string]string{}, subsystemReplicas: map[string][]string{}}
 	for _, pool := range pools {
 		volumes, err := r.API.PoolVolumes(ctx, clusterID, pool.UUID)
 		if err != nil {
@@ -146,6 +153,13 @@ func (r *StorageNodeOpsReconciler) classify(
 		for _, volume := range volumes {
 			if pv, accounted := byVolumeUUID[volume.UUID]; accounted && volume.NQN != "" {
 				census.subsystems[pv.Name] = volume.NQN
+			}
+			if volume.NQN != "" {
+				for _, node := range replicaNodes(volume) {
+					if !slices.Contains(census.subsystemReplicas[volume.NQN], node) {
+						census.subsystemReplicas[volume.NQN] = append(census.subsystemReplicas[volume.NQN], node)
+					}
+				}
 			}
 			if volume.PrimaryNodeUUID != nodeID || volume.Status == volumeStatusInDeletion {
 				continue
@@ -426,9 +440,10 @@ func scopeOf(clusterID string) cpinformer.Scope { return cpinformer.Scope{cluste
 // every volume of one subsystem leaves the node at the one cutover. Each move
 // is named by its subsystem's lexicographically first volume, which is stable
 // across passes for as long as that volume is on the node, and it may hold none
-// of any member's replicas: every member lands on the target. A volume the
-// control plane reports under no subsystem is a move of its own.
-func subsystemMoves(volumes []managedVolume) []managedVolume {
+// of any member's replicas: every member lands on the target. replicas adds
+// those of the members whose primary is not on the node. A volume the control
+// plane reports under no subsystem is a move of its own.
+func subsystemMoves(volumes []managedVolume, replicas map[string][]string) []managedVolume {
 	groups := map[string]*managedVolume{}
 	for _, volume := range volumes {
 		key := volume.NQN
@@ -453,6 +468,11 @@ func subsystemMoves(volumes []managedVolume) []managedVolume {
 	}
 	out := make([]managedVolume, 0, len(groups))
 	for _, group := range groups {
+		for _, node := range replicas[group.NQN] {
+			if !slices.Contains(group.ReplicaNodes, node) {
+				group.ReplicaNodes = append(group.ReplicaNodes, node)
+			}
+		}
 		out = append(out, *group)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].PVName < out[j].PVName })
