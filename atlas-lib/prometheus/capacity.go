@@ -1,14 +1,14 @@
 // Capacity samples for clusters, logical volumes, devices, storage nodes, and
 // storage pools. The five share this file because they share a shape: the
-// control plane exports the same five size gauges under each prefix, so the
-// only thing that differs is the prefix and the label naming the entity. Four
-// of them also export a sample date; the pool family does not, which is the one
-// asymmetry and is noted on PoolCapacity.
+// control plane's v2 exporter publishes the same size gauges under each prefix,
+// so the only thing that differs is the prefix and the label naming the entity.
+// The exporter publishes no percentage and no sample date, so both are derived.
 
 package prometheus
 
 import (
 	"context"
+	"math"
 	"time"
 )
 
@@ -27,16 +27,15 @@ type Capacity struct {
 	// Free is what remains of Total.
 	Free int64
 	// Provisioned is the space promised out of it, which for an
-	// over-provisioned pool may exceed Total.
+	// over-provisioned pool may exceed Total. The exporter publishes it only for
+	// clusters and storage nodes; it is zero for the other kinds.
 	Provisioned int64
-	// UtilizationPercent is the control plane's own rounding of Used over
-	// Total, carried rather than recomputed so that it agrees with what the
-	// control plane's own interfaces report.
+	// UtilizationPercent is Used over Total, rounded. The exporter publishes
+	// no percentage, so it is derived here.
 	UtilizationPercent int32
-	// SampledAt is when the control plane took the reading, which is not when
-	// it was scraped and not when it was asked for. It is the zero time when
-	// the control plane reports no date, which is how an entity that has never
-	// been sampled is distinguished from one sampled at the epoch.
+	// SampledAt is when this package read the sample, because the exporter
+	// publishes no date of its own. It is the zero time for an entity whose
+	// total is zero, which is how a never-measured entity is told from an empty one.
 	SampledAt time.Time
 }
 
@@ -48,6 +47,9 @@ func (c Capacity) Sampled() bool { return !c.SampledAt.IsZero() }
 // The entity a capacity sample belongs to, as the exporter names it: the metric
 // prefix, and the label carrying the entity's UUID.
 const (
+	// exporterNamespace is the prefix the v2 exporter puts on every metric name.
+	exporterNamespace = "simplyblock_"
+
 	volumeMetricPrefix = "lvol"
 	volumeIDLabel      = "lvol"
 	deviceMetricPrefix = "device"
@@ -136,11 +138,6 @@ func (p *Provider) NodeCapacity(
 // the sum of what the volumes in it were promised, so the two answer the
 // tenancy question the other families cannot: whether a pool is over-committed
 // against the capacity limit it was carved out with.
-//
-// Unlike the other three families the control plane exports no pool_date, so a
-// pool's sample carries no SampledAt and [Capacity.Sampled] is false for every
-// one of them. A caller therefore decides a pool has a reading by its presence
-// in this map rather than by asking the sample.
 func (p *Provider) PoolCapacity(
 	ctx context.Context,
 	clusterUUID string,
@@ -150,39 +147,42 @@ func (p *Provider) PoolCapacity(
 
 // capacity assembles the samples for one entity kind. The metric names are
 // derived from the prefix rather than listed per kind, because the exporter
-// publishes the same set under both and a divergence between them would be a
+// publishes the same set under each and a divergence between them would be a
 // change in the control plane rather than a choice made here.
+//
+// The v2 exporter publishes no percentage and no sample date. Utilization is
+// derived from used over total, and an entity with a measured total counts as
+// sampled, stamped with the time of this read.
 func (p *Provider) capacity(
 	ctx context.Context,
 	prefix, idLabel, clusterUUID string,
 ) (map[string]Capacity, error) {
-	total := prefix + "_size_total"
-	used := prefix + "_size_used"
-	free := prefix + "_size_free"
-	prov := prefix + "_size_prov"
-	util := prefix + "_size_util"
-	date := prefix + "_date"
+	total := exporterNamespace + prefix + "_size_total_bytes"
+	used := exporterNamespace + prefix + "_size_used_bytes"
+	free := exporterNamespace + prefix + "_size_free_bytes"
+	prov := exporterNamespace + prefix + "_size_provisioned_bytes"
 
 	families, err := p.queryFamilyByLabel(
-		ctx, []string{total, used, free, prov, util, date}, idLabel, clusterUUID,
+		ctx, []string{total, used, free, prov}, idLabel, clusterUUID,
 	)
 	if err != nil {
 		return nil, err
 	}
 
+	readAt := time.Now().UTC()
 	out := make(map[string]Capacity, len(families))
 	for id, series := range families {
 		c := Capacity{
-			Total:              whole(series[total]),
-			Used:               whole(series[used]),
-			Free:               whole(series[free]),
-			Provisioned:        whole(series[prov]),
-			UtilizationPercent: int32(whole(series[util])),
+			Total:       whole(series[total]),
+			Used:        whole(series[used]),
+			Free:        whole(series[free]),
+			Provisioned: whole(series[prov]),
 		}
-		// A date of zero is the control plane saying it has no reading, not a
-		// reading taken in 1970.
-		if seconds := whole(series[date]); seconds > 0 {
-			c.SampledAt = time.Unix(seconds, 0).UTC()
+		// A zero total is the exporter's all-zero record for an entity nothing
+		// has measured, so it is neither sampled nor a division.
+		if c.Total > 0 {
+			c.UtilizationPercent = int32(math.Round(float64(c.Used) / float64(c.Total) * 100))
+			c.SampledAt = readAt
 		}
 		out[id] = c
 	}
