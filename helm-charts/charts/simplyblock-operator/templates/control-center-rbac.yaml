@@ -142,6 +142,23 @@ rules:
   - apiGroups: ["dr.simplyblock.io"]
     resources: ["s3proberequests", "healthproberequests"]
     verbs: ["get", "create", "delete"]
+  # "Ask" on a guest network: dr-agent asks the NAD's DHCP servers (a
+  # short-lived pod on the network; dr-hub needs dr-admin for it too)
+  - apiGroups: ["dr.simplyblock.io"]
+    resources: ["dhcpproberequests"]
+    verbs: ["get", "create", "delete"]
+  # Label for DR on a managed site: dr-agent applies the allow-listed labels;
+  # the request stays on the hub as the record (no delete)
+  - apiGroups: ["dr.simplyblock.io"]
+    resources: ["labelrequests"]
+    verbs: ["get", "list", "create"]
+  # what each site's dr-agent reports, through the view dr-hub keeps of it:
+  # the forms offer discovered values (clusters' zones, Velero, classes,
+  # namespaces, labels, PVCs, NADs, DHCP servers). Only that view, by name.
+  - apiGroups: ["view.open-cluster-management.io"]
+    resources: ["managedclusterviews"]
+    resourceNames: ["dr-agent-status"]
+    verbs: ["get"]
   - apiGroups: ["sitemap.simplyblock.io"]
     resources: ["siteprofiles", "dhcpservers"]
     verbs: ["get", "list", "watch"]
@@ -161,6 +178,26 @@ rules:
   - apiGroups: ["cluster.open-cluster-management.io"]
     resources: ["managedclusters"]
     verbs: ["get", "list", "watch"]
+  {{- if .Values.controlCenter.rbac.hubLabelling }}
+  # Label for DR on the hub itself: the console patches the hub's objects
+  # directly. RBAC cannot narrow a patch to label keys (the console offers
+  # only DR's), so this is opt-in (controlCenter.rbac.hubLabelling).
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["patch"]
+  - apiGroups: [""]
+    resources: ["nodes", "persistentvolumeclaims"]
+    verbs: ["patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["list", "patch"]
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachines"]
+    verbs: ["list", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create"]
+  {{- end }}
   # the console asks the API server what its identity may do, to disable controls
   - apiGroups: ["authorization.k8s.io"]
     resources: ["selfsubjectaccessreviews", "selfsubjectrulesreviews"]

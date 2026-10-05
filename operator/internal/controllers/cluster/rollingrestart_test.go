@@ -9,9 +9,14 @@
 package cluster
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
@@ -326,5 +331,189 @@ func TestAnUnsyncedNodeCacheFallsBackToTheControlPlane(t *testing.T) {
 	}
 	if api.shutdownNodeCalls != 1 {
 		t.Errorf("the node was shut down %d times, want 1", api.shutdownNodeCalls)
+	}
+}
+
+// walkUntilNode reconciles until the walk is on the node at index, or fails the
+// test after a bounded number of passes.
+func walkUntilNode(t *testing.T, r *StorageClusterOpsReconciler, index int32) {
+	t.Helper()
+	for range 40 {
+		ops, _ := reconcileOps(t, r, 1)
+		if ops.Status.RollingRestart != nil && ops.Status.RollingRestart.NodeIndex >= index {
+			return
+		}
+	}
+	t.Fatalf("the walk never reached node %d", index)
+}
+
+// Regression: 2026-10-05-rolling-restart-holds-on-removed-node — the control
+// plane keeps a removed node's record, with the status removed, and the walk
+// planned it and held every other node for it to come back online, which a
+// removed node never does.
+func TestARemovedNodeNeitherJoinsNorHoldsTheWalk(t *testing.T) {
+	fleet := newRollingFleet(nodeA, nodeB)
+	fleet.status[nodeB] = utils.NodeStatusRemoved
+	api := rollingAPI(fleet)
+	r := newOpsReconciler(t, api, &recorder{},
+		newTestCluster(), newTestOps(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart))
+
+	ops, _ := reconcileOps(t, r, 20)
+	if ops.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseSucceeded {
+		t.Fatalf("phase = %q, want Succeeded (step %q, message %q)",
+			ops.Status.Phase, ops.Status.Step.State, ops.Status.Message)
+	}
+	if diff := cmp.Diff([]string{nodeA}, ops.Status.RollingRestart.Nodes); diff != "" {
+		t.Errorf("the walk planned a removed node (-want +got):\n%s", diff)
+	}
+}
+
+// Regression: 2026-10-05-rolling-restart-touches-removal — a node in the
+// middle of its removal was planned like any other, so once its peers had been
+// walked the rolling restart would shut it down and restart it back into the
+// cluster. Its removal holds the walk, because restarting a node while another
+// is being rebuilt away is two nodes' data at risk at once, and once removed it
+// is not walked at all.
+func TestANodeBeingRemovedHoldsTheWalkAndIsNeverRestarted(t *testing.T) {
+	fleet := newRollingFleet(nodeA, nodeB)
+	fleet.status[nodeB] = utils.NodeStatusMigratingLvols
+	api := rollingAPI(fleet)
+	rec := &recorder{}
+	r := newOpsReconciler(t, api, rec,
+		newTestCluster(), newTestOps(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart))
+
+	ops, _ := reconcileOps(t, r, 6)
+	if diff := cmp.Diff([]string{nodeA}, ops.Status.RollingRestart.Nodes); diff != "" {
+		t.Errorf("the walk planned a node in the middle of its removal (-want +got):\n%s", diff)
+	}
+	if got := ops.Status.Step.State; got != string(stepCheckingPeers) || api.shutdownNodeCalls != 0 {
+		t.Fatalf("step = %q after %d shutdown(s), want the walk holding before node A while B is "+
+			"being removed", got, api.shutdownNodeCalls)
+	}
+	if !rec.has(PeerNodeNotOnline) {
+		t.Error("the walk held for the removal and said nothing")
+	}
+
+	fleet.status[nodeB] = utils.NodeStatusRemoved
+	ops, _ = reconcileOps(t, r, 20)
+	if ops.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseSucceeded {
+		t.Fatalf("phase = %q, want Succeeded once the removal finished (step %q, message %q)",
+			ops.Status.Phase, ops.Status.Step.State, ops.Status.Message)
+	}
+	if api.shutdownNodeCalls != 1 || api.restartNodeCalls != 1 {
+		t.Errorf("shutdown=%d restart=%d, want node A alone restarted",
+			api.shutdownNodeCalls, api.restartNodeCalls)
+	}
+}
+
+// Regression: 2026-10-05-rolling-restart-touches-removal — a removal that
+// starts while the walk is on its node takes the node over. The walk skips it
+// rather than shutting it down, which would write over the removal's status,
+// or restarting it, which would bring it back into service mid-removal.
+func TestANodeWhoseRemovalStartsMidWalkIsSkipped(t *testing.T) {
+	fleet := newRollingFleet(nodeA, nodeB)
+	api := rollingAPI(fleet)
+	r := newOpsReconciler(t, api, &recorder{},
+		newTestCluster(), newTestOps(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart))
+
+	walkUntilNode(t, r, 1)
+	fleet.status[nodeB] = utils.NodeStatusMigratingDevices
+
+	ops, _ := reconcileOps(t, r, 20)
+	if ops.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseSucceeded {
+		t.Fatalf("phase = %q, want Succeeded (step %q, message %q)",
+			ops.Status.Phase, ops.Status.Step.State, ops.Status.Message)
+	}
+	if api.shutdownNodeCalls != 1 || api.restartNodeCalls != 1 {
+		t.Errorf("shutdown=%d restart=%d, want node A alone: node B belongs to its removal",
+			api.shutdownNodeCalls, api.restartNodeCalls)
+	}
+}
+
+// Regression: 2026-10-06-rolling-restart-reports-skips-as-restarts — a node the
+// walk skipped went through the same advance as a restarted one, so it emitted
+// NodeRestarted and the success message counted it among the restarted nodes,
+// although nothing was sent to it.
+func TestASkippedNodeIsReportedAsSkippedRatherThanRestarted(t *testing.T) {
+	fleet := newRollingFleet(nodeA, nodeB)
+	api := rollingAPI(fleet)
+	rec := &recorder{}
+	r := newOpsReconciler(t, api, rec,
+		newTestCluster(), newTestOps(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart))
+
+	walkUntilNode(t, r, 1)
+	fleet.status[nodeB] = utils.NodeStatusMigratingDevices
+
+	ops, _ := reconcileOps(t, r, 20)
+	if ops.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseSucceeded {
+		t.Fatalf("phase = %q, want Succeeded", ops.Status.Phase)
+	}
+	if diff := cmp.Diff([]string{nodeB}, ops.Status.RollingRestart.Skipped); diff != "" {
+		t.Errorf("the walk's record of skipped nodes is wrong (-want +got):\n%s", diff)
+	}
+	if rec.count(NodeRestarted) != 1 || !rec.has(NodeSkipped) {
+		t.Errorf("NodeRestarted=%d NodeSkipped=%v, want one restart and the skip announced as one",
+			rec.count(NodeRestarted), rec.has(NodeSkipped))
+	}
+	if !strings.Contains(ops.Status.Message, "1 of 2") || !strings.Contains(ops.Status.Message, nodeB) {
+		t.Errorf("message = %q, want it to count one of two restarted and name the skipped node",
+			ops.Status.Message)
+	}
+}
+
+// abortedAtShutdown is a one-node rolling restart at ShuttingDownNode, a step
+// with no abort edge, with spec.abort already set.
+func abortedAtShutdown(deadline *metav1.Time) (*simplyblockv1alpha2.StorageClusterOps, *simplyblockv1alpha2.StorageCluster) {
+	ops := newTestOps(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart,
+		func(o *simplyblockv1alpha2.StorageClusterOps) {
+			o.Spec.Abort = true
+			o.Status.Phase = simplyblockv1alpha2.StorageClusterOpsPhaseRunning
+			o.Status.Step = statemachine.KubeSnapshot{
+				State: string(stepShuttingDownNode), Deadline: deadline,
+			}
+			o.Status.RollingRestart = &simplyblockv1alpha2.RollingRestartStatus{Nodes: []string{nodeA}}
+		})
+	cluster := newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+		c.Status.ActiveOpsRef = testOpsName
+	})
+	return ops, cluster
+}
+
+// Regression: 2026-10-05-abort-refused-freezes-walk — an abort refused at a step
+// with no abort edge returned before the step ran, so with spec.abort still set
+// the walk never advanced and the node it had shut down stayed offline.
+func TestARefusedAbortLetsTheWalkBringTheNodeBack(t *testing.T) {
+	fleet := newRollingFleet(nodeA)
+	fleet.status[nodeA] = utils.NodeStatusOffline
+	api := rollingAPI(fleet)
+	rec := &recorder{}
+	ops, cluster := abortedAtShutdown(nil)
+	r := newOpsReconciler(t, api, rec, cluster, ops)
+
+	got, _ := reconcileOps(t, r, 20)
+	// Refused while the node is down, honored at Rebalancing once it is back.
+	if got.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseAborted ||
+		got.Status.Step.State != string(stepRebalancing) {
+		t.Fatalf("phase = %q at step %q, want Aborted at Rebalancing (message %q)",
+			got.Status.Phase, got.Status.Step.State, got.Status.Message)
+	}
+	if api.restartNodeCalls != 1 || !rec.has(AbortRefused) {
+		t.Errorf("restarts = %d, AbortRefused emitted = %t, want 1 and true",
+			api.restartNodeCalls, rec.has(AbortRefused))
+	}
+}
+
+// Regression: 2026-10-05-abort-refused-freezes-walk — the same early return
+// skipped the step deadline, so a step held by a refused abort never timed out.
+func TestARefusedAbortDoesNotSuspendTheStepDeadline(t *testing.T) {
+	fleet := newRollingFleet(nodeA)
+	fleet.status[nodeA] = utils.NodeStatusInShutdown
+	expired := metav1.NewTime(time.Now().Add(-time.Minute))
+	ops, cluster := abortedAtShutdown(&expired)
+	r := newOpsReconciler(t, rollingAPI(fleet), &recorder{}, cluster, ops)
+
+	got, _ := reconcileOps(t, r, 3)
+	if got.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseFailed {
+		t.Errorf("phase = %q, want Failed: the step is past its deadline", got.Status.Phase)
 	}
 }

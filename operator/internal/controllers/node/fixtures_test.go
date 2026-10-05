@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -30,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	atlaskube "github.com/simplyblock/atlas/kube"
+	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
@@ -92,6 +94,16 @@ type scriptedControlPlane struct {
 	// restarts carries the parameters of each restart, because three actions
 	// issue one and they differ precisely in what they fill in.
 	restarts []RestartParams
+
+	// progress and verification are what the removal's progress read and its
+	// drain verification answer.
+	progress     RemovalProgress
+	verification DrainVerification
+
+	// admission is what the removal admission answers, admitted when unset;
+	// admissionAbsent is a control plane that offers no such check.
+	admission       *RemovalAdmission
+	admissionAbsent bool
 }
 
 // aControlPlane reports one online node and nothing else.
@@ -102,6 +114,9 @@ func aControlPlane() *scriptedControlPlane {
 		},
 		volumes: map[string][]webapi.VolumeInfo{},
 		refuse:  map[string]error{},
+		// A node the census finds empty is one the control plane agrees is
+		// drained, unless a test says otherwise.
+		verification: DrainVerification{Drained: true},
 	}
 }
 
@@ -153,6 +168,21 @@ func (c *scriptedControlPlane) record(method, argument string) error {
 	return c.refuse[method]
 }
 
+func (c *scriptedControlPlane) RemovalAdmission(
+	_ context.Context, _, nodeID string,
+) (RemovalAdmission, bool, error) {
+	if err := c.record("RemovalAdmission", nodeID); err != nil {
+		return RemovalAdmission{}, false, err
+	}
+	if c.admissionAbsent {
+		return RemovalAdmission{}, false, nil
+	}
+	if c.admission == nil {
+		return RemovalAdmission{Admitted: true}, true, nil
+	}
+	return *c.admission, true, nil
+}
+
 func (c *scriptedControlPlane) StorageNode(
 	_ context.Context, _, nodeID string,
 ) (NodeReading, bool, error) {
@@ -178,8 +208,12 @@ func (c *scriptedControlPlane) StorageNodes(
 
 func (c *scriptedControlPlane) AddNode(
 	_ context.Context, clusterID string, _ utils.StorageNodeSetAddParams,
-) error {
-	return c.record("AddNode", clusterID)
+) (string, error) {
+	return theAddTask, c.record("AddNode", clusterID)
+}
+
+func (c *scriptedControlPlane) Task(_ context.Context, _, taskID string) (TaskReading, error) {
+	return TaskReading{}, c.record("Task", taskID)
 }
 
 func (c *scriptedControlPlane) Suspend(_ context.Context, _, nodeID string) error {
@@ -203,6 +237,28 @@ func (c *scriptedControlPlane) RestartNode(
 
 func (c *scriptedControlPlane) Promote(_ context.Context, _, nodeID string) error {
 	return c.record("Promote", nodeID)
+}
+
+func (c *scriptedControlPlane) PrepareRemoval(_ context.Context, _, nodeID string) error {
+	return c.record("PrepareRemoval", nodeID)
+}
+
+func (c *scriptedControlPlane) RemovalProgress(
+	_ context.Context, _, nodeID string,
+) (RemovalProgress, error) {
+	if err := c.record("RemovalProgress", nodeID); err != nil {
+		return RemovalProgress{}, err
+	}
+	return c.progress, nil
+}
+
+func (c *scriptedControlPlane) VerifyDrained(
+	_ context.Context, _, nodeID string,
+) (DrainVerification, error) {
+	if err := c.record("VerifyDrained", nodeID); err != nil {
+		return DrainVerification{}, err
+	}
+	return c.verification, nil
 }
 
 func (c *scriptedControlPlane) RemoveNode(_ context.Context, _, nodeID string) error {
@@ -400,4 +456,37 @@ func persisted(
 		t.Fatalf("store the operation's status: %v", err)
 	}
 	return &stored
+}
+
+// restoredAt is the machine of an operation restored at one of its action's steps,
+// with an hour left on it, which is what advance hands a step on a live pass.
+func restoredAt(
+	t *testing.T, ops *simplyblockv1alpha2.StorageNodeOps, at step,
+) *statemachine.Machine[step] {
+	t.Helper()
+	machine, err := graphs().FromSnapshot(context.Background(), action(ops.Spec.Action),
+		statemachine.Snapshot[step]{State: at, Deadline: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("restoring %s at %s: %v", ops.Spec.Action, at, err)
+	}
+	t.Cleanup(machine.Close)
+	return machine
+}
+
+// performing runs one pass of a step against a machine restored at it, on the
+// stored copy of the operation, because a step that claims itself before its call
+// writes the claim to the stored operation.
+func performing(
+	t *testing.T, r *StorageNodeOpsReconciler, ops *simplyblockv1alpha2.StorageNodeOps, at step,
+) (bool, error) {
+	t.Helper()
+	return r.perform(context.Background(), persisted(t, r.Client, ops), restoredAt(t, ops, at))
+}
+
+// performingRemoveStep is performing for the Remove action's own dispatcher.
+func performingRemoveStep(
+	t *testing.T, r *StorageNodeOpsReconciler, ops *simplyblockv1alpha2.StorageNodeOps, at step,
+) (bool, error) {
+	t.Helper()
+	return r.performRemoveStep(context.Background(), persisted(t, r.Client, ops), restoredAt(t, ops, at))
 }

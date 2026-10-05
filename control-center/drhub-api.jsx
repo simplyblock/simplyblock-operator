@@ -200,7 +200,8 @@ function normRAction(o) {
     appName: refName(sp.applicationRef), planName: refName(sp.planRef), targetName: refName(sp.applicationRef) || refName(sp.planRef),
     override: sp.override || null, timeout: sp.timeout || "", startTime: st.startTime, completionTime: st.completionTime,
     durationMs: durMs(st.startTime, st.completionTime), sourceCluster: st.sourceCluster || "", targetCluster: st.targetCluster || "",
-    steps: st.steps || [], children: st.children || [], report, reportKey: st.reportKey || "",
+    steps: st.steps || [], log: st.log || [], children: st.children || [], report, reportKey: st.reportKey || "",
+    completionMessage: ((st.conditions || []).find(c => c.type === "Completed") || {}).message || "",
     rtoSeconds: report ? report.rtoSeconds : null, rpoSeconds: report ? report.achievedRPOSeconds : null,
     guests: report ? report.guests || [] : [],
     createdBy: (drMeta(o).annotations || {})[DR_ANN.createdBy] || (report && report.operator) || "",
@@ -219,7 +220,8 @@ function normTBubble(o) {
     cloneSource: sp.cloneSource || "latest-replicated-snapshot", holdFor: sp.holdFor || "", maxLifetime: sp.maxLifetime || "", abort: !!sp.abort,
     testID: st.testID || "", sourceCluster: st.sourceCluster || "", targetCluster: st.targetCluster || "", clonesReadyTime: st.clonesReadyTime,
     applications: st.applications || [], startTime: st.startTime, completionTime: st.completionTime, durationMs: durMs(st.startTime, st.completionTime),
-    bubbleNamespaces: st.bubbleNamespaces || [], steps: st.steps || [], invariants: st.invariants || [], checks: st.checks || [], report, reportKey: st.reportKey || "",
+    bubbleNamespaces: st.bubbleNamespaces || [], steps: st.steps || [], log: st.log || [], invariants: st.invariants || [], checks: st.checks || [], report, reportKey: st.reportKey || "",
+    completionMessage: ((st.conditions || []).find(c => c.type === "Completed") || {}).message || "",
     scheduleName: (drMeta(o).labels || {})[DR_ANN.schedule] || "", createdBy: (drMeta(o).annotations || {})[DR_ANN.createdBy] || (report && report.operator) || "",
     counts: {apps: (st.applications || []).length, steps: (st.steps || []).length, invariants: (st.invariants || []).length}
   }));
@@ -354,7 +356,7 @@ const csv = s => String(s || "").split(/[,\s]+/).map(x => x.trim()).filter(Boole
 const PROBE_POLL_MS = 1000, PROBE_WAIT_MS = 150000;
 const probeErr = (e, what, role) => {
   if (e && e.status === 404) return new Error(`This DR hub cannot ${what} on demand yet (dr-hub before on-demand probes); the result shows on the saved object instead.`);
-  if (e && e.status === 403) return new Error(`Testing needs ${role}: create on ${what === "probe an S3 store" ? "s3proberequests" : "healthproberequests"} in dr.simplyblock.io.`);
+  if (e && e.status === 403) return new Error(`Testing needs ${role}: create on ${what === "probe an S3 store" ? "s3proberequests" : what === "ask DHCP servers" ? "dhcpproberequests" : "healthproberequests"} in dr.simplyblock.io.`);
   return e;
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -383,13 +385,16 @@ const probeS3 = store => runProbe("S3ProbeRequest", DR_NS(), Object.assign({buck
 // Health probes: of an application where it runs ({app}), or on a plan's site
 // for one not protected yet ({plan, site, namespaces}); probes default to the
 // application's own.
-const probeHealth = ({app, plan, site, namespaces, probes}) => runProbe("HealthProbeRequest", app ? app.namespace : DR_NS(),
+const probeHealth = ({app, plan, site, namespaces, probes, gates}) => runProbe("HealthProbeRequest", app ? app.namespace : DR_NS(),
   Object.assign({}, app ? {applicationRef: {name: app.name}} : {}, plan ? {planRef: plan} : {}, site ? {site} : {},
-    namespaces && namespaces.length ? {namespaces} : {}, probes && probes.length ? {probes} : {}),
-  "run health probes", "the dr-operator role");
+    namespaces && namespaces.length ? {namespaces} : {}, probes && probes.length ? {probes} : {}, gates && gates.length ? {gates} : {}),
+  gates && gates.length ? "test gates" : "run health probes", "the dr-operator role");
+// The DHCP servers of a VM network answer a short-lived pod on it (ADR 0021).
+const probeDHCP = ({cluster, nad}) => runProbe("DHCPProbeRequest", DR_NS(), {cluster, nad}, "ask DHCP servers", "the dr-admin role");
 
 const drhub = {
-  probeS3, probeHealth,
+  probeS3, probeHealth, probeDHCP,
+  discovery: () => window.loadDiscovery(),
   plans: () => drList("pplan"), plan: drById("pplan"),
   paths: () => drList("drpath"), path: drById("drpath"),
   apps: () => drList("papp"), app: drById("papp"),
@@ -439,11 +444,11 @@ const drhub = {
       target.kind === "rplan" ? {planRef: {name: target.name}} : {applicationRef: {name: target.name}},
       override ? {override: {reason: override}} : {}, timeout ? {timeout} : {})
   }, {namespace: target.namespace}),
-  runTest: ({target, path, cloneSource, holdFor, maxLifetime}) => k8s.create("TestBubble", {
+  runTest: ({target, path, cloneSource, holdFor, maxLifetime, testID}) => k8s.create("TestBubble", {
     apiVersion: DR_API_GROUP, kind: "TestBubble",
     metadata: {name: dns63(`test-${target.name}-${stamp()}`), namespace: target.namespace},
     spec: Object.assign({pathRef: path}, target.kind === "rplan" ? {planRef: {name: target.name}} : {applicationRef: {name: target.name}},
-      cloneSource ? {cloneSource} : {}, holdFor ? {holdFor} : {}, maxLifetime ? {maxLifetime} : {})
+      cloneSource ? {cloneSource} : {}, holdFor ? {holdFor} : {}, maxLifetime ? {maxLifetime} : {}, testID ? {testID} : {})
   }, {namespace: target.namespace}),
   abortTest: t => k8s.patch("TestBubble", t.name, {spec: {abort: true}}, {namespace: t.namespace}),
   holdTest: (t, holdFor) => k8s.patch("TestBubble", t.name, {spec: {holdFor}}, {namespace: t.namespace}),
@@ -469,6 +474,7 @@ const drhub = {
   patchSiteProfile: (s, spec) => k8s.patch("SiteProfile", s.name, {spec}),
   createPath: spec => k8s.create("DRPath", {apiVersion: DR_API_GROUP, kind: "DRPath", metadata: {name: dns63(spec.name)}, spec: spec.spec}),
   createApp: ({name, namespace, spec}) => k8s.create("ProtectedApplication", {apiVersion: DR_API_GROUP, kind: "ProtectedApplication", metadata: {name: dns63(name), namespace}, spec}, {namespace}),
+  patchRPlan: (p, spec) => k8s.patch("RecoveryPlan", p.name, {spec}, {namespace: p.namespace}),
   createRPlan: ({name, namespace, spec}) => k8s.create("RecoveryPlan", {apiVersion: DR_API_GROUP, kind: "RecoveryPlan", metadata: {name: dns63(name), namespace}, spec}, {namespace}),
   // A DHCP server of a site (ADR 0020): dr-hub renders the guest reservations
   // into its ConfigMap on the site; the hub never talks to the server.

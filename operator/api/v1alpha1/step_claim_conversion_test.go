@@ -69,7 +69,7 @@ func TestAStorageNodeOpsStepClaimSurvivesAV1alpha1RoundTrip(t *testing.T) {
 		},
 		Status: v1alpha2.StorageNodeOpsStatus{
 			Phase: v1alpha2.StorageNodeOpsPhaseRunning,
-			Step:  claimedStep(string(v1alpha2.StorageNodeOpsStepSuspending)),
+			Step:  claimedStep(string(v1alpha2.StorageNodeOpsStepVerifying)),
 		},
 	}
 

@@ -77,7 +77,7 @@ func allowing(t *testing.T, apiClient client.Client, windows int32) {
 // held runs the gate and reports whether it held this window back.
 func held(t *testing.T, r *StorageNodeOpsReconciler, ops *simplyblockv1alpha2.StorageNodeOps) bool {
 	t.Helper()
-	done, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepHolding)
+	done, err := performing(t, r, ops, stepHolding)
 	if err == nil {
 		return !done
 	}
@@ -165,7 +165,7 @@ func TestTheEvictionIsBlockedBeforeTheNodeIsTakenDown(t *testing.T) {
 	api := aControlPlane()
 	r, apiClient := anOpsWorld(t, api, aReadyStoragePod(opsWorker))
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aWindow("a-window")), stepShuttingDown)
+	done, err := performing(t, r, aWindow("a-window"), stepShuttingDown)
 	if err != nil {
 		t.Fatalf("shutting down: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestAnOfflineNodeNeedsNoShutdown(t *testing.T) {
 	api := aControlPlane().reporting(nodeStatusOffline)
 	r, _ := anOpsWorld(t, api, aReadyStoragePod(opsWorker))
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aWindow("a-window")), stepShuttingDown)
+	done, err := performing(t, r, aWindow("a-window"), stepShuttingDown)
 	if err != nil {
 		t.Fatalf("shutting down: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestANodeMidRestartIsWaitedForRatherThanShutDown(t *testing.T) {
 	api := aControlPlane().reporting(nodeStatusInRestart)
 	r, _ := anOpsWorld(t, api, aReadyStoragePod(opsWorker))
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aWindow("a-window")), stepShuttingDown)
+	done, err := performing(t, r, aWindow("a-window"), stepShuttingDown)
 	if err != nil {
 		t.Fatalf("shutting down: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestTheNodeIsRestartedOnceTheHostIsBack(t *testing.T) {
 	api := aControlPlane().reporting(nodeStatusOffline)
 	r, _ := anOpsWorld(t, api)
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aWindow("a-window")), stepRestarting)
+	done, err := performing(t, r, aWindow("a-window"), stepRestarting)
 	if err != nil {
 		t.Fatalf("restarting: %v", err)
 	}
@@ -243,14 +243,13 @@ func TestTheNodeIsRestartedOnceTheHostIsBack(t *testing.T) {
 	}
 
 	restarting, _ := anOpsWorld(t, aControlPlane().reporting(nodeStatusInRestart))
-	if done, err := restarting.perform(context.Background(),
-		aWindow("a-window"), stepRestarting); err != nil || done {
+	if done, err := performing(t, restarting, aWindow("a-window"), stepRestarting); err != nil || done {
 		t.Errorf("done, err = %v, %v; a restart in flight is waited for", done, err)
 	}
 
 	back := aControlPlane()
 	online, _ := anOpsWorld(t, back)
-	done, err = online.perform(context.Background(), aWindow("a-window"), stepRestarting)
+	done, err = performing(t, online, aWindow("a-window"), stepRestarting)
 	if err != nil {
 		t.Fatalf("restarting: %v", err)
 	}
@@ -269,10 +268,10 @@ func TestCleanupLeavesTheWorkerDrainableAgain(t *testing.T) {
 	r, apiClient := anOpsWorld(t, aControlPlane(), aReadyStoragePod(opsWorker), spdk)
 	ops := aWindow("a-window")
 
-	if _, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepShuttingDown); err != nil {
+	if _, err := performing(t, r, ops, stepShuttingDown); err != nil {
 		t.Fatalf("shutting down: %v", err)
 	}
-	done, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepCleanup)
+	done, err := performing(t, r, ops, stepCleanup)
 	if err != nil {
 		t.Fatalf("cleaning up: %v", err)
 	}
@@ -397,7 +396,7 @@ func TestReleasingWaitsForTheSpdkPodRatherThanTheNodeAgent(t *testing.T) {
 	r, apiClient := anOpsWorld(t, aControlPlane(), aReadyStoragePod(opsWorker), spdk)
 	ops := aWindow("a-window")
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepReleasing)
+	done, err := performing(t, r, ops, stepReleasing)
 	if err != nil {
 		t.Fatalf("releasing: %v", err)
 	}
@@ -411,7 +410,7 @@ func TestReleasingWaitsForTheSpdkPodRatherThanTheNodeAgent(t *testing.T) {
 
 	// The node agent's pod is still there, because a drain never takes it and
 	// the step whose turn is next needs it to answer.
-	done, err = r.perform(context.Background(), persisted(t, r.Client, ops), stepReleasing)
+	done, err = performing(t, r, ops, stepReleasing)
 	if err != nil {
 		t.Fatalf("releasing: %v", err)
 	}
@@ -432,7 +431,7 @@ func TestTheBudgetGuardsThePodsADrainCanEvict(t *testing.T) {
 		agent, spdk, aWebAPIPod(opsWorker), anFDBPod(opsWorker),
 		anSpdkPod(opsTarget, "4422"))
 
-	if _, err := r.perform(context.Background(), persisted(t, r.Client, aWindow("a-window")), stepShuttingDown); err != nil {
+	if _, err := performing(t, r, aWindow("a-window"), stepShuttingDown); err != nil {
 		t.Fatalf("shutting down: %v", err)
 	}
 
@@ -467,10 +466,10 @@ func TestReleasingTakesTheBudgetAwayRatherThanRelaxingIt(t *testing.T) {
 		aReadyStoragePod(opsWorker), anSpdkPod(opsWorker, "4420"), aWebAPIPod(opsWorker))
 	ops := aWindow("a-window")
 
-	if _, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepShuttingDown); err != nil {
+	if _, err := performing(t, r, ops, stepShuttingDown); err != nil {
 		t.Fatalf("shutting down: %v", err)
 	}
-	if _, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepReleasing); err != nil {
+	if _, err := performing(t, r, ops, stepReleasing); err != nil {
 		t.Fatalf("releasing: %v", err)
 	}
 
@@ -489,7 +488,7 @@ func TestAShutdownIsNotReissuedAgainstANodeAlreadyShuttingDown(t *testing.T) {
 	api := aControlPlane().reporting(nodeStatusInShutdown)
 	r, _ := anOpsWorld(t, api, aReadyStoragePod(opsWorker), anSpdkPod(opsWorker, "4420"))
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aWindow("a-window")), stepShuttingDown)
+	done, err := performing(t, r, aWindow("a-window"), stepShuttingDown)
 	if err != nil {
 		t.Fatalf("shutting down: %v", err)
 	}
@@ -558,10 +557,10 @@ func TestTheWorkersBudgetOutlivesTheFirstSocketToRelease(t *testing.T) {
 		anSpdkPod(opsWorker, "4420"), anSpdkPod(opsWorker, "4422"))
 	ops := aWindow("a-window")
 
-	if _, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepShuttingDown); err != nil {
+	if _, err := performing(t, r, ops, stepShuttingDown); err != nil {
 		t.Fatalf("shutting down: %v", err)
 	}
-	if _, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepReleasing); err != nil {
+	if _, err := performing(t, r, ops, stepReleasing); err != nil {
 		t.Fatalf("releasing: %v", err)
 	}
 
@@ -579,7 +578,7 @@ func TestTheWorkersBudgetOutlivesTheFirstSocketToRelease(t *testing.T) {
 	if err := apiClient.Status().Update(context.Background(), sibling); err != nil {
 		t.Fatalf("advancing the sibling: %v", err)
 	}
-	if _, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepReleasing); err != nil {
+	if _, err := performing(t, r, ops, stepReleasing); err != nil {
 		t.Fatalf("releasing: %v", err)
 	}
 	if budget := budgetFor(t, apiClient); budget != nil {
@@ -694,5 +693,35 @@ func TestTheTerminalTeardownAnnouncesANodeItCannotRead(t *testing.T) {
 
 	if !announcedReason(r, MaintenanceMarkersLeft) {
 		t.Error("a teardown that could not read its node said nothing about the markers")
+	}
+}
+
+// Regression: 2026-10-05-maintenance-touches-removal — a removal that failed
+// releases the node's lock with the node left removed_failed, and a
+// maintenance window on its worker then shut it down and restarted it back
+// into service. A node leaving the cluster belongs to its removal: the window
+// still guards and releases the worker, and sends the node nothing.
+func TestAMaintenanceWindowSendsNothingToANodeLeavingTheCluster(t *testing.T) {
+	for _, status := range []string{
+		nodeStatusPendingRemoval, nodeStatusMigratingLvols, nodeStatusRemovedFailed,
+	} {
+		t.Run(status, func(t *testing.T) {
+			api := aControlPlane().reporting(status)
+			r, _ := anOpsWorld(t, api, aReadyStoragePod(opsWorker))
+
+			for _, at := range []step{stepShuttingDown, stepRestarting} {
+				done, err := performing(t, r, aWindow("a-window"), at)
+				if err != nil {
+					t.Fatalf("%s: %v", at, err)
+				}
+				if !done {
+					t.Errorf("%s did not finish against a node its removal owns", at)
+				}
+			}
+			if shut, restarted := api.asked("ShutdownNode"), api.asked("RestartNode"); shut+restarted != 0 {
+				t.Errorf("shutdown=%d restart=%d sent to a node leaving the cluster, want none",
+					shut, restarted)
+			}
+		})
 	}
 }

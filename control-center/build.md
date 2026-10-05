@@ -18,7 +18,7 @@ npx @babel/cli --presets @babel/preset-react --no-babelrc \
   mock-backend.jsx mock-api.jsx k8s-client.jsx mock-k8s.jsx mock-k8s-server.jsx mock-extras.jsx mock-repl.jsx mock-dr.jsx mock-drhub.jsx mock-deploy.jsx mock-migrate.jsx mock-rbac.jsx \
   --out-file dist/mock.js
 npx @babel/cli --presets @babel/preset-react --no-babelrc \
-  k8s-client.jsx cpapi.jsx api.jsx drhub-api.jsx agent.jsx ui.jsx rbac.jsx actions.jsx panels.jsx rbac-admin.jsx tiles.jsx tiles-data.jsx details.jsx dr.jsx dr-plan.jsx repl.jsx cgroups.jsx migrations.jsx k8s.jsx deploy.jsx deploy-doc.jsx storage-types.jsx recipe.jsx migrate.jsx appdr.jsx drhub.jsx details-data.jsx app.jsx \
+  k8s-client.jsx cpapi.jsx api.jsx drhub-api.jsx discovery.jsx labels.jsx agent.jsx ui.jsx rbac.jsx actions.jsx panels.jsx rbac-admin.jsx tiles.jsx tiles-data.jsx details.jsx dr.jsx dr-plan.jsx repl.jsx cgroups.jsx migrations.jsx k8s.jsx deploy.jsx deploy-doc.jsx storage-types.jsx recipe.jsx migrate.jsx appdr.jsx drhub.jsx details-data.jsx app.jsx \
   --out-file dist/app.js
 ```
 

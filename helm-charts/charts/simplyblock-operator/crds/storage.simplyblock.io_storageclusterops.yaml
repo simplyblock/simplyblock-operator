@@ -319,6 +319,15 @@ spec:
                       items:
                         type: string
                       type: array
+                    skipped:
+                      description: |-
+                        Skipped are the nodes of Nodes the walk passed over without restarting
+                        them, in walk order: a node the control plane stopped listing, or one
+                        whose removal started after the walk was planned. A node leaving the
+                        cluster belongs to its removal, and the walk sends it nothing.
+                      items:
+                        type: string
+                      type: array
                   required:
                     - nodeIndex
                   type: object

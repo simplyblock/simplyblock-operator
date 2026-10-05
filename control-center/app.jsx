@@ -68,7 +68,8 @@ const pTSched = id => [{t: "dr"}, {t: "tschedules"}, {t: "tsched", id}];
 const pRestore = id => [{t: "dr"}, {t: "restores"}, {t: "restore", id}];
 const pSProf = id => [{t: "dr"}, {t: "siteprofiles"}, {t: "siteprofile", id}];
 const pDhcp = id => [{t: "dr"}, {t: "dhcpservers"}, {t: "dhcpserver", id}];
-const pSiteDeploy = id => [{t: "dr"}, {t: "sitedeploys"}, {t: "sitedeploy", id}];
+// a managed site's storage deployment belongs to the clusters, not to DR
+const pSiteDeploy = id => [{t: "sitedeploys"}, {t: "sitedeploy", id}];
 const pPair = id => [{t: "dr"}, {t: "pairs"}, {t: "pair", id}];
 const pSlot = id => [{t: "dr"}, {t: "slots"}, {t: "slot", id}];
 const pReplOp = id => [{t: "dr"}, {t: "replops"}, {t: "replop", id}];
@@ -526,7 +527,8 @@ function OverviewView({seg, parent, nav, prefs, rev, up, upLabel}) {
     <>
       <Toolbar {...{items, q, setQ, filters, setFilters, density, setDensity}} kind={cfg.kind} scope={scope}
         sort={activeSort} setSort={setSort} count={filtered.length} onRefresh={reload}
-        extra={gateCreate(seg.t === "clusters" ? <button className="btn primary" onClick={() => window.__ui.dialog(deployFromDialog(nav), {kind: "cluster", id: "new"})}><Icon n="plus" s={12} />Deploy cluster</button>
+        extra={gateCreate(seg.t === "clusters" ? <><button className="btn sitestorage" onClick={() => nav.siteStorage()}><Icon n="cluster" s={12} />Site storage</button><button className="btn primary" onClick={() => window.__ui.dialog(deployFromDialog(nav), {kind: "cluster", id: "new"})}><Icon n="plus" s={12} />Deploy cluster</button></>
+          : seg.t === "k8s" ? <button className="btn labelsbtn" onClick={() => window.__ui.dialog(labelDialog(), {kind: "labels", id: "new"})}><Icon n="list" s={12} />Label for DR</button>
           : seg.t === "deployconfigs" && parent && parent.t === "k8sc" ? <button className="btn primary" onClick={() => nav.deployWizard(parent.id)}><Icon n="plus" s={12} />Deploy a cluster</button>
           : seg.t === "pools" && parent && parent.t === "cluster" ? <button className="btn primary" onClick={() => window.__ui.dialog(newPoolDialog(REG[parent.id] || {id: parent.id, name: "this cluster"}), {kind: "pool", id: "new"})}><Icon n="plus" s={12} />New pool</button>
           : seg.t === "plans" ? <button className="btn primary" onClick={() => window.__ui.dialog(newPPlanDialog(), {kind: "pplan", id: "new"})}><Icon n="plus" s={12} />New plan</button>
@@ -765,6 +767,7 @@ function App() {
     k8s: () => go([{t: "k8s"}]),
     openCgroup: gid => (REG[gid] ? Promise.resolve(REG[gid]) : api.cgroup(gid)).then(g => go(pCg(g.clusterId, g.id))).catch(() => {}),
     drLayer: l => go([{t: "dr"}, {t: l}]),
+    siteStorage: () => go([{t: "sitedeploys"}]),
     openMPath: id => go(pMp(id)),
     openAppGroup: (pid, id) => go(pAg(pid, id)),
     zones: () => go([{t: "dr"}, {t: "zones"}]),

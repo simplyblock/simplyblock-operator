@@ -5596,6 +5596,28 @@ const RESOURCES = {
     namespaced: true,
     dr: true
   },
+  DHCPProbeRequest: {
+    plural: "dhcpproberequests",
+    short: "dhcpprobe",
+    core: DR_API_GROUP,
+    namespaced: true,
+    dr: true
+  },
+  // DR's labels on a site's objects, applied by its dr-agent (labels.jsx)
+  LabelRequest: {
+    plural: "labelrequests",
+    short: "labelreq",
+    core: DR_API_GROUP,
+    namespaced: true,
+    dr: true
+  },
+  // what each site's dr-agent reports, read through the view dr-hub keeps
+  // of it (<cluster>/dr-agent-status): the forms' discovered choices
+  ManagedClusterView: {
+    plural: "managedclusterviews",
+    core: "view.open-cluster-management.io/v1beta1",
+    namespaced: true
+  },
   // Ramen and OCM objects the hub derives — instances only, read-only here
   DRPolicy: {
     plural: "drpolicies",
@@ -10588,7 +10610,11 @@ window.SB_DR = {
     DHCPServer: [],
     StorageSiteDeployment: [],
     S3ProbeRequest: [],
-    HealthProbeRequest: []
+    HealthProbeRequest: [],
+    DHCPProbeRequest: [],
+    LabelRequest: [],
+    ManagedCluster: [],
+    ManagedClusterView: []
   };
   const api = (kind, group) => ({
     apiVersion: group || "dr.simplyblock.io/v1alpha1",
@@ -11377,6 +11403,14 @@ window.SB_DR = {
     logRef,
     idempotencyKey: U().hex(8)
   });
+  // status.log entries (dr-hub ADR 0022): [minutes ago, severity, step, source, message]
+  const logOf = rows => rows.map(([min, severity, stepName, source, message]) => ({
+    time: agoIso(min),
+    severity,
+    step: stepName,
+    source,
+    message
+  }));
   store.RecoveryAction.push(Object.assign(api("RecoveryAction"), {
     metadata: meta("relocate-ledger-1", OPS, {
       annotations: {
@@ -11449,7 +11483,8 @@ window.SB_DR = {
       completionTime: agoIso(60 * 24 * 2 - 14),
       sourceCluster: "cluster-a",
       targetCluster: "cluster-b",
-      steps: [step("pre-flight", "Succeeded", 60 * 24 * 2, 3, "Degraded, overridden"), step("ramen failover", "Succeeded", 60 * 24 * 2 - 1, 480, "DRPC FailedOver"), step("target starting", "Failed", 60 * 24 * 2 - 9, 300, "tier web: deployment payments-web not ready after 5m (ImagePullBackOff: registry mirror not bound on fra-b)")],
+      steps: [step("pre-flight", "Succeeded", 60 * 24 * 2, 3, "Degraded, overridden"), step("ramen failover", "Succeeded", 60 * 24 * 2 - 1, 480, "DRPC FailedOver"), step("target starting", "Failed", 60 * 24 * 2 - 9, 300, "the application did not pass its health probes on cluster-b: task deadline of 900s passed; root cause: Pod payments/payments-web-6c9 is ImagePullBackOff: web: Back-off pulling image \"quay.io/acme/payments-web:4.2\": registry mirror not bound on fra-b | recent: 09:12:40 probes: probes on cluster-b: 0 of 1 passing after 58 attempts; VMs 0, pods 1/2 ready, PVCs 2 / 09:13:10 pods: Pod payments/payments-web-6c9 is ImagePullBackOff")],
+      log: logOf([[60 * 24 * 2, "Info", "pre-flight", "workflow", "started (PreFlight)"], [60 * 24 * 2, "Warning", "", "workflow", "started against readiness Degraded (storage-replicating), overridden: storage-replicating advisory only"], [60 * 24 * 2 - 1, "Info", "ramen failover", "ramen", "Ramen: DRPC payments FailingOver, WaitingForResourceRestore"], [60 * 24 * 2 - 8, "Info", "ramen failover", "workflow", "succeeded: Ramen reports FailedOver on cluster-b"], [60 * 24 * 2 - 9, "Info", "target starting", "probes", "probes on cluster-b: 0 of 1 passing after 3 attempts; VMs 0, pods 1/2 ready, PVCs 2"], [60 * 24 * 2 - 9, "Warning", "target starting", "pods", "Pod payments/payments-web-6c9 is ImagePullBackOff: web: Back-off pulling image \"quay.io/acme/payments-web:4.2\": registry mirror not bound on fra-b"], [60 * 24 * 2 - 10, "Warning", "target starting", "events", "Pod/payments-web-6c9 Failed: Failed to pull image: dial tcp: lookup mirror.fra-b.example.com: no such host"], [60 * 24 * 2 - 12, "Warning", "target starting", "workflow", "stuck: Pod payments/payments-web-6c9 is ImagePullBackOff: web: Back-off pulling image \"quay.io/acme/payments-web:4.2\": registry mirror not bound on fra-b"], [60 * 24 * 2 - 14, "Error", "target starting", "workflow", "failed: the application did not pass its health probes on cluster-b: task deadline of 900s passed"], [60 * 24 * 2 - 14, "Error", "", "workflow", "Failed: the application did not pass its health probes on cluster-b (Ramen moved it; no rollback)"]]),
       report: {
         operator: "bob@example.com",
         overrideReason: "storage-replicating advisory only; site A network partitioned, business decision to fail over",
@@ -11500,7 +11535,56 @@ window.SB_DR = {
       startTime: agoIso(6),
       sourceCluster: "cluster-a",
       targetCluster: "cluster-b",
-      steps: [step("pre-flight", "Succeeded", 6, 3, "Degraded"), step("pre-source hooks", "Succeeded", 6, 20, ""), step("ramen relocate", "Succeeded", 5, 200, "DRPC Relocated"), step("target starting", "Running", 2, 0, "tier db ready; waiting for tier web")],
+      steps: [step("pre-flight", "Succeeded", 6, 3, "Degraded"), step("pre-source hooks", "Succeeded", 6, 20, ""), Object.assign(step("ramen-move", "Running", 5, 0, ""), {
+        phase: "TargetStarting",
+        deadline: iso(Date.now() + 25 * 60000),
+        lastProgressTime: agoIso(4),
+        progress: "Ramen reports Relocated on cluster-b; its restore of the application's objects is not done: Failed to restore kube objects: kube objects restore error, will retry",
+        blocker: "no progress for 4m0s: Ramen's restore waits for hook tools-0-deployments: selector shop-tools= matches nothing in shop on cluster-b (a label with an empty value: was a key=value meant?); the tiers after it are not restored until it passes"
+      })],
+      log: logOf([[6, "Info", "pre-flight", "workflow", "started (PreFlight)"], [6, "Info", "pre-flight", "workflow", "succeeded: Relocate cluster-a→cluster-b, readiness Degraded"], [6, "Info", "pre-source hooks", "agent", "hook 1 of 1 quiesce running on cluster-a: flushing caches"], [5, "Info", "ramen-move", "ramen", "Ramen: DRPC shop Relocating, RunningFinalSync"], [4, "Info", "ramen-move", "ramen", "Ramen reports Relocated on cluster-b; its restore of the application's objects is not done: Failed to restore kube objects: kube objects restore error, will retry"], [4, "Error", "ramen-move", "ramen", "Ramen's restore waits for hook tools-0-deployments: selector shop-tools= matches nothing in shop on cluster-b (a label with an empty value: was a key=value meant?); the tiers after it are not restored until it passes"], [4, "Error", "ramen-move", "ramen", "Ramen could not restore the application's objects on cluster-b: Failed to restore kube objects: kube objects restore error, will retry"], [0.5, "Warning", "ramen-move", "workflow", "stuck: Ramen's restore waits for hook tools-0-deployments: selector shop-tools= matches nothing in shop on cluster-b (a label with an empty value: was a key=value meant?); the tiers after it are not restored until it passes"]]),
+      conditions: []
+    }
+  }));
+  // A test that waits in its restore on an exec gate whose pod selector matches nothing in the bubble.
+  store.TestBubble.push(Object.assign(api("TestBubble"), {
+    metadata: meta("test-ledger-restoring", OPS, {
+      annotations: {
+        "dr.simplyblock.io/created-by": "carol@example.com"
+      },
+      creationTimestamp: agoIso(14)
+    }),
+    spec: {
+      pathRef: "fra-b-to-fra-a",
+      applicationRef: {
+        name: "ledger"
+      },
+      cloneSource: "latest-replicated-snapshot",
+      maxLifetime: "24h"
+    },
+    status: {
+      phase: "Restoring",
+      testID: "r7-2b1e",
+      sourceCluster: "cluster-b",
+      targetCluster: "cluster-a",
+      startTime: agoIso(14),
+      clonesReadyTime: agoIso(10),
+      applications: [{
+        name: "ledger",
+        priority: 1,
+        phase: "Restoring"
+      }],
+      bubbleNamespaces: ["ledger-drtest-r72b1e"],
+      steps: [step("pre-flight", "Succeeded", 14, 2, "1 applications, cluster-b→cluster-a"), step("clone", "Succeeded", 13, 180, "2 clones ready (1 TestFailovers), consistency per-group"), step("isolate", "Succeeded", 10, 20, "1 namespaces isolated"), Object.assign(step("restore/ledger", "Running", 9, 0, ""), {
+        phase: "Restoring",
+        deadline: iso(Date.now() + 21 * 60000),
+        lastProgressTime: agoIso(7),
+        progress: "step 3 of 5 exec/db-1 (attempt 41): no running pod selected in ledger-drtest-r72b1e yet; VMs 1, pods 0, PVCs 2",
+        blocker: "no progress for 7m0s: restore step exec/db-1 on cluster-a waits: no running pod selected in ledger-drtest-r72b1e yet [run \"pg_isready -h ledger-db\" in a running pod selected by labels app=wordpress-tools in ledger-drtest-r72b1e (timeout 900s)]"
+      })],
+      log: logOf([[14, "Info", "pre-flight", "workflow", "started (Pending)"], [13, "Info", "clone", "clones", "0 of 1 TestFailovers Ready on cluster-a; waiting: tf-r72b1e-ledger: Cloning (2 of 2 volumes)"], [10, "Info", "clone", "workflow", "succeeded: 2 clones ready (1 TestFailovers), consistency per-group"], [9, "Info", "restore/ledger", "agent", "step 1 of 5 group/config: 14 objects restored"], [8, "Info", "restore/ledger", "agent", "step 2 of 5 group/db: VirtualMachine ledger-db restored"], [7, "Info", "restore/ledger", "agent", "step 3 of 5 exec/db-1 (attempt 2): no running pod selected in ledger-drtest-r72b1e yet; VMs 1, pods 0, PVCs 2"], [3, "Warning", "restore/ledger", "gates", "restore step exec/db-1 on cluster-a waits: no running pod selected in ledger-drtest-r72b1e yet [run \"pg_isready -h ledger-db\" in a running pod selected by labels app=wordpress-tools in ledger-drtest-r72b1e (timeout 900s)]"], [3, "Warning", "restore/ledger", "workflow", "stuck: restore step exec/db-1 on cluster-a waits: no running pod selected in ledger-drtest-r72b1e yet [run \"pg_isready -h ledger-db\" in a running pod selected by labels app=wordpress-tools in ledger-drtest-r72b1e (timeout 900s)]"]]),
+      invariants: [],
+      checks: [],
       conditions: []
     }
   }));
@@ -11843,6 +11927,392 @@ window.SB_DR = {
   store.DHCPServer.push(dhcp("dhcp-cluster-a", "cluster-a", "dhcp", "sitemap-hosts", 3, "5e5e5e"));
   store.DHCPServer.push(dhcp("dhcp-cluster-b", "cluster-b", "dhcp", "sitemap-hosts", 3, "91ab00"));
 
+  // ---- managed clusters and what their dr-agents report (the forms' choices) ----
+  const mc = (name, region, zone, available) => Object.assign(api("ManagedCluster", "cluster.open-cluster-management.io/v1"), {
+    metadata: meta(name, null, {
+      labels: {
+        name,
+        cloud: "Amazon"
+      }
+    }),
+    spec: {
+      hubAcceptsClient: true
+    },
+    status: {
+      clusterClaims: [{
+        name: "region.open-cluster-management.io",
+        value: region
+      }].concat(zone ? [{
+        name: "topology.kubernetes.io/zone",
+        value: zone
+      }] : []),
+      conditions: [cond("ManagedClusterConditionAvailable", available !== false, available !== false ? "ManagedClusterAvailable" : "ManagedClusterLeaseUpdateStopped", "")]
+    }
+  });
+  store.ManagedCluster.push(mc("cluster-a", "eu-central-1"), mc("cluster-b", "eu-central-1"), mc("stretch", "eu-central-1"), mc("cluster-c", "eu-west-1", null, false));
+  const wl = (kind, name, labels, objectLabels) => ({
+    kind,
+    name,
+    labels,
+    objectLabels
+  });
+  const pvc = (name, labels) => ({
+    name,
+    labels,
+    storageClass: "sb-dr"
+  });
+  const svc = (name, ...ports) => ({
+    name,
+    ports: ports.map(p => ({
+      name: p[0],
+      port: p[1],
+      protocol: "TCP"
+    }))
+  });
+  const nsw = (namespace, prot, workloads, services, pvcs) => ({
+    namespace,
+    protected: prot,
+    workloads,
+    services: services.map(s => s.name),
+    serviceDetails: services,
+    pvcs
+  });
+  const tierL = t => ({
+    "dr.simplyblock.io/tier": t
+  });
+  const agentStatus = (cluster, o) => ({
+    cluster,
+    version: "c4395f0",
+    heartbeat: agoIso(1),
+    veleroNamespace: o.velero,
+    inventory: {
+      storageClasses: o.classes,
+      site: {
+        zones: o.zones,
+        regions: ["eu-central-1"],
+        nodes: o.zones.map((z, i) => ({
+          name: `${cluster}-w${i}`,
+          zone: z,
+          region: "eu-central-1",
+          ready: true
+        })),
+        nads: o.nads
+      }
+    },
+    workloads: o.workloads,
+    virtualMachines: o.vms || [],
+    dhcpServers: o.dhcp || []
+  });
+  const STATUS = {
+    "cluster-a": agentStatus("cluster-a", {
+      velero: "velero",
+      zones: ["eu-central-1a"],
+      classes: [{
+        name: "sb-dr",
+        driver: "csi.simplyblock.io",
+        labels: {
+          "simplyblock.io/dr": "true",
+          "simplyblock.io/replicated": "true"
+        }
+      }, {
+        name: "sb-fast",
+        driver: "csi.simplyblock.io"
+      }],
+      nads: [{
+        namespace: "apps",
+        name: "backend",
+        type: "macvlan",
+        master: "bond0.120",
+        vlan: 120
+      }, {
+        namespace: "apps",
+        name: "mgmt",
+        type: "macvlan",
+        master: "bond0.130",
+        vlan: 130
+      }, {
+        namespace: "dr-test",
+        name: "isolated",
+        type: "bridge",
+        bridge: "br-test",
+        ipamType: "static"
+      }],
+      workloads: [nsw("shop", true, [wl("StatefulSet", "shop-db", {
+        app: "shop-db"
+      }, Object.assign({
+        app: "shop"
+      }, {
+        tier: "db"
+      })), wl("Deployment", "shop-web", {
+        app: "shop-web"
+      }, {
+        app: "shop"
+      }), wl("Deployment", "shop-tools", {
+        app: "shop-tools"
+      }, {
+        app: "shop-tools"
+      })], [svc("shop-db", ["pg", 5432]), svc("shop", ["http", 80])], [pvc("data-shop-db-0", {
+        app: "shop"
+      })]), nsw("erp", true, [wl("VirtualMachine", "erp-db", {
+        "kubevirt.io/domain": "erp-db"
+      }, Object.assign({
+        app: "erp"
+      }, tierL("db"))), wl("VirtualMachine", "erp-app", {
+        "kubevirt.io/domain": "erp-app"
+      }, Object.assign({
+        app: "erp"
+      }, tierL("app")))], [svc("erp-db", ["mysql", 3306])], [pvc("erp-db-disk", {
+        app: "erp"
+      }), pvc("erp-app-disk", {
+        app: "erp"
+      })]),
+      // not protected yet: what a new protection is chosen from
+      nsw("crm", false, [wl("Deployment", "crm-tools", {
+        app: "crm-tools"
+      }, {
+        app: "crm-tools"
+      }), wl("VirtualMachine", "crm-db", {
+        "kubevirt.io/domain": "crm-db"
+      }, Object.assign({
+        app: "crm"
+      }, tierL("db"))), wl("VirtualMachine", "crm-web", {
+        "kubevirt.io/domain": "crm-web"
+      }, Object.assign({
+        app: "crm"
+      }, tierL("web")))], [svc("crm-db", ["pg", 5432]), svc("crm-web", ["http", 80], ["metrics", 9100])], [pvc("crm-db-data", {
+        app: "crm",
+        "storage.simplyblock.io/consistency-group": "crm"
+      }), pvc("crm-web-data", {
+        app: "crm",
+        "storage.simplyblock.io/consistency-group": "crm"
+      }), pvc("scratch", {
+        app: "crm-scratch"
+      })]), nsw("ledger", true, [wl("StatefulSet", "ledger", {
+        app: "ledger"
+      }, {
+        app: "ledger"
+      })], [svc("ledger", ["http", 8080])], [pvc("data-ledger-0", {
+        app: "ledger"
+      })]), nsw("wiki", true, [wl("Deployment", "wiki", {
+        app: "wiki"
+      }, {
+        app: "wiki"
+      })], [svc("wiki", ["http", 80])], [pvc("wiki-data", {
+        app: "wiki"
+      })])],
+      vms: [{
+        namespace: "erp",
+        name: "erp-db",
+        running: true,
+        networks: [{
+          name: "backend",
+          index: 1,
+          networkName: "apps/backend",
+          nad: "apps/backend",
+          mac: "52:54:00:a1:b2:01",
+          ips: ["192.168.110.21"]
+        }]
+      }, {
+        namespace: "erp",
+        name: "erp-app",
+        running: true,
+        networks: [{
+          name: "backend",
+          index: 1,
+          networkName: "apps/backend",
+          nad: "apps/backend",
+          ips: ["192.168.110.22"]
+        }, {
+          name: "mgmt",
+          index: 2,
+          networkName: "mgmt",
+          nad: "apps/mgmt",
+          ips: ["10.130.0.40"]
+        }]
+      }, {
+        namespace: "crm",
+        name: "crm-db",
+        running: true,
+        networks: [{
+          name: "app",
+          index: 1,
+          networkName: "apps/backend",
+          nad: "apps/backend",
+          mac: "52:54:00:c0:00:01",
+          ips: ["192.168.110.31"]
+        }]
+      }],
+      dhcp: [{
+        namespace: "dhcp",
+        pod: "dnsmasq-6d9f-x2k",
+        owner: "Deployment/dnsmasq",
+        software: "dnsmasq",
+        nads: [{
+          nad: "dhcp/dnsmasq-backend",
+          interface: "app0",
+          ips: ["192.168.110.2"]
+        }],
+        ranges: ["192.168.110.100,192.168.110.199,255.255.255.0,1h"],
+        hostsConfigMap: "sitemap-hosts",
+        hostsKey: "sitemap.hosts",
+        configMaps: ["dnsmasq-config", "sitemap-hosts"]
+      }, {
+        namespace: "dhcp-mgmt",
+        pod: "dnsmasq-mgmt-0",
+        owner: "StatefulSet/dnsmasq-mgmt",
+        software: "dnsmasq",
+        nads: [{
+          nad: "apps/mgmt",
+          interface: "net1",
+          ips: ["10.130.0.2"]
+        }],
+        ranges: ["10.130.0.100,10.130.0.200,12h"],
+        hostsConfigMap: "mgmt-hosts",
+        hostsKey: "hosts",
+        configMaps: ["mgmt-hosts"]
+      }]
+    }),
+    "cluster-b": agentStatus("cluster-b", {
+      velero: "velero",
+      zones: ["eu-central-1b"],
+      classes: [{
+        name: "sb-dr",
+        driver: "csi.simplyblock.io",
+        labels: {
+          "simplyblock.io/dr": "true"
+        }
+      }],
+      nads: [{
+        namespace: "apps",
+        name: "vlan210-backend",
+        type: "macvlan",
+        master: "bond0.210",
+        vlan: 210,
+        ipamType: "whereabouts",
+        ipamRanges: ["192.168.210.0/24"]
+      }, {
+        namespace: "apps",
+        name: "vlan220-mgmt",
+        type: "macvlan",
+        master: "bond0.220",
+        vlan: 220
+      }, {
+        namespace: "dr-test",
+        name: "isolated",
+        type: "bridge",
+        bridge: "br-test",
+        ipamType: "static"
+      }],
+      workloads: [nsw("crm-drtest-crm10051200", false, [], [], [])],
+      vms: [{
+        namespace: "erp",
+        name: "erp-db",
+        running: false,
+        networks: [{
+          name: "backend",
+          index: 1,
+          networkName: "apps/vlan210-backend",
+          nad: "apps/vlan210-backend",
+          ips: []
+        }]
+      }]
+    }),
+    "stretch": agentStatus("stretch", {
+      velero: "openshift-adp",
+      zones: ["eu-central-1a", "eu-central-1c"],
+      classes: [{
+        name: "sb-stretch",
+        driver: "csi.simplyblock.io",
+        labels: {
+          "simplyblock.io/stretch": "true"
+        }
+      }],
+      nads: [],
+      workloads: [nsw("erp", true, [], [], [pvc("erp-disk", {
+        "kubevirt.io/domain": "erp"
+      })])]
+    })
+  };
+  Object.entries(STATUS).forEach(([cluster, st]) => store.ManagedClusterView.push(Object.assign(api("ManagedClusterView", "view.open-cluster-management.io/v1beta1"), {
+    metadata: meta("dr-agent-status", cluster),
+    spec: {
+      scope: {
+        kind: "ConfigMap",
+        name: "dr-agent-status",
+        namespace: "dr-agent"
+      }
+    },
+    status: {
+      result: {
+        apiVersion: "v1",
+        kind: "ConfigMap",
+        metadata: {
+          name: "dr-agent-status",
+          namespace: "dr-agent"
+        },
+        data: {
+          "status.json": JSON.stringify(st)
+        }
+      }
+    }
+  })));
+  // what a gate test answers: an exec gate passes when its pod and the
+  // service:port it reaches exist; a kind gate when its selector matches
+  const gateAnswer = (cluster, ns, g, i) => {
+    const st = STATUS[cluster] || {
+      workloads: []
+    };
+    const w = (st.workloads || []).find(x => x.namespace === ns);
+    const sel = g.selector || {};
+    const match = labels => Object.entries(sel).every(([k, v]) => (labels || {})[k] === v);
+    if (!w) return {
+      index: i,
+      type: g.type,
+      passed: false,
+      message: `namespace ${ns} is not on ${cluster}`
+    };
+    if (g.type === "exec") {
+      const pod = w.workloads.find(x => match(x.labels));
+      if (!pod) return {
+        index: i,
+        type: g.type,
+        passed: false,
+        message: `no running pod in ${ns} matches ${Object.entries(sel).map(([k, v]) => `${k}=${v}`).join(",")} (0 pods match, none running)`
+      };
+      const cmd = g.command || [],
+        text = cmd.join(" ");
+      const hit = (w.serviceDetails || []).some(s => s.ports.some(p => text.includes(s.name) && text.includes(String(p.port))));
+      const code = hit ? 0 : 1;
+      return {
+        index: i,
+        type: g.type,
+        passed: hit,
+        pod: `${ns}/${pod.name}-5d9-x`,
+        exitCode: code,
+        durationMillis: hit ? 41 : 3012,
+        output: hit ? "" : `nc: ${cmd[cmd.length - 2] || "host"} (${cmd[cmd.length - 1] || "?"}): Connection refused`,
+        message: `${text} exited ${code} in ${ns}/${pod.name}-5d9-x`
+      };
+    }
+    const kind = {
+      vmRunning: "VirtualMachine",
+      deploymentsReady: "Deployment",
+      statefulSetsReady: "StatefulSet"
+    }[g.type] || "Pod";
+    const objs = w.workloads.filter(x => x.kind === kind && match(kind === "Pod" ? x.labels : x.objectLabels));
+    return objs.length ? {
+      index: i,
+      type: g.type,
+      passed: true,
+      message: `${objs.length} ${kind}s in ${ns} are ready`
+    } : {
+      index: i,
+      type: g.type,
+      passed: false,
+      message: `no ${kind} in ${ns} matches ${Object.entries(sel).map(([k, v]) => `${k}=${v}`).join(",")}`
+    };
+  };
+
   // ---- site storage (StorageSiteDeployment, storage.simplyblock.io/v1alpha2) ----
   const nodeSets = hosts => [{
     name: "default",
@@ -12028,12 +12498,40 @@ window.SB_DR = {
       const age = (t - Date.parse(a.metadata.creationTimestamp)) / 1000,
         i = Math.min(ACTION_SEQ.length - 1, Math.floor(age / 8));
       a.status.phase = ACTION_SEQ[i];
-      a.status.steps = ACTION_SEQ.slice(1, i + 1).map((p, j) => ({
-        name: p,
-        result: j < i - 1 || i === ACTION_SEQ.length - 1 ? "Succeeded" : "Running",
-        startTime: iso(Date.parse(a.metadata.creationTimestamp) + (j + 1) * 8000),
-        message: ""
-      }));
+      a.status.steps = ACTION_SEQ.slice(1, i + 1).map((p, j) => {
+        const running = !(j < i - 1 || i === ACTION_SEQ.length - 1),
+          start = Date.parse(a.metadata.creationTimestamp) + (j + 1) * 8000;
+        return {
+          name: p,
+          phase: p,
+          result: running ? "Running" : "Succeeded",
+          startTime: iso(start),
+          endTime: running ? undefined : iso(start + 8000),
+          message: running ? "" : p + " done",
+          progress: running ? `${p}: waiting (${Math.round(age - (j + 1) * 8)}s)` : undefined,
+          lastProgressTime: running ? iso(t) : undefined,
+          deadline: running ? iso(start + 15 * 60000) : undefined
+        };
+      });
+      a.status.log = a.status.steps.flatMap(st => [{
+        time: st.startTime,
+        severity: "Info",
+        step: st.name,
+        source: "workflow",
+        message: `started (${st.phase})`
+      }].concat(st.result === "Running" ? [{
+        time: st.lastProgressTime,
+        severity: "Info",
+        step: st.name,
+        source: "ramen",
+        message: st.progress
+      }] : [{
+        time: st.endTime,
+        severity: "Info",
+        step: st.name,
+        source: "workflow",
+        message: "succeeded: " + st.message
+      }]));
       if (i === ACTION_SEQ.length - 1 && !a.status.completionTime) {
         a.status.completionTime = iso(t);
         a.status.report = {
@@ -12051,12 +12549,40 @@ window.SB_DR = {
       const age = (t - Date.parse(b.metadata.creationTimestamp)) / 1000,
         i = b.spec.abort ? TEST_SEQ.length - 1 : Math.min(TEST_SEQ.length - 1, Math.floor(age / 8));
       b.status.phase = TEST_SEQ[i];
-      b.status.steps = TEST_SEQ.slice(1, i + 1).map((p, j) => ({
-        name: p,
-        result: j < i - 1 || i === TEST_SEQ.length - 1 ? "Succeeded" : "Running",
-        startTime: iso(Date.parse(b.metadata.creationTimestamp) + (j + 1) * 8000),
-        message: ""
-      }));
+      b.status.steps = TEST_SEQ.slice(1, i + 1).map((p, j) => {
+        const running = !(j < i - 1 || i === TEST_SEQ.length - 1),
+          start = Date.parse(b.metadata.creationTimestamp) + (j + 1) * 8000;
+        return {
+          name: p,
+          phase: p,
+          result: running ? "Running" : "Succeeded",
+          startTime: iso(start),
+          endTime: running ? undefined : iso(start + 8000),
+          message: running ? "" : p + " done",
+          progress: running ? `${p}: waiting (${Math.round(age - (j + 1) * 8)}s)` : undefined,
+          lastProgressTime: running ? iso(t) : undefined,
+          deadline: running ? iso(start + 30 * 60000) : undefined
+        };
+      });
+      b.status.log = b.status.steps.flatMap(st => [{
+        time: st.startTime,
+        severity: "Info",
+        step: st.name,
+        source: "workflow",
+        message: `started (${st.phase})`
+      }].concat(st.result === "Running" ? [{
+        time: st.lastProgressTime,
+        severity: "Info",
+        step: st.name,
+        source: "agent",
+        message: st.progress
+      }] : [{
+        time: st.endTime,
+        severity: "Info",
+        step: st.name,
+        source: "workflow",
+        message: "succeeded: " + st.message
+      }]));
       if (i === TEST_SEQ.length - 1 && !b.status.completionTime) {
         b.status.completionTime = iso(t);
         b.status.report = {
@@ -12183,6 +12709,16 @@ window.SB_DR = {
         if (!cluster) return done("Error", "the application does not run anywhere yet (no current cluster); name the site to probe");
         site = (plan.spec.sites.find(x => x.cluster === cluster) || {}).name || "";
       }
+      if (sp.gates && sp.gates.length) {
+        const nss = sp.namespaces && sp.namespaces.length ? sp.namespaces : app ? (app.spec.discovered || {}).protectedNamespaces || [app.metadata.namespace] : [];
+        const gates = sp.gates.map((g, i) => gateAnswer(cluster, g.namespace || nss[0], g, i)),
+          failed = gates.filter(g => !g.passed).length;
+        return done(failed ? "Failed" : "Passed", failed ? `${failed} of ${gates.length} checks failed on ${cluster}` : `${gates.length} checks passed on ${cluster}`, {
+          site,
+          cluster,
+          gates
+        });
+      }
       const probes = sp.probes && sp.probes.length ? sp.probes : app ? (app.spec.health || {}).probes || [] : [];
       if (!probes.length) return done("Error", "the application has no health probes", {
         site,
@@ -12197,6 +12733,138 @@ window.SB_DR = {
       });
     });
   };
+  const answerDHCP = t => store.DHCPProbeRequest.filter(o => !o.status.completedAt && t - Date.parse(o.metadata.creationTimestamp) > 1500).forEach(o => {
+    const at = iso(t),
+      sp = o.spec;
+    if (!STATUS[sp.cluster]) {
+      o.status = {
+        phase: "Error",
+        message: `ManagedCluster ${sp.cluster} is not managed by this hub`,
+        completedAt: at
+      };
+      return;
+    }
+    // apps/backend answers from the in-cluster dnsmasq, apps/mgmt from a corporate server outside the cluster
+    const offers = {
+      "apps/backend": [{
+        serverID: "192.168.110.2",
+        address: "192.168.110.142",
+        subnet: "255.255.255.0",
+        dns: ["192.168.110.2"],
+        domain: "app.lan",
+        leaseSeconds: 3600
+      }],
+      "apps/mgmt": [{
+        serverID: "10.130.0.250",
+        address: "10.130.0.77",
+        subnet: "255.255.255.0",
+        router: ["10.130.0.1"],
+        dns: ["10.0.0.53"],
+        domain: "corp.example",
+        leaseSeconds: 86400
+      }]
+    }[sp.nad] || [];
+    o.status = offers.length ? {
+      phase: "Passed",
+      message: `${offers.length} DHCP servers answered on ${sp.nad}`,
+      completedAt: at,
+      offers
+    } : {
+      phase: "Failed",
+      message: `no DHCP server answered on ${sp.nad} within 6s`,
+      completedAt: at
+    };
+  });
+
+  // a LabelRequest relabels the site's reported objects, as dr-agent would
+  const LABEL_ALLOW = {
+    StorageClass: ["simplyblock.io/replicated", "simplyblock.io/dr", "simplyblock.io/stretch"],
+    Node: ["topology.kubernetes.io/zone", "topology.kubernetes.io/region"],
+    PersistentVolumeClaim: ["app", "storage.simplyblock.io/consistency-group"],
+    VirtualMachine: ["app", "dr.simplyblock.io/tier"],
+    Deployment: ["app", "dr.simplyblock.io/tier"],
+    StatefulSet: ["app", "dr.simplyblock.io/tier"]
+  };
+  const answerLabels = t => store.LabelRequest.filter(o => !o.status.completedAt && t - Date.parse(o.metadata.creationTimestamp) > 1200).forEach(o => {
+    const at = iso(t),
+      st = STATUS[o.spec.cluster];
+    if (!st) {
+      o.status = {
+        phase: "Error",
+        message: `ManagedCluster ${o.spec.cluster} is not managed by this hub`,
+        completedAt: at
+      };
+      return;
+    }
+    const bad = o.spec.changes.map((c, i) => (LABEL_ALLOW[c.kind] || []).includes(c.key) ? null : `change ${i}: ${c.key} on a ${c.kind}`).filter(Boolean);
+    if (bad.length) {
+      o.status = {
+        phase: "Error",
+        message: `refused: ${bad.join("; ")}`,
+        completedAt: at
+      };
+      return;
+    }
+    const results = o.spec.changes.map((c, i) => {
+      let obj = null;
+      if (c.kind === "StorageClass") obj = (st.inventory.storageClasses || []).find(s => s.name === c.name);else if (c.kind === "PersistentVolumeClaim") obj = ((st.workloads.find(n => n.namespace === c.namespace) || {}).pvcs || []).find(p => p.name === c.name);else if (c.kind !== "Node") {
+        const w = ((st.workloads.find(n => n.namespace === c.namespace) || {}).workloads || []).find(x => x.kind === c.kind && x.name === c.name);
+        if (w) {
+          w.objectLabels = w.objectLabels || {};
+          obj = {
+            get labels() {
+              return w.objectLabels;
+            },
+            set labels(x) {
+              w.objectLabels = x;
+            }
+          };
+        }
+      } else {
+        const n = st.inventory.site.nodes.find(x => x.name === c.name);
+        if (n) obj = {
+          labels: {},
+          node: n
+        };
+      }
+      if (!obj) return {
+        index: i,
+        result: "Failed",
+        message: `${c.kind} ${c.namespace ? c.namespace + "/" : ""}${c.name} not found`
+      };
+      if (obj.node) {
+        const f = c.key.endsWith("zone") ? "zone" : "region";
+        const prev = obj.node[f] || "";
+        if (c.remove) delete obj.node[f];else obj.node[f] = c.value;
+        return {
+          index: i,
+          result: "Applied",
+          previous: prev,
+          message: c.remove ? `removed ${c.key}` : `set ${c.key}=${c.value}`
+        };
+      }
+      const labels = Object.assign({}, obj.labels || {});
+      const prev = labels[c.key] || "";
+      if (c.remove) delete labels[c.key];else labels[c.key] = c.value;
+      obj.labels = labels;
+      return {
+        index: i,
+        result: "Applied",
+        previous: prev,
+        message: (c.remove ? `removed ${c.key}` : `set ${c.key}=${c.value}`) + (c.kind === "PersistentVolumeClaim" && c.key === "storage.simplyblock.io/consistency-group" && !c.remove ? "; the volume exists already: the consistency group is a late join, which takes effect only where the volume is on the group's storage node already, or after a live migration" : "")
+      };
+    });
+    const view = store.ManagedClusterView.find(v => v.metadata.namespace === o.spec.cluster);
+    if (view) view.status.result.data["status.json"] = JSON.stringify(st);
+    const failed = results.filter(r => r.result === "Failed").length;
+    o.status = {
+      phase: failed ? "Failed" : "Passed",
+      message: failed ? `${failed} of ${results.length} changes failed on ${o.spec.cluster}` : `${results.length} of ${results.length} changes applied or unchanged`,
+      completedAt: at,
+      results,
+      requestedBy: (o.metadata.annotations || {})["dr.simplyblock.io/created-by"] || ""
+    };
+  });
   const KINDS = Object.keys(store);
   const strip = o => {
     const c = JSON.parse(JSON.stringify(o));
@@ -12208,6 +12876,8 @@ window.SB_DR = {
     list: kind => {
       advance();
       answerProbes(Date.now());
+      answerDHCP(Date.now());
+      answerLabels(Date.now());
       return store[kind].map(strip);
     }
   };
@@ -12241,6 +12911,10 @@ window.SB_DR = {
     if (findRef(kind, m.namespace, m.name)) return {
       err: `${kind.toLowerCase()}s "${m.name}" already exists`,
       reason: "AlreadyExists"
+    };
+    if (kind === "DHCPProbeRequest" && (!sp.cluster || !/^[a-z0-9-]+\/[a-z0-9.-]+$/.test(sp.nad || ""))) return {
+      err: `DHCPProbeRequest.dr.simplyblock.io "${m.name}" is invalid: spec.cluster and spec.nad (<namespace>/<name>) are required`,
+      reason: "Invalid"
     };
     if (kind === "S3ProbeRequest" || kind === "HealthProbeRequest") {
       if (viewer() !== "admin") return {
@@ -12365,7 +13039,7 @@ window.SB_DR = {
       reservations: 0,
       conditions: []
     };
-    if (kind === "S3ProbeRequest" || kind === "HealthProbeRequest") obj.status = {
+    if (kind === "S3ProbeRequest" || kind === "HealthProbeRequest" || kind === "DHCPProbeRequest" || kind === "LabelRequest") obj.status = {
       phase: "Running"
     };
     if (kind === "StorageSiteDeployment") obj.status = {
