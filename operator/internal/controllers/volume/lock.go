@@ -1,5 +1,9 @@
-// Mutual exclusion between two operations on one volume, through an annotation
-// on the volume.
+// Mutual exclusion between two operations on one NVMe-oF subsystem, through an
+// annotation on every volume of it.
+//
+// The subsystem rather than the volume is the unit, because the control plane
+// migrates a subsystem: an operation naming one volume moves every volume
+// published beside it, so the lock is taken on all of them.
 //
 // Every other Ops kind in this group takes status.activeOpsRef on its target. A
 // PersistentVolume is a core type this operator does not define and must not
@@ -21,18 +25,57 @@ package volume
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
+	"sort"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/simplyblock/atlas/lvol"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// acquireLock takes the volume's lock for this operation, and reports whether
-// it now holds it.
+// lockOutcome is what one attempt at the lock found: whether the operation now
+// holds it, and, when another operation is in the way, which one and on which
+// volume, which is what the waiting operation reports.
+type lockOutcome struct {
+	acquired bool
+	holder   string
+	volume   string
+}
+
+// acquireLock takes the lock on every volume of the named volume's subsystem
+// for this operation, and reports whether it now holds all of them.
+//
+// The subsystem is the unit because it is what the control plane migrates:
+// every volume published under it moves at the one cutover, so an operation
+// naming one of them is moving all of them, and an operation naming another
+// may not run beside it. Locking only the named volume let two operations on
+// siblings each ask for the whole subsystem to be moved.
+//
+// The volumes are taken in name order and all or nothing. A volume held by a
+// live operation releases whatever this pass took and waits, so a queued
+// operation holds nothing; the common order is what keeps two operations that
+// both need one subsystem from each holding half of it.
+//
+// An operation already past Pending holds its subsystem, because it was
+// admitted holding all of it and only its own terminal path releases any of
+// it. Re-reading the membership on every pass would cost two control-plane
+// calls per pass of an operation that can run for hours, to learn nothing, so
+// it only confirms its named volume's lock, through the uncached reader when
+// the cache has not caught up with its own write. It never gives a lock back
+// here: a running migration that dropped its locks would let a sibling's
+// operation move the subsystem underneath it.
+//
+// Every volume is read through the uncached reader before it is patched, so a
+// patch is never made against a copy the cache has not updated, and a conflict
+// means another writer rather than this operation's own earlier write.
 //
 // A lock another operation holds is waited on rather than failed, which is what
 // lets this kind queue like the rest of the group: a drain fanning out fifty
@@ -42,24 +85,90 @@ func (r *PersistentVolumeOpsReconciler) acquireLock(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.PersistentVolumeOps,
 	pv *corev1.PersistentVolume,
-) (bool, error) {
-	held := pv.Annotations[simplyblockv1alpha2.PersistentVolumeOpsLock]
-	if held == ops.Name {
-		return true, nil
-	}
-
-	if held != "" {
-		takeable, err := r.lockIsStale(ctx, held)
-		if err != nil || !takeable {
-			return false, err
+) (lockOutcome, error) {
+	if ops.Status.Step.State != "" {
+		held, err := r.holdsNamedVolume(ctx, ops, pv)
+		if err != nil || held {
+			return lockOutcome{acquired: held}, err
 		}
 	}
 
-	// The optimistic lock is what makes this a lock at all: two reconcilers
-	// that both read the annotation free patch the same resourceVersion, and
-	// one of them gets a 409 and comes back to find the volume taken. It is
-	// also what keeps two reconcilers from both breaking a stale lock and both
-	// concluding they won.
+	volumes, err := r.subsystemVolumes(ctx, pv)
+	if err != nil {
+		return lockOutcome{}, err
+	}
+
+	for _, volume := range volumes {
+		held := volume.Annotations[simplyblockv1alpha2.PersistentVolumeOpsLock]
+		if held == ops.Name {
+			continue
+		}
+		if held != "" {
+			takeable, err := r.lockIsStale(ctx, held)
+			if err != nil {
+				return lockOutcome{}, r.abandonAcquisition(ctx, ops, err)
+			}
+			if !takeable {
+				return lockOutcome{holder: held, volume: volume.Name}, r.abandonAcquisition(ctx, ops, nil)
+			}
+		}
+		taken, err := r.lockVolume(ctx, ops, volume)
+		if err != nil {
+			return lockOutcome{}, r.abandonAcquisition(ctx, ops, err)
+		}
+		if !taken {
+			return lockOutcome{}, r.abandonAcquisition(ctx, ops, nil)
+		}
+	}
+	return lockOutcome{acquired: true}, nil
+}
+
+// holdsNamedVolume reports whether the named volume's lock names this
+// operation, from the caller's copy and, when that copy says otherwise, from
+// the uncached reader: the cache can lag the operation's own acquisition.
+func (r *PersistentVolumeOpsReconciler) holdsNamedVolume(
+	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, pv *corev1.PersistentVolume,
+) (bool, error) {
+	if pv.Annotations[simplyblockv1alpha2.PersistentVolumeOpsLock] == ops.Name {
+		return true, nil
+	}
+	var fresh corev1.PersistentVolume
+	if err := r.Reader.Get(ctx, types.NamespacedName{Name: pv.Name}, &fresh); err != nil {
+		return false, fmt.Errorf("read volume %s to confirm its lock: %w", pv.Name, err)
+	}
+	return fresh.Annotations[simplyblockv1alpha2.PersistentVolumeOpsLock] == ops.Name, nil
+}
+
+// abandonAcquisition ends an acquisition that did not complete, and returns
+// cause joined with whatever giving back the partial lock cost.
+//
+// An operation still Pending gives back every volume it took, so a queued
+// operation never holds part of a subsystem. One past Pending gives back
+// nothing, because the locks it holds are what protect its running migration.
+func (r *PersistentVolumeOpsReconciler) abandonAcquisition(
+	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, cause error,
+) error {
+	if ops.Status.Step.State != "" {
+		return cause
+	}
+	if err := r.releaseLock(ctx, ops); err != nil {
+		return errors.Join(cause, fmt.Errorf("give back the partial lock of %s: %w", ops.Name, err))
+	}
+	return cause
+}
+
+// lockVolume writes this operation's name onto one volume, and reports whether
+// the write landed.
+//
+// The optimistic lock is what makes this a lock at all: two reconcilers that
+// both read the annotation free patch the same resourceVersion, and one of them
+// gets a 409 and comes back to find the volume taken. It is also what keeps two
+// reconcilers from both breaking a stale lock and both concluding they won.
+func (r *PersistentVolumeOpsReconciler) lockVolume(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.PersistentVolumeOps,
+	pv *corev1.PersistentVolume,
+) (bool, error) {
 	patch := client.MergeFromWithOptions(pv.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	if pv.Annotations == nil {
 		pv.Annotations = map[string]string{}
@@ -75,6 +184,56 @@ func (r *PersistentVolumeOpsReconciler) acquireLock(
 		return false, fmt.Errorf("take the lock on volume %s: %w", pv.Name, err)
 	}
 	return true, nil
+}
+
+// subsystemVolumes is every PersistentVolume fronting a volume of the named
+// volume's subsystem, the named one included, sorted by name.
+//
+// Membership is the control plane's: the volume's own record names the
+// subsystem, and the subsystem's members are listed across every pool, then
+// mapped back to PersistentVolumes through their CSI handles. A volume the
+// control plane reports under no subsystem is a subsystem of its own. A
+// member with no PersistentVolume is not one this operator can lock, and it
+// does not need to be: nothing here would migrate it on its own.
+func (r *PersistentVolumeOpsReconciler) subsystemVolumes(
+	ctx context.Context, pv *corev1.PersistentVolume,
+) ([]*corev1.PersistentVolume, error) {
+	alone := []*corev1.PersistentVolume{pv}
+	if pv.Spec.CSI == nil {
+		return alone, nil
+	}
+	handle, ok := lvol.ParseHandle(lvol.VolumeHandle(pv.Spec.CSI.VolumeHandle))
+	if !ok {
+		return alone, nil
+	}
+
+	volume, err := r.API.Volume(ctx, handle.Handle())
+	if err != nil {
+		return nil, fmt.Errorf("read volume %s to find its subsystem: %w", handle.VolumeID, err)
+	}
+	if volume.NQN == "" {
+		return alone, nil
+	}
+	members, err := r.API.SubsystemVolumes(ctx, handle.ClusterID, volume.NQN)
+	if err != nil {
+		return nil, fmt.Errorf("list the volumes of subsystem %s: %w", volume.NQN, err)
+	}
+
+	// Every copy, the named volume's included, comes from the uncached
+	// listing, so a patch is made against what the API server holds.
+	out, err := r.volumesFronting(ctx, expectedMembers(members, handle.VolumeID))
+	if err != nil {
+		return nil, err
+	}
+	if !slices.ContainsFunc(out, func(other *corev1.PersistentVolume) bool { return other.Name == pv.Name }) {
+		var fresh corev1.PersistentVolume
+		if err := r.Reader.Get(ctx, types.NamespacedName{Name: pv.Name}, &fresh); err != nil {
+			return nil, fmt.Errorf("read volume %s: %w", pv.Name, err)
+		}
+		out = append(out, &fresh)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
 }
 
 // lockIsStale reports whether a lock naming another operation may be broken.
@@ -98,13 +257,22 @@ func (r *PersistentVolumeOpsReconciler) lockIsStale(ctx context.Context, held st
 	}
 }
 
-// releaseLock clears the volume's lock, and only while it still names this
-// operation.
+// releaseLock clears this operation's lock from every volume carrying it, and
+// only from those.
+//
+// The volumes are found by the lock itself rather than by the subsystem's
+// membership, because membership is the control plane's and can change while
+// an operation runs, while the annotation is exactly what this operation took.
+// They are found through the uncached reader, because a release that runs
+// right after an acquisition, to give back a partial lock, would not find in
+// the cache the annotations it had just written.
 //
 // The ownership check is the whole of the safety. A pass that started before
 // the lock changed hands would otherwise clear a lock somebody else now holds,
 // which is worse than not releasing at all: two operations would then be
-// copying one logical volume to two places with neither of them knowing.
+// copying one logical volume to two places with neither of them knowing. A
+// conflict is not a release: the volume is read again, its ownership checked
+// again, and the patch retried.
 //
 // A volume that is gone is not an error. It took its lock with it, which is the
 // state being asked for, and this runs on the deletion path where a failure
@@ -112,23 +280,30 @@ func (r *PersistentVolumeOpsReconciler) lockIsStale(ctx context.Context, held st
 func (r *PersistentVolumeOpsReconciler) releaseLock(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps,
 ) error {
-	var pv corev1.PersistentVolume
-	err := r.Get(ctx, types.NamespacedName{Name: ops.Spec.PersistentVolumeName}, &pv)
-	switch {
-	case apierrors.IsNotFound(err):
-		return nil
-	case err != nil:
-		return fmt.Errorf("read volume %s to release its lock: %w", ops.Spec.PersistentVolumeName, err)
+	var volumes corev1.PersistentVolumeList
+	if err := r.Reader.List(ctx, &volumes); err != nil {
+		return fmt.Errorf("list the volumes to release the lock of %s: %w", ops.Name, err)
 	}
-
-	if pv.Annotations[simplyblockv1alpha2.PersistentVolumeOpsLock] != ops.Name {
-		return nil
-	}
-
-	patch := client.MergeFromWithOptions(pv.DeepCopy(), client.MergeFromWithOptimisticLock{})
-	delete(pv.Annotations, simplyblockv1alpha2.PersistentVolumeOpsLock)
-	if err := r.Patch(ctx, &pv, patch); err != nil && !apierrors.IsConflict(err) {
-		return fmt.Errorf("release the lock on volume %s: %w", pv.Name, err)
+	for i := range volumes.Items {
+		name := volumes.Items[i].Name
+		if volumes.Items[i].Annotations[simplyblockv1alpha2.PersistentVolumeOpsLock] != ops.Name {
+			continue
+		}
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			var pv corev1.PersistentVolume
+			if err := r.Reader.Get(ctx, types.NamespacedName{Name: name}, &pv); err != nil {
+				return err
+			}
+			if pv.Annotations[simplyblockv1alpha2.PersistentVolumeOpsLock] != ops.Name {
+				return nil
+			}
+			patch := client.MergeFromWithOptions(pv.DeepCopy(), client.MergeFromWithOptimisticLock{})
+			delete(pv.Annotations, simplyblockv1alpha2.PersistentVolumeOpsLock)
+			return r.Patch(ctx, &pv, patch)
+		})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("release the lock on volume %s: %w", name, err)
+		}
 	}
 	return nil
 }

@@ -15,6 +15,7 @@
 package cluster
 
 import (
+	"fmt"
 	"testing"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -47,7 +48,7 @@ func TestThePhaseReadsTheControlPlanesLifecycle(t *testing.T) {
 		{"something_new", simplyblockv1alpha2.StorageClusterPhaseUnavailable},
 	} {
 		t.Run(tc.status, func(t *testing.T) {
-			if got := phaseFor(tc.status, false); got != tc.want {
+			if got := phaseFor(tc.status, false, false); got != tc.want {
 				t.Errorf("phaseFor(%q) = %q, want %q", tc.status, got, tc.want)
 			}
 		})
@@ -70,8 +71,36 @@ func TestARebalanceIsReadOverTheServingStatusesOnly(t *testing.T) {
 		{"something_new", simplyblockv1alpha2.StorageClusterPhaseUnavailable},
 	} {
 		t.Run(tc.status, func(t *testing.T) {
-			if got := phaseFor(tc.status, true); got != tc.want {
+			if got := phaseFor(tc.status, true, false); got != tc.want {
 				t.Errorf("phaseFor(%q, rebalancing) = %q, want %q", tc.status, got, tc.want)
+			}
+		})
+	}
+}
+
+// Regression: 2026-10-02-cluster-shrinking-reads-degraded: while a node was being
+// removed the cluster showed Degraded and Rebalancing in turn, because the control
+// plane degrades it for the removal and rebalances onto the peers. The removal is
+// the cause of both, and it is the one operation the phase did not name.
+func TestARemovalInProgressReadsAsShrinking(t *testing.T) {
+	for _, tc := range []struct {
+		status      string
+		rebalancing bool
+		want        simplyblockv1alpha2.StorageClusterPhase
+	}{
+		{"active", false, simplyblockv1alpha2.StorageClusterPhaseShrinking},
+		{"active", true, simplyblockv1alpha2.StorageClusterPhaseShrinking},
+		{"degraded", false, simplyblockv1alpha2.StorageClusterPhaseShrinking},
+		{"degraded", true, simplyblockv1alpha2.StorageClusterPhaseShrinking},
+		{"read_only", false, simplyblockv1alpha2.StorageClusterPhaseShrinking},
+		{"suspended", false, simplyblockv1alpha2.StorageClusterPhaseSuspended},
+		{"in_activation", false, simplyblockv1alpha2.StorageClusterPhaseActivating},
+		{"something_new", false, simplyblockv1alpha2.StorageClusterPhaseUnavailable},
+	} {
+		t.Run(fmt.Sprintf("%s/rebalancing=%t", tc.status, tc.rebalancing), func(t *testing.T) {
+			if got := phaseFor(tc.status, tc.rebalancing, true); got != tc.want {
+				t.Errorf("phaseFor(%q, rebalancing=%t, shrinking) = %q, want %q",
+					tc.status, tc.rebalancing, got, tc.want)
 			}
 		})
 	}

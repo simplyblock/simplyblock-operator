@@ -41,6 +41,11 @@ type NodeDTO struct {
 	LvolPort      int32  `json:"lvol_subsys_port"`
 	NVMeOFPort    int32  `json:"nvmf_port"`
 	FailureDomain int    `json:"failure_domain"`
+
+	// SecondaryNodeID and TertiaryNodeID are the nodes holding this node's
+	// lvstore replicas, empty when it has none.
+	SecondaryNodeID string `json:"secondary_node_id"`
+	TertiaryNodeID  string `json:"tertiary_node_id"`
 }
 
 // NodeSubscription streams a cluster's storage nodes, decodes them into an

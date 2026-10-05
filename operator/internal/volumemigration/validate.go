@@ -3,6 +3,7 @@ package volumemigration
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/nvmeof"
@@ -135,6 +136,28 @@ func EnsureMigrationPaths(ctx context.Context, sysRoot string, conns []Connectio
 		}
 	}
 	return nil
+}
+
+// pathSettleTimeout bounds the wait for a migration's freshly connected paths
+// to serve every namespace of their subsystem. The kernel attaches a
+// subsystem's namespaces to a new controller one by one after the connect
+// returns, which takes seconds for a large subsystem on a loaded host; a path
+// that has not settled by then is left for the verification to name.
+const pathSettleTimeout = 15 * time.Second
+
+// SettleMigrationPaths waits, for at most pathSettleTimeout, until every live
+// path of the subsystem nqn serves every namespace the subsystem exports.
+//
+// It runs between the connect and the verification, because a path whose
+// namespace scan is still running looks exactly like a path that will never
+// serve them, and the verification would spend an attempt on it or, with a
+// slow enough scan, fail the migration. A wait that runs out is returned as an
+// error and decides nothing: the verification still runs and reports the
+// defect.
+func SettleMigrationPaths(ctx context.Context, sysRoot, nqn string) error {
+	ctx, cancel := context.WithTimeout(ctx, pathSettleTimeout)
+	defer cancel()
+	return nvmeof.WaitForPathsToServe(ctx, resolver(sysRoot), nqn)
 }
 
 // subsystemOrder returns the distinct NQNs of conns, in first-seen order.

@@ -114,7 +114,7 @@ func (c *Client) ListBackups(ctx context.Context, clusterID string) ([]Backup, e
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.api.ClustersBackupsListApiV2ClustersClusterIdBackupsGetWithResponse(ctx, cluster)
+	resp, err := c.api.ClustersBackupsListApiV2ClustersClusterIdBackupsGetWithResponse(ctx, cluster, nil)
 	if err != nil {
 		return nil, fmt.Errorf("list backups in %s: %w", clusterID, err)
 	}
@@ -173,7 +173,7 @@ func (c *Client) ListBackupPolicies(ctx context.Context, clusterID string) ([]Ba
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.api.ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetWithResponse(ctx, cluster)
+	resp, err := c.api.ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetWithResponse(ctx, cluster, nil)
 	if err != nil {
 		return nil, fmt.Errorf("list backup policies in %s: %w", clusterID, err)
 	}

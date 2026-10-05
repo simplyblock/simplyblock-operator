@@ -38,10 +38,11 @@ const (
 	stepDeparting        = simplyblockv1alpha2.StorageNodeOpsStepDeparting
 	stepAwaiting         = simplyblockv1alpha2.StorageNodeOpsStepAwaiting
 	stepValidating       = simplyblockv1alpha2.StorageNodeOpsStepValidating
-	stepSuspending       = simplyblockv1alpha2.StorageNodeOpsStepSuspending
+	stepMigratingDevices = simplyblockv1alpha2.StorageNodeOpsStepMigratingDevices
 	stepMigratingVolumes = simplyblockv1alpha2.StorageNodeOpsStepMigratingVolumes
 	stepVerifying        = simplyblockv1alpha2.StorageNodeOpsStepVerifying
 	stepRemoving         = simplyblockv1alpha2.StorageNodeOpsStepRemoving
+	stepAwaitingRemoval  = simplyblockv1alpha2.StorageNodeOpsStepAwaitingRemoval
 	stepPreparing        = simplyblockv1alpha2.StorageNodeOpsStepPreparing
 	stepRelocating       = simplyblockv1alpha2.StorageNodeOpsStepRelocating
 	stepAwaitingNode     = simplyblockv1alpha2.StorageNodeOpsStepAwaitingNode
@@ -87,12 +88,41 @@ const (
 	// the call, so a node still online minutes later is one whose restart the
 	// control plane dropped, and this is the budget that turns an invisible
 	// refusal into a failed operation with a reason.
-	departingDeadline   = 5 * time.Minute
-	validatingDeadline  = 24 * time.Hour
-	suspendingDeadline  = 15 * time.Minute
-	migratingDeadline   = 12 * time.Hour
-	verifyingDeadline   = 30 * time.Minute
-	removingDeadline    = 30 * time.Minute
+	departingDeadline  = 5 * time.Minute
+	validatingDeadline = 24 * time.Hour
+	migratingDeadline  = 12 * time.Hour
+	verifyingDeadline  = 30 * time.Minute
+
+	// removingDeadline bounds the node DELETE, including a DELETE the control
+	// plane defers because the cluster is still settling (RemovalDeferred). A
+	// drain ends with the cluster rebalancing after its own migrations, and the
+	// data realignment the operator triggers after them has been measured
+	// blocking the cluster for 15 to 42 minutes, so the budget leaves room for
+	// one of those twice over.
+	removingDeadline = 2 * time.Hour
+
+	// awaitingRemovalDeadline bounds the control plane's own removal, which
+	// rebuilds the node's devices onto its peers and migrates its volumes and
+	// takes as long as that data takes to move. It is a budget without progress
+	// rather than a total: every change of the node's status or of a device's
+	// moves it a whole budget out again (recordRemovalProgress). The control
+	// plane gives up on a removal after six hours and reports removed_failed,
+	// which this operation reads as its failure, so a budget past that is the
+	// backstop for a control plane that stopped reporting.
+	awaitingRemovalDeadline = 7 * time.Hour
+
+	// shuttingDownDeadline bounds a node being taken down: by the host
+	// maintenance's own shutdown, or by the removal's prepare-removal, which
+	// shuts the node down before it answers.
+	shuttingDownDeadline = 15 * time.Minute
+
+	// migratingDevicesDeadline bounds the control plane's rebuild of a departing
+	// node's devices onto its peers. Like awaitingRemovalDeadline it is a budget
+	// without progress: every change of the node's status or of a device's
+	// moves it a whole budget out again (recordRemovalProgress), so a rebuild
+	// that keeps moving is waited on for as long as it moves.
+	migratingDevicesDeadline = 7 * time.Hour
+
 	preparingDeadline   = 15 * time.Minute
 	relocatingDeadline  = 15 * time.Minute
 	nodeRestartDeadline = 45 * time.Minute
@@ -188,41 +218,43 @@ func graphs() statemachine.MultiConfig[step] {
 		action(simplyblockv1alpha2.StorageNodeOpsActionSuspend):  requestAndWait(),
 		action(simplyblockv1alpha2.StorageNodeOpsActionResume):   requestAndWait(),
 
-		// Validation runs before the suspend, and that ordering is the design: a
-		// suspended node accepts no new volume placement, so suspending one whose
-		// drain cannot complete takes capacity out of the cluster and leaves it
-		// out for as long as the blocker goes unnoticed (§8.2).
+		// Validation runs before prepare-removal, and that ordering is the
+		// design: from prepare-removal on there is no way back, so a drain that
+		// cannot complete is held while the node is still fully operational,
+		// and somebody decides what to do about the blocker (§8.2).
 		action(simplyblockv1alpha2.StorageNodeOpsActionRemove): {
 			Initial: stepValidating,
 			States: map[step]statemachine.StateDef[step]{
 				// Validating performs no side effect at all, which is what makes
-				// an abort there an Aborted directly rather than an unwind. The
-				// three steps past the suspend are abortable because their
-				// unwind exists: the resume the graph already performs on every
-				// other terminal outcome from Suspending onward (§8.3).
-				// Removing is not, because the node is being taken out of the
-				// cluster and there is no resume that puts it back.
+				// an abort there an Aborted directly. It is the only abortable
+				// step: ShuttingDown takes the node down, after which the
+				// removal takes it out of the cluster and nothing puts it back.
 				stepValidating: {
-					To:        []step{stepSuspending},
+					To:        []step{stepShuttingDown},
 					Abortable: true,
 					OnEnter:   deadline[step](validatingDeadline),
 				},
-				stepSuspending: {
-					To:        []step{stepMigratingVolumes},
-					Abortable: true,
-					OnEnter:   deadline[step](suspendingDeadline),
+				stepShuttingDown: {
+					To:      []step{stepMigratingDevices},
+					OnEnter: deadline[step](shuttingDownDeadline),
+				},
+				stepMigratingDevices: {
+					To:      []step{stepMigratingVolumes},
+					OnEnter: deadline[step](migratingDevicesDeadline),
 				},
 				stepMigratingVolumes: {
-					To:        []step{stepVerifying},
-					Abortable: true,
-					OnEnter:   deadline[step](migratingDeadline),
+					To:      []step{stepVerifying},
+					OnEnter: deadline[step](migratingDeadline),
 				},
 				stepVerifying: {
-					To:        []step{stepRemoving},
-					Abortable: true,
-					OnEnter:   deadline[step](verifyingDeadline),
+					To:      []step{stepRemoving},
+					OnEnter: deadline[step](verifyingDeadline),
 				},
-				stepRemoving: {OnEnter: deadline[step](removingDeadline)},
+				stepRemoving: {
+					To:      []step{stepAwaitingRemoval},
+					OnEnter: deadline[step](removingDeadline),
+				},
+				stepAwaitingRemoval: {OnEnter: deadline[step](awaitingRemovalDeadline)},
 			},
 		},
 
@@ -272,7 +304,7 @@ func graphs() statemachine.MultiConfig[step] {
 				},
 				stepShuttingDown: {
 					To:      []step{stepReleasing},
-					OnEnter: deadline[step](suspendingDeadline),
+					OnEnter: deadline[step](shuttingDownDeadline),
 				},
 				stepReleasing: {
 					To:      []step{stepAwaitingHost},
@@ -364,16 +396,17 @@ var stepBudgets = map[step]time.Duration{
 	stepDeparting:        departingDeadline,
 	stepAwaiting:         awaitingDeadline,
 	stepValidating:       validatingDeadline,
-	stepSuspending:       suspendingDeadline,
+	stepMigratingDevices: migratingDevicesDeadline,
 	stepMigratingVolumes: migratingDeadline,
 	stepVerifying:        verifyingDeadline,
 	stepRemoving:         removingDeadline,
+	stepAwaitingRemoval:  awaitingRemovalDeadline,
 	stepPreparing:        preparingDeadline,
 	stepRelocating:       relocatingDeadline,
 	stepAwaitingNode:     nodeRestartDeadline,
 	stepPromoting:        promotingDeadline,
 	stepHolding:          holdingDeadline,
-	stepShuttingDown:     suspendingDeadline,
+	stepShuttingDown:     shuttingDownDeadline,
 	stepReleasing:        releasingDeadline,
 	stepAwaitingHost:     awaitingHostDeadline,
 	stepRestarting:       nodeRestartDeadline,
@@ -401,19 +434,6 @@ var stepBudgets = map[step]time.Duration{
 // this reads the graphs rather than the machine the reconciler holds.
 func UnabortableSteps() []step {
 	return statemachine.UnabortableMultiStates(graphs())
-}
-
-// unwinds reports whether an abort or a failure from this step owes the node a
-// resume before the operation ends. Everything from Suspending onward in a drain
-// does: the node is not serving, and an operation that stopped there and left it
-// that way would take capacity out of the cluster indefinitely (§8.3).
-func unwinds(current step) bool {
-	switch current {
-	case stepSuspending, stepMigratingVolumes, stepVerifying, stepRemoving:
-		return true
-	default:
-		return false
-	}
 }
 
 // action converts the API's action enum into the MultiConfig's key. The

@@ -91,10 +91,9 @@ func HostHasSurvivingSibling(
 // RemovalBalanceViolation validates a set of post-removal per-domain host
 // counts against the balance rule and per-domain floor the backend enforces in
 // simplyblock_core's fd_balance_violation, which check_fd_admission_for_remove
-// calls. It is mirrored here so the drain reconciler can refuse to suspend a
-// node whose removal is already known to violate the rule, rather than
-// discovering that only after the node is suspended and the DELETE made much
-// later in the drain is rejected.
+// calls. It is mirrored here so the drain can hold in Validating a node whose
+// removal is already known to violate the rule, rather than discovering it in
+// prepare-removal with the node already shut down.
 //
 // counts must already reflect the removal, with the affected domain's count
 // decremented by the caller, and must still carry an entry — even a zero one —
