@@ -92,7 +92,14 @@ const (
 	validatingDeadline = 24 * time.Hour
 	migratingDeadline  = 12 * time.Hour
 	verifyingDeadline  = 30 * time.Minute
-	removingDeadline   = 30 * time.Minute
+
+	// removingDeadline bounds the node DELETE, including a DELETE the control
+	// plane defers because the cluster is still settling (RemovalDeferred). A
+	// drain ends with the cluster rebalancing after its own migrations, and the
+	// data realignment the operator triggers after them has been measured
+	// blocking the cluster for 15 to 42 minutes, so the budget leaves room for
+	// one of those twice over.
+	removingDeadline = 2 * time.Hour
 
 	// awaitingRemovalDeadline bounds the control plane's own removal, which
 	// rebuilds the node's devices onto its peers and migrates its volumes and

@@ -526,6 +526,12 @@ Files: `operator/internal/controllers/node/drain_test.go`, `peertargets_test.go`
 | U-472 | A pass that records progress writes the extended deadline in the same patch, so a lost write loses both or neither (PR #612 review)                         | Regression | `TestProgressAndItsDeadlineAreWrittenTogether`                                                                                                          |
 | U-479 | A waiting pass keeps the claim its call took, so a second pass within the lease sends nothing                                                               | Regression | `TestAWaitingPassKeepsTheClaimItsCallTook`                                                                                                              |
 | U-504 | A maintenance window on a node leaving the cluster guards the worker and sends the node no shutdown and no restart (2026-10-05-maintenance-touches-removal) | Regression | `TestAMaintenanceWindowSendsNothingToANodeLeavingTheCluster`                                                                                            |
+| U-493 | A DELETE refused without a reason while the cluster is rebalancing or not active holds with `RemovalDeferred` (2026-10-05-removal-refusal-read-as-final)    | Regression | `TestADeleteRefusedWhileTheClusterIsBusyWaits`                                                                                                          |
+| U-494 | A DELETE refused without a reason on a settled cluster fails the operation                                                                                  | Negative   | `TestABareDeleteRefusalOnASettledClusterIsFinal`                                                                                                        |
+| U-495 | A DELETE refused for a reason that passes by itself (an active task, a peer down) holds, naming the reason                                                  | Regression | `TestADeleteRefusedForAReasonThatPassesWaits`                                                                                                           |
+| U-496 | A refusal for a reason that does not pass is final, even while the cluster is busy                                                                          | Negative   | `TestARefusalForAReasonThatDoesNotPassIsFinal`                                                                                                          |
+| U-497 | `prepare-removal` refused while the cluster is still rebalancing holds rather than leaving the node offline                                                 | Regression | `TestAnAdmissionRefusedForAReasonThatPassesWaits`                                                                                                       |
+| U-512 | A DELETE refused without a reason on a cluster degraded only by this removal is final (2026-10-06-bare-refusal-held-on-own-degradation)                     | Regression | `TestABareDeleteRefusalOnAClusterDegradedOnlyByThisRemovalIsFinal`                                                                                      |
 | U-473 | `MigratingDevices` sends `prepare-removal` once the node is offline (2026-10-02)                                                                            | Positive   | `TestMigratingDevicesPreparesTheRemovalOfAnOfflineNode`                                                                                                 |
 | U-474 | A refused admission fails the operation and says the node is left offline for a Restart (2026-10-02)                                                        | Regression | `TestARefusedAdmissionEndsTheDrainAndSaysTheNodeIsOffline`                                                                                              |
 | U-475 | Nothing is sent while the node is still online, suspended, or `in_shutdown`                                                                                 | Negative   | `TestMigratingDevicesWaitsForTheShutdownToLand`                                                                                                         |
@@ -993,17 +999,17 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 409       | 304     | 105         |
+| Unit        | 415       | 310     | 105         |
 | Integration | 54        | 0       | 54          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **494**   | **304** | **190**     |
+| **Total**   | **500**   | **310** | **190**     |
 
 Eight further scenarios are struck through: they describe a system this one no
 longer is, and each names the row that replaced it. They are excluded from the
 counts.
 
-Two hundred and twenty-four distinct test functions cover the three hundred and four
+Two hundred and thirty distinct test functions cover the three hundred and ten
 covered scenarios, because a table-driven test satisfies one identifier per
 subtest and several rows are two halves of one assertion.
 

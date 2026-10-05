@@ -88,6 +88,12 @@ const (
 	// against a fresh target.
 	MigrationRetried = "MigrationRetried"
 
+	// RemovalDeferred says the control plane refused prepare-removal or the
+	// node DELETE for a reason that passes by itself, such as a cluster still
+	// rebalancing or an active task on the node, and the operation asks again
+	// rather than failing.
+	RemovalDeferred = "RemovalDeferred"
+
 	// DrainCompleted says every volume has been migrated off the node.
 	DrainCompleted = "DrainCompleted"
 
