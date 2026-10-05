@@ -551,24 +551,31 @@ Files: `operator/internal/controllers/node/drain_test.go`, `peertargets_test.go`
 
 ### Operation: The Fan-Out (design §8.4)
 
-Files: `operator/internal/controllers/node/drain_test.go`, `remove_fanout_test.go`
+Files: `operator/internal/controllers/node/drain_test.go`, `remove_fanout_test.go`, `subsystem_drain_test.go`,
+`operator/internal/volumemigration/mover_test.go`
 
-| #     | Scenario                                                                                                 | Type       | Test                                                      |
-|-------|----------------------------------------------------------------------------------------------------------|------------|-----------------------------------------------------------|
-| U-170 | Generated migration names are valid DNS labels                                                           | Positive   | `TestEveryMovableVolumeIsGivenAMove`                      |
-| U-171 | Two long volume names sharing a prefix produce distinct migration names                                  | Boundary   | —                                                         |
-| U-172 | An operator restart mid-drain does not recreate existing migration objects                               | Negative   | `TestAVolumeAlreadyMovingIsNotGivenASecondMove`           |
-| U-173 | A completed migration is deleted and the counter is written first                                        | Positive   | `TestFinishedMovesAreRecordedAndThenReaped`               |
-| U-174 | A failed migration is deleted and replaced against a fresh target                                        | Positive   | `TestAFailedMoveIsRetriedRatherThanFailingTheDrain`       |
-| U-175 | A migration deleted out of band is recreated rather than counted as complete                             | Negative   | `TestEveryMovableVolumeIsGivenAMove`                      |
-| U-176 | Every migration carries `spec.creatorRef` with the operation's UID                                       | Positive   | `TestTheFanOutRecordsItsCreatorWithoutOwningTheOperation` |
-| U-177 | The same volume name in two namespaces produces two distinct objects                                     | Boundary   | —                                                         |
-| U-248 | Every migration carries `storage.simplyblock.io/drain-node`, and a `List` on the label finds the fan-out | Positive   | `TestTheFanOutIsFoundAgainByItsLabel`                     |
-| U-342 | The cluster-scoped kind carries no owner reference, which garbage collection would follow                | Regression | `TestTheFanOutRecordsItsCreatorWithoutOwningTheOperation` |
-| U-343 | With the registered kind in use, the move is owned by the drain as it always was                         | Positive   | `TestTheLegacyFanOutIsStillOwnedByItsDrain`               |
-| U-344 | Deleting a drain reaps the fan-out it raised                                                             | Positive   | `TestDeletingADrainStopsWhatItFannedOut`                  |
-| U-345 | A move still copying holds the deletion rather than being reaped mid-copy                                | Negative   | `TestADrainBeingDeletedWaitsForAMoveStillRunning`         |
-| U-346 | A retried move is announced, so a drain that keeps retrying is not read as stalled                       | Positive   | `TestAFailedMoveIsRetriedRatherThanFailingTheDrain`       |
+| #     | Scenario                                                                                                                                 | Type       | Test                                                         |
+|-------|------------------------------------------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------------|
+| U-170 | Generated migration names are valid DNS labels                                                                                           | Positive   | `TestEveryMovableVolumeIsGivenAMove`                         |
+| U-171 | Two long volume names sharing a prefix produce distinct migration names                                                                  | Boundary   | —                                                            |
+| U-172 | An operator restart mid-drain does not recreate existing migration objects                                                               | Negative   | `TestAVolumeAlreadyMovingIsNotGivenASecondMove`              |
+| U-173 | A completed migration is deleted and the counter is written first                                                                        | Positive   | `TestFinishedMovesAreRecordedAndThenReaped`                  |
+| U-174 | A failed migration is deleted and replaced against a fresh target                                                                        | Positive   | `TestAFailedMoveIsRetriedRatherThanFailingTheDrain`          |
+| U-175 | A migration deleted out of band is recreated rather than counted as complete                                                             | Negative   | `TestEveryMovableVolumeIsGivenAMove`                         |
+| U-176 | Every migration carries `spec.creatorRef` with the operation's UID                                                                       | Positive   | `TestTheFanOutRecordsItsCreatorWithoutOwningTheOperation`    |
+| U-177 | The same volume name in two namespaces produces two distinct objects                                                                     | Boundary   | —                                                            |
+| U-248 | Every migration carries `storage.simplyblock.io/drain-node`, and a `List` on the label finds the fan-out                                 | Positive   | `TestTheFanOutIsFoundAgainByItsLabel`                        |
+| U-342 | The cluster-scoped kind carries no owner reference, which garbage collection would follow                                                | Regression | `TestTheFanOutRecordsItsCreatorWithoutOwningTheOperation`    |
+| U-343 | With the registered kind in use, the move is owned by the drain as it always was                                                         | Positive   | `TestTheLegacyFanOutIsStillOwnedByItsDrain`                  |
+| U-344 | Deleting a drain reaps the fan-out it raised                                                                                             | Positive   | `TestDeletingADrainStopsWhatItFannedOut`                     |
+| U-345 | A move still copying holds the deletion rather than being reaped mid-copy                                                                | Negative   | `TestADrainBeingDeletedWaitsForAMoveStillRunning`            |
+| U-346 | A retried move is announced, so a drain that keeps retrying is not read as stalled                                                       | Positive   | `TestAFailedMoveIsRetriedRatherThanFailingTheDrain`          |
+| U-480 | The volumes of one NVMe-oF subsystem get one move, named by the subsystem's first volume (2026-10-05-drain-per-volume-moves)             | Regression | `TestTheVolumesOfOneSubsystemAreGivenOneMove`                |
+| U-481 | A subsystem's target holds a replica of none of its volumes, not only of the volume the move is named by                                 | Regression | `TestASubsystemsTargetHoldsNoReplicaOfAnyMember`             |
+| U-482 | Mid-cutover, a sibling still reported on the node is covered by its subsystem's move and gets no second one                              | Regression | `TestASubsystemMidCutoverIsNotGivenASecondMove`              |
+| U-483 | A finished move counts every volume of its subsystem toward `status.drain.volumesMigrated`                                               | Regression | `TestAFinishedSubsystemMoveCountsEveryVolumeItCarried`       |
+| U-484 | A move reports how many volumes it carries, whichever kind carries it                                                                    | Regression | `TestAMoveSaysHowManyVolumesItCarries`                       |
+| U-509 | A subsystem's target avoids the replicas of siblings whose primary is off the drained node (2026-10-06-drain-replicas-of-moved-siblings) | Regression | `TestASubsystemsTargetAvoidsTheReplicasOfSiblingsOffTheNode` |
 
 ### Operation: The Migrate Graph (design §9)
 
@@ -975,17 +982,17 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 393       | 288     | 105         |
+| Unit        | 399       | 294     | 105         |
 | Integration | 54        | 0       | 54          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **478**   | **288** | **190**     |
+| **Total**   | **484**   | **294** | **190**     |
 
 Eight further scenarios are struck through: they describe a system this one no
 longer is, and each names the row that replaced it. They are excluded from the
 counts.
 
-Two hundred and eight distinct test functions cover the two hundred and eighty-eight
+Two hundred and fourteen distinct test functions cover the two hundred and ninety-four
 covered scenarios, because a table-driven test satisfies one identifier per
 subtest and several rows are two halves of one assertion.
 

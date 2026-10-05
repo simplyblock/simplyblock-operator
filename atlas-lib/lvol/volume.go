@@ -55,13 +55,20 @@ func (h VolumeHandle) Split() (clusterID, poolID, volumeID uuid.UUID, err error)
 }
 
 // Volume is the identity of a simplyblock logical volume, independent of
-// where (or whether) it is currently attached to a node.
+// where (or whether) a host currently has it attached.
 type Volume struct {
 	ID        VolumeHandle
 	Name      string
 	Pool      string
 	SizeBytes uint64
 	NQN       string // subsystem NQN this volume is published under
+
+	// StorageNodeID is the storage node hosting the volume's primary, in the
+	// control plane's UUID spelling, and empty when the control plane reports
+	// none. It is where the data lives rather than where a host reaches it,
+	// and it is what a migration changes: every volume of one subsystem has
+	// the same one, because the control plane moves a subsystem as a whole.
+	StorageNodeID string
 
 	// Status is the control plane's own lifecycle string for the volume, in the
 	// control plane's spelling and therefore not an enum here. It is what
