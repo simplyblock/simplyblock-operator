@@ -41,7 +41,7 @@ func targetsOf(
 ) (map[string]string, error) {
 	t.Helper()
 	r, _ := anOpsWorld(t, api)
-	return r.peerTargets(context.Background(), opsClusterID, opsNodeID, volumes)
+	return r.peerTargets(context.Background(), opsClusterID, opsNodeID, volumes, nil)
 }
 
 // Six volumes over two peers is three each, rather than six on the peer that
@@ -165,7 +165,7 @@ func TestThePeersComeFromTheStreamOnceItHasDelivered(t *testing.T) {
 		{ID: opsPeerID, Status: nodeStatusOnline},
 	}}
 
-	targets, err := r.peerTargets(context.Background(), opsClusterID, opsNodeID, movable("pv-a"))
+	targets, err := r.peerTargets(context.Background(), opsClusterID, opsNodeID, movable("pv-a"), nil)
 	if err != nil {
 		t.Fatalf("choosing targets: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestAnUndeliveredStreamFallsBackToTheControlPlane(t *testing.T) {
 	r, _ := anOpsWorld(t, api)
 	r.Nodes = &deliveredNodes{synced: false}
 
-	targets, err := r.peerTargets(context.Background(), opsClusterID, opsNodeID, movable("pv-a"))
+	targets, err := r.peerTargets(context.Background(), opsClusterID, opsNodeID, movable("pv-a"), nil)
 	if err != nil {
 		t.Fatalf("choosing targets: %v", err)
 	}

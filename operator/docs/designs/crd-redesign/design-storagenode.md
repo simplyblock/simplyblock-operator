@@ -1720,18 +1720,20 @@ in `status.drain` is counted in volumes, from the member count each move records
 volume the control plane reports under no subsystem is a move of its own.
 
 **Migration targets are chosen round-robin over the online peers that hold none
-of the replicas of any volume in the subsystem.** The replicas are those of every
-member the pools list, whatever node its primary is on, because a member off the
-drained node mid-cutover still has replicas the move's target must avoid. The
-control plane lists a volume's replica nodes, and
+of the replicas of any volume in the subsystem, and that the subsystem has not
+already failed on (§8.4).** The replicas are those of every member the pools list,
+whatever node its primary is on, because a member off the drained node mid-cutover
+still has replicas the move's target must avoid. The control plane lists a volume's
+replica nodes, and
 a node already holding one is never a target: the control plane refuses the
 move, and while the volume's primary is shut down for its removal that replica is
 what serves the volume. Round-robin over the rest spreads the drained node's
 volumes rather than concentrating them on whichever peer sorts first. A drain
-with no online peer to move to, or a volume whose replicas cover every online
-peer, is a stall, not a failure, and emits `NoMigrationTarget`: the condition is
-resolved by another node coming back, and failing the operation would only mean
-starting it again afterward.
+with no online peer to move to, a volume whose replicas cover every online peer,
+or a subsystem that has already failed on every peer left, is a stall, not a
+failure, and emits `NoMigrationTarget`, naming the targets tried. The condition is
+resolved by another node coming back or being added, and failing the operation
+would only mean starting it again afterward. The step's deadline bounds the wait.
 
 **`Verifying` closes on the control plane's word.** The census walks the pools
 for volumes and does not see snapshots, and the node DELETE refuses a node that
@@ -1799,7 +1801,9 @@ operation can be deleted while it runs.
 | The shutdown failed or stalled    | `MigratingDevices` | `prepare-removal` again, three times, then `Failed` |
 | The device rebuild gave up        | `MigratingDevices` | `Failed`                                            |
 | No online peer to migrate to      | `MigratingVolumes` | Hold, emit, requeue                                 |
-| A `PersistentVolumeOps` failed    | `MigratingVolumes` | Delete it and retry with a fresh target             |
+| A `PersistentVolumeOps` failed    | `MigratingVolumes` | Keep it and retry against a peer not ruled out      |
+| Every eligible peer ruled out     | `MigratingVolumes` | Hold, emit, requeue, naming the targets tried       |
+| A `PersistentVolumeOps` aborted   | `MigratingVolumes` | Delete it and re-issue it, ruling nothing out       |
 | Non-system volumes remain         | `Verifying`        | Hold, emit, requeue                                 |
 | `verify-drained` sees something   | `Verifying`        | Hold, emit, requeue, naming what is left            |
 | A system volume cannot be deleted | `Verifying`        | `Failed`                                            |
@@ -1826,11 +1830,28 @@ waiting for each member to report a terminal phase is what the cascade does anyw
 [`design-persistentvolumeops.md`](design-persistentvolumeops.md) §11.1 specifies
 the reference, the label, and the cascade.
 
-| State       | What happens to the object                                                                |
-|-------------|-------------------------------------------------------------------------------------------|
-| `Succeeded` | Deleted. `status.drain.volumesMigrated` is the progress record, not the object's presence |
-| `Failed`    | Deleted, and a replacement is created against a fresh round-robin target                  |
-| In flight   | `spec.abort` is set, and the object is deleted once it reports a terminal phase           |
+| State       | What happens to the object                                                                                                          |
+|-------------|-------------------------------------------------------------------------------------------------------------------------------------|
+| `Succeeded` | Deleted. `status.drain.volumesMigrated` is the progress record, not the object's presence                                           |
+| `Failed`    | Kept until the step ends, as the record of where the subsystem failed. A replacement is created against a peer it does not rule out |
+| `Aborted`   | Deleted and re-issued. An abort is a decision rather than a verdict on the target                                                   |
+| In flight   | `spec.abort` is set, and the object is deleted once it reports a terminal phase                                                     |
+
+**A failed move is kept, because it is the drain's memory of the failure.** It
+records the target it was headed for, in the `storage.simplyblock.io/target-node`
+label, and whether the control plane had accepted its migration. A failure rules its
+target out for that subsystem at once when the target took part: the migration was
+accepted, or the control plane's refusal names the target. A failure that never
+involved the target, such as a migration the cluster did not accept in time, is
+counted against it and rules it out on the third. The replacement is named with the
+attempt number, so a pass that runs again finds the object it made, and a restart
+reads the same memory back from the objects. Each failure is one object and is
+counted once. The failed moves are deleted on the pass that finds the node holding
+nothing movable, which is the pass that finishes the step, and by the deletion
+cascade above. Their number is bounded by the peers each subsystem can fail on. The
+memory is this drain's own: the fan-out is found by the drained node's label, which a
+later drain of the same node shares, so a failed move whose creator is another drain
+is reaped rather than read, and its targets and attempts count for nothing here.
 
 Deleting completed objects immediately is what keeps a hundred-volume drain from
 leaving a hundred objects behind. The counters in `status.drain` are the source of
