@@ -88,6 +88,18 @@ const (
 	// against a fresh target.
 	MigrationRetried = "MigrationRetried"
 
+	// RemovalDeferred says the control plane refused the removal's shutdown,
+	// prepare-removal, or the node DELETE for a reason that passes by itself,
+	// such as a peer restarting, a cluster still rebalancing, or an active task
+	// on the node, and the operation asks again rather than failing.
+	RemovalDeferred = "RemovalDeferred"
+
+	// RemovalNotAdmitted says the removal's admission refused the node while it
+	// still serves: a failure-domain balance the removal would break, or the
+	// control plane's own refusal. The drain holds in Validating, where nothing
+	// has been done, until the condition changes or somebody decides.
+	RemovalNotAdmitted = "RemovalNotAdmitted"
+
 	// DrainCompleted says every volume has been migrated off the node.
 	DrainCompleted = "DrainCompleted"
 

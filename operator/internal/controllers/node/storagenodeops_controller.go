@@ -914,6 +914,9 @@ func readingFromDTO(dto subscriptions.NodeDTO) NodeReading {
 		LvolPort:      dto.LvolPort,
 		NVMeOFPort:    dto.NVMeOFPort,
 		FailureDomain: dto.FailureDomain,
+
+		SecondaryNodeID: dto.SecondaryNodeID,
+		TertiaryNodeID:  dto.TertiaryNodeID,
 	}
 }
 

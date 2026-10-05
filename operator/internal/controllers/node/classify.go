@@ -71,6 +71,28 @@ type volumeCensus struct {
 	// and this flag is what stops the drain acting on a census it knows is a
 	// transient false positive.
 	Incomplete bool
+
+	// subsystems is the NVMe-oF subsystem of every PersistentVolume of the
+	// cluster, on this node or not, keyed by the PersistentVolume's name. A
+	// move is named by one volume and carries its whole subsystem, and the
+	// volume it is named by may already have left the node mid-cutover while
+	// a sibling is still reported on it: the subsystem is how the sibling is
+	// known to be covered.
+	subsystems map[string]string
+
+	// subsystemReplicas are the nodes holding a replica of any volume of a
+	// subsystem, keyed by NQN, from every pool-listed volume whatever node its
+	// primary is on. A move carries every member, so its target may hold none
+	// of their replicas, and a member off the drained node mid-cutover still
+	// has replicas the census would otherwise never see.
+	subsystemReplicas map[string][]string
+}
+
+// subsystemOf is the subsystem a PersistentVolume's volume is published under,
+// and the empty string when the control plane reports none or no longer
+// reports the volume.
+func (c volumeCensus) subsystemOf(pvName string) string {
+	return c.subsystems[pvName]
 }
 
 // managedVolume is one movable volume and the PersistentVolume that accounts for
@@ -78,6 +100,10 @@ type volumeCensus struct {
 type managedVolume struct {
 	VolumeUUID string
 	PVName     string
+
+	// NQN is the subsystem the volume is published under. The volumes of one
+	// subsystem move together, so the drain raises one move for all of them.
+	NQN string
 
 	// ReplicaNodes are the nodes holding the volume's replicas, the node being
 	// drained included. None of them is a target: the control plane refuses a
@@ -118,13 +144,23 @@ func (r *StorageNodeOpsReconciler) classify(
 		return volumeCensus{}, err
 	}
 
-	var census volumeCensus
+	census := volumeCensus{subsystems: map[string]string{}, subsystemReplicas: map[string][]string{}}
 	for _, pool := range pools {
 		volumes, err := r.API.PoolVolumes(ctx, clusterID, pool.UUID)
 		if err != nil {
 			return volumeCensus{}, fmt.Errorf("list the volumes of pool %s: %w", pool.UUID, err)
 		}
 		for _, volume := range volumes {
+			if pv, accounted := byVolumeUUID[volume.UUID]; accounted && volume.NQN != "" {
+				census.subsystems[pv.Name] = volume.NQN
+			}
+			if volume.NQN != "" {
+				for _, node := range replicaNodes(volume) {
+					if !slices.Contains(census.subsystemReplicas[volume.NQN], node) {
+						census.subsystemReplicas[volume.NQN] = append(census.subsystemReplicas[volume.NQN], node)
+					}
+				}
+			}
 			if volume.PrimaryNodeUUID != nodeID || volume.Status == volumeStatusInDeletion {
 				continue
 			}
@@ -163,8 +199,9 @@ func (r *StorageNodeOpsReconciler) sortVolume(
 	// A PersistentVolume with no claim cannot be pinned, because the annotation
 	// lives on the claim. It is movable.
 	if pv.Spec.ClaimRef == nil {
-		census.Managed = append(census.Managed,
-			managedVolume{VolumeUUID: volume.UUID, PVName: pv.Name, ReplicaNodes: replicaNodes(volume)})
+		census.Managed = append(census.Managed, managedVolume{
+			VolumeUUID: volume.UUID, PVName: pv.Name, NQN: volume.NQN, ReplicaNodes: replicaNodes(volume),
+		})
 		return
 	}
 
@@ -189,8 +226,9 @@ func (r *StorageNodeOpsReconciler) sortVolume(
 		census.Pinned = append(census.Pinned, volume.UUID)
 		return
 	}
-	census.Managed = append(census.Managed,
-		managedVolume{VolumeUUID: volume.UUID, PVName: pv.Name, ReplicaNodes: replicaNodes(volume)})
+	census.Managed = append(census.Managed, managedVolume{
+		VolumeUUID: volume.UUID, PVName: pv.Name, NQN: volume.NQN, ReplicaNodes: replicaNodes(volume),
+	})
 }
 
 // persistentVolumesByVolumeUUID indexes every simplyblock PersistentVolume in the
@@ -262,59 +300,104 @@ func replicaNodes(volume webapi.VolumeInfo) []string {
 	return nodes
 }
 
-// peerTargets assigns each movable volume an online peer to move to, round-robin
-// over the peers that hold none of the volume's replicas.
+// peerTargets assigns each move an online peer to move to, round-robin over the
+// peers that hold none of the move's replicas and that its subsystem has not
+// already failed on, preferring peers that do not replicate onto the drained
+// node.
 //
-// A node already holding one of the volume's replicas is never a target: the
+// A node already holding one of the move's replicas is never a target: the
 // control plane refuses the move, and while the volume's primary is shut down
-// for its removal that replica is what serves it. Round-robin over the rest
-// spreads the drained node's volumes rather than concentrating them on whichever
-// peer sorts first. The order is the peers' own UUIDs sorted, so the assignment
-// is stable across passes: a volume that was assigned to one peer and whose
-// migration then failed is reassigned by the caller deliberately rather than by
-// the list having reshuffled.
+// for its removal that replica is what serves it. The holders are the nodes the
+// volume lists and the drained node's own secondary and tertiary, because a
+// volume whose primary is the drained node has its replicas there, and a
+// volume created by replication lists no tertiary.
 //
-// A drain with no online peer, or a volume whose replicas cover every online
-// peer, is a stall rather than a failure, which is why this reports a
-// blockedStepError: the condition is resolved by another node coming back, and
+// A move builds the volume on the target's own secondary and tertiary as well,
+// so a peer that replicates onto the drained node puts the node that is leaving
+// on both sides of the copy. The control plane skips a departing replica, so
+// such a peer works, and is used only when no other is left: on a small cluster
+// every peer may replicate onto the drained node, and draining beats holding. A peer in ruledOut, keyed by
+// the move's name-giving volume, is one a failed move of the same subsystem
+// already ruled out (retry.go). Round-robin over the rest spreads the drained
+// node's volumes rather than concentrating them on whichever peer sorts first.
+// The order is the peers' own UUIDs sorted, so the assignment is stable across
+// passes, and a replacement lands elsewhere because of the record of the
+// failure rather than because the list reshuffled.
+//
+// A drain with no online peer, or a move with no eligible one left, is a stall
+// rather than a failure, which is why this reports a blockedStepError: the
+// condition is resolved by another node coming back or being added, and
 // failing the operation would only mean starting it again afterward (§8.2).
 func (r *StorageNodeOpsReconciler) peerTargets(
 	ctx context.Context, clusterID, nodeID string, volumes []managedVolume,
+	ruledOut map[string][]string,
 ) (map[string]string, error) {
 	readings, err := r.clusterNodes(ctx, clusterID)
 	if err != nil {
 		return nil, err
 	}
 
+	var drained NodeReading
 	peers := make([]string, 0, len(readings))
+	replicatesOntoDrained := map[string]bool{}
 	for _, reading := range readings {
-		if reading.UUID == nodeID || reading.Status != nodeStatusOnline {
+		if reading.UUID == nodeID {
+			drained = reading
+			continue
+		}
+		if reading.Status != nodeStatusOnline {
 			continue
 		}
 		peers = append(peers, reading.UUID)
+		if reading.SecondaryNodeID == nodeID || reading.TertiaryNodeID == nodeID {
+			replicatesOntoDrained[reading.UUID] = true
+		}
 	}
 	if len(peers) == 0 {
 		return nil, blockedf(NoMigrationTarget,
 			"no online peer to move this node's volumes to; the drain resumes when one returns")
 	}
 	sort.Strings(peers)
+	drainedReplicas := []string{drained.SecondaryNodeID, drained.TertiaryNodeID}
 
 	targets := make(map[string]string, len(volumes))
-	var stranded []string
+	var stranded, exhausted []string
 	next := 0
 	for _, volume := range volumes {
-		eligible := make([]string, 0, len(peers))
+		var preferred, fallback []string
+		replicaFree := 0
 		for _, peer := range peers {
-			if !slices.Contains(volume.ReplicaNodes, peer) {
-				eligible = append(eligible, peer)
+			if slices.Contains(volume.ReplicaNodes, peer) || slices.Contains(drainedReplicas, peer) {
+				continue
+			}
+			replicaFree++
+			switch {
+			case slices.Contains(ruledOut[volume.PVName], peer):
+			case replicatesOntoDrained[peer]:
+				fallback = append(fallback, peer)
+			default:
+				preferred = append(preferred, peer)
 			}
 		}
+		eligible := preferred
 		if len(eligible) == 0 {
-			stranded = append(stranded, volume.PVName)
-			continue
+			eligible = fallback
 		}
-		targets[volume.PVName] = eligible[next%len(eligible)]
-		next++
+		switch {
+		case len(eligible) > 0:
+			targets[volume.PVName] = eligible[next%len(eligible)]
+			next++
+		case replicaFree > 0:
+			exhausted = append(exhausted, fmt.Sprintf("%s (tried %s)",
+				volume.PVName, strings.Join(ruledOut[volume.PVName], ", ")))
+		default:
+			stranded = append(stranded, volume.PVName)
+		}
+	}
+	if len(exhausted) > 0 {
+		return nil, blockedf(NoMigrationTarget,
+			"every online peer able to take %s has already failed to; the drain resumes when "+
+				"another node returns or is added", strings.Join(exhausted, "; "))
 	}
 	if len(stranded) > 0 {
 		return nil, blockedf(NoMigrationTarget,
@@ -349,3 +432,49 @@ func (r *StorageNodeOpsReconciler) clusterNodes(
 // in this package is per cluster, so the scope is the cluster's UUID and nothing
 // else.
 func scopeOf(clusterID string) cpinformer.Scope { return cpinformer.Scope{clusterID} }
+
+// subsystemMoves folds the movable volumes into one move per NVMe-oF subsystem,
+// sorted by the name each move is given.
+//
+// The control plane migrates a subsystem rather than a volume inside it, so
+// every volume of one subsystem leaves the node at the one cutover. Each move
+// is named by its subsystem's lexicographically first volume, which is stable
+// across passes for as long as that volume is on the node, and it may hold none
+// of any member's replicas: every member lands on the target. replicas adds
+// those of the members whose primary is not on the node. A volume the control
+// plane reports under no subsystem is a move of its own.
+func subsystemMoves(volumes []managedVolume, replicas map[string][]string) []managedVolume {
+	groups := map[string]*managedVolume{}
+	for _, volume := range volumes {
+		key := volume.NQN
+		if key == "" {
+			key = "pv:" + volume.PVName
+		}
+		group, seen := groups[key]
+		if !seen {
+			first := volume
+			first.ReplicaNodes = slices.Clone(volume.ReplicaNodes)
+			groups[key] = &first
+			continue
+		}
+		if volume.PVName < group.PVName {
+			group.PVName, group.VolumeUUID = volume.PVName, volume.VolumeUUID
+		}
+		for _, node := range volume.ReplicaNodes {
+			if !slices.Contains(group.ReplicaNodes, node) {
+				group.ReplicaNodes = append(group.ReplicaNodes, node)
+			}
+		}
+	}
+	out := make([]managedVolume, 0, len(groups))
+	for _, group := range groups {
+		for _, node := range replicas[group.NQN] {
+			if !slices.Contains(group.ReplicaNodes, node) {
+				group.ReplicaNodes = append(group.ReplicaNodes, node)
+			}
+		}
+		out = append(out, *group)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].PVName < out[j].PVName })
+	return out
+}

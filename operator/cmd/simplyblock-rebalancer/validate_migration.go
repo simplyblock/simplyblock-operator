@@ -36,6 +36,7 @@ type validationRun struct {
 	hostHasSubsystem func(ctx context.Context, sysRoot, nqn string) (bool, error)
 	presentAddresses func(ctx context.Context, sysRoot, nqn string) (map[string]bool, error)
 	ensurePaths      func(ctx context.Context, sysRoot string, conns []volumemigration.Connection) error
+	settlePaths      func(ctx context.Context, sysRoot, nqn string) error
 	verifyPaths      func(ctx context.Context, sysRoot, nqn string, conns []volumemigration.Connection,
 		preExisting map[string]bool) ([]volumemigration.PathState, error)
 	reapDead     func(ctx context.Context, sysRoot, nqn string) ([]volumemigration.Released, error)
@@ -53,6 +54,7 @@ func newValidationRun() validationRun {
 		hostHasSubsystem: volumemigration.HostHasSubsystem,
 		presentAddresses: volumemigration.PresentAddresses,
 		ensurePaths:      volumemigration.EnsureMigrationPaths,
+		settlePaths:      volumemigration.SettleMigrationPaths,
 		verifyPaths:      volumemigration.VerifyMigrationPaths,
 		reapDead:         volumemigration.ReapDeadControllers,
 		releasePaths:     volumemigration.ReleaseMigrationPaths,
@@ -127,18 +129,26 @@ func (v validationRun) run(
 	}
 
 	// The freshly-connected target path can lag behind: nvme connect may return before
-	// its controller is live and the ANA log page settles. Retry the connect+verify
-	// cycle a few times before giving up so a transient lag is not mistaken for a
-	// missing path. Already connected paths are a no-op in ensurePaths, so re-running
-	// it only re-attempts paths that are genuinely missing.
+	// its controller is live and the ANA log page settles, and the kernel attaches the
+	// subsystem's namespaces to a live controller one by one afterward. The settle step
+	// waits out the namespace scan before each verification, and the connect+verify
+	// cycle is retried a few times before giving up so a transient lag is not mistaken
+	// for a missing path. Already connected paths are a no-op in ensurePaths, so
+	// re-running it only re-attempts paths that are genuinely missing.
 	var lastErr error
 	for attempt := 1; attempt <= v.attempts; attempt++ {
 		paths, verifyErr := []volumemigration.PathState(nil), error(nil)
-		if err := v.ensurePaths(ctx, sysRoot, conns); err != nil {
-			lastErr = fmt.Errorf("ensure migration paths: %w", err)
-		} else if paths, verifyErr = v.verifyPaths(ctx, sysRoot, nqn, conns, preExisting); verifyErr != nil {
+		connectErr := v.ensurePaths(ctx, sysRoot, conns)
+		if connectErr == nil {
+			v.settle(ctx, sysRoot, conns)
+			paths, verifyErr = v.verifyPaths(ctx, sysRoot, nqn, conns, preExisting)
+		}
+		switch {
+		case connectErr != nil:
+			lastErr = fmt.Errorf("ensure migration paths: %w", connectErr)
+		case verifyErr != nil:
 			lastErr = fmt.Errorf("verification: %w", verifyErr)
-		} else {
+		default:
 			for _, p := range paths {
 				log.Printf("path %s", p)
 			}
@@ -169,6 +179,28 @@ func (v validationRun) run(
 	v.release(ctx, sysRoot, nqn, conns)
 
 	return outcomeValidated, fmt.Errorf("validation failed after %d attempt(s): %w", v.attempts, lastErr)
+}
+
+// settle waits for the paths of every subsystem in conns to serve all of its
+// namespaces before they are verified. The connect returns once a controller is
+// live, and the kernel attaches the namespaces to it afterward, so a check run
+// straight away sees a path that is only scanning as one that is broken. A wait
+// that runs out is logged and decides nothing: the verification that follows
+// is what reports a path that never settled.
+func (v validationRun) settle(ctx context.Context, sysRoot string, conns []volumemigration.Connection) {
+	if v.settlePaths == nil {
+		return
+	}
+	seen := map[string]bool{}
+	for _, c := range conns {
+		if seen[c.NQN] {
+			continue
+		}
+		seen[c.NQN] = true
+		if err := v.settlePaths(ctx, sysRoot, c.NQN); err != nil {
+			log.Printf("the paths of %s did not settle; the verification decides: %v", c.NQN, err)
+		}
+	}
 }
 
 // reap clears the dead controllers of nqn, logging what went. Failures are logged and

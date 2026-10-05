@@ -166,6 +166,13 @@ type RollingRestartStatus struct {
 	// makes "the first node" and "unset" the same wire value.
 	// +kubebuilder:validation:Minimum=0
 	NodeIndex int32 `json:"nodeIndex"`
+
+	// Skipped are the nodes of Nodes the walk passed over without restarting
+	// them, in walk order: a node the control plane stopped listing, or one
+	// whose removal started after the walk was planned. A node leaving the
+	// cluster belongs to its removal, and the walk sends it nothing.
+	// +optional
+	Skipped []string `json:"skipped,omitempty"`
 }
 
 // StorageClusterOpsStatus is the observed state of one cluster operation.
