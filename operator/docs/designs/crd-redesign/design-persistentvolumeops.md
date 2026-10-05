@@ -25,7 +25,7 @@ is drained on the kind it started on (§10).
 3. [An Ops Kind Whose Target This Group Does Not Define](#3-an-ops-kind-whose-target-this-group-does-not-define)
 4. [PersistentVolumeOps: API](#4-persistentvolumeops-api)
 5. [The Step Machine](#5-the-step-machine)
-6. [Mutual Exclusion Through an Annotation on the Volume](#6-mutual-exclusion-through-an-annotation-on-the-volume)
+6. [Mutual Exclusion Through an Annotation on the Subsystem's Volumes](#6-mutual-exclusion-through-an-annotation-on-the-subsystems-volumes)
 7. [Backend API Requirements](#7-backend-api-requirements)
 8. [Observability](#8-observability)
 9. [Testing Strategy](#9-testing-strategy)
@@ -335,7 +335,9 @@ the same bucket as the ones below.
 offline, a target node that is already the volume's current node, a volume whose lock
 another operation holds, and a control plane that cannot be reached. The first two
 are `TargetNodeNotReady` and `TargetNodeIsSource` (§8.1), the third is `Pending` and
-`OperationQueued` (§6), and the fourth is a requeue. A node that is offline when the
+`OperationQueued` (§6), and the fourth is a requeue. `TargetNodeIsSource` ends the
+operation as `Succeeded` with nothing migrated, because the request is already true
+(§5). A node that is offline when the
 drain fans out its migrations may well be online by the time the fifteenth of them
 acquires the lock, which is exactly why that check belongs to the step that needs it
 rather than to the create.
@@ -374,6 +376,19 @@ Migrate
 | `Validating` | `POST` the migration, then start a Job per consuming node      | Every validation Job succeeded                  |
 | `Migrating`  | Continue the migration, which is what starts the data copy     | The control plane reports the copy finished     |
 | `Verifying`  | Delete the validation Jobs and clear the husks the checks left | No validation Job and no dead controller remain |
+
+**A subsystem already on the target is a move that has happened.** `Validating`
+reads the volume before it creates anything, and a subsystem whose every member the
+control plane reports on the target node ends the operation as `Succeeded`, with
+`TargetNodeIsSource` and no migration created. It is the ordinary outcome for an
+operation naming a sibling of a volume another operation has just moved there (§6).
+The control plane refuses a migration onto the node a volume is on, so creating one
+would only fail at the step's deadline. A subsystem only partly on the target is
+in the middle of a cutover this operation does not lock, a registered
+`VolumeMigration` or one started outside Kubernetes, and is waited on. The check
+runs under the step's claim, like the create it stands in for, so a pass reading a
+superseded copy of the operation cannot finish it past the cleanup it still owes. A
+creation that reports the target as its source is canceled and ends the same way.
 
 **A Job runs per consuming node rather than per path.** The paths are what the
 Job connects; what makes a Job necessary is the *host*, since a path is
@@ -474,16 +489,56 @@ nothing tracking it blocks every later migration on the volume, and has.
 
 ---
 
-## 6. Mutual Exclusion Through an Annotation on the Volume
+## 6. Mutual Exclusion Through an Annotation on the Subsystem's Volumes
 
-Two migrations of one volume at once would have two backend migrations copying the
-same logical volume to two places. Every other `Ops` kind prevents that with
+Two migrations of one subsystem at once would have two backend migrations copying
+the same logical volumes to two places. Every other `Ops` kind prevents that with
 `status.activeOpsRef` on its target
 ([`design-crd-model.md`](design-crd-model.md) §3.2), and a `PersistentVolume` is a
 core type this operator must not add a field to (§3). So the lock moves from status
 to metadata and keeps everything else: the annotation
-`storage.simplyblock.io/active-ops` on the `PersistentVolume` names the operation
+`storage.simplyblock.io/active-ops` on a `PersistentVolume` names the operation
 currently allowed to act on the volume, and is absent when none is.
+
+**The lock covers the subsystem, and an operation takes it on every volume of it.**
+The control plane migrates an NVMe-oF subsystem as a whole (§5), so an operation
+naming one volume moves every volume published beside it. An operation naming a
+sibling is therefore an operation on the same thing, and it waits. The membership is
+the control plane's: the named volume's record names its subsystem, the subsystem's
+members are listed across every pool, and each member is mapped to its
+`PersistentVolume` through the CSI handle. A member with no `PersistentVolume` has no
+annotation to carry, and nothing in this group migrates it on its own.
+
+**The volumes are taken in name order, all or nothing.** A volume held by a live
+operation makes the acquiring operation release whatever it took on that pass and
+wait at `Pending`, so a queued operation holds nothing and `kubectl get pv` never
+shows a volume held by an operation that is not running. Every operation takes its
+volumes in the same order, so two operations that both need one subsystem cannot
+each end up holding part of it.
+
+**An operation past `Pending` holds its whole subsystem and does not read the
+membership again.** It was admitted holding every member, and only its own terminal
+path releases any of them. It confirms only its named volume's lock, through the
+uncached reader when the cache has not caught up with its own write, and it gives no
+lock back on any path but its terminal one. Reading the membership on every pass would cost two
+control-plane calls on each pass of an operation that runs for hours. A volume that
+joins the subsystem after admission is not locked; an operation naming it is refused
+by the control plane while the migration runs, and finds the subsystem already on
+the target afterward (§5).
+
+**The release clears every annotation naming the operation**, found by the
+annotation itself rather than by the membership, because the membership can change
+while the operation runs and the annotation is exactly what the operation took.
+
+**Every read the lock acts on is uncached.** The members are read through the
+uncached reader before they are patched, so a patch is never made against a copy the
+cache has not updated, and a conflict means another writer rather than the
+operation's own earlier write. The release finds its volumes the same way, because a
+release that gives back a partial acquisition would not find in the cache the
+annotations it had just written. A conflicting release reads the volume again,
+checks its ownership again, and retries. A `Pending` operation whose acquisition
+fails on any path, a conflict, a refused write, or a holder that cannot be read,
+gives back everything it took.
 
 **It is a lock rather than a note because it has the three properties
 [`design-crd-model.md`](design-crd-model.md) §3.2 requires of one.** Acquisition is
@@ -509,8 +564,8 @@ broken by the same optimistic-lock patch, which is what keeps two operations fro
 both breaking it and both concluding they won.
 
 **Having a real lock is what lets this kind queue like the rest of the group.** A
-second operation for a locked volume is admitted by the API server, acquires
-nothing, and stays at `status.phase: Pending` until the lock frees, which is the
+second operation for a volume of a locked subsystem is admitted by the API server,
+acquires nothing, and stays at `status.phase: Pending` until the lock frees, which is the
 behavior [`design-crd-model.md`](design-crd-model.md) §3.2 describes and the reason
 nothing had to build queueing. It is also what `status.deferredSince`, the
 `OperationQueued` event, and `simplyblock_persistentvolume_operation_queued_seconds` (§8) already assume:
@@ -620,21 +675,21 @@ product uses, while the claim's mirrored copies sit with the workload.
 surprising enough to be worth writing down and is the second reason the mirror onto
 the claim exists.
 
-| Event                                                            | Type      | Reason                 | On                    |
-|------------------------------------------------------------------|-----------|------------------------|-----------------------|
-| The operation is waiting because another holds the volume's lock | `Normal`  | `OperationQueued`      | `PersistentVolumeOps` |
-| The operation acquired the volume's lock and started             | `Normal`  | `OperationStarted`     | `PersistentVolumeOps` |
-| The volume carries no usable CSI volume handle to address it     | `Warning` | `ClusterUnresolvable`  | `PersistentVolumeOps` |
-| The target node is not online                                    | `Warning` | `TargetNodeNotReady`   | `PersistentVolumeOps` |
-| The target node is the volume's current node                     | `Warning` | `TargetNodeIsSource`   | `PersistentVolumeOps` |
-| A validation Job failed, so the target's paths are unusable      | `Warning` | `ValidationFailed`     | `PersistentVolumeOps` |
-| The copy started                                                 | `Normal`  | `MigrationStarted`     | `PersistentVolumeOps` |
-| The operation finished successfully                              | `Normal`  | `OperationSucceeded`   | `PersistentVolumeOps` |
-| The operation failed                                             | `Warning` | `OperationFailed`      | `PersistentVolumeOps` |
-| The operation was canceled                                       | `Normal`  | `OperationAborted`     | `PersistentVolumeOps` |
-| A step's deadline expired                                        | `Warning` | `StepDeadlineExceeded` | `PersistentVolumeOps` |
-| A path was left connected and has been cleaned up                | `Warning` | `StalePathCleaned`     | `PersistentVolumeOps` |
-| A delete is held because the cleanup has not finished            | `Warning` | `CleanupBlocked`       | `PersistentVolumeOps` |
+| Event                                                          | Type      | Reason                 | On                    |
+|----------------------------------------------------------------|-----------|------------------------|-----------------------|
+| The operation waits because another holds a subsystem volume   | `Normal`  | `OperationQueued`      | `PersistentVolumeOps` |
+| The operation acquired the volume's lock and started           | `Normal`  | `OperationStarted`     | `PersistentVolumeOps` |
+| The volume carries no usable CSI volume handle to address it   | `Warning` | `ClusterUnresolvable`  | `PersistentVolumeOps` |
+| The target node is not online                                  | `Warning` | `TargetNodeNotReady`   | `PersistentVolumeOps` |
+| The volume's subsystem is already on the target; nothing moved | `Normal`  | `TargetNodeIsSource`   | `PersistentVolumeOps` |
+| A validation Job failed, so the target's paths are unusable    | `Warning` | `ValidationFailed`     | `PersistentVolumeOps` |
+| The copy started                                               | `Normal`  | `MigrationStarted`     | `PersistentVolumeOps` |
+| The operation finished successfully                            | `Normal`  | `OperationSucceeded`   | `PersistentVolumeOps` |
+| The operation failed                                           | `Warning` | `OperationFailed`      | `PersistentVolumeOps` |
+| The operation was canceled                                     | `Normal`  | `OperationAborted`     | `PersistentVolumeOps` |
+| A step's deadline expired                                      | `Warning` | `StepDeadlineExceeded` | `PersistentVolumeOps` |
+| A path was left connected and has been cleaned up              | `Warning` | `StalePathCleaned`     | `PersistentVolumeOps` |
+| A delete is held because the cleanup has not finished          | `Warning` | `CleanupBlocked`       | `PersistentVolumeOps` |
 
 **`StalePathCleaned` is a warning even though the operator fixed it**, because a
 path surviving its Job means the cleanup did not run when it should have, and §5
