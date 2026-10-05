@@ -14,7 +14,14 @@ type ClusterResponse struct {
 	// DataRebalancing is the control plane's is_data_rebalancing: device and
 	// balancing tasks only, without the cluster's own volume migrations. Nil
 	// when the control plane predates the field.
-	DataRebalancing   *bool
+	DataRebalancing *bool
+	// Shrinking is the control plane's is_shrinking: a node removal is in
+	// progress. It sits beside the status; the removal no longer sets a status
+	// of its own (in_shrink). Nil when the control plane predates the field.
+	Shrinking *bool
+	// DegradedByRemoval is is_degraded_by_removal: the status is degraded only
+	// because of the node being removed. Nil on an older control plane.
+	DegradedByRemoval *bool
 	NDCS              int
 	NPCS              int
 	MaxFaultTolerance int
@@ -27,6 +34,8 @@ type clusterResponsePayload struct {
 	Status            string `json:"status"`
 	Rebalancing       bool   `json:"is_re_balancing"`
 	DataRebalancing   *bool  `json:"is_data_rebalancing"`
+	Shrinking         *bool  `json:"is_shrinking"`
+	DegradedByRemoval *bool  `json:"is_degraded_by_removal"`
 	NDCS              int    `json:"distr_ndcs"`
 	NPCS              int    `json:"distr_npcs"`
 	MaxFaultTolerance int    `json:"max_fault_tolerance"`
@@ -42,6 +51,13 @@ func (r ClusterResponse) IsDataRebalancing() bool {
 		return *r.DataRebalancing
 	}
 	return r.Rebalancing
+}
+
+// IsDegradedByRemoval reports whether the cluster is degraded only because of
+// a node that is being removed. False against a control plane that does not
+// report it.
+func (r ClusterResponse) IsDegradedByRemoval() bool {
+	return r.DegradedByRemoval != nil && *r.DegradedByRemoval
 }
 
 func ParseClusterResponse(body []byte) (ClusterResponse, error) {
@@ -61,6 +77,8 @@ func ParseClusterResponse(body []byte) (ClusterResponse, error) {
 		Status:            payload.Status,
 		Rebalancing:       payload.Rebalancing,
 		DataRebalancing:   payload.DataRebalancing,
+		Shrinking:         payload.Shrinking,
+		DegradedByRemoval: payload.DegradedByRemoval,
 		NDCS:              payload.NDCS,
 		NPCS:              payload.NPCS,
 		MaxFaultTolerance: payload.MaxFaultTolerance,

@@ -1251,36 +1251,38 @@ func (r *StorageNodeOpsReconciler) drainShutdown(
 			return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 		}
 		if currentStatus == utils.NodeStatusInShutdown {
-			// A shutdown is already running; asking for another would only
-			// race it. Wait for it to land like one we started ourselves.
-			log.Info("drain: node already shutting down, waiting for it without POST")
+			// Somebody else's shutdown is running. Triggering the removal
+			// under it would stamp pending_removal over in_shutdown, and that
+			// shutdown then ends by writing offline. Wait for it to land first.
+			log.Info("drain: node is shutting down; triggering the removal once it has stopped")
 			patch := client.MergeFrom(ops.DeepCopy())
-			ops.Status.Triggered = true
-			ops.Status.Message = "node is already shutting down, waiting for it to stop"
+			ops.Status.Message = "node is shutting down; waiting for it to stop before triggering the removal"
 			_ = r.Status().Patch(ctx, ops, patch)
 			return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
-		}
-		if isNodeStopped(currentStatus) {
-			log.Info("drain: node already stopped, advancing without POST")
-			patch := client.MergeFrom(ops.DeepCopy())
-			ops.Status.Triggered = true
-			ops.Status.Message = "node already stopped"
-			_ = r.Status().Patch(ctx, ops, patch)
-			return ctrl.Result{RequeueAfter: drainRequeueImmediate}, nil
 		}
 
-		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown?force=true", clusterUUID, nodeUUID)
-		_, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
+		// The removal's first step, on the control plane: admit the node,
+		// mark it pending_removal (no way back from there), shut it down and
+		// rebuild its devices. Sent for a node that is already stopped too:
+		// the admission, the status and the rebuild are all still needed.
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/prepare-removal", clusterUUID, nodeUUID)
+		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
+			class := webapi.ClassifyError(err, status)
 			if err == nil {
-				err = fmt.Errorf("suspend API returned status %d", status)
+				err = fmt.Errorf("prepare-removal returned status %d: %s", status, string(body))
 			}
-			log.Error(err, "drain: suspend POST failed")
-			return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
+			if class.Retryable {
+				log.Error(err, "drain: transient error triggering the removal, retrying")
+				return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
+			}
+			// Refused at admission: nothing was changed on the node, so there
+			// is nothing to resume either.
+			return r.failOps(ctx, ops, fmt.Sprintf("the control plane refused to remove node %s: %v", nodeUUID, err))
 		}
 		patch := client.MergeFrom(ops.DeepCopy())
 		ops.Status.Triggered = true
-		ops.Status.Message = "shutdown request sent, waiting for the node to stop"
+		ops.Status.Message = "removal triggered; waiting for the node to stop"
 		_ = r.Status().Patch(ctx, ops, patch)
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 	}
@@ -1896,7 +1898,48 @@ func (r *StorageNodeOpsReconciler) drainVerify(
 		return ctrl.Result{RequeueAfter: drainRequeueVerify}, nil
 	}
 
+	// The removal's second step closes on the control plane's own check that
+	// the node hosts nothing any more -- volumes and snapshots alike -- before
+	// the DELETE dismantles it.
+	drained, err := verifyNodeDrained(ctx, apiClient, clusterUUID, nodeUUID)
+	if err != nil {
+		log.Error(err, "drain: could not verify the node is drained, retrying")
+		return ctrl.Result{RequeueAfter: drainRequeueVerify}, nil
+	}
+	if !drained.Drained {
+		patch := client.MergeFrom(ops.DeepCopy())
+		ops.Status.Message = fmt.Sprintf("Verifying: node still hosts %d volume(s) and %d snapshot(s)",
+			len(drained.Lvols), len(drained.Snapshots))
+		_ = r.Status().Patch(ctx, ops, patch)
+		return ctrl.Result{RequeueAfter: drainRequeueVerify}, nil
+	}
+
 	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseRemoving)
+}
+
+// drainVerification is the control plane's answer to verify-drained.
+type drainVerification struct {
+	Drained   bool     `json:"drained"`
+	Lvols     []string `json:"lvols"`
+	Snapshots []string `json:"snapshots"`
+}
+
+// verifyNodeDrained asks the control plane whether the node still hosts a
+// volume or a snapshot.
+func verifyNodeDrained(ctx context.Context, apiClient *webapi.Client, clusterUUID, nodeUUID string) (drainVerification, error) {
+	var v drainVerification
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/verify-drained", clusterUUID, nodeUUID)
+	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return v, err
+	}
+	if status >= 300 {
+		return v, fmt.Errorf("verify-drained returned status %d", status)
+	}
+	if err := json.Unmarshal(body, &v); err != nil {
+		return v, fmt.Errorf("decoding verify-drained: %w", err)
+	}
+	return v, nil
 }
 
 func (r *StorageNodeOpsReconciler) drainRemove(
@@ -1996,6 +2039,7 @@ const (
 	nodeStatusMigratingLvols   = "migrating_lvols"
 	nodeStatusInRemoval        = "in_removal"
 	nodeStatusRemovedFailed    = "removed_failed"
+	nodeStatusPendingRemoval   = "pending_removal"
 )
 
 // isNodeInRemoval reports whether a node is in the part of a removal that has
@@ -2034,6 +2078,11 @@ func (r *StorageNodeOpsReconciler) resumeAndFail(
 	// DELETE), which is why the rule lives here rather than at each caller.
 	if current, _, err := getNodeBackendStatusWithCode(ctx, apiClient, clusterUUID, nodeUUID); err == nil && isNodeStopped(current) {
 		return r.failOps(ctx, ops, reason+" (node already stopped; not resuming)")
+	} else if err == nil && current == nodeStatusPendingRemoval {
+		// The removal was triggered (prepare-removal): there is no way back
+		// from pending_removal. The node stays in the removal, to be driven
+		// again, not resumed into service.
+		return r.failOps(ctx, ops, reason+" (removal already triggered; not resuming)")
 	}
 
 	resumeEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/resume", clusterUUID, nodeUUID)
@@ -2076,12 +2125,7 @@ func (r *StorageNodeOpsReconciler) clusterPauseCheck(
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, false
 	}
 
-	var reason string
-	if clusterCR.Status.Status != "" && clusterCR.Status.Status != utils.ClusterStatusActive {
-		reason = fmt.Sprintf("cluster status is %q (not active)", clusterCR.Status.Status)
-	} else if r.clusterIsDataRebalancing(ctx, apiClient, clusterCR) {
-		reason = "cluster is rebalancing"
-	}
+	reason := drainPauseReason(clusterCR.Status.Status, r.clusterFlags(ctx, apiClient, clusterCR))
 
 	if reason == "" {
 		return ctrl.Result{}, false
@@ -2097,32 +2141,77 @@ func (r *StorageNodeOpsReconciler) clusterPauseCheck(
 	return ctrl.Result{RequeueAfter: 60 * time.Second}, true
 }
 
-// clusterIsDataRebalancing reports whether the cluster is moving data by
-// itself. A drain migrates the node's volumes, and the control plane's
-// is_re_balancing -- mirrored into status.rebalancing -- counts those
-// migrations too, so the drain paused on its own work for the whole of
-// every removal (2026-09-29). The control plane's is_data_rebalancing leaves
-// them out; it is read from the API, and status.rebalancing is the fallback
-// when the API cannot be asked or does not report it.
-func (r *StorageNodeOpsReconciler) clusterIsDataRebalancing(
+// drainClusterFlags is what the drain reads about the cluster beside its
+// status.
+type drainClusterFlags struct {
+	// Status is the control plane's own status when it could be read, else
+	// the CR's mirror of it.
+	Status string
+	// DataRebalancing: the cluster is moving data by itself. A drain migrates
+	// the node's volumes, and is_re_balancing -- mirrored into
+	// status.rebalancing -- counts those migrations too, so the drain paused on
+	// its own work for the whole of every removal (2026-09-29).
+	// is_data_rebalancing leaves them out.
+	DataRebalancing bool
+	// DegradedByRemoval: the status is degraded only because of the node
+	// being removed.
+	DegradedByRemoval bool
+}
+
+// clusterFlags reads the cluster's status and flags from the API, falling back
+// to the CR's mirror when the API cannot be asked or does not report them.
+func (r *StorageNodeOpsReconciler) clusterFlags(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
-) bool {
-	fallback := clusterCR.Status.Rebalancing != nil && *clusterCR.Status.Rebalancing
+) drainClusterFlags {
+	flags := drainClusterFlags{
+		Status:          clusterCR.Status.Status,
+		DataRebalancing: clusterCR.Status.Rebalancing != nil && *clusterCR.Status.Rebalancing,
+	}
 	if apiClient == nil || clusterCR.Status.UUID == "" {
-		return fallback
+		return flags
 	}
 	body, status, err := apiClient.Do(ctx, http.MethodGet,
 		fmt.Sprintf("/api/v2/clusters/%s", clusterCR.Status.UUID), nil)
 	if err != nil || status >= 300 {
-		return fallback
+		return flags
 	}
 	resp, err := webapi.ParseClusterResponse(body)
-	if err != nil || resp.DataRebalancing == nil {
-		return fallback
+	if err != nil {
+		return flags
 	}
-	return *resp.DataRebalancing
+	if resp.Status != "" {
+		flags.Status = resp.Status
+	}
+	if resp.DataRebalancing != nil {
+		flags.DataRebalancing = *resp.DataRebalancing
+	}
+	flags.DegradedByRemoval = resp.IsDegradedByRemoval()
+	return flags
+}
+
+// drainPauseReason says why a drain must wait, or "" when it may go on.
+//
+// It waits for a cluster that is not active -- except one that is degraded
+// only because of the node being removed: that degraded state lasts until the
+// node's data is rebuilt, and the drain is what rebuilds it, so waiting for it
+// to clear would wait for ever (a k=1 cluster did exactly that). Shrinking, the
+// removal's own flag, is never a reason to wait.
+func drainPauseReason(status string, flags drainClusterFlags) string {
+	if flags.Status != "" {
+		status = flags.Status
+	}
+	switch {
+	case status == "" || status == utils.ClusterStatusActive:
+	case status == utils.ClusterStatusDegraded && flags.DegradedByRemoval:
+	default:
+		return fmt.Sprintf("cluster status is %q (not active)", status)
+	}
+	if flags.DataRebalancing {
+		return "cluster is rebalancing"
+	}
+	return ""
 }
 
 // advanceSubPhase patches ops.status.subPhase and requeues immediately.
