@@ -8,7 +8,7 @@
 //     the only thing that changes: the field was already a floor rather than a
 //     cap, so nothing about the value's meaning moves with it.
 //   - spec.backup.localEndpoint becomes spec.backup.endpoint, and the store
-//     gains a bucket, a prefix, and a region it never had (§2.1).
+//     gains a bucket and a region it never had (§2.1).
 //   - spec.hashicorpVaultSettings.baseURL regroups under spec.kms.vault (§2.4).
 //   - Three bare `enabled` toggles resolve: the realignment's and the
 //     auto-placement's move up to spec.disableDataRealignment and
@@ -83,7 +83,6 @@ const (
 // object says which field each value belongs to without consulting this file.
 const (
 	annoClusterBackupBucket = "storage.simplyblock.io/conversion-spec.backup.bucket"
-	annoClusterBackupPrefix = "storage.simplyblock.io/conversion-spec.backup.prefix"
 	annoClusterBackupRegion = "storage.simplyblock.io/conversion-spec.backup.region"
 	annoClusterDeviceClass  = "storage.simplyblock.io/conversion-spec.deviceClass"
 
@@ -95,6 +94,11 @@ const (
 	annoClusterStatusTasks    = "storage.simplyblock.io/conversion-status.tasks"
 	annoClusterStatusMessage  = "storage.simplyblock.io/conversion-status.message"
 	annoClusterStatusObserved = "storage.simplyblock.io/conversion-status.observedGeneration"
+
+	// The failure-domain mapping has no v1alpha1 field, and losing it would
+	// let a later deployment give a label another index than its nodes run
+	// under.
+	annoClusterStatusFailureDomains = "storage.simplyblock.io/conversion-status.failureDomains"
 
 	// The thresholds widen from int32 to int64 on the way up, so a hub value
 	// beyond int32 has nowhere to go on the way down. It is stashed whole
@@ -358,7 +362,6 @@ func stashClusterHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageCluster) 
 			value any
 		}{
 			{annoClusterBackupBucket, b.Bucket},
-			{annoClusterBackupPrefix, b.Prefix},
 			{annoClusterBackupRegion, b.Region},
 		} {
 			if err := stash(meta, field.key, field.value); err != nil {
@@ -368,7 +371,7 @@ func stashClusterHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageCluster) 
 	} else {
 		// The block itself is gone, so any value stashed from an earlier write
 		// is stale: leaving it would restore a bucket the hub no longer names.
-		clear(meta, annoClusterBackupBucket, annoClusterBackupPrefix, annoClusterBackupRegion)
+		clear(meta, annoClusterBackupBucket, annoClusterBackupRegion)
 	}
 
 	// A threshold is stashed only when it does not fit the narrower type, so an
@@ -407,6 +410,7 @@ func stashClusterHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageCluster) 
 		{annoClusterDeviceClass, deviceClass},
 		{annoClusterStatusPhase, string(src.Status.Phase)},
 		{annoClusterStatusTasks, src.Status.Tasks},
+		{annoClusterStatusFailureDomains, src.Status.FailureDomains},
 		{annoClusterStatusMessage, src.Status.Message},
 		{annoClusterStatusObserved, src.Status.ObservedGeneration},
 	} {
@@ -421,13 +425,12 @@ func stashClusterHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageCluster) 
 // object converted up carries the fields rather than both the fields and the
 // notes about them.
 func restoreClusterHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageCluster) error {
-	var bucket, prefix, region string
+	var bucket, region string
 	for _, field := range []struct {
 		key    string
 		target any
 	}{
 		{annoClusterBackupBucket, &bucket},
-		{annoClusterBackupPrefix, &prefix},
 		{annoClusterBackupRegion, &region},
 	} {
 		if err := unstash(meta, field.key, field.target); err != nil {
@@ -436,7 +439,6 @@ func restoreClusterHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageCluster
 	}
 	if dst.Spec.Backup != nil {
 		dst.Spec.Backup.Bucket = bucket
-		dst.Spec.Backup.Prefix = prefix
 		dst.Spec.Backup.Region = region
 	}
 
@@ -482,6 +484,7 @@ func restoreClusterHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageCluster
 		target any
 	}{
 		{annoClusterStatusTasks, &dst.Status.Tasks},
+		{annoClusterStatusFailureDomains, &dst.Status.FailureDomains},
 		{annoClusterStatusMessage, &dst.Status.Message},
 		{annoClusterStatusObserved, &dst.Status.ObservedGeneration},
 	} {

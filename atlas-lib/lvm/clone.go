@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 )
 
 // ImportClonedVolumeGroup regenerates fresh PV/VG UUIDs for pv and renames
@@ -146,9 +145,5 @@ func (m *Manager) ResolveClonedVolumeGroup(
 // listLogicalVolumesOn is ListLogicalVolumes scoped to one device, for a group
 // whose name and UUID a source elsewhere on the host may share.
 func (m *Manager) listLogicalVolumesOn(ctx context.Context, pv PhysicalVolume, volumeGroup VolumeGroup) ([]string, error) {
-	out, err := m.exec(ctx, []string{pv.DevicePath}, "lvs", "--noheadings", "-o", "lv_name", volumeGroup.Name)
-	if err != nil {
-		return nil, err
-	}
-	return strings.Fields(out), nil
+	return m.lvsLVNames(ctx, []string{pv.DevicePath}, volumeGroup.Name)
 }

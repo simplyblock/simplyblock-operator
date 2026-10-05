@@ -229,7 +229,16 @@ func Job(opts JobOptions) (*batchv1.Job, error) {
 							ReadOnlyRootFilesystem: &readOnlyRoot,
 						},
 						VolumeMounts: []corev1.VolumeMount{
-							{Name: "host-sys", MountPath: hostSysfsMount, ReadOnly: true},
+							// sysfs is writable because the probe hands back
+							// the NVMe controllers a dead deployment left on a
+							// userspace driver, which is three writes under
+							// /sys/bus/pci. Scoping the write to that subtree
+							// would not do it: a device there is a symlink into
+							// /sys/devices, so the attribute the rebind sets
+							// resolves outside it. Read-only, a worker whose
+							// disks a previous deployment still holds is a
+							// worker with no disks.
+							{Name: "host-sys", MountPath: hostSysfsMount},
 							{Name: "host-proc", MountPath: hostProcMount, ReadOnly: true},
 							// /dev is not read-only: opening a device node
 							// O_EXCL is the kernel's own answer to whether

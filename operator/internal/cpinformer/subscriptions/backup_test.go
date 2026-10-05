@@ -157,3 +157,29 @@ func TestBackupPolicySubscriptionNamesTheObjectAfterThePolicysName(t *testing.T)
 		t.Errorf("Lookup = %+v, want the nightly policy", dto)
 	}
 }
+
+// Regression: a backup record the control plane removed is reported with an
+// empty body and its id, prefixed by the cluster, in the event's id field. The
+// cache ignored it and the StorageBackup object stayed until the next reconnect.
+func TestBackupSubscriptionDropsABackupDeletedWithAnEmptyBody(t *testing.T) {
+	s := adoptedBackupSubscription()
+	if err := s.Ingest(context.Background(),
+		backupSnapshot(t, BackupDTO{ID: backupID, Status: "completed"})); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	if err := s.Ingest(context.Background(), cpinformer.Event{
+		Kind: cpinformer.EventDeleted, Scope: backupScope(),
+		ID: backupCluster + "/" + backupID, Data: []byte(`{}`),
+	}); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	key := types.NamespacedName{
+		Namespace: backupNamespace,
+		Name:      simplyblockv1alpha2.StorageBackupName(backupID),
+	}
+	if _, _, ok := s.Lookup(key); ok {
+		t.Error("the backup is still cached after the control plane deleted it")
+	}
+}

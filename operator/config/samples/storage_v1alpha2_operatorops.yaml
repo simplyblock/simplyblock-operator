@@ -40,6 +40,12 @@ spec:
     nodeSelector:
       simplyblock.io/storage: "true"
 
+    # Report disks carrying a stale partition table alongside the free ones.
+    # It is the only availability condition that can be waived: a mounted or
+    # otherwise busy device is never reported, because simplyblock taking it
+    # would corrupt whatever is using it.
+    enablePartitionedDevices: true
+
     deviceFilter:
       # The slot the fleet boots from, kept out of every group of the draft.
       pcieDenyList:
@@ -47,9 +53,3 @@ spec:
 
       # Only the disks of the size this deployment was bought for.
       driveSizeRange: 1T-4T
-
-      # Report disks carrying a stale partition table alongside the free ones.
-      # It is the only availability condition that can be waived: a mounted or
-      # otherwise busy device is never reported, because simplyblock taking it
-      # would corrupt whatever is using it.
-      enablePartitionedDevices: true

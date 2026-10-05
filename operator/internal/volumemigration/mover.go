@@ -71,6 +71,22 @@ type Move struct {
 	// Message is why the phase is what it is, which a caller puts in the event
 	// it raises about the move.
 	Message string
+	// Members is how many volumes the move carries, which is every volume of
+	// the named one's NVMe-oF subsystem, because the control plane migrates a
+	// subsystem as a whole. Zero means the move has not learned it yet.
+	Members int
+	// TargetNodeUUID is the backend identifier of the node the move is
+	// headed for, which a caller that retries a failed move needs in order not
+	// to send the retry to the same place.
+	TargetNodeUUID string
+	// Engaged says the control plane accepted the move's migration, so a
+	// failure from there on happened with the target taking part rather than
+	// before it was ever asked.
+	Engaged bool
+	// CreatorUID is the UID of the object that raised the move, empty when
+	// the move records none. Moves are found by a label any later caller can
+	// share, and the UID is what tells one creator's moves from another's.
+	CreatorUID string
 }
 
 // MoveRequest is one volume's move, as a caller asks for it.
@@ -218,7 +234,21 @@ func migrationMove(migration *simplyblockv1alpha1.VolumeMigration) Move {
 		PVName:    migration.Spec.PVName,
 		Phase:     phase,
 		Message:   migration.Status.ErrorMessage,
+		Members:   migration.Status.MemberCount,
+
+		TargetNodeUUID: migration.Spec.TargetNodeUUID,
+		Engaged:        migration.Status.MigrationUUID != "",
+		CreatorUID:     controllerUID(migration),
 	}
+}
+
+// controllerUID is the UID of the object controlling obj, which is how the
+// namespaced kind records its creator, or the empty string when none does.
+func controllerUID(obj metav1.Object) string {
+	if ref := metav1.GetControllerOf(obj); ref != nil {
+		return string(ref.UID)
+	}
+	return ""
 }
 
 // OperationMover raises the redesigned PersistentVolumeOps.
@@ -240,7 +270,9 @@ func (m *OperationMover) Start(ctx context.Context, request MoveRequest) error {
 		return err
 	}
 
-	labels := map[string]string{}
+	labels := map[string]string{
+		simplyblockv1alpha2.PersistentVolumeOpsTargetNodeLabel: request.TargetNodeUUID,
+	}
 	for key, value := range request.Labels {
 		labels[key] = value
 	}
@@ -346,12 +378,26 @@ func operationMove(ops *simplyblockv1alpha2.PersistentVolumeOps) Move {
 	case simplyblockv1alpha2.PersistentVolumeOpsPhaseRunning:
 		phase = MoveRunning
 	}
-	return Move{
-		Name:    ops.Name,
-		PVName:  ops.Spec.PersistentVolumeName,
-		Phase:   phase,
-		Message: ops.Status.Message,
+	move := Move{
+		Name:           ops.Name,
+		PVName:         ops.Spec.PersistentVolumeName,
+		Phase:          phase,
+		Message:        ops.Status.Message,
+		TargetNodeUUID: ops.Labels[simplyblockv1alpha2.PersistentVolumeOpsTargetNodeLabel],
 	}
+	if ops.Spec.CreatorRef != nil {
+		move.CreatorUID = string(ops.Spec.CreatorRef.UID)
+	}
+	if recorded := ops.Status.Migration; recorded != nil {
+		if recorded.MemberCount != nil {
+			move.Members = int(*recorded.MemberCount)
+		}
+		if recorded.TargetNodeUUID != "" {
+			move.TargetNodeUUID = recorded.TargetNodeUUID
+		}
+		move.Engaged = recorded.MigrationUUID != ""
+	}
+	return move
 }
 
 // NewMover builds the mover a deployment uses.

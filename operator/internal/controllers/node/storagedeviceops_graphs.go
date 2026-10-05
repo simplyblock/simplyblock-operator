@@ -1,12 +1,18 @@
 // The state graph of each StorageDeviceOps action, declared as data.
 //
-//	Requesting ──► Awaiting
+//	Restart  Requesting ──► Awaiting
+//	Fail     Removing ──► Failing ──► Awaiting
 //
-// One action is declared, because one is what the control plane's v2 API can
-// serve; the other four of design-storagedevice.md §6 are blocked on verbs it
-// does not offer, and v1alpha2.ExternalDependencies is the list. A MultiConfig
-// with one entry is what every other Ops controller in this group uses, so the
-// second action arrives as an entry rather than as a case.
+// Two actions are declared, because two are what the control plane's v2 API can
+// serve. The other three of design-storagedevice.md §6 are blocked on verbs it
+// does not offer, and the TODO beside their constants in
+// storagedeviceops_types.go is the list.
+//
+// **Fail is three steps where §6 specifies two.** The control plane refuses to
+// fail a device that is still in the data path, so the removal §6 describes as
+// the action's effect is a call of its own that precedes it. Splitting them is
+// what the write-ahead rule asks for in any case: two side effects in one step
+// are two a resumed operation cannot tell apart.
 //
 // design-storagedevice.md §6 is the specification.
 
@@ -28,11 +34,15 @@ type deviceStep = simplyblockv1alpha2.StorageDeviceOpsStep
 const (
 	stepDeviceRequesting = simplyblockv1alpha2.StorageDeviceOpsStepRequesting
 	stepDeviceAwaiting   = simplyblockv1alpha2.StorageDeviceOpsStepAwaiting
+	stepDeviceRemoving   = simplyblockv1alpha2.StorageDeviceOpsStepRemoving
+	stepDeviceFailing    = simplyblockv1alpha2.StorageDeviceOpsStepFailing
 )
 
-// actionDeviceRestart is the MultiConfig key for the one action this kind
-// performs.
-const actionDeviceRestart = statemachine.Action(simplyblockv1alpha2.StorageDeviceOpsActionRestart)
+// The MultiConfig keys for the actions this kind performs.
+const (
+	actionDeviceRestart = statemachine.Action(simplyblockv1alpha2.StorageDeviceOpsActionRestart)
+	actionDeviceFail    = statemachine.Action(simplyblockv1alpha2.StorageDeviceOpsActionFail)
+)
 
 // How long each step may take before the operation is reported as stuck.
 const (
@@ -47,6 +57,19 @@ const (
 	// being recycled, which is the outcome worth reporting rather than waiting
 	// out.
 	awaitingDeviceDeadline = 15 * time.Minute
+
+	// removingDeviceDeadline bounds the removal. It is larger than the restart's
+	// budget because the call disconnects the device from every node in the
+	// cluster before it answers, so the work behind it grows with the cluster
+	// rather than with the device.
+	removingDeviceDeadline = 10 * time.Minute
+
+	// awaitingFailureDeadline bounds the control plane reporting a failure it
+	// records inside the call that asked for it. What is waited on is the
+	// device stream catching up, not a rebuild: the rebuild is started by the
+	// failure and outlives the operation, and an operation that waited for it
+	// would hold the device's lock for hours after its decision had landed.
+	awaitingFailureDeadline = 5 * time.Minute
 )
 
 // storageDeviceOpsGraphs declares the state graph of each action.
@@ -71,6 +94,35 @@ func storageDeviceOpsGraphs() statemachine.MultiConfig[deviceStep] {
 				stepDeviceAwaiting: {OnEnter: deviceDeadline(awaitingDeviceDeadline)},
 			},
 		},
+		actionDeviceFail: {
+			Initial: stepDeviceRemoving,
+			States: map[deviceStep]statemachine.StateDef[deviceStep]{
+				// Removing is abortable for the same reason Requesting is:
+				// nothing has been issued while the operation sits in it. The
+				// reconciler asks one question the graph cannot, because the
+				// call is made inside this step: a resumed operation whose
+				// device is already removed is refused the edge the graph
+				// grants it.
+				stepDeviceRemoving: {
+					To:        []deviceStep{stepDeviceFailing},
+					Abortable: true,
+					OnEnter:   deviceDeadline(removingDeviceDeadline),
+				},
+				// Failing is not. The device is out of the data path by the
+				// time this step is entered, and this operator has no call that
+				// puts it back. An abort here would record a stop while leaving
+				// the device removed under an object that says nothing
+				// happened.
+				stepDeviceFailing: {
+					To:      []deviceStep{stepDeviceAwaiting},
+					OnEnter: deviceDeadline(requestingDeviceDeadline),
+				},
+				// Awaiting is not, and here the reason is stronger than the
+				// restart's: a failure is the one decision in this kind that
+				// nothing reverses.
+				stepDeviceAwaiting: {OnEnter: deviceDeadline(awaitingFailureDeadline)},
+			},
+		},
 	}
 }
 
@@ -82,11 +134,15 @@ func deviceDeadline(d time.Duration) statemachine.TransitionFunc[deviceStep] {
 	return func(context.Context, deviceStep, deviceStep) (time.Duration, error) { return d, nil }
 }
 
-// initialDeviceDeadline is the budget of the step every operation is born in. A
-// machine is already in its initial state when it is built, so that state's
-// OnEnter never runs, and setting it explicitly is what stops the first step
-// from being the one step that cannot time out.
-const initialDeviceDeadline = requestingDeviceDeadline
+// initialDeviceDeadlines are the budgets of the step each action's machine is
+// born in. A machine is already in its initial state when it is built, so that
+// state's OnEnter never runs and the graph's deadline for it is never set.
+// Setting it explicitly is what stops the first step of every operation from
+// being the one step that cannot time out.
+var initialDeviceDeadlines = map[statemachine.Action]time.Duration{
+	actionDeviceRestart: requestingDeviceDeadline,
+	actionDeviceFail:    removingDeviceDeadline,
+}
 
 // UnabortableDeviceSteps are the steps a running operation cannot be stopped in,
 // which is the refusal table a DELETE admission guard would derive from this

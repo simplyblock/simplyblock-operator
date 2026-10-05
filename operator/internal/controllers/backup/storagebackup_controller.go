@@ -80,6 +80,7 @@ const (
 	cpBackupFailed     = "failed"
 	cpBackupMerging    = "merging"
 	cpBackupDeleting   = "deleting"
+	cpBackupMerged     = "merged"
 )
 
 // BackupCache is the read surface the reconciler needs from the backup
@@ -147,7 +148,10 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	switch {
-	case inCache && len(scope) == 1:
+	// A merged backup was folded into its successor, which unmapped its keys and
+	// deleted its manifest: the control plane keeps only a record of it, and the
+	// copy has left the store.
+	case inCache && len(scope) == 1 && dto.Status != cpBackupMerged:
 		return r.upsert(ctx, req.NamespacedName, scope, dto)
 
 	case exists:

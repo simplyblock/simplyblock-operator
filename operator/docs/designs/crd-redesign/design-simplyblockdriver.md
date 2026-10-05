@@ -547,7 +547,9 @@ such an object rather than orphaning volumes (§4.3, step 2), which contains the
 damage without removing the need.
 
 **The chart renders the object**, for every deployment profile that runs a CSI
-driver, which today is both of them. The earlier reading of this section was that
+driver, which is `standalone` and `managed`. The `empty` profile renders none:
+it installs the operator alone, and the administrator writes the
+`SimplyblockDriver` afterward. The earlier reading of this section was that
 it did not, and that left the kind with no producer at all: a fresh install came
 up with an operator, a control plane, and nothing able to provision a volume. So
 the chart writes it with the values below on its spec, and this table stays the

@@ -113,7 +113,8 @@ func reconcilerFor(t *testing.T, objects ...client.Object) *ClusterDeploymentCon
 	t.Helper()
 	scheme := testsupport.NewScheme(t, corev1.AddToScheme)
 	builder := fake.NewClientBuilder().WithScheme(scheme).
-		WithStatusSubresource(&simplyblockv1alpha2.ClusterDeploymentConfig{}).
+		WithStatusSubresource(&simplyblockv1alpha2.ClusterDeploymentConfig{},
+			&simplyblockv1alpha2.StorageCluster{}).
 		WithObjects(objects...)
 	return &ClusterDeploymentConfigReconciler{
 		Client:    builder.Build(),

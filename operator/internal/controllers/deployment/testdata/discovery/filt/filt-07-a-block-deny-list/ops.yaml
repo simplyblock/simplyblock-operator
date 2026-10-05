@@ -9,7 +9,7 @@ spec:
     deviceFilter:
       blockDenyList:
       - /dev/sda
-      enableLogicalBlockDevices: true
+    enableLogicalBlockDevices: true
     forceJournalDevice: true
 status:
   environment: K3s

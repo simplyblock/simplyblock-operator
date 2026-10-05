@@ -48,7 +48,8 @@ Writing is itself ordered, and the order is load-bearing.
 ```
 reports, sorted by worker name
   └─ per worker:
-       1. synthesize a device for every idle userspace NVMe controller   §4.4
+       1. synthesize a device for every userspace NVMe controller the
+          probe could not reclaim, and every controller bound to none    §4.4
        2. apply the device rules, first refusal wins                     §4.1
        3. apply the worker rules, first refusal wins                     §4.3
        4. choose which memory node to place on                           §5
@@ -261,6 +262,12 @@ survived the rules" is true and useless.
 | Userspace-bound controllers, nothing driving them   | the disks are there to be reclaimed       |
 | Neither                                             | no device of it survived the device rules |
 
+The second row is now the probe's failure rather than the fleet's state. A probe
+hands every idle userspace-bound controller back to the kernel before it reads
+the disks, so a controller still on a userspace driver and still idle by the time
+the generator sees it is one the rebind could not take. The message is right and
+the reader it is written for is the one asking why the reclaim did not happen.
+
 **Fully readable**: refuses a worker whose probe could not read everything. Off
 by default, and **nothing in the operator ever turns it on**. `GROUNDED`: a
 worker whose CPU tree could not be read still has disks worth reviewing.
@@ -274,6 +281,19 @@ reported device already carries. `GROUNDED`, and the trade is stated: everything
 the disk would have said about itself is lost, so it reaches the draft unsized
 and uninspected, and the group it lands in is named for a count rather than a
 capacity.
+
+**The synthesis is the fallback.** The probe reclaims an idle userspace-bound
+controller before it reads the block devices, so the disk behind it is read like
+any other: sized, inspected, and named by the stable path the draft records. Two
+states still reach the synthesis. One is a controller whose rebind failed. The
+other is the state the synthesis was written for in the first place, a controller
+bound to no driver at all, which is what a failed node add leaves behind and
+which no rebind is needed to read.
+
+So the trade covers the uncommon case now. The worker this section was written
+about, a machine of four controllers reporting no disks, reports four disks. What
+remains is an honest description of a draft entry nobody could read, and one of
+those in a draft is rare enough to be worth asking about.
 
 **Two interactions worth deciding on**, neither documented:
 
@@ -308,11 +328,11 @@ matter:
 - A worker whose report names a node the run is not about is dropped in silence.
 - ~~`blockAllowList` and `blockDenyList` are silently ignored when the
   planner's class and the filter disagree.~~ **Fixed.** The planner carried a
-  class field beside the filter's own `enableLogicalBlockDevices`, so one fact
+  class field beside the run's own `enableLogicalBlockDevices`, so one fact
   had two statements and they could disagree: a planner told nothing scanned
   NVMe, read the PCI lists, and dropped the block lists on a branch that never
-  ran. The field is gone, and the class is read from the filter, where it was
-  always written.
+  ran. The field is gone, and the class is read from `spec.discover`, where the
+  run states it.
 
 **F-4.3. `InUse: false` is not distinguished from "never read."** The report's
 own comment says a reader deciding whether to reclaim a controller "has to find

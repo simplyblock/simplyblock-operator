@@ -1,5 +1,6 @@
-// The reconciler for StorageDeviceOps, which today means one action: restarting
-// one device rather than the storage node it sits in.
+// The reconciler for StorageDeviceOps, which today means two actions: restarting
+// one device rather than the storage node it sits in, and failing one device so
+// the cluster stops trusting it.
 //
 // The operation holds its device's lock for as long as it runs, which is
 // status.activeOpsRef on the StorageDevice — the field design-storagedevice.md
@@ -10,7 +11,7 @@
 // Nothing here blocks. A step that is not finished requeues, and the step it is
 // on is in the status, so a controller restart resumes rather than restarts.
 //
-// design-storagedevice.md §6 is the specification, and §6's other four actions
+// design-storagedevice.md §6 is the specification, and §6's other three actions
 // are blocked on control-plane verbs that do not exist — the TODO beside their
 // constants in storagedeviceops_types.go names each one.
 
@@ -38,6 +39,7 @@ import (
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/stepclaim"
 )
 
 const (
@@ -58,6 +60,9 @@ const (
 	DeviceOperationFailed    = "OperationFailed"
 	DeviceOperationAborted   = "OperationAborted"
 	DeviceRestartRequested   = "DeviceRestartRequested"
+	DeviceRemovalRequested   = "DeviceRemovalRequested"
+	DeviceFailRequested      = "DeviceFailRequested"
+	DeviceAbortRefused       = "AbortRefused"
 	DeviceStepDeadlineGone   = "StepDeadlineExceeded"
 )
 
@@ -71,6 +76,14 @@ type DeviceClient interface {
 
 	// RestartDevice recycles one device in place.
 	RestartDevice(ctx context.Context, clusterID, nodeID, deviceID string) error
+
+	// RemoveDevice takes one device out of the data path, leaving it in its
+	// slot. It is the first of the two calls a failure is made of.
+	RemoveDevice(ctx context.Context, clusterID, nodeID, deviceID string) error
+
+	// FailDevice declares one removed device untrustworthy, so the cluster
+	// rebuilds the redundancy it held elsewhere.
+	FailDevice(ctx context.Context, clusterID, nodeID, deviceID string) error
 }
 
 // StorageDeviceOpsReconciler runs operations against one device.
@@ -166,16 +179,29 @@ func (r *StorageDeviceOpsReconciler) advance(
 
 	current := machine.CurrentState()
 	if ops.Spec.Abort {
-		if !machine.CanAbort() {
-			return ctrl.Result{RequeueAfter: deviceOpsRetry}, r.note(ctx, ops, fmt.Sprintf(
-				"an abort was asked for and step %s cannot be stopped; the restart has been "+
-					"issued and nothing recalls one", current))
+		blocked, err := r.abortBlocked(ctx, ops, device, machine.CanAbort())
+		if err != nil {
+			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, r.abort(ctx, ops, device, current)
+		if blocked == "" {
+			return ctrl.Result{}, r.abort(ctx, ops, device, current)
+		}
+		// Refused, and the operation runs on rather than stopping here. An
+		// operation halted by a refused abort would be stranded in the step it
+		// was refused in: a failure would leave the device out of the data path
+		// and never failed, which is the state the refusal exists to avoid, and
+		// either action would hold the device's lock until somebody noticed.
+		//
+		// The refusal is an event rather than the status message, because the
+		// message belongs to the step the operation is still running and two
+		// writers would alternate it every pass. Repeating the event is what the
+		// recorder aggregates.
+		r.event(ops, corev1.EventTypeWarning, DeviceAbortRefused,
+			fmt.Sprintf("the abort asked for in step %s was refused: %s", current, blocked))
 	}
 
 	if machine.TimeoutReached() {
-		expired := deviceTimeoutMessage(current, device.Name)
+		expired := deviceTimeoutMessage(ops.Spec.Action, current, device.Name)
 		r.event(ops, corev1.EventTypeWarning, DeviceStepDeadlineGone, expired)
 		return ctrl.Result{}, r.fail(ctx, ops, expired)
 	}
@@ -208,6 +234,51 @@ func (r *StorageDeviceOpsReconciler) advance(
 		statemachine.ToKube(machine.Snapshot()).Deadline)
 }
 
+// abortBlocked is why an abort cannot be honored, or the empty string when it
+// can.
+//
+// The graph answers for the step, and a failure asks one question more. Its
+// removal is issued inside the step that declares the abort edge, so a pass that
+// died between the call and the transition leaves the operation in an abortable
+// step with the device already out of the data path. Reading the device is what
+// tells that apart from a step that has issued nothing, and this operator has no
+// call that puts a removed device back.
+func (r *StorageDeviceOpsReconciler) abortBlocked(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageDeviceOps,
+	device *simplyblockv1alpha2.StorageDevice,
+	graphAllows bool,
+) (string, error) {
+	if !graphAllows {
+		return deviceAbortRefusal(ops.Spec.Action), nil
+	}
+	if ops.Spec.Action != simplyblockv1alpha2.StorageDeviceOpsActionFail {
+		return "", nil
+	}
+
+	cluster, node, id, err := deviceAddress(device)
+	if err != nil {
+		// A device with no backend identity is one nothing was issued against,
+		// because every step refuses it first.
+		return "", nil
+	}
+	current, err := r.API.Device(ctx, cluster, node, id)
+	switch {
+	case errors.Is(err, errs.ErrNotFound):
+		// A device the control plane no longer holds is one no unwind can
+		// reach, so there is nothing for the abort to strand.
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("read device %s to decide the abort: %w", device.Name, err)
+	}
+
+	if deviceIsInService(current.Status) {
+		return "", nil
+	}
+	return fmt.Sprintf("device %s already reports %q, so the removal has happened and "+
+		"this operator has no call that puts it back", device.Name, current.Status), nil
+}
+
 // performStep runs one step and reports whether it has finished.
 func (r *StorageDeviceOpsReconciler) performStep(
 	ctx context.Context,
@@ -218,6 +289,10 @@ func (r *StorageDeviceOpsReconciler) performStep(
 	switch current {
 	case stepDeviceRequesting:
 		return r.request(ctx, ops, device)
+	case stepDeviceRemoving:
+		return r.removeFromDataPath(ctx, ops, device)
+	case stepDeviceFailing:
+		return r.requestFailure(ctx, ops, device)
 	case stepDeviceAwaiting:
 		return r.await(ctx, ops, device)
 	default:
@@ -242,26 +317,156 @@ func (r *StorageDeviceOpsReconciler) request(
 		return true, nil
 	}
 
-	cluster, node, id := device.Status.ClusterID, device.Status.NodeID, device.Spec.DeviceID
-	if cluster == "" || node == "" || id == "" {
-		return false, refuseDevice(
-			"device %s does not report which cluster, node, and device it is, so there is "+
-				"nothing to address the restart to", device.Name)
-	}
-
-	before := device.Status.DeviceStatus
-	if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageDeviceOpsStatus) {
-		status.DeviceStatusBefore = before
-	}); err != nil {
+	cluster, node, id, err := deviceAddress(device)
+	if err != nil {
 		return false, err
 	}
 
-	if err := r.API.RestartDevice(ctx, cluster, node, id); err != nil {
-		return false, refuseDevice(
-			"the control plane refused to restart device %s: %v", device.Name, err)
+	// The record travels in the claim's patch rather than in a write of its
+	// own. A write that rereads and retries on a conflict lands for a pass
+	// holding a stale copy as well, and that pass would then restart the
+	// device a second time.
+	before := device.Status.DeviceStatus
+	claimed, err := r.once(ctx, ops, func() error {
+		if err := r.API.RestartDevice(ctx, cluster, node, id); err != nil {
+			return refuseDevice(
+				"the control plane refused to restart device %s: %v", device.Name, err)
+		}
+		return nil
+	}, func() { ops.Status.DeviceStatusBefore = before })
+	if err != nil || !claimed {
+		return false, err
 	}
 	r.event(ops, corev1.EventTypeNormal, DeviceRestartRequested,
 		fmt.Sprintf("asked the control plane to restart device %s", device.Name))
+	return true, nil
+}
+
+// deviceAddress is the three identifiers every device call carries, or the
+// refusal for an object that does not report them.
+func deviceAddress(
+	device *simplyblockv1alpha2.StorageDevice,
+) (cluster, node, id string, err error) {
+	cluster, node, id = device.Status.ClusterID, device.Status.NodeID, device.Spec.DeviceID
+	if cluster == "" || node == "" || id == "" {
+		return "", "", "", refuseDevice(
+			"device %s does not report which cluster, node, and device it is, so there is "+
+				"nothing to address the operation to", device.Name)
+	}
+	return cluster, node, id, nil
+}
+
+// removeFromDataPath takes the device out of the data path, which is the first
+// of the two calls a failure is made of: the control plane refuses to fail a
+// device that is still serving.
+//
+// What it decides from is the status the control plane reports rather than a
+// record of its own, which is what makes the step resumable. A pass that died
+// between the call and its record finds the device already removed and issues
+// nothing, where a written record would have been the thing that did not
+// survive.
+func (r *StorageDeviceOpsReconciler) removeFromDataPath(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageDeviceOps,
+	device *simplyblockv1alpha2.StorageDevice,
+) (bool, error) {
+	cluster, node, id, err := deviceAddress(device)
+	if err != nil {
+		return false, err
+	}
+
+	current, err := r.API.Device(ctx, cluster, node, id)
+	switch {
+	case errors.Is(err, errs.ErrNotFound):
+		return false, refuseDevice(
+			"device %s is no longer held by the control plane, so there is nothing to fail",
+			device.Name)
+	case err != nil:
+		return false, fmt.Errorf("read device %s before removing it: %w", device.Name, err)
+	}
+
+	// A device that is already failed is not failed again. The action records a
+	// decision somebody made, and reporting that the decision was carried out
+	// when nothing was issued hides the likelier reading: that the operation
+	// names a device somebody else has already dealt with.
+	if deviceIsFailed(current.Status) {
+		return false, refuseDevice(
+			"device %s already reports %q, so the failure this operation asks for has "+
+				"already happened", device.Name, current.Status)
+	}
+
+	if current.Status == cpDeviceRemoved {
+		// Out of the data path already, by an earlier pass of this step or by
+		// somebody's hand. Issuing the removal again is a call the control plane
+		// refuses, and the step's work is done either way.
+		return true, r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageDeviceOpsStatus) {
+			status.DeviceStatusBefore = current.Status
+		})
+	}
+
+	// The status before travels in the claim's patch, so that no write that
+	// rereads on a conflict runs between this pass choosing the step and
+	// claiming it.
+	claimed, err := r.once(ctx, ops, func() error {
+		if err := r.API.RemoveDevice(ctx, cluster, node, id); err != nil {
+			return refuseDevice(
+				"the control plane refused to remove device %s from the data path: %v",
+				device.Name, err)
+		}
+		return nil
+	}, func() { ops.Status.DeviceStatusBefore = current.Status })
+	if err != nil || !claimed {
+		return false, err
+	}
+	r.event(ops, corev1.EventTypeNormal, DeviceRemovalRequested,
+		fmt.Sprintf("took device %s out of the data path, before failing it", device.Name))
+	return true, nil
+}
+
+// requestFailure declares the removed device untrustworthy, which is the second
+// of the two calls and the irreversible one.
+func (r *StorageDeviceOpsReconciler) requestFailure(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageDeviceOps,
+	device *simplyblockv1alpha2.StorageDevice,
+) (bool, error) {
+	cluster, node, id, err := deviceAddress(device)
+	if err != nil {
+		return false, err
+	}
+
+	current, err := r.API.Device(ctx, cluster, node, id)
+	switch {
+	case errors.Is(err, errs.ErrNotFound):
+		return false, refuseDevice(
+			"device %s is no longer held by the control plane, so the failure cannot be "+
+				"issued against it", device.Name)
+	case err != nil:
+		return false, fmt.Errorf("read device %s before failing it: %w", device.Name, err)
+	}
+
+	if deviceIsFailed(current.Status) {
+		// The call landed on a pass that died before recording it.
+		return true, nil
+	}
+	if current.Status != cpDeviceRemoved {
+		return false, refuseDevice(
+			"device %s reports %q, where the control plane fails only a device it already "+
+				"holds as removed", device.Name, current.Status)
+	}
+
+	claimed, err := r.once(ctx, ops, func() error {
+		if err := r.API.FailDevice(ctx, cluster, node, id); err != nil {
+			return refuseDevice(
+				"the control plane refused to fail device %s: %v", device.Name, err)
+		}
+		return nil
+	})
+	if err != nil || !claimed {
+		return false, err
+	}
+	r.event(ops, corev1.EventTypeNormal, DeviceFailRequested,
+		fmt.Sprintf("asked the control plane to fail device %s", device.Name))
 	return true, nil
 }
 
@@ -270,42 +475,70 @@ func (r *StorageDeviceOpsReconciler) request(
 // What it waits for is the status the device reports rather than an absence:
 // a restart takes the device out and brings it back, and a check that only
 // looked for it being gone would finish on the way down.
+// What it waits for is the status the action asked for, which differs by action:
+// a restart ends in service and a failure ends out of it.
 func (r *StorageDeviceOpsReconciler) await(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.StorageDeviceOps,
 	device *simplyblockv1alpha2.StorageDevice,
 ) (bool, error) {
-	current, err := r.API.Device(ctx,
-		device.Status.ClusterID, device.Status.NodeID, device.Spec.DeviceID)
+	cluster, node, id, err := deviceAddress(device)
+	if err != nil {
+		return false, err
+	}
+
+	current, err := r.API.Device(ctx, cluster, node, id)
 	switch {
 	case errors.Is(err, errs.ErrNotFound):
-		// A device the control plane has stopped holding did not come back
-		// from the restart, which is a finding rather than a wait: §5.2 deletes
+		// A device the control plane has stopped holding did not reach what the
+		// action asked for, which is a finding rather than a wait: §5.2 deletes
 		// the object when the node stops reporting it, and this operation would
 		// otherwise sit until its deadline describing a device that is gone.
 		return false, refuseDevice(
-			"device %s is no longer held by the control plane, so the restart did not "+
-				"bring it back", device.Name)
+			"device %s is no longer held by the control plane, so %s",
+			device.Name, deviceLostDuringWait(ops.Spec.Action))
 	case err != nil:
 		return false, fmt.Errorf("read device %s back: %w", device.Name, err)
 	}
 
-	if !deviceIsInService(current.Status) {
+	if !deviceReachedItsOutcome(ops.Spec.Action, current.Status) {
 		return false, r.note(ctx, ops, fmt.Sprintf(
-			"device %s reports %q; waiting for it to come back", device.Name, current.Status))
+			"device %s reports %q; waiting for it to reach what the %s asked for",
+			device.Name, current.Status, ops.Spec.Action))
 	}
 	return true, nil
 }
 
+// deviceReachedItsOutcome reports whether the device is where the action asked it
+// to end up.
+//
+// The spellings it compares are the control plane's own and are the ones the
+// mirror already names in storagedevice_controller.go. They are compared rather
+// than mapped, for the reason status.deviceStatus keeps them: a vocabulary
+// translated here would be one these waits could not express, and the set of
+// statuses is the backend's to grow.
+func deviceReachedItsOutcome(
+	act simplyblockv1alpha2.StorageDeviceOpsAction, status string,
+) bool {
+	if act == simplyblockv1alpha2.StorageDeviceOpsActionFail {
+		return deviceIsFailed(status)
+	}
+	return deviceIsInService(status)
+}
+
 // deviceIsInService reads the control plane's own vocabulary for a device that
 // is serving.
-//
-// The spelling is the control plane's and is compared rather than mapped, for
-// the reason status.deviceStatus keeps it: a vocabulary translated here would be
-// one this wait could not express, and the set of statuses is the backend's to
-// grow.
 func deviceIsInService(status string) bool {
-	return status == "online"
+	return status == cpDeviceOnline
+}
+
+// deviceIsFailed accepts both spellings of a device that has been failed.
+//
+// The rebuild the failure starts moves the device from the first to the second
+// by itself, and a wait that accepted only the first would time out on a device
+// that had got further than the operation asked for.
+func deviceIsFailed(status string) bool {
+	return status == cpDeviceFailed || status == cpDeviceFailedAndMigrated
 }
 
 // target resolves the StorageDevice the operation names.
@@ -327,15 +560,79 @@ func (r *StorageDeviceOpsReconciler) target(
 }
 
 // deviceTimeoutMessage says what a step outliving its deadline means, which
-// differs by step: one is a control plane that did not answer, the other is a
-// device that did not come back.
-func deviceTimeoutMessage(step deviceStep, name string) string {
-	if step == stepDeviceAwaiting {
+// differs by step: a call the control plane did not answer, or a device that did
+// not reach the state the call asked for.
+func deviceTimeoutMessage(
+	act simplyblockv1alpha2.StorageDeviceOpsAction, step deviceStep, name string,
+) string {
+	switch step {
+	case stepDeviceRemoving:
+		return fmt.Sprintf("the control plane did not take device %s out of the data path "+
+			"within %s", name, removingDeviceDeadline)
+	case stepDeviceFailing:
+		return fmt.Sprintf("the control plane did not accept the failure of device %s "+
+			"within %s", name, requestingDeviceDeadline)
+	case stepDeviceAwaiting:
+		if act == simplyblockv1alpha2.StorageDeviceOpsActionFail {
+			return fmt.Sprintf("device %s was not reported failed within %s of the control "+
+				"plane accepting it", name, awaitingFailureDeadline)
+		}
 		return fmt.Sprintf("device %s did not come back within %s of being restarted",
 			name, awaitingDeviceDeadline)
+	default:
+		return fmt.Sprintf("the control plane did not accept the restart of device %s "+
+			"within %s", name, requestingDeviceDeadline)
 	}
-	return fmt.Sprintf("the control plane did not accept the restart of device %s within %s",
-		name, requestingDeviceDeadline)
+}
+
+// deviceNarration is what an action calls itself, so the status message and the
+// events read as the operation rather than as the one action this kind began
+// with.
+type deviceNarration struct {
+	starting  string
+	succeeded string
+}
+
+func narrateDevice(
+	act simplyblockv1alpha2.StorageDeviceOpsAction, name string,
+) deviceNarration {
+	switch act {
+	case simplyblockv1alpha2.StorageDeviceOpsActionRestart:
+		return deviceNarration{
+			starting:  fmt.Sprintf("restarting device %s", name),
+			succeeded: fmt.Sprintf("device %s was restarted and is back in service", name),
+		}
+	case simplyblockv1alpha2.StorageDeviceOpsActionFail:
+		return deviceNarration{
+			starting: fmt.Sprintf("failing device %s", name),
+			succeeded: fmt.Sprintf("device %s was failed; the cluster is rebuilding the "+
+				"redundancy it held and has stopped reading from it", name),
+		}
+	default:
+		return deviceNarration{
+			starting:  fmt.Sprintf("running %s on device %s", act, name),
+			succeeded: fmt.Sprintf("%s finished on device %s", act, name),
+		}
+	}
+}
+
+// deviceAbortRefusal says what an unabortable step has already done, which is
+// the half of the refusal a user can act on.
+func deviceAbortRefusal(act simplyblockv1alpha2.StorageDeviceOpsAction) string {
+	if act == simplyblockv1alpha2.StorageDeviceOpsActionFail {
+		return "the device is out of the data path and this operator has no call that " +
+			"puts it back"
+	}
+	return "the restart has been issued and nothing recalls one"
+}
+
+// deviceLostDuringWait says what a device vanishing mid-wait means for the
+// action that was waiting.
+func deviceLostDuringWait(act simplyblockv1alpha2.StorageDeviceOpsAction) string {
+	if act == simplyblockv1alpha2.StorageDeviceOpsActionFail {
+		return "the failure it was asked to confirm cannot be"
+	}
+	return "the restart did not bring it back"
 }
 
 // nextDeviceStep is the step that follows the current one. The graph is a line,
@@ -372,10 +669,14 @@ func (r *StorageDeviceOpsReconciler) begin(
 	device *simplyblockv1alpha2.StorageDevice,
 	initial deviceStep,
 ) (ctrl.Result, error) {
+	budget, declared := initialDeviceDeadlines[statemachine.Action(ops.Spec.Action)]
+	if !declared {
+		budget = requestingDeviceDeadline
+	}
 	now := metav1.Now()
-	deadline := metav1.NewTime(now.Add(initialDeviceDeadline))
-	r.event(ops, corev1.EventTypeNormal, DeviceOperationStarted,
-		fmt.Sprintf("restarting device %s", device.Name))
+	deadline := metav1.NewTime(now.Add(budget))
+	words := narrateDevice(ops.Spec.Action, device.Name)
+	r.event(ops, corev1.EventTypeNormal, DeviceOperationStarted, words.starting)
 
 	return ctrl.Result{RequeueAfter: deviceOpsRetry}, r.writeStatus(ctx, ops,
 		func(status *simplyblockv1alpha2.StorageDeviceOpsStatus) {
@@ -383,7 +684,7 @@ func (r *StorageDeviceOpsReconciler) begin(
 			status.StartedAt = &now
 			status.Step.State = string(initial)
 			status.Step.Deadline = &deadline
-			status.Message = fmt.Sprintf("restarting device %s", device.Name)
+			status.Message = words.starting
 		})
 }
 
@@ -423,7 +724,7 @@ func (r *StorageDeviceOpsReconciler) succeed(
 	if err := r.releaseLock(ctx, ops, device); err != nil {
 		return err
 	}
-	message := fmt.Sprintf("device %s was restarted and is back in service", device.Name)
+	message := narrateDevice(ops.Spec.Action, device.Name).succeeded
 	r.event(ops, corev1.EventTypeNormal, DeviceOperationSucceeded, message)
 
 	now := metav1.Now()
@@ -446,7 +747,7 @@ func (r *StorageDeviceOpsReconciler) abort(
 	if err := r.releaseLock(ctx, ops, device); err != nil {
 		return err
 	}
-	message := fmt.Sprintf("aborted in step %s; no restart had been issued", current)
+	message := fmt.Sprintf("aborted in step %s; nothing had been issued", current)
 	r.event(ops, corev1.EventTypeNormal, DeviceOperationAborted, message)
 
 	now := metav1.Now()
@@ -506,11 +807,23 @@ func (r *StorageDeviceOpsReconciler) writeStatus(
 	ops *simplyblockv1alpha2.StorageDeviceOps,
 	change func(*simplyblockv1alpha2.StorageDeviceOpsStatus),
 ) error {
+	// The first attempt starts from the caller's object rather than from a
+	// read. That object carries every write this pass made, including a claim
+	// on the step, which the cache may not have seen yet. Read from the cache,
+	// it would patch against the version before the claim and conflict until
+	// the cache caught up. Only a conflict means somebody else wrote, and only
+	// then does an attempt read the object again, and so does the first one
+	// when the caller's object was never read and carries no version to patch
+	// against.
+	reread := ops.ResourceVersion == ""
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var fresh simplyblockv1alpha2.StorageDeviceOps
-		if err := r.Get(ctx, client.ObjectKeyFromObject(ops), &fresh); err != nil {
-			return err
+		fresh := *ops.DeepCopy()
+		if reread {
+			if err := r.Get(ctx, client.ObjectKeyFromObject(ops), &fresh); err != nil {
+				return err
+			}
 		}
+		reread = true
 		patch := client.MergeFromWithOptions(fresh.DeepCopy(),
 			client.MergeFromWithOptimisticLock{})
 		change(&fresh.Status)
@@ -518,13 +831,29 @@ func (r *StorageDeviceOpsReconciler) writeStatus(
 		if err := r.Status().Patch(ctx, &fresh, patch); err != nil {
 			return err
 		}
+		// The version travels back with the status, because the next write in
+		// this pass starts from ops and patches against it.
 		fresh.Status.DeepCopyInto(&ops.Status)
+		ops.ResourceVersion = fresh.ResourceVersion
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("record the operation's status: %w", err)
 	}
 	return nil
+}
+
+// once makes call under a claim on the operation's current step, applies also
+// in the claim's own patch, and reports whether this pass made the call. A pass
+// that loses the claim made no call: either another pass holds a live claim on
+// the step, or this pass read the operation at a version a newer write has
+// replaced. Either way it waits, and the next pass reads again.
+func (r *StorageDeviceOpsReconciler) once(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageDeviceOps,
+	call func() error, also ...func(),
+) (bool, error) {
+	return statemachine.WithClaim(ctx, ops.Status.Step, claimLease,
+		stepclaim.Writer(r.Client, ops, &ops.Status.Step, also...), call)
 }
 
 // event records something about the operation, on the operation.

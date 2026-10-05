@@ -672,11 +672,6 @@ spec:
                       description: Endpoint is the S3 endpoint, for example, https://s3.example.com.
                       pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                       type: string
-                    prefix:
-                      description: |-
-                        Prefix narrows the store to one key prefix, so that several clusters can
-                        share a bucket without each walking the others' backups.
-                      type: string
                     region:
                       description: Region is the bucket's region, for endpoints that do not imply one.
                       type: string
@@ -1479,6 +1474,45 @@ spec:
                     ErasureCodingScheme is the active layout, rendered as ndcs, an x, and
                     npcs: a two-plus-one cluster reads 2x1.
                   type: string
+                failureDomains:
+                  description: |-
+                    FailureDomains maps each failure-domain label the cluster's nodes declare
+                    (StorageNode.spec.config.failureDomain) to the integer the control plane
+                    identifies that domain by. A deployment adds an entry for every label it
+                    introduces, both when it creates the cluster and when it grows one, and
+                    never changes or removes an entry: the control plane has already placed
+                    data by that index. A label that is a number keeps that number as its
+                    index when the number is free. A cluster holds at most 256 failure
+                    domains, and a deployment that would exceed that is refused before it is
+                    approved.
+                  items:
+                    description: |-
+                      FailureDomainIndex is one failure-domain label and the control plane's index
+                      for it.
+                    properties:
+                      index:
+                        description: |-
+                          Index is the integer sent to the control plane for every node in the
+                          domain.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      name:
+                        description: |-
+                          Name is the failure-domain label, as StorageNode.spec.config.failureDomain
+                          spells it ("rack-b").
+                        maxLength: 63
+                        minLength: 1
+                        type: string
+                    required:
+                      - index
+                      - name
+                    type: object
+                  maxItems: 256
+                  type: array
+                  x-kubernetes-list-map-keys:
+                    - name
+                  x-kubernetes-list-type: map
                 lastDataRealignmentAt:
                   description: |-
                     LastDataRealignmentAt is when a realignment was last requested, and it is
@@ -1519,6 +1553,7 @@ spec:
                     - Provisioning
                     - Activating
                     - Online
+                    - Shrinking
                     - Rebalancing
                     - Degraded
                     - Unavailable
@@ -1650,6 +1685,29 @@ spec:
                     Step is the position of the creation machine. The value is one of the
                     steps that machine declares.
                   properties:
+                    claim:
+                      description: |-
+                        Claim records that this state's side effect was started. Absent means
+                        no pass has started it since the state was entered.
+                      properties:
+                        attempt:
+                          description: Attempt counts the claims taken on this state, starting at 1.
+                          format: int32
+                          type: integer
+                        leaseUntil:
+                          description: |-
+                            LeaseUntil is when the claim expires and the side effect may be fired
+                            again.
+                          format: date-time
+                          type: string
+                        state:
+                          description: State is the state the claim was taken in.
+                          type: string
+                      required:
+                        - attempt
+                        - leaseUntil
+                        - state
+                      type: object
                     deadline:
                       description: |-
                         Deadline is when that state expires, absent when it has none. It is an

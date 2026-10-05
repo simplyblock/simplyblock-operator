@@ -110,6 +110,26 @@ func TestAClusterSnapshotCachesAndSyncs(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-02-cluster-shrinking-reads-degraded: the control plane
+// reports a removal in progress as is_shrinking beside the status, and a decode
+// that drops it leaves the cluster phase unable to say Shrinking at all.
+func TestAClusterReadsTheShrinkingFlag(t *testing.T) {
+	sub := registeredClusters(t)
+	ingestCluster(t, sub, cpinformer.EventSnapshot, `[
+		{"id":"`+scClusterA+`","name":"production","nqn":"nqn.a","status":"degraded",
+		 "is_re_balancing":true,"is_shrinking":true,
+		 "distr_ndcs":2,"distr_npcs":1,"max_fault_tolerance":1}
+	]`)
+
+	got, ok := sub.Lookup(scClusterA)
+	if !ok {
+		t.Fatalf("cluster %s is not cached", scClusterA)
+	}
+	if !got.Shrinking {
+		t.Errorf("a cluster reporting is_shrinking decoded as not shrinking: %+v", got)
+	}
+}
+
 // An update moves the cache and triggers a reconcile of the object the cluster
 // was adopted as. Both halves matter: the reconciler reads the cache, and
 // nothing else would tell it to look.

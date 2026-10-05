@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/simplyblock/atlas/bounded"
 	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/nvme"
 )
@@ -222,7 +223,9 @@ func deviceIdentity(d nvme.Device) (string, error) {
 	if d.Namespace.DevicePath == "" {
 		return "", fmt.Errorf("namespace %q has neither dev nor device path: %w", d.Namespace.Name, errs.ErrNotFound)
 	}
-	resolved, err := filepath.EvalSymlinks(d.Namespace.DevicePath)
+	resolved, err := bounded.Call("resolve "+d.Namespace.DevicePath, bounded.ReadTimeout, func() (string, error) {
+		return filepath.EvalSymlinks(d.Namespace.DevicePath)
+	})
 	if err != nil {
 		return "", fmt.Errorf("resolving %s: %w", d.Namespace.DevicePath, err)
 	}
@@ -255,10 +258,100 @@ func ready(d nvme.Device) error {
 // which costs the device nothing and is the only way to learn that it is really
 // there. A test's device path is a real file, so this answers for a fake exactly
 // as it does for a namespace.
+//
+// The open runs under bounded.ReadTimeout: opening a namespace whose paths are
+// all in error recovery can block until the kernel gives the namespace up.
 func openDevice(path string) error {
-	f, err := os.OpenFile(path, os.O_RDONLY, 0)
-	if err != nil {
-		return err
+	return bounded.Do("open "+path, bounded.ReadTimeout, func() error {
+		f, err := os.OpenFile(path, os.O_RDONLY, 0)
+		if err != nil {
+			return err
+		}
+		return f.Close()
+	})
+}
+
+// WaitForPathsToServe waits until every live controller of the subsystem nqn
+// names serves a path to every namespace the subsystem exports, and returns nil
+// once they all do.
+//
+// It is the multipath counterpart of what WaitForDevice is to a single device.
+// ConnectPaths returns once each path's controller is live, and the kernel
+// attaches the subsystem's namespaces to a new controller one by one after
+// that. In between, a live controller serves some of the namespaces, which is
+// exactly the picture of a path that will never serve them
+// (DefectControllerNotContributing), so a check run straight after a connect
+// cannot tell a scan in progress from a broken path. Waiting for the scan to
+// finish, under the caller's deadline, is what separates the two: a path that
+// settles was scanning, and one that does not is reported by name.
+//
+// "Serves" is the rule Inspect applies: the controller appears in the
+// namespace's per-controller path list. A namespace without a path list, which
+// is what the kernel publishes with native multipath off, says nothing either
+// way and is not waited on. A subsystem that is not attached yet, or exports no
+// namespace yet, is waited on. ctx bounds the wait, and on expiry the error
+// names each controller still short of namespaces.
+func WaitForPathsToServe(ctx context.Context, subs nvme.SubsystemResolver, nqn string) error {
+	ticker := time.NewTicker(defaultPoll)
+	defer ticker.Stop()
+
+	var unsettled error
+	for {
+		s, err := subs.ByNQN(ctx, nqn)
+		switch {
+		case errors.Is(err, errs.ErrNotFound):
+			unsettled = fmt.Errorf("subsystem %s is not attached yet", nqn)
+		case err != nil:
+			return fmt.Errorf("wait for the paths of %s: %w", nqn, err)
+		default:
+			unsettled = pathsNotServing(s)
+			if unsettled == nil {
+				return nil
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for the paths of %s: %w", nqn, errors.Join(ctx.Err(), unsettled))
+		case <-ticker.C:
+		}
 	}
-	return f.Close()
+}
+
+// pathsNotServing describes the live controllers of s that serve a path to
+// fewer namespaces than s exports, and is nil when none does.
+func pathsNotServing(s nvme.Subsystem) error {
+	if len(s.Namespaces) == 0 {
+		return fmt.Errorf("subsystem %s exports no namespace yet", s.NQN)
+	}
+
+	listed, served := 0, map[nvme.ControllerID]int{}
+	for _, ns := range s.Namespaces {
+		if len(ns.Paths) == 0 {
+			continue
+		}
+		listed++
+		seen := map[nvme.ControllerID]bool{}
+		for _, p := range ns.Paths {
+			if !seen[p.Controller] {
+				seen[p.Controller] = true
+				served[p.Controller]++
+			}
+		}
+	}
+	if listed == 0 {
+		return nil
+	}
+
+	var short []string
+	for _, ctrl := range liveControllers(s) {
+		if n := served[ctrl.ID]; n < listed {
+			short = append(short, fmt.Sprintf("controller %s at %s serves %d of %d namespaces",
+				ctrl.ID, endpointOf(ctrl), n, listed))
+		}
+	}
+	if len(short) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(short, "; "))
 }

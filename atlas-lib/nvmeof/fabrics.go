@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/simplyblock/atlas/bounded"
 	"github.com/simplyblock/atlas/nvme"
 )
 
@@ -56,7 +57,7 @@ func NewFabricsConnector(subs nvme.SubsystemResolver, opts ...Option) *FabricsCo
 		if err != nil {
 			return "", err
 		}
-		return writeFabricsDevice(ctx, opts)
+		return writeFabricsDevice(ctx, "connect "+endpoint(t)+" "+t.NQN, opts)
 	}
 	c.deleteCtrl = func(ctrl nvme.Controller) error {
 		return writeSysfs(filepath.Join(ctrl.SysfsPath, deleteControllerAttr), "1")
@@ -118,7 +119,21 @@ func fabricsOptions(t Target, cHostNQN, cHostID string) (string, error) {
 // writeFabricsDevice opens /dev/nvme-fabrics, writes the connect options, and
 // returns the kernel's "instance=N,cntlid=M" reply. A rejected connect (bad
 // options, unreachable or duplicate target) surfaces as the write error.
-func writeFabricsDevice(_ context.Context, options string) (string, error) {
+//
+// The write runs until ctx's deadline, or cliTimeout without one, and is given
+// up on after that. key names the target for the stuck-call guard and must not
+// carry the options, which can hold DHCHAP secrets.
+func writeFabricsDevice(ctx context.Context, key, options string) (string, error) {
+	timeout := cliTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout = min(timeout, time.Until(deadline))
+	}
+	return bounded.Call(key, timeout, func() (string, error) {
+		return writeFabricsDeviceUnbounded(options)
+	})
+}
+
+func writeFabricsDeviceUnbounded(options string) (string, error) {
 	f, err := os.OpenFile(fabricsDevice, os.O_RDWR, 0)
 	if err != nil {
 		return "", err
@@ -138,12 +153,19 @@ func writeFabricsDevice(_ context.Context, options string) (string, error) {
 
 // writeSysfs writes val to an existing sysfs attribute (no create, no
 // truncate), which is the canonical way to poke a kernel attribute.
+//
+// The one attribute written here is delete_controller, whose write returns once
+// the controller is torn down. That can take a while for a controller with I/O
+// to fail, so it gets cliTimeout rather than a read's budget, and is given up on
+// after that.
 func writeSysfs(path, val string) error {
-	f, err := os.OpenFile(path, os.O_WRONLY, 0)
-	if err != nil {
+	return bounded.Do("write "+path, cliTimeout, func() error {
+		f, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = f.Close() }()
+		_, err = f.WriteString(val)
 		return err
-	}
-	defer func() { _ = f.Close() }()
-	_, err = f.WriteString(val)
-	return err
+	})
 }

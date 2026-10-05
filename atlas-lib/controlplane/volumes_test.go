@@ -81,3 +81,50 @@ func TestClientSubsystemVolumesRefusesAnEmptyNQN(t *testing.T) {
 		t.Fatal("an empty NQN was accepted")
 	}
 }
+
+// TestClientVolumeReportsTheNodeHostingIt. A migration is asked for by naming
+// the node a volume should be on, and the control plane refuses one naming the
+// node it is already on. Whoever asks therefore has to read where the volume
+// is before asking, which is the storage node the detail reports.
+func TestClientVolumeReportsTheNodeHostingIt(t *testing.T) {
+	const node = "77777777-7777-7777-7777-777777777777"
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"` + testVolume + `","name":"vol1","pool_name":"pool1",` +
+			`"size":100,"ns_id":1,"nqn":"nqn.one","storage_node_id":"` + node + `"}`))
+	})
+
+	volume, err := c.Volume(context.Background(), lvol.NewVolumeHandle(testCluster, testPool, testVolume))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if volume.StorageNodeID != node {
+		t.Errorf("the volume is reported on node %q, want %q", volume.StorageNodeID, node)
+	}
+}
+
+// TestClientSubsystemVolumesReportTheNodeHostingEachMember. The members of a
+// subsystem are read to learn which of them a migration still has to move, and
+// a member already on the target is one that does not.
+func TestClientSubsystemVolumesReportTheNodeHostingEachMember(t *testing.T) {
+	const node = "77777777-7777-7777-7777-777777777777"
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/storage-pools/") {
+			_, _ = w.Write([]byte(`[{"id":"` + testPool + `","cluster_id":"` + testCluster + `","name":"pool1",` +
+				`"max_size":0,"capacity":{},"max_r_mbytes":0,"max_rw_iops":0,"max_rw_mbytes":0,` +
+				`"max_w_mbytes":0,"volume_max_size":0,"status":"active"}]`))
+			return
+		}
+		_, _ = w.Write([]byte(`[{"id":"` + testVolume + `","name":"vol1","pool_name":"pool1",` +
+			`"size":100,"ns_id":1,"nqn":"nqn.one","storage_node_id":"` + node + `"}]`))
+	})
+
+	members, err := c.SubsystemVolumes(context.Background(), testCluster, "nqn.one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 1 || members[0].StorageNodeID != node {
+		t.Errorf("members = %+v, want the one volume reported on node %s", members, node)
+	}
+}

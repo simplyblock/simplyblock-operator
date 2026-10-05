@@ -319,6 +319,15 @@ spec:
                       items:
                         type: string
                       type: array
+                    skipped:
+                      description: |-
+                        Skipped are the nodes of Nodes the walk passed over without restarting
+                        them, in walk order: a node the control plane stopped listing, or one
+                        whose removal started after the walk was planned. A node leaving the
+                        cluster belongs to its removal, and the walk sends it nothing.
+                      items:
+                        type: string
+                      type: array
                   required:
                     - nodeIndex
                   type: object
@@ -331,6 +340,29 @@ spec:
                     Step is the position of the running action's state machine. The value is
                     one of the steps the running action declares.
                   properties:
+                    claim:
+                      description: |-
+                        Claim records that this state's side effect was started. Absent means
+                        no pass has started it since the state was entered.
+                      properties:
+                        attempt:
+                          description: Attempt counts the claims taken on this state, starting at 1.
+                          format: int32
+                          type: integer
+                        leaseUntil:
+                          description: |-
+                            LeaseUntil is when the claim expires and the side effect may be fired
+                            again.
+                          format: date-time
+                          type: string
+                        state:
+                          description: State is the state the claim was taken in.
+                          type: string
+                      required:
+                        - attempt
+                        - leaseUntil
+                        - state
+                      type: object
                     deadline:
                       description: |-
                         Deadline is when that state expires, absent when it has none. It is an

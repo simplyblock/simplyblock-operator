@@ -84,7 +84,8 @@ func TestTheFanOutRecordsItsCreatorWithoutOwningTheOperation(t *testing.T) {
 		return vmigration.NewMover(c, s, false)
 	})
 
-	err := r.createMigration(context.Background(), aRemoveOpsWithUID(), aDrainedNodeID,
+	err := r.createMigration(context.Background(), aRemoveOpsWithUID(),
+		migrationName(aDrainedNodeID, "pv-1"), aDrainedNodeID,
 		managedVolume{PVName: "pv-1", VolumeUUID: "volume-uuid"}, aPeerNodeID)
 	if err != nil {
 		t.Fatalf("raising the move: %v", err)
@@ -127,7 +128,8 @@ func TestTheLegacyFanOutIsStillOwnedByItsDrain(t *testing.T) {
 		return vmigration.NewMover(c, s, true)
 	})
 
-	err := r.createMigration(context.Background(), aRemoveOpsWithUID(), aDrainedNodeID,
+	err := r.createMigration(context.Background(), aRemoveOpsWithUID(),
+		migrationName(aDrainedNodeID, "pv-1"), aDrainedNodeID,
 		managedVolume{PVName: "pv-1", VolumeUUID: "volume-uuid"}, aPeerNodeID)
 	if err != nil {
 		t.Fatalf("raising the move: %v", err)
@@ -162,7 +164,8 @@ func TestTheFanOutIsFoundAgainByItsLabel(t *testing.T) {
 			})
 			ops := aRemoveOpsWithUID()
 
-			if err := r.createMigration(context.Background(), ops, aDrainedNodeID,
+			if err := r.createMigration(context.Background(), ops,
+				migrationName(aDrainedNodeID, "pv-1"), aDrainedNodeID,
 				managedVolume{PVName: "pv-1", VolumeUUID: "volume-uuid"}, aPeerNodeID); err != nil {
 				t.Fatal(err)
 			}

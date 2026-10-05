@@ -26,8 +26,10 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/simplyblock/atlas/ptr"
+	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/stepclaim"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
@@ -50,9 +52,9 @@ func (r *StorageClusterOpsReconciler) perform(
 	case stepAwaiting:
 		return r.await(ctx, ops, clusterID)
 	case stepShuttingDown:
-		return r.shutDownCluster(ctx, clusterID)
+		return r.shutDownCluster(ctx, ops, clusterID)
 	case stepStarting:
-		return r.startCluster(ctx, clusterID)
+		return r.startCluster(ctx, ops, clusterID)
 	case stepCheckingPeers, stepShuttingDownNode, stepRefreshingPod,
 		stepAwaitingPod, stepRestartingNode, stepRebalancing:
 		return r.performNodeStep(ctx, ops, clusterID, current)
@@ -63,22 +65,30 @@ func (r *StorageClusterOpsReconciler) perform(
 
 // request issues the one call the five single-call actions make. Each is
 // skipped when the cluster is already where the call would put it, which is
-// what makes re-entering the step after a crash harmless.
+// what makes re-entering the step after a crash harmless, and each is made
+// under a claim on the step, which is what stops a pass reading the step from
+// a cache that has not seen the previous pass leave it from making it again.
 func (r *StorageClusterOpsReconciler) request(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps, clusterID string,
 ) (bool, error) {
 	log := logf.FromContext(ctx)
 
+	var call func() error
 	switch ops.Spec.Action {
 	case simplyblockv1alpha2.StorageClusterOpsActionActivate:
 		if ready, err := r.failureDomainsReady(ctx, ops); err != nil || !ready {
 			return false, err
 		}
-		active, err := r.clusterActive(ctx, clusterID)
+		reading, err := r.clusterReading(ctx, clusterID)
 		if err != nil {
 			return false, err
 		}
-		if active {
+		// A cluster in_activation is past where the call would put it: an
+		// attempt is running, and the control plane would run a second one
+		// beside it rather than refuse it. Awaiting is where that attempt is
+		// waited on, and where a failed one is requested again.
+		if reading.Status == utils.ClusterStatusActive ||
+			reading.Status == utils.ClusterStatusInActivation {
 			return true, nil
 		}
 		// After the active check rather than before it, so that a re-activation
@@ -88,16 +98,22 @@ func (r *StorageClusterOpsReconciler) request(
 		if ready, err := r.stripeNodesReady(ctx, ops); err != nil || !ready {
 			return false, err
 		}
-		if err := r.API.Activate(ctx, clusterID); err != nil {
-			return false, fmt.Errorf("activate cluster %s: %w", ops.Spec.ClusterRef, err)
+		call = func() error {
+			if err := r.API.Activate(ctx, clusterID); err != nil {
+				return fmt.Errorf("activate cluster %s: %w", ops.Spec.ClusterRef, err)
+			}
+			return nil
 		}
 
 	case simplyblockv1alpha2.StorageClusterOpsActionExpand:
 		// An expansion has no state of its own to skip on: a cluster is active
 		// before it and active after it, so the only guard is the step record
 		// (§13, Q1 leaves what an expansion takes as a parameter open).
-		if err := r.API.Expand(ctx, clusterID); err != nil {
-			return false, fmt.Errorf("expand cluster %s: %w", ops.Spec.ClusterRef, err)
+		call = func() error {
+			if err := r.API.Expand(ctx, clusterID); err != nil {
+				return fmt.Errorf("expand cluster %s: %w", ops.Spec.ClusterRef, err)
+			}
+			return nil
 		}
 
 	case simplyblockv1alpha2.StorageClusterOpsActionShutdown:
@@ -108,8 +124,11 @@ func (r *StorageClusterOpsReconciler) request(
 		if !active {
 			return true, nil
 		}
-		if err := r.API.Shutdown(ctx, clusterID); err != nil {
-			return false, fmt.Errorf("shut down cluster %s: %w", ops.Spec.ClusterRef, err)
+		call = func() error {
+			if err := r.API.Shutdown(ctx, clusterID); err != nil {
+				return fmt.Errorf("shut down cluster %s: %w", ops.Spec.ClusterRef, err)
+			}
+			return nil
 		}
 
 	case simplyblockv1alpha2.StorageClusterOpsActionStart:
@@ -120,8 +139,11 @@ func (r *StorageClusterOpsReconciler) request(
 		if active {
 			return true, nil
 		}
-		if err := r.API.Start(ctx, clusterID); err != nil {
-			return false, fmt.Errorf("start cluster %s: %w", ops.Spec.ClusterRef, err)
+		call = func() error {
+			if err := r.API.Start(ctx, clusterID); err != nil {
+				return fmt.Errorf("start cluster %s: %w", ops.Spec.ClusterRef, err)
+			}
+			return nil
 		}
 
 	case simplyblockv1alpha2.StorageClusterOpsActionCancelTask:
@@ -131,6 +153,10 @@ func (r *StorageClusterOpsReconciler) request(
 		return false, fatalf("action %s does not issue a request", ops.Spec.Action)
 	}
 
+	claimed, err := r.once(ctx, ops, call)
+	if err != nil || !claimed {
+		return false, err
+	}
 	log.Info("the action was accepted by the control plane",
 		"operation", ops.Name, "action", ops.Spec.Action, "cluster", ops.Spec.ClusterRef)
 	return true, nil
@@ -155,10 +181,12 @@ func (r *StorageClusterOpsReconciler) requestCancel(
 	if !running {
 		return true, nil
 	}
-	if err := r.API.CancelTask(ctx, clusterID, taskID); err != nil {
-		return false, fmt.Errorf("cancel task %s: %w", taskID, err)
-	}
-	return true, nil
+	return r.once(ctx, ops, func() error {
+		if err := r.API.CancelTask(ctx, clusterID, taskID); err != nil {
+			return fmt.Errorf("cancel task %s: %w", taskID, err)
+		}
+		return nil
+	})
 }
 
 // await is the second half of the five single-call actions: the completion
@@ -167,6 +195,9 @@ func (r *StorageClusterOpsReconciler) await(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps, clusterID string,
 ) (bool, error) {
 	switch ops.Spec.Action {
+	case simplyblockv1alpha2.StorageClusterOpsActionActivate:
+		return r.awaitActivation(ctx, ops, clusterID)
+
 	case simplyblockv1alpha2.StorageClusterOpsActionShutdown:
 		active, err := r.clusterActive(ctx, clusterID)
 		return !active, err
@@ -225,7 +256,7 @@ func (r *StorageClusterOpsReconciler) runningTask(
 // The control plane offers no restart of its own, which is what makes this the
 // one action with two side effects (§6.4).
 func (r *StorageClusterOpsReconciler) shutDownCluster(
-	ctx context.Context, clusterID string,
+	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps, clusterID string,
 ) (bool, error) {
 	active, err := r.clusterActive(ctx, clusterID)
 	if err != nil {
@@ -234,14 +265,17 @@ func (r *StorageClusterOpsReconciler) shutDownCluster(
 	if !active {
 		return true, nil
 	}
-	if err := r.API.Shutdown(ctx, clusterID); err != nil {
-		return false, fmt.Errorf("shut down cluster %s: %w", clusterID, err)
-	}
-	return false, nil
+	_, err = r.once(ctx, ops, func() error {
+		if err := r.API.Shutdown(ctx, clusterID); err != nil {
+			return fmt.Errorf("shut down cluster %s: %w", clusterID, err)
+		}
+		return nil
+	})
+	return false, err
 }
 
 func (r *StorageClusterOpsReconciler) startCluster(
-	ctx context.Context, clusterID string,
+	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps, clusterID string,
 ) (bool, error) {
 	active, err := r.clusterActive(ctx, clusterID)
 	if err != nil {
@@ -250,10 +284,25 @@ func (r *StorageClusterOpsReconciler) startCluster(
 	if active {
 		return true, nil
 	}
-	if err := r.API.Start(ctx, clusterID); err != nil {
-		return false, fmt.Errorf("start cluster %s: %w", clusterID, err)
-	}
-	return false, nil
+	_, err = r.once(ctx, ops, func() error {
+		if err := r.API.Start(ctx, clusterID); err != nil {
+			return fmt.Errorf("start cluster %s: %w", clusterID, err)
+		}
+		return nil
+	})
+	return false, err
+}
+
+// once makes call under a claim on the operation's current step, and reports
+// whether this pass made it. A pass that loses the claim made no call: either
+// another pass holds a live claim on the step, or this pass read the operation
+// at a version a newer write has replaced, and the step it read may already be
+// behind it. Either way it waits, and the next pass reads again.
+func (r *StorageClusterOpsReconciler) once(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps, call func() error,
+) (bool, error) {
+	return statemachine.WithClaim(ctx, ops.Status.Step, claimLease,
+		stepclaim.Writer(r.Client, ops, &ops.Status.Step), call)
 }
 
 // failureDomainsReady gates an activation on the cluster's failure domains

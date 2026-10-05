@@ -307,7 +307,7 @@ whether it came from the auto-rebalancer, a manual migration, or a drain, so it
 cannot sit under the rebalancing policy that is only one of its three sources.
 
 **`spec.backup` is where the cluster's backups live, and setting it is what makes
-them visible.** It names an S3 endpoint, a bucket, an optional prefix, and the Secret
+them visible.** It names an S3 endpoint, a bucket, and the Secret
 holding the credentials, and it is the one location the control plane writes copies to
 and the operator reads them from. Setting it at creation and setting it a year later are
 the same operation, which is why it is one of the few mutable fields here: a cluster
@@ -477,6 +477,19 @@ machine's position, both specified with the creation lock in §4.2.
 
 `status.tasks` is what the backend is currently busy with, specified in §3.4.
 
+`status.failureDomains` maps each failure-domain label the cluster's nodes declare
+to the integer the control plane identifies that domain by. The labels are this
+API's (`rack-b`), and the control plane's field is an index. A
+`ClusterDeploymentConfig` writes the mapping in `CreatingNodes`, for the cluster it
+creates and for the one it grows
+([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §4.2).
+An entry is never changed or removed once written, because the control plane has
+placed nodes under that index. New labels are indexed in name order from the
+lowest free index, except that a numeric label claims its own number when the
+number is free: before the mapping existed a numeric label was sent as that
+number, and a cluster built then already has nodes under it. The list holds at
+most 256 entries, and a deployment that would exceed it is refused at validation.
+
 **Four registered status fields are removed rather than carried forward.**
 `mgmtNodes`, `storageNodes`, `lastUpdated`, and `created` are declared on the
 registered kind, carry `FIXME` comments naming a possible API dependency, and are never
@@ -595,7 +608,6 @@ spec:
   backup:
     endpoint: https://s3.example.com
     bucket: simplyblock-backups
-    prefix: production/
     credentialsSecretRef:
       name: backup-credentials
 
@@ -737,7 +749,7 @@ response lost after the backend committed.
 
 ```go
 // StorageClusterPhase is where the operator has got to with this cluster.
-// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Rebalancing;Degraded;Unavailable;Suspended
+// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Shrinking;Rebalancing;Degraded;Unavailable;Suspended
 type StorageClusterPhase string
 
 // StorageClusterStep is one step of the creation path. There is one graph rather
@@ -757,6 +769,7 @@ the mapping is stated once rather than left to be inferred from a switch:
 | `in_creation`, `in_expansion`, `unready`              | `Provisioning` |
 | `in_activation`                                       | `Activating`   |
 | `active`                                              | `Online`       |
+| `active`, `degraded`, or `read_only` with a removal   | `Shrinking`    |
 | `active`, `degraded`, or `read_only` with a rebalance | `Rebalancing`  |
 | `degraded`, `read_only`                               | `Degraded`     |
 | `suspended`                                           | `Suspended`    |
@@ -772,6 +785,14 @@ replaces a phase that is not serving: a suspended cluster with a rebalance task
 still queued is suspended first. `status.status` keeps the control plane's own
 word beside it, and `status.rebalancing` the flag, which is how a rebalance on a
 degraded cluster is told from one on an active cluster.
+
+**`Shrinking` is read the same way, and over the rebalance.** The control plane
+reports a removal in progress as `is_shrinking`, set while any node is in
+`pending_removal`, `migrating_devices`, `migrating_lvols`, or `in_removal`. While
+it runs the control plane degrades the cluster for the departing node and
+rebalances that node's data onto the peers, so `Degraded` and `Rebalancing` are
+both what a removal looks like, and the removal is what the phase names. Like
+`Rebalancing`, it never replaces a phase that is not serving.
 
 `Provisioning` and `Activating` exist because a cluster being built is not a
 cluster that is broken. Without them `unready` and `in_activation` both read as
@@ -1253,6 +1274,10 @@ Nodes []string `json:"nodes,omitempty"`
 // zero is a valid index, and a field that disappears at zero makes "the first
 // node" and "unset" the same wire value.
 NodeIndex int32 `json:"nodeIndex"`
+
+// Skipped are the nodes of Nodes the walk passed over without restarting them,
+// in walk order.
+Skipped []string `json:"skipped,omitempty"`
 ```
 
 An immutable list with an index is what makes advancing one increment rather than a
@@ -1271,6 +1296,19 @@ zero, and `status.step` at `CheckingPeers`.
 node added to the cluster mid-walk is not restarted and a node removed mid-walk is
 skipped when the walk reaches it. Both follow from a rolling restart being over the
 fleet it was started against, and neither is a failure.
+
+**A node leaving the cluster is never walked.** A node in any removal status
+(`pending_removal`, `migrating_devices`, `migrating_lvols`, `in_removal`, `removed`,
+or `removed_failed`) belongs to its removal: a shutdown writes over the removal's
+status, and a restart brings the node back into service mid-removal. Such a node is
+left out of `nodes`, and a planned node whose removal starts mid-walk is skipped,
+the same as one the control plane stops listing.
+
+**A skip is recorded as a skip.** The walk advances past a skipped node at once,
+records it in `status.rollingRestart.skipped` in the same write that moves
+`nodeIndex`, and emits `NodeSkipped` rather than `NodeRestarted`. The success
+message counts only the nodes restarted and names the ones skipped, so a walk that
+passed over a node does not report it as restarted.
 
 ### 7.2 The steps
 
@@ -1303,7 +1341,11 @@ arrives by stream or by poll (`design-crd-model.md` §7.7).
 node down while another is already offline can exceed the cluster's fault tolerance
 and lose data, so `CheckingPeers` gates every shutdown on all peers being online and
 the walk holds there rather than proceeding. Holding is reported in `status.message`
-as `waiting for peer nodes`. The step's deadline is what distinguishes a walk holding
+as `waiting for peer nodes`. A removal still running, or one the control plane gave up
+on, is a peer that is not online and holds the walk, because restarting a node while
+another is being rebuilt away puts two nodes' data at risk at once. A removed node does
+not: the control plane keeps its record with the status `removed`, and it is gone from
+the cluster whatever the record says. The step's deadline is what distinguishes a walk holding
 because the cluster is degraded from one holding because of a bug.
 
 ### 7.3 Progress
@@ -1422,6 +1464,7 @@ administrator has open. An event about an operation goes on the
 | A backend task finished                                  | `Normal`  | `TaskCompleted`          | `StorageCluster`    |
 | A backend task was canceled                              | `Normal`  | `TaskCanceled`           | `StorageCluster`    |
 | The walk advanced to the next node                       | `Normal`  | `NodeRestarted`          | `StorageClusterOps` |
+| The walk passed over a node that left the cluster        | `Normal`  | `NodeSkipped`            | `StorageClusterOps` |
 
 `ClusterCreationFailed` carries the HTTP status and the full response body, so the
 cause is visible in `kubectl describe` without reading controller logs.
@@ -1548,7 +1591,7 @@ has to carry it.
 | `volumeAutoPlacement.enabled`                                                       | `spec.enableVolumeAutoPlacement` (§3.1)                                   | The same, and it is the choice `design-crd-model.md` §9.6 deferred to this kind                                                                                                                                                                                                                                                                                           |
 | `volumeMigrationSettings.enabled`                                                   | Removed (§3.1)                                                            | Behavioral. Migration cannot be turned off, because a drain, a rebalance, and a device replacement are performed by moving volumes                                                                                                                                                                                                                                        |
 | `spec.backup`, typed `BackupSpec`                                                   | The same field, typed `BackupStoreSpec` (Appendix A)                      | Type rename. `design-controlplane.md` declares a different `BackupSpec` in the same package, and two cannot coexist                                                                                                                                                                                                                                                       |
-| `spec.backup.localEndpoint`                                                         | `endpoint`, plus `bucket`, `prefix`, and `region` (Appendix A)            | Field rename and three additions. The registered type had no bucket, so nothing in the store could be located                                                                                                                                                                                                                                                             |
+| `spec.backup.localEndpoint`                                                         | `endpoint`, plus `bucket` and `region` (Appendix A)                       | Field rename and two additions. The registered type had no bucket, so nothing in the store could be located                                                                                                                                                                                                                                                               |
 | `spec.backup.withCompression`, `snapshotBackups`, `secondaryTarget`, `localTesting` | Removed (Appendix A)                                                      | Spec removals. The store is a location, and how a copy is taken is the control plane's: it keeps accepting these values, so what changes is that the operator stops sending them and the backend's defaults apply                                                                                                                                                         |
 | `spec.backup` as a write target only                                                | Also the inventory backups are discovered from (§3.1)                     | Behavioral, and it is what retires backup import and export                                                                                                                                                                                                                                                                                                               |
 | No `status.tasks`                                                                   | Present, capped at twenty (§3.4)                                          | Additive, and what the retired task mirror becomes                                                                                                                                                                                                                                                                                                                        |
@@ -1767,7 +1810,7 @@ against the same conventions it audits the shipped types against.
 // StorageClusterPhase is where the operator has got to with this cluster. The
 // first two values are the operator's own creation path; the rest are its reading
 // of the lifecycle status.status carries in the control plane's own spelling.
-// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Rebalancing;Degraded;Unavailable;Suspended
+// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Shrinking;Rebalancing;Degraded;Unavailable;Suspended
 type StorageClusterPhase string
 
 const (
@@ -1791,6 +1834,11 @@ const (
 
 	// Online: the control plane reports the cluster active and serving.
 	StorageClusterPhaseOnline StorageClusterPhase = "Online"
+
+	// Shrinking: serving, and removing at least one of its nodes. It replaces
+	// Rebalancing, Online, and Degraded while a removal runs, and no phase that
+	// is not serving.
+	StorageClusterPhaseShrinking StorageClusterPhase = "Shrinking"
 
 	// Rebalancing: serving, and moving data between its nodes or devices. It
 	// replaces Online and Degraded while a rebalance runs, and no phase that
@@ -1886,11 +1934,6 @@ type BackupStoreSpec struct {
 	// Bucket is the bucket backups are written to and read from.
 	// +kubebuilder:validation:Required
 	Bucket string `json:"bucket"`
-
-	// Prefix narrows the store to one key prefix, so that several clusters can
-	// share a bucket without each walking the others' backups.
-	// +optional
-	Prefix string `json:"prefix,omitempty"`
 
 	// Region is the bucket's region, for endpoints that do not imply one.
 	// +optional
@@ -2140,6 +2183,23 @@ type ClusterTask struct {
 	Retry int32 `json:"retry,omitempty"`
 }
 
+// FailureDomainIndex is one failure-domain label and the control plane's index
+// for it.
+type FailureDomainIndex struct {
+	// Name is the failure-domain label, as StorageNode.spec.config.failureDomain
+	// spells it ("rack-b").
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Index is the integer sent to the control plane for every node in the
+	// domain.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Required
+	Index int32 `json:"index"`
+}
+
 // StorageClusterStatus is the observed state of one backend cluster.
 type StorageClusterStatus struct {
 	// Phase is the operator's own view of this cluster, and the field its
@@ -2229,6 +2289,14 @@ type StorageClusterStatus struct {
 	// +kubebuilder:validation:MaxItems=64
 	// +optional
 	ProvisioningSlots []ProvisioningSlot `json:"provisioningSlots,omitempty"`
+
+	// FailureDomains maps each failure-domain label the cluster's nodes declare
+	// to the integer the control plane identifies that domain by (§3.3).
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=256
+	// +optional
+	FailureDomains []FailureDomainIndex `json:"failureDomains,omitempty"`
 
 	// ActiveOpsRef names the StorageClusterOps currently allowed to operate on
 	// this cluster. Empty when none is running.
@@ -2421,6 +2489,13 @@ type RollingRestartStatus struct {
 	// makes "the first node" and "unset" the same wire value.
 	// +kubebuilder:validation:Minimum=0
 	NodeIndex int32 `json:"nodeIndex"`
+
+	// Skipped are the nodes of Nodes the walk passed over without restarting
+	// them, in walk order: a node the control plane stopped listing, or one
+	// whose removal started after the walk was planned. A node leaving the
+	// cluster belongs to its removal, and the walk sends it nothing.
+	// +optional
+	Skipped []string `json:"skipped,omitempty"`
 }
 
 // StorageClusterOpsStatus is the observed state of one cluster operation.

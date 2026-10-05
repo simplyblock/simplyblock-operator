@@ -1,27 +1,28 @@
 package utils
 
+// BackupCredentials is the key pair a backup store is reached with.
+type BackupCredentials struct {
+	AccessKeyID     string `json:"access_key_id"`
+	SecretAccessKey string `json:"secret_access_key"`
+}
+
 // BackupConfig is where a cluster's backups live and how to reach them. It is
 // a location and nothing else: how a copy is taken is the control plane's, and
 // the four fields that described that are gone from the CRD
 // (design-storagecluster.md §12), so the operator stops sending them and the
 // backend's defaults apply. They stay declared here because the endpoint still
 // accepts them and a future caller may have reason to.
+//
+// Every key must be declared by UnresolvedBackupConfig in shared/openapi.json,
+// which TestBackupConfigKeysAreDeclared checks.
 type BackupConfig struct {
-	AccessKeyID     string `json:"access_key_id,omitempty"`
-	SecretAccessKey string `json:"secret_access_key,omitempty"`
-	LocalEndpoint   string `json:"local_endpoint,omitempty"`
-	// Bucket, Prefix, and Region locate the store within the endpoint. The
-	// registered CRD had no bucket at all, so nothing in the store could be
-	// located; these arrive with spec.backup's rework.
-	// Wire keys must match the /api/v2/clusters/ endpoint — verify against
-	// sbcli before release.
-	Bucket          string `json:"bucket,omitempty"`
-	Prefix          string `json:"prefix,omitempty"`
-	Region          string `json:"region,omitempty"`
-	SnapshotBackups *bool  `json:"snapshot_backups,omitempty"`
-	WithCompression *bool  `json:"with_compression,omitempty"`
-	SecondaryTarget *int32 `json:"secondary_target,omitempty"`
-	LocalTesting    *bool  `json:"local_testing,omitempty"`
+	Credentials     *BackupCredentials `json:"credentials,omitempty"`
+	Endpoint        string             `json:"endpoint,omitempty"`
+	BucketName      string             `json:"bucket_name,omitempty"`
+	Region          string             `json:"region,omitempty"`
+	SnapshotBackups *bool              `json:"snapshot_backups,omitempty"`
+	WithCompression *bool              `json:"with_compression,omitempty"`
+	SecondaryTarget *int32             `json:"secondary_target,omitempty"`
 }
 
 type HashicorpVaultConfig struct {

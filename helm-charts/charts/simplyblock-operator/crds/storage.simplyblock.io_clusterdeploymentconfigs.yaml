@@ -136,11 +136,6 @@ spec:
                         description: Endpoint is the S3 endpoint, for example, https://s3.example.com.
                         pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                         type: string
-                      prefix:
-                        description: |-
-                          Prefix narrows the store to one key prefix, so that several clusters can
-                          share a bucket without each walking the others' backups.
-                        type: string
                       region:
                         description: Region is the bucket's region, for endpoints
                           that do not imply one.
@@ -867,10 +862,11 @@ spec:
                               on these nodes.
                             properties:
                               count:
-                                description: Count is the number of journal managers
-                                  to configure.
+                                description: |-
+                                  Count is the number of journal managers to configure. The control plane
+                                  requires at least 3.
                                 format: int32
-                                minimum: 1
+                                minimum: 3
                                 type: integer
                               percentPerDevice:
                                 description: PercentPerDevice is the share of each
@@ -1018,6 +1014,30 @@ spec:
                 description: Step is the position of the expansion machine within
                   Expanding.
                 properties:
+                  claim:
+                    description: |-
+                      Claim records that this state's side effect was started. Absent means
+                      no pass has started it since the state was entered.
+                    properties:
+                      attempt:
+                        description: Attempt counts the claims taken on this state,
+                          starting at 1.
+                        format: int32
+                        type: integer
+                      leaseUntil:
+                        description: |-
+                          LeaseUntil is when the claim expires and the side effect may be fired
+                          again.
+                        format: date-time
+                        type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
+                    required:
+                    - attempt
+                    - leaseUntil
+                    - state
+                    type: object
                   deadline:
                     description: |-
                       Deadline is when that state expires, absent when it has none. It is an

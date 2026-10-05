@@ -431,13 +431,14 @@ func TestAnAbortThatArrivesTooLateIsRefusedAndTheOperationRunsOn(t *testing.T) {
 			o.Status.Phase = simplyblockv1alpha2.StorageClusterOpsPhaseRunning
 			o.Status.Step = statemachine.KubeSnapshot{State: string(stepAwaiting)}
 		})
-	r := newOpsReconciler(t, api, &recorder{}, newTestCluster(), ops)
+	rec := &recorder{}
+	r := newOpsReconciler(t, api, rec, newTestCluster(), ops)
 
 	got, _ := reconcileOps(t, r, 1)
 	if got.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseRunning {
 		t.Errorf("phase = %q, want the operation still Running", got.Status.Phase)
 	}
-	if got.Status.Message == "" {
+	if !rec.has(AbortRefused) {
 		t.Error("a refused abort said nothing about why")
 	}
 }

@@ -204,6 +204,29 @@ func TestThePhaseIsThisOperatorsReadingOfWhatTheControlPlaneSays(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-02-storagenode-removal-reads-failed: every status the
+// control plane passes through while removing a node fell into the default case,
+// so a removal that was going exactly to plan showed the node as Failed from the
+// shutdown to the end, and a node that had been removed stayed Failed for good.
+func TestANodeBeingRemovedReadsAsRemovingAndThenRemoved(t *testing.T) {
+	cases := []struct {
+		status string
+		want   simplyblockv1alpha2.StorageNodePhase
+	}{
+		{"in_shutdown", simplyblockv1alpha2.StorageNodePhaseOffline},
+		{"pending_removal", simplyblockv1alpha2.StorageNodePhaseRemoving},
+		{"migrating_devices", simplyblockv1alpha2.StorageNodePhaseRemoving},
+		{"migrating_lvols", simplyblockv1alpha2.StorageNodePhaseRemoving},
+		{"in_removal", simplyblockv1alpha2.StorageNodePhaseRemoving},
+		{"removed", simplyblockv1alpha2.StorageNodePhaseRemoved},
+	}
+	for _, c := range cases {
+		if got := phaseOf(NodeReading{Status: c.status}); got != c.want {
+			t.Errorf("a node reporting %q is %q, want %q", c.status, got, c.want)
+		}
+	}
+}
+
 // A stored UUID the control plane no longer reports is a cluster that was reset
 // and its nodes recreated. The object goes back to provisioning rather than
 // reporting a node that is not there.

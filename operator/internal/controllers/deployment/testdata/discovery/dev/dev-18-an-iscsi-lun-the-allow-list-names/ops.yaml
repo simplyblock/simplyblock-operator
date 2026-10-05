@@ -10,7 +10,7 @@ spec:
       blockAllowList:
       - /dev/sdb
       - /dev/vdb
-      enableLogicalBlockDevices: true
+    enableLogicalBlockDevices: true
     forceJournalDevice: true
 status:
   environment: K3s

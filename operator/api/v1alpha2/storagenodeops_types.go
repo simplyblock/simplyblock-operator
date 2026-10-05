@@ -67,7 +67,7 @@ const (
 // StorageNodeOpsStep is one step of a running node operation. The enum is the
 // union of every action's steps; which steps belong to which action is declared by
 // the graph rather than by this type.
-// +kubebuilder:validation:Enum=Requesting;Departing;Awaiting;Validating;Suspending;MigratingVolumes;Verifying;Removing;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
+// +kubebuilder:validation:Enum=Requesting;Departing;Awaiting;Validating;MigratingDevices;MigratingVolumes;Verifying;Removing;AwaitingRemoval;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
 type StorageNodeOpsStep string
 
 const (
@@ -79,12 +79,13 @@ const (
 	StorageNodeOpsStepDeparting  StorageNodeOpsStep = "Departing"
 	StorageNodeOpsStepAwaiting   StorageNodeOpsStep = "Awaiting"
 
-	// Remove.
+	// Remove, which also runs ShuttingDown, declared with HostMaintenance below.
 	StorageNodeOpsStepValidating       StorageNodeOpsStep = "Validating"
-	StorageNodeOpsStepSuspending       StorageNodeOpsStep = "Suspending"
+	StorageNodeOpsStepMigratingDevices StorageNodeOpsStep = "MigratingDevices"
 	StorageNodeOpsStepMigratingVolumes StorageNodeOpsStep = "MigratingVolumes"
 	StorageNodeOpsStepVerifying        StorageNodeOpsStep = "Verifying"
 	StorageNodeOpsStepRemoving         StorageNodeOpsStep = "Removing"
+	StorageNodeOpsStepAwaitingRemoval  StorageNodeOpsStep = "AwaitingRemoval"
 
 	// Migrate.
 	StorageNodeOpsStepPreparing    StorageNodeOpsStep = "Preparing"
@@ -210,15 +211,58 @@ type DrainStatus struct {
 	VolumesMigrated int32 `json:"volumesMigrated"`
 }
 
+// RemovalStatus is the control plane's progress through a node removal it has
+// accepted, as the operation last read it while waiting in AwaitingRemoval.
+//
+// Any change in it counts as progress. Each change moves the step's deadline out
+// by the full budget again, so a removal that keeps moving is waited on for as
+// long as it moves, and one that stops is failed once a full budget passes with
+// nothing changing.
+type RemovalStatus struct {
+	// NodeStatus is the node's status as the control plane last reported it,
+	// in the control plane's own spelling: pending_removal, migrating_devices,
+	// migrating_lvols, in_removal, removed, or removed_failed.
+	// +optional
+	NodeStatus string `json:"nodeStatus,omitempty"`
+
+	// Devices is the control-plane status each of the node's StorageDevices
+	// last reported, keyed by the StorageDevice's name. A device moves from
+	// online through failed to failed_and_migrated, or to removed, as the
+	// removal rebuilds its data onto the peers.
+	// +optional
+	Devices map[string]string `json:"devices,omitempty"`
+
+	// LastProgressTime is when NodeStatus or any of Devices last changed.
+	// +optional
+	LastProgressTime *metav1.Time `json:"lastProgressTime,omitempty"`
+
+	// PrepareAttempts is how many times the removal's first step was sent
+	// again for a node that stayed pending_removal, because the control plane
+	// reported the step failed or nothing moved for longer than a shutdown
+	// takes. The operation fails once the attempts run out.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	PrepareAttempts int32 `json:"prepareAttempts,omitempty"`
+
+	// LastPrepareTime is when the removal's first step was last sent again.
+	// +optional
+	LastPrepareTime *metav1.Time `json:"lastPrepareTime,omitempty"`
+}
+
 // StorageNodeOpsStatus is the observed state of one node operation.
 type StorageNodeOpsStatus struct {
 	// Phase is the operation's own progress.
 	// +optional
 	Phase StorageNodeOpsPhase `json:"phase,omitempty"`
 
+	// Removal is the control plane's progress through the removal, written by
+	// a Remove while it waits in AwaitingRemoval.
+	// +optional
+	Removal *RemovalStatus `json:"removal,omitempty"`
+
 	// Step is the position of the running action's state machine. The value is
 	// one of the steps the running action declares.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Departing','Awaiting','Validating','Suspending','MigratingVolumes','Verifying','Removing','Preparing','Relocating','AwaitingNode','Promoting','Holding','ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Departing','Awaiting','Validating','MigratingDevices','MigratingVolumes','Verifying','Removing','AwaitingRemoval','Preparing','Relocating','AwaitingNode','Promoting','Holding','ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

@@ -106,9 +106,10 @@ constructing one directly.
 | DEV-14 | The same volume on a block run                              | Refused the same way, since the rule is in both pipelines and reads no filter               | `CM`    |
 | DEV-15 | A worker whose every disk is an attached volume             | No draft, and the explanation counts them together rather than listing each                 | `CM`    |
 | DEV-16 | A fabric namespace another product exported                 | Refused for being on a fabric, not as a simplyblock volume: the NQN does not parse as one   | `CM`    |
-| DEV-17 | An iSCSI LUN beside a virtio disk, block run, no allow list | Only the virtio disk. A LUN is storage across a network and is never taken by default       | `CM`    |
+| DEV-17 | An iSCSI LUN beside virtio disks, block run, no allow list  | Only the virtio disks. A LUN is storage across a network and is never taken by default      | `CM`    |
 | DEV-18 | The same worker with the allow list naming the LUN          | Both disks. Naming it is the decision a run cannot make for a fleet                         | `CM`    |
 | DEV-19 | An iSCSI LUN on an NVMe run                                 | Refused for being the other class, before the iSCSI rule is reached                         | `CM`    |
+| DEV-20 | 4 equal virtio disks, block run, forceJournalDevice unset   | Refused: nothing says which disk carries the journal, and the class has no partitioned one  | `CM`    |
 
 ## 3. NUMA topology
 
@@ -456,11 +457,11 @@ the case for refusing a removable device: with install media in it the drive
 reports a whole disk of 924 MB on the SATA bus and reads as blank, so every
 other ground admits it.
 
-| ID      | Mutation                                                         | Expected                                                                                                                                   | Harness |
-|---------|------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------|---------|
-| HOST-01 | The six NVMe workers of e2e run 35988660084, replayed from sysfs | One group per worker. One PCI address each, the two namespaces counted once. The extra worker refused: its only disk is its boot disk      | `CM`    |
-| HOST-02 | The three block workers of e2e run 35975993533, on a block run   | One group per worker, `devices.block` holding `sdb` and `sdc`. The partitioned boot disk refused, and the extra worker with it             | `CM`    |
-| HOST-03 | A QEMU worker with two NVMe disks and a DVD-ROM, on a block run  | One group, `devices.block` holding `/dev/nvme0n1` and `/dev/nvme1n1`. The optical drive refused as removable, the boot disk as partitioned | `CM`    |
+| ID      | Mutation                                                         | Expected                                                                                                                                                                                                                               | Harness |
+|---------|------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------|
+| HOST-01 | The six NVMe workers of e2e run 35988660084, replayed from sysfs | One group per worker. One PCI address each, the two namespaces counted once. The extra worker refused: its only disk is its boot disk                                                                                                  | `CM`    |
+| HOST-02 | The three block workers of e2e run 35975993533, on a block run   | One group per worker, `devices.block` holding `sdb` and `sdc`. The partitioned boot disk refused, and the extra worker with it                                                                                                         | `CM`    |
+| HOST-03 | A QEMU worker with two NVMe disks and a DVD-ROM, on a block run  | One group, `devices.block` holding each namespace's own `nvme-eui.` link rather than `/dev/nvme0n1` and `/dev/nvme1n1`, which name this boot's enumeration order. The optical drive refused as removable, the boot disk as partitioned | `CM`    |
 
 ---
 

@@ -330,6 +330,9 @@ declares one graph, because it has no `spec.action` to key a `MultiConfig` on.
   spec.source.managed
     │
     ▼
+  ApplyingDatastore     ← the document store the management API needs, and the
+    │                      bucket configuration the Prometheus pods mount
+    ▼
   ApplyingFoundationDB  ← the FoundationDBCluster and its RBAC
     │
     ▼
@@ -337,9 +340,6 @@ declares one graph, because it has no `spec.action` to key a `MultiConfig` on.
     │
     ▼
   BuildingIndices       ← the database's secondary indices are declared ready
-    │
-    ▼
-  ApplyingDatastore     ← the document store the management API needs
     │
     ▼
   ApplyingAPI           ← the management API workload, Services, certificates
@@ -1031,10 +1031,12 @@ already impose on the operator.
 `deployment.profile` is the chart flag, and it names the mode rather than the
 installer: `standalone` renders a `ControlPlane` with `spec.source.local`, and
 `managed` renders one with `spec.source.managed` pointing at a control plane
-elsewhere. Either way the operator is what installs, and the templates that used
-to install a control plane locally are gone rather than gated. There is no flag
-that hands them back, because a deployment that needs something the spec cannot
-express is a deployment the spec has to grow a field for.
+elsewhere. `empty` renders no `ControlPlane` at all, and the administrator
+writes it after the install. Whichever way the object arrives, the operator is
+what installs, and the templates that used to install a control plane locally
+are gone rather than gated. There is no flag that hands them back, because a
+deployment that needs something the spec cannot express is a deployment the
+spec has to grow a field for.
 
 What is open is the transition for a deployment already running a chart-installed
 control plane. The chart refuses to upgrade over one without an explicit

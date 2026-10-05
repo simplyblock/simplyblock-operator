@@ -52,6 +52,7 @@ const (
 	annoOpsObserved  = "storage.simplyblock.io/conversion-status.observedGeneration"
 	annoOpsAbort     = "storage.simplyblock.io/conversion-spec.abort"
 	annoOpsCancelTsk = "storage.simplyblock.io/conversion-spec.cancelTask"
+	annoOpsSkipped   = "storage.simplyblock.io/conversion-status.rollingRestart.skipped"
 )
 
 // storageClusterOpsActionToHub maps this version's lowercase, hyphenated
@@ -198,6 +199,7 @@ func stashOpsHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageClusterOps) e
 	}{
 		{annoOpsObserved, src.Status.ObservedGeneration},
 		{annoOpsCancelTsk, src.Spec.CancelTask},
+		{annoOpsSkipped, skippedOf(src.Status.RollingRestart)},
 	} {
 		if err := stash(meta, field.key, field.value); err != nil {
 			return err
@@ -228,10 +230,13 @@ func stashOpsHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageClusterOps) e
 // The projection is one-way, so most of the rolling restart's steps survive
 // being written to nodePhase and read back, and annotating those would put a
 // note on every operation that ever ran. What does not survive is a step with a
-// deadline, a step of any action other than the rolling restart, and
-// CheckingPeers, which shares a v1alpha1 spelling with ShuttingDownNode.
+// deadline or a claim, a step of any action other than the rolling restart, and
+// CheckingPeers, which shares a v1alpha1 spelling with ShuttingDownNode. A claim
+// dropped here is a lease erased, and the next pass would make the step's call
+// again at once.
 func stashOpsStep(meta *metav1.ObjectMeta, step statemachine.KubeSnapshot) error {
-	if step.Deadline == nil && nodePhaseToStep[stepToNodePhase[step.State]] == step.State {
+	if step.Deadline == nil && step.Claim == nil &&
+		nodePhaseToStep[stepToNodePhase[step.State]] == step.State {
 		clear(meta, annoOpsStep)
 		return nil
 	}
@@ -266,11 +271,29 @@ func restoreOpsHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageClusterOps)
 		}
 	}
 
+	var skipped []string
+	if err := unstash(meta, annoOpsSkipped, &skipped); err != nil {
+		return err
+	}
+	if len(skipped) > 0 && dst.Status.RollingRestart != nil {
+		dst.Status.RollingRestart.Skipped = skipped
+	}
+
 	if phase := unstashRemoved(meta, annoOpsPhase); phase != "" {
 		dst.Status.Phase = v1alpha2.StorageClusterOpsPhase(phase)
 	}
 	dst.Spec.Abort = unstashRemoved(meta, annoOpsAbort) == stashedTrue
 	return nil
+}
+
+// skippedOf is the walk's record of the nodes it skipped, which this version's
+// two lists cannot carry: a skipped node is processed, the same as one that
+// was restarted.
+func skippedOf(walk *v1alpha2.RollingRestartStatus) []string {
+	if walk == nil {
+		return nil
+	}
+	return walk.Skipped
 }
 
 // narrowOpsPhase maps a hub phase onto one this version's Enum accepts. Only

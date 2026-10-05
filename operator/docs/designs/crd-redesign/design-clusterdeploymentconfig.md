@@ -537,7 +537,8 @@ another slot — is the one stated.
   AwaitingCluster   ← wait for status.uuid
     │
     ▼
-  CreatingNodes     ← one StorageNode per worker per slot
+  CreatingNodes     ← map the failure domains, then one StorageNode per
+                      worker per slot
     │
     ▼
   Activating        ← wait for this document's own nodes, then ask for the
@@ -558,6 +559,19 @@ whose groups disagree with it was rejected at approval (§5.1).
 gets the cluster's sizing and its group's devices as one `config.deviceNames`
 list (§3.1). Nothing on the node refers back to the config, which is what §4.3
 means by the document owning no part of the deployment.
+
+**`CreatingNodes` maps the document's failure domains before it creates a node.**
+A group's `failureDomain` is a label, and the control plane indexes a failure
+domain by integer, so the step gives every label the document introduces an
+index in the cluster's `status.failureDomains`
+([`design-storagecluster.md`](design-storagecluster.md) §3.3). It does this for
+a cluster the document created and for one it joined through `clusterRef`, and
+it only adds: a label already mapped keeps its index. Writing the mapping first
+means no node's add runs before the index it sends exists. The mapping holds at
+most 256 labels, so validation refuses a document that would take its cluster
+past that with `TooManyFailureDomains`, counting the labels the cluster already
+maps. Without it the status patch would be refused on every pass and the
+expansion would stall after approval.
 
 **The distribution flags `spec.environment` stands for land on the cluster, not on
 each node.** They configure the storage-node workload, which is one DaemonSet for
@@ -923,12 +937,17 @@ without anybody coordinating, since both runs read the same evidence.
 
 **Two classes of backend storage, and a run scans one of them.** NVMe devices are
 the class simplyblock has always accepted, and logical block devices are the class
-26.4 adds. `spec.discover.deviceFilter.enableLogicalBlockDevices` scans the block
-class, and leaving it unset scans NVMe. It selects rather than adds, because the
-draft a run writes describes one cluster and a cluster is built out of one class
+26.4 adds. `spec.discover.enableLogicalBlockDevices` scans the block class, and
+leaving it unset scans NVMe. It selects rather than adds, because the draft a run
+writes describes one cluster and a cluster is built out of one class
 ([`design-storagecluster.md`](design-storagecluster.md) §3.1): a run reporting
 both would write a document no reviewer could approve and no CEL rule would admit
 (§3.1).
+
+The field sits on `spec.discover` beside `forceJournalDevice` rather than inside
+`deviceFilter`, because it does not narrow the candidates. It decides which class
+of them is looked at, which of the filters apply, and what `forceJournalDevice`
+resolves, since the two classes lay out a journal differently.
 
 Unset is the conservative default for two reasons. Upgrading to 26.4 must not
 change what a discovery run reports, and NVMe is what every deployment before it
@@ -944,14 +963,13 @@ It is the only place in either kind that a device is described by a rule, and it
 has one set of filters per class. `pcieAllowList`, `pcieDenyList`, and `pcieModel`
 narrow the NVMe class, matching on an address and a model string only an NVMe
 device has. `blockAllowList` and `blockDenyList` narrow the block class, matching
-device paths. `driveSizeRange` and `enablePartitionedDevices` apply to whichever
-class the run is scanning, because a size and a partition table are properties of
-any device.
+device paths. `driveSizeRange` applies to whichever class the run is scanning,
+because a size is a property of any device.
 
 **A filter for the class the run is not scanning is refused.** A PCI list beside
 `enableLogicalBlockDevices: true` describes devices this run will never look at,
 and a block list without it does the same in the other direction, so a CEL rule on
-the filter rejects both combinations (Appendix B). Ignoring them instead would
+`spec.discover` rejects both combinations (Appendix B). Ignoring them instead would
 leave an administrator reading a narrowed run that was never narrowed, and the
 draft they would then review is the whole fleet's disks.
 
@@ -982,9 +1000,11 @@ an inspection cannot tell, so the inspection excludes it rather than handing a
 reviewer the job of noticing.
 
 **Partitions are the one condition an administrator can override.**
-`spec.discover.deviceFilter.enablePartitionedDevices` reports partitioned devices
-alongside the available ones, for the case where the partition table is stale and
-the device is meant to be handed over anyway. Naming such a device in a group is
+`spec.discover.enablePartitionedDevices` reports partitioned devices alongside
+the available ones, for the case where the partition table is stale and the
+device is meant to be handed over anyway. It sits on `spec.discover` rather than
+inside `deviceFilter` because it widens what a run reports, where every filter
+narrows it. Naming such a device in a group is
 then how it is forced into use (§3.1). Mounted and busy stay absolute: a device
 another subsystem is writing to is one simplyblock would corrupt, and a flag that
 turned that into an intention would be a flag for losing data.
@@ -1080,6 +1100,7 @@ Both kinds are new, so both tables are new infrastructure.
 | A draft names a worker that does not exist               | `Warning` | `WorkerNotFound`            | `ClusterDeploymentConfig` |
 | A draft names a device no node advertises                | `Warning` | `DeviceNotFound`            | `ClusterDeploymentConfig` |
 | A draft's devices are not the class its cluster uses     | `Warning` | `DeviceClassMismatch`       | `ClusterDeploymentConfig` |
+| A draft would map more than 256 failure domains          | `Warning` | `TooManyFailureDomains`     | `ClusterDeploymentConfig` |
 | A draft's scheme is one the control plane refuses        | `Warning` | `StripeUnsupported`         | `ClusterDeploymentConfig` |
 | A draft has fewer nodes than its scheme requires         | `Warning` | `StripeBelowMinimumNodes`   | `ClusterDeploymentConfig` |
 | A draft's nodes sit on too few workers for its scheme    | `Warning` | `StripeBelowMinimumWorkers` | `ClusterDeploymentConfig` |
@@ -1958,31 +1979,14 @@ const (
 // ClusterDeploymentConfig carries the explicit list the filter produced, not the
 // rule that produced it.
 //
-// The filters come in two sets, one per device class, and a run scans one class.
-// The two rules below reject the set belonging to the class this run is not
-// scanning, because a filter that will never be applied is one an administrator
-// reads as having narrowed a draft that was never narrowed.
-//
-// +kubebuilder:validation:XValidation:rule="!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !(has(self.pcieAllowList) || has(self.pcieDenyList) || has(self.pcieModel))",message="the PCI filters select NVMe devices and cannot be combined with enableLogicalBlockDevices; use blockAllowList and blockDenyList"
-// +kubebuilder:validation:XValidation:rule="(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !(has(self.blockAllowList) || has(self.blockDenyList))",message="blockAllowList and blockDenyList select logical block devices and require enableLogicalBlockDevices"
+// Every member narrows the devices of the class a run scans. Neither choosing
+// that class nor waiving an availability condition is a member: both are
+// statements about the run, spec.discover.enableLogicalBlockDevices and
+// spec.discover.enablePartitionedDevices, because the first decides which kind
+// of cluster the draft describes and the second widens what is reported. The
+// filters come in two sets, one per class, and the rules on DiscoverSpec reject
+// the set belonging to the class the run is not scanning.
 type DeviceFilter struct {
-	// EnableLogicalBlockDevices scans a worker's available logical block devices
-	// instead of its available NVMe devices. It selects the class rather than
-	// adding one, because the draft a run writes describes one cluster and a
-	// cluster is built out of one class. Unset scans NVMe, so that upgrading to
-	// 26.4 does not change what a discovery run reports.
-	// +optional
-	EnableLogicalBlockDevices *bool `json:"enableLogicalBlockDevices,omitempty"`
-
-	// EnablePartitionedDevices reports devices carrying a partition table
-	// alongside the available ones, for the administrator who knows the table is
-	// stale and intends to hand the device over anyway. It is the only one of the
-	// three availability conditions that can be waived: a mounted or otherwise
-	// busy device is never reported, because simplyblock taking it would corrupt
-	// whatever is using it.
-	// +optional
-	EnablePartitionedDevices *bool `json:"enablePartitionedDevices,omitempty"`
-
 	// PcieAllowList restricts candidates to these PCI addresses. This and the two
 	// PCI filters below narrow the NVMe class alone, because a logical block
 	// device has no PCI address to match, so setting any of them on a run that
@@ -2026,6 +2030,13 @@ type DeviceFilter struct {
 }
 
 // DiscoverSpec parameterizes the Discover action.
+//
+// The device filters come in two sets, one per device class, and a run scans
+// one class. The two class rules reject the set belonging to the class this run
+// is not scanning, because a filter that will never be applied is one an
+// administrator reads as having narrowed a draft that was never narrowed.
+// +kubebuilder:validation:XValidation:rule="!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !has(self.deviceFilter) || !(has(self.deviceFilter.pcieAllowList) || has(self.deviceFilter.pcieDenyList) || has(self.deviceFilter.pcieModel))",message="the PCI filters select NVMe devices and cannot be combined with enableLogicalBlockDevices; use blockAllowList and blockDenyList"
+// +kubebuilder:validation:XValidation:rule="(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !has(self.deviceFilter) || !(has(self.deviceFilter.blockAllowList) || has(self.deviceFilter.blockDenyList))",message="blockAllowList and blockDenyList select logical block devices and require enableLogicalBlockDevices"
 type DiscoverSpec struct {
 	// ConfigName is the ClusterDeploymentConfig to write. Absent generates one
 	// from the run's timestamp, so that a second discovery never overwrites the
@@ -2072,6 +2083,34 @@ type DiscoverSpec struct {
 	// proposes them ahead of the workers rather than leaving them out.
 	// +optional
 	EnableControlPlaneNodes *bool `json:"enableControlPlaneNodes,omitempty"`
+
+	// EnableLogicalBlockDevices scans a worker's available logical block devices
+	// instead of its available NVMe devices. It selects the class rather than
+	// adding one, because the draft a run writes describes one cluster and a
+	// cluster is built out of one class. Unset scans NVMe, so that upgrading to
+	// 26.4 does not change what a discovery run reports.
+	//
+	// It is a statement about the run rather than a member of DeviceFilter,
+	// because it does not narrow the devices reported: it decides which class of
+	// them is looked at, which filters in DeviceFilter apply, and what
+	// ForceJournalDevice resolves, since the two classes lay out a journal
+	// differently.
+	// +optional
+	EnableLogicalBlockDevices *bool `json:"enableLogicalBlockDevices,omitempty"`
+
+	// EnablePartitionedDevices reports devices carrying a partition table
+	// alongside the available ones, for the administrator who knows the table is
+	// stale and intends to hand the device over anyway. It is the only one of the
+	// three availability conditions that can be waived: a mounted or otherwise
+	// busy device is never reported, because simplyblock taking it would corrupt
+	// whatever is using it.
+	//
+	// It is a statement about the run rather than a member of DeviceFilter for
+	// the reason EnableLogicalBlockDevices is: it waives an availability
+	// condition for whichever class is scanned, and so widens what is reported,
+	// where every member of the filter narrows it.
+	// +optional
+	EnablePartitionedDevices *bool `json:"enablePartitionedDevices,omitempty"`
 
 	// DeviceFilter narrows which of an inspected worker's devices reach the
 	// draft. Empty reports every device the worker advertises, including the one

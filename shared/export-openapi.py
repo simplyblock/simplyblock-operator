@@ -13,8 +13,9 @@ catch-all redirect routes, and those redirects are what the filter drops; they
 are not part of the typed v2 surface and their {full_path} parameter is not
 declared in a way a generator can use.
 
-Importing the app needs sbcli's requirements installed, but no database and no
-FoundationDB client library: nothing connects at import time.
+Importing the app needs sbcli's requirements installed, including the
+FoundationDB client library sbcli's `fdb.api_version()` call loads at import
+time. No database connection is made either way: nothing connects.
 
     export-openapi.py export --sbcli ../sbcli --out shared/openapi.json
     export-openapi.py summarize --old openapi.old.json --new shared/openapi.json

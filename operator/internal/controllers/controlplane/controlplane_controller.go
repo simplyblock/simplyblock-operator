@@ -224,7 +224,7 @@ func (r *ControlPlaneReconciler) install(
 		// reconciling again. Restarting the install is the safe answer here and
 		// not elsewhere in this group: every step is an apply, so re-entering
 		// the first one re-applies to the same result.
-		return r.enterStepAt(ctx, cp, stepApplyingFoundationDB)
+		return r.enterStepAt(ctx, cp, stepApplyingDatastore)
 	}
 	defer machine.Close()
 
@@ -377,8 +377,8 @@ func (r *ControlPlaneReconciler) applyEverything(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
 ) error {
 	for _, set := range [][]client.Object{
-		foundationDBObjects(cp),
 		datastoreObjects(cp),
+		foundationDBObjects(cp),
 		managementAPIObjects(cp),
 	} {
 		if err := applyAll(ctx, r.Client, cp, r.Scheme, set); err != nil {

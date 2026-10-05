@@ -117,7 +117,7 @@ File: `atlas-lib/volstack/layers/state_test.go` (new)
 | U-95  | `vgcreate` and `lvcreate` carry `--addtag storage.simplyblock.io`, so no group or volume of the driver's exists without the tag                                                                                                                        | Positive   | `TestManager_CreateVolumeGroup`, `TestManager_CreateLogicalVolume_NoPoolTargetsTheVolumeGroup`                     |
 | U-96  | Adoption tags the group and the volumes in it, and issues nothing else                                                                                                                                                                                 | Positive   | `TestAdoptVolumeGroupTagsTheGroupAndItsVolumes`                                                                    |
 | U-97  | The informational tags converge on what was asked: a stale claim is removed, a missing one added, other tags untouched, and a group already right issues nothing                                                                                       | Positive   | `TestReconcileInformationalTags`                                                                                   |
-| U-98  | A clone whose untagged source the recognizer knows is adopted on its device and then imported, and one it does not know is refused with nothing issued against it                                                                                          | Negative   | `TestResolveClonedVolumeGroupRecognizesOrRefusesAnUntaggedSource`                                                  |
+| U-98  | A clone whose untagged source the recognizer knows is adopted on its device and then imported, and one it does not know is refused with nothing issued against it                                                                                      | Negative   | `TestResolveClonedVolumeGroupRecognizesOrRefusesAnUntaggedSource`                                                  |
 | U-99  | `lvmVolumeGroup` adopts an untagged group under its name that holds the volume under its name, tagging it before activating, and creates nothing                                                                                                       | Positive   | `TestLVMVolumeGroupAdoptsACompleteGroupMadeBeforeTheTag`                                                           |
 | U-100 | `lvmVolumeGroup` refuses an untagged group under its name that does not hold its volume, and neither activates, adopts, nor creates                                                                                                                    | Negative   | `TestLVMVolumeGroupRefusesAnUntaggedGroupWithoutItsVolume`                                                         |
 | U-101 | `lvmVolumeGroup` makes the informational tags current on every bring-up: the rebound claim is written and the stale one removed                                                                                                                        | Positive   | `TestLVMVolumeGroupKeepsItsInformationalTagsCurrent`                                                               |
@@ -234,6 +234,37 @@ File: `atlas-lib/volstack/optional_test.go` (new)
 | U-83 | A plan whose layers implement no `Grower`, which is the pNFS client shape, grows as a no-op                                        | Boundary | —    |
 | U-84 | `Grow` stops and reports when a lower layer's grow fails, and does not attempt the layers above it                                 | Negative | —    |
 | U-85 | `Heal` never calls `Ensure`, asserted by a zero call count, because the data already exists                                        | Negative | —    |
+
+### Bounded Kernel I/O and Device Presence
+
+Files: `atlas-lib/bounded/bounded_test.go`, `atlas-lib/internal/sysfs/sysfs_test.go`,
+`atlas-lib/nvme/identify_linux_test.go`, `atlas-lib/nvmeof/timeouts_test.go`,
+`csi-driver/internal/initiator/timeouts_test.go`, and
+`csi-driver/internal/initiator/presence_test.go` (all new)
+
+The regression cases pin two defects from run `lblk_outage_matrix_k8s-20261003-080237`:
+the reconnect monitor on worker-3 stopped at 08:56:59 and never reported a namespace
+the kernel removed at 08:58:45 (`2026-10-04-unbounded-nvme-io`), and devices the
+kernel still held were reported removed at 08:56:43 because `nvme list` left them out
+(`2026-10-04-presence-from-nvme-list`). A FIFO with no writer plays the stuck kernel
+call, and a fake `nvme` first on `PATH` plays the nvme-cli that cannot be reaped.
+
+| #     | Scenario                                                                                                                                  | Type       | Test                                               |
+|-------|-------------------------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------|
+| U-110 | A sysfs attribute read that never answers returns an error wrapping `context.DeadlineExceeded` within its budget                          | Regression | `TestReadAttrGivesUpOnAnAttributeThatNeverAnswers` |
+| U-111 | An Identify against a controller device that never answers returns a timeout within its budget (Linux only)                               | Regression | `TestIdentifyGivesUpOnAControllerThatNeverAnswers` |
+| U-112 | Opening a namespace device that never opens returns a timeout within its budget                                                           | Regression | `TestOpenDeviceGivesUpOnADeviceThatNeverOpens`     |
+| U-113 | An nvme-cli call returns by its deadline when a process it left behind holds the output pipe                                              | Regression | `TestRunCommandReturnsWhenTheProcessDoesNot`       |
+| U-114 | The monitor's device listing returns by its deadline when nvme-cli never releases its output                                              | Regression | `TestNVMeDevicesReturnsWhenNVMeCLIDoesNot`         |
+| U-115 | A `list-subsys` query still running after the query budget is given up on                                                                 | Regression | `TestSubsystemsForDeviceGivesUpOnASlowQuery`       |
+| U-116 | A second call on a key whose earlier call is still stuck fails at once and starts nothing, and the key clears once the stuck call returns | Negative   | `TestCallFailsAtOnceWhileTheSameKeyIsStuck`        |
+| U-117 | Concurrent calls on one healthy key all succeed, since only abandoned calls count as stuck                                                | Positive   | `TestConcurrentCallsOnAKeyAreNotStuck`             |
+| U-118 | A recorded device sysfs still has is not reported gone                                                                                    | Regression | `TestPruneKeepsADeviceSysfsStillHas`               |
+| U-119 | A recorded device sysfs no longer has is reported once, with its lvol                                                                     | Positive   | `TestPruneReportsADeviceSysfsNoLongerHasOnce`      |
+| U-120 | A sysfs scan that cannot be read reports nothing and keeps the record, so a later readable scan still reports the removal                 | Negative   | `TestPruneReportsNothingWhenSysfsCannotBeRead`     |
+| U-121 | A command killed at its deadline, or whose output a child still holds, returns an error wrapping `context.DeadlineExceeded`               | Regression | `TestCombinedOutputKillsAProcessAtTheDeadline`     |
+| U-122 | A device recorded by an attach while the presence scan runs is not reported gone by that scan                                             | Regression | `TestPruneLeavesADeviceRecordedDuringTheScan`      |
+| U-123 | A monitor tick whose path repair fails still reports the devices the kernel removed                                                       | Regression | `TestTickReportsGoneDevicesWhenPathRepairFails`    |
 
 ---
 

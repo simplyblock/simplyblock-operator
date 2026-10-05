@@ -99,7 +99,10 @@ func TestDevicePhaseFromStatus(t *testing.T) {
 		{"online", subscriptions.DeviceDTO{Status: "online"}, simplyblockv1alpha2.StorageDevicePhaseOnline},
 		{"journal device is serving", subscriptions.DeviceDTO{Status: "JM_DEV"}, simplyblockv1alpha2.StorageDevicePhaseOnline},
 		{"failed", subscriptions.DeviceDTO{Status: "failed"}, simplyblockv1alpha2.StorageDevicePhaseFailed},
-		{"failed and migrated is still failed", subscriptions.DeviceDTO{Status: "failed_and_migrated"}, simplyblockv1alpha2.StorageDevicePhaseFailed},
+		// Regression: 2026-10-02-migrated-device-reads-failed: the data of a
+		// failed_and_migrated device has been rebuilt on the peers, which is the
+		// end of a node's removal and not a failure the cluster is carrying.
+		{"failed and migrated is migrated", subscriptions.DeviceDTO{Status: "failed_and_migrated"}, simplyblockv1alpha2.StorageDevicePhaseMigrated},
 		{"removed", subscriptions.DeviceDTO{Status: "removed"}, simplyblockv1alpha2.StorageDevicePhaseRemoved},
 		// Serving and should not be: the definition of Degraded.
 		{"read only", subscriptions.DeviceDTO{Status: "read_only"}, simplyblockv1alpha2.StorageDevicePhaseDegraded},

@@ -104,15 +104,23 @@ func TestJobMountsTheHostsTreesReadOnlyExceptTheDeviceNodes(t *testing.T) {
 		byPath[mount.MountPath] = mount
 	}
 
-	for _, path := range []string{hostSysfsMount, hostProcMount} {
-		mount, ok := byPath[path]
-		if !ok {
-			t.Errorf("the host's tree at %s is not mounted", path)
-			continue
-		}
-		if !mount.ReadOnly {
-			t.Errorf("%s is mounted writable, and the probe only reads it", path)
-		}
+	mount, ok := byPath[hostProcMount]
+	if !ok {
+		t.Errorf("the host's tree at %s is not mounted", hostProcMount)
+	} else if !mount.ReadOnly {
+		t.Errorf("%s is mounted writable, and the probe only reads it", hostProcMount)
+	}
+
+	// sysfs is the other exception: handing an NVMe controller back to the
+	// kernel is three writes under it, and a read-only mount turns a worker
+	// whose disks a dead deployment still holds into a worker with no disks.
+	sysfs, ok := byPath[hostSysfsMount]
+	if !ok {
+		t.Fatalf("the host's sysfs is not mounted at %s", hostSysfsMount)
+	}
+	if sysfs.ReadOnly {
+		t.Error("sysfs is mounted read-only, so the probe cannot hand back a " +
+			"controller and every disk behind one stays invisible")
 	}
 
 	// /dev is the exception: asking the kernel whether anything holds a device

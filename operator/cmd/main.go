@@ -831,10 +831,11 @@ func main() {
 	// (design-simplyblockdriver.md §4.1). The discovery client is the same one
 	// the discovery run uses; a driver reconcile without it refuses rather than
 	// guessing, because guessing either way breaks a cluster in one direction.
-	// One device is the narrowest thing that can be recycled, which is the whole
-	// of why the kind exists (design-storagedevice.md §6). Its four other actions
-	// wait on control-plane verbs the v2 API does not offer, and
-	// v1alpha2.ExternalDependencies is the list.
+	// One device is the narrowest thing that can be recycled, and one device is
+	// the narrowest thing that can be taken out of the data path, which is the
+	// whole of why the kind exists (design-storagedevice.md §6). Its three other
+	// actions wait on control-plane verbs the v2 API does not offer, and the
+	// TODO beside their constants in storagedeviceops_types.go is the list.
 	if err := (&nodecontroller.StorageDeviceOpsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),

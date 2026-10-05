@@ -22,6 +22,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/simplyblock/atlas/bounded"
+
 	"github.com/simplyblock/atlas/errs"
 )
 
@@ -31,8 +33,13 @@ import (
 // anything else it is the device holding the filesystem the path is on. That
 // covers the two shapes a staged volume takes: a directory the filesystem is
 // mounted at, and the device file a raw block volume is published as.
+//
+// The stat runs under bounded.ReadTimeout, since a mount whose device lost every
+// path is exactly what this is asked about.
 func DeviceNumberAt(path string) (string, error) {
-	info, err := os.Stat(path)
+	info, err := bounded.Call("stat "+path, bounded.ReadTimeout, func() (os.FileInfo, error) {
+		return os.Stat(path)
+	})
 	if err != nil {
 		return "", fmt.Errorf("nvme: stat %s: %w", path, err)
 	}
