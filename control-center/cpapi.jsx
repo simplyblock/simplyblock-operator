@@ -81,6 +81,8 @@ const cpRaw = {
   clusters: () => cpGet("/clusters/").then(r => (r || []).map(dropSecrets)),
   nodes: cid => cpGet(`/clusters/${cid}/storage-nodes/`),
   devices: (cid, nid) => cpGet(`/clusters/${cid}/storage-nodes/${nid}/devices/`),
+  // the node's data NICs: [{"ID", "Device name", "Address", "Net type", "Status"}]
+  nics: (cid, nid) => cpGet(`/clusters/${cid}/storage-nodes/${nid}/nics`),
   pools: cid => cpGet(`/clusters/${cid}/storage-pools/`),
   volumes: (cid, pid) => cpGet(`/clusters/${cid}/storage-pools/${pid}/volumes/`),
   snapshots: (cid, pid) => cpGet(`/clusters/${cid}/storage-pools/${pid}/snapshots/`),
@@ -99,15 +101,17 @@ async function cpSites() {
   const [profiles, deploys] = await Promise.all([
     k8s.list("SiteProfile").catch(() => []),
     k8s.list("StorageSiteDeployment", {allNamespaces: true}).catch(() => [])]);
-  const byHost = {};
-  profiles.forEach(p => ((((p.status || {}).inventory) || {}).nodes || []).forEach(n => { byHost[n.name] = p.metadata.name; }));
+  const byHost = {}, invByHost = {};
+  profiles.forEach(p => ((((p.status || {}).inventory) || {}).nodes || []).forEach(n => {
+    byHost[n.name] = p.metadata.name; invByHost[n.name] = {node: n, site: p.metadata.name};
+  }));
   const byCluster = {};
   deploys.forEach(d => {
     const sc = (d.status || {}).storageCluster || {};
     const id = sc.uuid || sc.clusterId || sc.id;
     if (id && d.spec && d.spec.cluster) byCluster[id] = d.spec.cluster;
   });
-  return {byHost, byCluster, profiles};
+  return {byHost, byCluster, profiles, invByHost, deploys};
 }
 const siteOf = (sites, clusterId, nodes) => sites.byCluster[clusterId]
   || (nodes || []).map(n => sites.byHost[hostKey(n.hostname)]).find(Boolean) || "";
@@ -124,15 +128,26 @@ const knownStatus = st => {
   if (/new/.test(x)) return "in_creation";
   return "offline";
 };
-const wireNode = (n, site) => ({
+// A storage node's data NICs from the control plane's nics list; the port is
+// the node's volume subsystem port.
+const wireNics = (nics, n) => (nics || []).map(x => ({name: x["Device name"] || x.if_name || "", ip: x.Address || x.ip4_address || "",
+  port: n.lvol_subsys_port, state: String(x.Status || x.status || "").toLowerCase() === "online" ? "up" : (x.Status || x.status || null),
+  trtype: x["Net type"] || x.trtype || null}));
+// ANA multipath: a volume of this node is also reachable through its
+// secondary (and tertiary) node -- that is simplyblock's multipathing.
+const anaPaths = n => 1 + (n.secondary_node_id ? 1 : 0) + (n.tertiary_node_id ? 1 : 0);
+const wireNode = (n, site, nics) => ({
   uuid: n.id, cluster_id: n.cluster_id, host_id: `${n.cluster_id}:${hostKey(n.hostname)}`,
   hostname: hostKey(n.hostname), mgmt_ip: n.mgmt_ip, status: knownStatus(n.status),
-  data_nics: [{name: "", ip: n.mgmt_ip, port: n.lvol_subsys_port}],
+  data_nics: nics ? wireNics(nics, n) : null,
+  ana_paths: anaPaths(n), secondary_node_id: n.secondary_node_id || null, tertiary_node_id: n.tertiary_node_id || null,
   failure_domain: n.failure_domain >= 0 ? n.failure_domain : null,
   size_total: cpCap(n).size_total || 0, size_util: cpCap(n).size_used || 0,
   devices_count: n.device_count || 0, devices_online: n.online_device_count || 0,
   cpu_count: n.cpu_total_count, vcpu_reserved: n.cpu_spdk_count,
-  memory_total: n.memory, memory_reserved: n.spdk_mem, hugepages_total: n.hugepage_memory,
+  // in-use memory/hugepages and the SPDK version are not part of the record
+  memory_total: n.memory || null, memory_reserved: n.spdk_mem || null, hugepages_total: n.hugepage_memory || null,
+  memory_used: null, hugepages_used: null, spdk_version: null,
   max_subsystem_count: n.lvols_max || null, lvols: n.lvols || 0, site: site || ""
 });
 const wireDevice = (d, node) => ({
@@ -247,11 +262,99 @@ const clusterOfPool = async pid => {
   return cid;
 };
 
+// ---- hosts: one machine, every source that knows something about it --------
+// Kubernetes quantities ("16", "15500m", "32Gi", "8589934592") as numbers.
+const QTY = {Ki: 2 ** 10, Mi: 2 ** 20, Gi: 2 ** 30, Ti: 2 ** 40, Pi: 2 ** 50, k: 1e3, M: 1e6, G: 1e9, T: 1e12, P: 1e15, m: 1e-3};
+const qty = q => {
+  const m = /^([0-9.]+)([a-zA-Z]*)$/.exec(String(q === undefined || q === null ? "" : q).trim());
+  if (!m) return null;
+  const v = parseFloat(m[1]) * (m[2] ? QTY[m[2]] || NaN : 1);
+  return Number.isFinite(v) ? v : null;
+};
+const hugepagesOf = rl => {
+  const ks = Object.keys(rl || {}).filter(k => k.startsWith("hugepages-"));
+  return ks.length ? ks.reduce((t, k) => t + (qty(rl[k]) || 0), 0) : null;
+};
+const hostDevice = d => ({id: d.id, kind: d.bdev_type === "nvme" ? "nvme" : "block", numa_socket: null,
+  pcie_address: d.pcie_address || null, device_name: d.device_path || d.nvme_controller || null,
+  serial_number: d.serial_number || null, model_number: d.model || null, size: d.size || 0,
+  assigned_node_id: d.storage_node_id || null, status: d.status});
+// The draft group that names this host as a worker, when the storage was
+// deployed from the hub (StorageSiteDeployment): its NICs, sockets, devices.
+const draftGroupOf = (deploys, host) => {
+  for (const d of deploys || []) {
+    const dr = (d.status || {}).draft || {};
+    for (const set of dr.nodeSets || []) for (const g of set.groups || []) {
+      if ((g.workers || []).includes(host)) return {group: g, cluster: dr.cluster || {}, name: d.metadata.name};
+    }
+  }
+  return null;
+};
+const CPS = "control plane API", INV = "dr-agent inventory";
+// Every field a source knows is set with the source it came from (h.sources);
+// a field no source knows stays unset, and the view says so.
+function mergeHost(h, sites) {
+  const src = {};
+  const set = (field, v, from) => {
+    if (v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length) || (typeof v === "number" && !Number.isFinite(v))) return;
+    h[field] = v; src[field] = from;
+  };
+  const ns = h._nodes;
+  const max = f => { const v = ns.map(f).filter(x => typeof x === "number" && x > 0); return v.length ? Math.max(...v) : null; };
+  const sum = f => { const v = ns.map(f).filter(x => typeof x === "number" && x > 0); return v.length ? v.reduce((a, b) => a + b, 0) : null; };
+  // the control plane: what its storage nodes recorded of the machine
+  set("vcpu_count", max(n => n.cpu_total_count), CPS);
+  set("memory_total", max(n => n.memory), CPS);
+  set("hugepages_reserved", max(n => n.hugepage_memory), CPS);
+  set("hugepages_allocated", sum(n => n.spdk_mem), CPS);
+  set("memory_per_pod", max(n => n.spdk_mem), CPS);
+  if (h._devsKnown) src.devices = CPS;
+  if (h._nicsKnown) { src.nics = CPS; set("data_nics", h.nics.map(x => x.name).filter(Boolean), CPS); }
+  // dr-agent: the Kubernetes node (zone, region, rack, cabinet, capacity)
+  const inv = (sites.invByHost || {})[h.hostname];
+  if (inv) {
+    const n = inv.node, cap = n.capacity || {};
+    set("zone", n.zone, INV); set("zone_id", n.zone ? zoneId(inv.site, n.zone) : null, INV); set("region", n.region, INV);
+    set("rack_id", n.rack, INV); set("cabinet_id", n.cabinet, INV);
+    set("k8s_cluster", inv.site, INV);
+    // the node's own view of the machine wins over what a storage node recorded
+    set("vcpu_count", qty(cap.cpu), INV); set("memory_total", qty(cap.memory), INV); set("hugepages_reserved", hugepagesOf(cap), INV);
+    if (n.ready === false && h.status === "available") h.status = "unavailable";
+  }
+  // a hub-driven deployment: the draft that placed storage on this host
+  const dg = draftGroupOf(sites.deploys, h.hostname);
+  if (dg) {
+    const g = dg.group, from = `StorageSiteDeployment ${dg.name}`;
+    set("mgmt_nic", g.mgmtInterface, from);
+    if (!src.data_nics) set("data_nics", g.dataInterfaces, from);
+    set("numa_sockets_used", (dg.cluster.socketsToUse || []).map(x => parseInt(x, 10)).filter(x => !isNaN(x)), from);
+    if (!src.memory_per_pod) set("memory_per_pod", qty(g.spdkSystemMemory), from);
+    ((g.devices || {}).nvme || []).forEach(pcie => {
+      if (!h.devices.some(d => d.pcie_address === pcie)) {
+        h.devices.push({id: `draft:${pcie}`, kind: "nvme", numa_socket: null, pcie_address: pcie, size: 0, assigned_node_id: null, selected: true});
+      }
+    });
+    if (!src.devices && h.devices.length) src.devices = from;
+  }
+  const kinds = [...new Set(h.devices.map(d => d.kind))];
+  if (src.devices) set("host_class", kinds.length ? kinds.join(" + ") : null, src.devices);
+  h.devices_assigned = h.devices.filter(d => d.assigned_node_id).length;
+  h.devices_free = h.devices.length - h.devices_assigned;
+  h.nvme_count = h.devices.filter(d => d.kind === "nvme").length;
+  h.sources = src;
+  delete h._nodes; delete h._devsKnown; delete h._nicsKnown;
+  return h;
+}
+
 const cp = {
   on: cpOn,
   clusters: () => cpBundles().then(bs => bs.map(b => wireCluster(b.c, b.nodes, b.pools, b.site))),
   cluster: cid => cpBundle(cid).then(b => wireCluster(b.c, b.nodes, b.pools, b.site)),
-  nodes: cid => cpBundle(cid).then(b => b.nodes.map(n => wireNode(n, b.site))),
+  nodes: async cid => {
+    const b = await cpBundle(cid);
+    const nics = await Promise.all(b.nodes.map(n => cpRaw.nics(cid, n.id).catch(() => null)));
+    return b.nodes.map((n, i) => wireNode(n, b.site, nics[i]));
+  },
   node: async nid => (await cp.nodes(await clusterOfNode(nid))).find(n => n.uuid === nid),
   devices: async nid => {
     const cid = await clusterOfNode(nid);
@@ -321,17 +424,25 @@ const cp = {
   },
   // a storage node runs on one machine; the host view is that machine
   hosts: async cid => {
-    const b = await cpBundle(cid);
+    const [b, sites] = await Promise.all([cpBundle(cid), cpSites()]);
+    const [devs, nics] = await Promise.all([
+      Promise.all(b.nodes.map(n => cpRaw.devices(cid, n.id).catch(() => null))),
+      Promise.all(b.nodes.map(n => cpRaw.nics(cid, n.id).catch(() => null)))]);
     const by = {};
-    b.nodes.forEach(n => {
+    b.nodes.forEach((n, i) => {
       const k = hostKey(n.hostname);
       const h = by[k] = by[k] || {uuid: `${cid}:${k}`, cluster_id: cid, hostname: k, mgmt_ip: n.mgmt_ip, source: "kubernetes",
-        status: "unavailable", storage_node_ids: [], devices: [], size_total: 0, size_assigned: 0, k8s_cluster: b.site || null};
-      h.storage_node_ids.push(n.id);
+        status: "unavailable", storage_node_ids: [], devices: [], nics: [], size_total: 0, size_assigned: 0, k8s_cluster: b.site || null,
+        _nodes: [], _devsKnown: true, _nicsKnown: true};
+      h.storage_node_ids.push(n.id); h._nodes.push(n);
       if (n.status === "online") h.status = "available";
       h.size_total += cpCap(n).size_total || 0; h.size_assigned += cpCap(n).size_total || 0;
+      if (devs[i]) devs[i].forEach(d => h.devices.push(hostDevice(d)));
+      else h._devsKnown = false;
+      if (nics[i]) wireNics(nics[i], n).forEach(x => { if (!h.nics.some(y => y.name === x.name)) h.nics.push(x); });
+      else h._nicsKnown = false;
     });
-    return Object.values(by);
+    return Object.values(by).map(h => mergeHost(h, sites));
   },
   host: async hid => {
     const cid = String(hid).split(":")[0];
@@ -459,11 +570,17 @@ const hubK8s = {
   hosts: async id => {
     const s = await hubSite(id);
     const storageNodes = (await Promise.all(s.storage.map(c => cp.nodes(c.uuid).catch(() => [])))).flat();
-    return s.nodes.map(n => ({
-      uuid: `node:${s.name}:${n.name}`, hostname: n.name, status: n.ready ? "available" : "unavailable",
-      zone: n.zone || null, zone_id: n.zone ? zoneId(s.name, n.zone) : null, k8s_cluster: s.name, source: "kubernetes",
-      storage_node_ids: storageNodes.filter(x => x.hostname === n.name).map(x => x.uuid), devices: []
-    }));
+    return s.nodes.map(n => {
+      const cap = n.capacity || {}, h = {
+        uuid: `node:${s.name}:${n.name}`, hostname: n.name, status: n.ready ? "available" : "unavailable",
+        zone: n.zone || null, zone_id: n.zone ? zoneId(s.name, n.zone) : null, region: n.region || null,
+        rack_id: n.rack || null, cabinet_id: n.cabinet || null, k8s_cluster: s.name, source: "kubernetes",
+        vcpu_count: qty(cap.cpu), memory_total: qty(cap.memory), hugepages_reserved: hugepagesOf(cap),
+        storage_node_ids: storageNodes.filter(x => x.hostname === n.name).map(x => x.uuid), devices: []};
+      h.sources = {};
+      ["zone", "region", "rack_id", "cabinet_id", "vcpu_count", "memory_total", "hugepages_reserved"].forEach(f => { if (h[f]) h.sources[f] = INV; });
+      return h;
+    });
   },
   zones: async id => {
     const ss = id ? [await hubSite(id)] : await hubSites();
