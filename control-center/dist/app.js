@@ -3891,9 +3891,11 @@ function normRAction(o) {
     sourceCluster: st.sourceCluster || "",
     targetCluster: st.targetCluster || "",
     steps: st.steps || [],
+    log: st.log || [],
     children: st.children || [],
     report,
     reportKey: st.reportKey || "",
+    completionMessage: ((st.conditions || []).find(c => c.type === "Completed") || {}).message || "",
     rtoSeconds: report ? report.rtoSeconds : null,
     rpoSeconds: report ? report.achievedRPOSeconds : null,
     guests: report ? report.guests || [] : [],
@@ -3934,10 +3936,12 @@ function normTBubble(o) {
     durationMs: durMs(st.startTime, st.completionTime),
     bubbleNamespaces: st.bubbleNamespaces || [],
     steps: st.steps || [],
+    log: st.log || [],
     invariants: st.invariants || [],
     checks: st.checks || [],
     report,
     reportKey: st.reportKey || "",
+    completionMessage: ((st.conditions || []).find(c => c.type === "Completed") || {}).message || "",
     scheduleName: (drMeta(o).labels || {})[DR_ANN.schedule] || "",
     createdBy: (drMeta(o).annotations || {})[DR_ANN.createdBy] || report && report.operator || "",
     counts: {
@@ -23737,6 +23741,374 @@ const StepJournal = ({
   }, "log \xB7 ", s.logRef)));
 }));
 const durMs2 = (a, b) => a && b ? Math.max(0, Date.parse(b) - Date.parse(a)) : 0;
+
+// ---- workflow timeline (dr-hub ADR 0022) ------------------------------------
+// A run's steps with their live progress, deadline and blocker, and the
+// run's event log. dr-hub writes step.progress / lastProgressTime / deadline
+// / blocker while a step runs, and status.log (newest last, at most 100
+// entries) for the whole run; the detail view re-reads them every few
+// seconds while the run is going.
+const SEV_C = {
+  Error: "var(--bad)",
+  Warning: "var(--warn)",
+  Info: "var(--dim)"
+};
+const sevCount = (entries, sev) => entries.filter(e => e.severity === sev).length;
+const stepLog = (log, name) => (log || []).filter(e => e.step === name);
+const runningStep = steps => (steps || []).slice().reverse().find(s => s.result === "Running") || null;
+const failedStep = steps => (steps || []).slice().reverse().find(s => s.result === "Failed") || null;
+const deadlineText = (s, now) => {
+  if (!s.deadline || s.result !== "Running") return "";
+  const left = (Date.parse(s.deadline) - now) / 1000;
+  return left >= 0 ? `gives up in ${fmtSecs(left)}` : `past its deadline by ${fmtSecs(-left)}`;
+};
+const LogLines = ({
+  entries,
+  empty
+}) => !entries.length ? /*#__PURE__*/React.createElement("div", {
+  className: "nolim"
+}, empty || "No events.") : /*#__PURE__*/React.createElement("div", {
+  className: "wflog",
+  style: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 3
+  }
+}, entries.map((e, i) => /*#__PURE__*/React.createElement("div", {
+  key: i,
+  className: "wflog-e sev-" + (e.severity || "Info").toLowerCase(),
+  style: {
+    display: "flex",
+    gap: 8,
+    fontSize: 11.5,
+    alignItems: "baseline"
+  }
+}, /*#__PURE__*/React.createElement("span", {
+  className: "mono",
+  style: {
+    color: "var(--dim2)",
+    fontSize: 10.5,
+    flex: "none"
+  }
+}, e.time ? new Date(e.time).toISOString().slice(11, 19) : ""), /*#__PURE__*/React.createElement("span", {
+  className: "mono",
+  style: {
+    color: SEV_C[e.severity] || "var(--dim)",
+    fontSize: 10.5,
+    flex: "none",
+    minWidth: 52
+  }
+}, (e.severity || "Info").toLowerCase()), e.step && /*#__PURE__*/React.createElement("span", {
+  className: "badge",
+  style: {
+    flex: "none"
+  }
+}, e.step), /*#__PURE__*/React.createElement("span", {
+  className: "mono",
+  style: {
+    color: "var(--dim2)",
+    fontSize: 10.5,
+    flex: "none"
+  }
+}, e.source), /*#__PURE__*/React.createElement("span", {
+  style: {
+    color: e.severity === "Info" ? "var(--text)" : SEV_C[e.severity],
+    overflowWrap: "anywhere",
+    minWidth: 0
+  }
+}, e.message))));
+function WorkflowStep({
+  s,
+  log,
+  now
+}) {
+  const entries = stepLog(log, s.name);
+  const [open, setOpen] = useState(s.result === "Running" || s.result === "Failed");
+  const res = s.result || "Pending";
+  const cls = res === "Succeeded" ? "done" : res === "Running" ? "on" : res === "Failed" ? "failed" : res === "Skipped" ? "aborted" : "";
+  const elapsed = s.startTime ? (s.endTime ? durMs2(s.startTime, s.endTime) : Math.max(0, now - Date.parse(s.startTime))) / 1000 : null;
+  const warns = sevCount(entries, "Warning"),
+    errs = sevCount(entries, "Error");
+  return /*#__PURE__*/React.createElement("div", {
+    className: "stp wfstep" + (res === "Running" ? " running" : ""),
+    "data-step": s.name
+  }, /*#__PURE__*/React.createElement("ul", {
+    className: "opsteps",
+    style: {
+      margin: 0
+    }
+  }, /*#__PURE__*/React.createElement("li", {
+    className: cls
+  }, /*#__PURE__*/React.createElement("i", null))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "center",
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("b", {
+    style: {
+      fontSize: 12
+    }
+  }, s.name), s.phase && /*#__PURE__*/React.createElement("span", {
+    className: "badge"
+  }, s.phase), /*#__PURE__*/React.createElement(TrafficLight, {
+    status: res,
+    sm: true
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      fontSize: 10.5,
+      color: "var(--dim2)",
+      marginLeft: "auto"
+    }
+  }, s.startTime ? fmtDate(s.startTime) : "", elapsed != null ? ` · ${res === "Running" ? "running " : ""}${fmtSecs(elapsed)}` : "", deadlineText(s, now) ? ` · ${deadlineText(s, now)}` : "")), res === "Running" && s.progress && /*#__PURE__*/React.createElement("div", {
+    className: "wf-progress",
+    style: {
+      fontSize: 11.5,
+      marginTop: 4,
+      display: "flex",
+      gap: 6,
+      alignItems: "baseline"
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "refresh",
+    s: 11,
+    c: "var(--info)"
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      overflowWrap: "anywhere",
+      minWidth: 0
+    }
+  }, s.progress), s.lastProgressTime && /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      fontSize: 10.5,
+      color: "var(--dim2)",
+      flex: "none"
+    }
+  }, "\xB7 ", fmtAgo(s.lastProgressTime))), res === "Running" && !s.progress && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: "var(--dim2)",
+      marginTop: 4
+    }
+  }, "No progress reported yet."), s.blocker && /*#__PURE__*/React.createElement("div", {
+    className: "wf-blocker",
+    style: {
+      fontSize: 11.5,
+      marginTop: 5,
+      padding: "6px 8px",
+      borderRadius: 6,
+      color: "var(--warn)",
+      border: "1px solid color-mix(in srgb,var(--warn) 35%,transparent)",
+      background: "color-mix(in srgb,var(--warn) 8%,var(--panel))",
+      overflowWrap: "anywhere"
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 12
+  }), " ", /*#__PURE__*/React.createElement("b", null, "Stuck:"), " ", s.blocker), s.message && res !== "Running" && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: res === "Failed" ? "var(--bad)" : "var(--dim)",
+      marginTop: 3,
+      overflowWrap: "anywhere"
+    }
+  }, s.message), res !== "Running" && s.progress && s.progress !== s.message && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "var(--dim2)",
+      marginTop: 2,
+      overflowWrap: "anywhere"
+    }
+  }, "last progress: ", s.progress), s.logRef && /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 10.5,
+      color: "var(--dim2)",
+      marginTop: 3
+    }
+  }, "log \xB7 ", s.logRef), !!entries.length && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 5
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "chip wf-toggle",
+    onClick: () => setOpen(!open)
+  }, open ? "Hide" : "Show", " ", entries.length, " event", entries.length === 1 ? "" : "s", errs ? ` · ${errs} error${errs === 1 ? "" : "s"}` : "", warns ? ` · ${warns} warning${warns === 1 ? "" : "s"}` : ""), open && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 6
+    }
+  }, /*#__PURE__*/React.createElement(LogLines, {
+    entries: entries.slice(-30)
+  })))));
+}
+function WorkflowTimeline({
+  steps,
+  log,
+  empty
+}) {
+  const now = Date.now();
+  if (!(steps || []).length) return /*#__PURE__*/React.createElement("div", {
+    className: "nolim"
+  }, empty || "No steps recorded yet.");
+  return /*#__PURE__*/React.createElement("div", {
+    className: "steps wftimeline"
+  }, steps.map((s, i) => /*#__PURE__*/React.createElement(WorkflowStep, {
+    key: s.name + "|" + (s.phase || "") + "|" + i,
+    s: s,
+    log: log,
+    now: now
+  })));
+}
+function EventLog({
+  log
+}) {
+  const [filter, setFilter] = useState("all");
+  const entries = (log || []).filter(e => filter === "all" || (filter === "warn" ? e.severity !== "Info" : e.severity === "Error"));
+  const warns = sevCount(log || [], "Warning"),
+    errs = sevCount(log || [], "Error");
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card wf-eventlog",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Event log \xB7 ", (log || []).length, errs ? ` · ${errs} errors` : "", warns ? ` · ${warns} warnings` : ""), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      marginBottom: 8
+    }
+  }, [["all", "All"], ["warn", "Warnings and errors"], ["error", "Errors"]].map(([k, l]) => /*#__PURE__*/React.createElement("button", {
+    key: k,
+    className: "chip wf-filter" + (filter === k ? " on" : ""),
+    style: filter === k ? {
+      borderColor: "var(--info)",
+      color: "var(--info)"
+    } : null,
+    onClick: () => setFilter(k)
+  }, l))), /*#__PURE__*/React.createElement(LogLines, {
+    entries: entries.slice().reverse(),
+    empty: (log || []).length ? "Nothing at this severity." : "No events recorded yet. dr-hub writes them while the run goes (dr-simplyblock with ADR 0022)."
+  })));
+}
+// RunBanner is the run's state at the top of its detail view: the final
+// error of a failed run, the blocker of a stuck step, or the live progress
+// of the step that runs.
+function RunBanner({
+  run,
+  what
+}) {
+  const failed = run.status === "Failed" || run.status === "RolledBack" || run.outcome === "Failed" || run.outcome === "FailedInvariant";
+  const warnStyle = {
+    color: "var(--warn)",
+    borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)",
+    background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"
+  };
+  const infoStyle = {
+    color: "var(--info)",
+    borderColor: "color-mix(in srgb,var(--info) 35%,transparent)",
+    background: "color-mix(in srgb,var(--info) 8%,var(--panel))"
+  };
+  if (failed) {
+    const f = failedStep(run.steps);
+    const last = (run.log || []).slice().reverse().find(e => e.severity === "Error");
+    const msg = f && f.message || run.completionMessage || last && last.message || "See the journal.";
+    return /*#__PURE__*/React.createElement("div", {
+      className: "banner wf-banner-failed"
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "alert",
+      s: 15
+    }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "The ", what, " failed", f ? ` in step ${f.name}` : "", "."), " ", /*#__PURE__*/React.createElement("span", {
+      style: {
+        overflowWrap: "anywhere"
+      }
+    }, msg)));
+  }
+  if (run.terminal) return null;
+  const s = runningStep(run.steps);
+  if (!s) return /*#__PURE__*/React.createElement("div", {
+    className: "banner wf-banner-running",
+    style: infoStyle
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "refresh",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Starting."), " This view refreshes every few seconds while the ", what, " runs."));
+  if (s.blocker) return /*#__PURE__*/React.createElement("div", {
+    className: "banner wf-banner-stuck",
+    style: warnStyle
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Stuck in step ", s.name, "."), " ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      overflowWrap: "anywhere"
+    }
+  }, s.blocker), deadlineText(s, Date.now()) ? ` (The step ${deadlineText(s, Date.now())}.)` : ""));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "banner wf-banner-running",
+    style: infoStyle
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "refresh",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Running step ", s.name, "."), " ", s.progress || "No progress reported yet.", deadlineText(s, Date.now()) ? ` · ${deadlineText(s, Date.now())}` : ""));
+}
+// RunEvents is a running run's current step and its latest events, for the
+// application's page.
+function RunEvents({
+  run,
+  nav
+}) {
+  const s = runningStep(run.steps);
+  const recent = (run.log || []).slice(-5).reverse();
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card wf-runevents",
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, /*#__PURE__*/React.createElement(Ref, {
+    label: `${run.action || "Test"} ${run.name}`,
+    onClick: () => nav.detail(run)
+  }), " \xB7 ", run.phase), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, s ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12
+    }
+  }, /*#__PURE__*/React.createElement("b", null, s.name), ": ", s.progress || "no progress reported yet", s.lastProgressTime ? /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      fontSize: 10.5,
+      color: "var(--dim2)"
+    }
+  }, " \xB7 ", fmtAgo(s.lastProgressTime)) : "") : /*#__PURE__*/React.createElement("div", {
+    className: "nolim"
+  }, "Starting."), s && s.blocker && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: "var(--warn)",
+      marginTop: 4,
+      overflowWrap: "anywhere"
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 12
+  }), " ", /*#__PURE__*/React.createElement("b", null, "Stuck:"), " ", s.blocker), !!recent.length && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement(LogLines, {
+    entries: recent
+  }))));
+}
 const PhaseStripDR = ({
   phases,
   current,
@@ -26854,7 +27226,11 @@ function PAppDetail({
     key: r.id,
     label: `${r.action || "Test"} ${r.name}`,
     onClick: () => nav.detail(r)
-  })))), a.move && /*#__PURE__*/React.createElement("div", {
+  })))), running.map(r => /*#__PURE__*/React.createElement(RunEvents, {
+    key: "ev" + r.id,
+    run: r,
+    nav: nav
+  })), a.move && /*#__PURE__*/React.createElement("div", {
     className: "banner" + (a.move.phase === "Stuck" ? "" : " info")
   }, /*#__PURE__*/React.createElement(Icon, {
     n: a.move.phase === "Stuck" ? "alert" : "move",
@@ -27257,12 +27633,10 @@ function RActionDetail({
   }, /*#__PURE__*/React.createElement(Icon, {
     n: "alert",
     s: 15
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Readiness override."), " ", a.override.reason)), a.status === "Failed" && /*#__PURE__*/React.createElement("div", {
-    className: "banner"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "alert",
-    s: 15
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "The action failed."), " ", (a.steps.filter(s => s.result === "Failed").slice(-1)[0] || {}).message || "See the journal.")), /*#__PURE__*/React.createElement(PhaseStripDR, {
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Readiness override."), " ", a.override.reason)), /*#__PURE__*/React.createElement(RunBanner, {
+    run: a,
+    what: "action"
+  }), /*#__PURE__*/React.createElement(PhaseStripDR, {
     phases: ACTION_PHASES,
     current: a.phase,
     terminal: a.terminal
@@ -27293,13 +27667,16 @@ function RActionDetail({
     v: a.createdBy || "—"
   })), /*#__PURE__*/React.createElement("div", {
     className: "dcols"
-  }, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "card"
-  }, /*#__PURE__*/React.createElement("h3", null, "Journal \xB7 ", a.steps.length, " steps"), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("h3", null, "Journal \xB7 ", a.steps.length, " steps", !a.terminal ? " · live" : ""), /*#__PURE__*/React.createElement("div", {
     className: "bd"
-  }, /*#__PURE__*/React.createElement(StepJournal, {
-    steps: a.steps
-  }))), /*#__PURE__*/React.createElement("div", null, !!a.children.length && /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement(WorkflowTimeline, {
+    steps: a.steps,
+    log: a.log
+  }))), /*#__PURE__*/React.createElement(EventLog, {
+    log: a.log
+  })), /*#__PURE__*/React.createElement("div", null, !!a.children.length && /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       marginBottom: 10
@@ -27457,7 +27834,10 @@ function TBubbleDetail({
   }, /*#__PURE__*/React.createElement(Icon, {
     n: "alert",
     s: 15
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "An invariant was violated:"), " the test touched production state. See the invariants below.")), /*#__PURE__*/React.createElement(PhaseStripDR, {
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "An invariant was violated:"), " the test touched production state. See the invariants below.")), t.outcome !== "FailedInvariant" && /*#__PURE__*/React.createElement(RunBanner, {
+    run: t,
+    what: "test"
+  }), /*#__PURE__*/React.createElement(PhaseStripDR, {
     phases: TEST_PHASES,
     current: t.phase,
     terminal: t.terminal
@@ -27506,11 +27886,14 @@ function TBubbleDetail({
     style: {
       marginTop: 10
     }
-  }, /*#__PURE__*/React.createElement("h3", null, "Journal"), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("h3", null, "Journal", !t.terminal ? " · live" : ""), /*#__PURE__*/React.createElement("div", {
     className: "bd"
-  }, /*#__PURE__*/React.createElement(StepJournal, {
-    steps: t.steps
-  })))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement(WorkflowTimeline, {
+    steps: t.steps,
+    log: t.log
+  }))), /*#__PURE__*/React.createElement(EventLog, {
+    log: t.log
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("h3", null, "Checks"), /*#__PURE__*/React.createElement("div", {
     className: "bd"

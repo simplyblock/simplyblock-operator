@@ -11377,6 +11377,14 @@ window.SB_DR = {
     logRef,
     idempotencyKey: U().hex(8)
   });
+  // status.log entries (dr-hub ADR 0022): [minutes ago, severity, step, source, message]
+  const logOf = rows => rows.map(([min, severity, stepName, source, message]) => ({
+    time: agoIso(min),
+    severity,
+    step: stepName,
+    source,
+    message
+  }));
   store.RecoveryAction.push(Object.assign(api("RecoveryAction"), {
     metadata: meta("relocate-ledger-1", OPS, {
       annotations: {
@@ -11449,7 +11457,8 @@ window.SB_DR = {
       completionTime: agoIso(60 * 24 * 2 - 14),
       sourceCluster: "cluster-a",
       targetCluster: "cluster-b",
-      steps: [step("pre-flight", "Succeeded", 60 * 24 * 2, 3, "Degraded, overridden"), step("ramen failover", "Succeeded", 60 * 24 * 2 - 1, 480, "DRPC FailedOver"), step("target starting", "Failed", 60 * 24 * 2 - 9, 300, "tier web: deployment payments-web not ready after 5m (ImagePullBackOff: registry mirror not bound on fra-b)")],
+      steps: [step("pre-flight", "Succeeded", 60 * 24 * 2, 3, "Degraded, overridden"), step("ramen failover", "Succeeded", 60 * 24 * 2 - 1, 480, "DRPC FailedOver"), step("target starting", "Failed", 60 * 24 * 2 - 9, 300, "the application did not pass its health probes on cluster-b: task deadline of 900s passed; root cause: Pod payments/payments-web-6c9 is ImagePullBackOff: web: Back-off pulling image \"quay.io/acme/payments-web:4.2\": registry mirror not bound on fra-b | recent: 09:12:40 probes: probes on cluster-b: 0 of 1 passing after 58 attempts; VMs 0, pods 1/2 ready, PVCs 2 / 09:13:10 pods: Pod payments/payments-web-6c9 is ImagePullBackOff")],
+      log: logOf([[60 * 24 * 2, "Info", "pre-flight", "workflow", "started (PreFlight)"], [60 * 24 * 2, "Warning", "", "workflow", "started against readiness Degraded (storage-replicating), overridden: storage-replicating advisory only"], [60 * 24 * 2 - 1, "Info", "ramen failover", "ramen", "Ramen: DRPC payments FailingOver, WaitingForResourceRestore"], [60 * 24 * 2 - 8, "Info", "ramen failover", "workflow", "succeeded: Ramen reports FailedOver on cluster-b"], [60 * 24 * 2 - 9, "Info", "target starting", "probes", "probes on cluster-b: 0 of 1 passing after 3 attempts; VMs 0, pods 1/2 ready, PVCs 2"], [60 * 24 * 2 - 9, "Warning", "target starting", "pods", "Pod payments/payments-web-6c9 is ImagePullBackOff: web: Back-off pulling image \"quay.io/acme/payments-web:4.2\": registry mirror not bound on fra-b"], [60 * 24 * 2 - 10, "Warning", "target starting", "events", "Pod/payments-web-6c9 Failed: Failed to pull image: dial tcp: lookup mirror.fra-b.example.com: no such host"], [60 * 24 * 2 - 12, "Warning", "target starting", "workflow", "stuck: Pod payments/payments-web-6c9 is ImagePullBackOff: web: Back-off pulling image \"quay.io/acme/payments-web:4.2\": registry mirror not bound on fra-b"], [60 * 24 * 2 - 14, "Error", "target starting", "workflow", "failed: the application did not pass its health probes on cluster-b: task deadline of 900s passed"], [60 * 24 * 2 - 14, "Error", "", "workflow", "Failed: the application did not pass its health probes on cluster-b (Ramen moved it; no rollback)"]]),
       report: {
         operator: "bob@example.com",
         overrideReason: "storage-replicating advisory only; site A network partitioned, business decision to fail over",
@@ -11500,7 +11509,56 @@ window.SB_DR = {
       startTime: agoIso(6),
       sourceCluster: "cluster-a",
       targetCluster: "cluster-b",
-      steps: [step("pre-flight", "Succeeded", 6, 3, "Degraded"), step("pre-source hooks", "Succeeded", 6, 20, ""), step("ramen relocate", "Succeeded", 5, 200, "DRPC Relocated"), step("target starting", "Running", 2, 0, "tier db ready; waiting for tier web")],
+      steps: [step("pre-flight", "Succeeded", 6, 3, "Degraded"), step("pre-source hooks", "Succeeded", 6, 20, ""), Object.assign(step("ramen-move", "Running", 5, 0, ""), {
+        phase: "TargetStarting",
+        deadline: iso(Date.now() + 25 * 60000),
+        lastProgressTime: agoIso(4),
+        progress: "Ramen reports Relocated on cluster-b; its restore of the application's objects is not done: Failed to restore kube objects: kube objects restore error, will retry",
+        blocker: "no progress for 4m0s: Ramen's restore waits for hook tools-0-deployments: selector shop-tools= matches nothing in shop on cluster-b (a label with an empty value: was a key=value meant?); the tiers after it are not restored until it passes"
+      })],
+      log: logOf([[6, "Info", "pre-flight", "workflow", "started (PreFlight)"], [6, "Info", "pre-flight", "workflow", "succeeded: Relocate cluster-a→cluster-b, readiness Degraded"], [6, "Info", "pre-source hooks", "agent", "hook 1 of 1 quiesce running on cluster-a: flushing caches"], [5, "Info", "ramen-move", "ramen", "Ramen: DRPC shop Relocating, RunningFinalSync"], [4, "Info", "ramen-move", "ramen", "Ramen reports Relocated on cluster-b; its restore of the application's objects is not done: Failed to restore kube objects: kube objects restore error, will retry"], [4, "Error", "ramen-move", "ramen", "Ramen's restore waits for hook tools-0-deployments: selector shop-tools= matches nothing in shop on cluster-b (a label with an empty value: was a key=value meant?); the tiers after it are not restored until it passes"], [4, "Error", "ramen-move", "ramen", "Ramen could not restore the application's objects on cluster-b: Failed to restore kube objects: kube objects restore error, will retry"], [0.5, "Warning", "ramen-move", "workflow", "stuck: Ramen's restore waits for hook tools-0-deployments: selector shop-tools= matches nothing in shop on cluster-b (a label with an empty value: was a key=value meant?); the tiers after it are not restored until it passes"]]),
+      conditions: []
+    }
+  }));
+  // A test that waits in its restore on an exec gate whose pod selector matches nothing in the bubble.
+  store.TestBubble.push(Object.assign(api("TestBubble"), {
+    metadata: meta("test-ledger-restoring", OPS, {
+      annotations: {
+        "dr.simplyblock.io/created-by": "carol@example.com"
+      },
+      creationTimestamp: agoIso(14)
+    }),
+    spec: {
+      pathRef: "fra-b-to-fra-a",
+      applicationRef: {
+        name: "ledger"
+      },
+      cloneSource: "latest-replicated-snapshot",
+      maxLifetime: "24h"
+    },
+    status: {
+      phase: "Restoring",
+      testID: "r7-2b1e",
+      sourceCluster: "cluster-b",
+      targetCluster: "cluster-a",
+      startTime: agoIso(14),
+      clonesReadyTime: agoIso(10),
+      applications: [{
+        name: "ledger",
+        priority: 1,
+        phase: "Restoring"
+      }],
+      bubbleNamespaces: ["ledger-drtest-r72b1e"],
+      steps: [step("pre-flight", "Succeeded", 14, 2, "1 applications, cluster-b→cluster-a"), step("clone", "Succeeded", 13, 180, "2 clones ready (1 TestFailovers), consistency per-group"), step("isolate", "Succeeded", 10, 20, "1 namespaces isolated"), Object.assign(step("restore/ledger", "Running", 9, 0, ""), {
+        phase: "Restoring",
+        deadline: iso(Date.now() + 21 * 60000),
+        lastProgressTime: agoIso(7),
+        progress: "step 3 of 5 exec/db-1 (attempt 41): no running pod selected in ledger-drtest-r72b1e yet; VMs 1, pods 0, PVCs 2",
+        blocker: "no progress for 7m0s: restore step exec/db-1 on cluster-a waits: no running pod selected in ledger-drtest-r72b1e yet [run \"pg_isready -h ledger-db\" in a running pod selected by labels app=wordpress-tools in ledger-drtest-r72b1e (timeout 900s)]"
+      })],
+      log: logOf([[14, "Info", "pre-flight", "workflow", "started (Pending)"], [13, "Info", "clone", "clones", "0 of 1 TestFailovers Ready on cluster-a; waiting: tf-r72b1e-ledger: Cloning (2 of 2 volumes)"], [10, "Info", "clone", "workflow", "succeeded: 2 clones ready (1 TestFailovers), consistency per-group"], [9, "Info", "restore/ledger", "agent", "step 1 of 5 group/config: 14 objects restored"], [8, "Info", "restore/ledger", "agent", "step 2 of 5 group/db: VirtualMachine ledger-db restored"], [7, "Info", "restore/ledger", "agent", "step 3 of 5 exec/db-1 (attempt 2): no running pod selected in ledger-drtest-r72b1e yet; VMs 1, pods 0, PVCs 2"], [3, "Warning", "restore/ledger", "gates", "restore step exec/db-1 on cluster-a waits: no running pod selected in ledger-drtest-r72b1e yet [run \"pg_isready -h ledger-db\" in a running pod selected by labels app=wordpress-tools in ledger-drtest-r72b1e (timeout 900s)]"], [3, "Warning", "restore/ledger", "workflow", "stuck: restore step exec/db-1 on cluster-a waits: no running pod selected in ledger-drtest-r72b1e yet [run \"pg_isready -h ledger-db\" in a running pod selected by labels app=wordpress-tools in ledger-drtest-r72b1e (timeout 900s)]"]]),
+      invariants: [],
+      checks: [],
       conditions: []
     }
   }));
@@ -12028,12 +12086,40 @@ window.SB_DR = {
       const age = (t - Date.parse(a.metadata.creationTimestamp)) / 1000,
         i = Math.min(ACTION_SEQ.length - 1, Math.floor(age / 8));
       a.status.phase = ACTION_SEQ[i];
-      a.status.steps = ACTION_SEQ.slice(1, i + 1).map((p, j) => ({
-        name: p,
-        result: j < i - 1 || i === ACTION_SEQ.length - 1 ? "Succeeded" : "Running",
-        startTime: iso(Date.parse(a.metadata.creationTimestamp) + (j + 1) * 8000),
-        message: ""
-      }));
+      a.status.steps = ACTION_SEQ.slice(1, i + 1).map((p, j) => {
+        const running = !(j < i - 1 || i === ACTION_SEQ.length - 1),
+          start = Date.parse(a.metadata.creationTimestamp) + (j + 1) * 8000;
+        return {
+          name: p,
+          phase: p,
+          result: running ? "Running" : "Succeeded",
+          startTime: iso(start),
+          endTime: running ? undefined : iso(start + 8000),
+          message: running ? "" : p + " done",
+          progress: running ? `${p}: waiting (${Math.round(age - (j + 1) * 8)}s)` : undefined,
+          lastProgressTime: running ? iso(t) : undefined,
+          deadline: running ? iso(start + 15 * 60000) : undefined
+        };
+      });
+      a.status.log = a.status.steps.flatMap(st => [{
+        time: st.startTime,
+        severity: "Info",
+        step: st.name,
+        source: "workflow",
+        message: `started (${st.phase})`
+      }].concat(st.result === "Running" ? [{
+        time: st.lastProgressTime,
+        severity: "Info",
+        step: st.name,
+        source: "ramen",
+        message: st.progress
+      }] : [{
+        time: st.endTime,
+        severity: "Info",
+        step: st.name,
+        source: "workflow",
+        message: "succeeded: " + st.message
+      }]));
       if (i === ACTION_SEQ.length - 1 && !a.status.completionTime) {
         a.status.completionTime = iso(t);
         a.status.report = {
@@ -12051,12 +12137,40 @@ window.SB_DR = {
       const age = (t - Date.parse(b.metadata.creationTimestamp)) / 1000,
         i = b.spec.abort ? TEST_SEQ.length - 1 : Math.min(TEST_SEQ.length - 1, Math.floor(age / 8));
       b.status.phase = TEST_SEQ[i];
-      b.status.steps = TEST_SEQ.slice(1, i + 1).map((p, j) => ({
-        name: p,
-        result: j < i - 1 || i === TEST_SEQ.length - 1 ? "Succeeded" : "Running",
-        startTime: iso(Date.parse(b.metadata.creationTimestamp) + (j + 1) * 8000),
-        message: ""
-      }));
+      b.status.steps = TEST_SEQ.slice(1, i + 1).map((p, j) => {
+        const running = !(j < i - 1 || i === TEST_SEQ.length - 1),
+          start = Date.parse(b.metadata.creationTimestamp) + (j + 1) * 8000;
+        return {
+          name: p,
+          phase: p,
+          result: running ? "Running" : "Succeeded",
+          startTime: iso(start),
+          endTime: running ? undefined : iso(start + 8000),
+          message: running ? "" : p + " done",
+          progress: running ? `${p}: waiting (${Math.round(age - (j + 1) * 8)}s)` : undefined,
+          lastProgressTime: running ? iso(t) : undefined,
+          deadline: running ? iso(start + 30 * 60000) : undefined
+        };
+      });
+      b.status.log = b.status.steps.flatMap(st => [{
+        time: st.startTime,
+        severity: "Info",
+        step: st.name,
+        source: "workflow",
+        message: `started (${st.phase})`
+      }].concat(st.result === "Running" ? [{
+        time: st.lastProgressTime,
+        severity: "Info",
+        step: st.name,
+        source: "agent",
+        message: st.progress
+      }] : [{
+        time: st.endTime,
+        severity: "Info",
+        step: st.name,
+        source: "workflow",
+        message: "succeeded: " + st.message
+      }]));
       if (i === TEST_SEQ.length - 1 && !b.status.completionTime) {
         b.status.completionTime = iso(t);
         b.status.report = {
