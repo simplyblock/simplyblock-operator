@@ -227,9 +227,8 @@ func graphs() statemachine.MultiConfig[step] {
 			States: map[step]statemachine.StateDef[step]{
 				// Validating performs no side effect at all, which is what makes
 				// an abort there an Aborted directly. It is the only abortable
-				// step: ShuttingDown sends prepare-removal, after which the
-				// control plane is taking the node out of the cluster and
-				// nothing puts it back.
+				// step: ShuttingDown takes the node down, after which the
+				// removal takes it out of the cluster and nothing puts it back.
 				stepValidating: {
 					To:        []step{stepShuttingDown},
 					Abortable: true,
