@@ -6,7 +6,8 @@
 // that a handover rather than a rebuild is that nothing here deletes an object:
 // recreating the node DaemonSet restarts every node plugin in the cluster at
 // once, and recreating the registration takes the cluster's ability to attach a
-// volume away for as long as it is absent.
+// volume away for as long as it is absent. The plugins still roll once, one at a
+// time, because the operator's pod template adds csi-link.
 //
 // Specified by operator/docs/designs/crd-redesign/design-simplyblockdriver.md
 // §4.3.

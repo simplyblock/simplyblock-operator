@@ -65,6 +65,7 @@ const (
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=simplyblockdrivers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=simplyblockdrivers/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=daemonsets;statefulsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts;configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete;escalate;bind
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=csidrivers,verbs=get;list;watch;create;update;patch;delete
@@ -193,6 +194,13 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
+	// A controller pod stuck on a stale revision holds the StatefulSet rollout, so
+	// it is deleted after a grace period and looked at again when that runs out.
+	stuckWait, err := r.recycleStuckController(ctx, &d)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// The event marks the arrival rather than the state, so a deployment that
 	// stays Degraded says so once instead of on every resync.
 	if h.phase != d.Status.Phase {
@@ -205,7 +213,11 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{RequeueAfter: driverResyncInterval}, nil
+	requeue := driverResyncInterval
+	if stuckWait > 0 && stuckWait < requeue {
+		requeue = stuckWait
+	}
+	return ctrl.Result{RequeueAfter: requeue}, nil
 }
 
 // observe reads the two workloads and the registration back, which is what §4.2
@@ -394,8 +406,9 @@ func (r *SimplyblockDriverReconciler) inspectExisting(
 // change.
 //
 // csi-link is deliberately not among them. It is always on, so adopting a
-// deployment that lacks it adds it -- a change, but an intended one: the link
-// is part of what the operator deploys, not an option it offers.
+// deployment that lacks it adds it, and the plugins roll one at a time onto the
+// new pod template. Attached volumes survive that; the link is part of what the
+// operator deploys, not an option it offers.
 func (r *SimplyblockDriverReconciler) adoptionRefusal(
 	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
 ) (message string, refused bool, err error) {

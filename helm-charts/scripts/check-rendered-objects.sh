@@ -228,11 +228,35 @@ checkEmpty() {
   fi
 }
 
+# checkCredentialsKept asserts that the CSI credentials Secret outlives the
+# release.
+#
+# `helm uninstall` leaves the driver running, and the plugins mount this Secret.
+# Without the keep policy the uninstall deletes it, and the next plugin pod to
+# restart sticks in ContainerCreating with FailedMount.
+checkCredentialsKept() {
+  local profile out
+  for profile in standalone managed; do
+    out="$(helm template sb "$CHART" --namespace simplyblock \
+      "${CAPABILITIES[@]}" \
+      --set deployment.profile="$profile" \
+      --set controlplane.managed.endpoint=https://cp.example.com \
+      --show-only templates/secret.yaml 2>/dev/null)"
+    if ! grep -qx '    helm.sh/resource-policy: keep' <<<"$out"; then
+      echo "  ${profile}: the CSI credentials Secret does not carry helm.sh/resource-policy: keep"
+      fail=1
+    else
+      echo "  ${profile}: the CSI credentials Secret outlives the release"
+    fi
+  done
+}
+
 check standalone "${COMMON[@]}"
 check managed "${COMMON[@]}"
 check empty "${OPERATOR[@]}"
 checkEmpty
 checkPair
 checkVendoredCRDs
+checkCredentialsKept
 
 exit "$fail"
