@@ -149,3 +149,23 @@ func TestAnAdmissionRefusedForAReasonThatPassesWaits(t *testing.T) {
 	done, err := performing(t, r, aDrain(), stepMigratingDevices)
 	deferred(t, done, err)
 }
+
+// Regression: 2026-10-06-bare-refusal-held-on-own-degradation — the drain's own
+// shutdown is what can make the cluster degraded, so reading every degraded
+// cluster as busy held a refusal no wait changes for the whole Removing budget.
+// The control plane says when the removal is the only reason, and then the
+// cluster is settled and the refusal is final.
+func TestABareDeleteRefusalOnAClusterDegradedOnlyByThisRemovalIsFinal(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingLvols).refusing("RemoveNode", bareRemovalRefusal)
+	r, _ := aDraining(t, api, &scriptedMover{})
+	r.Clusters = &deliveredCluster{synced: true, reading: subscriptions.ClusterDTO{
+		ID: opsClusterID, Status: clusterStatusDegraded, DegradedByRemoval: true,
+	}}
+
+	_, err := performing(t, r, aDrain(), stepRemoving)
+
+	var fatal *terminalStepError
+	if !errors.As(err, &fatal) {
+		t.Errorf("err = %v, want the terminal kind: the cluster is degraded by this removal alone", err)
+	}
+}

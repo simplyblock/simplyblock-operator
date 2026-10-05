@@ -1702,7 +1702,9 @@ instead with `RemovalDeferred` and the control plane's reason, the claim's lease
 sends the call again at most once a minute, and the step's deadline bounds the
 wait. A refusal is judged by the reason it names. A DELETE refused without one is
 judged by the cluster stream: a cluster that is not `active`, or is rebalancing, is
-waited on, and a settled one is final. A cluster the stream has not reported is
+waited on, and a settled one is final. A cluster the control plane reports degraded
+only by this removal (`is_degraded_by_removal`) is settled, because the drain's own
+shutdown is what can degrade it. A cluster the stream has not reported is
 not taken for a busy one.
 
 **`MigratingDevices` is the control plane's rebuild.** From `migrating_devices`

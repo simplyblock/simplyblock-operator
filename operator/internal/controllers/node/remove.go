@@ -446,6 +446,12 @@ func refusalReason(body string) string {
 // stream, and is empty when the cluster is active and not rebalancing or when
 // the stream has not reported it. An unreported cluster is not read as a busy
 // one: the hold exists for a cluster known to be busy, not for one unknown.
+//
+// A cluster degraded only by this removal is settled. The drain's own shutdown
+// is what can degrade it, and reading that as a passing condition would hold a
+// refusal no wait changes for the whole Removing budget. The control plane
+// reports the distinction; one that does not reads every degraded cluster as
+// busy, as before.
 func (r *StorageNodeOpsReconciler) clusterBusy(clusterID string) string {
 	if r.Clusters == nil || !r.Clusters.SyncedRoot() {
 		return ""
@@ -454,7 +460,7 @@ func (r *StorageNodeOpsReconciler) clusterBusy(clusterID string) string {
 	switch {
 	case !ok:
 		return ""
-	case reading.Status != utils.ClusterStatusActive:
+	case reading.Status != utils.ClusterStatusActive && !reading.DegradedByRemoval:
 		return "is " + reading.Status
 	case reading.Rebalancing:
 		return "is rebalancing"
