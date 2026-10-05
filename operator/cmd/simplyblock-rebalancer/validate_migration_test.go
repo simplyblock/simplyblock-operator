@@ -116,6 +116,13 @@ type recorder struct {
 	ensureCallSeq  int
 	validateCallSq int
 
+	// settles counts the waits for the paths to settle. scanning makes the
+	// verification fail the way a path still scanning its namespaces does,
+	// until a wait has run; settleErr is what the wait answers.
+	settles   int
+	scanning  bool
+	settleErr error
+
 	reaps       int
 	releases    int
 	releaseConn []volumemigration.Connection
@@ -139,6 +146,11 @@ func (rec *recorder) newRun(attempts int) validationRun {
 			rec.ensureCallSeq++
 			return err
 		},
+		settlePaths: func(context.Context, string, string) error {
+			rec.settles++
+			rec.order = append(rec.order, "settle")
+			return rec.settleErr
+		},
 		reapDead: func(_ context.Context, _, _ string) ([]volumemigration.Released, error) {
 			rec.reaps++
 			rec.order = append(rec.order, "reap")
@@ -157,6 +169,10 @@ func (rec *recorder) newRun(attempts int) validationRun {
 		verifyPaths: func(_ context.Context, _, _ string, _ []volumemigration.Connection,
 			_ map[string]bool) ([]volumemigration.PathState, error) {
 			rec.validates++
+			rec.order = append(rec.order, "verify")
+			if rec.scanning && rec.settles == 0 {
+				return nil, errors.New("controller-not-contributing: nvme1 serves 1 of 5 namespaces")
+			}
 			err := errAt(rec.validateErrs, rec.validateCallSq)
 			rec.validateCallSq++
 			return nil, err
@@ -448,5 +464,43 @@ func TestValidationRun_PassesPreExistingToVerification(t *testing.T) {
 	}
 	if !got["10.0.0.112:4428"] {
 		t.Errorf("verification received %v, want the pre-existing baseline", got)
+	}
+}
+
+// Regression: 2026-10-05-migration-path-namespace-scan — the paths were verified
+// the moment the connect returned, while the kernel was still attaching the
+// subsystem's namespaces to the new controller, so a batched migration spent an
+// attempt on every path that was only scanning, and failed outright on one whose
+// scan outlasted the retry delays.
+func TestValidationRun_WaitsForThePathsToSettleBeforeVerifying(t *testing.T) {
+	rec := &recorder{present: true, scanning: true}
+
+	outcome, err := rec.newRun(3).run(context.Background(), "", "nqn.x", conns)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if outcome != outcomeValidated {
+		t.Errorf("outcome = %v, want validated", outcome)
+	}
+	if rec.validates != 1 {
+		t.Errorf("verified %d times, want once: no attempt is spent on a path still scanning", rec.validates)
+	}
+	if got := strings.Join(rec.order, ","); !strings.Contains(got, "ensure,settle,verify") {
+		t.Errorf("steps = %s, want the wait between the connect and the verification", got)
+	}
+}
+
+// A wait that runs out decides nothing: the verification still runs and its
+// verdict stands, so a path that never settles is reported by the check that
+// names the defect.
+func TestValidationRun_AWaitThatRunsOutLeavesTheVerdictToTheVerification(t *testing.T) {
+	rec := &recorder{present: true, settleErr: errors.New("context deadline exceeded")}
+
+	outcome, err := rec.newRun(3).run(context.Background(), "", "nqn.x", conns)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if outcome != outcomeValidated || rec.validates != 1 {
+		t.Errorf("outcome = %v after %d verification(s), want validated on the first", outcome, rec.validates)
 	}
 }
