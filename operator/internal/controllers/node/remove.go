@@ -675,7 +675,8 @@ func (r *StorageNodeOpsReconciler) recordDrainProgress(
 // artifacts: moving one to a peer would produce a benchmark volume measuring the
 // wrong node. A delete the control plane refuses for a reason other than "already
 // gone" fails the operation, because a volume that cannot be deleted and cannot be
-// migrated is a volume the removal would destroy (§8.2).
+// migrated is a volume the removal would destroy (§8.2). A delete that got no
+// answer is retried.
 func (r *StorageNodeOpsReconciler) drainVerify(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, clusterID, nodeID string,
 ) (bool, error) {
@@ -691,11 +692,19 @@ func (r *StorageNodeOpsReconciler) drainVerify(
 	// The deletions are one claimed call. The control plane deletes
 	// asynchronously, so the passes that follow still list the volumes, and
 	// deleting a volume already being deleted is a refusal this step reads as
-	// fatal.
+	// fatal. The census drops a volume once its deletion is accepted, so a
+	// retry after the claim's lease sends only the deletes still owed.
+	//
+	// Only an answer is a refusal. A timeout or a 5xx says nothing about
+	// whether the delete landed, so it is retried rather than failing a drain
+	// that has already moved every user volume.
 	if len(census.System) > 0 {
 		_, err := r.once(ctx, ops, func() error {
 			for _, volume := range census.System {
 				if err := r.API.DeleteVolume(ctx, clusterID, volume.PoolUUID, volume.VolumeUUID); err != nil {
+					if !refused(err) {
+						return fmt.Errorf("delete system volume %s: %w", volume.Name, err)
+					}
 					return fatalf("system volume %s could not be deleted and the node still holds it: %v",
 						volume.Name, err)
 				}
