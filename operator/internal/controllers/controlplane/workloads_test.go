@@ -599,3 +599,34 @@ func podSpecOf(obj client.Object) *corev1.PodSpec {
 		return nil
 	}
 }
+
+// The Control Center reads every storage cluster through the management API
+// with its own service account; the chart names it in the operator's
+// environment and the management API trusts it next to the operator.
+func TestExtraAdminServiceAccountsReachTheManagementAPI(t *testing.T) {
+	t.Setenv(extraAdminAccountsEnv,
+		" system:serviceaccount:simplyblock:console , not-an-account,system:serviceaccount:a:b:c,"+
+			"system:serviceaccount:simplyblock:console")
+	cp := localControlPlane()
+
+	api := findDeployment(t, managementAPIObjects(cp), ComponentWebAPI)
+	env := findEnvVar(t, api, "SB_K8S_ADMIN_SERVICE_ACCOUNTS")
+
+	want := "system:serviceaccount:" + cp.Namespace + ":simplyblock-operator,system:serviceaccount:simplyblock:console"
+	if env.Value != want {
+		t.Errorf("SB_K8S_ADMIN_SERVICE_ACCOUNTS = %q, want %q", env.Value, want)
+	}
+}
+
+// Without the operator's variable the management API trusts the operator alone.
+func TestNoExtraAdminServiceAccountsMeansTheOperatorAlone(t *testing.T) {
+	t.Setenv(extraAdminAccountsEnv, "")
+	cp := localControlPlane()
+
+	api := findDeployment(t, managementAPIObjects(cp), ComponentWebAPI)
+	env := findEnvVar(t, api, "SB_K8S_ADMIN_SERVICE_ACCOUNTS")
+
+	if want := "system:serviceaccount:" + cp.Namespace + ":simplyblock-operator"; env.Value != want {
+		t.Errorf("SB_K8S_ADMIN_SERVICE_ACCOUNTS = %q, want %q", env.Value, want)
+	}
+}

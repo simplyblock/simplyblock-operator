@@ -124,5 +124,25 @@ spec:
     - digital signature
     - key encipherment
     - client auth
+{{- if and .Values.controlCenter.enabled (include "sbcc.controlPlaneUrl" .) }}
+---
+# The Control Center's proxy presents this to the management API when it reads
+# storage through it (controlCenter.controlPlane).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: simplyblock-control-center-client
+  namespace: {{ .Release.Namespace }}
+spec:
+  commonName: simplyblock-control-center
+  secretName: simplyblock-control-center-client-tls
+  issuerRef:
+    kind: ClusterIssuer
+    name: simplyblock-certificate-authority-issuer
+  usages:
+    - digital signature
+    - key encipherment
+    - client auth
+{{- end }}
 {{- end }}
 {{- end }}

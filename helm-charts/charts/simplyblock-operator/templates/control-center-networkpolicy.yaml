@@ -52,6 +52,9 @@ spec:
           port: 8080
         - protocol: TCP
           port: 9090
+        # the control plane API (management API), read-only via the proxy
+        - protocol: TCP
+          port: 5000
     # The Kubernetes API server. Narrow these CIDRs — see the header comment.
     - to:
         {{- range $cidr := $cc.networkPolicy.apiServerCidrs }}
