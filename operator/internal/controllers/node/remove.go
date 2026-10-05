@@ -372,7 +372,7 @@ func refused(err error) bool {
 }
 
 // drainMigrate moves every PV-managed volume to a peer, one migration object per
-// volume, and completes when all of them have.
+// NVMe-oF subsystem, and completes when all of them have.
 //
 // Completed objects are deleted immediately, which is what keeps a hundred-volume
 // drain from leaving a hundred objects behind. status.drain is the progress record
@@ -406,18 +406,32 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 			"a volume's claim could not be read; the migration fan-out is retried")
 	}
 
-	// Every movable volume that has no migration gets one. That covers the first
-	// pass, an object deleted out of band, and a volume that arrived on the node
-	// after the count was taken.
+	// Every subsystem with a movable volume and no migration gets one. That
+	// covers the first pass, an object deleted out of band, and a volume that
+	// arrived on the node after the count was taken.
+	//
+	// A move carries its whole subsystem, so a subsystem is covered by a move
+	// named after any of its volumes. The control plane moves the members'
+	// records to the target one at a time during a cutover, so the volume a
+	// move is named by can have left the node while a sibling is still reported
+	// on it; the subsystem is what says the sibling is already being moved.
 	existing := make(map[string]struct{}, len(migrations))
+	covered := make(map[string]struct{}, len(migrations))
 	for i := range migrations {
 		existing[migrations[i].Name] = struct{}{}
+		if nqn := census.subsystemOf(migrations[i].PVName); nqn != "" {
+			covered[nqn] = struct{}{}
+		}
 	}
 	var missing []managedVolume
-	for _, volume := range census.Managed {
-		if _, ok := existing[migrationName(nodeID, volume.PVName)]; !ok {
-			missing = append(missing, volume)
+	for _, move := range subsystemMoves(census.Managed, census.subsystemReplicas) {
+		if _, ok := existing[migrationName(nodeID, move.PVName)]; ok {
+			continue
 		}
+		if _, ok := covered[move.NQN]; ok && move.NQN != "" {
+			continue
+		}
+		missing = append(missing, move)
 	}
 
 	if len(missing) > 0 {
@@ -444,10 +458,12 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 		return true, nil
 	}
 
+	// Progress is counted in volumes. A move carries every volume of its
+	// subsystem, and one that has not reported how many carried one.
 	completed, running := 0, 0
 	for i := range migrations {
 		if migrations[i].Phase == vmigration.MoveSucceeded {
-			completed++
+			completed += max(migrations[i].Members, 1)
 		} else {
 			running++
 		}

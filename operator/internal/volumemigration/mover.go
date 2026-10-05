@@ -71,6 +71,10 @@ type Move struct {
 	// Message is why the phase is what it is, which a caller puts in the event
 	// it raises about the move.
 	Message string
+	// Members is how many volumes the move carries, which is every volume of
+	// the named one's NVMe-oF subsystem, because the control plane migrates a
+	// subsystem as a whole. Zero means the move has not learned it yet.
+	Members int
 }
 
 // MoveRequest is one volume's move, as a caller asks for it.
@@ -218,6 +222,7 @@ func migrationMove(migration *simplyblockv1alpha1.VolumeMigration) Move {
 		PVName:    migration.Spec.PVName,
 		Phase:     phase,
 		Message:   migration.Status.ErrorMessage,
+		Members:   migration.Status.MemberCount,
 	}
 }
 
@@ -346,11 +351,16 @@ func operationMove(ops *simplyblockv1alpha2.PersistentVolumeOps) Move {
 	case simplyblockv1alpha2.PersistentVolumeOpsPhaseRunning:
 		phase = MoveRunning
 	}
+	members := 0
+	if recorded := ops.Status.Migration; recorded != nil && recorded.MemberCount != nil {
+		members = int(*recorded.MemberCount)
+	}
 	return Move{
 		Name:    ops.Name,
 		PVName:  ops.Spec.PersistentVolumeName,
 		Phase:   phase,
 		Message: ops.Status.Message,
+		Members: members,
 	}
 }
 

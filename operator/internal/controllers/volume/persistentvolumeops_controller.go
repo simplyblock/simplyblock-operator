@@ -240,16 +240,26 @@ func (r *PersistentVolumeOpsReconciler) Reconcile(
 		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, &ops, err.Error())
 	}
 
-	acquired, err := r.acquireLock(ctx, &ops, subject.pv)
+	lock, err := r.acquireLock(ctx, &ops, subject.pv)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if !acquired {
-		held := subject.pv.Annotations[simplyblockv1alpha2.PersistentVolumeOpsLock]
-		r.event(&ops, corev1.EventTypeNormal, ReasonOperationQueued,
-			"Volume %s is held by operation %s; this one is waiting", subject.pv.Name, held)
+	if !lock.acquired {
+		if lock.holder == "" {
+			// Another writer moved a volume between the read and the patch.
+			// Nothing is waited on, so the next pass simply tries again.
+			return ctrl.Result{RequeueAfter: opsAdvance}, nil
+		}
+		if lock.volume == subject.pv.Name {
+			r.event(&ops, corev1.EventTypeNormal, ReasonOperationQueued,
+				"Volume %s is held by operation %s; this one is waiting", lock.volume, lock.holder)
+		} else {
+			r.event(&ops, corev1.EventTypeNormal, ReasonOperationQueued,
+				"Volume %s, which shares a subsystem with volume %s, is held by operation %s; "+
+					"this one is waiting", lock.volume, subject.pv.Name, lock.holder)
+		}
 		return ctrl.Result{RequeueAfter: opsRetry}, r.hold(ctx, &ops,
-			fmt.Sprintf("waiting for operation %s to release volume %s", held, subject.pv.Name))
+			fmt.Sprintf("waiting for operation %s to release volume %s", lock.holder, lock.volume))
 	}
 
 	return r.advance(ctx, &ops, subject)
@@ -295,6 +305,13 @@ func (r *PersistentVolumeOpsReconciler) advance(
 	}
 
 	done, err := r.perform(ctx, ops, subject, current)
+	if errors.Is(err, errAlreadyOnTarget) {
+		r.event(ops, corev1.EventTypeNormal, ReasonTargetNodeIsSource,
+			"Volume %s is already on node %s with its subsystem; nothing was migrated",
+			ops.Spec.PersistentVolumeName, subject.targetNodeName())
+		return r.finish(ctx, ops, simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded,
+			fmt.Sprintf("the volume is already on node %s; nothing was migrated", subject.targetNodeName()))
+	}
 	if err != nil {
 		var fatal *terminalStepError
 		if errors.As(err, &fatal) {
