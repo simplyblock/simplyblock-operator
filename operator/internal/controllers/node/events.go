@@ -41,6 +41,9 @@ const (
 	// plane's task window without having produced a node.
 	NodeAddGaveUp = "NodeAddGaveUp"
 
+	// NodeAddFailing is the add this node waits on having failed and being retried.
+	NodeAddFailing = "NodeAddFailing"
+
 	// NodeAdopted says an existing backend node was taken over rather than
 	// added, which is the difference between a migration and a mistake.
 	NodeAdopted = "NodeAdopted"

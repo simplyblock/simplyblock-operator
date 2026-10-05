@@ -502,6 +502,11 @@ type StorageNodeStatus struct {
 	// +optional
 	UUID string `json:"uuid,omitempty"`
 
+	// NodeAddTaskID is the control-plane task the last add of this node created. It is how
+	// a node that is still being added reads why its own add is failing.
+	// +optional
+	NodeAddTaskID string `json:"nodeAddTaskID,omitempty"`
+
 	// Status is the lifecycle the control plane reports: online, suspended,
 	// offline, in_creation, in_restart, in_shutdown, unreachable, or timeout. The
 	// values are the control plane's, which is why they are neither PascalCase nor
