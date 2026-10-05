@@ -1041,6 +1041,23 @@ controlCenter:
   helmUrl: ""
   prometheusUrl: ""
 
+  # The control plane API, read-only, behind the console's own proxy. On a hub
+  # whose control plane manages storage clusters on other sites the clusters
+  # are not CRDs here, and this is where the Clusters and Control plane screens
+  # read them from. Every response is scrubbed of credentials before it leaves
+  # the console's pod, and the proxy refuses anything but GET.
+  controlPlane:
+    enabled: true
+    # Empty: this release's management API when deployment.profile is
+    # standalone (https when tls.enabled), and off otherwise.
+    url: ""
+    # Have the operator add the console's service account to the management
+    # API's admin accounts (serviceaccount mode). The console proxies only GETs.
+    trustServiceAccount: true
+    # Or a Secret (key: token) holding one of the control plane's static admin
+    # tokens (controlplane.local.adminTokenSecretRef); it wins when set.
+    tokenSecret: ""
+
   rbac:
     # Required in serviceaccount mode: the proxied token needs these rules or
     # every request returns 403 and the console renders empty. Set false only

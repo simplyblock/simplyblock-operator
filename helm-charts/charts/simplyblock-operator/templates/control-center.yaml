@@ -107,6 +107,23 @@ spec:
               value: {{ ternary $mockURL ($cc.helmUrl | default (include "sbcc.operatorUrl" .)) $cc.mock.enabled | quote }}
             - name: SB_PROMETHEUS_URL
               value: {{ ternary $mockURL (include "sbcc.prometheusUrl" .) $cc.mock.enabled | quote }}
+            {{- $cpURL := include "sbcc.controlPlaneUrl" . }}
+            - name: SB_CONTROLPLANE_URL
+              value: {{ $cpURL | quote }}
+            {{- if and $cpURL $cc.controlPlane.tokenSecret }}
+            - name: SB_CONTROLPLANE_TOKEN_FILE
+              value: /etc/simplyblock/controlplane-token/token
+            {{- end }}
+            {{- if and $cpURL .Values.tls.enabled }}
+            - name: SB_CONTROLPLANE_CA_FILE
+              value: /etc/simplyblock/tls/ca.crt
+            {{- if .Values.tls.mutual_enabled }}
+            - name: SB_CONTROLPLANE_CLIENT_CERT
+              value: /etc/simplyblock/tls/tls.crt
+            - name: SB_CONTROLPLANE_CLIENT_KEY
+              value: /etc/simplyblock/tls/tls.key
+            {{- end }}
+            {{- end }}
             - name: SB_MOCK
               value: "false"
             - name: SB_LISTEN_PORT
@@ -137,11 +154,30 @@ spec:
               mountPath: /tmp/nginx
             - name: nginx-confd
               mountPath: /etc/nginx/conf.d
+            {{- if and $cpURL $cc.controlPlane.tokenSecret }}
+            - name: controlplane-token
+              mountPath: /etc/simplyblock/controlplane-token
+              readOnly: true
+            {{- end }}
+            {{- if $cpURL }}
+            {{- include "simplyblock.tlsVolumeMount" . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: nginx-tmp
           emptyDir: {medium: Memory, sizeLimit: 16Mi}
         - name: nginx-confd
           emptyDir: {medium: Memory, sizeLimit: 1Mi}
+        {{- if and $cpURL $cc.controlPlane.tokenSecret }}
+        - name: controlplane-token
+          secret:
+            secretName: {{ $cc.controlPlane.tokenSecret }}
+            items:
+              - key: token
+                path: token
+        {{- end }}
+        {{- if $cpURL }}
+        {{- include "simplyblock.clientTlsVolume" (dict "ctx" . "clientSecret" "simplyblock-control-center-client-tls") | nindent 8 }}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

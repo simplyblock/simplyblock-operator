@@ -96,6 +96,13 @@ spec:
             # pod for the reason above.
             - name: SB_OPERATOR_IMAGE
               value: "{{ .Values.image.operator.repository }}:{{ .Values.image.operator.tag }}"
+            {{- with include "sbcc.trustedAccount" . }}
+            # The Control Center reads storage through the management API with
+            # its own service account; the management API trusts it next to
+            # this operator (controlCenter.controlPlane.trustServiceAccount).
+            - name: SB_EXTRA_ADMIN_SERVICE_ACCOUNTS
+              value: {{ . | quote }}
+            {{- end }}
             {{- include "simplyblock.tlsEnv" . | nindent 12 }}
           resources:
             limits:
