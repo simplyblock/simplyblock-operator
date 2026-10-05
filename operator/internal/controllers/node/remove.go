@@ -32,9 +32,11 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -49,6 +51,7 @@ import (
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 )
 
@@ -264,6 +267,9 @@ func (r *StorageNodeOpsReconciler) drainMigrateDevices(
 	case nodeStatusOffline:
 		if _, err := r.once(ctx, ops, func() error {
 			if err := r.API.PrepareRemoval(ctx, clusterID, nodeID); err != nil {
+				if deferral := r.removalDeferral(ops, clusterID, err); deferral != nil {
+					return deferral
+				}
 				if refused(err) {
 					return fatalf("the control plane refused to remove node %s: %v; the node is "+
 						"left offline, and a Restart operation brings it back", ops.Spec.NodeRef, err)
@@ -361,6 +367,99 @@ func (r *StorageNodeOpsReconciler) retryPrepare(
 		ops.Status.Removal.LastPrepareTime = &now
 	})
 	return claimed, err
+}
+
+// passingRefusals are the admission's refusals that pass by themselves, in the
+// control plane's own wording, lowercased: a cluster still rebalancing, a task
+// still active on the node, and peers that are down, which come back.
+var passingRefusals = []string{
+	"wait for rebalancing",
+	"is rebalancing",
+	"active task(s) on the node",
+	"not-online node",
+	"is not online",
+	"risk budget already committed",
+	"peer node(s) not online",
+}
+
+// unexplainedRemovalRefusal is what the node DELETE answers a refused removal with
+// when the control plane does not say why.
+const unexplainedRemovalRefusal = "failed to remove storage node"
+
+// removalDeferral reads a 400 the control plane answered prepare-removal or the
+// node DELETE with, and returns the hold to report when the refusal passes by
+// itself, or nil when it is final or not a refusal at all.
+//
+// Both calls run the control plane's removal admission, and some of its
+// refusals describe a moment rather than the cluster: a rebalance still
+// running, an active task on the node, a peer that is down. The node is already
+// shut down by then, so failing the operation on one of them leaves it offline
+// for a condition that clears minutes later. The operation holds instead, the
+// claim's lease paces the next attempt, and the step's deadline bounds the
+// wait.
+//
+// A refusal that names its reason is judged by the reason. One that names none,
+// which is how the node DELETE answers on a control plane that does not report
+// it, is judged by the cluster: a cluster that is not active or is rebalancing
+// is one the admission refuses for that, and a settled one is refusing for a
+// reason no wait changes.
+func (r *StorageNodeOpsReconciler) removalDeferral(
+	ops *simplyblockv1alpha2.StorageNodeOps, clusterID string, err error,
+) error {
+	var answer *ControlPlaneError
+	if !errors.As(err, &answer) || answer.Status != http.StatusBadRequest {
+		return nil
+	}
+	reason := refusalReason(answer.Body)
+	lowered := strings.ToLower(reason)
+	for _, passing := range passingRefusals {
+		if strings.Contains(lowered, passing) {
+			return blockedf(RemovalDeferred,
+				"the control plane deferred the removal of node %s: %s; it is asked again",
+				ops.Spec.NodeRef, reason)
+		}
+	}
+	if lowered != "" && lowered != unexplainedRemovalRefusal {
+		return nil
+	}
+	if busy := r.clusterBusy(clusterID); busy != "" {
+		return blockedf(RemovalDeferred,
+			"the control plane refused the removal of node %s while the cluster %s; it is asked "+
+				"again once the cluster settles", ops.Spec.NodeRef, busy)
+	}
+	return nil
+}
+
+// refusalReason is the reason a control-plane error body gives: the detail of a
+// JSON body, and the body itself when it has none.
+func refusalReason(body string) string {
+	var answer struct {
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal([]byte(body), &answer); err == nil && answer.Detail != "" {
+		return answer.Detail
+	}
+	return strings.TrimSpace(body)
+}
+
+// clusterBusy says what keeps the cluster from settling, from the cluster
+// stream, and is empty when the cluster is active and not rebalancing or when
+// the stream has not reported it. An unreported cluster is not read as a busy
+// one: the hold exists for a cluster known to be busy, not for one unknown.
+func (r *StorageNodeOpsReconciler) clusterBusy(clusterID string) string {
+	if r.Clusters == nil || !r.Clusters.SyncedRoot() {
+		return ""
+	}
+	reading, ok := r.Clusters.Lookup(clusterID)
+	switch {
+	case !ok:
+		return ""
+	case reading.Status != utils.ClusterStatusActive:
+		return "is " + reading.Status
+	case reading.Rebalancing:
+		return "is rebalancing"
+	}
+	return ""
 }
 
 // refused reports whether the control plane answered with a 4xx, which is its
@@ -643,6 +742,9 @@ func (r *StorageNodeOpsReconciler) drainRemove(
 
 	claimed, err := r.once(ctx, ops, func() error {
 		if err := r.API.RemoveNode(ctx, clusterID, nodeID); err != nil {
+			if deferral := r.removalDeferral(ops, clusterID, err); deferral != nil {
+				return deferral
+			}
 			// Only an answer is a refusal. A 4xx is the control plane's own
 			// admission saying what the cluster can afford to lose. Retrying
 			// cannot change it, so the operation fails, and the node is left to
