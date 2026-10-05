@@ -1681,9 +1681,18 @@ SPDK was gone, which left the node `pending_removal` with no rebuild. The node's
 `shutdown` answers at once and runs in the background, and with the node down
 `prepare-removal` has no shutdown of its own to run. Only a node still running
 is shut down: one already `offline` is not shut down again, one `in_shutdown` is
-under a shutdown already, and one in a removal status is past the step. A 4xx is
-a refusal with the node still serving, so the operation fails. A timeout or a
-5xx is retried, and the next pass reads the node.
+under a shutdown already, and one in a removal status is past the step.
+
+**The shutdown is graceful, and a 409 is waited on.** The control plane answers a
+graceful shutdown whose precondition is not met with a 409 naming it: a peer
+restarting or shutting down, a migration or restart task, a live restart claim.
+Each clears by itself, and the node is still serving, so the step holds with
+`RemovalDeferred` and the reason, and the claim's lease sends the shutdown again
+at most once a minute. The shutdown is not forced past those conditions, because
+they are what keeps two nodes from being down at once, and the removal's admission
+has not yet judged what the cluster can afford to lose. Any other 4xx is a refusal
+with the node still serving, so the operation fails. A timeout or a 5xx is
+retried, and the next pass reads the node.
 
 **Admission follows the shutdown.** `MigratingDevices` waits for the node to be
 `offline`, and a node still running a whole shutdown budget after its shutdown
@@ -1808,6 +1817,7 @@ operation can be deleted while it runs.
 | Condition                         | Step                           | Result                                              |
 |-----------------------------------|--------------------------------|-----------------------------------------------------|
 | Pinned or unmanaged volumes       | `Validating`                   | Hold, emit, requeue. The node is untouched          |
+| The shutdown cannot run yet (409) | `ShuttingDown`                 | Hold, emit, ask again once a minute                 |
 | The shutdown was refused          | `ShuttingDown`                 | `Failed`, the node still serving                    |
 | The shutdown got no answer        | `ShuttingDown`                 | Retry, reading the node first                       |
 | The shutdown never landed         | `MigratingDevices`             | `Failed` after 15 minutes, the node still serving   |
@@ -2212,7 +2222,7 @@ starts and the operation's name is not something they know yet.
 | A drain is blocked by unmanaged volumes                         | `Warning` | `DrainBlocked`         | `StorageNodeOps` |
 | A drain has no online peer to migrate to                        | `Warning` | `NoMigrationTarget`    | `StorageNodeOps` |
 | A volume migration failed and is being retried                  | `Warning` | `MigrationRetried`     | `StorageNodeOps` |
-| A removal call was refused for a reason that passes by itself   | `Warning` | `RemovalDeferred`      | `StorageNodeOps` |
+| A removal call or its shutdown was refused for now              | `Warning` | `RemovalDeferred`      | `StorageNodeOps` |
 | Every volume has been migrated off the node                     | `Normal`  | `DrainCompleted`       | `StorageNodeOps` |
 | The maintenance window is holding for another worker            | `Normal`  | `MaintenanceQueued`    | `StorageNodeOps` |
 

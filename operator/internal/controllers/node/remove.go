@@ -187,9 +187,16 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 //
 // Only a node still running is shut down: one already offline is not shut down
 // again, one in_shutdown is under a shutdown already, and one in a removal status
-// is past this step. A 4xx is a refusal that changed nothing, with the node still
-// serving, so the operation fails. A timeout or a 5xx is retried, and the next
-// pass reads the node.
+// is past this step. A 409 is a shutdown the control plane cannot run yet, and
+// the step holds on it (shutdownDeferral). Any other 4xx is a refusal that
+// changed nothing, with the node still serving, so the operation fails. A
+// timeout or a 5xx is retried, and the next pass reads the node.
+//
+// The shutdown is graceful rather than forced, because the conditions a 409
+// names are the ones that keep two nodes from being down at once: a peer
+// restarting or shutting down, a migration or restart task, a live restart
+// claim. Forcing past them would take this node down beside another one before
+// the removal's admission has judged what the cluster can afford to lose.
 func (r *StorageNodeOpsReconciler) drainShutDown(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, clusterID, nodeID string,
 ) (bool, error) {
@@ -203,6 +210,9 @@ func (r *StorageNodeOpsReconciler) drainShutDown(
 
 	claimed, err := r.once(ctx, ops, func() error {
 		if err := r.API.ShutdownNode(ctx, clusterID, nodeID); err != nil {
+			if deferral := shutdownDeferral(ops, err); deferral != nil {
+				return deferral
+			}
 			if refused(err) {
 				return fatalf("the control plane refused to shut node %s down for its removal: %v",
 					ops.Spec.NodeRef, err)
@@ -466,6 +476,21 @@ func (r *StorageNodeOpsReconciler) clusterBusy(clusterID string) string {
 		return "is rebalancing"
 	}
 	return ""
+}
+
+// shutdownDeferral reads the answer to the removal's shutdown and returns the
+// hold to report when the control plane answered 409, which is how it says a
+// graceful shutdown's precondition is not met yet, and nil otherwise. Every
+// such precondition clears by itself, the node is still serving while the step
+// waits, and the claim's lease sends the shutdown again at most once a minute.
+func shutdownDeferral(ops *simplyblockv1alpha2.StorageNodeOps, err error) error {
+	var answer *ControlPlaneError
+	if !errors.As(err, &answer) || answer.Status != http.StatusConflict {
+		return nil
+	}
+	return blockedf(RemovalDeferred,
+		"the control plane deferred the shutdown of node %s for its removal: %s; it is asked again",
+		ops.Spec.NodeRef, refusalReason(answer.Body))
 }
 
 // refused reports whether the control plane answered with a 4xx, which is its
