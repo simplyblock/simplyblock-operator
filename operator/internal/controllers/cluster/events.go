@@ -69,6 +69,11 @@ const (
 	// NodeRestarted says the walk advanced to the next node.
 	NodeRestarted = "NodeRestarted"
 
+	// NodeSkipped says the walk passed over a node without restarting it,
+	// because the control plane stopped listing it or its removal started
+	// after the walk was planned.
+	NodeSkipped = "NodeSkipped"
+
 	// FailureDomainNotReady says an activation is waiting because the cluster's
 	// failure domains do not yet hold an equal number of hosts.
 	FailureDomainNotReady = "FailureDomainNotReady"

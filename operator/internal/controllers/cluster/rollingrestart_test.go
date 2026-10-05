@@ -9,6 +9,7 @@
 package cluster
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -378,6 +379,9 @@ func TestANodeBeingRemovedHoldsTheWalkAndIsNeverRestarted(t *testing.T) {
 		newTestCluster(), newTestOps(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart))
 
 	ops, _ := reconcileOps(t, r, 6)
+	if diff := cmp.Diff([]string{nodeA}, ops.Status.RollingRestart.Nodes); diff != "" {
+		t.Errorf("the walk planned a node in the middle of its removal (-want +got):\n%s", diff)
+	}
 	if got := ops.Status.Step.State; got != string(stepCheckingPeers) || api.shutdownNodeCalls != 0 {
 		t.Fatalf("step = %q after %d shutdown(s), want the walk holding before node A while B is "+
 			"being removed", got, api.shutdownNodeCalls)
@@ -419,5 +423,36 @@ func TestANodeWhoseRemovalStartsMidWalkIsSkipped(t *testing.T) {
 	if api.shutdownNodeCalls != 1 || api.restartNodeCalls != 1 {
 		t.Errorf("shutdown=%d restart=%d, want node A alone: node B belongs to its removal",
 			api.shutdownNodeCalls, api.restartNodeCalls)
+	}
+}
+
+// Regression: 2026-10-06-rolling-restart-reports-skips-as-restarts — a node the
+// walk skipped went through the same advance as a restarted one, so it emitted
+// NodeRestarted and the success message counted it among the restarted nodes,
+// although nothing was sent to it.
+func TestASkippedNodeIsReportedAsSkippedRatherThanRestarted(t *testing.T) {
+	fleet := newRollingFleet(nodeA, nodeB)
+	api := rollingAPI(fleet)
+	rec := &recorder{}
+	r := newOpsReconciler(t, api, rec,
+		newTestCluster(), newTestOps(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart))
+
+	walkUntilNode(t, r, 1)
+	fleet.status[nodeB] = utils.NodeStatusMigratingDevices
+
+	ops, _ := reconcileOps(t, r, 20)
+	if ops.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseSucceeded {
+		t.Fatalf("phase = %q, want Succeeded", ops.Status.Phase)
+	}
+	if diff := cmp.Diff([]string{nodeB}, ops.Status.RollingRestart.Skipped); diff != "" {
+		t.Errorf("the walk's record of skipped nodes is wrong (-want +got):\n%s", diff)
+	}
+	if rec.count(NodeRestarted) != 1 || !rec.has(NodeSkipped) {
+		t.Errorf("NodeRestarted=%d NodeSkipped=%v, want one restart and the skip announced as one",
+			rec.count(NodeRestarted), rec.has(NodeSkipped))
+	}
+	if !strings.Contains(ops.Status.Message, "1 of 2") || !strings.Contains(ops.Status.Message, nodeB) {
+		t.Errorf("message = %q, want it to count one of two restarted and name the skipped node",
+			ops.Status.Message)
 	}
 }

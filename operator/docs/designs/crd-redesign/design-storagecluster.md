@@ -1274,6 +1274,10 @@ Nodes []string `json:"nodes,omitempty"`
 // zero is a valid index, and a field that disappears at zero makes "the first
 // node" and "unset" the same wire value.
 NodeIndex int32 `json:"nodeIndex"`
+
+// Skipped are the nodes of Nodes the walk passed over without restarting them,
+// in walk order.
+Skipped []string `json:"skipped,omitempty"`
 ```
 
 An immutable list with an index is what makes advancing one increment rather than a
@@ -1297,8 +1301,14 @@ fleet it was started against, and neither is a failure.
 (`pending_removal`, `migrating_devices`, `migrating_lvols`, `in_removal`, `removed`,
 or `removed_failed`) belongs to its removal: a shutdown writes over the removal's
 status, and a restart brings the node back into service mid-removal. Such a node is
-left out of `nodes`, and a planned node whose removal starts mid-walk is skipped at
-every step, the same as one the control plane stops listing.
+left out of `nodes`, and a planned node whose removal starts mid-walk is skipped,
+the same as one the control plane stops listing.
+
+**A skip is recorded as a skip.** The walk advances past a skipped node at once,
+records it in `status.rollingRestart.skipped` in the same write that moves
+`nodeIndex`, and emits `NodeSkipped` rather than `NodeRestarted`. The success
+message counts only the nodes restarted and names the ones skipped, so a walk that
+passed over a node does not report it as restarted.
 
 ### 7.2 The steps
 
@@ -1454,6 +1464,7 @@ administrator has open. An event about an operation goes on the
 | A backend task finished                                  | `Normal`  | `TaskCompleted`          | `StorageCluster`    |
 | A backend task was canceled                              | `Normal`  | `TaskCanceled`           | `StorageCluster`    |
 | The walk advanced to the next node                       | `Normal`  | `NodeRestarted`          | `StorageClusterOps` |
+| The walk passed over a node that left the cluster        | `Normal`  | `NodeSkipped`            | `StorageClusterOps` |
 
 `ClusterCreationFailed` carries the HTTP status and the full response body, so the
 cause is visible in `kubectl describe` without reading controller logs.
@@ -2478,6 +2489,13 @@ type RollingRestartStatus struct {
 	// makes "the first node" and "unset" the same wire value.
 	// +kubebuilder:validation:Minimum=0
 	NodeIndex int32 `json:"nodeIndex"`
+
+	// Skipped are the nodes of Nodes the walk passed over without restarting
+	// them, in walk order: a node the control plane stopped listing, or one
+	// whose removal started after the walk was planned. A node leaving the
+	// cluster belongs to its removal, and the walk sends it nothing.
+	// +optional
+	Skipped []string `json:"skipped,omitempty"`
 }
 
 // StorageClusterOpsStatus is the observed state of one cluster operation.

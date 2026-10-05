@@ -26,7 +26,9 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -51,6 +53,12 @@ const (
 	storageNodePodApp          = "storage-node"
 	storageNodePodClusterLabel = "simplyblock-cluster"
 )
+
+// errNodeSkipped is a planned node the walk passes over without restarting
+// it: the control plane stopped listing it, or its removal started after the
+// walk was planned. It advances the walk at once and is recorded as a skip
+// rather than a restart.
+var errNodeSkipped = errors.New("the node left the cluster after the walk was planned")
 
 // performNodeStep runs one step of the rolling restart against the node the
 // walk is currently on.
@@ -88,7 +96,7 @@ func (r *StorageClusterOpsReconciler) performNodeStep(
 	// restarting it brings it back into service mid-removal, so every step of
 	// it is finished as it stands.
 	if status, listed := nodeStatus(nodes, nodeID); !listed || utils.NodeIsLeaving(status) {
-		return true, nil
+		return false, errNodeSkipped
 	}
 
 	switch current {
@@ -367,22 +375,41 @@ func (r *StorageClusterOpsReconciler) awaitRebalance(
 // Rebalancing, and declaring it as one would make the graph cyclic and
 // IsTerminal useless. Reset also clears the deadline, which is what gives each
 // node its own budget per step rather than one deadline covering the fleet.
+//
+// skipped says the node was passed over rather than restarted. It is recorded
+// in status.rollingRestart.skipped in the same write that moves the index, and
+// announced as a skip, so neither the events nor the success message count it
+// among the restarted nodes.
 func (r *StorageClusterOpsReconciler) advanceWalk(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.StorageClusterOps,
 	machine *statemachine.Machine[step],
+	skipped bool,
 ) (ctrl.Result, error) {
 	walk := walkOf(ops)
 	next := walk.NodeIndex + 1
 	finished := walk.Nodes[walk.NodeIndex]
 
-	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal,
-		NodeRestarted, NodeRestarted,
-		"Node %d/%d (%s) was restarted", next, len(walk.Nodes), finished)
+	if skipped {
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal,
+			NodeSkipped, NodeSkipped,
+			"Node %d/%d (%s) was skipped: it left the cluster after the walk was planned",
+			next, len(walk.Nodes), finished)
+	} else {
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal,
+			NodeRestarted, NodeRestarted,
+			"Node %d/%d (%s) was restarted", next, len(walk.Nodes), finished)
+	}
+	recordSkip := func(status *simplyblockv1alpha2.StorageClusterOpsStatus) {
+		if skipped && !slices.Contains(status.RollingRestart.Skipped, finished) {
+			status.RollingRestart.Skipped = append(status.RollingRestart.Skipped, finished)
+		}
+	}
 
 	if int(next) >= len(walk.Nodes) {
 		err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageClusterOpsStatus) {
 			status.RollingRestart.NodeIndex = next
+			recordSkip(status)
 		})
 		if err != nil {
 			return ctrl.Result{}, err
@@ -398,6 +425,7 @@ func (r *StorageClusterOpsReconciler) advanceWalk(
 	deadline := metav1.NewTime(time.Now().Add(checkingPeersDeadline))
 	err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageClusterOpsStatus) {
 		status.RollingRestart.NodeIndex = next
+		recordSkip(status)
 		status.Step = statemachine.KubeSnapshot{
 			State:    string(machine.CurrentState()),
 			Deadline: &deadline,
