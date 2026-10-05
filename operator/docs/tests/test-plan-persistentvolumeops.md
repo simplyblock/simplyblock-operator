@@ -48,15 +48,15 @@ File: `operator/internal/controllers/volume/persistentvolumeops_resolve_test.go`
 
 ### Target Resolution (design §4.1)
 
-| #    | Scenario                                                                     | Type     | Test |
-|------|------------------------------------------------------------------------------|----------|------|
-| U-09 | `spec.migrate.targetNodeRef` names a node: its `status.uuid` is used         | Positive | —    |
-| U-10 | The target node does not exist: the operation fails with a not-found message | Negative | —    |
-| U-11 | The target node has no `status.uuid`: held, not failed                       | Negative | —    |
-| U-12 | The target node is not online: `TargetNodeNotReady`, held                    | Negative | —    |
-| U-13 | The target node is the volume's current node: `TargetNodeIsSource`, failed   | Negative | —    |
-| U-14 | The target node belongs to another cluster: refused before any backend call  | Negative | —    |
-| U-15 | `spec.migrate` absent for `action: Migrate`: rejected                        | Negative | —    |
+| #    | Scenario                                                                                                       | Type     | Test                                                        |
+|------|----------------------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------------|
+| U-09 | `spec.migrate.targetNodeRef` names a node: its `status.uuid` is used                                           | Positive | —                                                           |
+| U-10 | The target node does not exist: the operation fails with a not-found message                                   | Negative | —                                                           |
+| U-11 | The target node has no `status.uuid`: held, not failed                                                         | Negative | —                                                           |
+| U-12 | The target node is not online: `TargetNodeNotReady`, held                                                      | Negative | —                                                           |
+| U-13 | The target node is the volume's current node: `TargetNodeIsSource`, succeeded with nothing migrated (see U-55) | Negative | `TestASubsystemAlreadyOnTheTargetSucceedsWithoutAMigration` |
+| U-14 | The target node belongs to another cluster: refused before any backend call                                    | Negative | —                                                           |
+| U-15 | `spec.migrate` absent for `action: Migrate`: rejected                                                          | Negative | —                                                           |
 
 ### The Step Machine (design §5)
 
@@ -112,6 +112,22 @@ File: `operator/internal/webhook/persistentvolumeops_validator_test.go`
 | U-49 | An update rather than a create: not inspected                                   | Boundary | —    |
 | U-50 | A thousand terminal operations in the namespace: the check uses the field index | Boundary | —    |
 | U-51 | The second `Validating` finds the volume already migrating and fails            | Negative | —    |
+
+### The Subsystem as the Unit (design §5, §6)
+
+The control plane migrates an NVMe-oF subsystem as a whole, so every row here is about
+the volumes an operation does not name. Regression id for the rows marked so:
+`2026-10-05-pvops-per-volume-lock`.
+
+| #    | Scenario                                                                                                        | Type       | Test                                                        |
+|------|-----------------------------------------------------------------------------------------------------------------|------------|-------------------------------------------------------------|
+| U-52 | The lock is taken on every volume of the named volume's subsystem                                               | Regression | `TestAnOperationHoldsEveryVolumeOfItsSubsystem`             |
+| U-53 | A sibling's operation holds the subsystem: this one waits at `Pending`, holds nothing, and creates no migration | Regression | `TestAnOperationWaitsWhileASiblingOfItsVolumeIsBeingMoved`  |
+| U-54 | The release clears the lock from every volume carrying this operation's name                                    | Regression | `TestFinishingReleasesEveryVolumeOfItsSubsystem`            |
+| U-55 | The subsystem is already on the target: `Succeeded`, no migration created, every lock released                  | Regression | `TestASubsystemAlreadyOnTheTargetSucceedsWithoutAMigration` |
+| U-56 | A volume the control plane reports under no subsystem is locked alone                                           | Boundary   | `TestTheLockIsTakenWhenTheVolumeIsFree`                     |
+| U-57 | An operation past `Pending` does not read the subsystem's membership again                                      | Boundary   | —                                                           |
+| U-58 | Two operations on one subsystem acquiring at once: one holds every volume, the other holds none                 | Negative   | —                                                           |
 
 ---
 
@@ -247,13 +263,14 @@ question is whether the operation holds legibly or fails.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 51        | 0       | 51          |
+| Unit        | 58        | 6       | 52          |
 | Integration | 14        | 0       | 14          |
 | E2E         | 15        | 0       | 15          |
 | Manual      | 4         | 0       | 4           |
-| **Total**   | **84**    | **0**   | **84**      |
+| **Total**   | **91**    | **6**   | **85**      |
 
-Nothing is covered against the target model. `VolumeMigration` has the most test
+Only the subsystem rows `U-52` to `U-56` and `U-13` are covered against the target
+model. `VolumeMigration` has the most test
 files of any kind in this repository, five of them, and none can be cited here:
 they assert the merged phase enum, the `pvName` spelling, and a lifecycle with no
 `Verifying` step.
@@ -277,6 +294,7 @@ production.
 | U-29 … U-35 | Aborts and deadlines                                  | Partly covered. `U-31`'s refusal is new and comes from the graph                                                 |
 | U-36 … U-42 | The phase and step split                              | Planned, not built. They are one enum today                                                                      |
 | U-43 … U-51 | The exclusion webhook                                 | Planned, not built. Nothing prevents two migrations of one volume today                                          |
+| U-57, U-58  | Membership reuse and concurrent acquisition           | Needs a counting fake for the membership reads, and two reconcilers racing on one fake client                    |
 | I-01 … I-14 | Admission, concurrency, and ownership                 | Needs `envtest`, because CEL, `Required`, and real webhook admission cannot be exercised against a fake client   |
 | E-01 … E-15 | All end-to-end scenarios                              | Needs a live cluster and a real data path. The e2e harness under `test/` is not committed yet                    |
 | E-05 … E-10 | The five regression rows                              | Each pins a defect this repository has seen in the field. None has an automated reproduction                     |

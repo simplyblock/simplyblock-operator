@@ -21,6 +21,7 @@ package volume
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -45,6 +46,12 @@ const (
 	migrationStatusFailed   = "failed"
 	migrationStatusCanceled = "canceled"
 )
+
+// errAlreadyOnTarget is a volume whose subsystem is already on the node the
+// operation names. It ends the operation as succeeded with nothing migrated,
+// which is a distinct outcome from both a step that finished and one that
+// failed, and is why it is a sentinel rather than either.
+var errAlreadyOnTarget = errors.New("the volume's subsystem is already on the target node")
 
 // perform advances the current step and reports whether it has finished.
 func (r *PersistentVolumeOpsReconciler) perform(
@@ -132,6 +139,14 @@ func (r *PersistentVolumeOpsReconciler) createMigration(
 		return fatalf("volume %s publishes under no subsystem, so its migration cannot be addressed",
 			subject.handle.VolumeID)
 	}
+	// A subsystem already on the target is a move that has happened, most often
+	// through an operation naming a sibling that held the subsystem before this
+	// one could. The control plane refuses a migration onto the node a volume is
+	// on, and retrying that refusal until the step's deadline would fail an
+	// operation whose request is already true.
+	if volume.StorageNodeID != "" && volume.StorageNodeID == subject.targetUUID {
+		return errAlreadyOnTarget
+	}
 
 	// Made under a claim on the step: a pass that read the operation before
 	// the previous one recorded its migration loses the claim and creates
@@ -157,15 +172,12 @@ func (r *PersistentVolumeOpsReconciler) createMigration(
 		return fatalf("the control plane created a migration with no identifier")
 	}
 	if migration.SourceNodeID != "" && migration.SourceNodeID == subject.targetUUID {
-		r.event(ops, corev1.EventTypeWarning, ReasonTargetNodeIsSource,
-			"Volume %s is already on node %s", ops.Spec.PersistentVolumeName, subject.targetNodeName())
 		// Cancel rather than continue: the migration exists on the backend and
 		// leaving it would block the next one.
 		if cancelErr := r.API.CancelMigration(ctx, subject.clusterUUID, volume.NQN, migration.ID); cancelErr != nil {
 			return fmt.Errorf("cancel a migration to the node the volume is already on: %w", cancelErr)
 		}
-		return fatalf("volume %s is already on node %s",
-			ops.Spec.PersistentVolumeName, subject.targetNodeName())
+		return errAlreadyOnTarget
 	}
 
 	if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.PersistentVolumeOpsStatus) {
