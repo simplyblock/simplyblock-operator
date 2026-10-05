@@ -83,6 +83,10 @@ type Move struct {
 	// failure from there on happened with the target taking part rather than
 	// before it was ever asked.
 	Engaged bool
+	// CreatorUID is the UID of the object that raised the move, empty when
+	// the move records none. Moves are found by a label any later caller can
+	// share, and the UID is what tells one creator's moves from another's.
+	CreatorUID string
 }
 
 // MoveRequest is one volume's move, as a caller asks for it.
@@ -234,7 +238,17 @@ func migrationMove(migration *simplyblockv1alpha1.VolumeMigration) Move {
 
 		TargetNodeUUID: migration.Spec.TargetNodeUUID,
 		Engaged:        migration.Status.MigrationUUID != "",
+		CreatorUID:     controllerUID(migration),
 	}
+}
+
+// controllerUID is the UID of the object controlling obj, which is how the
+// namespaced kind records its creator, or the empty string when none does.
+func controllerUID(obj metav1.Object) string {
+	if ref := metav1.GetControllerOf(obj); ref != nil {
+		return string(ref.UID)
+	}
+	return ""
 }
 
 // OperationMover raises the redesigned PersistentVolumeOps.
@@ -370,6 +384,9 @@ func operationMove(ops *simplyblockv1alpha2.PersistentVolumeOps) Move {
 		Phase:          phase,
 		Message:        ops.Status.Message,
 		TargetNodeUUID: ops.Labels[simplyblockv1alpha2.PersistentVolumeOpsTargetNodeLabel],
+	}
+	if ops.Spec.CreatorRef != nil {
+		move.CreatorUID = string(ops.Spec.CreatorRef.UID)
 	}
 	if recorded := ops.Status.Migration; recorded != nil {
 		if recorded.MemberCount != nil {

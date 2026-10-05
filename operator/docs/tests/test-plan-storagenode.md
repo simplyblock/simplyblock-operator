@@ -569,36 +569,38 @@ Files: `operator/internal/controllers/node/drain_test.go`, `remove_fanout_test.g
 `drain_retry_test.go`,
 `operator/internal/volumemigration/mover_test.go`
 
-| #     | Scenario                                                                                                                                 | Type       | Test                                                         |
-|-------|------------------------------------------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------------|
-| U-170 | Generated migration names are valid DNS labels                                                                                           | Positive   | `TestEveryMovableVolumeIsGivenAMove`                         |
-| U-171 | Two long volume names sharing a prefix produce distinct migration names                                                                  | Boundary   | —                                                            |
-| U-172 | An operator restart mid-drain does not recreate existing migration objects                                                               | Negative   | `TestAVolumeAlreadyMovingIsNotGivenASecondMove`              |
-| U-173 | A completed migration is deleted and the counter is written first                                                                        | Positive   | `TestFinishedMovesAreRecordedAndThenReaped`                  |
-| U-174 | A failed migration is kept as the record and replaced under a name of its own                                                            | Positive   | `TestAFailedMoveIsRetriedRatherThanFailingTheDrain`          |
-| U-175 | A migration deleted out of band is recreated rather than counted as complete                                                             | Negative   | `TestEveryMovableVolumeIsGivenAMove`                         |
-| U-176 | Every migration carries `spec.creatorRef` with the operation's UID                                                                       | Positive   | `TestTheFanOutRecordsItsCreatorWithoutOwningTheOperation`    |
-| U-177 | The same volume name in two namespaces produces two distinct objects                                                                     | Boundary   | —                                                            |
-| U-248 | Every migration carries `storage.simplyblock.io/drain-node`, and a `List` on the label finds the fan-out                                 | Positive   | `TestTheFanOutIsFoundAgainByItsLabel`                        |
-| U-342 | The cluster-scoped kind carries no owner reference, which garbage collection would follow                                                | Regression | `TestTheFanOutRecordsItsCreatorWithoutOwningTheOperation`    |
-| U-343 | With the registered kind in use, the move is owned by the drain as it always was                                                         | Positive   | `TestTheLegacyFanOutIsStillOwnedByItsDrain`                  |
-| U-344 | Deleting a drain reaps the fan-out it raised                                                                                             | Positive   | `TestDeletingADrainStopsWhatItFannedOut`                     |
-| U-345 | A move still copying holds the deletion rather than being reaped mid-copy                                                                | Negative   | `TestADrainBeingDeletedWaitsForAMoveStillRunning`            |
-| U-346 | A retried move is announced, so a drain that keeps retrying is not read as stalled                                                       | Positive   | `TestAFailedMoveIsRetriedRatherThanFailingTheDrain`          |
-| U-480 | The volumes of one NVMe-oF subsystem get one move, named by the subsystem's first volume (2026-10-05-drain-per-volume-moves)             | Regression | `TestTheVolumesOfOneSubsystemAreGivenOneMove`                |
-| U-481 | A subsystem's target holds a replica of none of its volumes, not only of the volume the move is named by                                 | Regression | `TestASubsystemsTargetHoldsNoReplicaOfAnyMember`             |
-| U-482 | Mid-cutover, a sibling still reported on the node is covered by its subsystem's move and gets no second one                              | Regression | `TestASubsystemMidCutoverIsNotGivenASecondMove`              |
-| U-483 | A finished move counts every volume of its subsystem toward `status.drain.volumesMigrated`                                               | Regression | `TestAFinishedSubsystemMoveCountsEveryVolumeItCarried`       |
-| U-484 | A move reports how many volumes it carries, whichever kind carries it                                                                    | Regression | `TestAMoveSaysHowManyVolumesItCarries`                       |
-| U-485 | A failed move's replacement avoids a target the failure involved (2026-10-05-drain-target-memory)                                        | Regression | `TestAFailedMovesReplacementAvoidsTheTargetItFailedOn`       |
-| U-486 | A refusal naming the target rules it out, though no migration was created                                                                | Regression | `TestARefusalNamingTheTargetBurnsIt`                         |
-| U-487 | Two failures that never involved the target leave it eligible                                                                            | Boundary   | `TestAnUnattributedFailureDoesNotRuleOutItsTarget`           |
-| U-488 | A third failure that never involved the target rules it out                                                                              | Regression | `TestAThirdUnattributedFailureRulesOutItsTarget`             |
-| U-489 | An aborted move is re-issued, and its target is not ruled out                                                                            | Regression | `TestAnAbortedMoveIsReissuedWithoutBlamingItsTarget`         |
-| U-490 | Every eligible peer ruled out: the drain holds with `NoMigrationTarget`, naming the targets tried                                        | Regression | `TestADrainWithEveryPeerRuledOutHoldsAndNamesThem`           |
-| U-491 | The failed moves are reaped on the pass that finds the node holding nothing movable                                                      | Regression | `TestFailedMovesAreReapedWhenTheNodeHoldsNothingMovable`     |
-| U-492 | A move reports the target it was headed for and whether the control plane accepted it, for either kind                                   | Regression | `TestAMoveSaysWhereItWasHeadedAndWhetherItGotThere`          |
-| U-509 | A subsystem's target avoids the replicas of siblings whose primary is off the drained node (2026-10-06-drain-replicas-of-moved-siblings) | Regression | `TestASubsystemsTargetAvoidsTheReplicasOfSiblingsOffTheNode` |
+| #     | Scenario                                                                                                                                                    | Type       | Test                                                         |
+|-------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------------|
+| U-170 | Generated migration names are valid DNS labels                                                                                                              | Positive   | `TestEveryMovableVolumeIsGivenAMove`                         |
+| U-171 | Two long volume names sharing a prefix produce distinct migration names                                                                                     | Boundary   | —                                                            |
+| U-172 | An operator restart mid-drain does not recreate existing migration objects                                                                                  | Negative   | `TestAVolumeAlreadyMovingIsNotGivenASecondMove`              |
+| U-173 | A completed migration is deleted and the counter is written first                                                                                           | Positive   | `TestFinishedMovesAreRecordedAndThenReaped`                  |
+| U-174 | A failed migration is kept as the record and replaced under a name of its own                                                                               | Positive   | `TestAFailedMoveIsRetriedRatherThanFailingTheDrain`          |
+| U-175 | A migration deleted out of band is recreated rather than counted as complete                                                                                | Negative   | `TestEveryMovableVolumeIsGivenAMove`                         |
+| U-176 | Every migration carries `spec.creatorRef` with the operation's UID                                                                                          | Positive   | `TestTheFanOutRecordsItsCreatorWithoutOwningTheOperation`    |
+| U-177 | The same volume name in two namespaces produces two distinct objects                                                                                        | Boundary   | —                                                            |
+| U-248 | Every migration carries `storage.simplyblock.io/drain-node`, and a `List` on the label finds the fan-out                                                    | Positive   | `TestTheFanOutIsFoundAgainByItsLabel`                        |
+| U-342 | The cluster-scoped kind carries no owner reference, which garbage collection would follow                                                                   | Regression | `TestTheFanOutRecordsItsCreatorWithoutOwningTheOperation`    |
+| U-343 | With the registered kind in use, the move is owned by the drain as it always was                                                                            | Positive   | `TestTheLegacyFanOutIsStillOwnedByItsDrain`                  |
+| U-344 | Deleting a drain reaps the fan-out it raised                                                                                                                | Positive   | `TestDeletingADrainStopsWhatItFannedOut`                     |
+| U-345 | A move still copying holds the deletion rather than being reaped mid-copy                                                                                   | Negative   | `TestADrainBeingDeletedWaitsForAMoveStillRunning`            |
+| U-346 | A retried move is announced, so a drain that keeps retrying is not read as stalled                                                                          | Positive   | `TestAFailedMoveIsRetriedRatherThanFailingTheDrain`          |
+| U-480 | The volumes of one NVMe-oF subsystem get one move, named by the subsystem's first volume (2026-10-05-drain-per-volume-moves)                                | Regression | `TestTheVolumesOfOneSubsystemAreGivenOneMove`                |
+| U-481 | A subsystem's target holds a replica of none of its volumes, not only of the volume the move is named by                                                    | Regression | `TestASubsystemsTargetHoldsNoReplicaOfAnyMember`             |
+| U-482 | Mid-cutover, a sibling still reported on the node is covered by its subsystem's move and gets no second one                                                 | Regression | `TestASubsystemMidCutoverIsNotGivenASecondMove`              |
+| U-483 | A finished move counts every volume of its subsystem toward `status.drain.volumesMigrated`                                                                  | Regression | `TestAFinishedSubsystemMoveCountsEveryVolumeItCarried`       |
+| U-484 | A move reports how many volumes it carries, whichever kind carries it                                                                                       | Regression | `TestAMoveSaysHowManyVolumesItCarries`                       |
+| U-485 | A failed move's replacement avoids a target the failure involved (2026-10-05-drain-target-memory)                                                           | Regression | `TestAFailedMovesReplacementAvoidsTheTargetItFailedOn`       |
+| U-486 | A refusal naming the target rules it out, though no migration was created                                                                                   | Regression | `TestARefusalNamingTheTargetBurnsIt`                         |
+| U-487 | Two failures that never involved the target leave it eligible                                                                                               | Boundary   | `TestAnUnattributedFailureDoesNotRuleOutItsTarget`           |
+| U-488 | A third failure that never involved the target rules it out                                                                                                 | Regression | `TestAThirdUnattributedFailureRulesOutItsTarget`             |
+| U-489 | An aborted move is re-issued, and its target is not ruled out                                                                                               | Regression | `TestAnAbortedMoveIsReissuedWithoutBlamingItsTarget`         |
+| U-490 | Every eligible peer ruled out: the drain holds with `NoMigrationTarget`, naming the targets tried                                                           | Regression | `TestADrainWithEveryPeerRuledOutHoldsAndNamesThem`           |
+| U-491 | The failed moves are reaped on the pass that finds the node holding nothing movable                                                                         | Regression | `TestFailedMovesAreReapedWhenTheNodeHoldsNothingMovable`     |
+| U-492 | A move reports the target it was headed for and whether the control plane accepted it, for either kind                                                      | Regression | `TestAMoveSaysWhereItWasHeadedAndWhetherItGotThere`          |
+| U-510 | A failed move another drain raised is reaped, and neither rules out its target nor counts as an attempt (2026-10-06-drain-inherits-another-drains-failures) | Regression | `TestAnotherDrainsFailedMovesAreNeitherRememberedNorKept`    |
+| U-511 | A move reports the UID of the object that raised it, for either kind                                                                                        | Regression | `TestAMoveSaysWhoRaisedIt`                                   |
+| U-509 | A subsystem's target avoids the replicas of siblings whose primary is off the drained node (2026-10-06-drain-replicas-of-moved-siblings)                    | Regression | `TestASubsystemsTargetAvoidsTheReplicasOfSiblingsOffTheNode` |
 
 ### Operation: The Migrate Graph (design §9)
 
@@ -1005,17 +1007,17 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 421       | 316     | 105         |
+| Unit        | 423       | 318     | 105         |
 | Integration | 54        | 0       | 54          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **506**   | **316** | **190**     |
+| **Total**   | **508**   | **318** | **190**     |
 
 Eight further scenarios are struck through: they describe a system this one no
 longer is, and each names the row that replaced it. They are excluded from the
 counts.
 
-Two hundred and thirty-six distinct test functions cover the three hundred and sixteen
+Two hundred and thirty-eight distinct test functions cover the three hundred and eighteen
 covered scenarios, because a table-driven test satisfies one identifier per
 subtest and several rows are two halves of one assertion.
 

@@ -1898,7 +1898,10 @@ attempt number, so a pass that runs again finds the object it made, and a restar
 reads the same memory back from the objects. Each failure is one object and is
 counted once. The failed moves are deleted on the pass that finds the node holding
 nothing movable, which is the pass that finishes the step, and by the deletion
-cascade above. Their number is bounded by the peers each subsystem can fail on.
+cascade above. Their number is bounded by the peers each subsystem can fail on. The
+memory is this drain's own: the fan-out is found by the drained node's label, which a
+later drain of the same node shares, so a failed move whose creator is another drain
+is reaped rather than read, and its targets and attempts count for nothing here.
 
 Deleting completed objects immediately is what keeps a hundred-volume drain from
 leaving a hundred objects behind. The counters in `status.drain` are the source of
