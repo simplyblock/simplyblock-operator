@@ -149,3 +149,22 @@ func TestAnAdmissionRefusedForAReasonThatPassesWaits(t *testing.T) {
 	done, err := performing(t, r, aDrain(), stepMigratingDevices)
 	deferred(t, done, err)
 }
+
+// Regression: 2026-10-05-shutdown-precondition-read-as-final — the drain sends
+// a graceful shutdown, and the control plane answers one it cannot run yet
+// with a 409 naming the reason: a peer restarting or shutting down, a
+// migration or restart task, a live restart claim. Each clears by itself, and
+// the drain failed the operation on it.
+func TestAShutdownTheControlPlaneCannotRunYetWaits(t *testing.T) {
+	const reason = "Node node-2222 is restarting in this cluster, shutdown refused"
+	api := aControlPlane().refusing("ShutdownNode", &ControlPlaneError{
+		Status: http.StatusConflict, Body: `{"detail":"` + reason + `"}`,
+	})
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	done, err := performing(t, r, aDrain(), stepShuttingDown)
+	deferred(t, done, err)
+	if err != nil && !strings.Contains(err.Error(), reason) {
+		t.Errorf("err = %q, want the control plane's reason in it", err)
+	}
+}
