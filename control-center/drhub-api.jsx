@@ -200,7 +200,8 @@ function normRAction(o) {
     appName: refName(sp.applicationRef), planName: refName(sp.planRef), targetName: refName(sp.applicationRef) || refName(sp.planRef),
     override: sp.override || null, timeout: sp.timeout || "", startTime: st.startTime, completionTime: st.completionTime,
     durationMs: durMs(st.startTime, st.completionTime), sourceCluster: st.sourceCluster || "", targetCluster: st.targetCluster || "",
-    steps: st.steps || [], children: st.children || [], report, reportKey: st.reportKey || "",
+    steps: st.steps || [], log: st.log || [], children: st.children || [], report, reportKey: st.reportKey || "",
+    completionMessage: ((st.conditions || []).find(c => c.type === "Completed") || {}).message || "",
     rtoSeconds: report ? report.rtoSeconds : null, rpoSeconds: report ? report.achievedRPOSeconds : null,
     guests: report ? report.guests || [] : [],
     createdBy: (drMeta(o).annotations || {})[DR_ANN.createdBy] || (report && report.operator) || "",
@@ -219,7 +220,8 @@ function normTBubble(o) {
     cloneSource: sp.cloneSource || "latest-replicated-snapshot", holdFor: sp.holdFor || "", maxLifetime: sp.maxLifetime || "", abort: !!sp.abort,
     testID: st.testID || "", sourceCluster: st.sourceCluster || "", targetCluster: st.targetCluster || "", clonesReadyTime: st.clonesReadyTime,
     applications: st.applications || [], startTime: st.startTime, completionTime: st.completionTime, durationMs: durMs(st.startTime, st.completionTime),
-    bubbleNamespaces: st.bubbleNamespaces || [], steps: st.steps || [], invariants: st.invariants || [], checks: st.checks || [], report, reportKey: st.reportKey || "",
+    bubbleNamespaces: st.bubbleNamespaces || [], steps: st.steps || [], log: st.log || [], invariants: st.invariants || [], checks: st.checks || [], report, reportKey: st.reportKey || "",
+    completionMessage: ((st.conditions || []).find(c => c.type === "Completed") || {}).message || "",
     scheduleName: (drMeta(o).labels || {})[DR_ANN.schedule] || "", createdBy: (drMeta(o).annotations || {})[DR_ANN.createdBy] || (report && report.operator) || "",
     counts: {apps: (st.applications || []).length, steps: (st.steps || []).length, invariants: (st.invariants || []).length}
   }));
