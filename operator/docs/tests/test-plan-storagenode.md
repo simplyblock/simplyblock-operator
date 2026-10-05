@@ -1008,17 +1008,17 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 424       | 319     | 105         |
+| Unit        | 425       | 320     | 105         |
 | Integration | 54        | 0       | 54          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **509**   | **319** | **190**     |
+| **Total**   | **510**   | **320** | **190**     |
 
 Eight further scenarios are struck through: they describe a system this one no
 longer is, and each names the row that replaced it. They are excluded from the
 counts.
 
-Two hundred and thirty-nine distinct test functions cover the three hundred and nineteen
+Two hundred and forty distinct test functions cover the three hundred and twenty
 covered scenarios, because a table-driven test satisfies one identifier per
 subtest and several rows are two halves of one assertion.
 
