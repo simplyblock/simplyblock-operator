@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -156,6 +157,9 @@ func (r *PersistentVolumeOpsReconciler) createMigration(
 		var err error
 		migration, err = r.API.CreateMigration(ctx, subject.clusterUUID, volume.NQN, subject.targetUUID)
 		if err != nil {
+			if refusal := refusedCreate(err, subject.targetUUID); refusal != nil {
+				return refusal
+			}
 			// The request may have taken effect despite the error: a create
 			// can take longer than the client's timeout and allocates on the
 			// way, so failing here would abandon a half-created migration.
@@ -426,4 +430,36 @@ func expectedMembers(members []lvol.Volume, volumeUUID string) map[string]struct
 	}
 	out[volumeUUID] = struct{}{}
 	return out
+}
+
+// refusedCreate reads a create the control plane answered with a refusal that
+// no retry changes, and returns what the operation does about it: nil for an
+// answer worth retrying, errAlreadyOnTarget when the refusal says the volume
+// is already on the target, and a terminal error carrying the control plane's
+// reason otherwise.
+//
+// The control plane answers 400 for a request it will never accept (a target
+// serving as the fallback source, one with no lvstore, one it does not know)
+// and 409 for one it cannot accept yet (another migration of the subsystem is
+// active, a precondition that clears by itself). Two 400s that also clear by
+// themselves, a cluster rebalancing and a node busy with a data migration, are
+// matched on their wording and waited on like a 409. A timeout and a 5xx say
+// nothing about whether the create landed, so they are retried as well.
+//
+// Failing at once is what tells whatever raised the operation which target
+// refused it, and why, while there is still time to choose another.
+func refusedCreate(err error, targetUUID string) error {
+	var answer *controlplane.StatusError
+	if !errors.As(err, &answer) || answer.StatusCode != http.StatusBadRequest {
+		return nil
+	}
+	body := strings.ToLower(answer.Body)
+	if strings.Contains(body, "is rebalancing") || strings.Contains(body, "data migration in progress") {
+		return nil
+	}
+	if strings.Contains(body, "is already on node "+strings.ToLower(targetUUID)) {
+		return errAlreadyOnTarget
+	}
+	return fatalf("the control plane refused to migrate the volume to node %s: %s",
+		targetUUID, answer.Body)
 }

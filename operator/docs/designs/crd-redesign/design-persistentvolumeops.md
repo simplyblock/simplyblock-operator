@@ -386,6 +386,18 @@ a migration onto the node a volume is on, so creating one would only fail at the
 step's deadline. A creation that reports the target as its source is canceled and
 ends the same way.
 
+**A create the control plane refuses outright fails the operation at once.** A
+400 is a request the control plane will never accept: a target serving as the
+fallback source, one with no lvstore, one it does not know. The operation fails on
+the first answer with the control plane's reason in `status.message`, which is what
+lets whatever raised it choose another target while there is time. A 409 is one it
+cannot accept yet, such as another migration of the subsystem being active, and it
+is waited on in the step, like the two 400s that clear by themselves (a cluster
+rebalancing, a node busy with a data migration). A timeout or a 5xx says nothing
+about whether the create landed, and the claim's expiry retries it. A 400 saying
+the volume is already on the target ends the operation as `Succeeded`, the same as
+the check before the create.
+
 **A Job runs per consuming node rather than per path.** The paths are what the
 Job connects; what makes a Job necessary is the *host*, since a path is
 established on the node that will be served over it and a subsystem's members

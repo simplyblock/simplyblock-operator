@@ -113,6 +113,16 @@ File: `operator/internal/webhook/persistentvolumeops_validator_test.go`
 | U-50 | A thousand terminal operations in the namespace: the check uses the field index | Boundary | —    |
 | U-51 | The second `Validating` finds the volume already migrating and fails            | Negative | —    |
 
+### Create Refusals (design §5)
+
+Regression id for the rows marked so: `2026-10-05-drain-target-memory`.
+
+| #    | Scenario                                                                                     | Type       | Test                                                |
+|------|----------------------------------------------------------------------------------------------|------------|-----------------------------------------------------|
+| U-59 | A 400 to the create fails the operation on the first answer, with the control plane's reason | Regression | `TestARefusedCreateFailsTheOperationAtOnce`         |
+| U-60 | A 409 to the create is waited on in the step rather than failed                              | Negative   | `TestABusyControlPlaneIsWaitedOnRatherThanFailed`   |
+| U-61 | A 400 saying the volume is already on the target ends the operation as `Succeeded`           | Regression | `TestARefusalSayingTheVolumeIsAlreadyThereSucceeds` |
+
 ### The Subsystem as the Unit (design §5, §6)
 
 The control plane migrates an NVMe-oF subsystem as a whole, so every row here is about
@@ -263,14 +273,14 @@ question is whether the operation holds legibly or fails.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 58        | 6       | 52          |
+| Unit        | 61        | 9       | 52          |
 | Integration | 14        | 0       | 14          |
 | E2E         | 15        | 0       | 15          |
 | Manual      | 4         | 0       | 4           |
-| **Total**   | **91**    | **6**   | **85**      |
+| **Total**   | **94**    | **9**   | **85**      |
 
-Only the subsystem rows `U-52` to `U-56` and `U-13` are covered against the target
-model. `VolumeMigration` has the most test
+Only the subsystem rows `U-52` to `U-56`, the create refusals `U-59` to `U-61`, and
+`U-13` are covered against the target model. `VolumeMigration` has the most test
 files of any kind in this repository, five of them, and none can be cited here:
 they assert the merged phase enum, the `pvName` spelling, and a lifecycle with no
 `Verifying` step.
