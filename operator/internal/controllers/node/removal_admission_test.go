@@ -130,3 +130,15 @@ func TestAControlPlaneWithoutTheAdmissionCheckIsNoHold(t *testing.T) {
 		t.Errorf("done, err = %v, %v; want Validating to finish", done, err)
 	}
 }
+
+// Regression: 2026-10-06-admission-refusal-without-reason — the refusal was
+// carried by its reason text, so a control plane answering admitted false with
+// no reason read as an admission, and the drain went on to shut the node down.
+func TestARefusalWithNoReasonStillHoldsValidation(t *testing.T) {
+	api := aControlPlane()
+	api.admission = &RemovalAdmission{Admitted: false}
+	r, _ := anOpsWorld(t, api)
+
+	done, err := performing(t, r, aDrain(), stepValidating)
+	notAdmitted(t, done, err, "gave no reason")
+}

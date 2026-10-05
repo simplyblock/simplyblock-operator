@@ -209,7 +209,13 @@ func (r *StorageNodeOpsReconciler) removalRefusal(
 	if err != nil {
 		return "", fmt.Errorf("ask the removal admission of node %s: %w", ops.Spec.NodeRef, err)
 	}
+	// The flag decides, not the text: a refusal that comes without a reason
+	// is still a refusal, and reading it as an admission would shut the node
+	// down for a removal the control plane declined.
 	if offered && !answer.Admitted {
+		if answer.Reason == "" {
+			return "the control plane did not admit the removal and gave no reason", nil
+		}
 		return answer.Reason, nil
 	}
 	return "", nil

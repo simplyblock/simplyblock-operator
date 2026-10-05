@@ -541,6 +541,7 @@ Files: `operator/internal/controllers/node/drain_test.go`, `peertargets_test.go`
 | U-506 | A worker that keeps another storage node of the cluster stays in its failure domain                                                                         | Boundary   | `TestASiblingOnTheSameWorkerKeepsTheHostInItsDomain`                                                                                                    |
 | U-507 | The control plane's admission refusal holds `Validating`, naming the reason                                                                                 | Regression | `TestValidationHoldsOnTheControlPlanesRefusal`                                                                                                          |
 | U-508 | A control plane without the admission check is not a hold                                                                                                   | Boundary   | `TestAControlPlaneWithoutTheAdmissionCheckIsNoHold`                                                                                                     |
+| U-514 | An admission refusal with no reason still holds `Validating`, with a fallback message (2026-10-06-admission-refusal-without-reason)                         | Regression | `TestARefusalWithNoReasonStillHoldsValidation`                                                                                                          |
 | U-512 | A DELETE refused without a reason on a cluster degraded only by this removal is final (2026-10-06-bare-refusal-held-on-own-degradation)                     | Regression | `TestABareDeleteRefusalOnAClusterDegradedOnlyByThisRemovalIsFinal`                                                                                      |
 | U-473 | `MigratingDevices` sends `prepare-removal` once the node is offline (2026-10-02)                                                                            | Positive   | `TestMigratingDevicesPreparesTheRemovalOfAnOfflineNode`                                                                                                 |
 | U-474 | A refused admission fails the operation and says the node is left offline for a Restart (2026-10-02)                                                        | Regression | `TestARefusedAdmissionEndsTheDrainAndSaysTheNodeIsOffline`                                                                                              |
@@ -1009,17 +1010,17 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 425       | 320     | 105         |
+| Unit        | 426       | 321     | 105         |
 | Integration | 54        | 0       | 54          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **510**   | **320** | **190**     |
+| **Total**   | **511**   | **321** | **190**     |
 
 Eight further scenarios are struck through: they describe a system this one no
 longer is, and each names the row that replaced it. They are excluded from the
 counts.
 
-Two hundred and forty distinct test functions cover the three hundred and twenty
+Two hundred and forty-one distinct test functions cover the three hundred and twenty-one
 covered scenarios, because a table-driven test satisfies one identifier per
 subtest and several rows are two halves of one assertion.
 
