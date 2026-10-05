@@ -247,13 +247,13 @@ question is whether the operation holds legibly or fails.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 51        | 0       | 51          |
+| Unit        | 56        | 5       | 51          |
 | Integration | 14        | 0       | 14          |
 | E2E         | 15        | 0       | 15          |
 | Manual      | 4         | 0       | 4           |
-| **Total**   | **84**    | **0**   | **84**      |
+| **Total**   | **89**    | **5**   | **84**      |
 
-Nothing is covered against the target model. `VolumeMigration` has the most test
+Only the namespace-scan rows `U-62` to `U-66` are covered against the target model. `VolumeMigration` has the most test
 files of any kind in this repository, five of them, and none can be cited here:
 they assert the merged phase enum, the `pvName` spelling, and a lifecycle with no
 `Verifying` step.
