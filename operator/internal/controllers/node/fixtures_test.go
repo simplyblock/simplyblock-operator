@@ -99,6 +99,11 @@ type scriptedControlPlane struct {
 	// drain verification answer.
 	progress     RemovalProgress
 	verification DrainVerification
+
+	// admission is what the removal admission answers, admitted when unset;
+	// admissionAbsent is a control plane that offers no such check.
+	admission       *RemovalAdmission
+	admissionAbsent bool
 }
 
 // aControlPlane reports one online node and nothing else.
@@ -161,6 +166,21 @@ func (c *scriptedControlPlane) asked(method string) int {
 func (c *scriptedControlPlane) record(method, argument string) error {
 	c.calls = append(c.calls, method+":"+argument)
 	return c.refuse[method]
+}
+
+func (c *scriptedControlPlane) RemovalAdmission(
+	_ context.Context, _, nodeID string,
+) (RemovalAdmission, bool, error) {
+	if err := c.record("RemovalAdmission", nodeID); err != nil {
+		return RemovalAdmission{}, false, err
+	}
+	if c.admissionAbsent {
+		return RemovalAdmission{}, false, nil
+	}
+	if c.admission == nil {
+		return RemovalAdmission{Admitted: true}, true, nil
+	}
+	return *c.admission, true, nil
 }
 
 func (c *scriptedControlPlane) StorageNode(
