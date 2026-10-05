@@ -110,8 +110,9 @@ const (
 
 // JournalManagerSpec tunes the journal managers on one storage node.
 type JournalManagerSpec struct {
-	// Count is the number of journal managers to configure.
-	// +kubebuilder:validation:Minimum=1
+	// Count is the number of journal managers to configure. The control plane
+	// requires at least 3.
+	// +kubebuilder:validation:Minimum=3
 	// +optional
 	Count *int32 `json:"count,omitempty"`
 
