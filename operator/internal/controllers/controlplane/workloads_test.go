@@ -426,15 +426,15 @@ func TestTheControlPlanesAccountKeepsTheGrantsItCannotWorkWithout(t *testing.T) 
 
 	want := map[string]bool{"pods/exec": false, "tokenreviews": false, "nodes": false}
 	for _, rule := range role.Rules {
-		for _, resource := range rule.Resources {
-			if _, tracked := want[resource]; tracked {
-				want[resource] = true
+		for _, name := range rule.Resources {
+			if _, tracked := want[name]; tracked {
+				want[name] = true
 			}
 		}
 	}
-	for resource, granted := range want {
+	for name, granted := range want {
 		if !granted {
-			t.Errorf("the control plane's role does not grant %s", resource)
+			t.Errorf("the control plane's role does not grant %s", name)
 		}
 	}
 }
