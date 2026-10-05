@@ -378,6 +378,11 @@ func refused(err error) bool {
 // drain from leaving a hundred objects behind. status.drain is the progress record
 // rather than the objects' presence, which is why the counter is written before
 // the delete rather than derived from a List (§8.4).
+//
+// Failed objects are kept until the step ends, because they are the memory of
+// where each subsystem could not go (retry.go). A failed move is replaced
+// rather than failing the drain: the volume is still on the node, and the peer
+// it could not reach is not the only peer.
 func (r *StorageNodeOpsReconciler) drainMigrate(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, clusterID, nodeID string,
 ) (bool, error) {
@@ -388,12 +393,11 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 		return false, err
 	}
 
-	// A failed migration is deleted and replaced against a fresh target, rather
-	// than failing the drain: the volume is still on the node, and another peer
-	// may take it.
-	if retried, err := r.retryFailedMigrations(ctx, ops, migrations); err != nil {
+	// An aborted move was called off rather than failed, so it is re-issued
+	// and blames nobody.
+	if reissued, err := r.reissueAbortedMigrations(ctx, ops, migrations); err != nil {
 		return false, err
-	} else if retried > 0 {
+	} else if reissued > 0 {
 		return false, nil
 	}
 
@@ -406,64 +410,100 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 			"a volume's claim could not be read; the migration fan-out is retried")
 	}
 
-	// Every subsystem with a movable volume and no migration gets one. That
-	// covers the first pass, an object deleted out of band, and a volume that
-	// arrived on the node after the count was taken.
+	var live, failed []vmigration.Move
+	taken := make(map[string]struct{}, len(migrations))
+	for _, migration := range migrations {
+		taken[migration.Name] = struct{}{}
+		if migration.Phase == vmigration.MoveFailed {
+			failed = append(failed, migration)
+		} else {
+			live = append(live, migration)
+		}
+	}
+
+	// No movable volume is left and no migration is outstanding: everything that
+	// was going to move has moved. The census is the authority rather than the
+	// counter, because the counter is a record of what this operation did and the
+	// census is what is actually on the node. The failed moves have nothing left
+	// to remember, so they go with the step.
+	if len(census.Managed) == 0 && len(live) == 0 {
+		for _, migration := range failed {
+			if err := r.mover().Delete(ctx, migration); err != nil {
+				return false, fmt.Errorf("delete the failed migration %s: %w", migration.Name, err)
+			}
+		}
+		r.emit(ctx, ops, corev1.EventTypeNormal, DrainCompleted,
+			"Every volume has been migrated off the node")
+		return true, nil
+	}
+
+	// Every subsystem with a movable volume and no live migration gets one. That
+	// covers the first pass, a failed move, an object deleted out of band, and a
+	// volume that arrived on the node after the count was taken.
 	//
-	// A move carries its whole subsystem, so a subsystem is covered by a move
-	// named after any of its volumes. The control plane moves the members'
+	// A move carries its whole subsystem, so a subsystem is covered by a live
+	// move named after any of its volumes. The control plane moves the members'
 	// records to the target one at a time during a cutover, so the volume a
 	// move is named by can have left the node while a sibling is still reported
 	// on it; the subsystem is what says the sibling is already being moved.
-	existing := make(map[string]struct{}, len(migrations))
-	covered := make(map[string]struct{}, len(migrations))
-	for i := range migrations {
-		existing[migrations[i].Name] = struct{}{}
-		if nqn := census.subsystemOf(migrations[i].PVName); nqn != "" {
-			covered[nqn] = struct{}{}
-		}
+	covered := make(map[string]struct{}, len(live))
+	coveredVolumes := make(map[string]struct{}, len(live))
+	for _, migration := range live {
+		covered[subsystemKey(census.subsystemOf(migration.PVName), migration.PVName)] = struct{}{}
+		coveredVolumes[migration.PVName] = struct{}{}
 	}
 	var missing []managedVolume
 	for _, move := range subsystemMoves(census.Managed) {
-		if _, ok := existing[migrationName(nodeID, move.PVName)]; ok {
+		if _, ok := covered[subsystemKey(move.NQN, move.PVName)]; ok {
 			continue
 		}
-		if _, ok := covered[move.NQN]; ok && move.NQN != "" {
+		if _, ok := coveredVolumes[move.PVName]; ok {
 			continue
 		}
 		missing = append(missing, move)
 	}
 
 	if len(missing) > 0 {
-		targets, err := r.peerTargets(ctx, clusterID, nodeID, missing)
+		histories := failureHistories(census, failed)
+		ruledOut := make(map[string][]string, len(missing))
+		for _, move := range missing {
+			if history := histories[subsystemKey(move.NQN, move.PVName)]; history != nil {
+				ruledOut[move.PVName] = history.ruledOut
+			}
+		}
+		targets, err := r.peerTargets(ctx, clusterID, nodeID, missing, ruledOut)
 		if err != nil {
 			return false, err
 		}
-		for _, volume := range missing {
-			if err := r.createMigration(ctx, ops, nodeID, volume, targets[volume.PVName]); err != nil {
+		for _, move := range missing {
+			attempt := 0
+			history := histories[subsystemKey(move.NQN, move.PVName)]
+			if history != nil {
+				attempt = history.attempts
+			}
+			name := retryName(nodeID, move.PVName, attempt, taken)
+			target := targets[move.PVName]
+			if err := r.createMigration(ctx, ops, name, nodeID, move, target); err != nil {
 				log.Error(err, "a volume's migration could not be created",
-					"volume", volume.VolumeUUID, "persistentVolume", volume.PVName)
+					"volume", move.VolumeUUID, "persistentVolume", move.PVName)
+				continue
+			}
+			if history != nil {
+				r.emit(ctx, ops, corev1.EventTypeWarning, MigrationRetried, fmt.Sprintf(
+					"The migration of %s failed %d %s, last on node %s (%s); it is retried against node %s",
+					move.PVName, history.attempts, plural(history.attempts, "time", "times"),
+					history.last.TargetNodeUUID, history.last.Message, target))
 			}
 		}
 		return false, nil
 	}
 
-	// No movable volume is left and no migration is outstanding: everything that
-	// was going to move has moved. The census is the authority rather than the
-	// counter, because the counter is a record of what this operation did and the
-	// census is what is actually on the node.
-	if len(census.Managed) == 0 && len(migrations) == 0 {
-		r.emit(ctx, ops, corev1.EventTypeNormal, DrainCompleted,
-			"Every volume has been migrated off the node")
-		return true, nil
-	}
-
 	// Progress is counted in volumes. A move carries every volume of its
 	// subsystem, and one that has not reported how many carried one.
 	completed, running := 0, 0
-	for i := range migrations {
-		if migrations[i].Phase == vmigration.MoveSucceeded {
-			completed += max(migrations[i].Members, 1)
+	for _, migration := range live {
+		if migration.Phase == vmigration.MoveSucceeded {
+			completed += max(migration.Members, 1)
 		} else {
 			running++
 		}
@@ -473,16 +513,17 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 		return false, r.recordDrainProgress(ctx, ops, completed)
 	}
 
-	// Every migration finished. The counter is written before the objects go, so
-	// a crash between the two leaves the progress recorded rather than lost.
+	// Every live migration finished. The counter is written before the objects
+	// go, so a crash between the two leaves the progress recorded rather than
+	// lost.
 	if err := r.recordDrainProgress(ctx, ops, completed); err != nil {
 		return false, err
 	}
 	drainVolumesMigratedTotal.WithLabelValues(r.clusterLabel(ctx, ops)).Add(float64(completed))
-	for i := range migrations {
-		if err := r.mover().Delete(ctx, migrations[i]); err != nil {
+	for _, migration := range live {
+		if err := r.mover().Delete(ctx, migration); err != nil {
 			log.Error(err, "a completed migration could not be deleted",
-				"migration", migrations[i].Name)
+				"migration", migration.Name)
 		}
 	}
 	return false, nil
@@ -749,12 +790,12 @@ func (r *StorageNodeOpsReconciler) migrationsOf(
 func (r *StorageNodeOpsReconciler) createMigration(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.StorageNodeOps,
-	nodeID string,
+	name, nodeID string,
 	volume managedVolume,
 	target string,
 ) error {
 	return r.mover().Start(ctx, vmigration.MoveRequest{
-		Name:           migrationName(nodeID, volume.PVName),
+		Name:           name,
 		Namespace:      ops.Namespace,
 		PVName:         volume.PVName,
 		TargetNodeUUID: target,
@@ -774,32 +815,32 @@ func (r *StorageNodeOpsReconciler) mover() vmigration.Mover {
 	return vmigration.NewMover(r.Client, r.Scheme, false)
 }
 
-// retryFailedMigrations deletes every migration that failed and reports how many,
-// so the caller's next pass recreates them against a fresh round-robin target.
+// reissueAbortedMigrations deletes every migration that was aborted and reports
+// how many, so the caller's next pass raises each again.
 //
-// Retrying rather than failing the drain is the design: the volume is still on the
-// node, and the peer it could not reach is not the only peer.
-func (r *StorageNodeOpsReconciler) retryFailedMigrations(
+// An abort is a decision rather than a verdict on the target: somebody set
+// spec.abort, or the move was called off from elsewhere. So the move is deleted
+// rather than kept as a failure, and its target is not ruled out.
+func (r *StorageNodeOpsReconciler) reissueAbortedMigrations(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.StorageNodeOps,
 	migrations []vmigration.Move,
 ) (int, error) {
-	retried := 0
-	for i := range migrations {
-		migration := migrations[i]
-		if migration.Phase != vmigration.MoveFailed {
+	reissued := 0
+	for _, migration := range migrations {
+		if migration.Phase != vmigration.MoveAborted {
 			continue
 		}
-		r.emit(ctx, ops, corev1.EventTypeWarning, MigrationRetried, fmt.Sprintf(
-			"The migration of %s failed and is being retried against another peer: %s",
-			migration.PVName, migration.Message))
+		r.emit(ctx, ops, corev1.EventTypeNormal, MigrationRetried, fmt.Sprintf(
+			"The migration of %s was aborted and is re-issued; node %s is not ruled out for it",
+			migration.PVName, migration.TargetNodeUUID))
 		if err := r.mover().Delete(ctx, migration); err != nil {
-			return retried, fmt.Errorf("delete the failed migration of %s: %w",
+			return reissued, fmt.Errorf("delete the aborted migration of %s: %w",
 				migration.PVName, err)
 		}
-		retried++
+		reissued++
 	}
-	return retried, nil
+	return reissued, nil
 }
 
 // cascadeMigrations aborts the fan-out of a drain that is being deleted and

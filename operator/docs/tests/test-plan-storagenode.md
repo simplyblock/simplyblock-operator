@@ -551,6 +551,7 @@ Files: `operator/internal/controllers/node/drain_test.go`, `peertargets_test.go`
 ### Operation: The Fan-Out (design §8.4)
 
 Files: `operator/internal/controllers/node/drain_test.go`, `remove_fanout_test.go`, `subsystem_drain_test.go`,
+`drain_retry_test.go`,
 `operator/internal/volumemigration/mover_test.go`
 
 | #     | Scenario                                                                                                                     | Type       | Test                                                      |
@@ -559,7 +560,7 @@ Files: `operator/internal/controllers/node/drain_test.go`, `remove_fanout_test.g
 | U-171 | Two long volume names sharing a prefix produce distinct migration names                                                      | Boundary   | —                                                         |
 | U-172 | An operator restart mid-drain does not recreate existing migration objects                                                   | Negative   | `TestAVolumeAlreadyMovingIsNotGivenASecondMove`           |
 | U-173 | A completed migration is deleted and the counter is written first                                                            | Positive   | `TestFinishedMovesAreRecordedAndThenReaped`               |
-| U-174 | A failed migration is deleted and replaced against a fresh target                                                            | Positive   | `TestAFailedMoveIsRetriedRatherThanFailingTheDrain`       |
+| U-174 | A failed migration is kept as the record and replaced under a name of its own                                                | Positive   | `TestAFailedMoveIsRetriedRatherThanFailingTheDrain`       |
 | U-175 | A migration deleted out of band is recreated rather than counted as complete                                                 | Negative   | `TestEveryMovableVolumeIsGivenAMove`                      |
 | U-176 | Every migration carries `spec.creatorRef` with the operation's UID                                                           | Positive   | `TestTheFanOutRecordsItsCreatorWithoutOwningTheOperation` |
 | U-177 | The same volume name in two namespaces produces two distinct objects                                                         | Boundary   | —                                                         |
@@ -574,6 +575,14 @@ Files: `operator/internal/controllers/node/drain_test.go`, `remove_fanout_test.g
 | U-482 | Mid-cutover, a sibling still reported on the node is covered by its subsystem's move and gets no second one                  | Regression | `TestASubsystemMidCutoverIsNotGivenASecondMove`           |
 | U-483 | A finished move counts every volume of its subsystem toward `status.drain.volumesMigrated`                                   | Regression | `TestAFinishedSubsystemMoveCountsEveryVolumeItCarried`    |
 | U-484 | A move reports how many volumes it carries, whichever kind carries it                                                        | Regression | `TestAMoveSaysHowManyVolumesItCarries`                    |
+| U-485 | A failed move's replacement avoids a target the failure involved (2026-10-05-drain-target-memory)                            | Regression | `TestAFailedMovesReplacementAvoidsTheTargetItFailedOn`    |
+| U-486 | A refusal naming the target rules it out, though no migration was created                                                    | Regression | `TestARefusalNamingTheTargetBurnsIt`                      |
+| U-487 | Two failures that never involved the target leave it eligible                                                                | Boundary   | `TestAnUnattributedFailureDoesNotRuleOutItsTarget`        |
+| U-488 | A third failure that never involved the target rules it out                                                                  | Regression | `TestAThirdUnattributedFailureRulesOutItsTarget`          |
+| U-489 | An aborted move is re-issued, and its target is not ruled out                                                                | Regression | `TestAnAbortedMoveIsReissuedWithoutBlamingItsTarget`      |
+| U-490 | Every eligible peer ruled out: the drain holds with `NoMigrationTarget`, naming the targets tried                            | Regression | `TestADrainWithEveryPeerRuledOutHoldsAndNamesThem`        |
+| U-491 | The failed moves are reaped on the pass that finds the node holding nothing movable                                          | Regression | `TestFailedMovesAreReapedWhenTheNodeHoldsNothingMovable`  |
+| U-492 | A move reports the target it was headed for and whether the control plane accepted it, for either kind                       | Regression | `TestAMoveSaysWhereItWasHeadedAndWhetherItGotThere`       |
 
 ### Operation: The Migrate Graph (design §9)
 
@@ -980,18 +989,18 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 397       | 292     | 105         |
+| Unit        | 405       | 300     | 105         |
 | Integration | 54        | 0       | 54          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **482**   | **292** | **190**     |
+| **Total**   | **490**   | **300** | **190**     |
 
 Eight further scenarios are struck through: they describe a system this one no
 longer is, and each names the row that replaced it. They are excluded from the
 counts.
 
-Two hundred and twelve distinct test functions cover the two hundred and ninety-two
-covered scenarios, because a table-driven test satisfies one identifier per
+Two hundred and twenty distinct test functions cover the three hundred covered
+scenarios, because a table-driven test satisfies one identifier per
 subtest and several rows are two halves of one assertion.
 
 Every covered scenario is a unit test, and the concentration is the shape of the

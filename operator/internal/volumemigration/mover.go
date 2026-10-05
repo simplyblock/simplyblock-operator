@@ -75,6 +75,14 @@ type Move struct {
 	// the named one's NVMe-oF subsystem, because the control plane migrates a
 	// subsystem as a whole. Zero means the move has not learned it yet.
 	Members int
+	// TargetNodeUUID is the backend identifier of the node the move is
+	// headed for, which a caller that retries a failed move needs in order not
+	// to send the retry to the same place.
+	TargetNodeUUID string
+	// Engaged says the control plane accepted the move's migration, so a
+	// failure from there on happened with the target taking part rather than
+	// before it was ever asked.
+	Engaged bool
 }
 
 // MoveRequest is one volume's move, as a caller asks for it.
@@ -223,6 +231,9 @@ func migrationMove(migration *simplyblockv1alpha1.VolumeMigration) Move {
 		Phase:     phase,
 		Message:   migration.Status.ErrorMessage,
 		Members:   migration.Status.MemberCount,
+
+		TargetNodeUUID: migration.Spec.TargetNodeUUID,
+		Engaged:        migration.Status.MigrationUUID != "",
 	}
 }
 
@@ -245,7 +256,9 @@ func (m *OperationMover) Start(ctx context.Context, request MoveRequest) error {
 		return err
 	}
 
-	labels := map[string]string{}
+	labels := map[string]string{
+		simplyblockv1alpha2.PersistentVolumeOpsTargetNodeLabel: request.TargetNodeUUID,
+	}
 	for key, value := range request.Labels {
 		labels[key] = value
 	}
@@ -351,17 +364,23 @@ func operationMove(ops *simplyblockv1alpha2.PersistentVolumeOps) Move {
 	case simplyblockv1alpha2.PersistentVolumeOpsPhaseRunning:
 		phase = MoveRunning
 	}
-	members := 0
-	if recorded := ops.Status.Migration; recorded != nil && recorded.MemberCount != nil {
-		members = int(*recorded.MemberCount)
+	move := Move{
+		Name:           ops.Name,
+		PVName:         ops.Spec.PersistentVolumeName,
+		Phase:          phase,
+		Message:        ops.Status.Message,
+		TargetNodeUUID: ops.Labels[simplyblockv1alpha2.PersistentVolumeOpsTargetNodeLabel],
 	}
-	return Move{
-		Name:    ops.Name,
-		PVName:  ops.Spec.PersistentVolumeName,
-		Phase:   phase,
-		Message: ops.Status.Message,
-		Members: members,
+	if recorded := ops.Status.Migration; recorded != nil {
+		if recorded.MemberCount != nil {
+			move.Members = int(*recorded.MemberCount)
+		}
+		if recorded.TargetNodeUUID != "" {
+			move.TargetNodeUUID = recorded.TargetNodeUUID
+		}
+		move.Engaged = recorded.MigrationUUID != ""
 	}
+	return move
 }
 
 // NewMover builds the mover a deployment uses.

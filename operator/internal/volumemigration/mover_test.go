@@ -257,6 +257,47 @@ func TestAMoveSaysHowManyVolumesItCarries(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-05-drain-target-memory — a caller retrying a failed move
+// has to know where the move was headed and whether the control plane had
+// accepted it, or it sends the retry back to the node that just failed it.
+func TestAMoveSaysWhereItWasHeadedAndWhetherItGotThere(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("VolumeMigration", func(t *testing.T) {
+		existing := &simplyblockv1alpha1.VolumeMigration{
+			ObjectMeta: metav1.ObjectMeta{Name: "move-1", Namespace: testNamespace},
+			Spec:       simplyblockv1alpha1.VolumeMigrationSpec{PVName: movePVName, TargetNodeUUID: moveTargetID},
+			Status:     simplyblockv1alpha1.VolumeMigrationStatus{MigrationUUID: "migration-1"},
+		}
+		got, err := bothMovers(t, existing)["VolumeMigration"].Get(ctx, "move-1", testNamespace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.TargetNodeUUID != moveTargetID || !got.Engaged {
+			t.Errorf("move = %+v, want it headed for %s and engaged", got, moveTargetID)
+		}
+	})
+
+	t.Run("PersistentVolumeOps", func(t *testing.T) {
+		mover := bothMovers(t)["PersistentVolumeOps"]
+		if err := mover.Start(ctx, MoveRequest{
+			Name: "move-1", Namespace: testNamespace, PVName: movePVName, TargetNodeUUID: moveTargetID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := mover.Get(ctx, "move-1", testNamespace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.TargetNodeUUID != moveTargetID {
+			t.Errorf("a move not yet accepted reports target %q, want %s", got.TargetNodeUUID, moveTargetID)
+		}
+		if got.Engaged {
+			t.Error("a move the control plane never saw reports itself engaged")
+		}
+	})
+}
+
 // TestTheOperationNamesTheTargetAsAnObject. The redesigned kind takes a
 // StorageNode name rather than a backend UUID, so that a migration can be
 // written by hand without looking one up. The callers hold a UUID, so this is

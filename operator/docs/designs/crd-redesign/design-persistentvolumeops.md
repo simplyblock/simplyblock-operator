@@ -822,6 +822,13 @@ identifies: the label finds the operations some drain created and the UID in
 `spec.creatorRef` says which drain, which is the same division `pvc.spec.volumeName`
 and `pv.spec.claimRef.uid` have in core.
 
+**A second label carries the target's backend UUID.** The spec names the target
+as a `StorageNode` object, while the creator chose it by its UUID and reads it back
+when the operation fails. `storage.simplyblock.io/target-node` holds that UUID from
+the moment the operation is created, before `status.migration.targetNodeUUID` exists,
+so a creator retrying a failed move knows where it was headed without resolving the
+object again ([`design-storagenode.md`](design-storagenode.md) §8.4).
+
 **The cascade is the creator's finalizer, and it aborts before it deletes.**
 A `StorageNodeOps` being deleted sets `spec.abort` on every operation whose
 `creatorRef` matches it by UID, waits for each to reach a terminal phase, and deletes
