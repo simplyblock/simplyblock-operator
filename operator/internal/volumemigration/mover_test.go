@@ -222,6 +222,41 @@ func TestAMovesOutcomeReadsTheSameForEitherKind(t *testing.T) {
 	})
 }
 
+// Regression: 2026-10-05-drain-per-volume-moves — a move carries every volume
+// of its subsystem, and a caller counting progress in volumes has to read how
+// many from the move, whichever kind carries it.
+func TestAMoveSaysHowManyVolumesItCarries(t *testing.T) {
+	ctx := context.Background()
+	members := int32(3)
+	for name, existing := range map[string]client.Object{
+		"VolumeMigration": &simplyblockv1alpha1.VolumeMigration{
+			ObjectMeta: metav1.ObjectMeta{Name: "move-1", Namespace: testNamespace},
+			Spec:       simplyblockv1alpha1.VolumeMigrationSpec{PVName: movePVName},
+			Status:     simplyblockv1alpha1.VolumeMigrationStatus{MemberCount: 3},
+		},
+		"PersistentVolumeOps": &simplyblockv1alpha2.PersistentVolumeOps{
+			ObjectMeta: metav1.ObjectMeta{Name: "move-1"},
+			Spec: simplyblockv1alpha2.PersistentVolumeOpsSpec{
+				PersistentVolumeName: movePVName,
+				Action:               simplyblockv1alpha2.PersistentVolumeOpsActionMigrate,
+			},
+			Status: simplyblockv1alpha2.PersistentVolumeOpsStatus{
+				Migration: &simplyblockv1alpha2.MigrationStatus{MemberCount: &members},
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := bothMovers(t, existing)[name].Get(ctx, "move-1", testNamespace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Members != 3 {
+				t.Errorf("the move reports %d volumes, want the 3 its subsystem holds", got.Members)
+			}
+		})
+	}
+}
+
 // TestTheOperationNamesTheTargetAsAnObject. The redesigned kind takes a
 // StorageNode name rather than a backend UUID, so that a migration can be
 // written by hand without looking one up. The callers hold a UUID, so this is

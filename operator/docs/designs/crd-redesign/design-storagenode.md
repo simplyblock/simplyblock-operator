@@ -2,7 +2,7 @@
 
 **Status:** Implemented  
 **Authors:** Christoph Engelbert (noctarius), Israel Geoffrey (`StorageNodeOps`)  
-**Date:** 2026-08-28 (last updated 2026-09-17)  
+**Date:** 2026-08-28 (last updated 2026-10-05)  
 **Supersedes:** `design-storagenodeset-storagenode.md` and `design-node-removal-draining.md`, both removed in the same change  
 **Test Plan:** [`tests/test-plan-storagenode.md`](../../tests/test-plan-storagenode.md)
 
@@ -138,7 +138,7 @@ was.
   [`design-storagedevice.md`](design-storagedevice.md). This document keeps the
   `status.resources.devices` summary beside them (§3.3), which that document
   argues for rather than replaces.
-- **Not the volume migration.** The kind the drain fans out one per volume is
+- **Not the volume migration.** The kind the drain fans out one per subsystem is
   [`design-persistentvolumeops.md`](design-persistentvolumeops.md), and the
   migration algorithm it runs is
   [`design-auto-rebalancing.md`](../design-auto-rebalancing.md). This document
@@ -1660,7 +1660,7 @@ DELETE takes the node apart.
 | `Validating`       | None                                                                                                                             | No pinned and no unmanaged volumes remain                                    |
 | `ShuttingDown`     | `POST /storage-nodes/{node}/shutdown`, sent only to a node that is `online` or `suspended`                                       | The call returns 202, or the node is not running                             |
 | `MigratingDevices` | `POST /storage-nodes/{node}/prepare-removal` once the node is `offline`, and again on every pass from `migrating_devices` on     | `GET /storage-nodes/{node}/prepare-removal` reports `done`                   |
-| `MigratingVolumes` | One `PersistentVolumeOps` per PV-managed volume, to peers chosen round-robin                                                     | Every migration is `Succeeded`                                               |
+| `MigratingVolumes` | One `PersistentVolumeOps` per NVMe-oF subsystem of the PV-managed volumes, to peers chosen round-robin                           | Every migration is `Succeeded`                                               |
 | `Verifying`        | Deletes any remaining system volumes, then `POST /storage-nodes/{node}/verify-drained`                                           | The node reports no volumes, and `verify-drained` reports it drained         |
 | `Removing`         | `DELETE /storage-nodes/{node}?force_remove=false`, skipped once the node is `in_removal` or later, and while it is `in_shutdown` | The call returns 200, 204, or 404, or the node reports `in_removal` or later |
 | `AwaitingRemoval`  | None                                                                                                                             | The node reports `removed`, or 404                                           |
@@ -1708,8 +1708,19 @@ budget, because the control plane can fail the shutdown without saying so. The
 attempts are counted in `status.removal.prepareAttempts` before each is sent, and
 after three the operation fails with the control plane's message.
 
+**The fan-out is one move per NVMe-oF subsystem.** The control plane migrates a
+subsystem as a whole, so the PV-managed volumes published under one subsystem leave
+the node at the one cutover, and the drain raises one `PersistentVolumeOps` for all
+of them. The move is named by the subsystem's lexicographically first volume, which
+keeps its name stable across passes. A subsystem is covered by a move named after
+any of its volumes, including one that has already left the node: the control plane
+moves the members' records to the target one at a time during a cutover, so a
+sibling can still be reported on the node while its subsystem's move runs. Progress
+in `status.drain` is counted in volumes, from the member count each move records. A
+volume the control plane reports under no subsystem is a move of its own.
+
 **Migration targets are chosen round-robin over the online peers that hold none
-of the volume's replicas.** The control plane lists a volume's replica nodes, and
+of the replicas of any volume in the subsystem.** The control plane lists a volume's replica nodes, and
 a node already holding one is never a target: the control plane refuses the
 move, and while the volume's primary is shut down for its removal that replica is
 what serves the volume. Round-robin over the rest spreads the drained node's
@@ -1798,7 +1809,7 @@ operation can be deleted while it runs.
 
 ### 8.4 PersistentVolumeOps lifecycle
 
-The operation raises one `PersistentVolumeOps` per volume, and tracks the fan-out
+The operation raises one `PersistentVolumeOps` per subsystem (§8.2), and tracks the fan-out
 by `spec.creatorRef` and the `storage.simplyblock.io/managed-by` label rather than
 by an owner reference, which the kind's cluster scope forbids
 ([`design-crd-model.md`](design-crd-model.md) §3). The label is what a watch maps

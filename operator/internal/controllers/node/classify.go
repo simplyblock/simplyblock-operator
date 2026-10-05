@@ -71,6 +71,21 @@ type volumeCensus struct {
 	// and this flag is what stops the drain acting on a census it knows is a
 	// transient false positive.
 	Incomplete bool
+
+	// subsystems is the NVMe-oF subsystem of every PersistentVolume of the
+	// cluster, on this node or not, keyed by the PersistentVolume's name. A
+	// move is named by one volume and carries its whole subsystem, and the
+	// volume it is named by may already have left the node mid-cutover while
+	// a sibling is still reported on it: the subsystem is how the sibling is
+	// known to be covered.
+	subsystems map[string]string
+}
+
+// subsystemOf is the subsystem a PersistentVolume's volume is published under,
+// and the empty string when the control plane reports none or no longer
+// reports the volume.
+func (c volumeCensus) subsystemOf(pvName string) string {
+	return c.subsystems[pvName]
 }
 
 // managedVolume is one movable volume and the PersistentVolume that accounts for
@@ -78,6 +93,10 @@ type volumeCensus struct {
 type managedVolume struct {
 	VolumeUUID string
 	PVName     string
+
+	// NQN is the subsystem the volume is published under. The volumes of one
+	// subsystem move together, so the drain raises one move for all of them.
+	NQN string
 
 	// ReplicaNodes are the nodes holding the volume's replicas, the node being
 	// drained included. None of them is a target: the control plane refuses a
@@ -118,13 +137,16 @@ func (r *StorageNodeOpsReconciler) classify(
 		return volumeCensus{}, err
 	}
 
-	var census volumeCensus
+	census := volumeCensus{subsystems: map[string]string{}}
 	for _, pool := range pools {
 		volumes, err := r.API.PoolVolumes(ctx, clusterID, pool.UUID)
 		if err != nil {
 			return volumeCensus{}, fmt.Errorf("list the volumes of pool %s: %w", pool.UUID, err)
 		}
 		for _, volume := range volumes {
+			if pv, accounted := byVolumeUUID[volume.UUID]; accounted && volume.NQN != "" {
+				census.subsystems[pv.Name] = volume.NQN
+			}
 			if volume.PrimaryNodeUUID != nodeID || volume.Status == volumeStatusInDeletion {
 				continue
 			}
@@ -163,8 +185,9 @@ func (r *StorageNodeOpsReconciler) sortVolume(
 	// A PersistentVolume with no claim cannot be pinned, because the annotation
 	// lives on the claim. It is movable.
 	if pv.Spec.ClaimRef == nil {
-		census.Managed = append(census.Managed,
-			managedVolume{VolumeUUID: volume.UUID, PVName: pv.Name, ReplicaNodes: replicaNodes(volume)})
+		census.Managed = append(census.Managed, managedVolume{
+			VolumeUUID: volume.UUID, PVName: pv.Name, NQN: volume.NQN, ReplicaNodes: replicaNodes(volume),
+		})
 		return
 	}
 
@@ -189,8 +212,9 @@ func (r *StorageNodeOpsReconciler) sortVolume(
 		census.Pinned = append(census.Pinned, volume.UUID)
 		return
 	}
-	census.Managed = append(census.Managed,
-		managedVolume{VolumeUUID: volume.UUID, PVName: pv.Name, ReplicaNodes: replicaNodes(volume)})
+	census.Managed = append(census.Managed, managedVolume{
+		VolumeUUID: volume.UUID, PVName: pv.Name, NQN: volume.NQN, ReplicaNodes: replicaNodes(volume),
+	})
 }
 
 // persistentVolumesByVolumeUUID indexes every simplyblock PersistentVolume in the
@@ -349,3 +373,43 @@ func (r *StorageNodeOpsReconciler) clusterNodes(
 // in this package is per cluster, so the scope is the cluster's UUID and nothing
 // else.
 func scopeOf(clusterID string) cpinformer.Scope { return cpinformer.Scope{clusterID} }
+
+// subsystemMoves folds the movable volumes into one move per NVMe-oF subsystem,
+// sorted by the name each move is given.
+//
+// The control plane migrates a subsystem rather than a volume inside it, so
+// every volume of one subsystem leaves the node at the one cutover. Each move
+// is named by its subsystem's lexicographically first volume, which is stable
+// across passes for as long as that volume is on the node, and it may hold none
+// of any member's replicas: every member lands on the target. A volume the
+// control plane reports under no subsystem is a move of its own.
+func subsystemMoves(volumes []managedVolume) []managedVolume {
+	groups := map[string]*managedVolume{}
+	for _, volume := range volumes {
+		key := volume.NQN
+		if key == "" {
+			key = "pv:" + volume.PVName
+		}
+		group, seen := groups[key]
+		if !seen {
+			first := volume
+			first.ReplicaNodes = slices.Clone(volume.ReplicaNodes)
+			groups[key] = &first
+			continue
+		}
+		if volume.PVName < group.PVName {
+			group.PVName, group.VolumeUUID = volume.PVName, volume.VolumeUUID
+		}
+		for _, node := range volume.ReplicaNodes {
+			if !slices.Contains(group.ReplicaNodes, node) {
+				group.ReplicaNodes = append(group.ReplicaNodes, node)
+			}
+		}
+	}
+	out := make([]managedVolume, 0, len(groups))
+	for _, group := range groups {
+		out = append(out, *group)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].PVName < out[j].PVName })
+	return out
+}
