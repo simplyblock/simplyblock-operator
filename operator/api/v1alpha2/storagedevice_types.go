@@ -64,7 +64,7 @@ const (
 // are deliberately distinct: a degraded device is serving and should not be,
 // while a failed one is not serving and the cluster is running with less
 // redundancy than it thinks until it is replaced.
-// +kubebuilder:validation:Enum=Online;Degraded;Unknown;Removed;Failed
+// +kubebuilder:validation:Enum=Online;Degraded;Unknown;Removed;Failed;Migrated
 type StorageDevicePhase string
 
 const (
@@ -76,6 +76,11 @@ const (
 	StorageDevicePhaseUnknown StorageDevicePhase = "Unknown"
 	StorageDevicePhaseRemoved StorageDevicePhase = "Removed"
 	StorageDevicePhaseFailed  StorageDevicePhase = "Failed"
+	// StorageDevicePhaseMigrated is a device taken out of service whose data the
+	// control plane has rebuilt onto the node's peers, so the cluster carries no
+	// less redundancy for it. It is where the devices of a removed node end up,
+	// and like Failed and Removed it is terminal.
+	StorageDevicePhaseMigrated StorageDevicePhase = "Migrated"
 )
 
 // StorageDeviceRole is what the device carries. It is decided when the node is

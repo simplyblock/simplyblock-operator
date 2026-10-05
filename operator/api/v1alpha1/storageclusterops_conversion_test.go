@@ -263,3 +263,39 @@ func TestStorageClusterOpsRoundTripsThroughTheHub(t *testing.T) {
 		t.Errorf("round trip changed the object (-before +after):\n%s", diff)
 	}
 }
+
+// Regression: 2026-10-06-rolling-restart-reports-skips-as-restarts — the walk's
+// record of skipped nodes is a hub field this version has nowhere to put, and
+// it survives a write through this version unchanged.
+func TestTheSkippedNodesSurviveAWriteThroughThisVersion(t *testing.T) {
+	hub := &v1alpha2.StorageClusterOps{
+		ObjectMeta: metav1.ObjectMeta{Name: "ops-1", Namespace: "sb"},
+		Spec: v1alpha2.StorageClusterOpsSpec{
+			ClusterRef: "production",
+			Action:     v1alpha2.StorageClusterOpsActionRollingRestart,
+		},
+		Status: v1alpha2.StorageClusterOpsStatus{
+			Phase: v1alpha2.StorageClusterOpsPhaseSucceeded,
+			RollingRestart: &v1alpha2.RollingRestartStatus{
+				Nodes:     []string{"node-a", "node-b", "node-c"},
+				NodeIndex: 3,
+				Skipped:   []string{"node-b"},
+			},
+		},
+	}
+
+	var stored StorageClusterOps
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StorageClusterOps
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+	if diff := cmp.Diff(hub.Status.RollingRestart, back.Status.RollingRestart); diff != "" {
+		t.Errorf("the walk changed on the way through this version (-written +read):\n%s", diff)
+	}
+	if len(back.Annotations) != 0 {
+		t.Errorf("annotations %v were left behind on the way up", back.Annotations)
+	}
+}

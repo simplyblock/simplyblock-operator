@@ -58,6 +58,7 @@ const (
 	ClusterDTOStatusDegraded     ClusterDTOStatus = "degraded"
 	ClusterDTOStatusInActivation ClusterDTOStatus = "in_activation"
 	ClusterDTOStatusInExpansion  ClusterDTOStatus = "in_expansion"
+	ClusterDTOStatusInShrink     ClusterDTOStatus = "in_shrink"
 	ClusterDTOStatusInactive     ClusterDTOStatus = "inactive"
 	ClusterDTOStatusReadOnly     ClusterDTOStatus = "read_only"
 	ClusterDTOStatusSuspended    ClusterDTOStatus = "suspended"
@@ -74,6 +75,8 @@ func (e ClusterDTOStatus) Valid() bool {
 	case ClusterDTOStatusInActivation:
 		return true
 	case ClusterDTOStatusInExpansion:
+		return true
+	case ClusterDTOStatusInShrink:
 		return true
 	case ClusterDTOStatusInactive:
 		return true
@@ -730,6 +733,27 @@ func (e ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPostParamsRe
 	}
 }
 
+// Defines values for ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat.
+const (
+	ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormatEmpty      ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat = "empty"
+	ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormatFull       ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat = "full"
+	ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormatIdentifier ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat = "identifier"
+)
+
+// Valid indicates whether the value is a known member of the ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat enum.
+func (e ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat) Valid() bool {
+	switch e {
+	case ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormatEmpty:
+		return true
+	case ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormatFull:
+		return true
+	case ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormatIdentifier:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPostParamsResponseFormat.
 const (
 	ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPostParamsResponseFormatEmpty      ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPostParamsResponseFormat = "empty"
@@ -1163,7 +1187,7 @@ type ConsistencyGroupMemberJoinDTO struct {
 type DeviceDTO struct {
 	BdevType           *string            `json:"bdev_type,omitempty"`
 	Capacity           CapacityStatDTO    `json:"capacity"`
-	ClusterDeviceOrder int                `json:"cluster_device_order"`
+	ClusterDeviceOrder *int               `json:"cluster_device_order"`
 	ClusterId          openapi_types.UUID `json:"cluster_id"`
 	DevicePath         *string            `json:"device_path,omitempty"`
 	HealthCheck        *bool              `json:"health_check"`
@@ -1954,6 +1978,12 @@ type ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity string
 // ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus defines parameters for ClustersAlertsListApiV2ClustersClusterIdAlertsGet.
 type ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus string
 
+// ClustersBackupsListApiV2ClustersClusterIdBackupsGetParams defines parameters for ClustersBackupsListApiV2ClustersClusterIdBackupsGet.
+type ClustersBackupsListApiV2ClustersClusterIdBackupsGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
+}
+
 // ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParams defines parameters for ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost.
 type ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParams struct {
 	ResponseFormat *ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormat `form:"response-format,omitempty" json:"response-format,omitempty"`
@@ -1961,6 +1991,12 @@ type ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParams struct {
 
 // ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormat defines parameters for ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost.
 type ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormat string
+
+// ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetParams defines parameters for ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet.
+type ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
+}
 
 // ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetParams defines parameters for ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet.
 type ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetParams struct {
@@ -2073,6 +2109,14 @@ type ClustersStorageNodesDevicesIostatsApiV2ClustersClusterIdStorageNodesStorage
 type ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePostParams struct {
 	Force *bool `form:"force,omitempty" json:"force,omitempty"`
 }
+
+// ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParams defines parameters for ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost.
+type ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParams struct {
+	ResponseFormat *ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat `form:"response-format,omitempty" json:"response-format,omitempty"`
+}
+
+// ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat defines parameters for ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost.
+type ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat string
 
 // ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPostParams defines parameters for ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPost.
 type ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPostParams struct {
@@ -2665,13 +2709,13 @@ type ServerInterface interface {
 	ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
 	// ClustersBackupsListApiV2ClustersClusterIdBackupsGet Clusters:Backups:List
 	// (GET /api/v2/clusters/{cluster_id}/backups/)
-	ClustersBackupsListApiV2ClustersClusterIdBackupsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	ClustersBackupsListApiV2ClustersClusterIdBackupsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersBackupsListApiV2ClustersClusterIdBackupsGetParams)
 	// ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost Clusters:Backups:Create
 	// (POST /api/v2/clusters/{cluster_id}/backups/)
 	ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParams)
 	// ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet Clusters:Backup-Policies:List
 	// (GET /api/v2/clusters/{cluster_id}/backups/backup-policies/)
-	ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetParams)
 	// ClustersBackupPoliciesCreateApiV2ClustersClusterIdBackupsBackupPoliciesPost Clusters:Backup-Policies:Create
 	// (POST /api/v2/clusters/{cluster_id}/backups/backup-policies/)
 	ClustersBackupPoliciesCreateApiV2ClustersClusterIdBackupsBackupPoliciesPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
@@ -2806,6 +2850,9 @@ type ServerInterface interface {
 	// ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGet Clusters:Storage Nodes:Devices:Detail
 	// (GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/)
 	ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGetParams)
+	// ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost Clusters:Storage Nodes:Devices:Add
+	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/add)
+	ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID)
 	// ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet Clusters:Storage Nodes:Devices:Capacity
 	// (GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/capacity)
 	ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGetParams)
@@ -2821,6 +2868,9 @@ type ServerInterface interface {
 	// ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePost Clusters:Storage Nodes:Devices:Remove
 	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/remove)
 	ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePostParams)
+	// ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost Clusters:Storage Nodes:Devices:Replace
+	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/replace)
+	ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParams)
 	// ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPost Clusters:Storage Nodes:Devices:Reset
 	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/reset)
 	ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID)
@@ -3400,8 +3450,24 @@ func (siw *ServerInterfaceWrapper) ClustersBackupsListApiV2ClustersClusterIdBack
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersBackupsListApiV2ClustersClusterIdBackupsGetParams
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersBackupsListApiV2ClustersClusterIdBackupsGet(w, r, clusterId)
+		siw.Handler.ClustersBackupsListApiV2ClustersClusterIdBackupsGet(w, r, clusterId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3468,8 +3534,24 @@ func (siw *ServerInterfaceWrapper) ClustersBackupPoliciesListApiV2ClustersCluste
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetParams
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet(w, r, clusterId)
+		siw.Handler.ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet(w, r, clusterId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -5160,6 +5242,50 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesDetailApiV2Cluster
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "storage_node_id" -------------
+	var storageNodeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "storage_node_id", r.PathValue("storage_node_id"), &storageNodeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "storage_node_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "device_id" -------------
+	var deviceId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "device_id", r.PathValue("device_id"), &deviceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "device_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost(w, r, clusterId, storageNodeId, deviceId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet operation middleware
 func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet(w http.ResponseWriter, r *http.Request) {
 
@@ -5419,6 +5545,66 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesRemoveApiV2Cluster
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePost(w, r, clusterId, storageNodeId, deviceId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "storage_node_id" -------------
+	var storageNodeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "storage_node_id", r.PathValue("storage_node_id"), &storageNodeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "storage_node_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "device_id" -------------
+	var deviceId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "device_id", r.PathValue("device_id"), &deviceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "device_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParams
+
+	// ------------- Optional query parameter "response-format" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "response-format", r.URL.Query(), &params.ResponseFormat, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "response-format"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "response-format", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost(w, r, clusterId, storageNodeId, deviceId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -8365,11 +8551,13 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/capacity", wrapper.ClustersStorageNodesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdCapacityGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{$}", wrapper.ClustersStorageNodesDevicesListApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/{$}", wrapper.ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/add", wrapper.ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/capacity", wrapper.ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/fail", wrapper.ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-info", wrapper.ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/iostats", wrapper.ClustersStorageNodesDevicesIostatsApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdIostatsGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/remove", wrapper.ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/replace", wrapper.ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/reset", wrapper.ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/restart", wrapper.ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/iostats", wrapper.ClustersStorageNodesIostatsApiV2ClustersClusterIdStorageNodesStorageNodeIdIostatsGet)

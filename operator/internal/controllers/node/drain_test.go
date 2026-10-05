@@ -1,12 +1,11 @@
 // Draining a node before it leaves.
 //
 // Removing a storage node destroys it, so every logical volume whose data lives
-// on it has to be somewhere else first. The five steps are ordered around that
-// one fact: validation runs before the suspend, because suspending a node whose
-// drain cannot complete takes capacity out of the cluster and leaves it out for
-// as long as the blocker goes unnoticed; verification runs after the migration,
-// because the census is the authority on what is left rather than the counter of
-// what moved; and the removal is the last step rather than the operation.
+// on it has to be somewhere else first. The steps are ordered around that one
+// fact. Validation runs before prepare-removal, because there is no way back from
+// it. Verification runs after the migration, because the census is the authority
+// on what is left rather than the counter of what moved. The removal is the last
+// step rather than the operation.
 //
 // design-storagenode.md §8.
 
@@ -15,13 +14,19 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"strings"
 	"testing"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 // scriptedMover is the fan-out as a drain sees it: whatever moves the test says
@@ -70,7 +75,9 @@ func (m *scriptedMover) Delete(_ context.Context, move vmigration.Move) error {
 
 // aDrain is the operation these cases run.
 func aDrain() *simplyblockv1alpha2.StorageNodeOps {
-	return anOperation("a-drain", simplyblockv1alpha2.StorageNodeOpsActionRemove)
+	ops := anOperation("a-drain", simplyblockv1alpha2.StorageNodeOpsActionRemove)
+	ops.UID = aDrainUID
+	return ops
 }
 
 // aDraining builds the world, with the drain object already in it so that its
@@ -87,12 +94,12 @@ func aDraining(
 // A pinned claim stops the drain where nothing has been done yet, and says which
 // annotation to remove from which volume. Blocking here rather than later is
 // what leaves the node fully operational while somebody decides.
-func TestAPinnedVolumeStopsTheDrainBeforeItSuspendsAnything(t *testing.T) {
+func TestAPinnedVolumeStopsTheDrainBeforeItTouchesTheNode(t *testing.T) {
 	api := aControlPlane().holding(onNode("volume-1", "pvc-abc"))
 	r, _ := aDraining(t, api, &scriptedMover{},
 		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", true))
 
-	_, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepValidating)
+	_, err := performing(t, r, aDrain(), stepValidating)
 
 	var blocked *blockedStepError
 	if !errors.As(err, &blocked) {
@@ -101,8 +108,8 @@ func TestAPinnedVolumeStopsTheDrainBeforeItSuspendsAnything(t *testing.T) {
 	if blocked.reason != DrainBlocked {
 		t.Errorf("the hold is announced as %q, want %q", blocked.reason, DrainBlocked)
 	}
-	if asked := api.asked("Suspend"); asked != 0 {
-		t.Errorf("the node was suspended %d time(s) by a drain that cannot finish", asked)
+	if asked := api.asked("PrepareRemoval"); asked != 0 {
+		t.Errorf("prepare-removal was sent %d time(s) for a drain that cannot finish", asked)
 	}
 }
 
@@ -113,7 +120,7 @@ func TestAnUnmanagedVolumeStopsTheDrain(t *testing.T) {
 	api := aControlPlane().holding(onNode("volume-orphan", "hand-made"))
 	r, _ := aDraining(t, api, &scriptedMover{})
 
-	_, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepValidating)
+	_, err := performing(t, r, aDrain(), stepValidating)
 
 	var blocked *blockedStepError
 	if !errors.As(err, &blocked) {
@@ -130,7 +137,7 @@ func TestValidationWritesTheTotalTheDrainIsMeasuredAgainst(t *testing.T) {
 		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false),
 		aPersistentVolume("pv-2", "volume-2"), aClaim("pv-2", false))
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepValidating)
+	done, err := performing(t, r, aDrain(), stepValidating)
 	if err != nil {
 		t.Fatalf("validating: %v", err)
 	}
@@ -156,7 +163,7 @@ func TestAnIncompleteCensusIsRetriedRatherThanReportedAsABlocker(t *testing.T) {
 	r, _ := anOpsWorldWith(t, api, refusingClaims(),
 		aDrain(), aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false))
 
-	_, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepValidating)
+	_, err := performing(t, r, aDrain(), stepValidating)
 	if err == nil {
 		t.Fatal("the drain acted on a census it knows is incomplete")
 	}
@@ -166,43 +173,303 @@ func TestAnIncompleteCensusIsRetriedRatherThanReportedAsABlocker(t *testing.T) {
 	}
 }
 
-// The suspend is skipped against a node already at or past where it would put
-// it, which is what makes re-entering the step after a lost response harmless.
-func TestTheSuspendIsSkippedWhenTheNodeIsAlreadyOutOfService(t *testing.T) {
-	for _, status := range []string{nodeStatusSuspended, nodeStatusOffline} {
+// Regression: 2026-10-02-prepare-removal-shutdown-failed: prepare-removal shut
+// the node down inside its own request, timed out on the SPDK kill, reported the
+// shutdown failed although SPDK was gone, and left the node pending_removal with
+// no rebuild. The removal shuts the node down first through the node's own
+// shutdown, which runs in the background, and only a node still running gets it.
+func TestShuttingDownShutsARunningNodeDown(t *testing.T) {
+	for _, status := range []string{nodeStatusOnline, nodeStatusSuspended} {
 		t.Run(status, func(t *testing.T) {
 			api := aControlPlane().reporting(status)
 			r, _ := aDraining(t, api, &scriptedMover{})
 
-			done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepSuspending)
+			done, err := performing(t, r, aDrain(), stepShuttingDown)
 			if err != nil {
-				t.Fatalf("suspending: %v", err)
+				t.Fatalf("shutting down: %v", err)
 			}
 			if !done {
-				t.Errorf("the step did not finish against a node already %s", status)
+				t.Errorf("the step did not finish although the shutdown of a node %s was accepted",
+					status)
 			}
-			if asked := api.asked("Suspend"); asked != 0 {
-				t.Errorf("Suspend was issued %d time(s) against a node already %s", asked, status)
+			if asked := api.asked("ShutdownNode"); asked != 1 {
+				t.Errorf("ShutdownNode was issued %d time(s) against a node %s, want once", asked, status)
+			}
+			if asked := api.asked("PrepareRemoval"); asked != 0 {
+				t.Errorf("PrepareRemoval was issued %d time(s) before the node was down", asked)
 			}
 		})
 	}
 }
 
-// An online node is suspended, and the step does not finish on the call: it
-// finishes when the control plane reports the node suspended.
-func TestAnOnlineNodeIsSuspendedAndWaitedFor(t *testing.T) {
-	api := aControlPlane()
+// The shutdown is sent only to a node that is still running: one already
+// offline is not shut down again, one in_shutdown is under somebody else's
+// shutdown, and one in a removal status is past this step.
+func TestShuttingDownSendsNothingToANodeAlreadyOnItsWay(t *testing.T) {
+	for _, status := range []string{
+		nodeStatusOffline, nodeStatusInShutdown, nodeStatusPendingRemoval,
+		nodeStatusMigratingDevices, nodeStatusMigratingLvols,
+	} {
+		t.Run(status, func(t *testing.T) {
+			api := aControlPlane().reporting(status)
+			r, _ := aDraining(t, api, &scriptedMover{})
+
+			done, err := performing(t, r, aDrain(), stepShuttingDown)
+			if err != nil {
+				t.Fatalf("shutting down: %v", err)
+			}
+			if !done {
+				t.Errorf("the step did not finish against a node %s", status)
+			}
+			if asked := api.asked("ShutdownNode"); asked != 0 {
+				t.Errorf("ShutdownNode was issued %d time(s) against a node %s, want none",
+					asked, status)
+			}
+		})
+	}
+}
+
+// A refused shutdown changed nothing, and the node is still serving.
+func TestARefusedShutdownEndsTheDrain(t *testing.T) {
+	api := aControlPlane().refusing("ShutdownNode", &ControlPlaneError{
+		Status: http.StatusBadRequest, Body: `{"detail":"node is busy"}`,
+	})
 	r, _ := aDraining(t, api, &scriptedMover{})
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepSuspending)
+	_, err := performing(t, r, aDrain(), stepShuttingDown)
+
+	var fatal *terminalStepError
+	if !errors.As(err, &fatal) {
+		t.Errorf("err = %v, want the terminal kind for a refused shutdown", err)
+	}
+}
+
+// No answer is not a refusal, and the next pass reads the node.
+func TestAShutdownWithNoAnswerIsRetried(t *testing.T) {
+	api := aControlPlane().refusing("ShutdownNode",
+		fmt.Errorf("http error: %w", context.DeadlineExceeded))
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	done, err := performing(t, r, aDrain(), stepShuttingDown)
+
+	var fatal *terminalStepError
+	if errors.As(err, &fatal) || done {
+		t.Errorf("done, err = %t, %v; want a retry for a call the control plane never answered",
+			done, err)
+	}
+}
+
+// Regression: 2026-10-02-prepare-removal-shutdown-failed: once the node is down,
+// prepare-removal admits it and starts the rebuild, with no shutdown of its own
+// to run and nothing to block on.
+func TestMigratingDevicesPreparesTheRemovalOfAnOfflineNode(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusOffline)
+	api.progress = RemovalProgress{Total: 2, NodeStatus: nodeStatusOffline}
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	done, err := performing(t, r, aDrain(), stepMigratingDevices)
 	if err != nil {
-		t.Fatalf("suspending: %v", err)
+		t.Fatalf("migrating devices: %v", err)
 	}
 	if done {
-		t.Error("the step finished on the call rather than on the node reporting suspended")
+		t.Error("the step finished before the rebuild was done")
 	}
-	if asked := api.asked("Suspend"); asked != 1 {
-		t.Errorf("Suspend was issued %d time(s), want once", asked)
+	if asked := api.asked("PrepareRemoval"); asked != 1 {
+		t.Errorf("PrepareRemoval was issued %d time(s) for an offline node, want once", asked)
+	}
+}
+
+// A refused admission ends the removal. The node is left offline, which the
+// failure says, because nothing in a removal brings a node back.
+func TestARefusedAdmissionEndsTheDrainAndSaysTheNodeIsOffline(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusOffline).refusing("PrepareRemoval",
+		&ControlPlaneError{Status: http.StatusBadRequest, Body: `{"detail":"Can not remove node: FTT"}`})
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	_, err := performing(t, r, aDrain(), stepMigratingDevices)
+
+	var fatal *terminalStepError
+	if !errors.As(err, &fatal) {
+		t.Fatalf("err = %v, want the terminal kind for a refused admission", err)
+	}
+	for _, said := range []string{"FTT", "offline", "Restart"} {
+		if !strings.Contains(err.Error(), said) {
+			t.Errorf("err = %q, want it to say %q", err, said)
+		}
+	}
+}
+
+// A node still on its way down is waited on, and nothing is sent to it.
+func TestMigratingDevicesWaitsForTheShutdownToLand(t *testing.T) {
+	for _, status := range []string{nodeStatusOnline, nodeStatusSuspended, nodeStatusInShutdown} {
+		t.Run(status, func(t *testing.T) {
+			api := aControlPlane().reporting(status)
+			api.progress = RemovalProgress{Total: 2, NodeStatus: status}
+			r, _ := aDraining(t, api, &scriptedMover{})
+
+			done, err := performing(t, r, aDrain(), stepMigratingDevices)
+			if err != nil || done {
+				t.Fatalf("done, err = %t, %v; want a wait for the shutdown", done, err)
+			}
+			if asked := api.asked("PrepareRemoval") + api.asked("ShutdownNode"); asked != 0 {
+				t.Errorf("%d call(s) were sent to a node %s, want none", asked, status)
+			}
+		})
+	}
+}
+
+// A node still running long after its shutdown was accepted is one whose
+// shutdown the control plane dropped. Nothing has changed on the control plane's
+// side, so the removal fails with the node still serving.
+func TestANodeThatNeverWentDownEndsTheDrain(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusOnline)
+	api.progress = RemovalProgress{Total: 2, NodeStatus: nodeStatusOnline}
+	r, _, ops := aPendingDrain(t, api, &simplyblockv1alpha2.RemovalStatus{
+		NodeStatus: nodeStatusOnline, LastProgressTime: minutesAgo(20),
+	})
+
+	_, err := performing(t, r, ops, stepMigratingDevices)
+
+	var fatal *terminalStepError
+	if !errors.As(err, &fatal) {
+		t.Errorf("err = %v, want the terminal kind for a node that never went down", err)
+	}
+}
+
+// Regression: 2026-10-02-removal-three-steps: the device rebuild is the control
+// plane's, and the step finishes when the control plane says it has.
+func TestMigratingDevicesFinishesWhenTheRebuildIsDone(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingLvols)
+	api.progress = RemovalProgress{Done: true, Total: 2, Completed: 2,
+		NodeStatus: nodeStatusMigratingLvols}
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	done, err := performing(t, r, aDrain(), stepMigratingDevices)
+	if err != nil {
+		t.Fatalf("migrating devices: %v", err)
+	}
+	if !done {
+		t.Error("the step did not finish although the control plane reports the rebuild done")
+	}
+}
+
+// Regression: 2026-10-02-removal-three-steps: a rebuild still running is waited
+// on, and prepare-removal is sent again, which the control plane treats as a
+// no-op while the rebuild runs and as a restart of it when it has stopped.
+func TestMigratingDevicesWaitsAndKeepsTheRebuildRunning(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingDevices)
+	api.progress = RemovalProgress{Total: 2, Completed: 1, NodeStatus: nodeStatusMigratingDevices}
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	done, err := performing(t, r, aDrain(), stepMigratingDevices)
+	if err != nil {
+		t.Fatalf("migrating devices: %v", err)
+	}
+	if done {
+		t.Error("the step finished while the rebuild is still running")
+	}
+	if asked := api.asked("PrepareRemoval"); asked != 1 {
+		t.Errorf("PrepareRemoval was issued %d time(s), want once to keep the rebuild running", asked)
+	}
+}
+
+// Regression: 2026-10-02-removal-three-steps: the node is still on its way down,
+// and prepare-removal refuses to start the rebuild under a running shutdown.
+func TestMigratingDevicesSendsNothingWhileTheNodeShutsDown(t *testing.T) {
+	for _, status := range []string{nodeStatusPendingRemoval, nodeStatusInShutdown} {
+		t.Run(status, func(t *testing.T) {
+			api := aControlPlane().reporting(status)
+			api.progress = RemovalProgress{Total: 2, NodeStatus: status}
+			r, _ := aDraining(t, api, &scriptedMover{})
+
+			done, err := performing(t, r, aDrain(), stepMigratingDevices)
+			if err != nil {
+				t.Fatalf("migrating devices: %v", err)
+			}
+			if done {
+				t.Errorf("the step finished against a node %s", status)
+			}
+			if asked := api.asked("PrepareRemoval"); asked != 0 {
+				t.Errorf("PrepareRemoval was issued %d time(s) against a node %s, want none",
+					asked, status)
+			}
+		})
+	}
+}
+
+// Regression: 2026-10-02-removal-three-steps: a rebuild the control plane gave
+// up on is reported as a failure, and waiting longer cannot change it.
+func TestMigratingDevicesFailsWhenTheRebuildGivesUp(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusMigratingDevices)
+	api.progress = RemovalProgress{Total: 2, Completed: 1, Failed: 1,
+		Message: "device 2 stalled", NodeStatus: nodeStatusMigratingDevices}
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	_, err := performing(t, r, aDrain(), stepMigratingDevices)
+
+	var fatal *terminalStepError
+	if !errors.As(err, &fatal) {
+		t.Errorf("err = %v, want the terminal kind for a rebuild the control plane gave up on", err)
+	}
+}
+
+// replicatedOn is a volume on the node under operation whose replicas the control
+// plane reports on the given nodes as well, written as the control plane's URLs.
+func replicatedOn(uuid, name string, replicas ...string) webapi.VolumeInfo {
+	volume := onNode(uuid, name)
+	for _, node := range append([]string{opsNodeID}, replicas...) {
+		volume.Nodes = append(volume.Nodes,
+			"https://cp/api/v2/clusters/"+opsClusterID+"/storage-nodes/"+node+"/")
+	}
+	return volume
+}
+
+// Regression: 2026-10-02-migration-target-is-secondary: on ocp-simplyblock-ai the
+// drain chose worker-0 for LVOL_19, which was the volume's own secondary. The
+// control plane refused it with a 409 for as long as the drain retried, because
+// the peer chosen was the lowest UUID online with no regard to where the
+// volume's replicas are. A volume is never moved onto a node already holding
+// one of its replicas.
+func TestAVolumeIsNotMovedOntoItsOwnReplica(t *testing.T) {
+	api := aControlPlane().
+		withPeer(opsPeerID, nodeStatusOnline).
+		withPeer("node-3333", nodeStatusOnline).
+		holding(replicatedOn("volume-1", "pvc-abc", opsPeerID))
+	mover := &scriptedMover{}
+	r, _ := aDraining(t, api, mover,
+		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false))
+
+	if _, err := performing(t, r, aDrain(), stepMigratingVolumes); err != nil {
+		t.Fatalf("migrating: %v", err)
+	}
+	if len(mover.started) != 1 {
+		t.Fatalf("%d moves were raised for one movable volume", len(mover.started))
+	}
+	if target := mover.started[0].TargetNodeUUID; target != "node-3333" {
+		t.Errorf("the volume is being moved to %q, want node-3333, the one peer holding "+
+			"none of its replicas", target)
+	}
+}
+
+// Regression: 2026-10-02-migration-target-is-secondary: a volume whose replicas
+// cover every online peer has nowhere to go, which holds the drain as having no
+// target rather than raising a move the control plane refuses.
+func TestAVolumeWhoseReplicasCoverEveryPeerHolds(t *testing.T) {
+	api := aControlPlane().
+		withPeer(opsPeerID, nodeStatusOnline).
+		holding(replicatedOn("volume-1", "pvc-abc", opsPeerID))
+	mover := &scriptedMover{}
+	r, _ := aDraining(t, api, mover,
+		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false))
+
+	_, err := performing(t, r, aDrain(), stepMigratingVolumes)
+
+	var blocked *blockedStepError
+	if !errors.As(err, &blocked) || blocked.reason != NoMigrationTarget {
+		t.Errorf("err = %v, want the drain held for having no target", err)
+	}
+	if len(mover.started) != 0 {
+		t.Errorf("%d moves were raised onto the volume's own replica", len(mover.started))
 	}
 }
 
@@ -217,7 +484,7 @@ func TestEveryMovableVolumeIsGivenAMove(t *testing.T) {
 		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false),
 		aPersistentVolume("pv-2", "volume-2"), aClaim("pv-2", false))
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepMigratingVolumes)
+	done, err := performing(t, r, aDrain(), stepMigratingVolumes)
 	if err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
@@ -255,7 +522,7 @@ func TestAVolumeAlreadyMovingIsNotGivenASecondMove(t *testing.T) {
 	r, apiClient := aDraining(t, api, mover,
 		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false))
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepMigratingVolumes)
+	done, err := performing(t, r, aDrain(), stepMigratingVolumes)
 	if err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
@@ -273,45 +540,41 @@ func TestAVolumeAlreadyMovingIsNotGivenASecondMove(t *testing.T) {
 	}
 }
 
-// A failed move is deleted and replaced against a fresh target rather than
-// failing the drain: the volume is still on the node, and the peer that could
-// not take it is not the only peer.
+// A failed move is replaced rather than failing the drain: the volume is still
+// on the node, and the peer that could not take it is not the only peer. The
+// failed move itself is kept, because it is the record of where the volume
+// could not go, so the replacement carries a name of its own.
 func TestAFailedMoveIsRetriedRatherThanFailingTheDrain(t *testing.T) {
 	api := aControlPlane().
 		withPeer(opsPeerID, nodeStatusOnline).
 		holding(onNode("volume-1", "pvc-abc"))
-	mover := &scriptedMover{moves: []vmigration.Move{{
-		Name:    migrationName(opsNodeID, "pv-1"),
-		PVName:  "pv-1",
-		Phase:   vmigration.MoveFailed,
-		Message: "the target refused the copy",
-	}}}
+	failed := vmigration.Move{
+		Name:           migrationName(opsNodeID, "pv-1"),
+		PVName:         "pv-1",
+		Phase:          vmigration.MoveFailed,
+		TargetNodeUUID: opsPeerID,
+		Message:        "the cluster did not accept the migration in time",
+	}
+	mover := &scriptedMover{moves: []vmigration.Move{failed}}
 	r, _ := aDraining(t, api, mover,
 		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false))
 	ops := aDrain()
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepMigratingVolumes)
+	done, err := performing(t, r, ops, stepMigratingVolumes)
 	if err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
 	if done {
 		t.Error("the step finished although a volume is still on the node")
 	}
-	if len(mover.deleted) != 1 {
-		t.Errorf("the failed move was deleted %d time(s), so nothing would replace it",
-			len(mover.deleted))
+	if len(mover.deleted) != 0 {
+		t.Errorf("the failed move was deleted, and with it the record of where the volume failed")
+	}
+	if len(mover.started) != 1 || mover.started[0].Name == failed.Name {
+		t.Errorf("moves raised = %+v, want one replacement under a name of its own", mover.started)
 	}
 	if !announced(r.Recorder.(*events.FakeRecorder), MigrationRetried) {
 		t.Error("nothing announced the retry, so a drain that keeps retrying looks like one that stalled")
-	}
-
-	// The next pass raises it again, against a target chosen afresh.
-	if _, err := r.perform(context.Background(), persisted(t, r.Client, ops), stepMigratingVolumes); err != nil {
-		t.Fatalf("migrating: %v", err)
-	}
-	if len(mover.started) != 1 {
-		t.Errorf("%d moves were raised on the pass after the retry, want the replacement",
-			len(mover.started))
 	}
 }
 
@@ -326,7 +589,7 @@ func TestFinishedMovesAreRecordedAndThenReaped(t *testing.T) {
 	}}
 	r, apiClient := aDraining(t, api, mover)
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepMigratingVolumes)
+	done, err := performing(t, r, aDrain(), stepMigratingVolumes)
 	if err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
@@ -350,7 +613,7 @@ func TestFinishedMovesAreRecordedAndThenReaped(t *testing.T) {
 func TestADrainIsDoneWhenTheNodeHoldsNothingMovable(t *testing.T) {
 	r, _ := aDraining(t, aControlPlane().withPeer(opsPeerID, nodeStatusOnline), &scriptedMover{})
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepMigratingVolumes)
+	done, err := performing(t, r, aDrain(), stepMigratingVolumes)
 	if err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
@@ -369,7 +632,7 @@ func TestVerificationDeletesTheBenchmarkVolumesAndRereads(t *testing.T) {
 	api := aControlPlane().holding(onNode("volume-bench", "sb-fio-baseline-read"))
 	r, _ := aDraining(t, api, &scriptedMover{})
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepVerifying)
+	done, err := performing(t, r, aDrain(), stepVerifying)
 	if err != nil {
 		t.Fatalf("verifying: %v", err)
 	}
@@ -388,7 +651,7 @@ func TestVerificationHoldsWhileAUsersVolumeIsStillThere(t *testing.T) {
 	r, _ := aDraining(t, api, &scriptedMover{},
 		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false))
 
-	_, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepVerifying)
+	_, err := performing(t, r, aDrain(), stepVerifying)
 
 	var blocked *blockedStepError
 	if !errors.As(err, &blocked) {
@@ -401,10 +664,12 @@ func TestVerificationHoldsWhileAUsersVolumeIsStillThere(t *testing.T) {
 func TestABenchmarkVolumeThatCannotBeDeletedEndsTheDrain(t *testing.T) {
 	api := aControlPlane().
 		holding(onNode("volume-bench", "sb-fio-baseline-read")).
-		refusing("DeleteVolume", errors.New("the control plane refused"))
+		refusing("DeleteVolume", &ControlPlaneError{
+			Status: http.StatusBadRequest, Body: `{"detail":"the volume has snapshots"}`,
+		})
 	r, _ := aDraining(t, api, &scriptedMover{})
 
-	_, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepVerifying)
+	_, err := performing(t, r, aDrain(), stepVerifying)
 
 	var fatal *terminalStepError
 	if !errors.As(err, &fatal) {
@@ -412,11 +677,41 @@ func TestABenchmarkVolumeThatCannotBeDeletedEndsTheDrain(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-05-system-volume-delete-timeout-read-as-refusal — a
+// benchmark volume's DELETE that timed out or met a 5xx failed the drain after
+// every user volume had moved, although the control plane had not refused
+// anything and may well have deleted the volume.
+func TestASystemVolumeDeleteWithNoAnswerIsRetried(t *testing.T) {
+	cases := map[string]error{
+		"a timeout": fmt.Errorf("http error: Delete %q: %w",
+			"https://webappapi/storage-pools/p/volumes/v/", context.DeadlineExceeded),
+		"a 5xx": &ControlPlaneError{Status: http.StatusBadGateway, Body: "bad gateway"},
+	}
+	for name, failure := range cases {
+		t.Run(name, func(t *testing.T) {
+			api := aControlPlane().
+				holding(onNode("volume-bench", "sb-fio-baseline-read")).
+				refusing("DeleteVolume", failure)
+			r, _ := aDraining(t, api, &scriptedMover{})
+
+			done, err := performing(t, r, aDrain(), stepVerifying)
+
+			var fatal *terminalStepError
+			if errors.As(err, &fatal) {
+				t.Errorf("err = %v, want a retry for a delete the control plane never answered", err)
+			}
+			if done {
+				t.Error("the step finished although the benchmark volume may still be there")
+			}
+		})
+	}
+}
+
 // An empty node passes verification.
 func TestAnEmptyNodePassesVerification(t *testing.T) {
 	r, _ := aDraining(t, aControlPlane(), &scriptedMover{})
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepVerifying)
+	done, err := performing(t, r, aDrain(), stepVerifying)
 	if err != nil {
 		t.Fatalf("verifying: %v", err)
 	}
@@ -425,18 +720,101 @@ func TestAnEmptyNodePassesVerification(t *testing.T) {
 	}
 }
 
-// The removal is the last step, and a refusal is the control plane's answer
-// about what the cluster can afford to lose. Retrying cannot change it, so the
-// operation fails and the unwind puts the node back into service.
+// A refusal of the removal is the control plane's answer about what the cluster
+// can afford to lose. Retrying cannot change it, so the operation fails.
 func TestARefusedRemovalEndsTheDrain(t *testing.T) {
-	api := aControlPlane().refusing("RemoveNode", errors.New("the cluster cannot lose this node"))
+	api := aControlPlane().refusing("RemoveNode", &ControlPlaneError{
+		Status: http.StatusBadRequest, Body: `{"detail":"the cluster cannot lose this node"}`,
+	})
 	r, _ := aDraining(t, api, &scriptedMover{})
 
-	_, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepRemoving)
+	_, err := performing(t, r, aDrain(), stepRemoving)
 
 	var fatal *terminalStepError
 	if !errors.As(err, &fatal) {
 		t.Errorf("err = %v, want the terminal kind for a removal the control plane refused", err)
+	}
+}
+
+// Regression: 2026-10-02-remove-timeout-read-as-refusal: the DELETE that removes
+// a node outlived the HTTP client's timeout while the control plane went on and
+// removed the node. The drain read the timeout as a refusal, failed the
+// operation, and tried to resume a node that was being removed.
+func TestARemovalWithNoAnswerIsRetriedRatherThanFailed(t *testing.T) {
+	cases := map[string]error{
+		"a timeout": fmt.Errorf("http error: Delete %q: %w",
+			"https://webappapi/storage-nodes/x", context.DeadlineExceeded),
+		"a 5xx": &ControlPlaneError{Status: http.StatusBadGateway, Body: "bad gateway"},
+	}
+	for name, failure := range cases {
+		t.Run(name, func(t *testing.T) {
+			api := aControlPlane().refusing("RemoveNode", failure)
+			r, _ := aDraining(t, api, &scriptedMover{})
+
+			done, err := performing(t, r, aDrain(), stepRemoving)
+
+			var fatal *terminalStepError
+			if errors.As(err, &fatal) {
+				t.Errorf("err = %v, want a retry for a removal the control plane never answered", err)
+			}
+			if done {
+				t.Error("the step finished although the removal was never answered")
+			}
+		})
+	}
+}
+
+// Regression: 2026-10-02-remove-timeout-read-as-refusal: the pass after a
+// removal whose answer was lost finds the node already being removed. That is
+// the removal accepted, and a second DELETE against it is not one to send.
+func TestARemovalAlreadyUnderwayFinishesTheDrain(t *testing.T) {
+	for _, status := range []string{
+		nodeStatusInRemoval, nodeStatusRemoved, nodeStatusRemovedFailed,
+	} {
+		t.Run(status, func(t *testing.T) {
+			api := aControlPlane().reporting(status)
+			r, _ := aDraining(t, api, &scriptedMover{})
+
+			done, err := performing(t, r, aDrain(), stepRemoving)
+			if err != nil {
+				t.Fatalf("removing: %v", err)
+			}
+			if !done {
+				t.Errorf("the step did not finish although the node is already %s", status)
+			}
+			if asked := api.asked("RemoveNode"); asked != 0 {
+				t.Errorf("RemoveNode was issued %d time(s) against a node already %s, want none",
+					asked, status)
+			}
+		})
+	}
+}
+
+// Regression: 2026-10-02-delete-skipped-after-prepare (PR #612 review): after
+// prepare-removal the node is migrating_lvols, and Removing read every removal
+// status as the DELETE already accepted. The DELETE was never sent, so the
+// teardown was never asked for and AwaitingRemoval waited out its budget. A
+// preparation status is not the DELETE, which is idempotent and is sent.
+func TestAPreparedNodeIsStillDeleted(t *testing.T) {
+	for _, status := range []string{
+		nodeStatusMigratingLvols, nodeStatusMigratingDevices, nodeStatusPendingRemoval,
+	} {
+		t.Run(status, func(t *testing.T) {
+			api := aControlPlane().reporting(status)
+			r, _ := aDraining(t, api, &scriptedMover{})
+
+			done, err := performing(t, r, aDrain(), stepRemoving)
+			if err != nil {
+				t.Fatalf("removing: %v", err)
+			}
+			if !done {
+				t.Errorf("the step did not finish after the DELETE was accepted for a node %s", status)
+			}
+			if asked := api.asked("RemoveNode"); asked != 1 {
+				t.Errorf("RemoveNode was issued %d time(s) against a node %s, want once",
+					asked, status)
+			}
+		})
 	}
 }
 
@@ -445,7 +823,7 @@ func TestAnAcceptedRemovalFinishesTheDrain(t *testing.T) {
 	api := aControlPlane()
 	r, _ := aDraining(t, api, &scriptedMover{})
 
-	done, err := r.perform(context.Background(), persisted(t, r.Client, aDrain()), stepRemoving)
+	done, err := performing(t, r, aDrain(), stepRemoving)
 	if err != nil {
 		t.Fatalf("removing: %v", err)
 	}
@@ -454,6 +832,26 @@ func TestAnAcceptedRemovalFinishesTheDrain(t *testing.T) {
 	}
 	if asked := api.asked("RemoveNode"); asked != 1 {
 		t.Errorf("RemoveNode was issued %d time(s), want once", asked)
+	}
+}
+
+// Regression: 2026-10-02-remove-timeout-read-as-refusal: a node still shutting
+// down is not yet proof that the removal was accepted, and a second DELETE while
+// it shuts down is not one to send either. The step waits for the control plane
+// to say which it was.
+func TestARemovalStillShuttingTheNodeDownWaits(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusInShutdown)
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	done, err := performing(t, r, aDrain(), stepRemoving)
+	if err != nil {
+		t.Fatalf("removing: %v", err)
+	}
+	if done {
+		t.Error("the step finished although the node is only shutting down")
+	}
+	if asked := api.asked("RemoveNode"); asked != 0 {
+		t.Errorf("RemoveNode was issued %d time(s) against a node shutting down, want none", asked)
 	}
 }
 
@@ -494,5 +892,192 @@ func TestADrainBeingDeletedWaitsForAMoveStillRunning(t *testing.T) {
 	}
 	if len(mover.deleted) != 0 {
 		t.Errorf("%d moves were reaped mid-copy", len(mover.deleted))
+	}
+}
+
+// Regression: 2026-10-02-remove-timeout-read-as-refusal: the removal ended as soon
+// as the DELETE was accepted, while the control plane went on migrating the
+// node's devices and volumes for as long as that takes. A removal that stalled or
+// gave up there was invisible to the operation, which had already succeeded.
+func TestAwaitingRemovalWaitsWhileTheControlPlaneRemovesTheNode(t *testing.T) {
+	for _, status := range []string{
+		nodeStatusPendingRemoval, nodeStatusMigratingDevices,
+		nodeStatusMigratingLvols, nodeStatusInRemoval,
+	} {
+		t.Run(status, func(t *testing.T) {
+			r, _ := aDraining(t, aControlPlane().reporting(status), &scriptedMover{})
+
+			done, err := performing(t, r, aDrain(), stepAwaitingRemoval)
+			if err != nil {
+				t.Fatalf("awaiting the removal: %v", err)
+			}
+			if done {
+				t.Errorf("the step finished while the control plane still reports %s", status)
+			}
+		})
+	}
+}
+
+// Regression: 2026-10-02-remove-timeout-read-as-refusal: removed is the outcome
+// the operation exists for.
+func TestAwaitingRemovalFinishesWhenTheNodeIsRemoved(t *testing.T) {
+	r, _ := aDraining(t, aControlPlane().reporting(nodeStatusRemoved), &scriptedMover{})
+
+	done, err := performing(t, r, aDrain(), stepAwaitingRemoval)
+	if err != nil {
+		t.Fatalf("awaiting the removal: %v", err)
+	}
+	if !done {
+		t.Error("the step did not finish although the control plane reports the node removed")
+	}
+}
+
+// Regression: 2026-10-02-remove-timeout-read-as-refusal: removed_failed is the
+// control plane giving up on the removal. It is terminal on that side, so the
+// operation fails rather than waiting for a status that will not come.
+func TestAwaitingRemovalFailsWhenTheControlPlaneGivesUp(t *testing.T) {
+	r, _ := aDraining(t, aControlPlane().reporting(nodeStatusRemovedFailed), &scriptedMover{})
+
+	_, err := performing(t, r, aDrain(), stepAwaitingRemoval)
+
+	var fatal *terminalStepError
+	if !errors.As(err, &fatal) {
+		t.Errorf("err = %v, want the terminal kind for a removal the control plane gave up on", err)
+	}
+}
+
+// Regression: 2026-10-02-removal-three-steps: the census walks the pools for
+// volumes, and a snapshot is not one of them, so a node that still held a
+// snapshot passed verification and the DELETE refused it. The control plane's
+// verify-drained sees both, and the step finishes only when it says drained.
+func TestVerifyingHoldsWhileTheControlPlaneSeesSomethingLeft(t *testing.T) {
+	api := aControlPlane()
+	api.verification = DrainVerification{Snapshots: []string{"snap-1"}}
+	r, _ := aDraining(t, api, &scriptedMover{})
+
+	done, err := performing(t, r, aDrain(), stepVerifying)
+
+	var blocked *blockedStepError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("done, err = %t, %v; want the step held while the node holds a snapshot", done, err)
+	}
+	if !strings.Contains(blocked.message, "snap-1") {
+		t.Errorf("the hold says %q, want it to name what is left", blocked.message)
+	}
+}
+
+// aPendingDrain is a removal in MigratingDevices whose node is still
+// pending_removal, with the progress and prepare attempts it last recorded.
+func aPendingDrain(
+	t *testing.T, api *scriptedControlPlane, recorded *simplyblockv1alpha2.RemovalStatus,
+) (*StorageNodeOpsReconciler, client.Client, *simplyblockv1alpha2.StorageNodeOps) {
+	t.Helper()
+	ops := aDrain()
+	ops.Status.Removal = recorded
+	r, apiClient := anOpsWorld(t, api, ops)
+	r.Mover = &scriptedMover{}
+	return r, apiClient, ops
+}
+
+// minutesAgo is a status timestamp the given number of minutes in the past.
+func minutesAgo(minutes int) *metav1.Time {
+	at := metav1.NewTime(time.Now().Add(-time.Duration(minutes) * time.Minute))
+	return &at
+}
+
+// Regression: 2026-10-02-prepare-removal-shutdown-failed: prepare-removal marked
+// worker-4 pending_removal and then failed to shut it down, and the operation
+// waited on a node nothing was driving. A prepare the control plane reports
+// failed is sent again, which is the retry it is idempotent for.
+func TestAFailedPrepareIsSentAgain(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusPendingRemoval)
+	api.progress = RemovalProgress{Total: 2, Failed: 1, Message: "shutdown failed",
+		NodeStatus: nodeStatusPendingRemoval}
+	r, apiClient, ops := aPendingDrain(t, api, &simplyblockv1alpha2.RemovalStatus{
+		NodeStatus: nodeStatusPendingRemoval, LastProgressTime: minutesAgo(2),
+	})
+
+	done, err := performing(t, r, ops, stepMigratingDevices)
+	if err != nil || done {
+		t.Fatalf("done, err = %t, %v; want a pass that waits after sending prepare-removal again",
+			done, err)
+	}
+	if asked := api.asked("PrepareRemoval"); asked != 1 {
+		t.Errorf("PrepareRemoval was issued %d time(s), want once to retry the failed step", asked)
+	}
+	got := operationRead(t, apiClient, ops.Name)
+	if got.Status.Removal == nil || got.Status.Removal.PrepareAttempts != 1 ||
+		got.Status.Removal.LastPrepareTime == nil {
+		t.Errorf("status.removal = %+v, want the attempt counted and timed", got.Status.Removal)
+	}
+}
+
+// Regression: 2026-10-02-prepare-removal-shutdown-failed: the control plane can
+// also fail the shutdown without saying so, which leaves the node
+// pending_removal with nothing changing. Once nothing has moved for longer than
+// a shutdown takes, prepare-removal is sent again.
+func TestAStalledPrepareIsSentAgain(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusPendingRemoval)
+	api.progress = RemovalProgress{Total: 2, NodeStatus: nodeStatusPendingRemoval}
+	r, _, ops := aPendingDrain(t, api, &simplyblockv1alpha2.RemovalStatus{
+		NodeStatus: nodeStatusPendingRemoval, LastProgressTime: minutesAgo(20),
+	})
+
+	if _, err := performing(t, r, ops, stepMigratingDevices); err != nil {
+		t.Fatalf("migrating devices: %v", err)
+	}
+	if asked := api.asked("PrepareRemoval"); asked != 1 {
+		t.Errorf("PrepareRemoval was issued %d time(s) for a node stalled 20 minutes, want once",
+			asked)
+	}
+}
+
+// The other half: a node that only just became pending_removal may be shutting
+// down under the first prepare-removal, and a second one is not sent under it.
+// A retry already sent is not sent again until it had time to answer.
+func TestAPrepareIsNotSentAgainTooSoon(t *testing.T) {
+	for name, recorded := range map[string]*simplyblockv1alpha2.RemovalStatus{
+		"recently pending": {NodeStatus: nodeStatusPendingRemoval, LastProgressTime: minutesAgo(2)},
+		"recently retried": {NodeStatus: nodeStatusPendingRemoval, LastProgressTime: minutesAgo(30),
+			PrepareAttempts: 1, LastPrepareTime: minutesAgo(0)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := aControlPlane().reporting(nodeStatusPendingRemoval)
+			api.progress = RemovalProgress{Total: 2, NodeStatus: nodeStatusPendingRemoval}
+			if name == "recently retried" {
+				api.progress.Failed = 1
+			}
+			r, _, ops := aPendingDrain(t, api, recorded)
+
+			if _, err := performing(t, r, ops, stepMigratingDevices); err != nil {
+				t.Fatalf("migrating devices: %v", err)
+			}
+			if asked := api.asked("PrepareRemoval"); asked != 0 {
+				t.Errorf("PrepareRemoval was issued %d time(s), want none yet", asked)
+			}
+		})
+	}
+}
+
+// Regression: 2026-10-02-prepare-removal-shutdown-failed: a prepare that keeps
+// failing is not retried for the rest of the step's budget. Once the attempts
+// run out the operation fails with what the control plane said.
+func TestAPrepareThatKeepsFailingEndsTheDrain(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusPendingRemoval)
+	api.progress = RemovalProgress{Total: 2, Failed: 1, Message: "Failed to kill SPDK",
+		NodeStatus: nodeStatusPendingRemoval}
+	r, _, ops := aPendingDrain(t, api, &simplyblockv1alpha2.RemovalStatus{
+		NodeStatus: nodeStatusPendingRemoval, LastProgressTime: minutesAgo(30),
+		PrepareAttempts: maxPrepareAttempts, LastPrepareTime: minutesAgo(5),
+	})
+
+	_, err := performing(t, r, ops, stepMigratingDevices)
+
+	var fatal *terminalStepError
+	if !errors.As(err, &fatal) || !strings.Contains(err.Error(), "Failed to kill SPDK") {
+		t.Errorf("err = %v, want the terminal kind carrying the control plane's message", err)
+	}
+	if asked := api.asked("PrepareRemoval"); asked != 0 {
+		t.Errorf("PrepareRemoval was issued %d time(s) after the attempts ran out", asked)
 	}
 }

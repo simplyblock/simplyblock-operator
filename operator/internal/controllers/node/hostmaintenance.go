@@ -40,6 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // performMaintenanceStep runs one step of a maintenance window.
@@ -195,7 +196,10 @@ func (r *StorageNodeOpsReconciler) maintenanceShutDown(
 	if err != nil {
 		return false, err
 	}
-	if reading.Status == nodeStatusOffline {
+	// A node leaving the cluster belongs to its removal. The worker is still
+	// guarded and released like any other, and the node is sent nothing: a
+	// shutdown writes over the removal's status (§10).
+	if reading.Status == nodeStatusOffline || utils.NodeIsLeaving(reading.Status) {
 		return true, nil
 	}
 	if reading.Status == nodeStatusInRestart || reading.Status == nodeStatusInShutdown {
@@ -355,7 +359,10 @@ func (r *StorageNodeOpsReconciler) maintenanceRestart(
 	if err != nil {
 		return false, err
 	}
-	if reading.Status == nodeStatusOnline {
+	// A node leaving the cluster is not brought back: a restart returns it to
+	// service in the middle of its removal, or after the control plane gave up
+	// on one, which is the removal's to drive again rather than the window's.
+	if reading.Status == nodeStatusOnline || utils.NodeIsLeaving(reading.Status) {
 		return true, nil
 	}
 	if reading.Status == nodeStatusInRestart {

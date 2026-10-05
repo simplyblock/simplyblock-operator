@@ -42,7 +42,7 @@ func (b backendNodes) StorageNodes(context.Context, string) ([]NodeReading, erro
 }
 
 // adds counts the node_add calls a case provoked, which is what separates
-// "the step held" from "the step held after asking for a node anyway".
+// "the step held" from "the step held after asking for a node anyway."
 type countingBackend struct {
 	ControlPlane
 	adds *int
@@ -52,9 +52,9 @@ func (countingBackend) StorageNodes(context.Context, string) ([]NodeReading, err
 	return nil, nil
 }
 
-func (c countingBackend) AddNode(context.Context, string, utils.StorageNodeSetAddParams) error {
+func (c countingBackend) AddNode(context.Context, string, utils.StorageNodeSetAddParams) (string, error) {
 	*c.adds++
-	return nil
+	return theAddTask, nil
 }
 
 // aMatcher builds a reconciler over one worker whose Kubernetes address and

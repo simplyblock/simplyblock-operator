@@ -1535,10 +1535,11 @@ spec:
                               on these nodes.
                             properties:
                               count:
-                                description: Count is the number of journal managers
-                                  to configure.
+                                description: |-
+                                  Count is the number of journal managers to configure. The control plane
+                                  requires at least 3.
                                 format: int32
-                                minimum: 1
+                                minimum: 3
                                 type: integer
                               percentPerDevice:
                                 description: PercentPerDevice is the share of each
@@ -6008,6 +6009,15 @@ spec:
                     items:
                       type: string
                     type: array
+                  skipped:
+                    description: |-
+                      Skipped are the nodes of Nodes the walk passed over without restarting
+                      them, in walk order: a node the control plane stopped listing, or one
+                      whose removal started after the walk was planned. A node leaving the
+                      cluster belongs to its removal, and the walk sends it nothing.
+                    items:
+                      type: string
+                    type: array
                 required:
                 - nodeIndex
                 type: object
@@ -7684,6 +7694,7 @@ spec:
                 - Provisioning
                 - Activating
                 - Online
+                - Shrinking
                 - Rebalancing
                 - Degraded
                 - Unavailable
@@ -8292,6 +8303,7 @@ spec:
                 - Unknown
                 - Removed
                 - Failed
+                - Migrated
                 type: string
               role:
                 description: Role is what the device carries.
@@ -8689,6 +8701,46 @@ spec:
                 - Failed
                 - Aborted
                 type: string
+              removal:
+                description: |-
+                  Removal is the control plane's progress through the removal, written by
+                  a Remove while it waits in AwaitingRemoval.
+                properties:
+                  devices:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Devices is the control-plane status each of the node's StorageDevices
+                      last reported, keyed by the StorageDevice's name. A device moves from
+                      online through failed to failed_and_migrated, or to removed, as the
+                      removal rebuilds its data onto the peers.
+                    type: object
+                  lastPrepareTime:
+                    description: LastPrepareTime is when the removal's first step
+                      was last sent again.
+                    format: date-time
+                    type: string
+                  lastProgressTime:
+                    description: LastProgressTime is when NodeStatus or any of Devices
+                      last changed.
+                    format: date-time
+                    type: string
+                  nodeStatus:
+                    description: |-
+                      NodeStatus is the node's status as the control plane last reported it,
+                      in the control plane's own spelling: pending_removal, migrating_devices,
+                      migrating_lvols, in_removal, removed, or removed_failed.
+                    type: string
+                  prepareAttempts:
+                    description: |-
+                      PrepareAttempts is how many times the removal's first step was sent
+                      again for a node that stayed pending_removal, because the control plane
+                      reported the step failed or nothing moved for longer than a shutdown
+                      takes. The operation fails once the attempts run out.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
               startedAt:
                 description: StartedAt is when the operation acquired its target's
                   lock.
@@ -8738,7 +8790,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Requesting'',''Departing'',''Awaiting'',''Validating'',''Suspending'',''MigratingVolumes'',''Verifying'',''Removing'',''Preparing'',''Relocating'',''AwaitingNode'',''Promoting'',''Holding'',''ShuttingDown'',''Releasing'',''AwaitingHost'',''Restarting'',''Cleanup'']'
+                  rule: '!has(self.state) || self.state in [''Requesting'',''Departing'',''Awaiting'',''Validating'',''MigratingDevices'',''MigratingVolumes'',''Verifying'',''Removing'',''AwaitingRemoval'',''Preparing'',''Relocating'',''AwaitingNode'',''Promoting'',''Holding'',''ShuttingDown'',''Releasing'',''AwaitingHost'',''Restarting'',''Cleanup'']'
             type: object
         type: object
     served: true
@@ -9311,9 +9363,11 @@ spec:
                       devices were partitioned.
                     properties:
                       count:
-                        description: Count is the number of journal managers to configure.
+                        description: |-
+                          Count is the number of journal managers to configure. The control plane
+                          requires at least 3.
                         format: int32
-                        minimum: 1
+                        minimum: 3
                         type: integer
                       percentPerDevice:
                         description: PercentPerDevice is the share of each device
@@ -9579,6 +9633,11 @@ spec:
                   Message is the reason the phase is what it is: one sentence, replaced as the
                   node moves, and never a log.
                 type: string
+              nodeAddTaskID:
+                description: |-
+                  NodeAddTaskID is the control-plane task the last add of this node created. It is how
+                  a node that is still being added reads why its own add is failing.
+                type: string
               observedGeneration:
                 description: |-
                   ObservedGeneration is the generation the rest of this status was computed
@@ -9594,6 +9653,7 @@ spec:
                 - Provisioning
                 - Online
                 - Removing
+                - Removed
                 - Offline
                 - Degraded
                 - Failed

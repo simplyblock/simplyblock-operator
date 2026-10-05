@@ -100,9 +100,6 @@ func TestStorageNodeOpsDeleteIsAllowedWhereTheAbortEdgeExists(t *testing.T) {
 	for _, step := range []simplyblockv1alpha2.StorageNodeOpsStep{
 		simplyblockv1alpha2.StorageNodeOpsStepRequesting,
 		simplyblockv1alpha2.StorageNodeOpsStepValidating,
-		simplyblockv1alpha2.StorageNodeOpsStepSuspending,
-		simplyblockv1alpha2.StorageNodeOpsStepMigratingVolumes,
-		simplyblockv1alpha2.StorageNodeOpsStepVerifying,
 		simplyblockv1alpha2.StorageNodeOpsStepPreparing,
 		simplyblockv1alpha2.StorageNodeOpsStepHolding,
 	} {

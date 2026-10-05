@@ -29,7 +29,7 @@ import (
 // first two values are the operator's own creation path; the rest are its
 // reading of the lifecycle status.status carries in the control plane's own
 // spelling.
-// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Rebalancing;Degraded;Unavailable;Suspended
+// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Shrinking;Rebalancing;Degraded;Unavailable;Suspended
 type StorageClusterPhase string
 
 const (
@@ -57,6 +57,14 @@ const (
 	// StorageClusterPhaseOnline: the control plane reports the cluster active
 	// and serving.
 	StorageClusterPhaseOnline StorageClusterPhase = "Online"
+
+	// StorageClusterPhaseShrinking: serving, and removing at least one of its
+	// nodes. It replaces Rebalancing, Online, and Degraded for as long as the
+	// control plane reports a removal in progress, because a removal moves the
+	// departing node's data onto its peers and degrades the cluster while it
+	// does, and the removal is the cause of both. It never replaces a phase
+	// that is not serving.
+	StorageClusterPhaseShrinking StorageClusterPhase = "Shrinking"
 
 	// StorageClusterPhaseRebalancing: serving, and moving data between its
 	// nodes or devices. It replaces Online and Degraded for as long as the

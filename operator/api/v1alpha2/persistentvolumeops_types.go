@@ -32,7 +32,9 @@ import (
 )
 
 // PersistentVolumeOpsLock is the annotation on a PersistentVolume naming the
-// operation currently allowed to act on it, and absent when none is.
+// operation currently allowed to act on it, and absent when none is. An
+// operation takes it on every volume of its NVMe-oF subsystem, because a
+// migration moves the subsystem as a whole.
 //
 // It is what status.activeOpsRef is for every other kind in this group: taken
 // with an optimistic-lock patch so two reconcilers cannot both win, released
@@ -51,6 +53,13 @@ const PersistentVolumeOpsLock = "storage.simplyblock.io/active-ops"
 // It narrows rather than identifies. The label finds the operations some drain
 // created, and the UID in spec.creatorRef says which drain.
 const PersistentVolumeOpsManagedByLabel = "storage.simplyblock.io/managed-by"
+
+// PersistentVolumeOpsTargetNodeLabel carries the backend UUID of the node an
+// operation raised by another controller moves its volume to. The spec names
+// the node object rather than the UUID, and the UUID is what the creator chose
+// by and what it reads back when the operation fails: a retry that does not
+// know where the failed move was headed sends the volume back there.
+const PersistentVolumeOpsTargetNodeLabel = "storage.simplyblock.io/target-node"
 
 // PersistentVolumeOpsAction is the operation a PersistentVolumeOps performs.
 // The kind is named for its target rather than for the action so that carrying
