@@ -17,6 +17,10 @@
 package controlplane
 
 import (
+	"os"
+	"slices"
+	"strings"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -269,8 +273,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 		// The operator's own account is the one caller the control plane has to
 		// trust before anything else works: every controller in this process
 		// authenticates with its token.
-		{Name: "SB_K8S_ADMIN_SERVICE_ACCOUNTS",
-			Value: "system:serviceaccount:" + cp.Namespace + ":simplyblock-operator"},
+		{Name: "SB_K8S_ADMIN_SERVICE_ACCOUNTS", Value: adminServiceAccounts(cp.Namespace)},
 		{Name: "SB_K8S_METRICS_SERVICE_ACCOUNTS",
 			Value: "system:serviceaccount:" + cp.Namespace + ":simplyblock-prometheus"},
 	}
@@ -650,4 +653,25 @@ func fdbExporterService(namespace string) *corev1.Service {
 // port is declared with a name and matching on it survives a renumber.
 func intstrFromInt(port int32) intstr.IntOrString {
 	return intstr.FromInt32(port)
+}
+
+// extraAdminAccountsEnv names the operator's own environment variable listing
+// further service accounts the management API must trust as administrators:
+// the Control Center's, which reads every storage cluster through the control
+// plane API on a hub whose clusters are not CRDs here. The chart sets it; an
+// operator without it trusts only itself, as before.
+const extraAdminAccountsEnv = "SB_EXTRA_ADMIN_SERVICE_ACCOUNTS"
+
+// adminServiceAccounts is the operator's own account followed by the extra
+// ones. An entry that is not a service account username is ignored rather than
+// passed on, so a typo can only narrow who is trusted, never widen it.
+func adminServiceAccounts(namespace string) string {
+	accounts := []string{"system:serviceaccount:" + namespace + ":simplyblock-operator"}
+	for _, a := range strings.Split(os.Getenv(extraAdminAccountsEnv), ",") {
+		a = strings.TrimSpace(a)
+		if strings.Count(a, ":") == 3 && strings.HasPrefix(a, "system:serviceaccount:") && !slices.Contains(accounts, a) {
+			accounts = append(accounts, a)
+		}
+	}
+	return strings.Join(accounts, ",")
 }

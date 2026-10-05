@@ -290,6 +290,30 @@ const DETAIL_API = {
   mpath: prop("migration-paths/{uuid}"), appgroup: prop("app-groups/{uuid}"),
   deployconfig: crd1("clusterdeploymentconfigs")};
 
+// The source each screen names must be the one that served it: the control
+// plane API for storage read from it (cpapi.jsx), OCM and the dr-agents'
+// inventory for Kubernetes clusters on a hub without the operator API.
+if (cp.on()) {
+  const CPV = "GET /controlplane/api/v2/clusters";
+  VIEWS.clusters.api = p => p.t === "k8sc" ? `${CPV}/ (matched to the site by its storage nodes)` : `${CPV}/`;
+  VIEWS.nodes.api = () => `${CPV}/{cluster}/storage-nodes/`;
+  VIEWS.devices.api = () => `${CPV}/{cluster}/storage-nodes/{node}/devices/`;
+  VIEWS.pools.api = () => `${CPV}/{cluster}/storage-pools/`;
+  const volumesApi = VIEWS.volumes.api;
+  VIEWS.volumes.api = p => ["pool", "cluster"].includes(p.t) ? `${CPV}/{cluster}/storage-pools/{pool}/volumes/` : volumesApi(p);
+  VIEWS.snapshots.api = () => `${CPV}/{cluster}/storage-pools/{pool}/snapshots/`;
+  Object.assign(DETAIL_API, {cluster: `${CPV}/{id}/`, node: `${CPV}/{cluster}/storage-nodes/{id}/`,
+    device: `${CPV}/{cluster}/storage-nodes/{node}/devices/{id}/`, pool: `${CPV}/{cluster}/storage-pools/{id}/`,
+    volume: `${CPV}/{cluster}/storage-pools/{pool}/volumes/{id}/`, snapshot: `${CPV}/{cluster}/storage-pools/{pool}/snapshots/{id}/`});
+}
+if (!upstreamOn("operator")) {
+  const OCM = "GET /apis/cluster.open-cluster-management.io/v1/managedclusters";
+  const INV = "GET /apis/sitemap.simplyblock.io/v1alpha1/siteprofiles (status.inventory)";
+  VIEWS.k8s.api = () => `${OCM} + ${INV}`;
+  VIEWS.zones.api = () => INV;
+  Object.assign(DETAIL_API, {k8sc: `${OCM}/{name} + ${INV}`, zone: INV});
+}
+
 const KIND_LABEL = {cluster: "cluster", host: "host", node: "storage node", device: "device", pool: "storage pool",
   volume: "logical volume", snapshot: "snapshot", backup: "backup", policy: "backup policy",
   pplan: "protection plan", drpath: "DR path", papp: "protected application", rplan: "recovery plan", raction: "recovery action",
@@ -301,6 +325,19 @@ const KIND_LABEL = {cluster: "cluster", host: "host", node: "storage node", devi
   deployconfig: "deployment document", mpath: "migration path", appgroup: "application group"};
 
 function ErrorState({error, onRetry, kind, onUp, upLabel}) {
+  // the source of this screen is not part of this deployment: a fact about
+  // the installation, not a failure, so no retry and no red
+  if (error.reason === "NotInDeployment") {
+    return (
+      <div className="empty" data-state="not-in-deployment">
+        <Icon n="link" s={24} c="var(--dim2)" />
+        <b style={{color: "var(--text)"}}>Not available in this deployment</b>
+        <span style={{maxWidth: 480}}>{error.message}.</span>
+        {error.path && <span className="mono" style={{fontSize: 10.5, color: "var(--dim2)"}}>{error.path}</span>}
+        {onUp && <button className="chip" style={{marginTop: 8}} onClick={onUp}>Back to {upLabel}</button>}
+      </div>
+    );
+  }
   if (error.status === 501) {
     return (
       <div className="empty">
@@ -337,9 +374,10 @@ function ErrorState({error, onRetry, kind, onUp, upLabel}) {
   return (
     <div className="empty">
       <Icon n="alert" s={24} c="var(--bad)" />
-      <b style={{color: "var(--text)"}}>Could not reach the Kubernetes API</b>
+      <b style={{color: "var(--text)"}}>{error.source ? `The ${error.source} answered with an error` : "Could not reach the Kubernetes API"}</b>
       <span style={{maxWidth: 420}}>{error.status ? `HTTP ${error.status} — ` : ""}{error.message}</span>
-      <span className="mono" style={{fontSize: 10.5}}>{(error.path || "").startsWith("/apis") || (error.path || "").startsWith("/api/") ? API : window.SB_CONFIG.operatorBase}{error.path}</span>
+      <span className="mono" style={{fontSize: 10.5}}>{error.source === "control plane API" ? window.SB_CONFIG.cpBase
+        : (error.path || "").startsWith("/apis") || (error.path || "").startsWith("/api/") ? API : window.SB_CONFIG.operatorBase}{error.path}</span>
       <button className="chip" style={{marginTop: 8}} onClick={onRetry}><Icon n="refresh" s={12} />Retry</button>
     </div>
   );
@@ -855,5 +893,10 @@ function App() {
     </div>
   );
 }
+
+// panels.jsx, deploy.jsx and rbac-admin.jsx render ErrorState too; each file is
+// its own scope, so without this any error on those screens threw a
+// ReferenceError and the whole view failed to render
+Object.assign(window, {ErrorState});
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);

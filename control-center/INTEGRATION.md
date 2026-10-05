@@ -121,6 +121,9 @@ the environment, into the writable scratch mount. Nothing is baked in.
 | `SB_K8S_HOST` | `kubernetes.default.svc` | SNI and Host — must be on the API server's certificate |
 | `SB_K8S_CA_FILE` | the projected SA CA | CA bundle used to verify it |
 | `SB_OPERATOR_URL` | `http://simplyblock-operator:8080` | operator API; empty disables the proxy location (answers a 503 Status) |
+| `SB_CONTROLPLANE_URL` | empty | management API v2 (fully qualified: nginx resolves it per request); needs the njs module, GET only, every response scrubbed of credentials |
+| `SB_CONTROLPLANE_TOKEN_FILE` | empty | a static admin token for the control plane; else the proxied ServiceAccount token (the operator must list the account in `SB_EXTRA_ADMIN_SERVICE_ACCOUNTS`) |
+| `SB_CONTROLPLANE_CA_FILE`, `SB_CONTROLPLANE_CLIENT_CERT`, `SB_CONTROLPLANE_CLIENT_KEY` | empty | TLS to an https control plane: CA to verify it, client certificate where it requires one |
 | `SB_HELM_URL` | `http://simplyblock-operator:8080` | Helm release view; empty disables it |
 | `SB_PROMETHEUS_URL` | `http://simplyblock-prometheus:9090` | metrics; empty disables it |
 | `SB_LOGO_URL` | `vendor/logo-white.svg` | brand mark, vendored into the image |

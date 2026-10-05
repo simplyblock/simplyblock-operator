@@ -51,6 +51,27 @@ helm.sh/chart: {{ printf "%s-%s" .Name .Version | replace "+" "_" | trunc 63 | t
 {{- .Values.controlCenter.operatorUrl | default "http://simplyblock-operator:8080" -}}
 {{- end -}}
 
+{{/* The control plane API the console reads storage from. Fully qualified:
+     nginx resolves it per request without the pod's search domains. */}}
+{{- define "sbcc.controlPlaneUrl" -}}
+{{- $cp := .Values.controlCenter.controlPlane | default dict -}}
+{{- if and $cp.enabled (not .Values.controlCenter.mock.enabled) -}}
+{{- if $cp.url -}}
+{{- $cp.url -}}
+{{- else if eq .Values.deployment.profile "standalone" -}}
+{{- printf "%s://simplyblock-webappapi.%s.svc.cluster.local:5000" (ternary "https" "http" .Values.tls.enabled) .Release.Namespace -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The service account the operator adds to the management API's admins. */}}
+{{- define "sbcc.trustedAccount" -}}
+{{- $cp := .Values.controlCenter.controlPlane | default dict -}}
+{{- if and .Values.controlCenter.enabled $cp.trustServiceAccount (include "sbcc.controlPlaneUrl" .) (eq .Values.controlCenter.authMode "serviceaccount") (not $cp.tokenSecret) -}}
+{{- printf "system:serviceaccount:%s:%s" .Release.Namespace (include "sbcc.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "sbcc.prometheusUrl" -}}
 {{- if .Values.controlCenter.prometheusUrl -}}
 {{- .Values.controlCenter.prometheusUrl -}}
