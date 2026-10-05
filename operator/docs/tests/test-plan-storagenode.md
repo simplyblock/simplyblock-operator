@@ -536,6 +536,7 @@ Files: `operator/internal/controllers/node/drain_test.go`, `peertargets_test.go`
 | U-501 | A peer whose secondary or tertiary is the drained node is chosen only after every other eligible peer (2026-10-05-drain-target-replicates-onto-drainee)  | Regression | `TestPeersThatReplicateOntoTheDrainedNodeComeLast`                                                                                                      |
 | U-502 | A peer that replicates onto the drained node is still a target when it is the only one left                                                              | Boundary   | `TestAPeerReplicatingOntoTheDrainedNodeIsUsedWhenNoOtherIsLeft`                                                                                         |
 | U-503 | The node stream carries each node's secondary and tertiary into target selection                                                                         | Regression | `TestTheNodeStreamCarriesEachNodesReplicaPartners`                                                                                                      |
+| U-512 | A DELETE refused without a reason on a cluster degraded only by this removal is final (2026-10-06-bare-refusal-held-on-own-degradation)                  | Regression | `TestABareDeleteRefusalOnAClusterDegradedOnlyByThisRemovalIsFinal`                                                                                      |
 | U-473 | `MigratingDevices` sends `prepare-removal` once the node is offline (2026-10-02)                                                                         | Positive   | `TestMigratingDevicesPreparesTheRemovalOfAnOfflineNode`                                                                                                 |
 | U-474 | A refused admission fails the operation and says the node is left offline for a Restart (2026-10-02)                                                     | Regression | `TestARefusedAdmissionEndsTheDrainAndSaysTheNodeIsOffline`                                                                                              |
 | U-475 | Nothing is sent while the node is still online, suspended, or `in_shutdown`                                                                              | Negative   | `TestMigratingDevicesWaitsForTheShutdownToLand`                                                                                                         |
@@ -1003,17 +1004,17 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 419       | 314     | 105         |
+| Unit        | 420       | 315     | 105         |
 | Integration | 54        | 0       | 54          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **504**   | **314** | **190**     |
+| **Total**   | **505**   | **315** | **190**     |
 
 Eight further scenarios are struck through: they describe a system this one no
 longer is, and each names the row that replaced it. They are excluded from the
 counts.
 
-Two hundred and thirty-four distinct test functions cover the three hundred and fourteen
+Two hundred and thirty-five distinct test functions cover the three hundred and fifteen
 covered scenarios, because a table-driven test satisfies one identifier per
 subtest and several rows are two halves of one assertion.
 
