@@ -664,7 +664,9 @@ func TestVerificationHoldsWhileAUsersVolumeIsStillThere(t *testing.T) {
 func TestABenchmarkVolumeThatCannotBeDeletedEndsTheDrain(t *testing.T) {
 	api := aControlPlane().
 		holding(onNode("volume-bench", "sb-fio-baseline-read")).
-		refusing("DeleteVolume", errors.New("the control plane refused"))
+		refusing("DeleteVolume", &ControlPlaneError{
+			Status: http.StatusBadRequest, Body: `{"detail":"the volume has snapshots"}`,
+		})
 	r, _ := aDraining(t, api, &scriptedMover{})
 
 	_, err := performing(t, r, aDrain(), stepVerifying)
@@ -672,6 +674,36 @@ func TestABenchmarkVolumeThatCannotBeDeletedEndsTheDrain(t *testing.T) {
 	var fatal *terminalStepError
 	if !errors.As(err, &fatal) {
 		t.Errorf("err = %v, want the terminal kind: the node still holds the volume", err)
+	}
+}
+
+// Regression: 2026-10-05-system-volume-delete-timeout-read-as-refusal — a
+// benchmark volume's DELETE that timed out or met a 5xx failed the drain after
+// every user volume had moved, although the control plane had not refused
+// anything and may well have deleted the volume.
+func TestASystemVolumeDeleteWithNoAnswerIsRetried(t *testing.T) {
+	cases := map[string]error{
+		"a timeout": fmt.Errorf("http error: Delete %q: %w",
+			"https://webappapi/storage-pools/p/volumes/v/", context.DeadlineExceeded),
+		"a 5xx": &ControlPlaneError{Status: http.StatusBadGateway, Body: "bad gateway"},
+	}
+	for name, failure := range cases {
+		t.Run(name, func(t *testing.T) {
+			api := aControlPlane().
+				holding(onNode("volume-bench", "sb-fio-baseline-read")).
+				refusing("DeleteVolume", failure)
+			r, _ := aDraining(t, api, &scriptedMover{})
+
+			done, err := performing(t, r, aDrain(), stepVerifying)
+
+			var fatal *terminalStepError
+			if errors.As(err, &fatal) {
+				t.Errorf("err = %v, want a retry for a delete the control plane never answered", err)
+			}
+			if done {
+				t.Error("the step finished although the benchmark volume may still be there")
+			}
+		})
 	}
 }
 
