@@ -600,8 +600,9 @@ func (sm *Machine[S]) CurrentState() S {
 //	status, err := r.storage.MigrationStatus(sm.Context(), vm.Status.MigrationUUID)
 //
 // The returned context is replaced on every transition, so fetch it per use
-// rather than caching it. [Machine.ClearTimeout] replaces it too: dropping a
-// deadline cancels the work that deadline was bounding.
+// rather than caching it. [Machine.ClearTimeout] and [Machine.Extend] replace it
+// too: dropping a deadline cancels the work that deadline was bounding, and a
+// context's deadline cannot be moved in place.
 func (sm *Machine[S]) Context() context.Context {
 	return sm.stateCtx
 }
@@ -639,17 +640,63 @@ func (sm *Machine[S]) TimeoutReached() bool {
 }
 
 // ClearTimeout drops the current state's deadline without changing state,
-// acknowledging a timeout the caller has handled some other way:
+// acknowledging a timeout the caller has handled some other way and leaving the
+// state unbounded from then on:
 //
 //	if sm.TimeoutReached() {
-//		sm.ClearTimeout()             // do not report it again on the next pass
-//		r.extendValidationDeadline(vm) // the operator granted it more time
+//		sm.ClearTimeout() // do not report it again on the next pass
+//		r.escalate(vm)    // somebody else decides now
 //	}
+//
+// A caller that grants the state more time instead uses [Machine.Extend], which
+// keeps it bounded.
 //
 // It cancels the context returned by [Machine.Context], on the grounds that work
 // bounded by a deadline which has just fired is void.
 func (sm *Machine[S]) ClearTimeout() {
 	sm.arm(0)
+}
+
+// Extend moves the current state's deadline to by from now, when that is later
+// than the deadline it has, and reports whether it moved. The state does not
+// change and no hook runs.
+//
+// It is how a caller grants a state more time for work that is still moving: a
+// deadline bounding a state that stopped making progress rather than one that
+// takes long. Persist [Machine.Snapshot] afterward, as after any transition, or
+// the extension does not survive the process:
+//
+//	if progressed {
+//		sm.Extend(stallBudget) // a whole budget again from this pass
+//	}
+//	status.Step = statemachine.ToKube(sm.Snapshot())
+//
+// It only ever moves a deadline out, so asking for less than is left changes
+// nothing. A state with no deadline stays without one: the graph declared it
+// unbounded, and extending is about a budget the graph gave. A deadline that
+// already passed is extended like any other, which revives the state, so a
+// caller for whom a lapse must fail checks [Machine.TimeoutReached] first.
+//
+// A moved deadline replaces the context [Machine.Context] returns, canceling
+// the previous one, because a context's deadline cannot be changed in place.
+// Work bound to the old context should be re-issued against the new one.
+//
+// It reports false, and changes nothing, on a closed machine and from inside a
+// [TransitionFunc], where the deadline is the one the entering hook is about to
+// return.
+func (sm *Machine[S]) Extend(by time.Duration) bool {
+	if sm.entering != nil || sm.base.Err() != nil {
+		return false
+	}
+	current, bounded := sm.stateCtx.Deadline()
+	if !bounded {
+		return false
+	}
+	if !time.Now().Add(by).After(current) {
+		return false
+	}
+	sm.arm(by)
+	return true
 }
 
 // TransitionTo moves the machine to state to.

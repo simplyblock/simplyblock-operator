@@ -33,6 +33,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -338,8 +339,14 @@ func (r *StorageNodeOpsReconciler) advance(
 
 	current := machine.CurrentState()
 
+	// The machine is asked rather than a table beside it, and it is asked rather
+	// than the graphs, because it was built for this operation's action: a step
+	// two actions share can be abortable in one of them.
 	if ops.Spec.Abort {
-		return r.unwind(ctx, ops, machine, current)
+		if machine.CanAbort() {
+			return r.unwind(ctx, ops, current)
+		}
+		r.refuseAbort(ctx, ops, current)
 	}
 
 	// The deadline is read before the step is, on every pass, so that no step can
@@ -352,15 +359,15 @@ func (r *StorageNodeOpsReconciler) advance(
 			WithLabelValues(r.clusterLabel(ctx, ops), string(ops.Spec.Action), string(current)).Inc()
 		r.emit(ctx, ops, corev1.EventTypeWarning, StepDeadlineExceeded,
 			fmt.Sprintf("Step %s outlived its deadline", current))
-		return r.fail(ctx, ops, current,
+		return r.fail(ctx, ops,
 			fmt.Sprintf("step %s outlived its deadline", current))
 	}
 
-	done, err := r.perform(ctx, ops, current)
+	done, err := r.perform(ctx, ops, machine)
 	if err != nil {
 		var fatal *terminalStepError
 		if errors.As(err, &fatal) {
-			return r.fail(ctx, ops, current, fatal.Error())
+			return r.fail(ctx, ops, fatal.Error())
 		}
 		var blocked *blockedStepError
 		if errors.As(err, &blocked) {
@@ -376,7 +383,7 @@ func (r *StorageNodeOpsReconciler) advance(
 		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, err.Error())
 	}
 	if !done {
-		return r.waitOn(machine), r.note(ctx, ops, r.waitingMessage(ops, current))
+		return r.waitOn(machine), r.wait(ctx, ops, machine, r.waitingMessage(ops, current))
 	}
 
 	r.observeStep(ctx, ops, current)
@@ -388,7 +395,7 @@ func (r *StorageNodeOpsReconciler) advance(
 
 	next, err := r.nextStep(machine)
 	if err != nil {
-		return r.fail(ctx, ops, current, err.Error())
+		return r.fail(ctx, ops, err.Error())
 	}
 	return r.enterStep(ctx, ops, machine, next)
 }
@@ -451,38 +458,33 @@ func (r *StorageNodeOpsReconciler) nextStep(
 	return current, fmt.Errorf("step %s declares no successor and is not terminal", current)
 }
 
-// unwind honors spec.abort where the graph allows it, and reports an abort that
-// arrived too late rather than half-undoing the work.
+// refuseAbort answers an abort that arrived at a step with no abort edge, and
+// the operation runs on.
 //
 // The refusal is the point. A step with no abort edge has already asked the
 // control plane for something it is part-way through, and stopping there would
 // leave nothing driving the node back to a state somebody can reason about.
 // Promoting is the clearest case: the promote has re-homed the logical volumes,
 // so there is nothing to unwind and the operation is what finishes the relocation
-// (§9).
-func (r *StorageNodeOpsReconciler) unwind(
-	ctx context.Context,
-	ops *simplyblockv1alpha2.StorageNodeOps,
-	machine *statemachine.Machine[step],
-	current step,
-) (ctrl.Result, error) {
-	// The machine is asked rather than a table beside it, and it is asked rather
-	// than the graphs, because it was built for this operation's action: a step
-	// two actions share can be abortable in one of them.
-	if !machine.CanAbort() {
-		// Not a failure of the operation: it carries on. What the user asked for
-		// cannot be done, and saying so is the whole of the response.
-		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, fmt.Sprintf(
-			"the abort arrived at step %s, which the control plane is part-way through "+
-				"and cannot be stopped; the operation is running on", current))
-	}
+// (§9). Neither does the operation pause: spec.abort stays set, so a refusal that
+// returned before the step ran would refuse again on every pass and hold the
+// node's lock for good, with the step's deadline never read.
+//
+// The refusal is an event rather than the status message, because the message
+// belongs to the step the operation is still running and two writers would
+// alternate it every pass. Repeating the event is what the recorder aggregates.
+func (r *StorageNodeOpsReconciler) refuseAbort(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, current step,
+) {
+	r.emit(ctx, ops, corev1.EventTypeWarning, AbortRefused, fmt.Sprintf(
+		"The abort arrived at step %s, which the control plane is part-way through "+
+			"and cannot be stopped; the operation is running on", current))
+}
 
-	// Every terminal outcome from Suspending onward resumes the node first. A
-	// node past the suspend is not serving, and an operation that stopped there
-	// and left it that way would take capacity out of the cluster for as long as
-	// nobody noticed (§8.3).
-	r.resumeNode(ctx, ops, current)
-	r.abortMigrations(ctx, ops, current)
+// unwind ends an operation whose abort the graph allows at the current step.
+func (r *StorageNodeOpsReconciler) unwind(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, current step,
+) (ctrl.Result, error) {
 	r.clearMaintenanceMarkers(ctx, ops)
 
 	r.emit(ctx, ops, corev1.EventTypeNormal, OperationAborted,
@@ -491,40 +493,14 @@ func (r *StorageNodeOpsReconciler) unwind(
 		fmt.Sprintf("aborted at step %s", current))
 }
 
-// fail ends the operation, resuming the node first where the step it failed on
-// left it suspended and taking down what a maintenance window holds a worker
-// with.
+// fail ends the operation, taking down what a maintenance window holds a worker
+// with. Nothing is resumed: a removal's only step before the point of no return
+// changes nothing, and every later one leaves the node to the control plane.
 func (r *StorageNodeOpsReconciler) fail(
-	ctx context.Context,
-	ops *simplyblockv1alpha2.StorageNodeOps,
-	current step,
-	message string,
+	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, message string,
 ) (ctrl.Result, error) {
-	r.resumeNode(ctx, ops, current)
 	r.clearMaintenanceMarkers(ctx, ops)
 	return r.finish(ctx, ops, simplyblockv1alpha2.StorageNodeOpsPhaseFailed, message)
-}
-
-// resumeNode is the unwind of §8.3, and it is best-effort on purpose.
-//
-// A resume that itself fails leaves the node suspended, which is visible in
-// status.status and in the NodeResumeFailed event. Retrying it forever would mean
-// an operation that can never reach a terminal phase and a lock that is never
-// released, and §16 Q3 is whether that is the right trade.
-func (r *StorageNodeOpsReconciler) resumeNode(
-	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, current step,
-) {
-	if !unwinds(current) {
-		return
-	}
-	clusterID, nodeID, err := r.target(ctx, ops)
-	if err != nil || nodeID == "" {
-		return
-	}
-	if err := r.API.Resume(ctx, clusterID, nodeID); err != nil {
-		r.emit(ctx, ops, corev1.EventTypeWarning, NodeResumeFailed, fmt.Sprintf(
-			"Node %s could not be resumed and is left suspended: %v", ops.Spec.NodeRef, err))
-	}
 }
 
 // waitOn requeues for whatever is left of the current step's deadline, so that a
@@ -938,6 +914,9 @@ func readingFromDTO(dto subscriptions.NodeDTO) NodeReading {
 		LvolPort:      dto.LvolPort,
 		NVMeOFPort:    dto.NVMeOFPort,
 		FailureDomain: dto.FailureDomain,
+
+		SecondaryNodeID: dto.SecondaryNodeID,
+		TertiaryNodeID:  dto.TertiaryNodeID,
 	}
 }
 
@@ -963,6 +942,42 @@ func (r *StorageNodeOpsReconciler) note(
 	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageNodeOpsStatus) {
 		status.Message = message
 	})
+}
+
+// wait records a pass that left the step unfinished: its message, and the
+// machine's position. The position is written from the machine because a step may
+// have extended its deadline (Machine.Extend), and the machine is the one place a
+// deadline is decided. A pass that changed nothing writes nothing.
+func (r *StorageNodeOpsReconciler) wait(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageNodeOps,
+	machine *statemachine.Machine[step],
+	message string,
+) error {
+	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageNodeOpsStatus) {
+		status.Message = message
+		status.Step = snapshotOf(status.Step, machine)
+	})
+}
+
+// snapshotOf is the machine's position as the operation stores it, keeping the
+// claim the stored step carries.
+//
+// The machine knows its state and deadline and nothing of claims, which are taken
+// on the stored step by the calls a pass makes (once). Writing the machine's
+// snapshot alone would drop the claim a call of this very pass took, and the
+// next pass, finding no claim, would make the call again. A claim taken in
+// another state holds nothing in this one, so only a claim on the same state is
+// kept.
+func snapshotOf(
+	stored statemachine.KubeSnapshot, machine *statemachine.Machine[step],
+) statemachine.KubeSnapshot {
+	snapshot := statemachine.ToKube(machine.Snapshot())
+	if claim := stored.Claim; claim != nil && claim.State == snapshot.State {
+		kept := *claim
+		snapshot.Claim = &kept
+	}
+	return snapshot
 }
 
 // recordStep persists the step the operation is about to be in, with the instant
@@ -1059,12 +1074,14 @@ func (r *StorageNodeOpsReconciler) emit(
 // whether this pass made it. A pass that loses the claim made no call: either
 // another pass holds a live claim on the step, or this pass read the operation
 // at a version a newer write has replaced. Either way it waits, and the next
-// pass reads again.
+// pass reads again. also edits status that has to be written before the call,
+// and travels in the claim's own patch.
 func (r *StorageNodeOpsReconciler) once(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, call func() error,
+	also ...func(),
 ) (bool, error) {
 	return statemachine.WithClaim(ctx, ops.Status.Step, claimLease,
-		stepclaim.Writer(r.Client, ops, &ops.Status.Step), call)
+		stepclaim.Writer(r.Client, ops, &ops.Status.Step, also...), call)
 }
 
 // terminalOps reports a phase the operation can never leave.
@@ -1124,6 +1141,9 @@ func equalOpsStatus(a, b simplyblockv1alpha2.StorageNodeOpsStatus) bool {
 		!equalTime(a.CompletedAt, b.CompletedAt) {
 		return false
 	}
+	if !equality.Semantic.DeepEqual(a.Removal, b.Removal) {
+		return false
+	}
 	if (a.Drain == nil) != (b.Drain == nil) {
 		return false
 	}
@@ -1163,6 +1183,10 @@ func (r *StorageNodeOpsReconciler) waitingMessage(
 ) string {
 	if d := ops.Status.Drain; d != nil && current == stepMigratingVolumes {
 		return fmt.Sprintf("%d of %d volumes migrated", d.VolumesMigrated, d.VolumesTotal)
+	}
+	if removal := ops.Status.Removal; removal != nil &&
+		(current == stepMigratingDevices || current == stepAwaitingRemoval) {
+		return removalProgress(removal)
 	}
 	return fmt.Sprintf("waiting on %s", current)
 }

@@ -41,6 +41,9 @@ const (
 	// plane's task window without having produced a node.
 	NodeAddGaveUp = "NodeAddGaveUp"
 
+	// NodeAddFailing is the add this node waits on having failed and being retried.
+	NodeAddFailing = "NodeAddFailing"
+
 	// NodeAdopted says an existing backend node was taken over rather than
 	// added, which is the difference between a migration and a mistake.
 	NodeAdopted = "NodeAdopted"
@@ -64,6 +67,10 @@ const (
 	OperationFailed    = "OperationFailed"
 	OperationAborted   = "OperationAborted"
 
+	// AbortRefused says spec.abort arrived at a step that cannot be stopped,
+	// and that the operation is running on.
+	AbortRefused = "AbortRefused"
+
 	// StepDeadlineExceeded distinguishes an operation still working from one
 	// that stopped, which is the distinction status.message cannot express.
 	StepDeadlineExceeded = "StepDeadlineExceeded"
@@ -84,13 +91,20 @@ const (
 	// against a fresh target.
 	MigrationRetried = "MigrationRetried"
 
+	// RemovalDeferred says the control plane refused the removal's shutdown,
+	// prepare-removal, or the node DELETE for a reason that passes by itself,
+	// such as a peer restarting, a cluster still rebalancing, or an active task
+	// on the node, and the operation asks again rather than failing.
+	RemovalDeferred = "RemovalDeferred"
+
+	// RemovalNotAdmitted says the removal's admission refused the node while it
+	// still serves: a failure-domain balance the removal would break, or the
+	// control plane's own refusal. The drain holds in Validating, where nothing
+	// has been done, until the condition changes or somebody decides.
+	RemovalNotAdmitted = "RemovalNotAdmitted"
+
 	// DrainCompleted says every volume has been migrated off the node.
 	DrainCompleted = "DrainCompleted"
-
-	// NodeResumeFailed is the one that cannot be retried away. The unwind of §8.3
-	// is best-effort, so a resume that fails leaves a node suspended and out of
-	// service, and this event is the only place that is visible.
-	NodeResumeFailed = "NodeResumeFailed"
 
 	// MaintenanceQueued says a maintenance window is holding for another worker,
 	// which is correct behavior and looks like a stalled controller without it.

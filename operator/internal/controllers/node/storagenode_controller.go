@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -763,11 +764,14 @@ func (r *StorageNodeReconciler) postNode(
 	cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
 	params := r.addParams(node, cluster)
-	if err := r.API.AddNode(ctx, cluster.Status.UUID, params); err != nil {
+	taskID, err := r.API.AddNode(ctx, cluster.Status.UUID, params)
+	if err != nil {
 		return fmt.Errorf("add node %s on worker %s: %w",
 			node.Name, node.Spec.WorkerNode, err)
 	}
-	return nil
+	return r.writeStatus(ctx, node, func(status *simplyblockv1alpha2.StorageNodeStatus) {
+		status.NodeAddTaskID = taskID
+	})
 }
 
 // resolveUUID matches this node's slot against the cluster's node list and writes
@@ -811,6 +815,20 @@ func (r *StorageNodeReconciler) resolve(
 		return stepResolving, done, err
 	}
 
+	// A restarted, suspended add is failing, not slow, and addInFlight still counts
+	// it as work. The task is this node's own: the one its add returned.
+	if node.Status.NodeAddTaskID != "" {
+		task, err := r.API.Task(ctx, cluster.Status.UUID, node.Status.NodeAddTaskID)
+		if err != nil {
+			return stepResolving, false, err
+		}
+		if task.Status == taskSuspended && task.Retry > 0 {
+			return stepResolving, false, blockedf(NodeAddFailing, "%s", clip(fmt.Sprintf(
+				"%s task %s failed: %s", nodeAddTask, node.Status.NodeAddTaskID, task.Result),
+				eventNoteLimit))
+		}
+	}
+
 	if addInFlight(cluster) {
 		return stepResolving, false, nil
 	}
@@ -836,6 +854,27 @@ func addInFlight(cluster *simplyblockv1alpha2.StorageCluster) bool {
 	}
 	return false
 }
+
+// eventNoteLimit is the most bytes an event note takes.
+const eventNoteLimit = 1024
+
+// clip cuts s to at most limit bytes without splitting a character, and ends it
+// with an ellipsis when it cut.
+func clip(s string, limit int) string {
+	const mark = "…"
+	if len(s) <= limit {
+		return s
+	}
+	cut := limit - len(mark)
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + mark
+}
+
+// taskSuspended is the control plane's status for a task it has stopped working
+// and will pick up again.
+const taskSuspended = "suspended"
 
 // taskDone is the control plane's terminal task status. Everything else it
 // publishes — new, running, suspended — is a task still being worked through.
@@ -1065,10 +1104,17 @@ func phaseOf(reading NodeReading) simplyblockv1alpha2.StorageNodePhase {
 			return simplyblockv1alpha2.StorageNodePhaseDegraded
 		}
 		return simplyblockv1alpha2.StorageNodePhaseOnline
-	case nodeStatusSuspended, nodeStatusOffline:
+	case nodeStatusSuspended, nodeStatusOffline, nodeStatusInShutdown:
+		// A shutdown in progress is read as where it is going, the same way a
+		// restart in progress is read as Provisioning.
 		return simplyblockv1alpha2.StorageNodePhaseOffline
 	case nodeStatusInCreation, nodeStatusInRestart:
 		return simplyblockv1alpha2.StorageNodePhaseProvisioning
+	case nodeStatusPendingRemoval, nodeStatusMigratingDevices,
+		nodeStatusMigratingLvols, nodeStatusInRemoval:
+		return simplyblockv1alpha2.StorageNodePhaseRemoving
+	case nodeStatusRemoved:
+		return simplyblockv1alpha2.StorageNodePhaseRemoved
 	default:
 		// unreachable and timeout, plus anything the control plane adds later. A
 		// value this operator does not know is a node it cannot vouch for.
@@ -1719,6 +1765,7 @@ func (r *StorageNodeReconciler) observePhase(node *simplyblockv1alpha2.StorageNo
 		simplyblockv1alpha2.StorageNodePhaseProvisioning,
 		simplyblockv1alpha2.StorageNodePhaseOnline,
 		simplyblockv1alpha2.StorageNodePhaseRemoving,
+		simplyblockv1alpha2.StorageNodePhaseRemoved,
 		simplyblockv1alpha2.StorageNodePhaseOffline,
 		simplyblockv1alpha2.StorageNodePhaseDegraded,
 		simplyblockv1alpha2.StorageNodePhaseFailed,
@@ -1735,7 +1782,7 @@ func (r *StorageNodeReconciler) observePhase(node *simplyblockv1alpha2.StorageNo
 // write. It is spelled out rather than reflect.DeepEqual because the status
 // carries pointers, and two equal values behind two pointers are not deeply equal.
 func equalNodeStatus(a, b simplyblockv1alpha2.StorageNodeStatus) bool {
-	if a.Phase != b.Phase || a.UUID != b.UUID || a.Status != b.Status ||
+	if a.Phase != b.Phase || a.UUID != b.UUID || a.NodeAddTaskID != b.NodeAddTaskID || a.Status != b.Status ||
 		a.Health != b.Health || a.Hostname != b.Hostname || a.Uptime != b.Uptime ||
 		a.FailureDomain != b.FailureDomain || a.ActiveOpsRef != b.ActiveOpsRef ||
 		a.Message != b.Message || a.ObservedGeneration != b.ObservedGeneration ||

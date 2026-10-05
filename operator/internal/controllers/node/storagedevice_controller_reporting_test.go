@@ -11,6 +11,7 @@ package node
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -19,6 +20,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -312,6 +314,122 @@ func TestUnknownDoesNotOverwriteATerminalPhase(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-02-migrated-device-reads-failed: every device of a node
+// removed exactly to plan ended Failed, announced with a DeviceFailed warning
+// and a message saying the cluster ran with less redundancy until the device was
+// replaced. Its data was rebuilt on the peers, which is the opposite.
+func TestARebuiltDeviceIsAnnouncedAsMigrated(t *testing.T) {
+	cache := sdOnlineCache()
+	dto := cache.devices[sdName()]
+	dto.Status = cpDeviceFailedAndMigrated
+	cache.devices[sdName()] = dto
+
+	r := sdReconciler(t, cache,
+		sdNodeWithStatus(utils.NodeStatusOnline), sdNodeSet(),
+		existingDevice(simplyblockv1alpha2.StorageDevicePhaseFailed, cpDeviceFailed))
+
+	if _, err := r.Reconcile(context.Background(), sdReq()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	sd, err := getSD(t, r.Client)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if sd.Status.Phase != simplyblockv1alpha2.StorageDevicePhaseMigrated {
+		t.Errorf("phase = %q, want Migrated for a device whose data was rebuilt", sd.Status.Phase)
+	}
+	if strings.Contains(sd.Status.Message, "less redundancy") {
+		t.Errorf("message = %q, which tells a reader to replace a device that needs nothing",
+			sd.Status.Message)
+	}
+	reasons := strings.Join(drainReasons(r.Recorder.(*events.FakeRecorder)), "\n")
+	if !strings.Contains(reasons, "Normal DeviceMigrated") || strings.Contains(reasons, "DeviceFailed") {
+		t.Errorf("announced %q, want a Normal DeviceMigrated and no DeviceFailed", reasons)
+	}
+}
+
+// Regression: 2026-10-02-unavailable-device-on-a-down-node: while a node was
+// shut down for its removal, each of its devices reported unavailable and was
+// read as Degraded (serving and should not be) with a DeviceDegraded warning.
+// A device of a node that is down serves nothing, and its state is not
+// observable until the node is back or gone, which is what Unknown says.
+func TestAnUnavailableDeviceOnADownNodeIsUnknownRatherThanDegraded(t *testing.T) {
+	for _, nodeStatus := range []string{
+		nodeStatusInShutdown, nodeStatusOffline, nodeStatusMigratingDevices, nodeStatusInRemoval,
+	} {
+		t.Run(nodeStatus, func(t *testing.T) {
+			cache := sdOnlineCache()
+			dto := cache.devices[sdName()]
+			dto.Status = cpDeviceUnavailable
+			cache.devices[sdName()] = dto
+
+			r := sdReconciler(t, cache,
+				sdNodeWithStatus(nodeStatus), sdNodeSet(),
+				existingDevice(simplyblockv1alpha2.StorageDevicePhaseOnline, cpDeviceOnline))
+
+			if _, err := r.Reconcile(context.Background(), sdReq()); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			sd, err := getSD(t, r.Client)
+			if err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if sd.Status.Phase != simplyblockv1alpha2.StorageDevicePhaseUnknown {
+				t.Errorf("phase = %q on a node %s, want Unknown", sd.Status.Phase, nodeStatus)
+			}
+			if !strings.Contains(sd.Status.Message, nodeStatus) {
+				t.Errorf("message = %q, want it to say the node is %s", sd.Status.Message, nodeStatus)
+			}
+			if reasons := strings.Join(drainReasons(r.Recorder.(*events.FakeRecorder)), "\n"); strings.Contains(reasons, "DeviceDegraded") {
+				t.Errorf("announced %q; a device of a node that is down is not degraded", reasons)
+			}
+		})
+	}
+}
+
+// The other half: on a node that is serving, an unavailable device is serving
+// and should not be, which is Degraded.
+func TestAnUnavailableDeviceOnAnOnlineNodeIsDegraded(t *testing.T) {
+	cache := sdOnlineCache()
+	dto := cache.devices[sdName()]
+	dto.Status = cpDeviceUnavailable
+	cache.devices[sdName()] = dto
+
+	r := sdReconciler(t, cache,
+		sdNodeWithStatus(utils.NodeStatusOnline), sdNodeSet(),
+		existingDevice(simplyblockv1alpha2.StorageDevicePhaseOnline, cpDeviceOnline))
+
+	if _, err := r.Reconcile(context.Background(), sdReq()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	sd, err := getSD(t, r.Client)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if sd.Status.Phase != simplyblockv1alpha2.StorageDevicePhaseDegraded {
+		t.Errorf("phase = %q on an online node, want Degraded", sd.Status.Phase)
+	}
+}
+
+// Migrated is terminal like Failed, and an unreachable node does not revoke it.
+func TestUnknownDoesNotOverwriteMigrated(t *testing.T) {
+	migrated := existingDevice(simplyblockv1alpha2.StorageDevicePhaseMigrated, cpDeviceFailedAndMigrated)
+
+	r := sdReconciler(t, &fakeDeviceCache{synced: true, devices: map[string]subscriptions.DeviceDTO{}},
+		sdNodeWithStatus(utils.NodeStatusUnreachable), sdNodeSet(), migrated)
+
+	if _, err := r.Reconcile(context.Background(), sdReq()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	sd, err := getSD(t, r.Client)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if sd.Status.Phase != simplyblockv1alpha2.StorageDevicePhaseMigrated {
+		t.Errorf("phase = %q, want the terminal Migrated kept", sd.Status.Phase)
+	}
+}
+
 // An online node that stops reporting a device is information: the drive is
 // gone. Which of the two events it gets is what says whether anybody asked for
 // it.
@@ -504,5 +622,52 @@ func TestALabelThatStopsBeingResolvableIsRemoved(t *testing.T) {
 	}
 	if sd.Labels["unrelated"] != "kept" {
 		t.Errorf("a label the mirror does not own was dropped: %v", sd.Labels)
+	}
+}
+
+// Regression: 2026-10-02-device-phase-misses-node-change (PR #612 review): a
+// device's phase reads its node's status, and nothing re-read the devices when
+// only the node changed. A device seen unavailable before the node's shutdown
+// reached Kubernetes stayed Degraded on a node that was offline, and one read
+// Unknown stayed so after the node came back. A node event wakes its devices.
+func TestANodeEventWakesItsDevices(t *testing.T) {
+	ofNode := func(name, node string) *simplyblockv1alpha2.StorageDevice {
+		return &simplyblockv1alpha2.StorageDevice{ObjectMeta: metav1.ObjectMeta{
+			Namespace: "sb", Name: name,
+			Labels: map[string]string{simplyblockv1alpha2.DeviceLabelNode: node},
+		}}
+	}
+	r := sdReconciler(t, sdOnlineCache(), sdNodeWithStatus(utils.NodeStatusOffline), sdNodeSet(),
+		ofNode("dev-a", sdNodeCR), ofNode("dev-b", sdNodeCR), ofNode("dev-other", "another-node"))
+
+	requests := r.devicesOf(context.Background(), sdNodeWithStatus(utils.NodeStatusOffline))
+
+	woken := make([]string, 0, len(requests))
+	for _, request := range requests {
+		woken = append(woken, request.Name)
+	}
+	slices.Sort(woken)
+	if !slices.Equal(woken, []string{"dev-a", "dev-b"}) {
+		t.Errorf("the node woke %v, want its own two devices", woken)
+	}
+}
+
+// Regression: 2026-10-02-device-phase-misses-node-change (PR #612 review): only a
+// change of the node's control-plane status wakes its devices. Every other status
+// write of a node would otherwise reconcile all of them.
+func TestOnlyANodeStatusChangeWakesItsDevices(t *testing.T) {
+	updated := func(before, after *simplyblockv1alpha2.StorageNode) bool {
+		return nodeStatusChanged().Update(event.UpdateEvent{ObjectOld: before, ObjectNew: after})
+	}
+	online := sdNodeWithStatus(utils.NodeStatusOnline)
+	offline := sdNodeWithStatus(utils.NodeStatusOffline)
+	touched := sdNodeWithStatus(utils.NodeStatusOnline)
+	touched.Status.Message = "a reading of something else moved"
+
+	if !updated(online, offline) {
+		t.Error("a node that went offline did not wake its devices")
+	}
+	if updated(online, touched) {
+		t.Error("a node whose control-plane status did not move woke its devices")
 	}
 }

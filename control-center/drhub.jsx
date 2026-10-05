@@ -51,6 +51,120 @@ const StepJournal = ({steps, empty}) => !steps.length ? <div className="nolim">{
   })}</div>
 );
 const durMs2 = (a, b) => a && b ? Math.max(0, Date.parse(b) - Date.parse(a)) : 0;
+
+// ---- workflow timeline (dr-hub ADR 0022) ------------------------------------
+// A run's steps with their live progress, deadline and blocker, and the
+// run's event log. dr-hub writes step.progress / lastProgressTime / deadline
+// / blocker while a step runs, and status.log (newest last, at most 100
+// entries) for the whole run; the detail view re-reads them every few
+// seconds while the run is going.
+const SEV_C = {Error: "var(--bad)", Warning: "var(--warn)", Info: "var(--dim)"};
+const sevCount = (entries, sev) => entries.filter(e => e.severity === sev).length;
+const stepLog = (log, name) => (log || []).filter(e => e.step === name);
+const runningStep = steps => (steps || []).slice().reverse().find(s => s.result === "Running") || null;
+const failedStep = steps => (steps || []).slice().reverse().find(s => s.result === "Failed") || null;
+const deadlineText = (s, now) => {
+  if (!s.deadline || s.result !== "Running") return "";
+  const left = (Date.parse(s.deadline) - now) / 1000;
+  return left >= 0 ? `gives up in ${fmtSecs(left)}` : `past its deadline by ${fmtSecs(-left)}`;
+};
+const LogLines = ({entries, empty}) => !entries.length ? <div className="nolim">{empty || "No events."}</div> : (
+  <div className="wflog" style={{display: "flex", flexDirection: "column", gap: 3}}>{entries.map((e, i) => (
+    <div key={i} className={"wflog-e sev-" + (e.severity || "Info").toLowerCase()} style={{display: "flex", gap: 8, fontSize: 11.5, alignItems: "baseline"}}>
+      <span className="mono" style={{color: "var(--dim2)", fontSize: 10.5, flex: "none"}}>{e.time ? new Date(e.time).toISOString().slice(11, 19) : ""}</span>
+      <span className="mono" style={{color: SEV_C[e.severity] || "var(--dim)", fontSize: 10.5, flex: "none", minWidth: 52}}>{(e.severity || "Info").toLowerCase()}</span>
+      {e.step && <span className="badge" style={{flex: "none"}}>{e.step}</span>}
+      <span className="mono" style={{color: "var(--dim2)", fontSize: 10.5, flex: "none"}}>{e.source}</span>
+      <span style={{color: e.severity === "Info" ? "var(--text)" : SEV_C[e.severity], overflowWrap: "anywhere", minWidth: 0}}>{e.message}</span>
+    </div>))}</div>
+);
+function WorkflowStep({s, log, now}) {
+  const entries = stepLog(log, s.name);
+  const [open, setOpen] = useState(s.result === "Running" || s.result === "Failed");
+  const res = s.result || "Pending";
+  const cls = res === "Succeeded" ? "done" : res === "Running" ? "on" : res === "Failed" ? "failed" : res === "Skipped" ? "aborted" : "";
+  const elapsed = s.startTime ? (s.endTime ? durMs2(s.startTime, s.endTime) : Math.max(0, now - Date.parse(s.startTime))) / 1000 : null;
+  const warns = sevCount(entries, "Warning"), errs = sevCount(entries, "Error");
+  return (
+    <div className={"stp wfstep" + (res === "Running" ? " running" : "")} data-step={s.name}>
+      <ul className="opsteps" style={{margin: 0}}><li className={cls}><i></i></li></ul>
+      <div style={{flex: 1, minWidth: 0}}>
+        <div style={{display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap"}}>
+          <b style={{fontSize: 12}}>{s.name}</b>{s.phase && <span className="badge">{s.phase}</span>}<TrafficLight status={res} sm />
+          <span className="mono" style={{fontSize: 10.5, color: "var(--dim2)", marginLeft: "auto"}}>
+            {s.startTime ? fmtDate(s.startTime) : ""}{elapsed != null ? ` · ${res === "Running" ? "running " : ""}${fmtSecs(elapsed)}` : ""}
+            {deadlineText(s, now) ? ` · ${deadlineText(s, now)}` : ""}</span>
+        </div>
+        {res === "Running" && s.progress && <div className="wf-progress" style={{fontSize: 11.5, marginTop: 4, display: "flex", gap: 6, alignItems: "baseline"}}>
+          <Icon n="refresh" s={11} c="var(--info)" /><span style={{overflowWrap: "anywhere", minWidth: 0}}>{s.progress}</span>
+          {s.lastProgressTime && <span className="mono" style={{fontSize: 10.5, color: "var(--dim2)", flex: "none"}}>· {fmtAgo(s.lastProgressTime)}</span>}</div>}
+        {res === "Running" && !s.progress && <div style={{fontSize: 11.5, color: "var(--dim2)", marginTop: 4}}>No progress reported yet.</div>}
+        {s.blocker && <div className="wf-blocker" style={{fontSize: 11.5, marginTop: 5, padding: "6px 8px", borderRadius: 6, color: "var(--warn)",
+          border: "1px solid color-mix(in srgb,var(--warn) 35%,transparent)", background: "color-mix(in srgb,var(--warn) 8%,var(--panel))", overflowWrap: "anywhere"}}>
+          <Icon n="alert" s={12} /> <b>Stuck:</b> {s.blocker}</div>}
+        {s.message && res !== "Running" && <div style={{fontSize: 11.5, color: res === "Failed" ? "var(--bad)" : "var(--dim)", marginTop: 3, overflowWrap: "anywhere"}}>{s.message}</div>}
+        {res !== "Running" && s.progress && s.progress !== s.message && <div style={{fontSize: 11, color: "var(--dim2)", marginTop: 2, overflowWrap: "anywhere"}}>last progress: {s.progress}</div>}
+        {s.logRef && <div className="mono" style={{fontSize: 10.5, color: "var(--dim2)", marginTop: 3}}>log · {s.logRef}</div>}
+        {!!entries.length && <div style={{marginTop: 5}}>
+          <button className="chip wf-toggle" onClick={() => setOpen(!open)}>{open ? "Hide" : "Show"} {entries.length} event{entries.length === 1 ? "" : "s"}
+            {errs ? ` · ${errs} error${errs === 1 ? "" : "s"}` : ""}{warns ? ` · ${warns} warning${warns === 1 ? "" : "s"}` : ""}</button>
+          {open && <div style={{marginTop: 6}}><LogLines entries={entries.slice(-30)} /></div>}
+        </div>}
+      </div>
+    </div>
+  );
+}
+function WorkflowTimeline({steps, log, empty}) {
+  const now = Date.now();
+  if (!(steps || []).length) return <div className="nolim">{empty || "No steps recorded yet."}</div>;
+  return <div className="steps wftimeline">{steps.map((s, i) => <WorkflowStep key={s.name + "|" + (s.phase || "") + "|" + i} s={s} log={log} now={now} />)}</div>;
+}
+function EventLog({log}) {
+  const [filter, setFilter] = useState("all");
+  const entries = (log || []).filter(e => filter === "all" || (filter === "warn" ? e.severity !== "Info" : e.severity === "Error"));
+  const warns = sevCount(log || [], "Warning"), errs = sevCount(log || [], "Error");
+  return (
+    <div className="card wf-eventlog" style={{marginTop: 10}}><h3>Event log · {(log || []).length}{errs ? ` · ${errs} errors` : ""}{warns ? ` · ${warns} warnings` : ""}</h3><div className="bd">
+      <div style={{display: "flex", gap: 6, marginBottom: 8}}>
+        {[["all", "All"], ["warn", "Warnings and errors"], ["error", "Errors"]].map(([k, l]) =>
+          <button key={k} className={"chip wf-filter" + (filter === k ? " on" : "")} style={filter === k ? {borderColor: "var(--info)", color: "var(--info)"} : null} onClick={() => setFilter(k)}>{l}</button>)}
+      </div>
+      <LogLines entries={entries.slice().reverse()} empty={(log || []).length ? "Nothing at this severity." : "No events recorded yet. dr-hub writes them while the run goes (dr-simplyblock with ADR 0022)."} />
+    </div></div>
+  );
+}
+// RunBanner is the run's state at the top of its detail view: the final
+// error of a failed run, the blocker of a stuck step, or the live progress
+// of the step that runs.
+function RunBanner({run, what}) {
+  const failed = run.status === "Failed" || run.status === "RolledBack" || run.outcome === "Failed" || run.outcome === "FailedInvariant";
+  const warnStyle = {color: "var(--warn)", borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)", background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"};
+  const infoStyle = {color: "var(--info)", borderColor: "color-mix(in srgb,var(--info) 35%,transparent)", background: "color-mix(in srgb,var(--info) 8%,var(--panel))"};
+  if (failed) {
+    const f = failedStep(run.steps);
+    const last = (run.log || []).slice().reverse().find(e => e.severity === "Error");
+    const msg = (f && f.message) || run.completionMessage || (last && last.message) || "See the journal.";
+    return <div className="banner wf-banner-failed"><Icon n="alert" s={15} /><span><b>The {what} failed{f ? ` in step ${f.name}` : ""}.</b> <span style={{overflowWrap: "anywhere"}}>{msg}</span></span></div>;
+  }
+  if (run.terminal) return null;
+  const s = runningStep(run.steps);
+  if (!s) return <div className="banner wf-banner-running" style={infoStyle}><Icon n="refresh" s={15} /><span><b>Starting.</b> This view refreshes every few seconds while the {what} runs.</span></div>;
+  if (s.blocker) return <div className="banner wf-banner-stuck" style={warnStyle}><Icon n="alert" s={15} /><span><b>Stuck in step {s.name}.</b> <span style={{overflowWrap: "anywhere"}}>{s.blocker}</span>{deadlineText(s, Date.now()) ? ` (The step ${deadlineText(s, Date.now())}.)` : ""}</span></div>;
+  return <div className="banner wf-banner-running" style={infoStyle}><Icon n="refresh" s={15} /><span><b>Running step {s.name}.</b> {s.progress || "No progress reported yet."}{deadlineText(s, Date.now()) ? ` · ${deadlineText(s, Date.now())}` : ""}</span></div>;
+}
+// RunEvents is a running run's current step and its latest events, for the
+// application's page.
+function RunEvents({run, nav}) {
+  const s = runningStep(run.steps);
+  const recent = (run.log || []).slice(-5).reverse();
+  return (
+    <div className="card wf-runevents" style={{marginBottom: 10}}><h3><Ref label={`${run.action || "Test"} ${run.name}`} onClick={() => nav.detail(run)} /> · {run.phase}</h3><div className="bd">
+      {s ? <div style={{fontSize: 12}}><b>{s.name}</b>: {s.progress || "no progress reported yet"}{s.lastProgressTime ? <span className="mono" style={{fontSize: 10.5, color: "var(--dim2)"}}> · {fmtAgo(s.lastProgressTime)}</span> : ""}</div> : <div className="nolim">Starting.</div>}
+      {s && s.blocker && <div style={{fontSize: 11.5, color: "var(--warn)", marginTop: 4, overflowWrap: "anywhere"}}><Icon n="alert" s={12} /> <b>Stuck:</b> {s.blocker}</div>}
+      {!!recent.length && <div style={{marginTop: 8}}><LogLines entries={recent} /></div>}
+    </div></div>
+  );
+}
 const PhaseStripDR = ({phases, current, terminal}) => {
   const idx = phases.indexOf(current);
   return <div className="phases">{phases.map((p, i) => <React.Fragment key={p}>
@@ -1484,6 +1598,7 @@ function PAppDetail({o: a, nav}) {
         badge={<><span className="badge">{a.appKind}</span>{a.method && <span className="badge">{a.method}</span>}{a.protected === false && <span className="badge" style={{color: "var(--bad)"}}>not protected</span>}</>} />
       {!!running.length && <div className="banner" style={{color: "var(--info)", borderColor: "color-mix(in srgb,var(--info) 35%,transparent)", background: "color-mix(in srgb,var(--info) 8%,var(--panel))"}}><Icon n="refresh" s={15} />
         <span><b>{running.length} run{running.length === 1 ? "" : "s"} in progress:</b> {running.map(r => <Ref key={r.id} label={`${r.action || "Test"} ${r.name}`} onClick={() => nav.detail(r)} />)}</span></div>}
+      {running.map(r => <RunEvents key={"ev" + r.id} run={r} nav={nav} />)}
       {a.move && <div className={"banner" + (a.move.phase === "Stuck" ? "" : " info")}><Icon n={a.move.phase === "Stuck" ? "alert" : "move"} s={15} /><span>
         <b>{a.move.action} {a.move.from} → {a.move.to} {a.move.phase === "Stuck" ? "is stuck" : "in progress"}{a.move.since ? ` since ${fmtAgo(a.move.since)}` : ""}.</b>
         {a.move.blocking ? <> Ramen reports: <Mono>{a.move.blocking}</Mono>.</> : a.move.progression ? ` Ramen: ${a.move.progression}.` : ""}
@@ -1596,7 +1711,7 @@ function RActionDetail({o: a, nav}) {
     <div>
       <DetailHead obj={a} title={a.name} sub={<><span className="mono" style={{color: "var(--dim)"}}>{a.namespace}</span><span className="mono">{a.planName ? `plan ${a.planName}` : `application ${a.appName}`}{a.pathName ? ` · ${a.pathName}` : " · in place"}</span></>} badge={<KindBadge k={a.action} />} />
       {a.override && <div className="banner" style={{color: "var(--warn)", borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)", background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"}}><Icon n="alert" s={15} /><span><b>Readiness override.</b> {a.override.reason}</span></div>}
-      {a.status === "Failed" && <div className="banner"><Icon n="alert" s={15} /><span><b>The action failed.</b> {(a.steps.filter(s => s.result === "Failed").slice(-1)[0] || {}).message || "See the journal."}</span></div>}
+      <RunBanner run={a} what="action" />
       <PhaseStripDR phases={ACTION_PHASES} current={a.phase} terminal={a.terminal} />
       <div className="stats">
         <Stat k="Phase" v={<TrafficLight status={a.status} />} />
@@ -1607,7 +1722,10 @@ function RActionDetail({o: a, nav}) {
         <Stat k="Operator" v={a.createdBy || "—"} />
       </div>
       <div className="dcols">
-        <div className="card"><h3>Journal · {a.steps.length} steps</h3><div className="bd"><StepJournal steps={a.steps} /></div></div>
+        <div>
+          <div className="card"><h3>Journal · {a.steps.length} steps{!a.terminal ? " · live" : ""}</h3><div className="bd"><WorkflowTimeline steps={a.steps} log={a.log} /></div></div>
+          <EventLog log={a.log} />
+        </div>
         <div>
           {!!a.children.length && <div className="card" style={{marginBottom: 10}}><h3>Applications in this plan run</h3><div className="bd">
             <Table cols={["Application", "Priority", "Action", "Phase", "Message"]} rows={a.children.map(c => [<b>{c.application}</b>, c.priority, <Mono dim>{c.action}</Mono>, <TrafficLight status={c.phase || "Pending"} sm />, c.message])} />
@@ -1646,6 +1764,7 @@ function TBubbleDetail({o: t, nav}) {
         badge={<><KindBadge k="Test" />{t.scheduleName && <span className="badge">schedule {t.scheduleName}</span>}</>} />
       {t.abort && !t.terminal && <div className="banner" style={{color: "var(--warn)", borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)", background: "color-mix(in srgb,var(--warn) 8%,var(--panel))"}}><Icon n="alert" s={15} /><span><b>Abort requested.</b> The bubble is being torn down.</span></div>}
       {t.outcome === "FailedInvariant" && <div className="banner"><Icon n="alert" s={15} /><span><b>An invariant was violated:</b> the test touched production state. See the invariants below.</span></div>}
+      {t.outcome !== "FailedInvariant" && <RunBanner run={t} what="test" />}
       <PhaseStripDR phases={TEST_PHASES} current={t.phase} terminal={t.terminal} />
       <div className="stats">
         <Stat k="Outcome" v={<TrafficLight status={t.status} />} s={t.testID ? `test ${t.testID}` : ""} />
@@ -1660,7 +1779,8 @@ function TBubbleDetail({o: t, nav}) {
           <div className="card"><h3>Applications</h3><div className="bd">
             <Table cols={["Application", "Priority", "Phase", "Ready", "Message"]} empty="Not started." rows={t.applications.map(a => [<b>{a.name}</b>, a.priority, <TrafficLight status={a.phase || "Pending"} sm />, a.readyTime ? fmtDate(a.readyTime) : "", a.message])} />
           </div></div>
-          <div className="card" style={{marginTop: 10}}><h3>Journal</h3><div className="bd"><StepJournal steps={t.steps} /></div></div>
+          <div className="card" style={{marginTop: 10}}><h3>Journal{!t.terminal ? " · live" : ""}</h3><div className="bd"><WorkflowTimeline steps={t.steps} log={t.log} /></div></div>
+          <EventLog log={t.log} />
         </div>
         <div>
           <div className="card"><h3>Checks</h3><div className="bd">

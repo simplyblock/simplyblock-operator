@@ -21,10 +21,13 @@ import (
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	atlaskube "github.com/simplyblock/atlas/kube"
@@ -116,7 +119,46 @@ func (r *StorageDeviceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&simplyblockv1alpha2.StorageDevice{}).
 		Named("storagedevice").
 		WatchesRawSource(source.Channel(r.Devices.Triggers(), &handler.EnqueueRequestForObject{})).
+		Watches(&simplyblockv1alpha2.StorageNode{},
+			handler.EnqueueRequestsFromMapFunc(r.devicesOf),
+			builder.WithPredicates(nodeStatusChanged())).
 		Complete(r)
+}
+
+// devicesOf maps a StorageNode event to the node's devices, by the node label
+// every mirror object carries. A device's phase reads its node's status (an
+// unavailable device on a node that is down is Unknown rather than Degraded), so
+// a change of the node alone has to re-read them. Without it the reading
+// converges only when the device itself next changes, which for a device that
+// stays unavailable is never.
+func (r *StorageDeviceReconciler) devicesOf(
+	ctx context.Context, node client.Object,
+) []reconcile.Request {
+	var devices simplyblockv1alpha2.StorageDeviceList
+	if err := r.List(ctx, &devices, client.InNamespace(node.GetNamespace()),
+		client.MatchingLabels{simplyblockv1alpha2.DeviceLabelNode: node.GetName()}); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(devices.Items))
+	for i := range devices.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(&devices.Items[i]),
+		})
+	}
+	return requests
+}
+
+// nodeStatusChanged passes a StorageNode update only when the control plane's
+// status for it moved, which is the one part of the node a device's phase reads.
+// Every other status write of a node would otherwise wake all of its devices.
+func nodeStatusChanged() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			before, okBefore := e.ObjectOld.(*simplyblockv1alpha2.StorageNode)
+			after, okAfter := e.ObjectNew.(*simplyblockv1alpha2.StorageNode)
+			return !okBefore || !okAfter || before.Status.Status != after.Status.Status
+		},
+	}
 }
 
 // Reconcile converges one StorageDevice toward the cache's view of its
@@ -206,6 +248,7 @@ func (r *StorageDeviceReconciler) markUnobservable(
 		}
 		switch current.Status.Phase {
 		case simplyblockv1alpha2.StorageDevicePhaseFailed,
+			simplyblockv1alpha2.StorageDevicePhaseMigrated,
 			simplyblockv1alpha2.StorageDevicePhaseRemoved,
 			simplyblockv1alpha2.StorageDevicePhaseUnknown:
 			previous = current.Status.Phase
@@ -264,6 +307,9 @@ func (r *StorageDeviceReconciler) announcePhase(
 	case simplyblockv1alpha2.StorageDevicePhaseFailed:
 		r.Recorder.Eventf(sd, nil, corev1.EventTypeWarning, "DeviceFailed", "DeviceFailed",
 			"%s", sd.Status.Message)
+	case simplyblockv1alpha2.StorageDevicePhaseMigrated:
+		r.Recorder.Eventf(sd, nil, corev1.EventTypeNormal, "DeviceMigrated", "DeviceMigrated",
+			"%s", sd.Status.Message)
 	case simplyblockv1alpha2.StorageDevicePhaseDegraded:
 		r.Recorder.Eventf(sd, nil, corev1.EventTypeWarning, "DeviceDegraded", "DeviceDegraded",
 			"%s", sd.Status.Message)
@@ -289,6 +335,21 @@ func (r *StorageDeviceReconciler) announcePhase(
 func nodeSeesItsDevices(node *simplyblockv1alpha2.StorageNode) bool {
 	switch nodeState(node) {
 	case utils.NodeStatusOnline, utils.NodeStatusSuspended, utils.NodeStatusRemoved:
+		return true
+	default:
+		return false
+	}
+}
+
+// nodeIsDown reports whether the node's control-plane status is one in which it
+// serves nothing: shut down or on its way there, restarting, unreachable, or in
+// any step of a removal.
+func nodeIsDown(node *simplyblockv1alpha2.StorageNode) bool {
+	switch nodeState(node) {
+	case nodeStatusOffline, nodeStatusInShutdown, nodeStatusInRestart,
+		utils.NodeStatusUnreachable, nodeStatusDown,
+		nodeStatusPendingRemoval, nodeStatusMigratingDevices, nodeStatusMigratingLvols,
+		nodeStatusInRemoval, nodeStatusRemoved, nodeStatusRemovedFailed:
 		return true
 	default:
 		return false
@@ -334,6 +395,18 @@ func (r *StorageDeviceReconciler) upsert(
 		ClusterID:    scope[0],
 		NodeID:       scope[1],
 		Message:      deviceMessage(dto),
+	}
+	// unavailable means serving-and-should-not-be only on a node that serves. A
+	// node that is shut down, restarting, or being removed serves nothing, and
+	// its devices report unavailable for that reason alone, so their state is not
+	// observable until the node is back or gone. That is Unknown, the same
+	// reading an unreachable node's silence gets, rather than Degraded and its
+	// warning. A real verdict (failed, removed, failed_and_migrated) is kept.
+	if dto.Status == cpDeviceUnavailable && nodeIsDown(node) {
+		status.Phase = simplyblockv1alpha2.StorageDevicePhaseUnknown
+		status.Message = fmt.Sprintf(
+			"storage node %s is %s, so the device reports unavailable and its state is not observable",
+			node.Name, nodeState(node))
 	}
 
 	// The mirror is enqueued by its own writes and, independently, by the
@@ -541,10 +614,13 @@ func deviceMessage(dto subscriptions.DeviceDTO) string {
 			"the control plane reports status %q, which is serving and should not be", dto.Status)
 	case cpDeviceRemoved:
 		return "the control plane reports the device removed from the node"
-	case cpDeviceFailed, cpDeviceFailedAndMigrated:
+	case cpDeviceFailed:
 		return fmt.Sprintf(
 			"the control plane reports status %q, so the cluster is running with less redundancy "+
 				"than it thinks until the device is replaced", dto.Status)
+	case cpDeviceFailedAndMigrated:
+		return "the control plane reports the device out of service and its data rebuilt onto " +
+			"the node's peers, so the cluster's redundancy is whole and the device needs nothing"
 	default:
 		return fmt.Sprintf(
 			"the control plane reports status %q, which this operator does not recognize", dto.Status)
@@ -624,8 +700,10 @@ func devicePhase(dto subscriptions.DeviceDTO) simplyblockv1alpha2.StorageDeviceP
 		return simplyblockv1alpha2.StorageDevicePhaseDegraded
 	case cpDeviceRemoved:
 		return simplyblockv1alpha2.StorageDevicePhaseRemoved
-	case cpDeviceFailed, cpDeviceFailedAndMigrated:
+	case cpDeviceFailed:
 		return simplyblockv1alpha2.StorageDevicePhaseFailed
+	case cpDeviceFailedAndMigrated:
+		return simplyblockv1alpha2.StorageDevicePhaseMigrated
 	default:
 		return simplyblockv1alpha2.StorageDevicePhaseUnknown
 	}

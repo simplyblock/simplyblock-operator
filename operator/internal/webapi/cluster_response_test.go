@@ -29,3 +29,20 @@ func TestParseClusterResponseRejectsMissingIdentity(t *testing.T) {
 		t.Fatalf("expected ParseClusterResponse to reject payloads without id")
 	}
 }
+
+// Regression: 2026-10-02-cluster-shrinking-reads-degraded: the detail read is the
+// fallback before the stream has synced, and it has to carry is_shrinking for the
+// same reason the stream does.
+func TestParseClusterResponseReadsTheShrinkingFlag(t *testing.T) {
+	resp, err := ParseClusterResponse([]byte(`{
+		"id":"cluster-dto-uuid",
+		"status":"degraded",
+		"is_shrinking":true
+	}`))
+	if err != nil {
+		t.Fatalf("ParseClusterResponse returned error: %v", err)
+	}
+	if !resp.Shrinking {
+		t.Errorf("a cluster reporting is_shrinking parsed as not shrinking: %#v", resp)
+	}
+}

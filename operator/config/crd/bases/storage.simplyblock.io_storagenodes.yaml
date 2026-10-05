@@ -523,9 +523,11 @@ spec:
                         devices were partitioned.
                       properties:
                         count:
-                          description: Count is the number of journal managers to configure.
+                          description: |-
+                            Count is the number of journal managers to configure. The control plane
+                            requires at least 3.
                           format: int32
-                          minimum: 1
+                          minimum: 3
                           type: integer
                         percentPerDevice:
                           description: PercentPerDevice is the share of each device given to the journal.
@@ -788,6 +790,11 @@ spec:
                     Message is the reason the phase is what it is: one sentence, replaced as the
                     node moves, and never a log.
                   type: string
+                nodeAddTaskID:
+                  description: |-
+                    NodeAddTaskID is the control-plane task the last add of this node created. It is how
+                    a node that is still being added reads why its own add is failing.
+                  type: string
                 observedGeneration:
                   description: |-
                     ObservedGeneration is the generation the rest of this status was computed
@@ -803,6 +810,7 @@ spec:
                     - Provisioning
                     - Online
                     - Removing
+                    - Removed
                     - Offline
                     - Degraded
                     - Failed

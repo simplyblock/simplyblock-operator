@@ -546,6 +546,7 @@ immutability rules are CEL and cannot be exercised any other way.
 | I-57     | An `imagePullPolicy` outside the enum: rejected                                                                        | Negative | `TestTheApiserverStampsAndPolicesTheImageSlots`    |
 | I-58     | An image from a registry outside the trusted set: rejected by the pattern                                              | Negative | `TestTheApiserverStampsAndPolicesTheImageSlots`    |
 | I-59     | `deviceFilter.enableLogicalBlockDevices`, the class inside the filter: rejected as an unknown field                    | Negative | `TestTheDeviceFilterNoLongerCarriesTheClass`       |
+| I-60     | A `journalManager.count` below 3: rejected by the minimum                                                              | Negative | `TestAJournalCountBelowThreeIsRefusedBySchema`     |
 
 ---
 

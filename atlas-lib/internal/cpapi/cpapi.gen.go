@@ -60,6 +60,7 @@ const (
 	ClusterDTOStatusDegraded     ClusterDTOStatus = "degraded"
 	ClusterDTOStatusInActivation ClusterDTOStatus = "in_activation"
 	ClusterDTOStatusInExpansion  ClusterDTOStatus = "in_expansion"
+	ClusterDTOStatusInShrink     ClusterDTOStatus = "in_shrink"
 	ClusterDTOStatusInactive     ClusterDTOStatus = "inactive"
 	ClusterDTOStatusReadOnly     ClusterDTOStatus = "read_only"
 	ClusterDTOStatusSuspended    ClusterDTOStatus = "suspended"
@@ -76,6 +77,8 @@ func (e ClusterDTOStatus) Valid() bool {
 	case ClusterDTOStatusInActivation:
 		return true
 	case ClusterDTOStatusInExpansion:
+		return true
+	case ClusterDTOStatusInShrink:
 		return true
 	case ClusterDTOStatusInactive:
 		return true
@@ -732,6 +735,27 @@ func (e ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPostParamsRe
 	}
 }
 
+// Defines values for ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat.
+const (
+	ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormatEmpty      ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat = "empty"
+	ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormatFull       ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat = "full"
+	ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormatIdentifier ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat = "identifier"
+)
+
+// Valid indicates whether the value is a known member of the ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat enum.
+func (e ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat) Valid() bool {
+	switch e {
+	case ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormatEmpty:
+		return true
+	case ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormatFull:
+		return true
+	case ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormatIdentifier:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPostParamsResponseFormat.
 const (
 	ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPostParamsResponseFormatEmpty      ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPostParamsResponseFormat = "empty"
@@ -1165,7 +1189,7 @@ type ConsistencyGroupMemberJoinDTO struct {
 type DeviceDTO struct {
 	BdevType           *string            `json:"bdev_type,omitempty"`
 	Capacity           CapacityStatDTO    `json:"capacity"`
-	ClusterDeviceOrder int                `json:"cluster_device_order"`
+	ClusterDeviceOrder *int               `json:"cluster_device_order"`
 	ClusterId          openapi_types.UUID `json:"cluster_id"`
 	DevicePath         *string            `json:"device_path,omitempty"`
 	HealthCheck        *bool              `json:"health_check"`
@@ -1956,6 +1980,12 @@ type ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity string
 // ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus defines parameters for ClustersAlertsListApiV2ClustersClusterIdAlertsGet.
 type ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus string
 
+// ClustersBackupsListApiV2ClustersClusterIdBackupsGetParams defines parameters for ClustersBackupsListApiV2ClustersClusterIdBackupsGet.
+type ClustersBackupsListApiV2ClustersClusterIdBackupsGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
+}
+
 // ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParams defines parameters for ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost.
 type ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParams struct {
 	ResponseFormat *ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormat `form:"response-format,omitempty" json:"response-format,omitempty"`
@@ -1963,6 +1993,12 @@ type ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParams struct {
 
 // ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormat defines parameters for ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost.
 type ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormat string
+
+// ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetParams defines parameters for ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet.
+type ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
+}
 
 // ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetParams defines parameters for ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet.
 type ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetParams struct {
@@ -2075,6 +2111,14 @@ type ClustersStorageNodesDevicesIostatsApiV2ClustersClusterIdStorageNodesStorage
 type ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePostParams struct {
 	Force *bool `form:"force,omitempty" json:"force,omitempty"`
 }
+
+// ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParams defines parameters for ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost.
+type ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParams struct {
+	ResponseFormat *ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat `form:"response-format,omitempty" json:"response-format,omitempty"`
+}
+
+// ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat defines parameters for ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost.
+type ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat string
 
 // ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPostParams defines parameters for ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPost.
 type ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPostParams struct {
@@ -2815,7 +2859,7 @@ type ClientInterface interface {
 	// ClustersBackupsListApiV2ClustersClusterIdBackupsGet Clusters:Backups:List
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/backups/ (the `ClustersBackupsListApiV2ClustersClusterIdBackupsGet` operationId).
-	ClustersBackupsListApiV2ClustersClusterIdBackupsGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ClustersBackupsListApiV2ClustersClusterIdBackupsGet(ctx context.Context, clusterId openapi_types.UUID, params *ClustersBackupsListApiV2ClustersClusterIdBackupsGetParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostWithBody Clusters:Backups:Create
 	//
@@ -2834,7 +2878,7 @@ type ClientInterface interface {
 	// ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet Clusters:Backup-Policies:List
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/backups/backup-policies/ (the `ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet` operationId).
-	ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet(ctx context.Context, clusterId openapi_types.UUID, params *ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersBackupPoliciesCreateApiV2ClustersClusterIdBackupsBackupPoliciesPostWithBody Clusters:Backup-Policies:Create
 	//
@@ -3195,6 +3239,11 @@ type ClientInterface interface {
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/ (the `ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGet` operationId).
 	ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGet(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params *ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGetParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost Clusters:Storage Nodes:Devices:Add
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/add (the `ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost` operationId).
+	ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet Clusters:Storage Nodes:Devices:Capacity
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/capacity (the `ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet` operationId).
@@ -3219,6 +3268,17 @@ type ClientInterface interface {
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/remove (the `ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePost` operationId).
 	ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params *ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePostParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost Clusters:Storage Nodes:Devices:Replace
+	//
+	// Add a failed and migrated device back as a new, empty device.
+	//
+	// The replacement carries the failed device's information but none of its
+	// data, and arrives in `new` state — `POST ../devices/{id}/add` puts it into
+	// service.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/replace (the `ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost` operationId).
+	ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params *ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPost Clusters:Storage Nodes:Devices:Reset
 	//
@@ -3999,8 +4059,8 @@ func (c *Client) ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet(ct
 // ClustersBackupsListApiV2ClustersClusterIdBackupsGet Clusters:Backups:List
 //
 // Corresponds with GET /api/v2/clusters/{cluster_id}/backups/ (the `ClustersBackupsListApiV2ClustersClusterIdBackupsGet` operationId).
-func (c *Client) ClustersBackupsListApiV2ClustersClusterIdBackupsGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewClustersBackupsListApiV2ClustersClusterIdBackupsGetRequest(c.Server, clusterId)
+func (c *Client) ClustersBackupsListApiV2ClustersClusterIdBackupsGet(ctx context.Context, clusterId openapi_types.UUID, params *ClustersBackupsListApiV2ClustersClusterIdBackupsGetParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersBackupsListApiV2ClustersClusterIdBackupsGetRequest(c.Server, clusterId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -4048,8 +4108,8 @@ func (c *Client) ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost(ctx cont
 // ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet Clusters:Backup-Policies:List
 //
 // Corresponds with GET /api/v2/clusters/{cluster_id}/backups/backup-policies/ (the `ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet` operationId).
-func (c *Client) ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetRequest(c.Server, clusterId)
+func (c *Client) ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet(ctx context.Context, clusterId openapi_types.UUID, params *ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetRequest(c.Server, clusterId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -4958,6 +5018,21 @@ func (c *Client) ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageN
 	return c.Client.Do(req)
 }
 
+// ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost Clusters:Storage Nodes:Devices:Add
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/add (the `ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost` operationId).
+func (c *Client) ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostRequest(c.Server, clusterId, storageNodeId, deviceId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet Clusters:Storage Nodes:Devices:Capacity
 //
 // Corresponds with GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/capacity (the `ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet` operationId).
@@ -5023,6 +5098,27 @@ func (c *Client) ClustersStorageNodesDevicesIostatsApiV2ClustersClusterIdStorage
 // Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/remove (the `ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePost` operationId).
 func (c *Client) ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params *ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePostParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePostRequest(c.Server, clusterId, storageNodeId, deviceId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost Clusters:Storage Nodes:Devices:Replace
+//
+// Add a failed and migrated device back as a new, empty device.
+//
+// The replacement carries the failed device's information but none of its
+// data, and arrives in `new` state — `POST ../devices/{id}/add` puts it into
+// service.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/replace (the `ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost` operationId).
+func (c *Client) ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params *ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostRequest(c.Server, clusterId, storageNodeId, deviceId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -6884,7 +6980,7 @@ func NewClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetRequest(serv
 }
 
 // NewClustersBackupsListApiV2ClustersClusterIdBackupsGetRequest constructs an http.Request for the ClustersBackupsListApiV2ClustersClusterIdBackupsGet method
-func NewClustersBackupsListApiV2ClustersClusterIdBackupsGetRequest(server string, clusterId openapi_types.UUID) (*http.Request, error) {
+func NewClustersBackupsListApiV2ClustersClusterIdBackupsGetRequest(server string, clusterId openapi_types.UUID, params *ClustersBackupsListApiV2ClustersClusterIdBackupsGetParams) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -6907,6 +7003,33 @@ func NewClustersBackupsListApiV2ClustersClusterIdBackupsGetRequest(server string
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Watch != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "watch", *params.Watch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
@@ -6992,7 +7115,7 @@ func NewClustersBackupsCreateApiV2ClustersClusterIdBackupsPostRequestWithBody(se
 }
 
 // NewClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetRequest constructs an http.Request for the ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet method
-func NewClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetRequest(server string, clusterId openapi_types.UUID) (*http.Request, error) {
+func NewClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetRequest(server string, clusterId openapi_types.UUID, params *ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetParams) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -7015,6 +7138,33 @@ func NewClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Watch != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "watch", *params.Watch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
@@ -9280,6 +9430,54 @@ func NewClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStora
 	return req, nil
 }
 
+// NewClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostRequest constructs an http.Request for the ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost method
+func NewClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostRequest(server string, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "storage_node_id", storageNodeId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "device_id", deviceId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/devices/%s/add", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGetRequest constructs an http.Request for the ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet method
 func NewClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGetRequest(server string, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params *ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGetParams) (*http.Request, error) {
 	var err error
@@ -9578,6 +9776,81 @@ func NewClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStora
 		if params.Force != nil {
 
 			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "force", *params.Force, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostRequest constructs an http.Request for the ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost method
+func NewClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostRequest(server string, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params *ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "storage_node_id", storageNodeId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "device_id", deviceId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/devices/%s/replace", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.ResponseFormat != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "response-format", *params.ResponseFormat, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
 				return nil, err
 			} else {
 				for _, qp := range strings.Split(queryFrag, "&") {
@@ -13296,7 +13569,7 @@ type ClientWithResponsesInterface interface {
 	// Returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/backups/ (the `ClustersBackupsListApiV2ClustersClusterIdBackupsGet` operationId).
-	ClustersBackupsListApiV2ClustersClusterIdBackupsGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersBackupsListApiV2ClustersClusterIdBackupsGetResponse, error)
+	ClustersBackupsListApiV2ClustersClusterIdBackupsGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, params *ClustersBackupsListApiV2ClustersClusterIdBackupsGetParams, reqEditors ...RequestEditorFn) (*ClustersBackupsListApiV2ClustersClusterIdBackupsGetResponse, error)
 
 	// ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostWithBodyWithResponse Clusters:Backups:Create
 	//
@@ -13317,7 +13590,7 @@ type ClientWithResponsesInterface interface {
 	// Returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/backups/backup-policies/ (the `ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet` operationId).
-	ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetResponse, error)
+	ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, params *ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetParams, reqEditors ...RequestEditorFn) (*ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetResponse, error)
 
 	// ClustersBackupPoliciesCreateApiV2ClustersClusterIdBackupsBackupPoliciesPostWithBodyWithResponse Clusters:Backup-Policies:Create
 	//
@@ -13746,6 +14019,13 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/ (the `ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGet` operationId).
 	ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params *ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGetParams, reqEditors ...RequestEditorFn) (*ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGetResponse, error)
 
+	// ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostWithResponse Clusters:Storage Nodes:Devices:Add
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/add (the `ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost` operationId).
+	ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostResponse, error)
+
 	// ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGetWithResponse Clusters:Storage Nodes:Devices:Capacity
 	//
 	// Returns a wrapper object for the known response body format(s).
@@ -13780,6 +14060,19 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/remove (the `ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePost` operationId).
 	ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params *ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePostParams, reqEditors ...RequestEditorFn) (*ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePostResponse, error)
+
+	// ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostWithResponse Clusters:Storage Nodes:Devices:Replace
+	//
+	// Add a failed and migrated device back as a new, empty device.
+	//
+	// The replacement carries the failed device's information but none of its
+	// data, and arrives in `new` state — `POST ../devices/{id}/add` puts it into
+	// service.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/replace (the `ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost` operationId).
+	ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params *ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParams, reqEditors ...RequestEditorFn) (*ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostResponse, error)
 
 	// ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPostWithResponse Clusters:Storage Nodes:Devices:Reset
 	//
@@ -17011,6 +17304,47 @@ func (r ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStora
 	return ""
 }
 
+type ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGetResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -17231,6 +17565,47 @@ func (r ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStora
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -20106,8 +20481,8 @@ func (c *ClientWithResponses) ClustersBackupConfigGetApiV2ClustersClusterIdBacku
 // Returns a wrapper object for the known response body format(s).
 //
 // Corresponds with GET /api/v2/clusters/{cluster_id}/backups/ (the `ClustersBackupsListApiV2ClustersClusterIdBackupsGet` operationId).
-func (c *ClientWithResponses) ClustersBackupsListApiV2ClustersClusterIdBackupsGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersBackupsListApiV2ClustersClusterIdBackupsGetResponse, error) {
-	rsp, err := c.ClustersBackupsListApiV2ClustersClusterIdBackupsGet(ctx, clusterId, reqEditors...)
+func (c *ClientWithResponses) ClustersBackupsListApiV2ClustersClusterIdBackupsGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, params *ClustersBackupsListApiV2ClustersClusterIdBackupsGetParams, reqEditors ...RequestEditorFn) (*ClustersBackupsListApiV2ClustersClusterIdBackupsGetResponse, error) {
+	rsp, err := c.ClustersBackupsListApiV2ClustersClusterIdBackupsGet(ctx, clusterId, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -20145,8 +20520,8 @@ func (c *ClientWithResponses) ClustersBackupsCreateApiV2ClustersClusterIdBackups
 // Returns a wrapper object for the known response body format(s).
 //
 // Corresponds with GET /api/v2/clusters/{cluster_id}/backups/backup-policies/ (the `ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet` operationId).
-func (c *ClientWithResponses) ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetResponse, error) {
-	rsp, err := c.ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet(ctx, clusterId, reqEditors...)
+func (c *ClientWithResponses) ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, params *ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetParams, reqEditors ...RequestEditorFn) (*ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetResponse, error) {
+	rsp, err := c.ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet(ctx, clusterId, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -20904,6 +21279,19 @@ func (c *ClientWithResponses) ClustersStorageNodesDevicesDetailApiV2ClustersClus
 	return ParseClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGetResponse(rsp)
 }
 
+// ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostWithResponse Clusters:Storage Nodes:Devices:Add
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/add (the `ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost` operationId).
+func (c *ClientWithResponses) ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostResponse, error) {
+	rsp, err := c.ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost(ctx, clusterId, storageNodeId, deviceId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostResponse(rsp)
+}
+
 // ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGetWithResponse Clusters:Storage Nodes:Devices:Capacity
 //
 // Returns a wrapper object for the known response body format(s).
@@ -20967,6 +21355,25 @@ func (c *ClientWithResponses) ClustersStorageNodesDevicesRemoveApiV2ClustersClus
 		return nil, err
 	}
 	return ParseClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePostResponse(rsp)
+}
+
+// ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostWithResponse Clusters:Storage Nodes:Devices:Replace
+//
+// Add a failed and migrated device back as a new, empty device.
+//
+// The replacement carries the failed device's information but none of its
+// data, and arrives in `new` state — `POST ../devices/{id}/add` puts it into
+// service.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/replace (the `ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost` operationId).
+func (c *ClientWithResponses) ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params *ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParams, reqEditors ...RequestEditorFn) (*ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostResponse, error) {
+	rsp, err := c.ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost(ctx, clusterId, storageNodeId, deviceId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostResponse(rsp)
 }
 
 // ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPostWithResponse Clusters:Storage Nodes:Devices:Reset
@@ -22391,6 +22798,9 @@ func ParseClustersBackupsListApiV2ClustersClusterIdBackupsGetResponse(rsp *http.
 		}
 		response.JSON422 = &dest
 
+	case rsp.StatusCode == 200:
+		// Content-type (text/event-stream) unsupported
+
 	}
 
 	return response, nil
@@ -22452,6 +22862,9 @@ func ParseClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesG
 			return nil, err
 		}
 		response.JSON422 = &dest
+
+	case rsp.StatusCode == 200:
+		// Content-type (text/event-stream) unsupported
 
 	}
 
@@ -23865,6 +24278,38 @@ func ParseClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesSto
 	return response, nil
 }
 
+// ParseClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostResponse parses an HTTP response from a ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostWithResponse call
+func ParseClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostResponse(rsp *http.Response) (*ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case rsp.StatusCode == 409:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGetResponse parses an HTTP response from a ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGetWithResponse call
 func ParseClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGetResponse(rsp *http.Response) (*ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGetResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -24008,6 +24453,38 @@ func ParseClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesSto
 
 	switch {
 	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostResponse parses an HTTP response from a ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostWithResponse call
+func ParseClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostResponse(rsp *http.Response) (*ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 201:
+		break // No content-type
+
+	case rsp.StatusCode == 409:
 		break // No content-type
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
@@ -24254,6 +24731,9 @@ func ParseClustersStorageNodesResumeApiV2ClustersClusterIdStorageNodesStorageNod
 	case rsp.StatusCode == 204:
 		break // No content-type
 
+	case rsp.StatusCode == 409:
+		break // No content-type
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest HTTPValidationError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -24342,6 +24822,9 @@ func ParseClustersStorageNodesSuspendApiV2ClustersClusterIdStorageNodesStorageNo
 
 	switch {
 	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case rsp.StatusCode == 409:
 		break // No content-type
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
