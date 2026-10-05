@@ -107,6 +107,7 @@ COPY --from=vendor /vendor/ /usr/share/nginx/html/vendor/
 COPY deploy/nginx-security-headers.conf /etc/nginx/snippets/security-headers.conf
 COPY deploy/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY deploy/nginx-main.conf /etc/nginx/nginx.conf
+COPY deploy/redact.js /etc/nginx/njs/redact.js
 COPY deploy/docker-entrypoint.sh /usr/local/bin/sb-entrypoint
 RUN chmod +x /usr/local/bin/sb-entrypoint
 
@@ -123,6 +124,7 @@ ENV NGINX_ENVSUBST_FILTER=SB_ \
     SB_OPERATOR_URL=http://simplyblock-operator:8080 \
     SB_HELM_URL=http://simplyblock-operator:8080 \
     SB_PROMETHEUS_URL=http://simplyblock-prometheus:9090 \
+    SB_CONTROLPLANE_URL= \
     SB_LOGO_URL=vendor/logo-white.svg \
     SB_MOCK=false \
     SB_LISTEN_PORT=8080 \

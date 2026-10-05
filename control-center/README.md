@@ -240,6 +240,12 @@ written by a controller.
 | Kubernetes API | `k8sBase` | CRDs in `storage.simplyblock.io/v1alpha1`; core objects (Node, Pod, PV, PVC, StorageClass, Secret, Event); pod logs |
 | Operator API | `operatorBase` | `/releases` compatibility matrix, SSE watch, and `/proposed/*` for kinds v1alpha1 does not model yet |
 | Helm | `helmBase` | release, revision, chart, values |
+| Control plane API (read-only) | `cpBase` | storage clusters, nodes, devices, pools, volumes, snapshots, tasks, logs and alerts where they are not CRDs here (a hub managing sites); GET only, credentials scrubbed by the proxy (`deploy/redact.js`) |
+
+`SB_CONFIG.upstreams` says which optional upstreams the pod proxies. A screen
+whose only source is off renders "Not available in this deployment" with the
+reason instead of an error. Without the operator API, Kubernetes clusters are
+the hub's OCM ManagedClusters with their dr-agents' inventory (`cpapi.jsx`).
 
 `k8s-client.jsx` is the only transport. `api.jsx` resolves one path grammar onto
 those surfaces and normalizes the results into view models; the components never

@@ -619,6 +619,698 @@ Object.assign(window, {
   DR_NS
 });
 })();
+// ---- cpapi.jsx ----
+(function(){
+// ---------------------------------------------------------------------------
+// CONTROL PLANE API (simplyblock management API v2) — read-only
+//
+// Where the storage clusters are not CRDs in this Kubernetes cluster — a hub
+// whose control plane manages storage clusters on other sites (the managed
+// operators keep their StorageCluster objects there) — the control plane is
+// the one place that knows every cluster, node, device, pool and volume. The
+// console reads it through its own proxy (/controlplane/), which attaches the
+// console's identity and scrubs credentials out of every response before it
+// reaches the browser. Writes never go this way: actions stay Ops objects on
+// the Kubernetes API.
+//
+// This file speaks the v2 wire format and turns it into the records the
+// normalizers in api.jsx already read, so the screens render unchanged.
+// ---------------------------------------------------------------------------
+const CP_SB = window.SB_CONFIG;
+// Off in the fixture backend and wherever the pod does not proxy the control
+// plane: the screens then keep reading CRDs and the operator API as before.
+const cpOn = () => !CP_SB.mock && !!CP_SB.cpBase && !!(CP_SB.upstreams && CP_SB.upstreams.controlPlane);
+// Which optional upstream this pod proxies. A config without the table (the
+// fixture backend, an older pod) is taken to have them all.
+const upstreamOn = name => !CP_SB.upstreams || CP_SB.upstreams[name] !== false;
+
+// A screen whose source is not part of this deployment. The console renders it
+// as a neutral "not available" state, never as a failure.
+const notInDeployment = (what, why, path) => new ApiError(503, `${what} ${why || "is not part of this deployment"}`, path || "", "NotInDeployment");
+const CP_TTL_MS = 3000;
+const cpCache = new Map();
+const cpErr = (status, message, path, reason) => {
+  const e = new ApiError(status, message, path, reason);
+  e.source = "control plane API";
+  return e;
+};
+// GET only, deduplicated for a few seconds: a cluster view asks for the same
+// node list from several panels at once.
+function cpGet(path) {
+  const now = Date.now();
+  const hit = cpCache.get(path);
+  if (hit && now - hit.t < CP_TTL_MS) return hit.p;
+  const p = (async () => {
+    let res;
+    try {
+      res = await fetch(CP_SB.cpBase + path, {
+        headers: {
+          Accept: "application/json"
+        }
+      });
+    } catch (e) {
+      throw cpErr(0, "Cannot reach the control plane API", path, "Unreachable");
+    }
+    let body = null;
+    try {
+      body = await res.json();
+    } catch (e) {}
+    if (!res.ok || body && body.kind === "Status" && body.status === "Failure") {
+      if (res.status === 401 || res.status === 403) throw cpErr(res.status, "The control plane did not accept the console's identity. Its service account must be one of the control plane's admin accounts (the chart adds it when controlCenter.enabled), or mount an admin token (controlCenter.controlPlane.tokenSecret)", path, "Unauthorized");
+      if (body && body.reason === "NotInDeployment") throw cpErr(503, body.message, path, "NotInDeployment");
+      const detail = body && (body.message || (typeof body.detail === "string" ? body.detail : body.detail && JSON.stringify(body.detail)));
+      throw cpErr(body && body.code || res.status, detail || `The control plane answered HTTP ${res.status}`, path, body && body.reason || null);
+    }
+    return body;
+  })();
+  cpCache.set(path, {
+    t: now,
+    p
+  });
+  p.catch(() => cpCache.delete(path));
+  return p;
+}
+
+// ---- small helpers ---------------------------------------------------------
+const cpCap = o => o && o.capacity || {};
+// a storage node's hostname carries its RPC port ("ip-10-70-2-22_4420"); the
+// machine is the part before it
+const hostKey = h => String(h || "").replace(/_\d+$/, "");
+// v2 links related records by URL; the id is the last path segment
+const idOfUrl = u => String(u || "").replace(/\/+$/, "").split("/").pop() || null;
+const SECRET_FIELD = /^(secret|password|token|access_key|secret_key)$|_(secret|password|token)$/i;
+// Defense in depth: the proxy scrubs credentials, and nothing the console keeps
+// may carry one either way.
+const dropSecrets = o => {
+  const out = {};
+  Object.keys(o || {}).forEach(k => {
+    if (!SECRET_FIELD.test(k)) out[k] = o[k];
+  });
+  return out;
+};
+
+// ---- raw reads -------------------------------------------------------------
+const cpRaw = {
+  clusters: () => cpGet("/clusters/").then(r => (r || []).map(dropSecrets)),
+  nodes: cid => cpGet(`/clusters/${cid}/storage-nodes/`),
+  devices: (cid, nid) => cpGet(`/clusters/${cid}/storage-nodes/${nid}/devices/`),
+  pools: cid => cpGet(`/clusters/${cid}/storage-pools/`),
+  volumes: (cid, pid) => cpGet(`/clusters/${cid}/storage-pools/${pid}/volumes/`),
+  snapshots: (cid, pid) => cpGet(`/clusters/${cid}/storage-pools/${pid}/snapshots/`),
+  tasks: cid => cpGet(`/clusters/${cid}/tasks/`),
+  logs: cid => cpGet(`/clusters/${cid}/logs`),
+  alerts: cid => cpGet(`/clusters/${cid}/alerts/`),
+  cgs: cid => cpGet(`/clusters/${cid}/consistency-groups/`)
+};
+
+// ---- site mapping ----------------------------------------------------------
+// Which managed cluster (site) a storage cluster runs on. The DR hub's
+// SiteProfiles carry each site's node inventory as its dr-agent reported it;
+// a storage node runs on one of those machines. A StorageSiteDeployment names
+// its cluster directly when the storage was deployed from the hub.
+async function cpSites() {
+  const [profiles, deploys] = await Promise.all([k8s.list("SiteProfile").catch(() => []), k8s.list("StorageSiteDeployment", {
+    allNamespaces: true
+  }).catch(() => [])]);
+  const byHost = {};
+  profiles.forEach(p => (((p.status || {}).inventory || {}).nodes || []).forEach(n => {
+    byHost[n.name] = p.metadata.name;
+  }));
+  const byCluster = {};
+  deploys.forEach(d => {
+    const sc = (d.status || {}).storageCluster || {};
+    const id = sc.uuid || sc.clusterId || sc.id;
+    if (id && d.spec && d.spec.cluster) byCluster[id] = d.spec.cluster;
+  });
+  return {
+    byHost,
+    byCluster,
+    profiles
+  };
+}
+const siteOf = (sites, clusterId, nodes) => sites.byCluster[clusterId] || (nodes || []).map(n => sites.byHost[hostKey(n.hostname)]).find(Boolean) || "";
+
+// ---- v2 record -> console wire record ---------------------------------------
+// The tiles color by STATUS_META; a state the console has no entry for (a new
+// control plane state) is folded into the nearest one rather than crashing it.
+const knownStatus = st => {
+  const x = String(st || "");
+  if (window.STATUS_META && STATUS_META[x]) return x;
+  if (/fail|error/.test(x)) return "error";
+  if (/read_only/.test(x)) return "degraded";
+  if (/^in_|ing$/.test(x)) return "in_activation";
+  if (/new/.test(x)) return "in_creation";
+  return "offline";
+};
+const wireNode = (n, site) => ({
+  uuid: n.id,
+  cluster_id: n.cluster_id,
+  host_id: `${n.cluster_id}:${hostKey(n.hostname)}`,
+  hostname: hostKey(n.hostname),
+  mgmt_ip: n.mgmt_ip,
+  status: knownStatus(n.status),
+  data_nics: [{
+    name: "",
+    ip: n.mgmt_ip,
+    port: n.lvol_subsys_port
+  }],
+  failure_domain: n.failure_domain >= 0 ? n.failure_domain : null,
+  size_total: cpCap(n).size_total || 0,
+  size_util: cpCap(n).size_used || 0,
+  devices_count: n.device_count || 0,
+  devices_online: n.online_device_count || 0,
+  cpu_count: n.cpu_total_count,
+  vcpu_reserved: n.cpu_spdk_count,
+  memory_total: n.memory,
+  memory_reserved: n.spdk_mem,
+  hugepages_total: n.hugepage_memory,
+  max_subsystem_count: n.lvols_max || null,
+  lvols: n.lvols || 0,
+  site: site || ""
+});
+const wireDevice = (d, node) => ({
+  uuid: d.id,
+  node_id: d.storage_node_id,
+  cluster_id: d.cluster_id,
+  host_id: node ? `${d.cluster_id}:${hostKey(node.hostname)}` : null,
+  cluster_device_class: d.bdev_type === "nvme" ? "nvme" : "blockdev",
+  serial_number: d.serial_number,
+  pcie_address: d.pcie_address,
+  device_name: d.device_path || d.nvme_controller,
+  model_number: d.model,
+  status: knownStatus(d.status),
+  // the console's health vocabulary is good / warn / critical
+  health_check: d.health_check === false ? "critical" : d.health_check === null || d.health_check === undefined ? "warn" : "good",
+  size_total: cpCap(d).size_total || d.size || 0,
+  size_util: cpCap(d).size_used || 0
+});
+const qosOf = o => o.max_rw_iops || o.max_rw_mbytes || o.max_r_mbytes || o.max_w_mbytes ? {
+  rw_ios_per_sec: o.max_rw_iops || 0,
+  rw_mbytes_per_sec: o.max_rw_mbytes || 0,
+  r_mbytes_per_sec: o.max_r_mbytes || 0,
+  w_mbytes_per_sec: o.max_w_mbytes || 0
+} : null;
+const wirePool = (p, vols, snaps) => ({
+  uuid: p.id,
+  cluster_id: p.cluster_id,
+  pool_name: p.name,
+  enabled: p.status === "active",
+  dhchap_bidirectional: !!p.dhchap,
+  qos: qosOf(p),
+  size_prov: cpCap(p).size_total || p.max_size || 0,
+  size_util: cpCap(p).size_used || 0,
+  lvols_count: (vols || []).length,
+  lvols_online: (vols || []).filter(v => v.status === "online").length,
+  snapshots_count: (snaps || []).length,
+  storage_classes: []
+});
+const wireVolume = (v, nodesById, cgsById) => {
+  const ids = (v.nodes || []).map(idOfUrl).filter(Boolean);
+  const ref = id => id ? {
+    uuid: id,
+    hostname: nodesById && nodesById[id] ? hostKey(nodesById[id].hostname) : id
+  } : null;
+  return {
+    uuid: v.id,
+    pool_id: v.pool_uuid,
+    pool_name: v.pool_name,
+    cluster_id: v.cluster_id,
+    lvol_name: v.name,
+    status: knownStatus(v.status),
+    nqn: v.nqn,
+    nodes: {
+      primary: ref(ids[0] || v.storage_node_id),
+      secondary: ref(ids[1]),
+      tertiary: ref(ids[2])
+    },
+    size_prov: v.size || 0,
+    size_util: cpCap(v).size_used || 0,
+    qos: qosOf(v),
+    pvc: null,
+    pvc_name: v.pvc_name || "",
+    pvc_namespace: v.namespace || "",
+    replication: v.do_replicate ? {
+      status: "replicating",
+      mode: "async",
+      consistency_group: v.group_id || null
+    } : null,
+    consistency_groups: v.group_id ? [{
+      uuid: idOfUrl(v.group_id),
+      name: ((cgsById || {})[idOfUrl(v.group_id)] || {}).name || idOfUrl(v.group_id)
+    }] : []
+  };
+};
+const wireSnapshot = (s, pool) => ({
+  uuid: s.id,
+  cluster_id: pool.cluster_id,
+  pool_id: pool.id,
+  pool_name: pool.name,
+  lvol_id: idOfUrl(s.lvol),
+  lvol_name: "",
+  snapshot_name: s.name,
+  status: knownStatus(s.status),
+  seq: s.group_seq || null,
+  created_at: s.created_at,
+  size: s.size || 0
+});
+const wireTask = t => ({
+  uuid: t.id,
+  cluster_id: t.cluster_id,
+  function_name: t.function_name,
+  target_id: t.device_id || t.storage_node_id || null,
+  node_id: t.storage_node_id,
+  status: t.status,
+  result: t.function_result,
+  retry: t.retry,
+  max_retry: t.max_retry,
+  canceled: t.canceled
+});
+const wireLog = l => ({
+  uuid: l.id,
+  ts: l.date,
+  level: l.level,
+  event: l.event,
+  message: l.message,
+  node_id: l.node_id,
+  storage_id: l.storage_id,
+  vuid: l.vuid,
+  record_status: l.status
+});
+const wireAlert = (a, c) => ({
+  uuid: a.id,
+  cluster_id: a.cluster_id,
+  cluster_name: c ? c.name : "",
+  rule: a.kind,
+  severity: a.severity,
+  scope: a.device_id ? "device" : a.node_id ? "node" : "cluster",
+  title: a.message,
+  detail: Object.keys(a.details || {}).length ? JSON.stringify(a.details) : "",
+  node_id: a.node_id,
+  device_ids: a.device_id ? [a.device_id] : [],
+  since: a.since || a.first_seen,
+  silenced: false
+});
+const wireCg = g => ({
+  uuid: g.id,
+  cluster_id: g.cluster_id,
+  name: g.name,
+  status: "online",
+  lvols_count: g.member_count || 0
+});
+const wireCluster = (c, nodes, pools, site) => {
+  const hosts = new Set(nodes.map(n => hostKey(n.hostname)));
+  const online = nodes.filter(n => n.status === "online");
+  return {
+    uuid: c.id,
+    name: c.name || c.id,
+    status: knownStatus(c.status),
+    rebalancing: !!c.is_re_balancing,
+    device_class: c.device_mode === "nvme" ? "nvme" : "blockdev",
+    size_total: cpCap(c).size_total || 0,
+    size_util: cpCap(c).size_used || 0,
+    hosts_count: hosts.size,
+    hosts_available: new Set(online.map(n => hostKey(n.hostname))).size,
+    storage_nodes_count: nodes.length,
+    storage_nodes_online: online.length,
+    devices_count: nodes.reduce((s, n) => s + (n.device_count || 0), 0),
+    devices_online: nodes.reduce((s, n) => s + (n.online_device_count || 0), 0),
+    pools_count: pools.length,
+    lvols_count: nodes.reduce((s, n) => s + (n.lvols || 0), 0),
+    distr_ndcs: c.distr_ndcs,
+    distr_npcs: c.distr_npcs,
+    ha_type: c.ha ? "ha" : "single",
+    backup_enabled: !!c.backup_enabled,
+    failure_domain_enabled: !!c.enable_failure_domain,
+    node_affinity: c.node_affinity ? "node" : "none",
+    mgmt_endpoint: site ? `hub control plane · site ${site}` : "hub control plane",
+    mgmt_endpoint_kind: "control plane API",
+    site: site || ""
+  };
+};
+
+// ---- the read model ----------------------------------------------------------
+// Indexes from the last listing, so a detail link (/storage-nodes/{id}) finds
+// its cluster without walking every cluster again.
+const cpIdx = {
+  node: {},
+  device: {},
+  pool: {},
+  volume: {},
+  snapshot: {}
+};
+async function cpClusterBundle(c, sites) {
+  const [nodes, pools] = await Promise.all([cpRaw.nodes(c.id).catch(() => []), cpRaw.pools(c.id).catch(() => [])]);
+  nodes.forEach(n => {
+    cpIdx.node[n.id] = c.id;
+  });
+  pools.forEach(p => {
+    cpIdx.pool[p.id] = c.id;
+  });
+  return {
+    c,
+    nodes,
+    pools,
+    site: siteOf(sites, c.id, nodes)
+  };
+}
+async function cpBundles() {
+  const [cs, sites] = await Promise.all([cpRaw.clusters(), cpSites()]);
+  return Promise.all(cs.map(c => cpClusterBundle(c, sites)));
+}
+async function cpBundle(cid) {
+  const cs = await cpRaw.clusters();
+  const c = cs.find(x => x.id === cid);
+  if (!c) throw new ApiError(404, `cluster ${cid} not found in the control plane`, `/clusters/${cid}`, "NotFound");
+  return cpClusterBundle(c, await cpSites());
+}
+const clusterOfNode = async nid => {
+  if (!cpIdx.node[nid]) await cpBundles();
+  const cid = cpIdx.node[nid];
+  if (!cid) throw new ApiError(404, `storage node ${nid} not found in the control plane`, `/storage-nodes/${nid}`, "NotFound");
+  return cid;
+};
+const clusterOfPool = async pid => {
+  if (!cpIdx.pool[pid]) await cpBundles();
+  const cid = cpIdx.pool[pid];
+  if (!cid) throw new ApiError(404, `pool ${pid} not found in the control plane`, `/pools/${pid}`, "NotFound");
+  return cid;
+};
+const cp = {
+  on: cpOn,
+  clusters: () => cpBundles().then(bs => bs.map(b => wireCluster(b.c, b.nodes, b.pools, b.site))),
+  cluster: cid => cpBundle(cid).then(b => wireCluster(b.c, b.nodes, b.pools, b.site)),
+  nodes: cid => cpBundle(cid).then(b => b.nodes.map(n => wireNode(n, b.site))),
+  node: async nid => (await cp.nodes(await clusterOfNode(nid))).find(n => n.uuid === nid),
+  devices: async nid => {
+    const cid = await clusterOfNode(nid);
+    const [ds, ns] = await Promise.all([cpRaw.devices(cid, nid), cpRaw.nodes(cid)]);
+    const node = ns.find(n => n.id === nid);
+    ds.forEach(d => {
+      cpIdx.device[d.id] = [cid, nid];
+    });
+    return ds.map(d => wireDevice(d, node));
+  },
+  device: async did => {
+    if (!cpIdx.device[did]) {
+      const bs = await cpBundles();
+      await Promise.all(bs.flatMap(b => b.nodes.map(n => cpRaw.devices(b.c.id, n.id).then(ds => ds.forEach(d => {
+        cpIdx.device[d.id] = [b.c.id, n.id];
+      })).catch(() => {}))));
+    }
+    const at = cpIdx.device[did];
+    if (!at) throw new ApiError(404, `device ${did} not found in the control plane`, `/devices/${did}`, "NotFound");
+    return (await cp.devices(at[1])).find(d => d.uuid === did);
+  },
+  pools: async cid => {
+    const b = await cpBundle(cid);
+    return Promise.all(b.pools.map(async p => {
+      const [vols, snaps] = await Promise.all([cpRaw.volumes(cid, p.id).catch(() => []), cpRaw.snapshots(cid, p.id).catch(() => [])]);
+      return wirePool(p, vols, snaps);
+    }));
+  },
+  pool: async pid => (await cp.pools(await clusterOfPool(pid))).find(p => p.uuid === pid),
+  poolVolumes: async pid => {
+    const cid = await clusterOfPool(pid);
+    const [vols, nodes, cgs] = await Promise.all([cpRaw.volumes(cid, pid), cpRaw.nodes(cid), cpRaw.cgs(cid).catch(() => [])]);
+    const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
+    const cgById = Object.fromEntries(cgs.map(g => [g.id, g]));
+    vols.forEach(v => {
+      cpIdx.volume[v.id] = [cid, pid];
+    });
+    return vols.map(v => wireVolume(v, byId, cgById));
+  },
+  clusterVolumes: async cid => {
+    const b = await cpBundle(cid);
+    const lists = await Promise.all(b.pools.map(p => cp.poolVolumes(p.id).catch(() => [])));
+    return lists.flat();
+  },
+  volume: async vid => {
+    if (!cpIdx.volume[vid]) {
+      const bs = await cpBundles();
+      await Promise.all(bs.map(b => cp.clusterVolumes(b.c.id).catch(() => [])));
+    }
+    const at = cpIdx.volume[vid];
+    if (!at) throw new ApiError(404, `volume ${vid} not found in the control plane`, `/lvols/${vid}`, "NotFound");
+    return (await cp.poolVolumes(at[1])).find(v => v.uuid === vid);
+  },
+  // snapshots are listed per pool; a volume's are the pool's filtered by it
+  snapshots: async (scope, id) => {
+    let cid, pools;
+    if (scope === "clusters") {
+      const b = await cpBundle(id);
+      cid = id;
+      pools = b.pools;
+    } else if (scope === "pools") {
+      cid = await clusterOfPool(id);
+      pools = (await cpRaw.pools(cid)).filter(p => p.id === id);
+    } else {
+      if (!cpIdx.volume[id]) await cp.volume(id);
+      const [c2, pid] = cpIdx.volume[id];
+      cid = c2;
+      pools = (await cpRaw.pools(cid)).filter(p => p.id === pid);
+    }
+    const lists = await Promise.all(pools.map(p => cpRaw.snapshots(cid, p.id).then(ss => ss.map(s => wireSnapshot(s, p))).catch(() => [])));
+    const all = lists.flat();
+    all.forEach(s => {
+      cpIdx.snapshot[s.uuid] = s;
+    });
+    return scope === "lvols" ? all.filter(s => s.lvol_id === id) : all;
+  },
+  snapshot: async sid => {
+    if (!cpIdx.snapshot[sid]) {
+      const bs = await cpBundles();
+      await Promise.all(bs.map(b => cp.snapshots("clusters", b.c.id).catch(() => [])));
+    }
+    const s = cpIdx.snapshot[sid];
+    if (!s) throw new ApiError(404, `snapshot ${sid} not found in the control plane`, `/snapshots/${sid}`, "NotFound");
+    return s;
+  },
+  // a storage node runs on one machine; the host view is that machine
+  hosts: async cid => {
+    const b = await cpBundle(cid);
+    const by = {};
+    b.nodes.forEach(n => {
+      const k = hostKey(n.hostname);
+      const h = by[k] = by[k] || {
+        uuid: `${cid}:${k}`,
+        cluster_id: cid,
+        hostname: k,
+        mgmt_ip: n.mgmt_ip,
+        source: "kubernetes",
+        status: "unavailable",
+        storage_node_ids: [],
+        devices: [],
+        size_total: 0,
+        size_assigned: 0,
+        k8s_cluster: b.site || null
+      };
+      h.storage_node_ids.push(n.id);
+      if (n.status === "online") h.status = "available";
+      h.size_total += cpCap(n).size_total || 0;
+      h.size_assigned += cpCap(n).size_total || 0;
+    });
+    return Object.values(by);
+  },
+  host: async hid => {
+    const cid = String(hid).split(":")[0];
+    const h = (await cp.hosts(cid)).find(x => x.uuid === hid);
+    if (!h) throw new ApiError(404, `host ${hid} not found`, `/hosts/${hid}`, "NotFound");
+    return h;
+  },
+  tasks: cid => cpRaw.tasks(cid).then(ts => ts.map(wireTask)),
+  logs: cid => cpRaw.logs(cid).then(ls => ls.map(wireLog).sort((x, y) => Date.parse(y.ts) - Date.parse(x.ts))),
+  cgroups: cid => cpRaw.cgs(cid).then(gs => gs.map(wireCg)),
+  cgroup: async gid => {
+    const cs = await cpRaw.clusters();
+    const lists = await Promise.all(cs.map(c => cpRaw.cgs(c.id).catch(() => [])));
+    const g = lists.flat().find(x => x.id === gid);
+    if (!g) throw new ApiError(404, `consistency group ${gid} not found in the control plane`, `/consistency-groups/${gid}`, "NotFound");
+    return wireCg(g);
+  },
+  alerts: async cid => {
+    const cs = await cpRaw.clusters();
+    const c = cs.find(x => x.id === cid);
+    return (await cpRaw.alerts(cid)).map(a => wireAlert(a, c));
+  },
+  // every cluster's alerts: the control plane raises them per cluster
+  allAlerts: async () => {
+    const cs = await cpRaw.clusters();
+    const lists = await Promise.all(cs.map(c => cpRaw.alerts(c.id).then(as => as.map(a => wireAlert(a, c))).catch(() => [])));
+    return lists.flat();
+  },
+  sites: cpSites
+};
+
+// Resolve one console path onto the control plane, or null when the control
+// plane does not model it (the caller then says it is not available here).
+cp.route = path => {
+  const seg = path.split("?")[0].split("/").filter(Boolean);
+  const [a, id, child] = seg;
+  const one = p => p.then(x => [x]);
+  if (seg.length === 1) {
+    if (a === "clusters") return cp.clusters();
+    if (a === "alerts") return cp.allAlerts();
+    return null;
+  }
+  if (seg.length === 2) {
+    if (a === "control-plane" && id === "alerts") return cp.allAlerts();
+    const one1 = {
+      clusters: cp.cluster,
+      "storage-nodes": cp.node,
+      devices: cp.device,
+      pools: cp.pool,
+      lvols: cp.volume,
+      snapshots: cp.snapshot,
+      hosts: cp.host,
+      "consistency-groups": cp.cgroup
+    }[a];
+    return one1 ? one(one1(id)) : null;
+  }
+  if (seg.length === 3) {
+    if (a === "clusters") {
+      const f = {
+        "storage-nodes": cp.nodes,
+        pools: cp.pools,
+        lvols: cp.clusterVolumes,
+        tasks: cp.tasks,
+        logs: cp.logs,
+        alerts: cp.alerts,
+        hosts: cp.hosts,
+        "consistency-groups": cp.cgroups
+      }[child];
+      if (f) return f(id);
+      if (child === "snapshots") return cp.snapshots("clusters", id);
+      return null;
+    }
+    if (a === "storage-nodes" && child === "devices") return cp.devices(id);
+    if (a === "pools" && child === "lvols") return cp.poolVolumes(id);
+    if ((a === "pools" || a === "lvols") && child === "snapshots") return cp.snapshots(a, id);
+  }
+  return null;
+};
+
+// ---------------------------------------------------------------------------
+// KUBERNETES CLUSTERS ON A HUB — Open Cluster Management + dr-agent inventory
+//
+// Without the operator API there is no "kubernetes-clusters" collection. On a
+// hub the clusters are OCM ManagedClusters, and what each one has (nodes,
+// zones, storage classes) is the inventory its dr-agent reports into the
+// site's SiteProfile. Storage clusters are matched to sites through the
+// control plane (see siteOf).
+// ---------------------------------------------------------------------------
+const condTrue = (o, type) => (((o || {}).status || {}).conditions || []).some(c => c.type === type && c.status === "True");
+const condKnown = (o, type) => (((o || {}).status || {}).conditions || []).some(c => c.type === type);
+const zoneId = (site, z) => `zone:${site}:${z}`;
+async function hubSites() {
+  const [mcs, profiles, storage] = await Promise.all([k8s.list("ManagedCluster").catch(e => {
+    if (e.status === 404) throw notInDeployment("The Kubernetes clusters view", "reads the hub's Open Cluster Management clusters, and OCM is not installed here (nor is the operator API)", "/apis/cluster.open-cluster-management.io/v1/managedclusters");
+    throw e;
+  }), k8s.list("SiteProfile").catch(() => []), cpOn() ? cp.clusters().catch(() => []) : Promise.resolve([])]);
+  const prof = Object.fromEntries(profiles.map(p => [p.metadata.name, p]));
+  return mcs.map(mc => {
+    const name = mc.metadata.name;
+    const p = prof[name];
+    const inv = ((p || {}).status || {}).inventory || {};
+    const nodes = inv.nodes || [];
+    const zones = inv.zones && inv.zones.length ? inv.zones : [...new Set(nodes.map(n => n.zone).filter(Boolean))];
+    const avail = condTrue(mc, "ManagedClusterConditionAvailable");
+    const labels = mc.metadata.labels || {};
+    const csi = (inv.storageClasses || []).find(c => /simplyblock/.test(c.driver || ""));
+    return {
+      mc,
+      name,
+      profile: p || null,
+      inv,
+      nodes,
+      zones,
+      storage: storage.filter(c => c.site === name),
+      wire: {
+        uuid: mc.metadata.uid || name,
+        name,
+        version: ((mc.status || {}).version || {}).kubernetes || "",
+        status: avail ? "online" : condKnown(mc, "ManagedClusterConditionAvailable") ? "offline" : "unreachable",
+        // the CSI driver is visible as the provisioner of a storage class
+        csi_version: csi ? csi.driver : p ? "not seen" : "not reported",
+        csi_status: csi || !p ? "online" : "unreachable",
+        api_endpoint: (((mc.spec || {}).managedClusterClientConfigs || [])[0] || {}).url || "",
+        environment: [labels.vendor, labels.cloud].filter(x => x && x !== "auto-detect").join(" · ") || "Kubernetes",
+        discovered: false,
+        operator_namespace: "simplyblock",
+        zone_ids: zones.map(z => zoneId(name, z)),
+        storage_cluster_ids: storage.filter(c => c.site === name).map(c => c.uuid),
+        worker_nodes_count: nodes.length,
+        storage_classes_count: (inv.storageClasses || []).length,
+        created_at: mc.metadata.creationTimestamp,
+        // where the numbers come from, for the detail view
+        source: "Open Cluster Management + dr-agent inventory",
+        inventory_reported_at: ((p || {}).status || {}).reportedAt || null
+      }
+    };
+  });
+}
+const hubSite = async id => {
+  const s = (await hubSites()).find(x => x.wire.uuid === id || x.name === id);
+  if (!s) throw new ApiError(404, `Kubernetes cluster ${id} is not a managed cluster of this hub`, `/kubernetes-clusters/${id}`, "NotFound");
+  return s;
+};
+const hubK8s = {
+  clusters: () => hubSites().then(ss => ss.map(s => s.wire)),
+  cluster: id => hubSite(id).then(s => s.wire),
+  hosts: async id => {
+    const s = await hubSite(id);
+    const storageNodes = (await Promise.all(s.storage.map(c => cp.nodes(c.uuid).catch(() => [])))).flat();
+    return s.nodes.map(n => ({
+      uuid: `node:${s.name}:${n.name}`,
+      hostname: n.name,
+      status: n.ready ? "available" : "unavailable",
+      zone: n.zone || null,
+      zone_id: n.zone ? zoneId(s.name, n.zone) : null,
+      k8s_cluster: s.name,
+      source: "kubernetes",
+      storage_node_ids: storageNodes.filter(x => x.hostname === n.name).map(x => x.uuid),
+      devices: []
+    }));
+  },
+  zones: async id => {
+    const ss = id ? [await hubSite(id)] : await hubSites();
+    return ss.flatMap(s => s.zones.map(z => ({
+      uuid: zoneId(s.name, z),
+      name: z,
+      region: "",
+      cluster_ids: s.storage.map(c => c.uuid),
+      k8s_cluster_ids: [s.wire.uuid],
+      k8s_clusters: [{
+        uuid: s.wire.uuid,
+        name: s.name
+      }],
+      hosts_count: s.nodes.filter(n => n.zone === z).length
+    })));
+  },
+  storageClasses: async id => {
+    const s = await hubSite(id);
+    return (s.inv.storageClasses || []).map(c => ({
+      uuid: `sc:${s.name}:${c.name}`,
+      k8s_cluster_id: s.wire.uuid,
+      name: c.name,
+      provisioner: c.driver || "",
+      parameters: {},
+      spec_parameters: c.labels || {}
+    }));
+  },
+  storageClusters: id => hubSite(id).then(s => s.storage)
+};
+Object.assign(window, {
+  cp,
+  cpOn,
+  upstreamOn,
+  notInDeployment,
+  cpGet,
+  hostKey,
+  idOfUrl,
+  hubK8s,
+  hubSites
+});
+})();
 // ---- api.jsx ----
 (function(){
 // ---------------------------------------------------------------------------
@@ -633,6 +1325,9 @@ const API = window.SB_CONFIG.k8sBase;
 
 // proposed: served by the operator until the kinds exist as CRDs
 async function preq(path) {
+  // A pod that does not proxy the operator API says so up front: the screen
+  // renders "not available in this deployment" instead of an error.
+  if (!upstreamOn("operator")) throw notInDeployment("The operator API", "that serves this view is not part of this deployment", path);
   let res;
   try {
     res = await fetch(window.SB_CONFIG.operatorBase + "/proposed" + path, {
@@ -712,6 +1407,13 @@ async function req(path, opts) {
   const method = ((opts || {}).method || "GET").toUpperCase();
   const seg = path.split("?")[0].split("/").filter(Boolean);
   if (method !== "GET") return mutate(method, path, opts && opts.body ? JSON.parse(opts.body) : {});
+
+  // Storage clusters managed by this pod's control plane but not CRDs here (a
+  // hub managing sites): the control plane API is the source (cpapi.jsx).
+  if (cp.on()) {
+    const r = cp.route(path);
+    if (r) return r;
+  }
 
   // /coll
   if (seg.length === 1) {
@@ -821,6 +1523,9 @@ async function k8sNameOf(kind, id) {
     const s = o.status || {};
     return [s.clusterId, s.nodeId, s.deviceId, s.poolId, s.backupId, s.simplyblock && s.simplyblock.volumeId, o.metadata.uid].includes(id);
   });
+  // Read from the control plane but not a CRD here: the object belongs to a
+  // site, and its operations are that site's Ops objects.
+  if (!hit && cp.on()) throw notInDeployment(`Actions on this ${OPS_TARGET_LABEL[kind] || kind}`, "run on the site that hosts it — its object is on that site's Kubernetes API, not on this hub", "/" + id);
   if (!hit) throw new ApiError(404, `${kind} ${id} not found`, "/" + id, "NotFound");
   return hit.metadata.name;
 }
@@ -836,6 +1541,7 @@ async function mutate(method, path, payload) {
     return submitOps(kind, await k8sNameOf(kind, seg[1]), action, null);
   }
   // Not an operation: a proposed collection the operator owns until it is a CRD.
+  if (!upstreamOn("operator")) throw notInDeployment("This change", "goes through the operator API, which is not part of this deployment", path);
   const res = await fetch(window.SB_CONFIG.operatorBase + "/proposed" + path, {
     method,
     headers: {
@@ -3028,13 +3734,15 @@ const api = {
   accessEffective: subject => req("/access/effective?subject=" + encodeURIComponent(subject)).then(r => r[0]),
   accessReview: b => send("POST", "/access/review", b),
   accessInvariants: () => req("/access/invariants"),
-  k8sClusters: () => req("/kubernetes-clusters").then(r => r.map(normK8s)),
-  k8sCluster: id => req(`/kubernetes-clusters/${id}`).then(r => normK8s(r[0])),
-  k8sStorageClasses: id => req(`/kubernetes-clusters/${id}/storage-classes`).then(r => r.map(normSc)),
-  k8sPvcs: id => req(`/kubernetes-clusters/${id}/pvcs`).then(r => r.map(normPvc)),
-  k8sHosts: id => req(`/kubernetes-clusters/${id}/hosts`).then(r => r.map(normHost)),
-  k8sZones: id => req(`/kubernetes-clusters/${id}/zones`).then(r => r.map(normZone)),
-  k8sStorageClusters: id => req(`/kubernetes-clusters/${id}/storage-clusters`).then(r => r.map(normCluster)),
+  // Without the operator API the Kubernetes clusters are the hub's OCM
+  // ManagedClusters with their dr-agents' inventory (cpapi.jsx, hubK8s).
+  k8sClusters: () => (upstreamOn("operator") ? req("/kubernetes-clusters") : hubK8s.clusters()).then(r => r.map(normK8s)),
+  k8sCluster: id => (upstreamOn("operator") ? req(`/kubernetes-clusters/${id}`).then(r => r[0]) : hubK8s.cluster(id)).then(normK8s),
+  k8sStorageClasses: id => (upstreamOn("operator") ? req(`/kubernetes-clusters/${id}/storage-classes`) : hubK8s.storageClasses(id)).then(r => r.map(normSc)),
+  k8sPvcs: id => upstreamOn("operator") ? req(`/kubernetes-clusters/${id}/pvcs`).then(r => r.map(normPvc)) : Promise.reject(notInDeployment("A managed cluster's PVCs", "are not readable from the hub: no agent reports them", `/kubernetes-clusters/${id}/pvcs`)),
+  k8sHosts: id => (upstreamOn("operator") ? req(`/kubernetes-clusters/${id}/hosts`) : hubK8s.hosts(id)).then(r => r.map(normHost)),
+  k8sZones: id => (upstreamOn("operator") ? req(`/kubernetes-clusters/${id}/zones`) : hubK8s.zones(id)).then(r => r.map(normZone)),
+  k8sStorageClusters: id => (upstreamOn("operator") ? req(`/kubernetes-clusters/${id}/storage-clusters`) : hubK8s.storageClusters(id)).then(r => r.map(normCluster)),
   clusterK8s: id => req(`/clusters/${id}/kubernetes-clusters`).then(r => r.map(normK8s)),
   storageClass: id => req(`/storage-classes/${id}`).then(r => normSc(r[0])),
   storageClassPvcs: id => req(`/storage-classes/${id}/pvcs`).then(r => r.map(normPvc)),
@@ -3062,12 +3770,18 @@ const api = {
   clusterFailoverMds: cid => send("POST", `/clusters/${cid}/file-storage/failover`),
   clusterSetObjectStorage: (cid, p) => send("PUT", `/clusters/${cid}/object-storage`, p),
   pvc: id => req(`/pvcs/${id}`).then(r => normPvc(r[0])),
-  zoneK8sClusters: id => req(`/zones/${id}/kubernetes-clusters`).then(r => r.map(normK8s)),
-  zones: () => req("/zones").then(r => r.map(normZone)),
-  zone: id => req(`/zones/${id}`).then(r => normZone(r[0])),
-  zoneHosts: id => req(`/zones/${id}/hosts`).then(r => r.map(normHost)),
-  zoneClusters: id => req(`/zones/${id}/clusters`).then(r => r.map(normCluster)),
-  clusterZones: cid => req(`/clusters/${cid}/zones`).then(r => r.map(normZone)),
+  // Without the operator API a zone is a managed cluster's node zone, as its
+  // dr-agent reports it (topology.kubernetes.io/zone); hubZones in cpapi.jsx.
+  zoneK8sClusters: id => upstreamOn("operator") ? req(`/zones/${id}/kubernetes-clusters`).then(r => r.map(normK8s)) : hubSites().then(ss => ss.filter(s => s.wire.zone_ids.includes(id)).map(s => normK8s(s.wire))),
+  zones: () => (upstreamOn("operator") ? req("/zones") : hubK8s.zones()).then(r => r.map(normZone)),
+  zone: id => upstreamOn("operator") ? req(`/zones/${id}`).then(r => normZone(r[0])) : hubK8s.zones().then(zs => {
+    const z = zs.find(x => x.uuid === id);
+    if (!z) throw new ApiError(404, `zone ${id} not found`, `/zones/${id}`, "NotFound");
+    return normZone(z);
+  }),
+  zoneHosts: id => upstreamOn("operator") ? req(`/zones/${id}/hosts`).then(r => r.map(normHost)) : hubSites().then(ss => Promise.all(ss.filter(s => s.wire.zone_ids.includes(id)).map(s => hubK8s.hosts(s.name)))).then(ls => ls.flat().filter(h => h.zone_id === id).map(normHost)),
+  zoneClusters: id => upstreamOn("operator") ? req(`/zones/${id}/clusters`).then(r => r.map(normCluster)) : hubSites().then(ss => ss.filter(s => s.wire.zone_ids.includes(id)).flatMap(s => s.storage).map(normCluster)),
+  clusterZones: cid => upstreamOn("operator") ? req(`/clusters/${cid}/zones`).then(r => r.map(normZone)) : hubK8s.zones().then(zs => zs.filter(z => z.cluster_ids.includes(cid)).map(normZone)),
   pairCreate: p => send("POST", "/cluster-pairs", p),
   pairTest: id => send("POST", `/cluster-pairs/${id}/test`),
   pairDelete: id => send("DELETE", `/cluster-pairs/${id}`),
@@ -4740,6 +5454,8 @@ Object.assign(window, {
 const AGENT_BASE = window.SB_CONFIG.agentBase;
 const PROM_BASE = window.SB_CONFIG.promBase;
 async function areq(base, path) {
+  if (base === AGENT_BASE && !upstreamOn("operator")) throw notInDeployment("The operator's agent API", "that serves this view is not part of this deployment", path);
+  if (base === PROM_BASE && !upstreamOn("prometheus")) throw notInDeployment("Prometheus", "is not part of this deployment", path);
   let res;
   try {
     res = await fetch(base + path, {
@@ -4802,11 +5518,104 @@ const normFdb = b => ({
   status: b.status,
   restoreRequestedAt: b.restore_requested_at || null
 });
+
+// Without the operator's agent the control plane's services are read where
+// they run: the pods in the console's namespace, from the Kubernetes API.
+// Pods report no live CPU/memory use; the allocation shown is their limits.
+const memQty = q => {
+  const m = /^([0-9.]+)\s*([KMGTP]i?)?$/.exec(String(q || "").trim());
+  if (!m) return 0;
+  const mul = {
+    K: 1e3,
+    M: 1e6,
+    G: 1e9,
+    T: 1e12,
+    P: 1e15,
+    Ki: 1024,
+    Mi: 1048576,
+    Gi: 1073741824,
+    Ti: 1099511627776
+  }[m[2]] || 1;
+  return Number(m[1]) * mul;
+};
+const cpuQty = q => {
+  const s = String(q || "");
+  return s.endsWith("m") ? Number(s.slice(0, -1)) / 1000 : Number(s) || 0;
+};
+const podGroup = p => {
+  const l = p.metadata.labels || {};
+  const app = l.app || l["app.kubernetes.io/name"] || l["app.kubernetes.io/component"] || "";
+  if (/graylog|opensearch|mongo|grafana|prometheus|thanos|fluent/.test(app + p.metadata.name)) return "observability";
+  if (/fdb|foundationdb/.test(app + p.metadata.name)) return "state database";
+  if (/control-center|operator|reloader/.test(app + p.metadata.name)) return "operator & console";
+  return "control plane";
+};
+const podContainer = p => {
+  const cs = (p.spec || {}).containers || [];
+  const st = (p.status || {}).containerStatuses || [];
+  const lim = k => cs.reduce((s, c) => s + (k === "cpu" ? cpuQty : memQty)(((c.resources || {}).limits || {})[k]), 0);
+  const started = (p.status || {}).startTime ? Date.parse(p.status.startTime) : null;
+  const ready = st.length > 0 && st.every(c => c.ready);
+  return {
+    name: p.metadata.name,
+    group: podGroup(p),
+    image: (cs[0] || {}).image || "",
+    state: (p.status || {}).phase === "Running" && ready ? "running" : String((p.status || {}).phase || "unknown").toLowerCase(),
+    cpu_cores_alloc: lim("cpu"),
+    cpu_pct: 0,
+    mem_used: 0,
+    mem_limit: lim("memory"),
+    disk_used: 0,
+    disk_limit: 0,
+    restarts: st.reduce((s, c) => s + (c.restartCount || 0), 0),
+    uptime_h: started ? Math.max(0, Math.round((Date.now() - started) / 36e5)) : 0,
+    metrics: false
+  };
+};
+const LOG_LEVEL = /\b(DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL|CRITICAL)\b/i;
+async function podLogs(name) {
+  const path = pathFor("Pod", {
+    name,
+    subresource: "log"
+  }) + "?tailLines=300&timestamps=true";
+  let res;
+  try {
+    res = await fetch(window.SB_CONFIG.k8sBase + path, {
+      headers: {
+        Accept: "text/plain",
+        Authorization: `Bearer ${window.SB_CONFIG.token}`
+      }
+    });
+  } catch (e) {
+    throw new ApiError(0, "Cannot reach the Kubernetes API", path, "Unreachable");
+  }
+  const text = await res.text();
+  if (!res.ok) {
+    let b = null;
+    try {
+      b = JSON.parse(text);
+    } catch (e) {}
+    throw new ApiError(res.status, b && b.message || "Request failed", path, b && b.reason || null);
+  }
+  return text.split("\n").filter(Boolean).map(line => {
+    const sp = line.indexOf(" ");
+    const ts = sp > 0 ? line.slice(0, sp) : "",
+      msg = sp > 0 ? line.slice(sp + 1) : line;
+    const lv = (LOG_LEVEL.exec(msg) || [])[1] || "INFO";
+    return {
+      ts,
+      level: lv.toUpperCase().replace("WARNING", "WARN").replace("CRITICAL", "ERROR").replace("FATAL", "ERROR"),
+      msg
+    };
+  });
+}
 const agent = {
   // The control plane is one deployment across every cluster, so none of these
   // are scoped by cluster.
-  containers: () => areq(AGENT_BASE, "/control-plane/containers").then(r => r.map(normContainer)),
-  containerLogs: name => areq(AGENT_BASE, `/control-plane/containers/${name}/logs`),
+  containers: () => upstreamOn("operator") ? areq(AGENT_BASE, "/control-plane/containers").then(r => r.map(normContainer)) : k8s.list("Pod").then(ps => ps.map(p => Object.assign(normContainer(podContainer(p)), {
+    metrics: false
+  }))),
+  containerLogs: name => upstreamOn("operator") ? areq(AGENT_BASE, `/control-plane/containers/${name}/logs`) : podLogs(name),
   fdbBackups: () => areq(AGENT_BASE, "/control-plane/fdb/backups").then(r => r.map(normFdb)),
   fdbRestore: id => asend(AGENT_BASE, "POST", `/control-plane/fdb/backups/${id}/restore`),
   nodeLogs: (nid, stream) => areq(AGENT_BASE, `/nodes/${nid}/logs/${stream}`),
@@ -4834,7 +5643,9 @@ Object.assign(window, {
   PROM_BASE,
   SourceTag,
   normContainer,
-  normFdb
+  normFdb,
+  podContainer,
+  memQty
 });
 })();
 // ---- ui.jsx ----
@@ -5340,6 +6151,10 @@ const KIND_GROUP = {
 const ENTITY_GROUP = {
   drhub: "dr.simplyblock.io"
 };
+// Without the operator API the Kubernetes clusters are the hub's OCM
+// ManagedClusters (cpapi.jsx hubK8s), so reading them is a question about
+// that group, not the operator's proposed one.
+if (!upstreamOn("operator")) ENTITY_GROUP.k8scluster = "cluster.open-cluster-management.io";
 const ENTITY_RESOURCE = {
   k8scluster: "managedclusters",
   storagecluster: "storageclusters",
@@ -5425,7 +6240,8 @@ async function loadAccessK8s() {
     incomplete: !!rules.incomplete,
     grants: [],
     scopes: null,
-    demoUsers: []
+    demoUsers: [],
+    k8sRules: true
   });
 }
 async function loadAccess() {
@@ -5451,7 +6267,8 @@ async function loadAccess() {
       grants: r.grants || [],
       scopes: r.scopes || null,
       ns: r.scopes && r.scopes.ns || AC_STATE.ns,
-      demoUsers: r.demo_users || []
+      demoUsers: r.demo_users || [],
+      k8sRules: false
     });
   } catch (e) {
     // no operator API (or it has no access view): the Kubernetes API is the truth
@@ -5516,7 +6333,18 @@ function allowedIn(ns, verb, resource, group, name) {
 const anyNs = (verb, resource, group, name) => allowedIn("*", verb, resource, group, name) || Object.keys(AC_STATE.rules.ns).some(n => allowedIn(n, verb, resource, group, name));
 
 // what (verb, resource) does (op, entity) become?
+// Storage entities the operator's access model splits into proposed resources
+// (volumes, snapshots, devices, ...). With the API server's own rules there is
+// no such split: the console reads storage through CRDs or the control plane
+// with its own identity, so reading any of it is "get storageclusters" in the
+// real group — the rule the console role grants.
+const K8S_STORAGE_READ = new Set(["storagecluster", "storagepool", "backupop", "backuppolicy"]);
 function target(op, entity, obj) {
+  if (AC_STATE.k8sRules && op === "read" && K8S_STORAGE_READ.has(entity)) return {
+    verb: "get",
+    resource: "storageclusters",
+    group: "storage.simplyblock.io"
+  };
   if (entity === "drhub") {
     const group = "dr.simplyblock.io";
     if (op === "failover" || op === "relocate" || op === "restart") return {
@@ -10949,10 +11777,10 @@ function ControlPlanePanel() {
   });
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "sech"
-  }, /*#__PURE__*/React.createElement("h2", null, "Live allocation"), /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement("h2", null, upstreamOn("operator") ? "Live allocation" : "Services"), /*#__PURE__*/React.createElement("span", {
     className: "ln"
   }), /*#__PURE__*/React.createElement(SourceTag, {
-    what: "container runtime"
+    what: upstreamOn("operator") ? "container runtime" : "Kubernetes pods"
   })), loading && !list.length ? /*#__PURE__*/React.createElement("div", {
     className: "grid"
   }, Array.from({
@@ -10991,7 +11819,12 @@ function ControlPlanePanel() {
     className: "tname"
   }, c.name), /*#__PURE__*/React.createElement("div", {
     className: "tsub"
-  }, c.image))), /*#__PURE__*/React.createElement("div", {
+  }, c.image))), c.metrics === false ? /*#__PURE__*/React.createElement("div", {
+    className: "kv",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "CPU limit"), /*#__PURE__*/React.createElement("b", null, c.cpu.alloc ? `${c.cpu.alloc} cores` : "none")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "Memory limit"), /*#__PURE__*/React.createElement("b", null, c.mem.limit ? fmtBytes(c.mem.limit) : "none"))) : /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 10
     }
@@ -30232,6 +31065,38 @@ const DETAIL_API = {
   appgroup: prop("app-groups/{uuid}"),
   deployconfig: crd1("clusterdeploymentconfigs")
 };
+
+// The source each screen names must be the one that served it: the control
+// plane API for storage read from it (cpapi.jsx), OCM and the dr-agents'
+// inventory for Kubernetes clusters on a hub without the operator API.
+if (cp.on()) {
+  const CPV = "GET /controlplane/api/v2/clusters";
+  VIEWS.clusters.api = p => p.t === "k8sc" ? `${CPV}/ (matched to the site by its storage nodes)` : `${CPV}/`;
+  VIEWS.nodes.api = () => `${CPV}/{cluster}/storage-nodes/`;
+  VIEWS.devices.api = () => `${CPV}/{cluster}/storage-nodes/{node}/devices/`;
+  VIEWS.pools.api = () => `${CPV}/{cluster}/storage-pools/`;
+  const volumesApi = VIEWS.volumes.api;
+  VIEWS.volumes.api = p => ["pool", "cluster"].includes(p.t) ? `${CPV}/{cluster}/storage-pools/{pool}/volumes/` : volumesApi(p);
+  VIEWS.snapshots.api = () => `${CPV}/{cluster}/storage-pools/{pool}/snapshots/`;
+  Object.assign(DETAIL_API, {
+    cluster: `${CPV}/{id}/`,
+    node: `${CPV}/{cluster}/storage-nodes/{id}/`,
+    device: `${CPV}/{cluster}/storage-nodes/{node}/devices/{id}/`,
+    pool: `${CPV}/{cluster}/storage-pools/{id}/`,
+    volume: `${CPV}/{cluster}/storage-pools/{pool}/volumes/{id}/`,
+    snapshot: `${CPV}/{cluster}/storage-pools/{pool}/snapshots/{id}/`
+  });
+}
+if (!upstreamOn("operator")) {
+  const OCM = "GET /apis/cluster.open-cluster-management.io/v1/managedclusters";
+  const INV = "GET /apis/sitemap.simplyblock.io/v1alpha1/siteprofiles (status.inventory)";
+  VIEWS.k8s.api = () => `${OCM} + ${INV}`;
+  VIEWS.zones.api = () => INV;
+  Object.assign(DETAIL_API, {
+    k8sc: `${OCM}/{name} + ${INV}`,
+    zone: INV
+  });
+}
 const KIND_LABEL = {
   cluster: "cluster",
   host: "host",
@@ -30276,6 +31141,38 @@ function ErrorState({
   onUp,
   upLabel
 }) {
+  // the source of this screen is not part of this deployment: a fact about
+  // the installation, not a failure, so no retry and no red
+  if (error.reason === "NotInDeployment") {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "empty",
+      "data-state": "not-in-deployment"
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "link",
+      s: 24,
+      c: "var(--dim2)"
+    }), /*#__PURE__*/React.createElement("b", {
+      style: {
+        color: "var(--text)"
+      }
+    }, "Not available in this deployment"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        maxWidth: 480
+      }
+    }, error.message, "."), error.path && /*#__PURE__*/React.createElement("span", {
+      className: "mono",
+      style: {
+        fontSize: 10.5,
+        color: "var(--dim2)"
+      }
+    }, error.path), onUp && /*#__PURE__*/React.createElement("button", {
+      className: "chip",
+      style: {
+        marginTop: 8
+      },
+      onClick: onUp
+    }, "Back to ", upLabel));
+  }
   if (error.status === 501) {
     return /*#__PURE__*/React.createElement("div", {
       className: "empty"
@@ -30370,7 +31267,7 @@ function ErrorState({
     style: {
       color: "var(--text)"
     }
-  }, "Could not reach the Kubernetes API"), /*#__PURE__*/React.createElement("span", {
+  }, error.source ? `The ${error.source} answered with an error` : "Could not reach the Kubernetes API"), /*#__PURE__*/React.createElement("span", {
     style: {
       maxWidth: 420
     }
@@ -30379,7 +31276,7 @@ function ErrorState({
     style: {
       fontSize: 10.5
     }
-  }, (error.path || "").startsWith("/apis") || (error.path || "").startsWith("/api/") ? API : window.SB_CONFIG.operatorBase, error.path), /*#__PURE__*/React.createElement("button", {
+  }, error.source === "control plane API" ? window.SB_CONFIG.cpBase : (error.path || "").startsWith("/apis") || (error.path || "").startsWith("/api/") ? API : window.SB_CONFIG.operatorBase, error.path), /*#__PURE__*/React.createElement("button", {
     className: "chip",
     style: {
       marginTop: 8
@@ -31785,5 +32682,12 @@ function App() {
     className: "toast"
   }, toast));
 }
+
+// panels.jsx, deploy.jsx and rbac-admin.jsx render ErrorState too; each file is
+// its own scope, so without this any error on those screens threw a
+// ReferenceError and the whole view failed to render
+Object.assign(window, {
+  ErrorState
+});
 ReactDOM.createRoot(document.getElementById("root")).render(/*#__PURE__*/React.createElement(App, null));
 })();

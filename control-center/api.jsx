@@ -10,6 +10,9 @@ const API = window.SB_CONFIG.k8sBase;
 
 // proposed: served by the operator until the kinds exist as CRDs
 async function preq(path) {
+  // A pod that does not proxy the operator API says so up front: the screen
+  // renders "not available in this deployment" instead of an error.
+  if (!upstreamOn("operator")) throw notInDeployment("The operator API", "that serves this view is not part of this deployment", path);
   let res;
   try {
     res = await fetch(window.SB_CONFIG.operatorBase + "/proposed" + path,
@@ -64,6 +67,13 @@ async function req(path, opts) {
   const method = ((opts || {}).method || "GET").toUpperCase();
   const seg = path.split("?")[0].split("/").filter(Boolean);
   if (method !== "GET") return mutate(method, path, opts && opts.body ? JSON.parse(opts.body) : {});
+
+  // Storage clusters managed by this pod's control plane but not CRDs here (a
+  // hub managing sites): the control plane API is the source (cpapi.jsx).
+  if (cp.on()) {
+    const r = cp.route(path);
+    if (r) return r;
+  }
 
   // /coll
   if (seg.length === 1) {
@@ -125,6 +135,10 @@ async function k8sNameOf(kind, id) {
     return [s.clusterId, s.nodeId, s.deviceId, s.poolId, s.backupId,
       s.simplyblock && s.simplyblock.volumeId, o.metadata.uid].includes(id);
   });
+  // Read from the control plane but not a CRD here: the object belongs to a
+  // site, and its operations are that site's Ops objects.
+  if (!hit && cp.on()) throw notInDeployment(`Actions on this ${OPS_TARGET_LABEL[kind] || kind}`,
+    "run on the site that hosts it — its object is on that site's Kubernetes API, not on this hub", "/" + id);
   if (!hit) throw new ApiError(404, `${kind} ${id} not found`, "/" + id, "NotFound");
   return hit.metadata.name;
 }
@@ -141,6 +155,7 @@ async function mutate(method, path, payload) {
     return submitOps(kind, await k8sNameOf(kind, seg[1]), action, null);
   }
   // Not an operation: a proposed collection the operator owns until it is a CRD.
+  if (!upstreamOn("operator")) throw notInDeployment("This change", "goes through the operator API, which is not part of this deployment", path);
   const res = await fetch(window.SB_CONFIG.operatorBase + "/proposed" + path, {
     method, headers: {"Content-Type": "application/json",
       Authorization: `Bearer ${window.SB_CONFIG.token}`},
@@ -1097,13 +1112,16 @@ const api = {
   accessEffective: subject => req("/access/effective?subject=" + encodeURIComponent(subject)).then(r => r[0]),
   accessReview: b => send("POST", "/access/review", b),
   accessInvariants: () => req("/access/invariants"),
-  k8sClusters: () => req("/kubernetes-clusters").then(r => r.map(normK8s)),
-  k8sCluster: id => req(`/kubernetes-clusters/${id}`).then(r => normK8s(r[0])),
-  k8sStorageClasses: id => req(`/kubernetes-clusters/${id}/storage-classes`).then(r => r.map(normSc)),
-  k8sPvcs: id => req(`/kubernetes-clusters/${id}/pvcs`).then(r => r.map(normPvc)),
-  k8sHosts: id => req(`/kubernetes-clusters/${id}/hosts`).then(r => r.map(normHost)),
-  k8sZones: id => req(`/kubernetes-clusters/${id}/zones`).then(r => r.map(normZone)),
-  k8sStorageClusters: id => req(`/kubernetes-clusters/${id}/storage-clusters`).then(r => r.map(normCluster)),
+  // Without the operator API the Kubernetes clusters are the hub's OCM
+  // ManagedClusters with their dr-agents' inventory (cpapi.jsx, hubK8s).
+  k8sClusters: () => (upstreamOn("operator") ? req("/kubernetes-clusters") : hubK8s.clusters()).then(r => r.map(normK8s)),
+  k8sCluster: id => (upstreamOn("operator") ? req(`/kubernetes-clusters/${id}`).then(r => r[0]) : hubK8s.cluster(id)).then(normK8s),
+  k8sStorageClasses: id => (upstreamOn("operator") ? req(`/kubernetes-clusters/${id}/storage-classes`) : hubK8s.storageClasses(id)).then(r => r.map(normSc)),
+  k8sPvcs: id => upstreamOn("operator") ? req(`/kubernetes-clusters/${id}/pvcs`).then(r => r.map(normPvc))
+    : Promise.reject(notInDeployment("A managed cluster's PVCs", "are not readable from the hub: no agent reports them", `/kubernetes-clusters/${id}/pvcs`)),
+  k8sHosts: id => (upstreamOn("operator") ? req(`/kubernetes-clusters/${id}/hosts`) : hubK8s.hosts(id)).then(r => r.map(normHost)),
+  k8sZones: id => (upstreamOn("operator") ? req(`/kubernetes-clusters/${id}/zones`) : hubK8s.zones(id)).then(r => r.map(normZone)),
+  k8sStorageClusters: id => (upstreamOn("operator") ? req(`/kubernetes-clusters/${id}/storage-clusters`) : hubK8s.storageClusters(id)).then(r => r.map(normCluster)),
   clusterK8s: id => req(`/clusters/${id}/kubernetes-clusters`).then(r => r.map(normK8s)),
   storageClass: id => req(`/storage-classes/${id}`).then(r => normSc(r[0])),
   storageClassPvcs: id => req(`/storage-classes/${id}/pvcs`).then(r => r.map(normPvc)),
@@ -1123,12 +1141,20 @@ const api = {
   clusterFailoverMds: cid => send("POST", `/clusters/${cid}/file-storage/failover`),
   clusterSetObjectStorage: (cid, p) => send("PUT", `/clusters/${cid}/object-storage`, p),
   pvc: id => req(`/pvcs/${id}`).then(r => normPvc(r[0])),
-  zoneK8sClusters: id => req(`/zones/${id}/kubernetes-clusters`).then(r => r.map(normK8s)),
-  zones: () => req("/zones").then(r => r.map(normZone)),
-  zone: id => req(`/zones/${id}`).then(r => normZone(r[0])),
-  zoneHosts: id => req(`/zones/${id}/hosts`).then(r => r.map(normHost)),
-  zoneClusters: id => req(`/zones/${id}/clusters`).then(r => r.map(normCluster)),
-  clusterZones: cid => req(`/clusters/${cid}/zones`).then(r => r.map(normZone)),
+  // Without the operator API a zone is a managed cluster's node zone, as its
+  // dr-agent reports it (topology.kubernetes.io/zone); hubZones in cpapi.jsx.
+  zoneK8sClusters: id => upstreamOn("operator") ? req(`/zones/${id}/kubernetes-clusters`).then(r => r.map(normK8s))
+    : hubSites().then(ss => ss.filter(s => s.wire.zone_ids.includes(id)).map(s => normK8s(s.wire))),
+  zones: () => (upstreamOn("operator") ? req("/zones") : hubK8s.zones()).then(r => r.map(normZone)),
+  zone: id => upstreamOn("operator") ? req(`/zones/${id}`).then(r => normZone(r[0]))
+    : hubK8s.zones().then(zs => { const z = zs.find(x => x.uuid === id); if (!z) throw new ApiError(404, `zone ${id} not found`, `/zones/${id}`, "NotFound"); return normZone(z); }),
+  zoneHosts: id => upstreamOn("operator") ? req(`/zones/${id}/hosts`).then(r => r.map(normHost))
+    : hubSites().then(ss => Promise.all(ss.filter(s => s.wire.zone_ids.includes(id)).map(s => hubK8s.hosts(s.name))))
+      .then(ls => ls.flat().filter(h => h.zone_id === id).map(normHost)),
+  zoneClusters: id => upstreamOn("operator") ? req(`/zones/${id}/clusters`).then(r => r.map(normCluster))
+    : hubSites().then(ss => ss.filter(s => s.wire.zone_ids.includes(id)).flatMap(s => s.storage).map(normCluster)),
+  clusterZones: cid => upstreamOn("operator") ? req(`/clusters/${cid}/zones`).then(r => r.map(normZone))
+    : hubK8s.zones().then(zs => zs.filter(z => z.cluster_ids.includes(cid)).map(normZone)),
 
   pairCreate: p => send("POST", "/cluster-pairs", p),
   pairTest: id => send("POST", `/cluster-pairs/${id}/test`),

@@ -61,6 +61,10 @@ const KIND_GROUP = {pplan: "dr.simplyblock.io", drpath: "dr.simplyblock.io", pap
   drconfig: "dr.simplyblock.io", siteprofile: "sitemap.simplyblock.io", dhcpserver: "sitemap.simplyblock.io",
   sitedeploy: "storage.simplyblock.io"};
 const ENTITY_GROUP = {drhub: "dr.simplyblock.io"};
+// Without the operator API the Kubernetes clusters are the hub's OCM
+// ManagedClusters (cpapi.jsx hubK8s), so reading them is a question about
+// that group, not the operator's proposed one.
+if (!upstreamOn("operator")) ENTITY_GROUP.k8scluster = "cluster.open-cluster-management.io";
 const ENTITY_RESOURCE = {k8scluster: "managedclusters", storagecluster: "storageclusters", storagepool: "storagepools", backupop: "backups",
   replicationpolicy: "replicationpolicies", backuppolicy: "backuppolicies", drpolicy: "drpolicies", application: "protectedapplications", role: "clusterroles", binding: "accessgrants",
   drhub: "protectedapplications"};
@@ -86,7 +90,7 @@ async function loadAccessK8s() {
   const norm = (rules.resourceRules || []).map(r => ({apiGroups: r.apiGroups || [""], resources: r.resources || [], verbs: r.verbs || [], resourceNames: r.resourceNames}));
   const user = who.username || null;
   Object.assign(AC_STATE, {ready: true, error: null, user, groups: who.groups || [], initials: initialsOf(user), label: user,
-    rules: {cluster: norm, ns: {}}, incomplete: !!rules.incomplete, grants: [], scopes: null, demoUsers: []});
+    rules: {cluster: norm, ns: {}}, incomplete: !!rules.incomplete, grants: [], scopes: null, demoUsers: [], k8sRules: true});
 }
 
 async function loadAccess() {
@@ -95,7 +99,7 @@ async function loadAccess() {
     const r = await api.accessSelf();
     Object.assign(AC_STATE, {ready: true, error: null, user: r.user, groups: r.groups || [], initials: r.initials || "??", label: r.label || r.user,
       rules: r.rules || {cluster: [], ns: {}}, incomplete: !!r.incomplete, grants: r.grants || [], scopes: r.scopes || null,
-      ns: (r.scopes && r.scopes.ns) || AC_STATE.ns, demoUsers: r.demo_users || []});
+      ns: (r.scopes && r.scopes.ns) || AC_STATE.ns, demoUsers: r.demo_users || [], k8sRules: false});
   } catch (e) {
     // no operator API (or it has no access view): the Kubernetes API is the truth
     try { await loadAccessK8s(); }
@@ -149,7 +153,15 @@ function allowedIn(ns, verb, resource, group, name) {
 const anyNs = (verb, resource, group, name) => allowedIn("*", verb, resource, group, name) || Object.keys(AC_STATE.rules.ns).some(n => allowedIn(n, verb, resource, group, name));
 
 // what (verb, resource) does (op, entity) become?
+// Storage entities the operator's access model splits into proposed resources
+// (volumes, snapshots, devices, ...). With the API server's own rules there is
+// no such split: the console reads storage through CRDs or the control plane
+// with its own identity, so reading any of it is "get storageclusters" in the
+// real group — the rule the console role grants.
+const K8S_STORAGE_READ = new Set(["storagecluster", "storagepool", "backupop", "backuppolicy"]);
 function target(op, entity, obj) {
+  if (AC_STATE.k8sRules && op === "read" && K8S_STORAGE_READ.has(entity))
+    return {verb: "get", resource: "storageclusters", group: "storage.simplyblock.io"};
   if (entity === "drhub") {
     const group = "dr.simplyblock.io";
     if (op === "failover" || op === "relocate" || op === "restart") return {verb: "create", resource: "recoveryactions", group};

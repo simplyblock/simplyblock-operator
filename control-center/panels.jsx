@@ -412,7 +412,7 @@ function ControlPlanePanel() {
   if (error) return <ErrorState error={error} onRetry={reload} />;
   return (
     <>
-      <div className="sech"><h2>Live allocation</h2><span className="ln"></span><SourceTag what="container runtime" /></div>
+      <div className="sech"><h2>{upstreamOn("operator") ? "Live allocation" : "Services"}</h2><span className="ln"></span><SourceTag what={upstreamOn("operator") ? "container runtime" : "Kubernetes pods"} /></div>
       {loading && !list.length ? <div className="grid">{Array.from({length: 6}).map((_, i) => <div className="skel" key={i} style={{height: 150}}></div>)}</div>
         : groups.map(g => (
           <div key={g}>
@@ -425,11 +425,16 @@ function ControlPlanePanel() {
                     <div className="tname">{c.name}</div>
                     <div className="tsub">{c.image}</div>
                   </div></div>
-                  <div style={{marginTop: 10}}>
+                  {c.metrics === false
+                    ? <div className="kv" style={{marginTop: 10}}>
+                        <div><span>CPU limit</span><b>{c.cpu.alloc ? `${c.cpu.alloc} cores` : "none"}</b></div>
+                        <div><span>Memory limit</span><b>{c.mem.limit ? fmtBytes(c.mem.limit) : "none"}</b></div>
+                      </div>
+                    : <div style={{marginTop: 10}}>
                     <AllocBar label="vCPU" used={c.cpu.pct / 100} total={c.cpu.alloc} unit="cores" color="var(--accent)" />
                     <AllocBar label="RAM" used={c.mem.used} total={c.mem.limit} color="var(--ok)" />
                     <AllocBar label="Disk" used={c.disk.used} total={c.disk.limit} color="var(--ro)" />
-                  </div>
+                  </div>}
                   <div className="kv" style={{marginTop: 9}}>
                     <div><span>Restarts</span><b>{c.restarts}</b></div>
                     <div><span>Uptime</span><b>{c.uptimeH}h</b></div>
