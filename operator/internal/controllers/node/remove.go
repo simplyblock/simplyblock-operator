@@ -44,6 +44,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -51,6 +52,7 @@ import (
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	clusterctl "github.com/simplyblock/simplyblock-operator/internal/controllers/cluster"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 )
@@ -168,11 +170,114 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 			strings.Join(census.Unmanaged, ", "))
 	}
 
+	// The removal's admission is asked here, while the node still serves,
+	// because from the shutdown on there is no way back: a refusal learned in
+	// prepare-removal leaves the node offline.
+	refusal, err := r.removalRefusal(ctx, ops, clusterID, nodeID)
+	if err != nil {
+		return false, err
+	}
+	if refusal != "" {
+		return false, blockedf(RemovalNotAdmitted,
+			"the removal of node %s is not admitted: %s; nothing has been done", ops.Spec.NodeRef, refusal)
+	}
+
 	total := int32(len(census.Managed))
 	err = r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageNodeOpsStatus) {
 		status.Drain = &simplyblockv1alpha2.DrainStatus{VolumesTotal: total, VolumesMigrated: 0}
 	})
 	return err == nil, err
+}
+
+// removalRefusal asks whether the node may be removed, and returns why not, or
+// the empty string when it may.
+//
+// Two answers are asked. The failure-domain balance the removal would leave is
+// computed here, from the StorageNodes, by the rule the control plane enforces
+// (cluster.RemovalBalanceViolation). The control plane's own admission, which
+// also covers fault-tolerance headroom, replica relocation, and active tasks,
+// is asked through its read-only check; a control plane that does not offer
+// one runs the admission inside prepare-removal only, as it always has.
+func (r *StorageNodeOpsReconciler) removalRefusal(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, clusterID, nodeID string,
+) (string, error) {
+	violation, err := r.failureDomainViolation(ctx, ops)
+	if err != nil || violation != "" {
+		return violation, err
+	}
+	answer, offered, err := r.API.RemovalAdmission(ctx, clusterID, nodeID)
+	if err != nil {
+		return "", fmt.Errorf("ask the removal admission of node %s: %w", ops.Spec.NodeRef, err)
+	}
+	if offered && !answer.Admitted {
+		return answer.Reason, nil
+	}
+	return "", nil
+}
+
+// failureDomainViolation is the failure-domain balance rule the removal would
+// break, or the empty string. It applies only to a cluster with failure
+// domains enabled.
+//
+// The counts are per worker, the host, and the drained node's domain loses a
+// host only when no other storage node of the cluster stays on its worker: a
+// multi-socket worker runs several, and removing one leaves the host where it
+// was. Counts are taken before the removal and the one domain decremented, so a
+// domain the removal would empty stays in the map at zero rather than
+// vanishing from it.
+func (r *StorageNodeOpsReconciler) failureDomainViolation(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps,
+) (string, error) {
+	node, err := r.node(ctx, ops)
+	if err != nil {
+		return "", fmt.Errorf("read node %s: %w", ops.Spec.NodeRef, err)
+	}
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := types.NamespacedName{Name: node.Spec.ClusterRef, Namespace: node.Namespace}
+	if err := r.Get(ctx, key, &cluster); err != nil {
+		return "", fmt.Errorf("read cluster %s: %w", node.Spec.ClusterRef, err)
+	}
+	if cluster.Spec.EnableFailureDomains == nil || !*cluster.Spec.EnableFailureDomains {
+		return "", nil
+	}
+
+	hosts, err := clusterctl.FailureDomainHosts(ctx, r.Client, node.Namespace, node.Spec.ClusterRef)
+	if err != nil {
+		return "", fmt.Errorf("read the failure domains of cluster %s: %w", node.Spec.ClusterRef, err)
+	}
+	counts := make(map[int32]int, len(hosts))
+	for _, domain := range hosts {
+		counts[domain]++
+	}
+	if domain, placed := hosts[node.Spec.WorkerNode]; placed {
+		kept, err := r.workerKeepsANode(ctx, node)
+		if err != nil {
+			return "", err
+		}
+		if !kept {
+			counts[domain]--
+		}
+	}
+	return clusterctl.RemovalBalanceViolation(counts), nil
+}
+
+// workerKeepsANode reports whether another storage node of the same cluster,
+// not removed, stays on the drained node's worker.
+func (r *StorageNodeOpsReconciler) workerKeepsANode(
+	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
+) (bool, error) {
+	var nodes simplyblockv1alpha2.StorageNodeList
+	if err := r.List(ctx, &nodes, client.InNamespace(node.Namespace)); err != nil {
+		return false, fmt.Errorf("list the storage nodes of namespace %s: %w", node.Namespace, err)
+	}
+	for i := range nodes.Items {
+		other := &nodes.Items[i]
+		if other.Name != node.Name && other.Spec.ClusterRef == node.Spec.ClusterRef &&
+			other.Spec.WorkerNode == node.Spec.WorkerNode && other.Status.Status != nodeStatusRemoved {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // drainShutDown takes the node down before anything is moved off it, through the
