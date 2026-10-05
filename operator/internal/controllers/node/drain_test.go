@@ -75,7 +75,9 @@ func (m *scriptedMover) Delete(_ context.Context, move vmigration.Move) error {
 
 // aDrain is the operation these cases run.
 func aDrain() *simplyblockv1alpha2.StorageNodeOps {
-	return anOperation("a-drain", simplyblockv1alpha2.StorageNodeOpsActionRemove)
+	ops := anOperation("a-drain", simplyblockv1alpha2.StorageNodeOpsActionRemove)
+	ops.UID = aDrainUID
+	return ops
 }
 
 // aDraining builds the world, with the drain object already in it so that its
