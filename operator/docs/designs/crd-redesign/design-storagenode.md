@@ -1759,9 +1759,11 @@ already failed on (§8.4).** A node already holding one of the volume's replicas
 is never a target: the control plane refuses the move, and while the volume's
 primary is shut down for its removal that replica is what serves the volume. The
 holders are the nodes the volume lists and the drained node's own secondary and
-tertiary, read from the node stream. A volume whose primary is the drained node
-has its replicas on those two, and a volume created by replication lists no
-tertiary. Round-robin over the rest spreads the drained node's volumes rather than
+tertiary, read from the node stream, and the replicas of every other member of the
+subsystem the pools list, whatever node its primary is on. A volume whose primary
+is the drained node has its replicas on the drained node's secondary and tertiary,
+a volume created by replication lists no tertiary, and a member off the drained
+node mid-cutover still has replicas the move's target must avoid. Round-robin over the rest spreads the drained node's volumes rather than
 concentrating them on whichever peer sorts first.
 
 **A peer that replicates onto the drained node is used last.** A move builds the

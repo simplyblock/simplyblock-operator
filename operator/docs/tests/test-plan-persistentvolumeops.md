@@ -129,15 +129,21 @@ The control plane migrates an NVMe-oF subsystem as a whole, so every row here is
 the volumes an operation does not name. Regression id for the rows marked so:
 `2026-10-05-pvops-per-volume-lock`.
 
-| #    | Scenario                                                                                                        | Type       | Test                                                        |
-|------|-----------------------------------------------------------------------------------------------------------------|------------|-------------------------------------------------------------|
-| U-52 | The lock is taken on every volume of the named volume's subsystem                                               | Regression | `TestAnOperationHoldsEveryVolumeOfItsSubsystem`             |
-| U-53 | A sibling's operation holds the subsystem: this one waits at `Pending`, holds nothing, and creates no migration | Regression | `TestAnOperationWaitsWhileASiblingOfItsVolumeIsBeingMoved`  |
-| U-54 | The release clears the lock from every volume carrying this operation's name                                    | Regression | `TestFinishingReleasesEveryVolumeOfItsSubsystem`            |
-| U-55 | The subsystem is already on the target: `Succeeded`, no migration created, every lock released                  | Regression | `TestASubsystemAlreadyOnTheTargetSucceedsWithoutAMigration` |
-| U-56 | A volume the control plane reports under no subsystem is locked alone                                           | Boundary   | `TestTheLockIsTakenWhenTheVolumeIsFree`                     |
-| U-57 | An operation past `Pending` does not read the subsystem's membership again                                      | Boundary   | —                                                           |
-| U-58 | Two operations on one subsystem acquiring at once: one holds every volume, the other holds none                 | Negative   | —                                                           |
+| #    | Scenario                                                                                                                                 | Type       | Test                                                        |
+|------|------------------------------------------------------------------------------------------------------------------------------------------|------------|-------------------------------------------------------------|
+| U-52 | The lock is taken on every volume of the named volume's subsystem                                                                        | Regression | `TestAnOperationHoldsEveryVolumeOfItsSubsystem`             |
+| U-53 | A sibling's operation holds the subsystem: this one waits at `Pending`, holds nothing, and creates no migration                          | Regression | `TestAnOperationWaitsWhileASiblingOfItsVolumeIsBeingMoved`  |
+| U-54 | The release clears the lock from every volume carrying this operation's name                                                             | Regression | `TestFinishingReleasesEveryVolumeOfItsSubsystem`            |
+| U-55 | The subsystem is already on the target: `Succeeded`, no migration created, every lock released                                           | Regression | `TestASubsystemAlreadyOnTheTargetSucceedsWithoutAMigration` |
+| U-56 | A volume the control plane reports under no subsystem is locked alone                                                                    | Boundary   | `TestTheLockIsTakenWhenTheVolumeIsFree`                     |
+| U-57 | An operation past `Pending` does not read the subsystem's membership again                                                               | Boundary   | —                                                           |
+| U-58 | Two operations on one subsystem acquiring at once: one holds every volume, the other holds none                                          | Negative   | —                                                           |
+| U-67 | A running operation reading a stale copy of its named volume keeps its claim and every lock (2026-10-06-pvops-lock-rollback-on-own-lock) | Regression | `TestARunningOperationReadingAStaleCopyKeepsItsLocks`       |
+| U-68 | The release finds locks the cache has not seen yet (2026-10-06-pvops-release-misses-uncached-lock)                                       | Regression | `TestReleaseFindsLocksTheCacheHasNotSeen`                   |
+| U-69 | A release whose patch conflicts is retried after re-checking ownership (2026-10-06-pvops-release-conflict-read-as-done)                  | Regression | `TestAReleaseThatConflictsIsRetried`                        |
+| U-70 | An acquisition that fails halfway gives back everything it took (2026-10-06-pvops-partial-lock-on-error)                                 | Regression | `TestAnAcquisitionThatFailsHalfwayHoldsNothing`             |
+| U-71 | A subsystem only partly on the target is waited on, not reported moved (2026-10-06-pvops-noop-on-a-split-subsystem)                      | Regression | `TestASubsystemOnlyPartlyOnTheTargetIsWaitedOn`             |
+| U-72 | A pass reading a superseded copy cannot finish the operation through the already-there shortcut (2026-10-06-pvops-noop-bypasses-claim)   | Regression | `TestAStalePassCannotFinishTheOperationThroughTheShortcut`  |
 
 ---
 
@@ -273,14 +279,14 @@ question is whether the operation holds legibly or fails.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 61        | 9       | 52          |
+| Unit        | 67        | 15      | 52          |
 | Integration | 14        | 0       | 14          |
 | E2E         | 15        | 0       | 15          |
 | Manual      | 4         | 0       | 4           |
-| **Total**   | **94**    | **9**   | **85**      |
+| **Total**   | **100**   | **15**  | **85**      |
 
-Only the subsystem rows `U-52` to `U-56`, the create refusals `U-59` to `U-61`, and
-`U-13` are covered against the target model. `VolumeMigration` has the most test
+Only the subsystem rows `U-52` to `U-56` and `U-67` to `U-72`, the create refusals
+`U-59` to `U-61`, and `U-13` are covered against the target model. `VolumeMigration` has the most test
 files of any kind in this repository, five of them, and none can be cited here:
 they assert the merged phase enum, the `pvName` spelling, and a lifecycle with no
 `Verifying` step.

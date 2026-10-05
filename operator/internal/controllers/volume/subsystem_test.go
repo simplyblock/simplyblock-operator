@@ -11,6 +11,7 @@ package volume
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -165,5 +166,53 @@ func TestASubsystemAlreadyOnTheTargetSucceedsWithoutAMigration(t *testing.T) {
 		if got := lockOnVolume(t, r, name); got != "" {
 			t.Errorf("volume %s is still locked by %q after the operation finished", name, got)
 		}
+	}
+}
+
+// Regression: 2026-10-06-pvops-noop-on-a-split-subsystem — the named volume on
+// the target was taken for the whole subsystem there, while a cutover outside
+// this operation was still moving a sibling, and the operation reported a move
+// that had not finished.
+func TestASubsystemOnlyPartlyOnTheTargetIsWaitedOn(t *testing.T) {
+	api := sharedSubsystem()
+	api.volume.StorageNodeID = testTargetID
+	api.members[0].StorageNodeID = testTargetID
+	r := testReconciler(t, api, append(testWorld(), siblingVolumeObject())...)
+
+	for range 4 {
+		runPass(t, r)
+	}
+
+	ops := operationFrom(t, r)
+	if ops.Status.Phase == simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded {
+		t.Errorf("the operation succeeded with sibling %s still on the source", testSiblingID)
+	}
+	if api.creates != 0 {
+		t.Errorf("a migration was requested for a subsystem already moving, %d time(s)", api.creates)
+	}
+}
+
+// Regression: 2026-10-06-pvops-noop-bypasses-claim — the already-there shortcut
+// ran outside the step's claim, so a pass reading the operation from before its
+// migration was recorded could finish a newer operation as Succeeded and skip
+// the cleanup of its validation paths.
+func TestAStalePassCannotFinishTheOperationThroughTheShortcut(t *testing.T) {
+	api := sharedSubsystem()
+	api.volume.StorageNodeID = testTargetID
+	for i := range api.members {
+		api.members[i].StorageNodeID = testTargetID
+	}
+	r := testReconciler(t, api, append(testWorld(), siblingVolumeObject())...)
+	stale := operationFrom(t, r)
+	if err := atStep(r, stepValidating); err != nil {
+		t.Fatal(err)
+	}
+
+	subject, err := r.resolve(context.Background(), stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.createMigration(context.Background(), stale, subject); errors.Is(err, errAlreadyOnTarget) {
+		t.Error("a pass reading a superseded copy of the operation took the shortcut to Succeeded")
 	}
 }
