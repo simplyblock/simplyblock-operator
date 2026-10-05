@@ -302,11 +302,21 @@ func replicaNodes(volume webapi.VolumeInfo) []string {
 
 // peerTargets assigns each move an online peer to move to, round-robin over the
 // peers that hold none of the move's replicas and that its subsystem has not
-// already failed on.
+// already failed on, preferring peers that do not replicate onto the drained
+// node.
 //
 // A node already holding one of the move's replicas is never a target: the
 // control plane refuses the move, and while the volume's primary is shut down
-// for its removal that replica is what serves it. A peer in ruledOut, keyed by
+// for its removal that replica is what serves it. The holders are the nodes the
+// volume lists and the drained node's own secondary and tertiary, because a
+// volume whose primary is the drained node has its replicas there, and a
+// volume created by replication lists no tertiary.
+//
+// A move builds the volume on the target's own secondary and tertiary as well,
+// so a peer that replicates onto the drained node puts the node that is leaving
+// on both sides of the copy. The control plane skips a departing replica, so
+// such a peer works, and is used only when no other is left: on a small cluster
+// every peer may replicate onto the drained node, and draining beats holding. A peer in ruledOut, keyed by
 // the move's name-giving volume, is one a failed move of the same subsystem
 // already ruled out (retry.go). Round-robin over the rest spreads the drained
 // node's volumes rather than concentrating them on whichever peer sorts first.
@@ -327,33 +337,51 @@ func (r *StorageNodeOpsReconciler) peerTargets(
 		return nil, err
 	}
 
+	var drained NodeReading
 	peers := make([]string, 0, len(readings))
+	replicatesOntoDrained := map[string]bool{}
 	for _, reading := range readings {
-		if reading.UUID == nodeID || reading.Status != nodeStatusOnline {
+		if reading.UUID == nodeID {
+			drained = reading
+			continue
+		}
+		if reading.Status != nodeStatusOnline {
 			continue
 		}
 		peers = append(peers, reading.UUID)
+		if reading.SecondaryNodeID == nodeID || reading.TertiaryNodeID == nodeID {
+			replicatesOntoDrained[reading.UUID] = true
+		}
 	}
 	if len(peers) == 0 {
 		return nil, blockedf(NoMigrationTarget,
 			"no online peer to move this node's volumes to; the drain resumes when one returns")
 	}
 	sort.Strings(peers)
+	drainedReplicas := []string{drained.SecondaryNodeID, drained.TertiaryNodeID}
 
 	targets := make(map[string]string, len(volumes))
 	var stranded, exhausted []string
 	next := 0
 	for _, volume := range volumes {
-		eligible := make([]string, 0, len(peers))
+		var preferred, fallback []string
 		replicaFree := 0
 		for _, peer := range peers {
-			if slices.Contains(volume.ReplicaNodes, peer) {
+			if slices.Contains(volume.ReplicaNodes, peer) || slices.Contains(drainedReplicas, peer) {
 				continue
 			}
 			replicaFree++
-			if !slices.Contains(ruledOut[volume.PVName], peer) {
-				eligible = append(eligible, peer)
+			switch {
+			case slices.Contains(ruledOut[volume.PVName], peer):
+			case replicatesOntoDrained[peer]:
+				fallback = append(fallback, peer)
+			default:
+				preferred = append(preferred, peer)
 			}
+		}
+		eligible := preferred
+		if len(eligible) == 0 {
+			eligible = fallback
 		}
 		switch {
 		case len(eligible) > 0:
