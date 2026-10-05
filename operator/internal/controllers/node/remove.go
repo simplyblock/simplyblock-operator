@@ -424,7 +424,7 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 		}
 	}
 	var missing []managedVolume
-	for _, move := range subsystemMoves(census.Managed) {
+	for _, move := range subsystemMoves(census.Managed, census.subsystemReplicas) {
 		if _, ok := existing[migrationName(nodeID, move.PVName)]; ok {
 			continue
 		}

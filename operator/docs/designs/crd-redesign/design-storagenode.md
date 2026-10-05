@@ -1720,7 +1720,10 @@ in `status.drain` is counted in volumes, from the member count each move records
 volume the control plane reports under no subsystem is a move of its own.
 
 **Migration targets are chosen round-robin over the online peers that hold none
-of the replicas of any volume in the subsystem.** The control plane lists a volume's replica nodes, and
+of the replicas of any volume in the subsystem.** The replicas are those of every
+member the pools list, whatever node its primary is on, because a member off the
+drained node mid-cutover still has replicas the move's target must avoid. The
+control plane lists a volume's replica nodes, and
 a node already holding one is never a target: the control plane refuses the
 move, and while the volume's primary is shut down for its removal that replica is
 what serves the volume. Round-robin over the rest spreads the drained node's
