@@ -298,6 +298,33 @@ func TestAMoveSaysWhereItWasHeadedAndWhetherItGotThere(t *testing.T) {
 	})
 }
 
+// Regression: 2026-10-06-drain-inherits-another-drains-failures — moves are
+// found by the drained node's label, which a later drain of the same node
+// shares, so a caller keeping its own memory of failed moves has to tell its
+// moves from another creator's, whichever kind carries them.
+func TestAMoveSaysWhoRaisedIt(t *testing.T) {
+	ctx := context.Background()
+	creator := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+		Name: "a-drain", Namespace: testNamespace, UID: "uid-of-the-drain"}}
+	for name, mover := range bothMovers(t) {
+		t.Run(name, func(t *testing.T) {
+			request := moveRequest()
+			request.Owner, request.OwnerKind = creator, "ConfigMap"
+			request.Scheme = moverScheme(t)
+			if err := mover.Start(ctx, request); err != nil {
+				t.Fatal(err)
+			}
+			got, err := mover.Get(ctx, request.Name, testNamespace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.CreatorUID != "uid-of-the-drain" {
+				t.Errorf("the move names creator %q, want the UID of the object that raised it", got.CreatorUID)
+			}
+		})
+	}
+}
+
 // TestTheOperationNamesTheTargetAsAnObject. The redesigned kind takes a
 // StorageNode name rather than a backend UUID, so that a migration can be
 // written by hand without looking one up. The callers hold a UUID, so this is

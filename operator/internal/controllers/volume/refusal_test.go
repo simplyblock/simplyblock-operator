@@ -85,3 +85,47 @@ func TestARefusalSayingTheVolumeIsAlreadyThereSucceeds(t *testing.T) {
 			ops.Status.Phase, ops.Status.Message)
 	}
 }
+
+// Regression: 2026-10-06-pvops-400-conflict-read-as-final — some control
+// planes answer a create that conflicts with an active migration of the
+// subsystem with a 400 rather than a 409, in the wording the registered kind's
+// client already recognizes. It clears when that migration ends, and failing
+// on it handed the drain a failure that was not one.
+func TestAConflictAnsweredWithA400IsWaitedOn(t *testing.T) {
+	r := testReconciler(t, refusingCreate(400, `{"detail":"An active migration for `+testVolumeID+
+		` already exists targeting a different node (`+testSourceID+`). Cancel it first."}`), testWorld()...)
+
+	for range 3 {
+		runPass(t, r)
+	}
+
+	if ops := operationFrom(t, r); ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseRunning {
+		t.Errorf("phase = %q (%s), want Running while another migration of the subsystem is active",
+			ops.Status.Phase, ops.Status.Message)
+	}
+}
+
+// Regression: 2026-10-06-pvops-refusal-names-the-target — the failure message
+// put the target node's UUID in front of the control plane's reason, so a drain
+// reading it found the target named in every refusal and ruled the target out
+// at once, whatever the control plane had actually objected to.
+func TestARefusalKeepsTheControlPlanesWordsAndNamesNoTargetOfItsOwn(t *testing.T) {
+	const reason = "LVol belongs to a shared NVMe-oF subsystem with 2 member(s). Use --batch to migrate the whole subsystem together."
+	r := testReconciler(t, refusingCreate(400, `{"detail":"`+reason+`"}`), testWorld()...)
+
+	for range 3 {
+		runPass(t, r)
+	}
+
+	ops := operationFrom(t, r)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed {
+		t.Fatalf("phase = %q, want Failed on the refusal", ops.Status.Phase)
+	}
+	if !strings.Contains(ops.Status.Message, reason) {
+		t.Errorf("message = %q, want the control plane's reason", ops.Status.Message)
+	}
+	if strings.Contains(ops.Status.Message, testTargetID) {
+		t.Errorf("message = %q names the target %s, which the control plane's answer did not",
+			ops.Status.Message, testTargetID)
+	}
+}
