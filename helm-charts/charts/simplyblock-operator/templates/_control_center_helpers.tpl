@@ -74,6 +74,32 @@ http://simplyblock-operator:8080
 {{- end -}}
 {{- end -}}
 
+{{/* The log store the console searches: Graylog of this release's
+     observability stack, unless an explicit URL is given. Fully qualified for
+     the same reason as the control plane URL. */}}
+{{- define "sbcc.graylogUrl" -}}
+{{- $ls := .Values.controlCenter.logStore | default dict -}}
+{{- if and $ls.enabled (not .Values.controlCenter.mock.enabled) -}}
+{{- if $ls.url -}}
+{{- $ls.url -}}
+{{- else if ((.Values.controlplane).observability).enabled -}}
+{{- printf "http://simplyblock-graylog.%s.svc.cluster.local:9000" .Release.Namespace -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The Secret and key holding the log store's password: the given one, or
+     the observability stack's own secret (its root password is
+     controlplane.observability.secret, kept in simplyblock-grafana-secrets). */}}
+{{- define "sbcc.graylogPasswordSecret" -}}
+{{- $ls := .Values.controlCenter.logStore | default dict -}}
+{{- $ls.passwordSecret | default "simplyblock-grafana-secrets" -}}
+{{- end -}}
+{{- define "sbcc.graylogPasswordKey" -}}
+{{- $ls := .Values.controlCenter.logStore | default dict -}}
+{{- $ls.passwordKey | default "MONITORING_SECRET" -}}
+{{- end -}}
+
 {{/* The service account the operator adds to the management API's admins. */}}
 {{- define "sbcc.trustedAccount" -}}
 {{- $cp := .Values.controlCenter.controlPlane | default dict -}}

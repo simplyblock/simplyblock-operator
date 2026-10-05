@@ -1074,6 +1074,22 @@ controlCenter:
     # tokens (controlplane.local.adminTokenSecretRef); it wins when set.
     tokenSecret: ""
 
+  # The log store the Logs view searches: Graylog's search API (the shipped
+  # logs of every pod fluent-bit collects), read-only through the console's
+  # proxy, credentials attached server-side, responses scrubbed of credentials.
+  # Without it the Logs view falls back to a pod's live tail.
+  logStore:
+    enabled: true
+    # Empty: this release's Graylog when controlplane.observability.enabled.
+    url: ""
+    user: admin
+    # The Secret and key holding the user's password. Empty: the observability
+    # stack's own (simplyblock-grafana-secrets / MONITORING_SECRET).
+    passwordSecret: ""
+    passwordKey: ""
+    # Or a Secret (key: token) holding a Graylog access token; it wins when set.
+    tokenSecret: ""
+
   rbac:
     # Required in serviceaccount mode: the proxied token needs these rules or
     # every request returns 403 and the console renders empty. Set false only
