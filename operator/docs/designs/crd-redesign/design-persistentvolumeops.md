@@ -390,6 +390,21 @@ runs under the step's claim, like the create it stands in for, so a pass reading
 superseded copy of the operation cannot finish it past the cleanup it still owes. A
 creation that reports the target as its source is canceled and ends the same way.
 
+**A create the control plane refuses outright fails the operation at once.** A
+400 is a request the control plane will never accept: a target serving as the
+fallback source, one with no lvstore, one it does not know. The operation fails on
+the first answer with the control plane's reason in `status.message`, which is what
+lets whatever raised it choose another target while there is time. The message is
+the control plane's words alone and names no node of its own, because whoever reads
+it decides from those words whether the refusal was about the target. A 409 is one
+it cannot accept yet, such as another migration of the subsystem being active, and
+it is waited on in the step, like the three 400s that clear by themselves (a cluster
+rebalancing, a node busy with a data migration, and an active migration of the
+subsystem, which some control planes answer with a 400 rather than a 409). A timeout or a 5xx says nothing
+about whether the create landed, and the claim's expiry retries it. A 400 saying
+the volume is already on the target ends the operation as `Succeeded`, the same as
+the check before the create.
+
 **A Job runs per consuming node rather than per path.** The paths are what the
 Job connects; what makes a Job necessary is the *host*, since a path is
 established on the node that will be served over it and a subsystem's members
@@ -825,6 +840,13 @@ cluster. It is the group's one key for this
 identifies: the label finds the operations some drain created and the UID in
 `spec.creatorRef` says which drain, which is the same division `pvc.spec.volumeName`
 and `pv.spec.claimRef.uid` have in core.
+
+**A second label carries the target's backend UUID.** The spec names the target
+as a `StorageNode` object, while the creator chose it by its UUID and reads it back
+when the operation fails. `storage.simplyblock.io/target-node` holds that UUID from
+the moment the operation is created, before `status.migration.targetNodeUUID` exists,
+so a creator retrying a failed move knows where it was headed without resolving the
+object again ([`design-storagenode.md`](design-storagenode.md) §8.4).
 
 **The cascade is the creator's finalizer, and it aborts before it deletes.**
 A `StorageNodeOps` being deleted sets `spec.abort` on every operation whose

@@ -300,24 +300,27 @@ func replicaNodes(volume webapi.VolumeInfo) []string {
 	return nodes
 }
 
-// peerTargets assigns each movable volume an online peer to move to, round-robin
-// over the peers that hold none of the volume's replicas.
+// peerTargets assigns each move an online peer to move to, round-robin over the
+// peers that hold none of the move's replicas and that its subsystem has not
+// already failed on.
 //
-// A node already holding one of the volume's replicas is never a target: the
+// A node already holding one of the move's replicas is never a target: the
 // control plane refuses the move, and while the volume's primary is shut down
-// for its removal that replica is what serves it. Round-robin over the rest
-// spreads the drained node's volumes rather than concentrating them on whichever
-// peer sorts first. The order is the peers' own UUIDs sorted, so the assignment
-// is stable across passes: a volume that was assigned to one peer and whose
-// migration then failed is reassigned by the caller deliberately rather than by
-// the list having reshuffled.
+// for its removal that replica is what serves it. A peer in ruledOut, keyed by
+// the move's name-giving volume, is one a failed move of the same subsystem
+// already ruled out (retry.go). Round-robin over the rest spreads the drained
+// node's volumes rather than concentrating them on whichever peer sorts first.
+// The order is the peers' own UUIDs sorted, so the assignment is stable across
+// passes, and a replacement lands elsewhere because of the record of the
+// failure rather than because the list reshuffled.
 //
-// A drain with no online peer, or a volume whose replicas cover every online
-// peer, is a stall rather than a failure, which is why this reports a
-// blockedStepError: the condition is resolved by another node coming back, and
+// A drain with no online peer, or a move with no eligible one left, is a stall
+// rather than a failure, which is why this reports a blockedStepError: the
+// condition is resolved by another node coming back or being added, and
 // failing the operation would only mean starting it again afterward (§8.2).
 func (r *StorageNodeOpsReconciler) peerTargets(
 	ctx context.Context, clusterID, nodeID string, volumes []managedVolume,
+	ruledOut map[string][]string,
 ) (map[string]string, error) {
 	readings, err := r.clusterNodes(ctx, clusterID)
 	if err != nil {
@@ -338,21 +341,35 @@ func (r *StorageNodeOpsReconciler) peerTargets(
 	sort.Strings(peers)
 
 	targets := make(map[string]string, len(volumes))
-	var stranded []string
+	var stranded, exhausted []string
 	next := 0
 	for _, volume := range volumes {
 		eligible := make([]string, 0, len(peers))
+		replicaFree := 0
 		for _, peer := range peers {
-			if !slices.Contains(volume.ReplicaNodes, peer) {
+			if slices.Contains(volume.ReplicaNodes, peer) {
+				continue
+			}
+			replicaFree++
+			if !slices.Contains(ruledOut[volume.PVName], peer) {
 				eligible = append(eligible, peer)
 			}
 		}
-		if len(eligible) == 0 {
+		switch {
+		case len(eligible) > 0:
+			targets[volume.PVName] = eligible[next%len(eligible)]
+			next++
+		case replicaFree > 0:
+			exhausted = append(exhausted, fmt.Sprintf("%s (tried %s)",
+				volume.PVName, strings.Join(ruledOut[volume.PVName], ", ")))
+		default:
 			stranded = append(stranded, volume.PVName)
-			continue
 		}
-		targets[volume.PVName] = eligible[next%len(eligible)]
-		next++
+	}
+	if len(exhausted) > 0 {
+		return nil, blockedf(NoMigrationTarget,
+			"every online peer able to take %s has already failed to; the drain resumes when "+
+				"another node returns or is added", strings.Join(exhausted, "; "))
 	}
 	if len(stranded) > 0 {
 		return nil, blockedf(NoMigrationTarget,
