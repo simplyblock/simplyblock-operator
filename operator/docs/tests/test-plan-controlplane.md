@@ -170,6 +170,9 @@ would be the old `Degraded` under a new name.
 | U-185     | The failure message separates `BackoffLimitExceeded` from `DeadlineExceeded`, and the second sends its reader to whether a pod exists at all                                                             | Boundary | `TestTheFailureMessageSeparatesARefusalFromABackfillThatNeverStarted` |
 | U-186     | `observability` with `enableMonitoring` and a `secretRef`: the management API carries `ENABLE_MONITORING=true`, and it and the admin pod read `MONITORING_SECRET` from that Secret                       | Positive | `TestMonitoringEnabledReachesTheControlPlanesEnvironment`             |
 | U-187     | No `observability` block: `ENABLE_MONITORING=false`, and no workload names a monitoring Secret                                                                                                           | Negative | `TestMonitoringStaysOffWithoutTheObservabilityBlock`                  |
+| U-188     | `source.local.objectStore.resources` stated: the object store's server container runs in exactly those requests and limits                                                                               | Positive | `TestTheObjectStoreRunsInTheResourcesTheSpecStates`                   |
+| U-189     | `objectStore` absent or present and empty: the server keeps the default requests (100m, 256Mi) and limits (500m, 1Gi)                                                                                    | Boundary | `TestTheObjectStoreKeepsItsDefaultResourcesWhenTheSpecStatesNone`     |
+| U-190     | Only a limit stated: it replaces the default block as a whole, and no default request or limit is merged in                                                                                              | Boundary | `TestAStatedObjectStoreLimitReplacesTheDefaults`                      |
 
 ### TLS (design §5.1, §12 Q2)
 

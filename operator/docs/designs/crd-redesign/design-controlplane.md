@@ -568,6 +568,22 @@ it. They become children of the `ControlPlane` by controller reference, so the
 ownership spine starts at a real edge rather than at a Helm release.
 
 ```go
+// ObjectStoreSpec sizes the object store the operator installs next to the
+// control plane. The store holds the metric history and the backups the control
+// plane writes, so a busy deployment needs more than the default.
+type ObjectStoreSpec struct {
+	// Resources sets requests and limits for the object store's server
+	// container. Unset keeps the default of 100m CPU and 256Mi memory requested,
+	// with limits of 500m CPU and 1Gi memory. A value that is set replaces the
+	// default as a whole, so state the requests and the limits together.
+	//
+	// The server is killed when it reaches its memory limit, and a backup that is
+	// writing to it fails when that happens. Raise the memory limit for
+	// deployments that run several backups at the same time.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+}
+
 // LocalControlPlane is a control plane this cluster hosts, installed and owned
 // by the operator.
 type LocalControlPlane struct {
@@ -618,6 +634,14 @@ somewhere to keep what outlives a process, which is the metric history the contr
 plane keeps and the backups it writes, and that is an object store. The bucket is
 made by a sidecar beside the server, which is where it can wait for the store to
 answer.
+
+**The object store's size is the deployment's to set.** The server runs with small
+requests and a 1 GiB memory limit by default, which suits a base deployment that
+holds little. It is killed when it reaches the limit, and a backup writing to it
+fails with a refused connection when that happens, so a deployment that runs
+several backups at once states a larger limit in `source.local.objectStore.resources`.
+A stated block replaces the default as a whole, as `source.local.resources` does for
+the management API, so the requests and the limits are stated together.
 
 **The management API runs two instances by default, and the number is
 load-bearing.** A second instance is what lets a pod be replaced while the control
@@ -1278,6 +1302,11 @@ type LocalControlPlane struct {
 	// Resources sets requests and limits for the management API pods.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// ObjectStore sizes the object store that holds the metric history and the
+	// backups. Unset runs it with the default requests and limits.
+	// +optional
+	ObjectStore *ObjectStoreSpec `json:"objectStore,omitempty"`
 
 	// Tolerations are applied to every pod the operator installs for the control
 	// plane.

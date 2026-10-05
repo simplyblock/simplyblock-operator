@@ -195,6 +195,22 @@ func (l *LocalControlPlane) TLSProvider() ControlPlaneTLSProvider {
 	return l.TLS.Provider
 }
 
+// ObjectStoreSpec sizes the object store the operator installs next to the
+// control plane. The store holds the metric history and the backups the control
+// plane writes, so a busy deployment needs more than the default.
+type ObjectStoreSpec struct {
+	// Resources sets requests and limits for the object store's server
+	// container. Unset keeps the default of 100m CPU and 256Mi memory requested,
+	// with limits of 500m CPU and 1Gi memory. A value that is set replaces the
+	// default as a whole, so state the requests and the limits together.
+	//
+	// The server is killed when it reaches its memory limit, and a backup that is
+	// writing to it fails when that happens. Raise the memory limit for
+	// deployments that run several backups at the same time.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+}
+
 // LocalControlPlane is a control plane this cluster hosts, installed and owned
 // by the operator. Its objects carry a controller reference to the ControlPlane,
 // so the ownership spine starts at a real edge rather than at a Helm release.
@@ -228,6 +244,11 @@ type LocalControlPlane struct {
 	// Resources sets requests and limits for the management API pods.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// ObjectStore sizes the object store that holds the metric history and the
+	// backups. Unset runs it with the default requests and limits.
+	// +optional
+	ObjectStore *ObjectStoreSpec `json:"objectStore,omitempty"`
 
 	// Tolerations are applied to every pod the operator installs for the control
 	// plane.
