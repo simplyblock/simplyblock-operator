@@ -1657,7 +1657,7 @@ DELETE takes the node apart.
 
 | Step               | Side effect on entry                                                                                                             | Complete when                                                                |
 |--------------------|----------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
-| `Validating`       | None                                                                                                                             | No pinned and no unmanaged volumes remain                                    |
+| `Validating`       | None                                                                                                                             | No pinned and no unmanaged volumes remain, and the removal is admitted       |
 | `ShuttingDown`     | `POST /storage-nodes/{node}/shutdown`, sent only to a node that is `online` or `suspended`                                       | The call returns 202, or the node is not running                             |
 | `MigratingDevices` | `POST /storage-nodes/{node}/prepare-removal` once the node is `offline`, and again on every pass from `migrating_devices` on     | `GET /storage-nodes/{node}/prepare-removal` reports `done`                   |
 | `MigratingVolumes` | One `PersistentVolumeOps` per NVMe-oF subsystem of the PV-managed volumes, to peers chosen round-robin                           | Every migration is `Succeeded`                                               |
@@ -1669,6 +1669,19 @@ DELETE takes the node apart.
 the shutdown on there is no way back, so a drain that cannot complete is held
 while the node is still fully operational, and somebody decides what to do about
 the pinned claim.
+
+**`Validating` asks whether the removal is admitted.** Two answers are asked,
+because the control plane runs its own admission only inside `prepare-removal`,
+after the shutdown. The failure-domain balance the removal would leave is computed
+by the operator, from the `StorageNode` objects, with the rule the control plane
+enforces: on a cluster with failure domains enabled, no two domains may differ by
+more than one host, and none may drop below two. A worker that keeps another storage
+node of the cluster stays in its domain. The control plane's own admission, which
+also covers fault-tolerance headroom, replica relocation, and active tasks, is asked
+through `GET /storage-nodes/{node}/removal-admission`, which changes nothing. A
+control plane that does not offer it answers 404, and the admission then runs inside
+`prepare-removal` only. A refusal from either holds `Validating` with
+`RemovalNotAdmitted` and the reason, with nothing done to the node.
 
 **`Validating` holds rather than fails.** It has a deadline like every other step,
 but a blocked drain is a correct outcome waiting on a human, so the deadline is
@@ -1744,14 +1757,24 @@ volume the control plane reports under no subsystem is a move of its own.
 
 **Migration targets are chosen round-robin over the online peers that hold none
 of the replicas of any volume in the subsystem, and that the subsystem has not
-already failed on (§8.4).** The replicas are those of every member the pools list,
-whatever node its primary is on, because a member off the drained node mid-cutover
-still has replicas the move's target must avoid. The control plane lists a volume's
-replica nodes, and
-a node already holding one is never a target: the control plane refuses the
-move, and while the volume's primary is shut down for its removal that replica is
-what serves the volume. Round-robin over the rest spreads the drained node's
-volumes rather than concentrating them on whichever peer sorts first. A drain
+already failed on (§8.4).** A node already holding one of the volume's replicas
+is never a target: the control plane refuses the move, and while the volume's
+primary is shut down for its removal that replica is what serves the volume. The
+holders are the nodes the volume lists and the drained node's own secondary and
+tertiary, read from the node stream, and the replicas of every other member of the
+subsystem the pools list, whatever node its primary is on. A volume whose primary
+is the drained node has its replicas on the drained node's secondary and tertiary,
+a volume created by replication lists no tertiary, and a member off the drained
+node mid-cutover still has replicas the move's target must avoid. Round-robin over the rest spreads the drained node's volumes rather than
+concentrating them on whichever peer sorts first.
+
+**A peer that replicates onto the drained node is used last.** A move builds the
+volume on the target's own secondary and tertiary as well, so a peer whose
+secondary or tertiary is the drained node puts the node that is leaving on both
+sides of the copy. The control plane skips a departing replica when it builds, so
+such a peer works, with one replica fewer until the removal re-places it. It is
+chosen only when no other eligible peer is left: on a small cluster every peer may
+replicate onto the drained node, and draining beats holding. A drain
 with no online peer to move to, a volume whose replicas cover every online peer,
 or a subsystem that has already failed on every peer left, is a stall, not a
 failure, and emits `NoMigrationTarget`, naming the targets tried. The condition is
@@ -1819,6 +1842,7 @@ operation can be deleted while it runs.
 | Condition                            | Step                           | Result                                              |
 |--------------------------------------|--------------------------------|-----------------------------------------------------|
 | Pinned or unmanaged volumes          | `Validating`                   | Hold, emit, requeue. The node is untouched          |
+| The removal is not admitted          | `Validating`                   | Hold, emit, requeue. The node is untouched          |
 | The shutdown cannot run yet (409)    | `ShuttingDown`                 | Hold, emit, ask again once a minute                 |
 | The shutdown was refused             | `ShuttingDown`                 | `Failed`, the node still serving                    |
 | The shutdown got no answer           | `ShuttingDown`                 | Retry, reading the node first                       |
@@ -2144,21 +2168,22 @@ block node operations directly is §16, Q5.
 
 ## 12. Backend API Requirements
 
-| Method   | Endpoint                                                             | Notes                                                                                            |
-|----------|----------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes`                           | Adds every socket of one worker at once, and is not idempotent, which is why §4.2 claims first   |
-| `GET`    | `/api/v2/clusters/{cluster}/storage-nodes/?watch=true`               | The node stream every status write and completion check reads (§4.4). Scoped per cluster         |
-| `DELETE` | `/api/v2/clusters/{cluster}/storage-nodes/{node}?force_remove=false` | The drain's last step. 404 is success, since a node already gone is a node removed               |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/suspend`            | Used by `Suspend`. Must tolerate a repeat, because a step recorded without its call re-issues it |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/resume`             | Used by `Resume`                                                                                 |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/prepare-removal`    | The removal's first step on a node already down: admits it and rebuilds its devices (§8.2)       |
-| `GET`    | `/api/v2/clusters/{cluster}/storage-nodes/{node}/prepare-removal`    | The device rebuild's progress, read by `MigratingDevices`                                        |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/verify-drained`     | Whether the node still holds a volume or a snapshot, which closes `Verifying` (§8.2)             |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/shutdown`           | Used by `Shutdown`, `HostMaintenance`, and `Remove`                                              |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/restart`            | Takes `node_address`, `force`, `reattach_volume`, and `new_ssd_pcie`. Used by three actions      |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/promote`            | The migration's last control-plane call, and the one that cannot be undone (§9)                  |
-| `GET`    | `/api/v2/clusters/{cluster}/storage-pools/{pool}/volumes/`           | Lists a node's volumes for the drain's classification and verification (§8)                      |
-| `DELETE` | `/api/v2/clusters/{cluster}/storage-pools/{pool}/volumes/{vol}/`     | Deletes system volumes during verification. 404 is success                                       |
+| Method   | Endpoint                                                             | Notes                                                                                                      |
+|----------|----------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------|
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes`                           | Adds every socket of one worker at once, and is not idempotent, which is why §4.2 claims first             |
+| `GET`    | `/api/v2/clusters/{cluster}/storage-nodes/?watch=true`               | The node stream every status write and completion check reads (§4.4). Scoped per cluster                   |
+| `DELETE` | `/api/v2/clusters/{cluster}/storage-nodes/{node}?force_remove=false` | The drain's last step. 404 is success, since a node already gone is a node removed                         |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/suspend`            | Used by `Suspend`. Must tolerate a repeat, because a step recorded without its call re-issues it           |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/resume`             | Used by `Resume`                                                                                           |
+| `GET`    | `/api/v2/clusters/{cluster}/storage-nodes/{node}/removal-admission`  | The removal's admission without starting it, asked by `Validating`. Absent on an older control plane (404) |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/prepare-removal`    | The removal's first step on a node already down: admits it and rebuilds its devices (§8.2)                 |
+| `GET`    | `/api/v2/clusters/{cluster}/storage-nodes/{node}/prepare-removal`    | The device rebuild's progress, read by `MigratingDevices`                                                  |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/verify-drained`     | Whether the node still holds a volume or a snapshot, which closes `Verifying` (§8.2)                       |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/shutdown`           | Used by `Shutdown`, `HostMaintenance`, and `Remove`                                                        |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/restart`            | Takes `node_address`, `force`, `reattach_volume`, and `new_ssd_pcie`. Used by three actions                |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/promote`            | The migration's last control-plane call, and the one that cannot be undone (§9)                            |
+| `GET`    | `/api/v2/clusters/{cluster}/storage-pools/{pool}/volumes/`           | Lists a node's volumes for the drain's classification and verification (§8)                                |
+| `DELETE` | `/api/v2/clusters/{cluster}/storage-pools/{pool}/volumes/{vol}/`     | Deletes system volumes during verification. 404 is success                                                 |
 
 **The `?watch=true` row is a Server-Sent-Events subscription rather than a request
 that returns**, and it arrives with the control plane's SSE work rather than with
@@ -2226,6 +2251,7 @@ starts and the operation's name is not something they know yet.
 | A drain has no online peer to migrate to                        | `Warning` | `NoMigrationTarget`    | `StorageNodeOps` |
 | A volume migration failed and is being retried                  | `Warning` | `MigrationRetried`     | `StorageNodeOps` |
 | A removal call or its shutdown was refused for now              | `Warning` | `RemovalDeferred`      | `StorageNodeOps` |
+| The removal's admission refused the node while it still serves  | `Warning` | `RemovalNotAdmitted`   | `StorageNodeOps` |
 | Every volume has been migrated off the node                     | `Normal`  | `DrainCompleted`       | `StorageNodeOps` |
 | The maintenance window is holding for another worker            | `Normal`  | `MaintenanceQueued`    | `StorageNodeOps` |
 

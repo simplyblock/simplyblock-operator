@@ -412,6 +412,14 @@ may be consumed on several nodes at once. Every node consuming any volume of the
 migrated subsystem gets one, because at cutover every member moves together and a
 node that was not checked loses its volume.
 
+**A Job waits for the new paths' namespace scan before it verifies them.** The
+connect returns once a path's controller is live, and the kernel attaches the
+subsystem's namespaces to that controller one by one afterward. A path verified in
+between serves some of the namespaces, which is the picture of a path that never
+will. So each Job waits, for at most 15 seconds, until every live path serves every
+namespace the subsystem exports, and then verifies. A wait that runs out decides
+nothing: the verification still runs and names the path that did not settle.
+
 **`Verifying` is new and it exists because of a defect that reached production.**
 A migration's validation Jobs connect NVMe-oF paths to check the target is
 reachable, and nothing disconnected them. The paths outlived the Jobs, poisoned

@@ -65,6 +65,13 @@ type NodeReading struct {
 	// the digits: the control plane's own vocabulary is what it is, and the
 	// operator does not invent a name the control plane never said (§3.3).
 	FailureDomain int `json:"failure_domain"`
+
+	// SecondaryNodeID and TertiaryNodeID are the nodes holding this node's
+	// lvstore replicas, empty when it has none. A volume whose primary is this
+	// node has its replicas there, and a volume created on this node is built
+	// there as well.
+	SecondaryNodeID string `json:"secondary_node_id"`
+	TertiaryNodeID  string `json:"tertiary_node_id"`
 }
 
 // The lifecycle values the control plane reports, in its own spelling. They are
@@ -98,6 +105,13 @@ type RemovalProgress struct {
 	Failed     int    `json:"failed"`
 	Message    string `json:"message"`
 	NodeStatus string `json:"node_status"`
+}
+
+// RemovalAdmission is the control plane's answer to whether a node may be
+// removed, asked without starting the removal.
+type RemovalAdmission struct {
+	Admitted bool   `json:"admitted"`
+	Reason   string `json:"reason"`
 }
 
 // DrainVerification is whether the node still hosts anything, and what.
@@ -159,6 +173,13 @@ type ControlPlane interface {
 	// changes nothing, and from pending_removal on there is no way back. A
 	// repeat is a no-op while the step runs.
 	PrepareRemoval(ctx context.Context, clusterID, nodeID string) error
+
+	// RemovalAdmission asks the removal's admission (fault-tolerance headroom,
+	// failure-domain balance, replica relocation, active tasks) without
+	// starting the removal, which is what lets the drain ask it while the
+	// node still serves. offered is false on a control plane that has no such
+	// check, which answers the request 404.
+	RemovalAdmission(ctx context.Context, clusterID, nodeID string) (answer RemovalAdmission, offered bool, err error)
 
 	// RemovalProgress is how far PrepareRemoval's device rebuild has got.
 	RemovalProgress(ctx context.Context, clusterID, nodeID string) (RemovalProgress, error)
@@ -270,6 +291,24 @@ func (c *httpControlPlane) RestartNode(
 
 func (c *httpControlPlane) PrepareRemoval(ctx context.Context, clusterID, nodeID string) error {
 	return c.post(ctx, c.nodePath(clusterID, nodeID, "prepare-removal"), nil)
+}
+
+func (c *httpControlPlane) RemovalAdmission(
+	ctx context.Context, clusterID, nodeID string,
+) (RemovalAdmission, bool, error) {
+	body, err := c.call(ctx, http.MethodGet, c.nodePath(clusterID, nodeID, "removal-admission"), nil)
+	var refusal *ControlPlaneError
+	if errors.As(err, &refusal) && refusal.Status == http.StatusNotFound {
+		return RemovalAdmission{}, false, nil
+	}
+	if err != nil {
+		return RemovalAdmission{}, false, err
+	}
+	var answer RemovalAdmission
+	if err := json.Unmarshal(body, &answer); err != nil {
+		return RemovalAdmission{}, false, fmt.Errorf("read the removal admission of node %s: %w", nodeID, err)
+	}
+	return answer, true, nil
 }
 
 func (c *httpControlPlane) RemovalProgress(

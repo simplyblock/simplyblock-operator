@@ -533,6 +533,16 @@ Files: `operator/internal/controllers/node/drain_test.go`, `peertargets_test.go`
 | U-497 | `prepare-removal` refused while the cluster is still rebalancing holds rather than leaving the node offline                                                 | Regression | `TestAnAdmissionRefusedForAReasonThatPassesWaits`                                                                                                       |
 | U-498 | A 409 to the removal's graceful shutdown holds with `RemovalDeferred`, naming the reason (2026-10-05-shutdown-precondition-read-as-final)                   | Regression | `TestAShutdownTheControlPlaneCannotRunYetWaits`                                                                                                         |
 | U-499 | A system-volume delete that timed out or met a 5xx is retried rather than failing the drain (2026-10-05-system-volume-delete-timeout-read-as-refusal)       | Regression | `TestASystemVolumeDeleteWithNoAnswerIsRetried`                                                                                                          |
+| U-500 | The drained node's tertiary is never a target, though a volume created by replication does not list it (2026-10-05-drain-target-is-tertiary)                | Regression | `TestTheDrainedNodesTertiaryIsNeverATarget`                                                                                                             |
+| U-501 | A peer whose secondary or tertiary is the drained node is chosen only after every other eligible peer (2026-10-05-drain-target-replicates-onto-drainee)     | Regression | `TestPeersThatReplicateOntoTheDrainedNodeComeLast`                                                                                                      |
+| U-502 | A peer that replicates onto the drained node is still a target when it is the only one left                                                                 | Boundary   | `TestAPeerReplicatingOntoTheDrainedNodeIsUsedWhenNoOtherIsLeft`                                                                                         |
+| U-503 | The node stream carries each node's secondary and tertiary into target selection (2026-10-05-drain-target-is-tertiary)                                      | Regression | `TestTheNodeStreamCarriesEachNodesReplicaPartners`                                                                                                      |
+| U-513 | The node stream decodes each node's `secondary_node_id` and `tertiary_node_id` from the wire, a null tertiary as none (2026-10-05-drain-target-is-tertiary) | Regression | `TestNodeSubscriptionCarriesEachNodesReplicaPartners`                                                                                                   |
+| U-505 | A removal that would leave a failure domain short of hosts holds `Validating` with `RemovalNotAdmitted` (2026-10-05-removal-admission-after-shutdown)       | Regression | `TestValidationHoldsOnAFailureDomainTheRemovalWouldBreak`                                                                                               |
+| U-506 | A worker that keeps another storage node of the cluster stays in its failure domain                                                                         | Boundary   | `TestASiblingOnTheSameWorkerKeepsTheHostInItsDomain`                                                                                                    |
+| U-507 | The control plane's admission refusal holds `Validating`, naming the reason                                                                                 | Regression | `TestValidationHoldsOnTheControlPlanesRefusal`                                                                                                          |
+| U-508 | A control plane without the admission check is not a hold                                                                                                   | Boundary   | `TestAControlPlaneWithoutTheAdmissionCheckIsNoHold`                                                                                                     |
+| U-514 | An admission refusal with no reason still holds `Validating`, with a fallback message (2026-10-06-admission-refusal-without-reason)                         | Regression | `TestARefusalWithNoReasonStillHoldsValidation`                                                                                                          |
 | U-512 | A DELETE refused without a reason on a cluster degraded only by this removal is final (2026-10-06-bare-refusal-held-on-own-degradation)                     | Regression | `TestABareDeleteRefusalOnAClusterDegradedOnlyByThisRemovalIsFinal`                                                                                      |
 | U-473 | `MigratingDevices` sends `prepare-removal` once the node is offline (2026-10-02)                                                                            | Positive   | `TestMigratingDevicesPreparesTheRemovalOfAnOfflineNode`                                                                                                 |
 | U-474 | A refused admission fails the operation and says the node is left offline for a Restart (2026-10-02)                                                        | Regression | `TestARefusedAdmissionEndsTheDrainAndSaysTheNodeIsOffline`                                                                                              |
@@ -1001,17 +1011,17 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 417       | 312     | 105         |
+| Unit        | 427       | 322     | 105         |
 | Integration | 54        | 0       | 54          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **502**   | **312** | **190**     |
+| **Total**   | **512**   | **322** | **190**     |
 
 Eight further scenarios are struck through: they describe a system this one no
 longer is, and each names the row that replaced it. They are excluded from the
 counts.
 
-Two hundred and thirty-two distinct test functions cover the three hundred and twelve
+Two hundred and forty-two distinct test functions cover the three hundred and twenty-two
 covered scenarios, because a table-driven test satisfies one identifier per
 subtest and several rows are two halves of one assertion.
 

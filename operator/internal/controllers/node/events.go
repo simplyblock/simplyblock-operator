@@ -94,6 +94,12 @@ const (
 	// on the node, and the operation asks again rather than failing.
 	RemovalDeferred = "RemovalDeferred"
 
+	// RemovalNotAdmitted says the removal's admission refused the node while it
+	// still serves: a failure-domain balance the removal would break, or the
+	// control plane's own refusal. The drain holds in Validating, where nothing
+	// has been done, until the condition changes or somebody decides.
+	RemovalNotAdmitted = "RemovalNotAdmitted"
+
 	// DrainCompleted says every volume has been migrated off the node.
 	DrainCompleted = "DrainCompleted"
 

@@ -125,6 +125,18 @@ Regression id for the rows marked so: `2026-10-05-drain-target-memory`.
 | U-73 | A 400 reporting an active migration of the subsystem is waited on like a 409 (2026-10-06-pvops-400-conflict-read-as-final)   | Regression | `TestAConflictAnsweredWithA400IsWaitedOn`                        |
 | U-74 | A refusal's message is the control plane's reason and names no target of its own (2026-10-06-pvops-refusal-names-the-target) | Regression | `TestARefusalKeepsTheControlPlanesWordsAndNamesNoTargetOfItsOwn` |
 
+### The Namespace Scan (design §5)
+
+Regression id for the rows marked so: `2026-10-05-migration-path-namespace-scan`.
+
+| #    | Scenario                                                                                            | Type       | Test                                                                  |
+|------|-----------------------------------------------------------------------------------------------------|------------|-----------------------------------------------------------------------|
+| U-62 | The wait returns once every live path serves every namespace of the subsystem                       | Regression | `TestWaitForPathsToServeWaitsForTheNamespaceScan`                     |
+| U-63 | A path that never settles ends the wait with the controller and its namespace count named           | Regression | `TestWaitForPathsToServeNamesWhatNeverSettled`                        |
+| U-64 | A subsystem without per-controller path lists, native multipath off, is not waited on               | Boundary   | `TestWaitForPathsToServeAcceptsASubsystemWithoutPathLists`            |
+| U-65 | The validation Job waits for the scan between the connect and the verification, spending no attempt | Regression | `TestValidationRun_WaitsForThePathsToSettleBeforeVerifying`           |
+| U-66 | A wait that runs out leaves the verdict to the verification                                         | Negative   | `TestValidationRun_AWaitThatRunsOutLeavesTheVerdictToTheVerification` |
+
 ### The Subsystem as the Unit (design §5, §6)
 
 The control plane migrates an NVMe-oF subsystem as a whole, so every row here is about
@@ -281,14 +293,14 @@ question is whether the operation holds legibly or fails.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 69        | 17      | 52          |
+| Unit        | 74        | 22      | 52          |
 | Integration | 14        | 0       | 14          |
 | E2E         | 15        | 0       | 15          |
 | Manual      | 4         | 0       | 4           |
-| **Total**   | **102**   | **17**  | **85**      |
+| **Total**   | **107**   | **22**  | **85**      |
 
 Only the subsystem rows `U-52` to `U-56` and `U-67` to `U-72`, the create refusals
-`U-59` to `U-61` and `U-73` to `U-74`, and `U-13` are covered against the target model. `VolumeMigration` has the most test
+`U-59` to `U-61` and `U-73` to `U-74`, the namespace-scan rows `U-62` to `U-66`, and `U-13` are covered against the target model. `VolumeMigration` has the most test
 files of any kind in this repository, five of them, and none can be cited here:
 they assert the merged phase enum, the `pvName` spelling, and a lifecycle with no
 `Verifying` step.
