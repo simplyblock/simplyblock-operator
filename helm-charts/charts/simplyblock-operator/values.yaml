@@ -966,6 +966,11 @@ controlCenter:
     # every request returns 403 and the console renders empty. Set false only
     # with authMode: passthrough, where each user's own RBAC applies instead.
     create: true
+    # Let "Label for DR" patch the hub's own StorageClasses, nodes, PVCs and
+    # workloads. RBAC cannot narrow a patch to label keys, so this grants
+    # patch on those kinds; managed sites are labelled through dr-agent
+    # (LabelRequest) and need no grant here.
+    hubLabelling: false
 
   service:
     type: ClusterIP

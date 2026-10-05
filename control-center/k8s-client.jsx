@@ -76,6 +76,12 @@ const RESOURCES = {
   // read until answered, deleted; never listed in a view
   S3ProbeRequest:       {plural: "s3proberequests",       short: "s3probe",  core: DR_API_GROUP, namespaced: true, dr: true},
   HealthProbeRequest:   {plural: "healthproberequests",   short: "hprobe",   core: DR_API_GROUP, namespaced: true, dr: true},
+  DHCPProbeRequest:     {plural: "dhcpproberequests",     short: "dhcpprobe", core: DR_API_GROUP, namespaced: true, dr: true},
+  // DR's labels on a site's objects, applied by its dr-agent (labels.jsx)
+  LabelRequest:         {plural: "labelrequests",         short: "labelreq", core: DR_API_GROUP, namespaced: true, dr: true},
+  // what each site's dr-agent reports, read through the view dr-hub keeps
+  // of it (<cluster>/dr-agent-status): the forms' discovered choices
+  ManagedClusterView:    {plural: "managedclusterviews",    core: "view.open-cluster-management.io/v1beta1", namespaced: true},
   // Ramen and OCM objects the hub derives — instances only, read-only here
   DRPolicy:              {plural: "drpolicies",             core: RAMEN_API_GROUP, namespaced: false},
   DRCluster:             {plural: "drclusters",             core: RAMEN_API_GROUP, namespaced: false},
