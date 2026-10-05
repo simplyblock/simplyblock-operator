@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -131,13 +132,26 @@ func (v validationRun) run(
 	// cycle a few times before giving up so a transient lag is not mistaken for a
 	// missing path. Already connected paths are a no-op in ensurePaths, so re-running
 	// it only re-attempts paths that are genuinely missing.
+	//
+	// A path still being scanned (it serves some of the subsystem's namespaces, not all)
+	// is waited for without spending an attempt or logging a failure, up to
+	// settleChecks short checks; only then does it count as a failed attempt.
 	var lastErr error
+	settles := 0
 	for attempt := 1; attempt <= v.attempts; attempt++ {
 		paths, verifyErr := []volumemigration.PathState(nil), error(nil)
 		if err := v.ensurePaths(ctx, sysRoot, conns); err != nil {
 			lastErr = fmt.Errorf("ensure migration paths: %w", err)
 		} else if paths, verifyErr = v.verifyPaths(ctx, sysRoot, nqn, conns, preExisting); verifyErr != nil {
 			lastErr = fmt.Errorf("verification: %w", verifyErr)
+			var settling *volumemigration.NamespacesSettlingError
+			if errors.As(verifyErr, &settling) && settles < settleChecks {
+				settles++
+				log.Printf("waiting for the host to finish scanning namespaces: %v", settling)
+				v.sleep(settleDelay)
+				attempt--
+				continue
+			}
 		} else {
 			for _, p := range paths {
 				log.Printf("path %s", p)
@@ -271,6 +285,15 @@ func releaseMigration() {
 		log.Printf("could not reap every dead controller of %s: %v", nqn, rerr)
 	}
 }
+
+// settleChecks bounds how many times a verification that found a path still
+// scanning namespaces is repeated before it counts as a failed attempt, and
+// settleDelay spaces those checks. A 5-namespace subsystem finished within two
+// seconds on the test cluster.
+const (
+	settleChecks = 15
+	settleDelay  = time.Second
+)
 
 // validateAttempts returns the number of connect+validate attempts, overridable
 // via VMIG_VALIDATE_ATTEMPTS. Invalid or non-positive values fall back to the default.

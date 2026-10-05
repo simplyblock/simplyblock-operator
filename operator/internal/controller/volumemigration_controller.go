@@ -182,6 +182,23 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 		return r.setFailed(ctx, vm, fmt.Sprintf("volume %s has no subsystem NQN; cannot address its migration", volumeUUID))
 	}
 
+	// The control plane migrates the subsystem whole, and holds one migration
+	// per subsystem. If another live VolumeMigration already carries this
+	// subsystem -- a sibling namespace being drained, pinned or rebalanced --
+	// submitting again would only make CreateMigration cancel that one to
+	// make room, and the two would keep cancelling each other. Wait for it:
+	// its completion moves this volume too.
+	if owner, err := r.liveSiblingMigration(ctx, vm, volume.NQN); err != nil {
+		return ctrl.Result{}, err
+	} else if owner != "" {
+		log.Info("Subsystem already being migrated by another VolumeMigration; waiting",
+			"subsystem", volume.NQN, "owner", owner)
+		r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "WaitingForSiblingMigration", "WaitingForSiblingMigration",
+			"Subsystem %s is already being migrated by VolumeMigration %s; this volume moves with it; retrying in %s",
+			volume.NQN, owner, siblingMigrationRetryDelay)
+		return ctrl.Result{RequeueAfter: siblingMigrationRetryDelay}, nil
+	}
+
 	log.Info("Submitting volume migration",
 		"volume", volumeUUID, "cluster", clusterUUID, "subsystem", volume.NQN,
 		"target", vm.Spec.TargetNodeUUID)
@@ -197,6 +214,12 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 		// Failing here would abandon that half-created migration. Retrying instead lets the
 		// next attempt hit the existing-migration path, which cancels it before re-creating.
 		return r.retryIndeterminateCreate(ctx, vm, clusterUUID, err)
+	case alreadyOnTarget(err, vm.Spec.TargetNodeUUID):
+		// The volume is already where this migration was sending it -- moved
+		// by a sibling's batch, or by an earlier attempt that finished. That is
+		// the outcome asked for, not a failure; failing it made the drain blame
+		// a good target and retry (2026-09-29, run 12).
+		return r.setCompletedAlreadyOnTarget(ctx, vm, clusterUUID, volumeUUID, poolUUID, volume.NQN)
 	case err != nil:
 		return r.setFailed(ctx, vm, fmt.Sprintf("CreateMigration: %v", err))
 	}
@@ -251,6 +274,35 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 		"Migration %s created for subsystem %s (%d volume(s)): validating %d connection(s) to node %s",
 		migration.ID, volume.NQN, migration.MemberCount, len(conns), vm.Spec.TargetNodeUUID)
 	return ctrl.Result{Requeue: true}, nil
+}
+
+// siblingMigrationRetryDelay is how long a VolumeMigration waits before looking
+// again when another one is already migrating its subsystem.
+const siblingMigrationRetryDelay = 15 * time.Second
+
+// liveSiblingMigration returns the name of another VolumeMigration in the same
+// namespace that is currently migrating the subsystem nqn (Validating or
+// Running), or "" if there is none.
+func (r *VolumeMigrationReconciler) liveSiblingMigration(
+	ctx context.Context,
+	vm *simplyblockv1alpha1.VolumeMigration,
+	nqn string,
+) (string, error) {
+	var list simplyblockv1alpha1.VolumeMigrationList
+	if err := r.List(ctx, &list, client.InNamespace(vm.Namespace)); err != nil {
+		return "", fmt.Errorf("list VolumeMigrations: %w", err)
+	}
+	for i := range list.Items {
+		other := &list.Items[i]
+		if other.Name == vm.Name || other.Status.SubsystemNQN != nqn {
+			continue
+		}
+		switch other.Status.Phase {
+		case simplyblockv1alpha1.VolumeMigrationPhaseValidating, simplyblockv1alpha1.VolumeMigrationPhaseRunning:
+			return other.Name, nil
+		}
+	}
+	return "", nil
 }
 
 // deferMigration holds a migration the control plane refused because the cluster is
@@ -1306,6 +1358,36 @@ func (r *VolumeMigrationReconciler) reconcileAbort(
 }
 
 // setFailed transitions the migration to Failed with the given reason.
+// alreadyOnTarget reports whether a CreateMigration refusal says the volume is
+// already on target ("LVol X is already on node <target>; cannot migrate to
+// the same node").
+func alreadyOnTarget(err error, target string) bool {
+	return err != nil && target != "" && strings.Contains(err.Error(), "is already on node "+target)
+}
+
+// setCompletedAlreadyOnTarget completes a VolumeMigration whose volume is
+// already on its target.
+func (r *VolumeMigrationReconciler) setCompletedAlreadyOnTarget(
+	ctx context.Context,
+	vm *simplyblockv1alpha1.VolumeMigration,
+	clusterUUID, volumeUUID, poolUUID, nqn string,
+) (ctrl.Result, error) {
+	now := metav1.Now()
+	patch := client.MergeFrom(vm.DeepCopy())
+	vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseCompleted
+	vm.Status.ClusterUUID = clusterUUID
+	vm.Status.VolumeUUID = volumeUUID
+	vm.Status.PoolUUID = poolUUID
+	vm.Status.SubsystemNQN = nqn
+	vm.Status.CompletedAt = &now
+	if err := r.Status().Patch(ctx, vm, patch); err != nil {
+		return ctrl.Result{}, fmt.Errorf("patch status Completed (already on target): %w", err)
+	}
+	r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "AlreadyOnTarget", "AlreadyOnTarget",
+		"Volume %s is already on node %s; nothing to migrate", volumeUUID, vm.Spec.TargetNodeUUID)
+	return ctrl.Result{}, nil
+}
+
 func (r *VolumeMigrationReconciler) setFailed(
 	ctx context.Context,
 	vm *simplyblockv1alpha1.VolumeMigration,

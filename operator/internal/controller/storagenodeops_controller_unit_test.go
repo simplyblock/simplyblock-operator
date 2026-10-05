@@ -108,7 +108,9 @@ func TestAcquireLock_RequeuesWhenAnotherOpsActive(t *testing.T) {
 	sn := newTestStorageNode("sn-1", opsTestNS, "sns", opsTestWorker, opsTestNodeUUID)
 	sn.Status.ActiveOpsRef = opsTestOtherOps
 	ops := newTestStorageNodeOps(opsTestOpsName, opsTestNS, "sn-1", "suspend")
-	r := newOpsReconciler(t, sn, ops)
+	other := newTestStorageNodeOps(opsTestOtherOps, opsTestNS, "sn-1", "suspend")
+	other.Status.Phase = simplyblockv1alpha1.StorageNodeOpsPhaseRunning // live holder
+	r := newOpsReconciler(t, sn, ops, other)
 
 	result, err := r.acquireLock(context.Background(), ops, sn)
 	if err != nil {

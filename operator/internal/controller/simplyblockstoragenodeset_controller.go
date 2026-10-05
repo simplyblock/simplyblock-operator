@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"sort"
 
 	"strconv"
 	"strings"
@@ -1038,6 +1039,94 @@ func (r *StorageNodeSetReconciler) recordSpdkPodEvents(
 	}
 }
 
+// specFailureDomain returns the failure domain a worker is configured for,
+// from the StorageNodeSet spec: nodeConfigs[worker].failureDomain first, then
+// nodeFailureDomains[worker], then -- for a node the backend has already
+// reported -- status.nodes[].failureDomain. A worker that has not been added
+// yet has no status entry, so for the dispatch order below the spec is the
+// only source that can answer.
+func specFailureDomain(snCR *simplyblockv1alpha1.StorageNodeSet, worker string) (int32, bool) {
+	if cfg, ok := snCR.Spec.NodeConfigs[worker]; ok && cfg.FailureDomain != nil {
+		return *cfg.FailureDomain, true
+	}
+	if fd, ok := snCR.Spec.NodeFailureDomains[worker]; ok {
+		return fd, true
+	}
+	return workerFailureDomain(snCR, worker)
+}
+
+// workerIsAdded reports whether the backend already knows this worker: its
+// status entry carries the storage node's UUID.
+func workerIsAdded(snCR *simplyblockv1alpha1.StorageNodeSet, worker string) bool {
+	for _, n := range snCR.Status.Nodes {
+		if n.Hostname == worker && n.UUID != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// expansionDispatchOrder returns the order in which to dispatch node adds.
+//
+// Adding to an already-active cluster (spec.expand) is admitted by the
+// backend one node at a time under the +/-1 failure-domain balance rule, so
+// the second of two same-domain workers listed adjacently is refused on
+// every reconcile until a worker from another domain has landed: a 400, a
+// warning event and a requeue each time, for as long as that takes. The
+// order is the only thing at fault, so it is fixed here rather than by
+// asking the operator to write spec.workerNodes interleaved.
+//
+// Workers already added or in flight keep their place at the front, in
+// spec order -- they hold slots and are not re-dispatched. The pending
+// workers follow round-robin over their configured domains (domains in
+// ascending id, spec order within a domain), so each add keeps the
+// per-domain split within one host of balanced at every step. Pending
+// workers with no resolvable domain come last, in spec order; the backend
+// will refuse those on a domain-enabled cluster anyway.
+//
+// Only spec.expand changes anything: an initial build has no per-add gate,
+// every worker is added regardless of order, and activation checks the
+// final split -- so there the spec order is kept as written. Stable across
+// reconciles: the result depends only on the spec and on which workers have
+// been added, not on when.
+func expansionDispatchOrder(snCR *simplyblockv1alpha1.StorageNodeSet, workers []string) []string {
+	if !ptr.BoolFromOrFalse(snCR.Spec.Expand) {
+		return workers
+	}
+	var settled, unplaced []string
+	byDomain := map[int32][]string{}
+	for _, w := range workers {
+		if workerIsAdded(snCR, w) || workerIsInFlight(snCR, w) {
+			settled = append(settled, w)
+			continue
+		}
+		if fd, ok := specFailureDomain(snCR, w); ok {
+			byDomain[fd] = append(byDomain[fd], w)
+		} else {
+			unplaced = append(unplaced, w)
+		}
+	}
+	domains := make([]int, 0, len(byDomain))
+	for fd := range byDomain {
+		domains = append(domains, int(fd))
+	}
+	sort.Ints(domains)
+	out := append([]string{}, settled...)
+	for round := 0; ; round++ {
+		placed := false
+		for _, fd := range domains {
+			if ws := byDomain[int32(fd)]; round < len(ws) {
+				out = append(out, ws[round])
+				placed = true
+			}
+		}
+		if !placed {
+			break
+		}
+	}
+	return append(out, unplaced...)
+}
+
 // reconcileWorkerNodes fans out the node-add loop across parallel (non-FDB) and
 // sequential (FDB) workers, respecting MaxParallelNodeAdds.
 // MaxParallelNodeAdds carries a +kubebuilder:default=1 marker so the API server
@@ -1052,7 +1141,7 @@ func (r *StorageNodeSetReconciler) reconcileWorkerNodes(
 	fdbWorkers := r.fdbWorkerSet(ctx, snCR)
 
 	var parallelWorkers, sequentialWorkers []string
-	for _, nodeName := range snCR.Spec.WorkerNodes {
+	for _, nodeName := range expansionDispatchOrder(snCR, snCR.Spec.WorkerNodes) {
 		if fdbWorkers[nodeName] {
 			sequentialWorkers = append(sequentialWorkers, nodeName)
 		} else {

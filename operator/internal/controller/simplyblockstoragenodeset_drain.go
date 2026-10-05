@@ -19,9 +19,12 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -203,53 +206,254 @@ func getNodeBackendStatus(
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
 ) (string, error) {
+	status, _, err := getNodeBackendStatusWithCode(ctx, apiClient, clusterUUID, nodeUUID)
+	return status, err
+}
+
+// getNodeBackendStatusWithCode is getNodeBackendStatus for callers that need
+// to tell "the node is gone" (404) apart from "the API is unavailable": the
+// removal's last step reads a vanished record as success, not as an error.
+func getNodeBackendStatusWithCode(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID, nodeUUID string,
+) (string, int, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, nodeUUID)
 	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return "", fmt.Errorf("getNodeBackendStatus: %w", err)
+		return "", 0, fmt.Errorf("getNodeBackendStatus: %w", err)
 	}
 	if status >= 300 {
-		return "", fmt.Errorf("getNodeBackendStatus: status %d", status)
+		return "", status, fmt.Errorf("getNodeBackendStatus: status %d", status)
 	}
 	var resp utils.NodeStatusResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return "", fmt.Errorf("getNodeBackendStatus: unmarshal: %w", err)
+		return "", status, fmt.Errorf("getNodeBackendStatus: unmarshal: %w", err)
 	}
-	return resp.Status, nil
+	return resp.Status, status, nil
 }
 
-// roundRobinTargetNodes lists all online nodes (excluding the drained node) and
-// assigns each PV name a target node UUID using round-robin order. The i-th PV
-// in pvNames is assigned to onlineNodes[i % len(onlineNodes)], distributing
-// migrations evenly across the cluster without requiring persistent state.
-// Returns an error if no online peer node is available.
+// roundRobinTargetNodes assigns each PV name a target node UUID, round-robin
+// over the online nodes that are eligible to receive a volume from the node
+// being drained. The i-th eligible PV goes to eligible[i % len(eligible)],
+// spreading the migrations without needing persistent state.
+//
+// triedFor reports the targets already exhausted for a PV; nil means none.
+// Passed in rather than read from the ops object so this stays a pure function
+// of its inputs and can be tested without one.
+type triedFor func(pvName string) []string
+
+// roundRobinTargetNodes assigns each PV a target, round-robin over the online
+// peers, skipping any target that has already failed for that PV.
+//
+// A node HA-paired with the drained node is NOT excluded. A migration creates
+// the volume on the target's whole HA pair, so if half that pair is the
+// departing node the control plane has to tolerate it — and it does: the
+// overlap-drain cases in _get_target_secondary_node / _get_target_tertiary_node
+// allow a replica that is the migration source itself. Those cases only ever
+// recognised SUSPENDED, which is why such a target stalled a drain for 75
+// minutes on 2026-09-25; sbcli now admits every draining status there, so the
+// target is legitimate again and excluding it here would only shrink the
+// candidate set that escalation depends on.
+// errTargetsExhausted is returned by roundRobinTargetNodes when a volume has
+// already failed on every online peer. It is the drain's terminal answer for
+// that volume, not a condition to retry.
+var errTargetsExhausted = errors.New("no migration target left")
+
 func roundRobinTargetNodes(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
 	excludeNodeUUID string,
 	pvNames []string,
+	tried triedFor,
 ) (map[string]string, error) {
 	nodes, err := apiClient.GetStorageNodes(ctx, clusterUUID)
 	if err != nil {
 		return nil, fmt.Errorf("roundRobinTargetNodes: %w", err)
 	}
 
-	var online []string
+	// A migration builds the volume on the target's whole replica set, so a
+	// target that replicates onto the node being removed involves that node
+	// on both sides of the copy: its registration there fails or times out,
+	// the convert on it fails ("No such device"), and the migration only
+	// succeeds on a retry -- while removal phase 3b is about to move that
+	// replica anyway. Such targets go last. They stay candidates: on a small
+	// cluster every peer may replicate onto the drainee, and draining beats
+	// refusing.
+	//
+	// The drained node's OWN secondary and tertiary go after those: once the
+	// drainee is shut down, the control plane reads the volume from one of
+	// them (the fallback source) and refuses it as a target outright, and the
+	// other is where the removal's own replica relocation is about to act.
+	drainee := webapi.StorageNodeInfo{}
 	for _, n := range nodes {
-		if n.UUID != excludeNodeUUID && n.Status == utils.NodeStatusOnline {
-			online = append(online, n.UUID)
+		if n.UUID == excludeNodeUUID {
+			drainee = n
 		}
 	}
-	if len(online) == 0 {
+	var preferred, fallback, ownReplicas []string
+	for _, n := range nodes {
+		if n.UUID == excludeNodeUUID || n.Status != utils.NodeStatusOnline {
+			continue
+		}
+		switch {
+		case n.UUID == drainee.SecondaryNodeID || n.UUID == drainee.TertiaryNodeID:
+			ownReplicas = append(ownReplicas, n.UUID)
+		case n.SecondaryNodeID == excludeNodeUUID || n.TertiaryNodeID == excludeNodeUUID:
+			fallback = append(fallback, n.UUID)
+		default:
+			preferred = append(preferred, n.UUID)
+		}
+	}
+	if len(preferred)+len(fallback)+len(ownReplicas) == 0 {
 		return nil, fmt.Errorf("roundRobinTargetNodes: no online node available other than %s", excludeNodeUUID)
 	}
 
 	assignment := make(map[string]string, len(pvNames))
 	for i, pv := range pvNames {
-		assignment[pv] = online[i%len(online)]
+		// Round-robin sets where this PV starts looking, so several PVs still
+		// spread across the cluster; the exhausted list then moves this one on.
+		// Scanning from its own offset rather than always from 0 keeps that
+		// spread instead of funnelling every retry onto the same next node.
+		var exhausted []string
+		if tried != nil {
+			exhausted = tried(pv)
+		}
+		picked := pickRoundRobin(preferred, i, exhausted)
+		if picked == "" {
+			picked = pickRoundRobin(fallback, i, exhausted)
+		}
+		if picked == "" {
+			picked = pickRoundRobin(ownReplicas, i, exhausted)
+		}
+		if picked == "" {
+			// Every peer has already failed for this volume. Saying so is the
+			// point of tracking them: the alternative is handing it back to a
+			// node that just failed, for ever. Wrapped in errTargetsExhausted
+			// so the caller can tell it from "no peer is online right now",
+			// which is transient and worth waiting out; this is not.
+			return nil, fmt.Errorf(
+				"%w: every online peer of %s has already failed for %s (%d tried)",
+				errTargetsExhausted, excludeNodeUUID, pv, len(exhausted))
+		}
+		assignment[pv] = picked
 	}
 	return assignment, nil
+}
+
+// annoSubsystemMembers is set on a drain VolumeMigration that carries a shared
+// (multi-namespace) subsystem: the comma-separated names of every PV on the
+// drained node whose volume lives in that subsystem, the CR's own PV included.
+// The control plane migrates the whole subsystem in one go, so those PVs move
+// with this CR and get no CR of their own.
+const annoSubsystemMembers = "storage.simplyblock.io/subsystem-members"
+
+// drainSubsystemGroups partitions the drained node's PV-managed volumes by NVMe
+// subsystem.
+//
+// The storage API migrates a subsystem, not a volume: a namespaced volume
+// shares its subsystem with siblings, and one migration moves all of them. One
+// VolumeMigration per PV therefore meant several CRs for the same subsystem,
+// each with its own round-robin target; the API refused every create after the
+// first as "a migration already exists", the client cancelled that migration
+// to make room, and the CRs kept cancelling one another -- 79 minutes at "1 of
+// 6 volumes migrated" on 2026-09-28. So a subsystem gets one CR, carried by its
+// canonical PV, and the others are recorded as members.
+//
+// canonicalByPV maps every PV to the PV that carries its subsystem's CR: the
+// lexicographically smallest PV name of the group, so the choice is the same on
+// every reconcile as long as the group is. membersByCanonical lists each
+// group's PVs, sorted. A volume without an NQN is its own group.
+func drainSubsystemGroups(
+	volumes []webapi.VolumeInfo,
+	pvManaged []string,
+	pvNameByVolumeUUID map[string]string,
+) (canonicalByPV map[string]string, membersByCanonical map[string][]string) {
+	nqnByVolume := make(map[string]string, len(volumes))
+	for _, v := range volumes {
+		nqnByVolume[v.UUID] = v.NQN
+	}
+	pvsByNQN := make(map[string][]string)
+	for _, volUUID := range pvManaged {
+		pvName, ok := pvNameByVolumeUUID[volUUID]
+		if !ok {
+			continue
+		}
+		key := nqnByVolume[volUUID]
+		if key == "" {
+			key = "pv:" + pvName
+		}
+		pvsByNQN[key] = append(pvsByNQN[key], pvName)
+	}
+	canonicalByPV = make(map[string]string)
+	membersByCanonical = make(map[string][]string)
+	for _, pvs := range pvsByNQN {
+		sort.Strings(pvs)
+		canonical := pvs[0]
+		membersByCanonical[canonical] = pvs
+		for _, pv := range pvs {
+			canonicalByPV[pv] = canonical
+		}
+	}
+	return canonicalByPV, membersByCanonical
+}
+
+// drainCoveredPVs is every PV an existing drain VolumeMigration already moves:
+// its own PV and, for a shared subsystem, the members it lists.
+//
+// Grouping alone is not stable across a batch cutover. The control plane moves
+// the members' records to the target one at a time, so for a moment only some
+// of them still read as being on the drained node; grouping what is left named
+// the group after a different PV, found no CR under that name, and created a
+// second VolumeMigration for a volume the first was already moving (2026-09-29,
+// run 12: "1 of 7 volumes", then a refusal because the volume was already on
+// the target). A PV an existing CR covers is never scheduled again.
+func drainCoveredPVs(items []simplyblockv1alpha1.VolumeMigration) map[string]struct{} {
+	covered := make(map[string]struct{})
+	for i := range items {
+		covered[items[i].Spec.PVName] = struct{}{}
+		if members := items[i].Annotations[annoSubsystemMembers]; members != "" {
+			for _, pv := range strings.Split(members, ",") {
+				covered[pv] = struct{}{}
+			}
+		}
+	}
+	return covered
+}
+
+func anyCovered(pvs []string, covered map[string]struct{}) bool {
+	for _, pv := range pvs {
+		if _, ok := covered[pv]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// drainMigrationVolumes is how many of the drained node's volumes a drain
+// VolumeMigration moves: the members it was created for, else what the
+// control plane reported for the subsystem, else one.
+func drainMigrationVolumes(vm *simplyblockv1alpha1.VolumeMigration) int {
+	if members := vm.Annotations[annoSubsystemMembers]; members != "" {
+		return len(strings.Split(members, ","))
+	}
+	if vm.Status.MemberCount > 1 {
+		return vm.Status.MemberCount
+	}
+	return 1
+}
+
+// pickRoundRobin returns the first candidate, scanning from offset i, that is
+// not in exhausted, or "" when every candidate is.
+func pickRoundRobin(candidates []string, i int, exhausted []string) string {
+	for off := 0; off < len(candidates); off++ {
+		cand := candidates[(i+off)%len(candidates)]
+		if !slices.Contains(exhausted, cand) {
+			return cand
+		}
+	}
+	return ""
 }
 
 // drainMigrationName builds a DNS-label-safe name for a VolumeMigration CR.

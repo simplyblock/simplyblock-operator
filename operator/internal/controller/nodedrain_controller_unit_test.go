@@ -1313,3 +1313,19 @@ func newNodeDrainTestReconciler(t *testing.T, objects ...client.Object) *NodeDra
 		Scheme: scheme,
 	}
 }
+
+func TestIsClusterRebalancingIgnoresVolumeMigrations(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"is_re_balancing":true,"is_data_rebalancing":false}`))
+	}))
+	defer srv.Close()
+
+	rebalancing, err := isClusterRebalancing(context.Background(), webapi.NewClient(srv.URL), "cluster-uuid")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rebalancing {
+		t.Error("volume migrations alone must not hold the drain slot")
+	}
+}

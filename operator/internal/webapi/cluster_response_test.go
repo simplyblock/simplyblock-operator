@@ -29,3 +29,28 @@ func TestParseClusterResponseRejectsMissingIdentity(t *testing.T) {
 		t.Fatalf("expected ParseClusterResponse to reject payloads without id")
 	}
 }
+
+// Volume migrations make the control plane report is_re_balancing; a drain
+// must look at is_data_rebalancing, and fall back to the old flag only when
+// the control plane does not report the new one.
+func TestIsDataRebalancing(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"own migrations only", `{"id":"c","is_re_balancing":true,"is_data_rebalancing":false}`, false},
+		{"data rebalancing", `{"id":"c","is_re_balancing":true,"is_data_rebalancing":true}`, true},
+		{"older control plane, rebalancing", `{"id":"c","is_re_balancing":true}`, true},
+		{"older control plane, idle", `{"id":"c","is_re_balancing":false}`, false},
+	}
+	for _, tc := range cases {
+		resp, err := ParseClusterResponse([]byte(tc.body))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := resp.IsDataRebalancing(); got != tc.want {
+			t.Errorf("%s: IsDataRebalancing = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

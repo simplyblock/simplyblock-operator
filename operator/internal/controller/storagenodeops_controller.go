@@ -19,9 +19,12 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -143,8 +146,26 @@ func (r *StorageNodeOpsReconciler) acquireLock(
 	log := logf.FromContext(ctx)
 
 	if sn.Status.ActiveOpsRef != "" && sn.Status.ActiveOpsRef != ops.Name {
-		log.Info("another ops is active, requeuing", "activeOps", sn.Status.ActiveOpsRef)
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		// The lock is only as good as the op it names. A StorageNodeOps has no
+		// finalizer, so one deleted mid-drain vanishes without running
+		// releaseLock and leaves activeOpsRef pointing at nothing; every
+		// later op on the node was then refused for ever ("another ops is
+		// active, requeuing", 2026-09-28, after a stuck batch drain was
+		// deleted to retry it). A finished op that failed to release is the
+		// same case. Both are stale: take the lock over.
+		stale, err := r.opsLockIsStale(ctx, ops.Namespace, sn.Status.ActiveOpsRef)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !stale {
+			log.Info("another ops is active, requeuing", "activeOps", sn.Status.ActiveOpsRef)
+			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		}
+		log.Info("activeOpsRef names an op that no longer runs; taking the lock over",
+			"staleOps", sn.Status.ActiveOpsRef)
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "StaleOpsLock", "StaleOpsLock",
+			"StorageNode %s was still locked by %s, which no longer runs; taking the lock over",
+			sn.Name, sn.Status.ActiveOpsRef)
 	}
 
 	snPatch := client.MergeFrom(sn.DeepCopy())
@@ -164,6 +185,25 @@ func (r *StorageNodeOpsReconciler) acquireLock(
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{Requeue: true}, nil
+}
+
+// opsLockIsStale reports whether the StorageNodeOps named by a StorageNode's
+// activeOpsRef no longer holds it: the op does not exist any more, or it has
+// reached a terminal phase. Only a live, unfinished op keeps the lock.
+func (r *StorageNodeOpsReconciler) opsLockIsStale(ctx context.Context, namespace, opsName string) (bool, error) {
+	var holder simplyblockv1alpha1.StorageNodeOps
+	err := r.Get(ctx, types.NamespacedName{Name: opsName, Namespace: namespace}, &holder)
+	if apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("looking up lock holder %s: %w", opsName, err)
+	}
+	switch holder.Status.Phase {
+	case simplyblockv1alpha1.StorageNodeOpsPhaseSucceeded, simplyblockv1alpha1.StorageNodeOpsPhaseFailed:
+		return true, nil
+	}
+	return false, nil
 }
 
 // dispatch routes the ops to the correct handler.
@@ -980,7 +1020,9 @@ func (r *StorageNodeOpsReconciler) storageNodePodReady(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Drain state machine (action=remove)
-// Phases: Validating → Suspending → Migrating → Verifying → Removing
+// Phases: Validating → ShuttingDown → MigratingDevices → Migrating → Verifying → Removing
+// (Suspending and Reshuffling are legacy phases a CR may still carry across
+// an upgrade; runDrain carries them forward.)
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (r *StorageNodeOpsReconciler) runDrain(
@@ -993,12 +1035,29 @@ func (r *StorageNodeOpsReconciler) runDrain(
 	switch ops.Status.SubPhase {
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseValidating:
 		return r.drainValidate(ctx, ops, sn, clusterUUID, apiClient)
-	case simplyblockv1alpha1.StorageNodeOpsSubPhaseSuspending:
-		return r.drainSuspend(ctx, ops, sn, clusterUUID, apiClient)
+	case simplyblockv1alpha1.StorageNodeOpsSubPhaseShuttingDown:
+		return r.drainShutdown(ctx, ops, sn, clusterUUID, apiClient)
+	case simplyblockv1alpha1.StorageNodeOpsSubPhaseMigratingDevices:
+		return r.drainMigrateDevices(ctx, ops, sn, clusterUUID, apiClient)
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseMigrating:
 		return r.drainMigrate(ctx, ops, sn, clusterUUID, apiClient)
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseVerifying:
 		return r.drainVerify(ctx, ops, sn, clusterUUID, apiClient)
+	case simplyblockv1alpha1.StorageNodeOpsSubPhaseSuspending:
+		// Legacy: a CR that was suspending its node when the operator was
+		// upgraded. The drain shuts the node down now, and drainShutdown
+		// already handles a node that is suspended (or stopped) rather than
+		// online, so carrying the op into ShuttingDown is exact. Failing it
+		// here -- which the default branch would -- left the node suspended
+		// with nothing to resume it.
+		return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseShuttingDown)
+	case simplyblockv1alpha1.StorageNodeOpsSubPhaseReshuffling:
+		// Legacy: a CR that entered this phase before replica reallocation moved
+		// back into the removal. Nothing to do here any more -- the DELETE that
+		// Removing issues reallocates the roles itself, in the order that step
+		// requires. Advancing rather than failing lets an op that is mid-flight
+		// across the upgrade finish instead of stranding its node.
+		return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseRemoving)
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseRemoving:
 		return r.drainRemove(ctx, ops, sn, clusterUUID, apiClient)
 	default:
@@ -1058,10 +1117,10 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 	// Failure-domain balance gate: the backend's own admission check
 	// (check_fd_admission_for_remove) will refuse the DELETE call later in
 	// this drain if removing this node would violate the +/-1 balance rule
-	// -- but by then the node has already been suspended (Suspending runs
-	// before Removing), and that suspension has no path back on its own.
-	// Checking it here, before Suspending, means an infeasible removal
-	// never suspends the node in the first place.
+	// -- but by then the node has already been shut down (ShuttingDown runs
+	// before Removing), and a stopped node has no path back on its own.
+	// Checking it here, before ShuttingDown, means an infeasible removal
+	// never stops the node in the first place.
 	//
 	// Fails outright rather than blocking-and-requeuing like the
 	// pinned/unmanaged-volume checks above: those resolve by acting ON THIS
@@ -1086,7 +1145,7 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 			"removing node %s would violate failure-domain balance: %s", nodeUUID, reason))
 	}
 
-	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseSuspending)
+	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseShuttingDown)
 }
 
 // fdRemovalBalanceCheck reports whether removing sn would violate the
@@ -1098,7 +1157,7 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 // Validating is the only sub-phase that needs them. Returns ("", nil) when
 // removal is fine (including when FD data isn't populated yet, same as the
 // backend's own early-outs); a non-empty reason means drainValidate must
-// fail rather than advance to Suspending.
+// fail rather than advance to ShuttingDown.
 func (r *StorageNodeOpsReconciler) fdRemovalBalanceCheck(
 	ctx context.Context, sn *simplyblockv1alpha1.StorageNode,
 ) (string, error) {
@@ -1148,7 +1207,34 @@ func (r *StorageNodeOpsReconciler) fdRemovalBalanceCheck(
 	return fdRemovalBalanceViolation(counts), nil
 }
 
-func (r *StorageNodeOpsReconciler) drainSuspend(
+// isNodeStopped reports whether a node's SPDK is no longer serving, which is
+// what the drain waits for before it moves anything.
+//
+// Several statuses mean it: the shutdown's landing status offline, and the
+// removal statuses a re-driven drain may already have reached. Waiting for one
+// exact status would hang whenever the node arrived at a different one -- and
+// the shutdown's landing status is not something this controller chooses.
+//
+// in_shutdown is deliberately not one of them: it means the shutdown is still
+// running, and that shutdown ends by writing offline. Advancing on it started
+// the device step under a live shutdown, whose offline write then undid the
+// step's migrating_devices stamp, and the rebuild of the node's own distribs
+// queued on the node itself for ever (2026-09-30, runs 19 and 24).
+func isNodeStopped(status string) bool {
+	switch status {
+	case utils.NodeStatusOffline,
+		nodeStatusMigratingDevices,
+		nodeStatusMigratingLvols,
+		nodeStatusInRemoval,
+		utils.NodeStatusRemoved,
+		nodeStatusRemovedFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *StorageNodeOpsReconciler) drainShutdown(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.StorageNodeOps,
 	sn *simplyblockv1alpha1.StorageNode,
@@ -1164,16 +1250,26 @@ func (r *StorageNodeOpsReconciler) drainSuspend(
 			log.Error(err, "drain: could not read node status before suspend, retrying")
 			return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 		}
-		if currentStatus == utils.NodeStatusSuspended {
-			log.Info("drain: node already suspended, advancing without POST")
+		if currentStatus == utils.NodeStatusInShutdown {
+			// A shutdown is already running; asking for another would only
+			// race it. Wait for it to land like one we started ourselves.
+			log.Info("drain: node already shutting down, waiting for it without POST")
 			patch := client.MergeFrom(ops.DeepCopy())
 			ops.Status.Triggered = true
-			ops.Status.Message = "node already suspended"
+			ops.Status.Message = "node is already shutting down, waiting for it to stop"
+			_ = r.Status().Patch(ctx, ops, patch)
+			return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
+		}
+		if isNodeStopped(currentStatus) {
+			log.Info("drain: node already stopped, advancing without POST")
+			patch := client.MergeFrom(ops.DeepCopy())
+			ops.Status.Triggered = true
+			ops.Status.Message = "node already stopped"
 			_ = r.Status().Patch(ctx, ops, patch)
 			return ctrl.Result{RequeueAfter: drainRequeueImmediate}, nil
 		}
 
-		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/suspend", clusterUUID, nodeUUID)
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown?force=true", clusterUUID, nodeUUID)
 		_, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
 			if err == nil {
@@ -1184,7 +1280,7 @@ func (r *StorageNodeOpsReconciler) drainSuspend(
 		}
 		patch := client.MergeFrom(ops.DeepCopy())
 		ops.Status.Triggered = true
-		ops.Status.Message = "suspend request sent, waiting for node to suspend"
+		ops.Status.Message = "shutdown request sent, waiting for the node to stop"
 		_ = r.Status().Patch(ctx, ops, patch)
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 	}
@@ -1204,13 +1300,17 @@ func (r *StorageNodeOpsReconciler) drainSuspend(
 		log.Error(err, "drain: failed to unmarshal node status")
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 	}
-	if nodeResp.Status != utils.NodeStatusSuspended {
-		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "DrainSuspendPending", "DrainSuspendPending",
-			"waiting for node %s to suspend (current status: %s)", nodeUUID, nodeResp.Status)
-		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainSuspendPending", fmt.Sprintf("waiting for node %s to suspend (current status: %s)", nodeUUID, nodeResp.Status))
+	if !isNodeStopped(nodeResp.Status) {
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "DrainShutdownPending", "DrainShutdownPending",
+			"waiting for node %s to stop (current status: %s)", nodeUUID, nodeResp.Status)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainShutdownPending", fmt.Sprintf("waiting for node %s to stop (current status: %s)", nodeUUID, nodeResp.Status))
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 	}
-	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseMigrating)
+	// Devices before lvols: the node's devices are failed and rebuilt onto peers
+	// first, and only then are its volumes drained. The volumes are served from
+	// their replicas throughout, which is slower than being served locally, so
+	// MigratingDevices reports its progress rather than leaving that unexplained.
+	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseMigratingDevices)
 }
 
 func (r *StorageNodeOpsReconciler) drainMigrate(
@@ -1237,12 +1337,16 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 		return res, nil
 	}
 
-	completed, inProgress := 0, 0
+	// Counted in volumes: a CR that carries a shared subsystem moves every
+	// member volume, and the operator reads "N of M volumes".
+	completed, inProgress, completedCRs := 0, 0, 0
 	for i := range vmigList.Items {
+		n := drainMigrationVolumes(&vmigList.Items[i])
 		if vmigList.Items[i].Status.Phase == simplyblockv1alpha1.VolumeMigrationPhaseCompleted {
-			completed++
+			completed += n
+			completedCRs++
 		} else {
-			inProgress++
+			inProgress += n
 		}
 	}
 
@@ -1251,11 +1355,11 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 		existingVMNames[vmigList.Items[i].Name] = struct{}{}
 	}
 
-	if len(vmigList.Items) == 0 || r.hasMissingVolumeMigrationsOps(ctx, apiClient, clusterUUID, nodeUUID, ops, existingVMNames) {
+	if len(vmigList.Items) == 0 || r.hasMissingVolumeMigrationsOps(ctx, apiClient, clusterUUID, nodeUUID, ops, existingVMNames, vmigList.Items) {
 		return r.createMissingVolumeMigrationsOps(ctx, apiClient, clusterUUID, ops, sn, vmigList.Items, existingVMNames)
 	}
 
-	if inProgress == 0 && completed == len(vmigList.Items) {
+	if inProgress == 0 && completedCRs == len(vmigList.Items) {
 		patch := client.MergeFrom(ops.DeepCopy())
 		ops.Status.VolumesMigrated = completed
 		ops.Status.VolumesPending = 0
@@ -1276,7 +1380,7 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 	patch := client.MergeFrom(ops.DeepCopy())
 	ops.Status.VolumesMigrated = completed
 	ops.Status.VolumesPending = inProgress
-	ops.Status.Message = fmt.Sprintf("Migrating: %d of %d volumes migrated", completed, len(vmigList.Items))
+	ops.Status.Message = fmt.Sprintf("Migrating: %d of %d volumes migrated", completed, completed+inProgress)
 	_ = r.Status().Patch(ctx, ops, patch)
 	return ctrl.Result{RequeueAfter: drainRequeueMigrate}, nil
 }
@@ -1288,27 +1392,62 @@ func (r *StorageNodeOpsReconciler) handleFailedVolumeMigrations(
 	items []simplyblockv1alpha1.VolumeMigration,
 ) (ctrl.Result, bool) {
 	log := logf.FromContext(ctx)
-	var failed []simplyblockv1alpha1.VolumeMigration
-	for i := range items {
-		if items[i].Status.Phase == simplyblockv1alpha1.VolumeMigrationPhaseFailed ||
-			items[i].Status.Phase == simplyblockv1alpha1.VolumeMigrationPhaseAborted {
-			failed = append(failed, items[i])
+	// Failed and Aborted are both retried, but only Failed says anything
+	// about the target. An abort is a decision -- spec.abort set, a cancel
+	// from elsewhere -- not a verdict on the node the volume was heading to,
+	// so it is deleted and re-issued without the target being recorded or
+	// counted; otherwise every abort of a drain's own CR burnt a good node.
+	var failed, aborted []simplyblockv1alpha1.VolumeMigration
+	switch_ := func(vm simplyblockv1alpha1.VolumeMigration) {
+		switch vm.Status.Phase {
+		case simplyblockv1alpha1.VolumeMigrationPhaseFailed:
+			failed = append(failed, vm)
+		case simplyblockv1alpha1.VolumeMigrationPhaseAborted:
+			aborted = append(aborted, vm)
 		}
 	}
-	if len(failed) == 0 {
+	for i := range items {
+		switch_(items[i])
+	}
+	if len(failed)+len(aborted) == 0 {
 		return ctrl.Result{}, false
 	}
 
-	// Check if the cluster is paused — if so, delete and wait.
+	// The target is recorded as exhausted BEFORE any delete, and the status
+	// write is what makes the next attempt a different attempt. Deleting alone
+	// re-picks from the same ordered candidate list, so the volume goes back to
+	// the node it just failed on -- with one volume, for ever. The event says
+	// "will retry with new target"; recording it is what makes that true.
+	//
+	// That holds on the pause path too. It used to delete first and count
+	// never, and a drain reads "cluster is rebalancing" most of the time, so a
+	// target the control plane refuses outright was offered again ~320 times
+	// in ten minutes with one failure counted (2026-09-29, run 10).
+	opsPatch := client.MergeFrom(ops.DeepCopy())
+	recorded := recordExhaustedTargets(ops, failed)
+	if recorded {
+		if err := r.Status().Patch(ctx, ops, opsPatch); err != nil {
+			// Deleting without the record would lose the escalation, so leave
+			// the CRs alone and come back: a failed CR is idle, not harmful.
+			log.Error(err, "drain: could not record exhausted migration targets; not deleting yet")
+			return ctrl.Result{RequeueAfter: drainRequeueImmediate}, true
+		}
+	}
+
+	// Cluster paused: delete and wait; the next pass recreates them.
 	if res, paused := r.clusterPauseCheck(ctx, ops, apiClient); paused {
 		for i := range failed {
 			_ = r.Delete(ctx, &failed[i])
 		}
-		log.Info("drain: cluster not ready, deleted failed VMs and pausing", "count", len(failed))
+		for i := range aborted {
+			_ = r.Delete(ctx, &aborted[i])
+		}
+		log.Info("drain: cluster not ready, deleted failed VMs and pausing", "count", len(failed)+len(aborted))
 		return res, true
 	}
 
 	// Cluster ready: delete failed CRs and let createMissingVolumeMigrationsOps recreate them.
+
 	for i := range failed {
 		vm := &failed[i]
 		if err := r.Delete(ctx, vm); err != nil {
@@ -1316,10 +1455,219 @@ func (r *StorageNodeOpsReconciler) handleFailedVolumeMigrations(
 			continue
 		}
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "MigrationRetry", "MigrationRetry",
-			"VolumeMigration %s failed, deleted and will retry with new target", vm.Name)
-		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "MigrationRetry", fmt.Sprintf("VolumeMigration %s failed, deleted and will retry with new target", vm.Name))
+			"VolumeMigration %s failed on %s, deleted and will retry with another target",
+			vm.Name, vm.Spec.TargetNodeUUID)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "MigrationRetry",
+			fmt.Sprintf("VolumeMigration %s failed on %s, deleted and will retry with another target",
+				vm.Name, vm.Spec.TargetNodeUUID))
+	}
+	for i := range aborted {
+		vm := &aborted[i]
+		if err := r.Delete(ctx, vm); err != nil {
+			log.Error(err, "drain: failed to delete aborted VolumeMigration", "name", vm.Name)
+			continue
+		}
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "MigrationRetry", "MigrationRetry",
+			"VolumeMigration %s was aborted, deleted and will be re-issued (target %s not blamed)",
+			vm.Name, vm.Spec.TargetNodeUUID)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "MigrationRetry",
+			fmt.Sprintf("VolumeMigration %s was aborted, deleted and will be re-issued (target %s not blamed)",
+				vm.Name, vm.Spec.TargetNodeUUID))
 	}
 	return ctrl.Result{RequeueAfter: drainRequeueImmediate}, true
+}
+
+// recordExhaustedTargets marks the target of every failed migration that the
+// target can actually be blamed for. Returns true if anything changed, so the
+// caller only writes status when there is something new to write.
+//
+// Separate from the reconcile it is called from so the decision -- which
+// failures burn a target and which do not -- is testable without an API server
+// behind it.
+func recordExhaustedTargets(
+	ops *simplyblockv1alpha1.StorageNodeOps,
+	failed []simplyblockv1alpha1.VolumeMigration,
+) bool {
+	recorded := false
+	for i := range failed {
+		target := failed[i].Spec.TargetNodeUUID
+		if target == "" {
+			continue
+		}
+		pv := failed[i].Spec.PVName
+
+		// Once per failed CR. The CR outlives the pass that counts it until
+		// the delete lands, so a pass cut short -- status write refused,
+		// delete refused, operator restarted -- re-observes the same Failed
+		// CR and would count it again, pushing the unattributed count toward
+		// the bound on repeats of one failure. A recreated CR has a new UID.
+		if markFailureCounted(ops, pv, string(failed[i].UID)) {
+			continue
+		}
+
+		// Attribution decides how FAST a target is abandoned, never whether it
+		// ever is. A failure the target caused burns it at once. One it did not
+		// cause is retried, but counted -- otherwise the drain recreates the
+		// same migration against the same node for ever, which is what happens
+		// when nothing can be blamed and nothing is bounded.
+		if targetWasEngaged(&failed[i]) || targetRefusedByBackend(&failed[i]) {
+			if recordDrainTargetTried(ops, pv, target) {
+				recorded = true
+			}
+			continue
+		}
+
+		if bumpUnattributedFailure(ops, pv, target) >= MaxUnattributedFailures {
+			if recordDrainTargetTried(ops, pv, target) {
+				resetUnattributedFailures(ops, pv)
+				recorded = true
+			}
+			continue
+		}
+		recorded = true // the count itself is state worth persisting
+	}
+	return recorded
+}
+
+// MaxUnattributedFailures bounds how many times one volume's migration may fail
+// for a reason outside the target before that target is abandoned anyway.
+//
+// Mirrors NODE_DRAIN_MAX_RESTARTS_PER_TARGET in the control plane's own drain,
+// which has always had this bound; the operator's escalation was written
+// without it and could loop indefinitely.
+const MaxUnattributedFailures = 10
+
+// bumpUnattributedFailure increments and returns the count of consecutive
+// unattributed failures of pvName's migration against target.
+//
+// The count is per target, not per volume. Failures nobody can pin on a node
+// are only comparable while the node stays the same: the bound exists to
+// abandon a target that keeps failing for reasons outside itself, and ten
+// such failures spread over three candidates -- the online set changed, a
+// retry landed elsewhere -- say nothing about the third. A count kept per
+// volume alone reached the bound on that third node and burnt it for
+// failures it never saw. A different target restarts the count at one.
+func bumpUnattributedFailure(ops *simplyblockv1alpha1.StorageNodeOps, pvName, target string) int {
+	for i := range ops.Status.DrainTargetsTried {
+		entry := &ops.Status.DrainTargetsTried[i]
+		if entry.PVName != pvName {
+			continue
+		}
+		if entry.FailingTarget != target {
+			entry.FailingTarget = target
+			entry.Failures = 0
+		}
+		entry.Failures++
+		return entry.Failures
+	}
+	ops.Status.DrainTargetsTried = append(ops.Status.DrainTargetsTried,
+		simplyblockv1alpha1.VolumeDrainTargets{PVName: pvName, Failures: 1, FailingTarget: target})
+	return 1
+}
+
+// resetUnattributedFailures clears the count so the next candidate target is
+// judged on its own attempts rather than inheriting the previous one's.
+func resetUnattributedFailures(ops *simplyblockv1alpha1.StorageNodeOps, pvName string) {
+	for i := range ops.Status.DrainTargetsTried {
+		if ops.Status.DrainTargetsTried[i].PVName == pvName {
+			ops.Status.DrainTargetsTried[i].Failures = 0
+			ops.Status.DrainTargetsTried[i].FailingTarget = ""
+			return
+		}
+	}
+}
+
+// targetWasEngaged reports whether a failed migration ever reached the point of
+// working against its target, and so whether the failure says anything about
+// that target.
+//
+// A migration fails for two very different kinds of reason. Some are about the
+// target -- the register on its replica failed, it went offline mid-copy. Others
+// are about the environment and would fail identically against every node: the
+// volume's consumer pod is not Running, the PV cannot be resolved, the cluster
+// is busy. Burning a target for the second kind destroys good candidates for
+// something that was never their fault.
+//
+// Observed on 2026-09-25: the volume's fio pod died, so every later attempt
+// failed the consumer-pod precondition inside a minute, before touching the
+// target -- and three untried, perfectly good targets were marked exhausted on
+// the strength of it. With all six gone the drain stalled permanently, on what
+// was a recoverable situation.
+//
+// SourceNodeUUID is the marker because reconcileRunning is the only place that
+// writes it (volumemigration_controller.go), and it does so from the first
+// successful poll after the migration starts moving data. Its presence
+// therefore means "this migration actually ran against this target"; its
+// absence means the failure happened in validation or earlier, where the target
+// is not implicated. Phase cannot be used instead: setFailed overwrites it with
+// Failed, losing the phase the failure came from.
+func targetWasEngaged(vm *simplyblockv1alpha1.VolumeMigration) bool {
+	return vm.Status.SourceNodeUUID != ""
+}
+
+// targetRefusedByBackend reports whether the control plane refused this
+// target itself when the migration was created -- "Cannot migrate to node X:
+// ..." (X is the fallback source, is the volume's own node, cannot host it).
+// No retry against the same node can succeed, so it burns the target at once
+// even though the migration never engaged it.
+func targetRefusedByBackend(vm *simplyblockv1alpha1.VolumeMigration) bool {
+	target := vm.Spec.TargetNodeUUID
+	return target != "" && strings.Contains(vm.Status.ErrorMessage, "Cannot migrate to node "+target)
+}
+
+// markFailureCounted records that the failed CR with uid has been counted for
+// pvName, and reports whether it already had been. An empty uid (an object
+// that never went through the API server) is never deduplicated.
+func markFailureCounted(ops *simplyblockv1alpha1.StorageNodeOps, pvName, uid string) bool {
+	if uid == "" {
+		return false
+	}
+	for i := range ops.Status.DrainTargetsTried {
+		if ops.Status.DrainTargetsTried[i].PVName != pvName {
+			continue
+		}
+		if ops.Status.DrainTargetsTried[i].CountedFailure == uid {
+			return true
+		}
+		ops.Status.DrainTargetsTried[i].CountedFailure = uid
+		return false
+	}
+	ops.Status.DrainTargetsTried = append(ops.Status.DrainTargetsTried,
+		simplyblockv1alpha1.VolumeDrainTargets{PVName: pvName, CountedFailure: uid})
+	return false
+}
+
+// recordDrainTargetTried marks target as exhausted for pvName. Returns true if
+// this changed the status, so the caller only writes when there is something
+// new -- a reconcile that re-observes the same failed CR must not keep patching.
+func recordDrainTargetTried(ops *simplyblockv1alpha1.StorageNodeOps, pvName, target string) bool {
+	if pvName == "" || target == "" {
+		return false
+	}
+	for i := range ops.Status.DrainTargetsTried {
+		if ops.Status.DrainTargetsTried[i].PVName != pvName {
+			continue
+		}
+		if slices.Contains(ops.Status.DrainTargetsTried[i].Targets, target) {
+			return false
+		}
+		ops.Status.DrainTargetsTried[i].Targets = append(
+			ops.Status.DrainTargetsTried[i].Targets, target)
+		return true
+	}
+	ops.Status.DrainTargetsTried = append(ops.Status.DrainTargetsTried,
+		simplyblockv1alpha1.VolumeDrainTargets{PVName: pvName, Targets: []string{target}})
+	return true
+}
+
+// drainTargetsTriedFor returns the targets already exhausted for pvName.
+func drainTargetsTriedFor(ops *simplyblockv1alpha1.StorageNodeOps, pvName string) []string {
+	for i := range ops.Status.DrainTargetsTried {
+		if ops.Status.DrainTargetsTried[i].PVName == pvName {
+			return ops.Status.DrainTargetsTried[i].Targets
+		}
+	}
+	return nil
 }
 
 func (r *StorageNodeOpsReconciler) hasMissingVolumeMigrationsOps(
@@ -1328,6 +1676,7 @@ func (r *StorageNodeOpsReconciler) hasMissingVolumeMigrationsOps(
 	clusterUUID, nodeUUID string,
 	ops *simplyblockv1alpha1.StorageNodeOps,
 	existingVMNames map[string]struct{},
+	existingItems []simplyblockv1alpha1.VolumeMigration,
 ) bool {
 	vols, err := listNodeVolumes(ctx, apiClient, clusterUUID, nodeUUID)
 	if err != nil {
@@ -1341,9 +1690,16 @@ func (r *StorageNodeOpsReconciler) hasMissingVolumeMigrationsOps(
 	if err != nil {
 		return false
 	}
+	// A PV is covered by the CR of its subsystem, which its canonical PV
+	// carries -- see drainSubsystemGroups.
+	canonicalByPV, _ := drainSubsystemGroups(vols, pvm, pvByVol)
+	covered := drainCoveredPVs(existingItems)
 	for _, volUUID := range pvm {
 		if pvName, ok := pvByVol[volUUID]; ok {
-			if _, exists := existingVMNames[drainMigrationName(nodeUUID, pvName)]; !exists {
+			if _, done := covered[pvName]; done {
+				continue
+			}
+			if _, exists := existingVMNames[drainMigrationName(nodeUUID, canonicalByPV[pvName])]; !exists {
 				return true
 			}
 		}
@@ -1388,21 +1744,38 @@ func (r *StorageNodeOpsReconciler) createMissingVolumeMigrationsOps(
 		return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseVerifying)
 	}
 
-	pvNames := make([]string, 0, len(pvManaged))
-	for _, volUUID := range pvManaged {
-		pvName, ok := pvNameByVolumeUUID[volUUID]
-		if !ok {
+	// One CR per subsystem: the control plane moves a subsystem whole, so the
+	// PVs sharing one travel with its canonical PV's CR (drainSubsystemGroups).
+	// Targets are chosen per subsystem for the same reason -- the members
+	// cannot go to different nodes.
+	_, membersByCanonical := drainSubsystemGroups(volumes, pvManaged, pvNameByVolumeUUID)
+	covered := drainCoveredPVs(existingItems)
+	pvNames := make([]string, 0, len(membersByCanonical))
+	for canonical, members := range membersByCanonical {
+		if _, exists := existingVMNames[drainMigrationName(nodeUUID, canonical)]; exists {
 			continue
 		}
-		if _, exists := existingVMNames[drainMigrationName(nodeUUID, pvName)]; !exists {
-			pvNames = append(pvNames, pvName)
+		if anyCovered(members, covered) {
+			continue
 		}
+		pvNames = append(pvNames, canonical)
 	}
+	sort.Strings(pvNames) // round-robin offsets follow list order; keep it stable
 	if len(pvNames) == 0 {
 		return ctrl.Result{RequeueAfter: drainRequeueMigrate}, nil
 	}
 
-	targetByPV, err := roundRobinTargetNodes(ctx, apiClient, clusterUUID, nodeUUID, pvNames)
+	targetByPV, err := roundRobinTargetNodes(ctx, apiClient, clusterUUID, nodeUUID, pvNames,
+		func(pv string) []string { return drainTargetsTriedFor(ops, pv) })
+	if errors.Is(err, errTargetsExhausted) {
+		// Every online peer has failed this volume. The bound on retries
+		// exists so the drain can say so and stop; waiting here would be the
+		// very "hand it back for ever" the bound was written to prevent.
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "DrainTargetsExhausted", "DrainTargetsExhausted",
+			"drain cannot continue: %v", err)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainTargetsExhausted", fmt.Sprintf("drain cannot continue: %v", err))
+		return r.resumeAndFail(ctx, ops, sn, apiClient, clusterUUID, err.Error())
+	}
 	if err != nil {
 		log.Error(err, "drain: no available target nodes for migration")
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "DrainNoMigrationTarget", "DrainNoMigrationTarget",
@@ -1411,16 +1784,10 @@ func (r *StorageNodeOpsReconciler) createMissingVolumeMigrationsOps(
 		return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
 	}
 
-	createdCount := 0
-	for _, volUUID := range pvManaged {
-		pvName, ok := pvNameByVolumeUUID[volUUID]
-		if !ok {
-			continue
-		}
+	createdVolumes := 0
+	for _, pvName := range pvNames {
 		migName := drainMigrationName(nodeUUID, pvName)
-		if _, exists := existingVMNames[migName]; exists {
-			continue
-		}
+		members := membersByCanonical[pvName]
 		vmig := &simplyblockv1alpha1.VolumeMigration{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      migName,
@@ -1432,6 +1799,9 @@ func (r *StorageNodeOpsReconciler) createMissingVolumeMigrationsOps(
 				TargetNodeUUID: targetByPV[pvName],
 			},
 		}
+		if len(members) > 1 {
+			vmig.Annotations = map[string]string{annoSubsystemMembers: strings.Join(members, ",")}
+		}
 		if err := controllerutil.SetControllerReference(ops, vmig, r.Scheme); err != nil {
 			log.Error(err, "drain: failed to set controller reference", "name", migName)
 			continue
@@ -1440,13 +1810,17 @@ func (r *StorageNodeOpsReconciler) createMissingVolumeMigrationsOps(
 			log.Error(err, "drain: failed to create VolumeMigration", "name", migName)
 			continue
 		}
-		createdCount++
+		if len(members) > 1 {
+			log.Info("drain: one VolumeMigration for a shared subsystem",
+				"name", migName, "volumes", len(members), "members", members)
+		}
+		createdVolumes += len(members)
 	}
 
 	patch := client.MergeFrom(ops.DeepCopy())
-	ops.Status.VolumesPending = createdCount
+	ops.Status.VolumesPending = createdVolumes
 	ops.Status.VolumesMigrated = 0
-	ops.Status.Message = fmt.Sprintf("Migrating: 0 of %d volumes migrated", createdCount)
+	ops.Status.Message = fmt.Sprintf("Migrating: 0 of %d volumes migrated", createdVolumes)
 	_ = r.Status().Patch(ctx, ops, patch)
 	return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
 }
@@ -1535,24 +1909,110 @@ func (r *StorageNodeOpsReconciler) drainRemove(
 	log := logf.FromContext(ctx)
 	nodeUUID := sn.Status.UUID
 
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s?force_remove=false",
-		clusterUUID, nodeUUID)
-	_, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
+	// The DELETE queues the removal; it does not perform it. The control plane
+	// then runs its own phases -- in_removal, its replicas torn down, the
+	// roles it hosted reallocated, its devices dismantled -- and the node reads
+	// "removed" only at the end, or "removed_failed" once it has given up.
+	// Succeeding on the 204 reported the node removed while it was still at
+	// the first of those, and hid a removal that never finished behind a
+	// Succeeded op (2026-09-26). So the DELETE is sent once, and the op then
+	// follows the node to its terminal status.
+	if !ops.Status.RemoveTriggered {
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s?force_remove=false",
+			clusterUUID, nodeUUID)
+		_, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
 
-	if err == nil && (status == http.StatusOK || status == http.StatusNoContent || status == http.StatusNotFound) {
+		switch {
+		case err == nil && (status == http.StatusOK || status == http.StatusNoContent || status == http.StatusNotFound):
+			patch := client.MergeFrom(ops.DeepCopy())
+			ops.Status.RemoveTriggered = true
+			ops.Status.Message = "removal queued; waiting for the node to be removed"
+			_ = r.Status().Patch(ctx, ops, patch)
+			r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "NodeRemovalQueued", "NodeRemovalQueued",
+				"removal of storage node %s accepted by the control plane", nodeUUID)
+			return ctrl.Result{RequeueAfter: drainRequeueImmediate}, nil
+		case webapi.ClassifyError(err, status).Retryable:
+			log.Error(err, "drain: transient error on node DELETE, retrying", "status", status)
+			return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
+		}
+
+		// A 400 is the control plane's answer to every refused removal, the
+		// final ones and the passing ones alike: "cluster is not active",
+		// "cluster is rebalancing", "task found" come back exactly like a
+		// removal that can never succeed, and the body carries no reason
+		// (the endpoint maps remove_storage_node's False to a bare 400). So a
+		// removal issued while the cluster was still settling from the
+		// volume migrations was failed outright -- on a stopped node, with
+		// nothing to resume. The cluster's own state tells the two apart:
+		// while it is not active or is rebalancing, the refusal is the
+		// passing kind, and the op waits for it exactly as the other drain
+		// steps do; refused with the cluster active, it is final.
+		if status == http.StatusBadRequest {
+			if res, paused := r.clusterPauseCheck(ctx, ops, apiClient); paused {
+				log.Info("drain: node DELETE refused while the cluster is not ready; retrying", "status", status)
+				return res, nil
+			}
+		}
+
+		// The DELETE was refused before anything was dismantled. A node that
+		// is still up can be handed back; one the drain has already stopped
+		// cannot be resumed -- the resume itself fails, and retrying it
+		// forever is how a refused DELETE turned into an op that never ended.
+		// resumeAndFail itself declines to resume a node the drain has
+		// already stopped, and fails the op outright instead.
+		return r.resumeAndFail(ctx, ops, sn, apiClient, clusterUUID,
+			fmt.Sprintf("DELETE node returned status %d", status))
+	}
+
+	current, code, err := getNodeBackendStatusWithCode(ctx, apiClient, clusterUUID, nodeUUID)
+	if err != nil && code != http.StatusNotFound {
+		log.Error(err, "drain: could not read the node while waiting for its removal, retrying")
+		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
+	}
+
+	switch {
+	case code == http.StatusNotFound, current == utils.NodeStatusRemoved:
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "NodeRemoved", "NodeRemoved",
 			"storage node %s removed successfully", nodeUUID)
 		r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "NodeRemoved", fmt.Sprintf("storage node %s removed successfully", nodeUUID))
 		return r.succeedOps(ctx, ops, sn)
+	case current == nodeStatusRemovedFailed:
+		return r.failOps(ctx, ops, fmt.Sprintf("the control plane gave up removing node %s (removed_failed)", nodeUUID))
 	}
 
-	class := webapi.ClassifyError(err, status)
-	if class.Retryable {
-		log.Error(err, "drain: transient error on node DELETE, retrying", "status", status)
-		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
+	patch := client.MergeFrom(ops.DeepCopy())
+	ops.Status.Message = fmt.Sprintf("removal in progress: node is %s", current)
+	_ = r.Status().Patch(ctx, ops, patch)
+	return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
+}
+
+// The statuses the control plane stamps on a node during a removal, as its
+// API reports them: pending_removal -> migrating_devices -> migrating_lvols ->
+// in_removal -> removed, or removed_failed once it has given up. The operator
+// can re-drive a removed_failed node, so an op that reaches it fails rather
+// than waits. "removed" itself is utils.NodeStatusRemoved.
+const (
+	nodeStatusMigratingDevices = "migrating_devices"
+	nodeStatusMigratingLvols   = "migrating_lvols"
+	nodeStatusInRemoval        = "in_removal"
+	nodeStatusRemovedFailed    = "removed_failed"
+)
+
+// isNodeInRemoval reports whether a node is in the part of a removal that has
+// already shut it down: migrating_devices through removed_failed. Such a node
+// belongs to the removal until it is removed; a bulk restart or a worker drain
+// must leave it alone. A shutdown of it would write in_shutdown over the
+// removal status, and a restart would bring it back into service mid-removal
+// (the control plane now refuses both, but the operator should not ask).
+// pending_removal is not in the set: the node is still up then, and the
+// removal's own shutdown has not run yet.
+func isNodeInRemoval(status string) bool {
+	switch status {
+	case nodeStatusMigratingDevices, nodeStatusMigratingLvols, nodeStatusInRemoval,
+		utils.NodeStatusRemoved, nodeStatusRemovedFailed:
+		return true
 	}
-	return r.resumeAndFail(ctx, ops, sn, apiClient, clusterUUID,
-		fmt.Sprintf("DELETE node returned status %d", status))
+	return false
 }
 
 func (r *StorageNodeOpsReconciler) resumeAndFail(
@@ -1564,6 +2024,17 @@ func (r *StorageNodeOpsReconciler) resumeAndFail(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	nodeUUID := sn.Status.UUID
+
+	// Resume only makes sense for a node that is still up. Once the drain has
+	// stopped it (ShuttingDown and everything after), /resume fails -- there
+	// is no SPDK to resume -- and that failure is a 500 the client classifies
+	// as retryable, so the op requeued on "resume pending" for ever. Every
+	// step after the shutdown ends up here on failure (a device that would
+	// not rebuild, a system volume the backend refused to delete, a refused
+	// DELETE), which is why the rule lives here rather than at each caller.
+	if current, _, err := getNodeBackendStatusWithCode(ctx, apiClient, clusterUUID, nodeUUID); err == nil && isNodeStopped(current) {
+		return r.failOps(ctx, ops, reason+" (node already stopped; not resuming)")
+	}
 
 	resumeEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/resume", clusterUUID, nodeUUID)
 	_, resumeStatus, resumeErr := apiClient.Do(ctx, http.MethodPost, resumeEndpoint, nil)
@@ -1585,7 +2056,7 @@ func (r *StorageNodeOpsReconciler) resumeAndFail(
 func (r *StorageNodeOpsReconciler) clusterPauseCheck(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.StorageNodeOps,
-	_ *webapi.Client,
+	apiClient *webapi.Client,
 ) (ctrl.Result, bool) {
 	log := logf.FromContext(ctx)
 
@@ -1608,7 +2079,7 @@ func (r *StorageNodeOpsReconciler) clusterPauseCheck(
 	var reason string
 	if clusterCR.Status.Status != "" && clusterCR.Status.Status != utils.ClusterStatusActive {
 		reason = fmt.Sprintf("cluster status is %q (not active)", clusterCR.Status.Status)
-	} else if clusterCR.Status.Rebalancing != nil && *clusterCR.Status.Rebalancing {
+	} else if r.clusterIsDataRebalancing(ctx, apiClient, clusterCR) {
 		reason = "cluster is rebalancing"
 	}
 
@@ -1624,6 +2095,34 @@ func (r *StorageNodeOpsReconciler) clusterPauseCheck(
 	r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainPaused", fmt.Sprintf("drain paused: %s — will resume when cluster is active", reason))
 	log.Info("drain: pausing — cluster not ready", "reason", reason)
 	return ctrl.Result{RequeueAfter: 60 * time.Second}, true
+}
+
+// clusterIsDataRebalancing reports whether the cluster is moving data by
+// itself. A drain migrates the node's volumes, and the control plane's
+// is_re_balancing -- mirrored into status.rebalancing -- counts those
+// migrations too, so the drain paused on its own work for the whole of
+// every removal (2026-09-29). The control plane's is_data_rebalancing leaves
+// them out; it is read from the API, and status.rebalancing is the fallback
+// when the API cannot be asked or does not report it.
+func (r *StorageNodeOpsReconciler) clusterIsDataRebalancing(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
+) bool {
+	fallback := clusterCR.Status.Rebalancing != nil && *clusterCR.Status.Rebalancing
+	if apiClient == nil || clusterCR.Status.UUID == "" {
+		return fallback
+	}
+	body, status, err := apiClient.Do(ctx, http.MethodGet,
+		fmt.Sprintf("/api/v2/clusters/%s", clusterCR.Status.UUID), nil)
+	if err != nil || status >= 300 {
+		return fallback
+	}
+	resp, err := webapi.ParseClusterResponse(body)
+	if err != nil || resp.DataRebalancing == nil {
+		return fallback
+	}
+	return *resp.DataRebalancing
 }
 
 // advanceSubPhase patches ops.status.subPhase and requeues immediately.
@@ -1652,6 +2151,11 @@ func (r *StorageNodeOpsReconciler) succeedOps(
 	patch := client.MergeFrom(ops.DeepCopy())
 	ops.Status.Phase = simplyblockv1alpha1.StorageNodeOpsPhaseSucceeded
 	ops.Status.SubPhase = ""
+	// Message is progress commentary for a running op -- the last step's pause
+	// or wait. Left in place it outlived the op: a Succeeded drain kept
+	// reporting "drain paused: cluster status is in_shrink" (2026-09-26).
+	// failOps writes the reason; success has nothing to add to the phase.
+	ops.Status.Message = ""
 	ops.Status.CompletedAt = &now
 	if err := r.Status().Patch(ctx, ops, patch); err != nil {
 		return ctrl.Result{}, err
