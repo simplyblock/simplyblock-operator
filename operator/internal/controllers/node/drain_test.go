@@ -75,7 +75,9 @@ func (m *scriptedMover) Delete(_ context.Context, move vmigration.Move) error {
 
 // aDrain is the operation these cases run.
 func aDrain() *simplyblockv1alpha2.StorageNodeOps {
-	return anOperation("a-drain", simplyblockv1alpha2.StorageNodeOpsActionRemove)
+	ops := anOperation("a-drain", simplyblockv1alpha2.StorageNodeOpsActionRemove)
+	ops.UID = aDrainUID
+	return ops
 }
 
 // aDraining builds the world, with the drain object already in it so that its
@@ -538,19 +540,22 @@ func TestAVolumeAlreadyMovingIsNotGivenASecondMove(t *testing.T) {
 	}
 }
 
-// A failed move is deleted and replaced against a fresh target rather than
-// failing the drain: the volume is still on the node, and the peer that could
-// not take it is not the only peer.
+// A failed move is replaced rather than failing the drain: the volume is still
+// on the node, and the peer that could not take it is not the only peer. The
+// failed move itself is kept, because it is the record of where the volume
+// could not go, so the replacement carries a name of its own.
 func TestAFailedMoveIsRetriedRatherThanFailingTheDrain(t *testing.T) {
 	api := aControlPlane().
 		withPeer(opsPeerID, nodeStatusOnline).
 		holding(onNode("volume-1", "pvc-abc"))
-	mover := &scriptedMover{moves: []vmigration.Move{{
-		Name:    migrationName(opsNodeID, "pv-1"),
-		PVName:  "pv-1",
-		Phase:   vmigration.MoveFailed,
-		Message: "the target refused the copy",
-	}}}
+	failed := vmigration.Move{
+		Name:           migrationName(opsNodeID, "pv-1"),
+		PVName:         "pv-1",
+		Phase:          vmigration.MoveFailed,
+		TargetNodeUUID: opsPeerID,
+		Message:        "the cluster did not accept the migration in time",
+	}
+	mover := &scriptedMover{moves: []vmigration.Move{failed}}
 	r, _ := aDraining(t, api, mover,
 		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false))
 	ops := aDrain()
@@ -562,21 +567,14 @@ func TestAFailedMoveIsRetriedRatherThanFailingTheDrain(t *testing.T) {
 	if done {
 		t.Error("the step finished although a volume is still on the node")
 	}
-	if len(mover.deleted) != 1 {
-		t.Errorf("the failed move was deleted %d time(s), so nothing would replace it",
-			len(mover.deleted))
+	if len(mover.deleted) != 0 {
+		t.Errorf("the failed move was deleted, and with it the record of where the volume failed")
+	}
+	if len(mover.started) != 1 || mover.started[0].Name == failed.Name {
+		t.Errorf("moves raised = %+v, want one replacement under a name of its own", mover.started)
 	}
 	if !announced(r.Recorder.(*events.FakeRecorder), MigrationRetried) {
 		t.Error("nothing announced the retry, so a drain that keeps retrying looks like one that stalled")
-	}
-
-	// The next pass raises it again, against a target chosen afresh.
-	if _, err := performing(t, r, ops, stepMigratingVolumes); err != nil {
-		t.Fatalf("migrating: %v", err)
-	}
-	if len(mover.started) != 1 {
-		t.Errorf("%d moves were raised on the pass after the retry, want the replacement",
-			len(mover.started))
 	}
 }
 
