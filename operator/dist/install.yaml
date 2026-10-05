@@ -1830,7 +1830,7 @@ spec:
                   pages, and a node that receives no value fails config generation outright
                   rather than falling back to a default.
                 format: int32
-                maximum: 75
+                maximum: 500
                 minimum: 10
                 type: integer
               nodeRecycle:
@@ -1877,7 +1877,7 @@ spec:
                   it produces must match across the cluster, so it is stated rather than left
                   to a per-node heuristic.
                 format: int32
-                minimum: 6
+                minimum: 4
                 type: integer
               volumeAutoPlacement:
                 description: |-

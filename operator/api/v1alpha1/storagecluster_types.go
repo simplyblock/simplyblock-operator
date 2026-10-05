@@ -310,7 +310,7 @@ type StorageClusterSpec struct {
 	// rather than falling back to a default.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Minimum=10
-	// +kubebuilder:validation:Maximum=75
+	// +kubebuilder:validation:Maximum=500
 	MaxSubsystemCount *int32 `json:"maxSubsystemCount"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Huge Pages Size"
 	// MaxHugePagesSize is the maximum allocatable size of huge pages on each
@@ -326,7 +326,7 @@ type StorageClusterSpec struct {
 	// it produces must match across the cluster, so it is stated rather than left
 	// to a per-node heuristic.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Minimum=6
+	// +kubebuilder:validation:Minimum=4
 	VCPUCount *int32 `json:"vcpuCount"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Warning Threshold"

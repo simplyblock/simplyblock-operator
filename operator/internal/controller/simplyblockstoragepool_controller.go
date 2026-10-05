@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/simplyblock/atlas/kube"
@@ -369,7 +370,9 @@ func (r *StoragePoolReconciler) createStorageClassIfNotExists(ctx context.Contex
 		"cluster_id": clusterUUID,
 		"pool_name":  storagePoolCR.Name,
 	}
-	mergeStorageClassParameters(params, storagePoolCR.Spec.StorageClassParameters)
+	if err := mergeStorageClassParameters(params, storagePoolCR.Spec.StorageClassParameters); err != nil {
+		return err
+	}
 
 	sc := &storagev1.StorageClass{
 		ObjectMeta: metav1.ObjectMeta{
@@ -405,15 +408,22 @@ func (r *StoragePoolReconciler) createStorageClassIfNotExists(ctx context.Contex
 // snake_case names for the rest. Defaults are declared on the struct via +kubebuilder:default
 // markers and are applied by the API server before the CR is stored, so p fields always carry
 // their intended values here.
-func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.StorageClassParameters) {
+func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.StorageClassParameters) error {
 	if p == nil {
-		return
+		return nil
 	}
 	boolStr := func(b *bool) string {
 		if b != nil && *b {
 			return "True"
 		}
 		return "False"
+	}
+	v, err := strconv.ParseUint(p.MaxNamespacePerSubsys, 10, 32)
+	if err != nil {
+		return err
+	}
+	if v > 50 {
+		return fmt.Errorf("max_namespace_per_subsys must be less than or equal to 50")
 	}
 	dst["qos_rw_iops"] = p.QosRwIops
 	dst["qos_rw_mbytes"] = p.QosRwMbytes
@@ -424,6 +434,7 @@ func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.S
 	dst["max_namespace_per_subsys"] = p.MaxNamespacePerSubsys
 	dst["tune2fs_reserved_blocks"] = p.Tune2fsReservedBlocks
 	dst["csi.storage.k8s.io/fstype"] = p.Filesystem
+	return nil
 }
 
 // syncNodeLabels ensures the pool's allowed-node label is present on every node
