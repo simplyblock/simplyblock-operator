@@ -40,6 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // performMaintenanceStep runs one step of a maintenance window.
@@ -195,7 +196,10 @@ func (r *StorageNodeOpsReconciler) maintenanceShutDown(
 	if err != nil {
 		return false, err
 	}
-	if reading.Status == nodeStatusOffline {
+	// A node leaving the cluster belongs to its removal. The worker is still
+	// guarded and released like any other, and the node is sent nothing: a
+	// shutdown writes over the removal's status (§10).
+	if reading.Status == nodeStatusOffline || utils.NodeIsLeaving(reading.Status) {
 		return true, nil
 	}
 	if reading.Status == nodeStatusInRestart || reading.Status == nodeStatusInShutdown {
@@ -211,10 +215,13 @@ func (r *StorageNodeOpsReconciler) maintenanceShutDown(
 		// Regression: 2026-09-29-maintenance-reissues-the-shutdown.
 		return false, nil
 	}
-	if err := r.API.ShutdownNode(ctx, clusterID, nodeID); err != nil {
-		return false, fmt.Errorf("shut down node %s for maintenance: %w", ops.Spec.NodeRef, err)
-	}
-	return false, nil
+	_, err = r.once(ctx, ops, func() error {
+		if err := r.API.ShutdownNode(ctx, clusterID, nodeID); err != nil {
+			return fmt.Errorf("shut down node %s for maintenance: %w", ops.Spec.NodeRef, err)
+		}
+		return nil
+	})
+	return false, err
 }
 
 // maintenanceRelease takes the budget away so the eviction the drain is waiting
@@ -352,7 +359,10 @@ func (r *StorageNodeOpsReconciler) maintenanceRestart(
 	if err != nil {
 		return false, err
 	}
-	if reading.Status == nodeStatusOnline {
+	// A node leaving the cluster is not brought back: a restart returns it to
+	// service in the middle of its removal, or after the control plane gave up
+	// on one, which is the removal's to drive again rather than the window's.
+	if reading.Status == nodeStatusOnline || utils.NodeIsLeaving(reading.Status) {
 		return true, nil
 	}
 	if reading.Status == nodeStatusInRestart {
@@ -362,10 +372,13 @@ func (r *StorageNodeOpsReconciler) maintenanceRestart(
 		Force:          boolValue(ops.Spec.Force),
 		ReattachVolume: boolValue(ops.Spec.ReattachVolume),
 	}
-	if err := r.API.RestartNode(ctx, clusterID, nodeID, params); err != nil {
-		return false, fmt.Errorf("restart node %s after maintenance: %w", ops.Spec.NodeRef, err)
-	}
-	return false, nil
+	_, err = r.once(ctx, ops, func() error {
+		if err := r.API.RestartNode(ctx, clusterID, nodeID, params); err != nil {
+			return fmt.Errorf("restart node %s after maintenance: %w", ops.Spec.NodeRef, err)
+		}
+		return nil
+	})
+	return false, err
 }
 
 // maintenanceCleanup removes what the window put in place, so the worker is

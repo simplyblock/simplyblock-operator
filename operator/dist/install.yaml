@@ -809,11 +809,6 @@ spec:
                         description: Endpoint is the S3 endpoint, for example, https://s3.example.com.
                         pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                         type: string
-                      prefix:
-                        description: |-
-                          Prefix narrows the store to one key prefix, so that several clusters can
-                          share a bucket without each walking the others' backups.
-                        type: string
                       region:
                         description: Region is the bucket's region, for endpoints
                           that do not imply one.
@@ -1540,10 +1535,11 @@ spec:
                               on these nodes.
                             properties:
                               count:
-                                description: Count is the number of journal managers
-                                  to configure.
+                                description: |-
+                                  Count is the number of journal managers to configure. The control plane
+                                  requires at least 3.
                                 format: int32
-                                minimum: 1
+                                minimum: 3
                                 type: integer
                               percentPerDevice:
                                 description: PercentPerDevice is the share of each
@@ -1691,6 +1687,30 @@ spec:
                 description: Step is the position of the expansion machine within
                   Expanding.
                 properties:
+                  claim:
+                    description: |-
+                      Claim records that this state's side effect was started. Absent means
+                      no pass has started it since the state was entered.
+                    properties:
+                      attempt:
+                        description: Attempt counts the claims taken on this state,
+                          starting at 1.
+                        format: int32
+                        type: integer
+                      leaseUntil:
+                        description: |-
+                          LeaseUntil is when the claim expires and the side effect may be fired
+                          again.
+                        format: date-time
+                        type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
+                    required:
+                    - attempt
+                    - leaseUntil
+                    - state
+                    type: object
                   deadline:
                     description: |-
                       Deadline is when that state expires, absent when it has none. It is an
@@ -1932,6 +1952,30 @@ spec:
                   persisted before the side effect that step performs, so a step reported
                   here is a step that started.
                 properties:
+                  claim:
+                    description: |-
+                      Claim records that this state's side effect was started. Absent means
+                      no pass has started it since the state was entered.
+                    properties:
+                      attempt:
+                        description: Attempt counts the claims taken on this state,
+                          starting at 1.
+                        format: int32
+                        type: integer
+                      leaseUntil:
+                        description: |-
+                          LeaseUntil is when the claim expires and the side effect may be fired
+                          again.
+                        format: date-time
+                        type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
+                    required:
+                    - attempt
+                    - leaseUntil
+                    - state
+                    type: object
                   deadline:
                     description: |-
                       Deadline is when that state expires, absent when it has none. It is an
@@ -2596,6 +2640,30 @@ spec:
                   rule repeats the ControlPlaneStep enum because a marker cannot reach a
                   field of the shared snapshot type.
                 properties:
+                  claim:
+                    description: |-
+                      Claim records that this state's side effect was started. Absent means
+                      no pass has started it since the state was entered.
+                    properties:
+                      attempt:
+                        description: Attempt counts the claims taken on this state,
+                          starting at 1.
+                        format: int32
+                        type: integer
+                      leaseUntil:
+                        description: |-
+                          LeaseUntil is when the claim expires and the side effect may be fired
+                          again.
+                        format: date-time
+                        type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
+                    required:
+                    - attempt
+                    - leaseUntil
+                    - state
+                    type: object
                   deadline:
                     description: |-
                       Deadline is when that state expires, absent when it has none. It is an
@@ -2759,23 +2827,6 @@ spec:
                           DriveSizeRange restricts candidates by size ("100G-2T"). Unlike the
                           per-class filters, it applies to whichever class the run is scanning.
                         type: string
-                      enableLogicalBlockDevices:
-                        description: |-
-                          EnableLogicalBlockDevices scans a worker's available logical block devices
-                          instead of its available NVMe devices. It selects the class rather than
-                          adding one, because the draft a run writes describes one cluster and a
-                          cluster is built out of one class. Unset scans NVMe, so that upgrading to
-                          26.4 does not change what a discovery run reports.
-                        type: boolean
-                      enablePartitionedDevices:
-                        description: |-
-                          EnablePartitionedDevices reports devices carrying a partition table
-                          alongside the available ones, for the administrator who knows the table is
-                          stale and intends to hand the device over anyway. It is the only one of the
-                          three availability conditions that can be waived: a mounted or otherwise
-                          busy device is never reported, because simplyblock taking it would corrupt
-                          whatever is using it.
-                        type: boolean
                       pcieAllowList:
                         description: |-
                           PcieAllowList restricts candidates to these PCI addresses. This and the two
@@ -2800,16 +2851,6 @@ spec:
                           PCI model string matches.
                         type: string
                     type: object
-                    x-kubernetes-validations:
-                    - message: the PCI filters select NVMe devices and cannot be combined
-                        with enableLogicalBlockDevices; use blockAllowList and blockDenyList
-                      rule: '!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
-                        || !(has(self.pcieAllowList) || has(self.pcieDenyList) ||
-                        has(self.pcieModel))'
-                    - message: blockAllowList and blockDenyList select logical block
-                        devices and require enableLogicalBlockDevices
-                      rule: (has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
-                        || !(has(self.blockAllowList) || has(self.blockDenyList))
                   enableControlPlaneNodes:
                     description: |-
                       EnableControlPlaneNodes lets the run consider machines that run the API
@@ -2827,6 +2868,34 @@ spec:
                       infrastructure runs on, and simplyblock storage is infrastructure. A fleet
                       with disks in its infra nodes meant those disks to be the storage, so a draft
                       proposes them ahead of the workers rather than leaving them out.
+                    type: boolean
+                  enableLogicalBlockDevices:
+                    description: |-
+                      EnableLogicalBlockDevices scans a worker's available logical block devices
+                      instead of its available NVMe devices. It selects the class rather than
+                      adding one, because the draft a run writes describes one cluster and a
+                      cluster is built out of one class. Unset scans NVMe, so that upgrading to
+                      26.4 does not change what a discovery run reports.
+
+                      It is a statement about the run rather than a member of DeviceFilter,
+                      because it does not narrow the devices reported: it decides which class of
+                      them is looked at, which filters in DeviceFilter apply, and what
+                      ForceJournalDevice resolves, since the two classes lay out a journal
+                      differently.
+                    type: boolean
+                  enablePartitionedDevices:
+                    description: |-
+                      EnablePartitionedDevices reports devices carrying a partition table
+                      alongside the available ones, for the administrator who knows the table is
+                      stale and intends to hand the device over anyway. It is the only one of the
+                      three availability conditions that can be waived: a mounted or otherwise
+                      busy device is never reported, because simplyblock taking it would corrupt
+                      whatever is using it.
+
+                      It is a statement about the run rather than a member of DeviceFilter for
+                      the reason EnableLogicalBlockDevices is: it waives an availability
+                      condition for whichever class is scanned, and so widens what is reported,
+                      where every member of the filter narrows it.
                     type: boolean
                   forceJournalDevice:
                     description: |-
@@ -2937,6 +3006,16 @@ spec:
                     type: array
                 type: object
                 x-kubernetes-validations:
+                - message: the PCI filters select NVMe devices and cannot be combined
+                    with enableLogicalBlockDevices; use blockAllowList and blockDenyList
+                  rule: '!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
+                    || !has(self.deviceFilter) || !(has(self.deviceFilter.pcieAllowList)
+                    || has(self.deviceFilter.pcieDenyList) || has(self.deviceFilter.pcieModel))'
+                - message: blockAllowList and blockDenyList select logical block devices
+                    and require enableLogicalBlockDevices
+                  rule: (has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
+                    || !has(self.deviceFilter) || !(has(self.deviceFilter.blockAllowList)
+                    || has(self.deviceFilter.blockDenyList))
                 - message: spec.discover names workers and also carries a nodeSelector;
                     state one or the other
                   rule: '!(has(self.workers) && size(self.workers) > 0 && has(self.nodeSelector)
@@ -2994,6 +3073,30 @@ spec:
               step:
                 description: Step is the position of the running action's state machine.
                 properties:
+                  claim:
+                    description: |-
+                      Claim records that this state's side effect was started. Absent means
+                      no pass has started it since the state was entered.
+                    properties:
+                      attempt:
+                        description: Attempt counts the claims taken on this state,
+                          starting at 1.
+                        format: int32
+                        type: integer
+                      leaseUntil:
+                        description: |-
+                          LeaseUntil is when the claim expires and the side effect may be fired
+                          again.
+                        format: date-time
+                        type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
+                    required:
+                    - attempt
+                    - leaseUntil
+                    - state
+                    type: object
                   deadline:
                     description: |-
                       Deadline is when that state expires, absent when it has none. It is an
@@ -3398,6 +3501,30 @@ spec:
                   persisted before the side effect that step performs, so a step reported
                   here is a step that started.
                 properties:
+                  claim:
+                    description: |-
+                      Claim records that this state's side effect was started. Absent means
+                      no pass has started it since the state was entered.
+                    properties:
+                      attempt:
+                        description: Attempt counts the claims taken on this state,
+                          starting at 1.
+                        format: int32
+                        type: integer
+                      leaseUntil:
+                        description: |-
+                          LeaseUntil is when the claim expires and the side effect may be fired
+                          again.
+                        format: date-time
+                        type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
+                    required:
+                    - attempt
+                    - leaseUntil
+                    - state
+                    type: object
                   deadline:
                     description: |-
                       Deadline is when that state expires, absent when it has none. It is an
@@ -4874,6 +5001,30 @@ spec:
                   persisted before the side effect that step performs, so a step reported
                   here is a step that started.
                 properties:
+                  claim:
+                    description: |-
+                      Claim records that this state's side effect was started. Absent means
+                      no pass has started it since the state was entered.
+                    properties:
+                      attempt:
+                        description: Attempt counts the claims taken on this state,
+                          starting at 1.
+                        format: int32
+                        type: integer
+                      leaseUntil:
+                        description: |-
+                          LeaseUntil is when the claim expires and the side effect may be fired
+                          again.
+                        format: date-time
+                        type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
+                    required:
+                    - attempt
+                    - leaseUntil
+                    - state
+                    type: object
                   deadline:
                     description: |-
                       Deadline is when that state expires, absent when it has none. It is an
@@ -5914,6 +6065,15 @@ spec:
                     items:
                       type: string
                     type: array
+                  skipped:
+                    description: |-
+                      Skipped are the nodes of Nodes the walk passed over without restarting
+                      them, in walk order: a node the control plane stopped listing, or one
+                      whose removal started after the walk was planned. A node leaving the
+                      cluster belongs to its removal, and the walk sends it nothing.
+                    items:
+                      type: string
+                    type: array
                 required:
                 - nodeIndex
                 type: object
@@ -5927,6 +6087,30 @@ spec:
                   Step is the position of the running action's state machine. The value is
                   one of the steps the running action declares.
                 properties:
+                  claim:
+                    description: |-
+                      Claim records that this state's side effect was started. Absent means
+                      no pass has started it since the state was entered.
+                    properties:
+                      attempt:
+                        description: Attempt counts the claims taken on this state,
+                          starting at 1.
+                        format: int32
+                        type: integer
+                      leaseUntil:
+                        description: |-
+                          LeaseUntil is when the claim expires and the side effect may be fired
+                          again.
+                        format: date-time
+                        type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
+                    required:
+                    - attempt
+                    - leaseUntil
+                    - state
+                    type: object
                   deadline:
                     description: |-
                       Deadline is when that state expires, absent when it has none. It is an
@@ -6667,11 +6851,6 @@ spec:
                   endpoint:
                     description: Endpoint is the S3 endpoint, for example, https://s3.example.com.
                     pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
-                    type: string
-                  prefix:
-                    description: |-
-                      Prefix narrows the store to one key prefix, so that several clusters can
-                      share a bucket without each walking the others' backups.
                     type: string
                   region:
                     description: Region is the bucket's region, for endpoints that
@@ -7492,6 +7671,45 @@ spec:
                   ErasureCodingScheme is the active layout, rendered as ndcs, an x, and
                   npcs: a two-plus-one cluster reads 2x1.
                 type: string
+              failureDomains:
+                description: |-
+                  FailureDomains maps each failure-domain label the cluster's nodes declare
+                  (StorageNode.spec.config.failureDomain) to the integer the control plane
+                  identifies that domain by. A deployment adds an entry for every label it
+                  introduces, both when it creates the cluster and when it grows one, and
+                  never changes or removes an entry: the control plane has already placed
+                  data by that index. A label that is a number keeps that number as its
+                  index when the number is free. A cluster holds at most 256 failure
+                  domains, and a deployment that would exceed that is refused before it is
+                  approved.
+                items:
+                  description: |-
+                    FailureDomainIndex is one failure-domain label and the control plane's index
+                    for it.
+                  properties:
+                    index:
+                      description: |-
+                        Index is the integer sent to the control plane for every node in the
+                        domain.
+                      format: int32
+                      minimum: 0
+                      type: integer
+                    name:
+                      description: |-
+                        Name is the failure-domain label, as StorageNode.spec.config.failureDomain
+                        spells it ("rack-b").
+                      maxLength: 63
+                      minLength: 1
+                      type: string
+                  required:
+                  - index
+                  - name
+                  type: object
+                maxItems: 256
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               lastDataRealignmentAt:
                 description: |-
                   LastDataRealignmentAt is when a realignment was last requested, and it is
@@ -7532,6 +7750,7 @@ spec:
                 - Provisioning
                 - Activating
                 - Online
+                - Shrinking
                 - Rebalancing
                 - Degraded
                 - Unavailable
@@ -7664,6 +7883,30 @@ spec:
                   Step is the position of the creation machine. The value is one of the
                   steps that machine declares.
                 properties:
+                  claim:
+                    description: |-
+                      Claim records that this state's side effect was started. Absent means
+                      no pass has started it since the state was entered.
+                    properties:
+                      attempt:
+                        description: Attempt counts the claims taken on this state,
+                          starting at 1.
+                        format: int32
+                        type: integer
+                      leaseUntil:
+                        description: |-
+                          LeaseUntil is when the claim expires and the side effect may be fired
+                          again.
+                        format: date-time
+                        type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
+                    required:
+                    - attempt
+                    - leaseUntil
+                    - state
+                    type: object
                   deadline:
                     description: |-
                       Deadline is when that state expires, absent when it has none. It is an
@@ -7818,14 +8061,17 @@ spec:
                 description: |-
                   Abort asks a running operation to stop at its next step and unwind.
 
-                  Restart can be aborted before its call is issued and not after: a restart
-                  the control plane has accepted is one nothing can recall, so the graph
-                  declares where the edge exists rather than this field promising one.
+                  Each action can be aborted before it has issued anything and not after: a
+                  restart the control plane has accepted is one nothing can recall, and a
+                  device a failure has already removed is one this operator has no call to
+                  put back. The graph declares where the edge exists rather than this field
+                  promising one.
                 type: boolean
               action:
                 description: Action is the operation to perform.
                 enum:
                 - Restart
+                - Fail
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -7889,6 +8135,30 @@ spec:
                   Step is the position of the running action's state machine. It is
                   persisted before the side effect that step performs.
                 properties:
+                  claim:
+                    description: |-
+                      Claim records that this state's side effect was started. Absent means
+                      no pass has started it since the state was entered.
+                    properties:
+                      attempt:
+                        description: Attempt counts the claims taken on this state,
+                          starting at 1.
+                        format: int32
+                        type: integer
+                      leaseUntil:
+                        description: |-
+                          LeaseUntil is when the claim expires and the side effect may be fired
+                          again.
+                        format: date-time
+                        type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
+                    required:
+                    - attempt
+                    - leaseUntil
+                    - state
+                    type: object
                   deadline:
                     description: |-
                       Deadline is when that state expires, absent when it has none. It is an
@@ -7904,7 +8174,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Requesting'',''Awaiting'']'
+                  rule: '!has(self.state) || self.state in [''Requesting'',''Awaiting'',''Removing'',''Failing'']'
             type: object
         type: object
     served: true
@@ -8089,6 +8359,7 @@ spec:
                 - Unknown
                 - Removed
                 - Failed
+                - Migrated
                 type: string
               role:
                 description: Role is what the device carries.
@@ -8486,6 +8757,46 @@ spec:
                 - Failed
                 - Aborted
                 type: string
+              removal:
+                description: |-
+                  Removal is the control plane's progress through the removal, written by
+                  a Remove while it waits in AwaitingRemoval.
+                properties:
+                  devices:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Devices is the control-plane status each of the node's StorageDevices
+                      last reported, keyed by the StorageDevice's name. A device moves from
+                      online through failed to failed_and_migrated, or to removed, as the
+                      removal rebuilds its data onto the peers.
+                    type: object
+                  lastPrepareTime:
+                    description: LastPrepareTime is when the removal's first step
+                      was last sent again.
+                    format: date-time
+                    type: string
+                  lastProgressTime:
+                    description: LastProgressTime is when NodeStatus or any of Devices
+                      last changed.
+                    format: date-time
+                    type: string
+                  nodeStatus:
+                    description: |-
+                      NodeStatus is the node's status as the control plane last reported it,
+                      in the control plane's own spelling: pending_removal, migrating_devices,
+                      migrating_lvols, in_removal, removed, or removed_failed.
+                    type: string
+                  prepareAttempts:
+                    description: |-
+                      PrepareAttempts is how many times the removal's first step was sent
+                      again for a node that stayed pending_removal, because the control plane
+                      reported the step failed or nothing moved for longer than a shutdown
+                      takes. The operation fails once the attempts run out.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
               startedAt:
                 description: StartedAt is when the operation acquired its target's
                   lock.
@@ -8496,6 +8807,30 @@ spec:
                   Step is the position of the running action's state machine. The value is
                   one of the steps the running action declares.
                 properties:
+                  claim:
+                    description: |-
+                      Claim records that this state's side effect was started. Absent means
+                      no pass has started it since the state was entered.
+                    properties:
+                      attempt:
+                        description: Attempt counts the claims taken on this state,
+                          starting at 1.
+                        format: int32
+                        type: integer
+                      leaseUntil:
+                        description: |-
+                          LeaseUntil is when the claim expires and the side effect may be fired
+                          again.
+                        format: date-time
+                        type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
+                    required:
+                    - attempt
+                    - leaseUntil
+                    - state
+                    type: object
                   deadline:
                     description: |-
                       Deadline is when that state expires, absent when it has none. It is an
@@ -8511,7 +8846,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Requesting'',''Departing'',''Awaiting'',''Validating'',''Suspending'',''MigratingVolumes'',''Verifying'',''Removing'',''Preparing'',''Relocating'',''AwaitingNode'',''Promoting'',''Holding'',''ShuttingDown'',''Releasing'',''AwaitingHost'',''Restarting'',''Cleanup'']'
+                  rule: '!has(self.state) || self.state in [''Requesting'',''Departing'',''Awaiting'',''Validating'',''MigratingDevices'',''MigratingVolumes'',''Verifying'',''Removing'',''AwaitingRemoval'',''Preparing'',''Relocating'',''AwaitingNode'',''Promoting'',''Holding'',''ShuttingDown'',''Releasing'',''AwaitingHost'',''Restarting'',''Cleanup'']'
             type: object
         type: object
     served: true
@@ -9084,9 +9419,11 @@ spec:
                       devices were partitioned.
                     properties:
                       count:
-                        description: Count is the number of journal managers to configure.
+                        description: |-
+                          Count is the number of journal managers to configure. The control plane
+                          requires at least 3.
                         format: int32
-                        minimum: 1
+                        minimum: 3
                         type: integer
                       percentPerDevice:
                         description: PercentPerDevice is the share of each device
@@ -9352,6 +9689,11 @@ spec:
                   Message is the reason the phase is what it is: one sentence, replaced as the
                   node moves, and never a log.
                 type: string
+              nodeAddTaskID:
+                description: |-
+                  NodeAddTaskID is the control-plane task the last add of this node created. It is how
+                  a node that is still being added reads why its own add is failing.
+                type: string
               observedGeneration:
                 description: |-
                   ObservedGeneration is the generation the rest of this status was computed
@@ -9367,6 +9709,7 @@ spec:
                 - Provisioning
                 - Online
                 - Removing
+                - Removed
                 - Offline
                 - Degraded
                 - Failed
@@ -9468,6 +9811,30 @@ spec:
                   Step is the position of the provisioning machine. The value is one of the
                   steps that machine declares.
                 properties:
+                  claim:
+                    description: |-
+                      Claim records that this state's side effect was started. Absent means
+                      no pass has started it since the state was entered.
+                    properties:
+                      attempt:
+                        description: Attempt counts the claims taken on this state,
+                          starting at 1.
+                        format: int32
+                        type: integer
+                      leaseUntil:
+                        description: |-
+                          LeaseUntil is when the claim expires and the side effect may be fired
+                          again.
+                        format: date-time
+                        type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
+                    required:
+                    - attempt
+                    - leaseUntil
+                    - state
+                    type: object
                   deadline:
                     description: |-
                       Deadline is when that state expires, absent when it has none. It is an
@@ -10499,6 +10866,30 @@ spec:
                   persisted before the side effect that step performs, so a step reported
                   here is a step that started.
                 properties:
+                  claim:
+                    description: |-
+                      Claim records that this state's side effect was started. Absent means
+                      no pass has started it since the state was entered.
+                    properties:
+                      attempt:
+                        description: Attempt counts the claims taken on this state,
+                          starting at 1.
+                        format: int32
+                        type: integer
+                      leaseUntil:
+                        description: |-
+                          LeaseUntil is when the claim expires and the side effect may be fired
+                          again.
+                        format: date-time
+                        type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
+                    required:
+                    - attempt
+                    - leaseUntil
+                    - state
+                    type: object
                   deadline:
                     description: |-
                       Deadline is when that state expires, absent when it has none. It is an
@@ -11463,11 +11854,6 @@ spec:
                               https://s3.example.com.
                             pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                             type: string
-                          prefix:
-                            description: |-
-                              Prefix narrows the store to one key prefix, so that several clusters can
-                              share a bucket without each walking the others' backups.
-                            type: string
                           region:
                             description: Region is the bucket's region, for endpoints
                               that do not imply one.
@@ -12044,10 +12430,11 @@ spec:
                                   on these nodes.
                                 properties:
                                   count:
-                                    description: Count is the number of journal managers
-                                      to configure.
+                                    description: |-
+                                      Count is the number of journal managers to configure. The control plane
+                                      requires at least 3.
                                     format: int32
-                                    minimum: 1
+                                    minimum: 3
                                     type: integer
                                   percentPerDevice:
                                     description: PercentPerDevice is the share of
@@ -12597,6 +12984,30 @@ spec:
               step:
                 description: Step is the position of the running drill's state machine.
                 properties:
+                  claim:
+                    description: |-
+                      Claim records that this state's side effect was started. Absent means
+                      no pass has started it since the state was entered.
+                    properties:
+                      attempt:
+                        description: Attempt counts the claims taken on this state,
+                          starting at 1.
+                        format: int32
+                        type: integer
+                      leaseUntil:
+                        description: |-
+                          LeaseUntil is when the claim expires and the side effect may be fired
+                          again.
+                        format: date-time
+                        type: string
+                      state:
+                        description: State is the state the claim was taken in.
+                        type: string
+                    required:
+                    - attempt
+                    - leaseUntil
+                    - state
+                    type: object
                   deadline:
                     description: |-
                       Deadline is when that state expires, absent when it has none. It is an

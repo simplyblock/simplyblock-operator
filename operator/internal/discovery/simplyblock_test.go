@@ -70,30 +70,30 @@ func TestTheRuleIsInEveryRunsPipeline(t *testing.T) {
 	// switches on.
 	volume := attached("nvme3n1", "c30a691a", "792e184c")
 
-	runs := []*simplyblockv1alpha2.DeviceFilter{
+	runs := []*simplyblockv1alpha2.DiscoverSpec{
 		nil,
 		{EnableLogicalBlockDevices: ptr.To(true)},
 	}
 
-	for _, filter := range runs {
+	for _, run := range runs {
 		var found bool
-		for _, rule := range BasicDeviceRules(filter) {
+		for _, rule := range BasicDeviceRules(run) {
 			if _, isRule := rule.(SimplyblockVolumeRule); isRule {
 				found = true
 			}
 		}
 		if !found {
-			t.Errorf("a %s run has no rule refusing this product's own volumes", ClassOf(filter))
+			t.Errorf("a %s run has no rule refusing this product's own volumes", ClassOf(run))
 		}
 	}
 
 	// And the whole pipeline refuses it, whichever class is scanned.
-	for _, filter := range runs {
+	for _, run := range runs {
 		report := report("worker-1")
 		report.Devices = []nodeprobe.Device{volume}
-		plan := Planner{}.Plan([]nodeprobe.Report{report}, filter)
+		plan := Planner{}.Plan([]nodeprobe.Report{report}, run)
 		if len(plan.NodeSets) != 0 {
-			t.Errorf("a %s run drafted a simplyblock volume", ClassOf(filter))
+			t.Errorf("a %s run drafted a simplyblock volume", ClassOf(run))
 		}
 	}
 }

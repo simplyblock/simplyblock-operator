@@ -266,6 +266,13 @@ func parseOptions(args []string, env func(string) string) (options, error) {
 		return options{}, fmt.Errorf("--timeout is %s, and a collection needs a positive one", opts.timeout)
 	}
 
+	// A fleet that has run this product before has every NVMe controller on a
+	// userspace driver, and a probe that only looks reports machine after
+	// machine with no storage on it. The disks are taken back from the
+	// deployments that are gone, never from one that is running: the reclaim
+	// refuses a controller something is driving. See inventory.Config.
+	opts.roots.ReclaimControllers = true
+
 	opts.owner = ownerFrom(env)
 	return opts, nil
 }

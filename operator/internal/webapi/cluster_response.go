@@ -11,6 +11,7 @@ type ClusterResponse struct {
 	NQN               string
 	Status            string
 	Rebalancing       bool
+	Shrinking         bool
 	NDCS              int
 	NPCS              int
 	MaxFaultTolerance int
@@ -22,6 +23,7 @@ type clusterResponsePayload struct {
 	NQN               string `json:"nqn"`
 	Status            string `json:"status"`
 	Rebalancing       bool   `json:"is_re_balancing"`
+	Shrinking         bool   `json:"is_shrinking"`
 	NDCS              int    `json:"distr_ndcs"`
 	NPCS              int    `json:"distr_npcs"`
 	MaxFaultTolerance int    `json:"max_fault_tolerance"`
@@ -43,6 +45,7 @@ func ParseClusterResponse(body []byte) (ClusterResponse, error) {
 		NQN:               payload.NQN,
 		Status:            payload.Status,
 		Rebalancing:       payload.Rebalancing,
+		Shrinking:         payload.Shrinking,
 		NDCS:              payload.NDCS,
 		NPCS:              payload.NPCS,
 		MaxFaultTolerance: payload.MaxFaultTolerance,

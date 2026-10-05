@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 
+	openapi_types "github.com/oapi-codegen/runtime/types"
+
 	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/internal/cpapi"
 	"github.com/simplyblock/atlas/lvol"
@@ -28,12 +30,13 @@ func (c *Client) Volume(ctx context.Context, h lvol.VolumeHandle) (lvol.Volume, 
 		return lvol.Volume{}, err
 	}
 	return lvol.Volume{
-		ID:        h,
-		Name:      d.Name,
-		Pool:      d.PoolName,
-		SizeBytes: uint64(d.Size),
-		NQN:       d.Nqn,
-		Status:    d.Status,
+		ID:            h,
+		Name:          d.Name,
+		Pool:          d.PoolName,
+		SizeBytes:     uint64(d.Size),
+		NQN:           d.Nqn,
+		StorageNodeID: nodeID(d.StorageNodeId),
+		Status:        d.Status,
 	}, nil
 }
 
@@ -151,14 +154,25 @@ func (c *Client) ListVolumes(ctx context.Context, clusterID, poolID string) ([]l
 	out := make([]lvol.Volume, 0, len(*ds))
 	for _, d := range *ds {
 		out = append(out, lvol.Volume{
-			ID:        lvol.VolumeHandle(clusterID + ":" + poolID + ":" + d.Id.String()),
-			Name:      d.Name,
-			Pool:      d.PoolName,
-			SizeBytes: uint64(d.Size),
-			NQN:       d.Nqn,
+			ID:            lvol.VolumeHandle(clusterID + ":" + poolID + ":" + d.Id.String()),
+			Name:          d.Name,
+			Pool:          d.PoolName,
+			SizeBytes:     uint64(d.Size),
+			NQN:           d.Nqn,
+			StorageNodeID: nodeID(d.StorageNodeId),
 		})
 	}
 	return out, nil
+}
+
+// nodeID renders a node UUID the control plane reported, and the empty string
+// for the zero value a missing field decodes to: a volume reported on no node
+// is not a volume on the node whose UUID is all zeros.
+func nodeID(id openapi_types.UUID) string {
+	if id == (openapi_types.UUID{}) {
+		return ""
+	}
+	return id.String()
 }
 
 // SubsystemVolumes returns every volume published under the given NVMe-oF

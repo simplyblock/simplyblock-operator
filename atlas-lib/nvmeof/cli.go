@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/simplyblock/atlas/bounded"
 	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/nvme"
 )
@@ -99,8 +99,7 @@ func NewCLIConnectorWithRunner(
 // unprivileged uid, so writing /dev/nvme-fabrics fails on permissions with
 // nothing in the container's configuration to suggest why.
 func SudoRunner(ctx context.Context, args ...string) ([]byte, error) {
-	//nolint:gosec // fixed binaries, structured args
-	return exec.CommandContext(ctx, "sudo", append([]string{"nvme"}, args...)...).CombinedOutput()
+	return bounded.CombinedOutput(ctx, cliTimeout, CommandKey(args), "sudo", append([]string{"nvme"}, args...)...)
 }
 
 // connect establishes one path with `nvme connect`.
@@ -206,7 +205,10 @@ func (c *CLIConnector) disconnectController(ctrl nvme.Controller) error {
 		return fmt.Errorf("disconnect controller: no name or sysfs path: %w", errs.ErrUnsupported)
 	}
 	if ctrl.SysfsPath != "" {
-		if _, err := os.Stat(ctrl.SysfsPath); errors.Is(err, os.ErrNotExist) {
+		_, err := bounded.Call("stat "+ctrl.SysfsPath, bounded.ReadTimeout, func() (os.FileInfo, error) {
+			return os.Stat(ctrl.SysfsPath)
+		})
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 	}
@@ -247,6 +249,27 @@ func isAlreadyConnected(out []byte, err error) bool {
 
 // runCommand executes nvme-cli and returns its combined output, which is where
 // nvme-cli puts the reason for a failure.
+//
+// It returns by ctx's deadline, or cliTimeout without one, even when nvme-cli
+// cannot be reaped: an nvme-cli blocked in the kernel ignores the kill until
+// the kernel lets it go.
 func runCommand(ctx context.Context, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, "nvme", args...).CombinedOutput() //nolint:gosec // fixed binary, structured args
+	return bounded.CombinedOutput(ctx, cliTimeout, CommandKey(args), "nvme", args...)
+}
+
+// CommandKey names an nvme-cli invocation for the stuck-call guard: the
+// subcommand and the target or controller it addresses. It never includes the
+// rest of the command line, which can carry DHCHAP secrets.
+func CommandKey(args []string) string {
+	if len(args) == 0 {
+		return "nvme"
+	}
+	key := "nvme " + args[0]
+	for i := 1; i+1 < len(args); i++ {
+		switch args[i] {
+		case "-a", "-s", "-n", "-d":
+			key += " " + args[i] + " " + args[i+1]
+		}
+	}
+	return key
 }

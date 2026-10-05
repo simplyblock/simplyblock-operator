@@ -61,7 +61,11 @@ func (s *Server) ClustersAlertsListApiV2ClustersClusterIdAlertsGet(w http.Respon
 	notImplemented(w, r)
 }
 
-func (s *Server) ClustersBackupsListApiV2ClustersClusterIdBackupsGet(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID) {
+func (s *Server) ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID) {
+	notImplemented(w, r)
+}
+
+func (s *Server) ClustersBackupsListApiV2ClustersClusterIdBackupsGet(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID, _ ClustersBackupsListApiV2ClustersClusterIdBackupsGetParams) {
 	notImplemented(w, r)
 }
 
@@ -69,7 +73,7 @@ func (s *Server) ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost(w http.R
 	notImplemented(w, r)
 }
 
-func (s *Server) ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID) {
+func (s *Server) ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID, _ ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetParams) {
 	notImplemented(w, r)
 }
 
@@ -89,6 +93,10 @@ func (s *Server) ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackup
 	notImplemented(w, r)
 }
 
+func (s *Server) ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID) {
+	notImplemented(w, r)
+}
+
 func (s *Server) ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID, _ ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetParams) {
 	notImplemented(w, r)
 }
@@ -98,14 +106,6 @@ func (s *Server) ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPost(w 
 }
 
 func (s *Server) ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePost(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID) {
-	notImplemented(w, r)
-}
-
-func (s *Server) ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID) {
-	notImplemented(w, r)
-}
-
-func (s *Server) ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID) {
 	notImplemented(w, r)
 }
 
@@ -253,7 +253,15 @@ func (s *Server) ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageN
 	notImplemented(w, r)
 }
 
+func (s *Server) ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID, _ openapi_types.UUID, _ openapi_types.UUID) {
+	notImplemented(w, r)
+}
+
 func (s *Server) ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID, _ openapi_types.UUID, _ openapi_types.UUID, _ ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGetParams) {
+	notImplemented(w, r)
+}
+
+func (s *Server) ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID, _ openapi_types.UUID, _ openapi_types.UUID) {
 	notImplemented(w, r)
 }
 
@@ -266,6 +274,10 @@ func (s *Server) ClustersStorageNodesDevicesIostatsApiV2ClustersClusterIdStorage
 }
 
 func (s *Server) ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePost(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID, _ openapi_types.UUID, _ openapi_types.UUID, _ ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePostParams) {
+	notImplemented(w, r)
+}
+
+func (s *Server) ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost(w http.ResponseWriter, r *http.Request, _ openapi_types.UUID, _ openapi_types.UUID, _ openapi_types.UUID, _ ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParams) {
 	notImplemented(w, r)
 }
 

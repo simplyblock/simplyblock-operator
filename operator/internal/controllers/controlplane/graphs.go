@@ -113,8 +113,12 @@ func deadline[S comparable](d time.Duration) statemachine.TransitionFunc[S] {
 // makes the control plane Available.
 func installGraph() statemachine.Config[installStep] {
 	return statemachine.Config[installStep]{
-		Initial: stepApplyingFoundationDB,
+		Initial: stepApplyingDatastore,
 		States: map[installStep]statemachine.StateDef[installStep]{
+			stepApplyingDatastore: {
+				To:      []installStep{stepApplyingFoundationDB},
+				OnEnter: deadline[installStep](applyingDatastoreDeadline),
+			},
 			stepApplyingFoundationDB: {
 				To:      []installStep{stepAwaitingFoundationDB},
 				OnEnter: deadline[installStep](applyingFoundationDBDeadline),
@@ -124,12 +128,8 @@ func installGraph() statemachine.Config[installStep] {
 				OnEnter: deadline[installStep](awaitingFoundationDBDeadline),
 			},
 			stepBuildingIndices: {
-				To:      []installStep{stepApplyingDatastore},
-				OnEnter: deadline[installStep](buildingIndicesDeadline),
-			},
-			stepApplyingDatastore: {
 				To:      []installStep{stepApplyingAPI},
-				OnEnter: deadline[installStep](applyingDatastoreDeadline),
+				OnEnter: deadline[installStep](buildingIndicesDeadline),
 			},
 			stepApplyingAPI: {
 				To:      []installStep{stepAwaitingAPI},

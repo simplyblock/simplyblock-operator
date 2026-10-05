@@ -34,7 +34,8 @@ atlas/
 ├── nvmeof/                 NVMe-oF fabric connect/disconnect (TCP)
 │   ├── connector.go        Connector iface; Target, Targets + TargetOptions
 │   ├── fabrics.go          local impl: NewFabricsConnector (/dev/nvme-fabrics)
-│   ├── wait.go             ConnectMultipathDevice: attach all paths -> nvme.Device (start here)
+│   ├── wait.go             ConnectMultipathDevice: attach all paths -> nvme.Device (start here);
+│   │                       WaitForPathsToServe: wait out a new path's namespace scan
 │   ├── reconcile.go        ReconcilePaths: make attached paths match the control plane + PathState
 │   ├── detach.go           DetachDevice: disconnect unless the subsystem is shared
 │   └── multipath.go        the halves: ConnectPaths (ordered per-path connect) + PathResult
@@ -144,9 +145,13 @@ atlas/
 │   ├── statemachine.go     Config, StateDef, Machine, Snapshot, deadlines
 │   ├── multiconfig.go      MultiConfig: one graph per action over one state type
 │   ├── abort.go            StateDef.Abortable read three ways: CanAbort + the two graph queries
-│   └── kubernetes.go       KubeSnapshot + ToKube/FromKube: the CRD form of a Snapshot
+│   ├── kubernetes.go       KubeSnapshot + ToKube/FromKube: the CRD form of a Snapshot
+│   └── claim.go            KubeClaim + WithClaim: fire a state's side effect once, under a leased claim
 ├── net/                    Outbound URL validation (SSRF guard)
 ├── ptr/                    Pointer/optional-field helpers for generated + K8s types
+├── bounded/                Hard deadlines for calls no context reaches
+│   ├── bounded.go          Call/Do: a sysfs read, ioctl, or open under a deadline + the stuck-key guard
+│   └── command.go          CombinedOutput/Output: a child process that returns even when it cannot be reaped
 ├── errs/                   Sentinel errors (errors.Is across packages)
 │   └── deferrers/          defer-friendly Close/Run that log instead of dropping errors
 │
@@ -265,6 +270,15 @@ if err := client.ContinueMigration(ctx, clusterID, nqn, migration.ID); err != ni
     handleError(err)
 }
 ```
+
+`validateTargetPaths` connects the new paths on each consuming host and checks
+them. Between the two, `nvmeof.WaitForPathsToServe` waits, under a deadline, for
+every live path to serve every namespace of the subsystem: the connect returns
+once a controller is live, and the kernel attaches the namespaces to it one by
+one afterward, so a check run straight away sees a scanning path as a broken
+one. *Today:* the validation Job's settle step,
+`operator/cmd/simplyblock-rebalancer/validate_migration.go` through
+`volumemigration.SettleMigrationPaths`.
 
 `ListMigrations` returns everything one subsystem has in flight, of both kinds,
 because the control plane returns them in one list. `Kind` is decided on a field
@@ -1430,6 +1444,28 @@ size := ptr.ClampToInt(sizeBytes, false)           // saturates, never wraps
 defer deferrers.Close(resp.Body)
 defer deferrers.Run(cancelWatch)
 ```
+
+#### Bound a call that blocks in the kernel
+
+A sysfs read, an ioctl, a device open, or the wait for a child process can sit
+in the kernel until a wedged controller is torn down, and no context reaches it.
+Run it under `bounded`, which gives up at the deadline with an error wrapping
+`context.DeadlineExceeded`, and fails at once while an earlier call on the same
+key is still stuck:
+
+```go
+b, err := bounded.Call(path, bounded.ReadTimeout, func() ([]byte, error) {
+    return os.ReadFile(path)
+})
+
+// nvme-cli: the key names the target and never the secrets on the command line.
+out, err := bounded.Output(ctx, bounded.CommandTimeout, "nvme list", "nvme", "list", "-o", "json")
+```
+
+Everything in `nvme` and `nvmeof` that touches the kernel already goes through
+it, so a resolver or a connector never needs wrapping again.
+
+_Today:_ `csi-driver/internal/initiator/initiator.go` (`execNVMeQuery`).
 
 #### Validate user-supplied outbound URLs
 

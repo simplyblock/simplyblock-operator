@@ -28,6 +28,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -86,6 +87,16 @@ const (
 	// watches, so this is the backstop for the event rather than the path the
 	// next step normally arrives on.
 	opsAdvance = time.Second
+
+	// claimLease is how long a step's claimed call is trusted to be in flight
+	// before another pass may make it again. The pass that made the call
+	// records the next step straight afterward, so the lease only runs out
+	// when that pass crashed or its write failed. The lease starts before the
+	// call does, so it runs a minute past the request timeout: a call that
+	// waited the whole timeout has an outcome nobody knows yet, and Expand has
+	// no state of the cluster to skip on. It stays inside requestingDeadline,
+	// so a crashed claim is retried before the step times out.
+	claimLease = webapi.RequestTimeout + time.Minute
 
 	// clusterRefField is the index a cluster event is mapped back through. It
 	// is what makes a released lock wake the queue immediately rather than
@@ -271,7 +282,14 @@ func (r *StorageClusterOpsReconciler) advance(
 	current := machine.CurrentState()
 
 	if ops.Spec.Abort {
-		return r.unwind(ctx, ops, machine, current)
+		if machine.CanAbort() {
+			return r.unwind(ctx, ops, current)
+		}
+		// Refused, and the operation runs on: returning here would refuse again
+		// on every pass, with the step never run and its deadline never read.
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, AbortRefused, AbortRefused,
+			"The abort arrived at step %s, which the control plane is part-way through "+
+				"and cannot be stopped; the operation is running on", current)
 	}
 
 	if machine.TimeoutReached() {
@@ -295,7 +313,14 @@ func (r *StorageClusterOpsReconciler) advance(
 	}
 
 	done, err := r.perform(ctx, ops, current)
+	if errors.Is(err, errNodeSkipped) {
+		return r.advanceWalk(ctx, ops, machine, true)
+	}
 	if err != nil {
+		var reverted *activationRevertedError
+		if errors.As(err, &reverted) {
+			return r.retryActivation(ctx, ops, machine, reverted)
+		}
 		var fatal *terminalStepError
 		if errors.As(err, &fatal) {
 			return r.finish(ctx, ops, simplyblockv1alpha2.StorageClusterOpsPhaseFailed, fatal.Error())
@@ -314,7 +339,7 @@ func (r *StorageClusterOpsReconciler) advance(
 		// A rolling restart's terminal step ends one node rather than the
 		// operation. Every other action is finished when its graph is.
 		if ops.Spec.Action == simplyblockv1alpha2.StorageClusterOpsActionRollingRestart {
-			return r.advanceWalk(ctx, ops, machine)
+			return r.advanceWalk(ctx, ops, machine, false)
 		}
 		return r.finish(ctx, ops, simplyblockv1alpha2.StorageClusterOpsPhaseSucceeded,
 			r.successMessage(ops))
@@ -394,29 +419,10 @@ func (r *StorageClusterOpsReconciler) nextStep(
 	return current, fmt.Errorf("step %s declares no successor and is not terminal", current)
 }
 
-// unwind honors spec.abort where the graph allows it, and reports an abort that
-// arrived too late rather than half-undoing the work.
-//
-// The refusal is the point. A step with no abort edge has already asked the
-// control plane for something it is part-way through, and stopping there would
-// leave nothing driving the cluster back to a state somebody can reason about.
+// unwind ends an operation whose abort the graph allows at the current step.
 func (r *StorageClusterOpsReconciler) unwind(
-	ctx context.Context,
-	ops *simplyblockv1alpha2.StorageClusterOps,
-	machine *statemachine.Machine[step],
-	current step,
+	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps, current step,
 ) (ctrl.Result, error) {
-	// The machine is asked rather than a table beside it, and it is asked rather
-	// than the graphs, because it was built for this operation's action: a step
-	// two actions share can be abortable in one of them.
-	if !machine.CanAbort() {
-		// Not a failure of the operation: it carries on. What the user asked
-		// for cannot be done, and saying so is the whole of the response.
-		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, fmt.Sprintf(
-			"the abort arrived at step %s, which the control plane is part-way through "+
-				"and cannot be stopped; the operation is running on", current))
-	}
-
 	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal,
 		OperationAborted, OperationAborted,
 		"The operation was aborted at step %s", current)
@@ -739,11 +745,24 @@ func (r *StorageClusterOpsReconciler) writeStatus(
 	// cluster's lock straight afterward, so a dropped terminal status would
 	// free the cluster for the next operation while this one still reported
 	// Running.
+	//
+	// The first attempt starts from the caller's object rather than from a
+	// read. That object carries every write this pass made, including a claim
+	// on the step, which the cache may not have seen yet. Read from the cache,
+	// it would patch against the version before the claim and conflict until
+	// the cache caught up. Only a conflict means somebody else wrote, and only
+	// then does an attempt read the object again, and so does the first one
+	// when the caller's object was never read and carries no version to patch
+	// against.
+	reread := ops.ResourceVersion == ""
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var fresh simplyblockv1alpha2.StorageClusterOps
-		if err := r.Get(ctx, client.ObjectKeyFromObject(ops), &fresh); err != nil {
-			return err
+		fresh := *ops.DeepCopy()
+		if reread {
+			if err := r.Get(ctx, client.ObjectKeyFromObject(ops), &fresh); err != nil {
+				return err
+			}
 		}
+		reread = true
 
 		desired := *fresh.Status.DeepCopy()
 		mutate(&desired)
@@ -863,7 +882,13 @@ func (r *StorageClusterOpsReconciler) successMessage(
 	ops *simplyblockv1alpha2.StorageClusterOps,
 ) string {
 	if ops.Spec.Action == simplyblockv1alpha2.StorageClusterOpsActionRollingRestart {
-		return fmt.Sprintf("all %d nodes restarted", len(walkOf(ops).Nodes))
+		walk := walkOf(ops)
+		if len(walk.Skipped) == 0 {
+			return fmt.Sprintf("all %d nodes restarted", len(walk.Nodes))
+		}
+		return fmt.Sprintf("%d of %d nodes restarted; skipped %s, which left the cluster after "+
+			"the walk was planned", len(walk.Nodes)-len(walk.Skipped), len(walk.Nodes),
+			strings.Join(walk.Skipped, ", "))
 	}
 	return fmt.Sprintf("the %s completed on cluster %s",
 		ops.Spec.Action, ops.Spec.ClusterRef)
@@ -924,6 +949,7 @@ func (r *StorageClusterOpsReconciler) clusterReading(
 		NQN:               response.NQN,
 		Status:            response.Status,
 		Rebalancing:       response.Rebalancing,
+		Shrinking:         response.Shrinking,
 		NDCS:              response.NDCS,
 		NPCS:              response.NPCS,
 		MaxFaultTolerance: response.MaxFaultTolerance,

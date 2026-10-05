@@ -49,11 +49,11 @@ func TestTheLockIsTakenWhenTheVolumeIsFree(t *testing.T) {
 	ops := testOperation()
 	r := testReconciler(t, &fakeControlPlane{}, ops, testVolumeObject())
 
-	acquired, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r))
+	lock, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !acquired {
+	if !lock.acquired {
 		t.Fatal("the operation did not take a lock nobody holds")
 	}
 	if got := lockOn(t, r); got != testOpsName {
@@ -72,11 +72,11 @@ func TestTheHolderReadoptsItsOwnLock(t *testing.T) {
 	}
 	r := testReconciler(t, &fakeControlPlane{}, ops, pv)
 
-	acquired, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r))
+	lock, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !acquired {
+	if !lock.acquired {
 		t.Error("the operation could not re-adopt the lock it already holds")
 	}
 }
@@ -96,11 +96,11 @@ func TestALockHeldByALiveOperationIsWaitedOn(t *testing.T) {
 	}
 	r := testReconciler(t, &fakeControlPlane{}, holder, ops, pv)
 
-	acquired, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r))
+	lock, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if acquired {
+	if lock.acquired {
 		t.Fatal("the operation took a lock another running operation holds")
 	}
 	if got := lockOn(t, r); got != holder.Name {
@@ -130,11 +130,11 @@ func TestALockHeldByATerminalOperationIsBroken(t *testing.T) {
 			}
 			r := testReconciler(t, &fakeControlPlane{}, holder, ops, pv)
 
-			acquired, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r))
+			lock, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !acquired {
+			if !lock.acquired {
 				t.Fatal("the operation waited on a lock whose holder had finished")
 			}
 			if got := lockOn(t, r); got != testOpsName {
@@ -155,11 +155,11 @@ func TestALockHeldByNobodyIsBroken(t *testing.T) {
 	}
 	r := testReconciler(t, &fakeControlPlane{}, ops, pv)
 
-	acquired, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r))
+	lock, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !acquired {
+	if !lock.acquired {
 		t.Fatal("the operation waited on a lock held by an operation that does not exist")
 	}
 	if got := lockOn(t, r); got != testOpsName {

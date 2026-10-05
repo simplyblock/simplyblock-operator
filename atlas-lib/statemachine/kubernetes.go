@@ -56,6 +56,11 @@ type KubeSnapshot struct {
 	// was down restores as already expired.
 	// +optional
 	Deadline *metav1.Time `json:"deadline,omitempty"`
+
+	// Claim records that this state's side effect was started. Absent means
+	// no pass has started it since the state was entered.
+	// +optional
+	Claim *KubeClaim `json:"claim,omitempty"`
 }
 
 // DeepCopyInto writes a deep copy into out. It is hand-written because
@@ -65,6 +70,11 @@ func (in *KubeSnapshot) DeepCopyInto(out *KubeSnapshot) {
 	*out = *in
 	if in.Deadline != nil {
 		out.Deadline = in.Deadline.DeepCopy()
+	}
+	if in.Claim != nil {
+		claim := *in.Claim
+		in.Claim.LeaseUntil.DeepCopyInto(&claim.LeaseUntil)
+		out.Claim = &claim
 	}
 }
 

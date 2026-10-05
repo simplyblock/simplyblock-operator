@@ -37,6 +37,7 @@ func FromInventory(node string, at time.Time, inv inventory.Inventory, unreadabl
 		Interfaces:      interfacesOf(inv.Interfaces),
 		Devices:         devicesOf(inv.Devices),
 		NVMeControllers: controllersOf(inv.NVMeControllers),
+		Reclaimed:       controllersOf(inv.Reclaimed),
 		HostOS:          hostOSOf(inv.HostOS),
 		Unreadable:      sentences(unreadable),
 	}
@@ -124,10 +125,26 @@ func interfacesOf(ifaces []inventory.Interface) []Interface {
 			Kind:       string(iface.Kind),
 			Lower:      iface.Lower,
 			Upper:      iface.Upper,
+			VLAN:       vlanOf(iface.VLAN),
+			VXLAN:      vxlanOf(iface.VXLAN),
 			Addresses:  iface.Addresses,
 		})
 	}
 	return out
+}
+
+func vlanOf(tag *inventory.VLANTag) *VLAN {
+	if tag == nil {
+		return nil
+	}
+	return &VLAN{ID: tag.ID, Protocol: tag.Protocol}
+}
+
+func vxlanOf(overlay *inventory.VXLANOverlay) *VXLAN {
+	if overlay == nil {
+		return nil
+	}
+	return &VXLAN{VNI: overlay.VNI}
 }
 
 func devicesOf(candidates []blockdev.Candidate) []Device {

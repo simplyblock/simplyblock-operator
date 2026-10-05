@@ -80,6 +80,14 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 		findings = append(findings, finding{reason: DeviceNotFound, message: found})
 	}
 
+	overflow, err := r.failureDomainOverflow(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	if overflow != "" {
+		findings = append(findings, finding{reason: TooManyFailureDomains, message: overflow})
+	}
+
 	if found := duplicateWorkers(config); len(found) > 0 {
 		findings = append(findings, finding{
 			reason: WorkerNotFound,
@@ -324,6 +332,40 @@ func (r *ClusterDeploymentConfigReconciler) missingFailureDomains(
 		"the cluster has failure domains enabled and group %s %s none; "+
 			"provisioning holds until each declares one",
 		strings.Join(found, ", "), plural(len(found), "declares", "declare"))
+}
+
+// failureDomainOverflow reports a document whose failure-domain labels would
+// grow the cluster's mapping past what status.failureDomains holds.
+//
+// The mapping only grows, so a growth document is counted against what its
+// cluster has already mapped. Past the limit the status patch in CreatingNodes is
+// refused by the apiserver on every pass, and the expansion would stall after
+// approval rather than say so in the draft.
+func (r *ClusterDeploymentConfigReconciler) failureDomainOverflow(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) (string, error) {
+	var assigned []simplyblockv1alpha2.FailureDomainIndex
+	if config.Spec.ClusterRef != "" {
+		var cluster simplyblockv1alpha2.StorageCluster
+		key := client.ObjectKey{Namespace: config.Namespace, Name: config.Spec.ClusterRef}
+		err := r.Get(ctx, key, &cluster)
+		switch {
+		case apierrors.IsNotFound(err):
+			// ClusterNotFound is reported by the step that resolves the cluster.
+		case err != nil:
+			return "", fmt.Errorf("reading StorageCluster %s: %w", config.Spec.ClusterRef, err)
+		default:
+			assigned = cluster.Status.FailureDomains
+		}
+	}
+
+	total := len(assignFailureDomains(assigned, failureDomainsOf(config)))
+	if total <= maxFailureDomains {
+		return "", nil
+	}
+	return fmt.Sprintf(
+		"the document would bring the cluster to %d failure domains, and a cluster maps "+
+			"at most %d", total, maxFailureDomains), nil
 }
 
 // failureDomainsRequired reads the flag from whichever cluster the document acts

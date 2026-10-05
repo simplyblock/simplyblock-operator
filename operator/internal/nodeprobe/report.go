@@ -99,6 +99,18 @@ type Report struct {
 	// them to conclude the machine has none.
 	NVMeControllers []Controller `json:"nvmeControllers,omitempty"`
 
+	// Reclaimed is the controllers this probe handed back to the kernel, as
+	// they were before it did.
+	//
+	// The probe takes a controller a dead deployment left on a userspace driver
+	// so that the disks behind it can be read at all, and leaves it on the
+	// kernel driver afterward, because the path a draft records has to still
+	// exist when the node is added. These are therefore the disks in Devices
+	// that are there only because the probe changed the machine, and a reader
+	// comparing a worker against what it looked like an hour ago is owed the
+	// list.
+	Reclaimed []Controller `json:"reclaimed,omitempty"`
+
 	// Unreadable is what the probe could not read, one sentence each. It is
 	// separate from a device's own rejections: this is the machine refusing to
 	// answer, where a rejection is an answer.
@@ -292,11 +304,32 @@ type Interface struct {
 	// management network is tagged, the address is on a VLAN above it.
 	Upper []string `json:"upper,omitempty"`
 
+	// VLAN is the tag of a VLAN interface and VXLAN the network identifier of
+	// a VXLAN one. Each is absent for every other kind, and for an interface
+	// whose identifier the probe could not read over netlink.
+	VLAN  *VLAN  `json:"vlan,omitempty"`
+	VXLAN *VXLAN `json:"vxlan,omitempty"`
+
 	// Addresses are the IP addresses the interface holds, without a prefix
 	// length. They are what makes a management interface identifiable: the one
 	// a draft names is the one carrying the address the cluster already reaches
 	// the machine on.
 	Addresses []string `json:"addresses,omitempty"`
+}
+
+// VLAN is the tag a VLAN interface puts on its frames.
+type VLAN struct {
+	// ID is the VLAN identifier, 0 to 4094.
+	ID int `json:"id"`
+
+	// Protocol is `802.1Q` or `802.1ad`.
+	Protocol string `json:"protocol,omitempty"`
+}
+
+// VXLAN is what identifies the overlay a VXLAN interface belongs to.
+type VXLAN struct {
+	// VNI is the VXLAN network identifier, 0 to 16777215.
+	VNI int `json:"vni"`
 }
 
 // Device is one block device and whether it may be handed to a storage cluster.

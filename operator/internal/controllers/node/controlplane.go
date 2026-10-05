@@ -65,6 +65,13 @@ type NodeReading struct {
 	// the digits: the control plane's own vocabulary is what it is, and the
 	// operator does not invent a name the control plane never said (§3.3).
 	FailureDomain int `json:"failure_domain"`
+
+	// SecondaryNodeID and TertiaryNodeID are the nodes holding this node's
+	// lvstore replicas, empty when it has none. A volume whose primary is this
+	// node has its replicas there, and a volume created on this node is built
+	// there as well.
+	SecondaryNodeID string `json:"secondary_node_id"`
+	TertiaryNodeID  string `json:"tertiary_node_id"`
 }
 
 // The lifecycle values the control plane reports, in its own spelling. They are
@@ -77,8 +84,42 @@ const (
 	nodeStatusInCreation = "in_creation"
 	nodeStatusInRestart  = "in_restart"
 	nodeStatusInShutdown = "in_shutdown"
+	nodeStatusDown       = "down"
 	nodeStatusActive     = "active"
+
+	nodeStatusPendingRemoval   = "pending_removal"
+	nodeStatusMigratingDevices = "migrating_devices"
+	nodeStatusMigratingLvols   = "migrating_lvols"
+	nodeStatusInRemoval        = "in_removal"
+	nodeStatusRemoved          = "removed"
+	nodeStatusRemovedFailed    = "removed_failed"
 )
+
+// RemovalProgress is the control plane's account of a removal's first step. Done
+// is the one field that decides anything: the step is finished when it says so,
+// and the counts are for reporting.
+type RemovalProgress struct {
+	Done       bool   `json:"done"`
+	Total      int    `json:"total"`
+	Completed  int    `json:"completed"`
+	Failed     int    `json:"failed"`
+	Message    string `json:"message"`
+	NodeStatus string `json:"node_status"`
+}
+
+// RemovalAdmission is the control plane's answer to whether a node may be
+// removed, asked without starting the removal.
+type RemovalAdmission struct {
+	Admitted bool   `json:"admitted"`
+	Reason   string `json:"reason"`
+}
+
+// DrainVerification is whether the node still hosts anything, and what.
+type DrainVerification struct {
+	Drained   bool     `json:"drained"`
+	Lvols     []string `json:"lvols"`
+	Snapshots []string `json:"snapshots"`
+}
 
 // RestartParams are what the control plane's restart endpoint takes. Three
 // actions use it and each fills a different subset: a plain Restart passes only
@@ -96,13 +137,24 @@ type RestartParams struct {
 	NewSsdPcie     []string `json:"new_ssd_pcie,omitempty"`
 }
 
+// TaskReading is a control-plane task as far as a node reads it.
+type TaskReading struct {
+	Status string `json:"status"`
+	Retry  int32  `json:"retry"`
+	Result string `json:"function_result"`
+}
+
 // ControlPlane is everything the two reconcilers in this package ask of the
 // simplyblock control plane.
 type ControlPlane interface {
 	// AddNode adds every storage node of one worker at once and is not
 	// idempotent, which is why the provisioning machine claims its slot in
-	// Kubernetes before calling it (§4.2).
-	AddNode(ctx context.Context, clusterID string, params utils.StorageNodeSetAddParams) error
+	// Kubernetes before calling it (§4.2). It returns the ID of the task doing the
+	// add, which is the existing task while one for the worker is still alive.
+	AddNode(ctx context.Context, clusterID string, params utils.StorageNodeSetAddParams) (string, error)
+
+	// Task reads one control-plane task by its ID.
+	Task(ctx context.Context, clusterID, taskID string) (TaskReading, error)
 
 	// StorageNodes are the cluster's nodes as the control plane reports them,
 	// which is what adoption matches against and what the fallback of every
@@ -125,6 +177,27 @@ type ControlPlane interface {
 	// be undone: it activates the target host's devices, fails and migrates the
 	// origin host's, starts a rebalance, and re-homes the logical volumes (§9).
 	Promote(ctx context.Context, clusterID, nodeID string) error
+
+	// PrepareRemoval is the removal's first step: the control plane admits the
+	// node, marks it pending_removal, shuts it down if it is still running, and
+	// rebuilds its devices onto the peers. A refused admission is a 4xx and
+	// changes nothing, and from pending_removal on there is no way back. A
+	// repeat is a no-op while the step runs.
+	PrepareRemoval(ctx context.Context, clusterID, nodeID string) error
+
+	// RemovalAdmission asks the removal's admission (fault-tolerance headroom,
+	// failure-domain balance, replica relocation, active tasks) without
+	// starting the removal, which is what lets the drain ask it while the
+	// node still serves. offered is false on a control plane that has no such
+	// check, which answers the request 404.
+	RemovalAdmission(ctx context.Context, clusterID, nodeID string) (answer RemovalAdmission, offered bool, err error)
+
+	// RemovalProgress is how far PrepareRemoval's device rebuild has got.
+	RemovalProgress(ctx context.Context, clusterID, nodeID string) (RemovalProgress, error)
+
+	// VerifyDrained is the control plane's own answer to whether the node still
+	// hosts a volume or a snapshot. It moves nothing.
+	VerifyDrained(ctx context.Context, clusterID, nodeID string) (DrainVerification, error)
 
 	// RemoveNode is the drain's last step. A 404 is success: a node the control
 	// plane no longer knows about is a node that has been removed, and a retry
@@ -171,8 +244,32 @@ func NewControlPlane(resolve controlplane.EndpointResolver) ControlPlane {
 
 func (c *httpControlPlane) AddNode(
 	ctx context.Context, clusterID string, params utils.StorageNodeSetAddParams,
-) error {
-	return c.post(ctx, fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterID), params)
+) (string, error) {
+	body, err := c.call(ctx, http.MethodPost,
+		fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterID), params)
+	if err != nil {
+		return "", err
+	}
+	var taskID string
+	if err := json.Unmarshal(body, &taskID); err != nil {
+		return "", fmt.Errorf("read the add's task id: %w", err)
+	}
+	return taskID, nil
+}
+
+func (c *httpControlPlane) Task(
+	ctx context.Context, clusterID, taskID string,
+) (TaskReading, error) {
+	body, err := c.call(ctx, http.MethodGet,
+		fmt.Sprintf("/api/v2/clusters/%s/tasks/%s", clusterID, taskID), nil)
+	if err != nil {
+		return TaskReading{}, err
+	}
+	var task TaskReading
+	if err := json.Unmarshal(body, &task); err != nil {
+		return TaskReading{}, fmt.Errorf("read task %s: %w", taskID, err)
+	}
+	return task, nil
 }
 
 func (c *httpControlPlane) StorageNodes(
@@ -225,6 +322,57 @@ func (c *httpControlPlane) RestartNode(
 	ctx context.Context, clusterID, nodeID string, params RestartParams,
 ) error {
 	return c.post(ctx, c.nodePath(clusterID, nodeID, "restart"), params)
+}
+
+func (c *httpControlPlane) PrepareRemoval(ctx context.Context, clusterID, nodeID string) error {
+	return c.post(ctx, c.nodePath(clusterID, nodeID, "prepare-removal"), nil)
+}
+
+func (c *httpControlPlane) RemovalAdmission(
+	ctx context.Context, clusterID, nodeID string,
+) (RemovalAdmission, bool, error) {
+	body, err := c.call(ctx, http.MethodGet, c.nodePath(clusterID, nodeID, "removal-admission"), nil)
+	var refusal *ControlPlaneError
+	if errors.As(err, &refusal) && refusal.Status == http.StatusNotFound {
+		return RemovalAdmission{}, false, nil
+	}
+	if err != nil {
+		return RemovalAdmission{}, false, err
+	}
+	var answer RemovalAdmission
+	if err := json.Unmarshal(body, &answer); err != nil {
+		return RemovalAdmission{}, false, fmt.Errorf("read the removal admission of node %s: %w", nodeID, err)
+	}
+	return answer, true, nil
+}
+
+func (c *httpControlPlane) RemovalProgress(
+	ctx context.Context, clusterID, nodeID string,
+) (RemovalProgress, error) {
+	body, err := c.call(ctx, http.MethodGet, c.nodePath(clusterID, nodeID, "prepare-removal"), nil)
+	if err != nil {
+		return RemovalProgress{}, err
+	}
+	var progress RemovalProgress
+	if err := json.Unmarshal(body, &progress); err != nil {
+		return RemovalProgress{}, fmt.Errorf("read the removal progress of node %s: %w", nodeID, err)
+	}
+	return progress, nil
+}
+
+func (c *httpControlPlane) VerifyDrained(
+	ctx context.Context, clusterID, nodeID string,
+) (DrainVerification, error) {
+	body, err := c.call(ctx, http.MethodPost, c.nodePath(clusterID, nodeID, "verify-drained"), nil)
+	if err != nil {
+		return DrainVerification{}, err
+	}
+	var verification DrainVerification
+	if err := json.Unmarshal(body, &verification); err != nil {
+		return DrainVerification{}, fmt.Errorf("read the drain verification of node %s: %w",
+			nodeID, err)
+	}
+	return verification, nil
 }
 
 func (c *httpControlPlane) Promote(ctx context.Context, clusterID, nodeID string) error {

@@ -56,6 +56,7 @@ const (
 	annoNodeOpsPhase    = "storage.simplyblock.io/conversion-status.phase"
 	annoNodeOpsObserved = "storage.simplyblock.io/conversion-status.observedGeneration"
 	annoNodeOpsAbort    = "storage.simplyblock.io/conversion-spec.abort"
+	annoNodeOpsRemoval  = "storage.simplyblock.io/conversion-status.removal"
 )
 
 // storageNodeOpsActionToHub maps this version's lowercase actions onto the hub's
@@ -91,7 +92,9 @@ var storageNodeOpsActionFromHub = invertStringMap(storageNodeOpsActionToHub)
 var subPhaseToStep = map[v1alpha2.StorageNodeOpsAction]map[string]string{
 	v1alpha2.StorageNodeOpsActionRemove: {
 		string(StorageNodeOpsSubPhaseValidating): string(v1alpha2.StorageNodeOpsStepValidating),
-		string(StorageNodeOpsSubPhaseSuspending): string(v1alpha2.StorageNodeOpsStepSuspending),
+		// This version suspended the node here. The hub's next step is
+		// ShuttingDown, which sends prepare-removal and accepts a suspended node.
+		string(StorageNodeOpsSubPhaseSuspending): string(v1alpha2.StorageNodeOpsStepShuttingDown),
 		string(StorageNodeOpsSubPhaseMigrating):  string(v1alpha2.StorageNodeOpsStepMigratingVolumes),
 		string(StorageNodeOpsSubPhaseVerifying):  string(v1alpha2.StorageNodeOpsStepVerifying),
 		string(StorageNodeOpsSubPhaseRemoving):   string(v1alpha2.StorageNodeOpsStepRemoving),
@@ -110,15 +113,16 @@ var subPhaseToStep = map[v1alpha2.StorageNodeOpsAction]map[string]string{
 // accepts, so that a v1alpha1 reader sees where the operation is rather than an
 // empty field.
 //
-// It is not the inverse of subPhaseToStep and cannot be. Four of the hub's steps
-// have no v1alpha1 spelling at all: Requesting and Awaiting, because the four
-// single-step actions never had a sub-phase here, and Relocating and AwaitingNode,
-// which are the two halves this version wrote as one Restarting. Every step of
-// HostMaintenance is likewise absent, since the action is. Those read as an empty
-// sub-phase, and the stash carries the real step.
+// It is not the inverse of subPhaseToStep and cannot be. Several of the hub's
+// steps have no v1alpha1 spelling at all. Requesting and Awaiting have none
+// because the four single-step actions never had a sub-phase here. Relocating and
+// AwaitingNode are the two halves this version wrote as one Restarting.
+// ShuttingDown, MigratingDevices, and AwaitingRemoval are removal steps this
+// version does not have. Every step of HostMaintenance is likewise absent, since
+// the action is. Those read as an empty sub-phase, and the stash carries the real
+// step.
 var stepToSubPhase = map[string]StorageNodeOpsSubPhase{
 	string(v1alpha2.StorageNodeOpsStepValidating):       StorageNodeOpsSubPhaseValidating,
-	string(v1alpha2.StorageNodeOpsStepSuspending):       StorageNodeOpsSubPhaseSuspending,
 	string(v1alpha2.StorageNodeOpsStepMigratingVolumes): StorageNodeOpsSubPhaseMigrating,
 	string(v1alpha2.StorageNodeOpsStepVerifying):        StorageNodeOpsSubPhaseVerifying,
 	string(v1alpha2.StorageNodeOpsStepRemoving):         StorageNodeOpsSubPhaseRemoving,
@@ -235,6 +239,12 @@ func stashNodeOpsHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageNodeOps) 
 	if err := stash(meta, annoNodeOpsObserved, src.Status.ObservedGeneration); err != nil {
 		return err
 	}
+	// The removal's progress record is what its deadline is measured against,
+	// so losing it on a v1alpha1 write would grant a stalled removal a new
+	// budget.
+	if err := stash(meta, annoNodeOpsRemoval, src.Status.Removal); err != nil {
+		return err
+	}
 
 	// Only the phase this version cannot spell is recorded. Every other value
 	// survives the narrowing, and an annotation for each would be noise on every
@@ -260,7 +270,7 @@ func stashNodeOpsHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageNodeOps) 
 // The projection is one-way, so the five Remove steps and two of the four Migrate
 // steps survive being written to subPhase and read back, and annotating those
 // would put a note on every drain that ever ran. What does not survive is a step
-// with a deadline, either half of the Relocating and AwaitingNode pair this
+// with a deadline or a claim, either half of the Relocating and AwaitingNode pair this
 // version spelled as one Restarting, and every step of an action subPhase never
 // covered.
 func stashNodeOpsStep(
@@ -269,7 +279,7 @@ func stashNodeOpsStep(
 	step statemachine.KubeSnapshot,
 ) error {
 	roundTrips := subPhaseToStep[action][string(stepToSubPhase[step.State])] == step.State
-	if step.Deadline == nil && roundTrips {
+	if step.Deadline == nil && step.Claim == nil && roundTrips {
 		clear(meta, annoNodeOpsStep)
 		return nil
 	}
@@ -292,6 +302,9 @@ func restoreNodeOpsHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageNodeOps
 	}
 
 	if err := unstash(meta, annoNodeOpsObserved, &dst.Status.ObservedGeneration); err != nil {
+		return err
+	}
+	if err := unstash(meta, annoNodeOpsRemoval, &dst.Status.Removal); err != nil {
 		return err
 	}
 

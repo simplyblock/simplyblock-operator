@@ -80,7 +80,7 @@ multiCluster:
     workers:
       
 deployment:
-  # One of: standalone, managed.
+  # One of: standalone, managed, empty.
   #
   # standalone hosts its own control plane. The operator installs FoundationDB,
   # the object store, and the management API from the ControlPlane object this
@@ -88,6 +88,17 @@ deployment:
   #
   # managed registers this cluster's storage with a control plane elsewhere,
   # named by controlplane.managed below. Nothing is installed here.
+  #
+  # empty installs the operator, its CRDs, and its webhooks, and nothing for it to
+  # act on: no ControlPlane, no SimplyblockDriver, and no discovery run. The
+  # administrator writes the ControlPlane and the SimplyblockDriver afterward. The
+  # `driver` section below is not read, and of `discovery` only `namespace` is:
+  # the node-probe ServiceAccount and Role go there, and a discovery run raised
+  # later by hand needs them in its namespace.
+  #
+  # A release cannot switch to empty while a ControlPlane or SimplyblockDriver it
+  # created still exists, because Helm keeps both on the upgrade and the operator
+  # goes on running them. validate-controlplane.yaml says how to take them over.
   #
   # Observability under controlplane is rendered for standalone only: it stores
   # what it collects in the object store a hosted control plane brings.
@@ -107,7 +118,8 @@ deployment:
 # `kubectl create -f` against an OperatorOps of your own.
 #
 # Rendered for the managed profile as `enabled: false` alone: there, the cluster
-# that manages this one raises the run, in the namespace it chooses.
+# that manages this one raises the run, in the namespace it chooses. The empty
+# profile renders the same, because its administrator writes the cluster.
 discovery:
   # Whether this installation raises the run at all. An installation that wants
   # no draft waiting for it sets this to false and writes its
@@ -175,6 +187,22 @@ discovery:
   # control-plane node.
   enableControlPlaneNodes: false
 
+  # Scan each worker's logical block devices instead of its NVMe devices. It
+  # selects the class rather than adding one: a cluster is built out of one
+  # class of backend storage, and a draft describes one cluster. It decides which
+  # of the filters under deviceFilter apply, and what forceJournalDevice
+  # resolves, which is why it sits here rather than among the filters.
+  enableLogicalBlockDevices: false
+
+  # Report devices carrying a partition table alongside the available ones. On,
+  # because a machine that has held data before carries one on every disk and
+  # refusing them makes the run meant to show a fleet what it has report that it
+  # has nothing. It waives the table and nothing else: a device that is also
+  # mounted, held by the kernel, or carrying swap stays out. It widens what the
+  # run reports for either class, which is why it sits here rather than among
+  # the filters.
+  enablePartitionedDevices: true
+
   # Dedicate a journal device on a fleet whose disks do not say which one.
   #
   # The run proposes a dedicated journal device when every worker hands over one
@@ -200,18 +228,6 @@ discovery:
   # here never appears in the document, so this is the place to keep a boot disk
   # out of a fifty-worker draft nobody reads line by line.
   deviceFilter:
-    # Scan each worker's logical block devices instead of its NVMe devices. It
-    # selects the class rather than adding one: a cluster is built out of one
-    # class of backend storage, and a draft describes one cluster.
-    enableLogicalBlockDevices: false
-
-    # Report devices carrying a partition table alongside the available ones. On,
-    # because a machine that has held data before carries one on every disk and
-    # refusing them makes the run meant to show a fleet what it has report that it
-    # has nothing. It waives the table and nothing else: a device that is also
-    # mounted, held by the kernel, or carrying swap stays out.
-    enablePartitionedDevices: true
-
     # The two block-device lists, which require enableLogicalBlockDevices.
     #
     # A deny list is the one most deployments want: on a fleet that boots from

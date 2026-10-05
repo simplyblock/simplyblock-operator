@@ -287,11 +287,11 @@ func TestTheInitialRunWaivesAPartitionTable(t *testing.T) {
 	if err := d.Get(context.Background(), key, &run); err != nil {
 		t.Fatalf("reading the run: %v", err)
 	}
-	filter := run.Spec.Discover.DeviceFilter
-	if filter == nil || filter.EnablePartitionedDevices == nil {
+	waiver := run.Spec.Discover.EnablePartitionedDevices
+	if waiver == nil {
 		t.Fatalf("the initial run states no partition waiver: %+v", run.Spec.Discover)
 	}
-	if !*filter.EnablePartitionedDevices {
+	if !*waiver {
 		t.Error("the initial run refuses a disk for carrying a partition table")
 	}
 }

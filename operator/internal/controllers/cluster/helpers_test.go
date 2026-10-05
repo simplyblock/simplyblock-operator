@@ -229,6 +229,7 @@ type fakeControlPlane struct {
 	// control plane was actually asked to do something, which is the only way
 	// to tell a step that skipped its call from one that made it twice.
 	activateCalls     int
+	expandCalls       int
 	shutdownCalls     int
 	startCalls        int
 	createCalls       int
@@ -302,6 +303,7 @@ func (f *fakeControlPlane) Activate(_ context.Context, clusterID string) error {
 }
 
 func (f *fakeControlPlane) Expand(_ context.Context, clusterID string) error {
+	f.expandCalls++
 	if f.expand == nil {
 		return nil
 	}

@@ -69,9 +69,8 @@ func TestAnISCSILUNIsRefusedByAWholeRunUnlessNamed(t *testing.T) {
 	report := report("worker-1")
 	report.Devices = []nodeprobe.Device{attachedLUN("sdb", 2*tb), blockDisk("vdb", 2*tb)}
 
-	block := &simplyblockv1alpha2.DeviceFilter{EnableLogicalBlockDevices: ptr.To(true)}
-	plan := Planner{}.Plan([]nodeprobe.Report{report},
-		&simplyblockv1alpha2.DeviceFilter{EnableLogicalBlockDevices: block.EnableLogicalBlockDevices})
+	block := &simplyblockv1alpha2.DiscoverSpec{EnableLogicalBlockDevices: ptr.To(true)}
+	plan := Planner{}.Plan([]nodeprobe.Report{report}, block)
 
 	if len(plan.NodeSets) != 1 {
 		t.Fatalf("built %+v", plan.NodeSets)
@@ -83,9 +82,11 @@ func TestAnISCSILUNIsRefusedByAWholeRunUnlessNamed(t *testing.T) {
 
 	// Naming it is what takes it, and the allow list then bounds the draft to
 	// what it names, which is the allow list's own rule.
-	named := &simplyblockv1alpha2.DeviceFilter{
+	named := &simplyblockv1alpha2.DiscoverSpec{
 		EnableLogicalBlockDevices: ptr.To(true),
-		BlockAllowList:            []string{"/dev/sdb", "/dev/vdb"},
+		DeviceFilter: &simplyblockv1alpha2.DeviceFilter{
+			BlockAllowList: []string{"/dev/sdb", "/dev/vdb"},
+		},
 	}
 	plan = Planner{}.Plan([]nodeprobe.Report{report}, named)
 	if len(plan.NodeSets) != 1 {

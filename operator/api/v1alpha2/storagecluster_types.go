@@ -29,7 +29,7 @@ import (
 // first two values are the operator's own creation path; the rest are its
 // reading of the lifecycle status.status carries in the control plane's own
 // spelling.
-// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Rebalancing;Degraded;Unavailable;Suspended
+// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Shrinking;Rebalancing;Degraded;Unavailable;Suspended
 type StorageClusterPhase string
 
 const (
@@ -57,6 +57,14 @@ const (
 	// StorageClusterPhaseOnline: the control plane reports the cluster active
 	// and serving.
 	StorageClusterPhaseOnline StorageClusterPhase = "Online"
+
+	// StorageClusterPhaseShrinking: serving, and removing at least one of its
+	// nodes. It replaces Rebalancing, Online, and Degraded for as long as the
+	// control plane reports a removal in progress, because a removal moves the
+	// departing node's data onto its peers and degrades the cluster while it
+	// does, and the removal is the cause of both. It never replaces a phase
+	// that is not serving.
+	StorageClusterPhaseShrinking StorageClusterPhase = "Shrinking"
 
 	// StorageClusterPhaseRebalancing: serving, and moving data between its
 	// nodes or devices. It replaces Online and Degraded for as long as the
@@ -179,11 +187,6 @@ type BackupStoreSpec struct {
 	// Bucket is the bucket backups are written to and read from.
 	// +kubebuilder:validation:Required
 	Bucket string `json:"bucket"`
-
-	// Prefix narrows the store to one key prefix, so that several clusters can
-	// share a bucket without each walking the others' backups.
-	// +optional
-	Prefix string `json:"prefix,omitempty"`
 
 	// Region is the bucket's region, for endpoints that do not imply one.
 	// +optional
@@ -985,6 +988,21 @@ type StorageClusterStatus struct {
 	// +optional
 	ProvisioningSlots []ProvisioningSlot `json:"provisioningSlots,omitempty"`
 
+	// FailureDomains maps each failure-domain label the cluster's nodes declare
+	// (StorageNode.spec.config.failureDomain) to the integer the control plane
+	// identifies that domain by. A deployment adds an entry for every label it
+	// introduces, both when it creates the cluster and when it grows one, and
+	// never changes or removes an entry: the control plane has already placed
+	// data by that index. A label that is a number keeps that number as its
+	// index when the number is free. A cluster holds at most 256 failure
+	// domains, and a deployment that would exceed that is refused before it is
+	// approved.
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=256
+	// +optional
+	FailureDomains []FailureDomainIndex `json:"failureDomains,omitempty"`
+
 	// ActiveOpsRef names the StorageClusterOps currently allowed to operate on
 	// this cluster. Empty when none is running.
 	// +optional
@@ -1004,6 +1022,23 @@ type StorageClusterStatus struct {
 	// from, so a stale status can be told from a current one.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+}
+
+// FailureDomainIndex is one failure-domain label and the control plane's index
+// for it.
+type FailureDomainIndex struct {
+	// Name is the failure-domain label, as StorageNode.spec.config.failureDomain
+	// spells it ("rack-b").
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Index is the integer sent to the control plane for every node in the
+	// domain.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Required
+	Index int32 `json:"index"`
 }
 
 // v1alpha2 is the storage version in the manifests this repository ships. A

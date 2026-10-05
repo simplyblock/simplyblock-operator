@@ -161,15 +161,20 @@ func TestReconcileInformationalTags(t *testing.T) {
 // recognizer says whether the names are the driver's, and a group it does not
 // recognize is refused with nothing issued against it.
 func TestResolveClonedVolumeGroupRecognizesOrRefusesAnUntaggedSource(t *testing.T) {
-	pvs := joinKey([]string{"pvs", "--devices", "/dev/nvme1n1", "--noheadings", "-o", "vg_name", "/dev/nvme1n1"})
+	pvs := joinKey([]string{"pvs", "--devices", "/dev/nvme1n1", "--reportformat", "json", "-o", "vg_name", "/dev/nvme1n1"})
 	owned := joinKey([]string{"pvs", "--devices", "/dev/nvme1n1", "--noheadings", "-o", "vg_name,vg_tags", "/dev/nvme1n1"})
-	lvsOn := joinKey([]string{"lvs", "--devices", "/dev/nvme1n1", "--noheadings", "-o", "lv_name", "vdo-source"})
-	lvs := joinKey([]string{"lvs", "--noheadings", "-o", "lv_name", "vdo-clone1"})
+	lvsOn := joinKey([]string{"lvs", "--devices", "/dev/nvme1n1", "--reportformat", "json", "-o", "lv_name", "vdo-source"})
+	lvs := joinKey([]string{"lvs", "--reportformat", "json", "-o", "lv_name", "vdo-clone1"})
 	driverShaped := func(group string, volumes []string) bool { return group == "vdo-source" && len(volumes) == 2 }
 
 	t.Run("recognized: adopted on the device, volumes and group, then imported", func(t *testing.T) {
 		fake := &fakeRunner{
-			out: map[string]string{pvs: "vdo-source\n", owned: "  vdo-source\n", lvsOn: "  vdopool\n  source-lv\n", lvs: "  vdopool\n  source-lv\n"},
+			out: map[string]string{
+				pvs:   `{"report":[{"pv":[{"vg_name":"vdo-source"}]}]}`,
+				owned: "  vdo-source\n",
+				lvsOn: `{"report":[{"lv":[{"lv_name":"vdopool"},{"lv_name":"source-lv"}]}]}`,
+				lvs:   `{"report":[{"lv":[{"lv_name":"vdopool"},{"lv_name":"source-lv"}]}]}`,
+			},
 			err: map[string]error{},
 		}
 		mgr := NewManagerWithRunner(fake.run)
@@ -192,7 +197,11 @@ func TestResolveClonedVolumeGroupRecognizesOrRefusesAnUntaggedSource(t *testing.
 
 	t.Run("not recognized: refused, nothing issued", func(t *testing.T) {
 		fake := &fakeRunner{
-			out: map[string]string{pvs: "vdo-source\n", owned: "  vdo-source\n", lvsOn: "  data\n"},
+			out: map[string]string{
+				pvs:   `{"report":[{"pv":[{"vg_name":"vdo-source"}]}]}`,
+				owned: "  vdo-source\n",
+				lvsOn: `{"report":[{"lv":[{"lv_name":"data"}]}]}`,
+			},
 			err: map[string]error{}, unowned: true,
 		}
 		_, err := NewManagerWithRunner(fake.run).ResolveClonedVolumeGroup(context.Background(),

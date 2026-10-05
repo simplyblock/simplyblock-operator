@@ -392,7 +392,6 @@ func TestStorageClusterRoundTripsFromTheHub(t *testing.T) {
 			Backup: &v1alpha2.BackupStoreSpec{
 				Endpoint:             "https://s3.example.com",
 				Bucket:               "simplyblock-backups",
-				Prefix:               "production/",
 				Region:               "eu-central-1",
 				CredentialsSecretRef: corev1.LocalObjectReference{Name: "backup-credentials"},
 			},
@@ -413,6 +412,10 @@ func TestStorageClusterRoundTripsFromTheHub(t *testing.T) {
 			Configured:          true,
 			Tasks: []v1alpha2.ClusterTask{
 				{ID: "task-1", Type: "node_restart", Status: "running", Retry: 2},
+			},
+			FailureDomains: []v1alpha2.FailureDomainIndex{
+				{Name: "rack-a", Index: 0},
+				{Name: "rack-b", Index: 1},
 			},
 			Message:            "creating the backend cluster",
 			ObservedGeneration: 7,

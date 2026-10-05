@@ -37,11 +37,7 @@ func blockClass() *simplyblockv1alpha2.DiscoverSpec {
 // blockClassUndecided scans logical block devices and says nothing about the
 // journal, which is what an administrator writes the first time.
 func blockClassUndecided() *simplyblockv1alpha2.DiscoverSpec {
-	return &simplyblockv1alpha2.DiscoverSpec{
-		DeviceFilter: &simplyblockv1alpha2.DeviceFilter{
-			EnableLogicalBlockDevices: ptr.To(true),
-		},
-	}
+	return &simplyblockv1alpha2.DiscoverSpec{EnableLogicalBlockDevices: ptr.To(true)}
 }
 
 // oneNodeFourNVMe is the same four disks with every one of them on memory node
@@ -194,9 +190,9 @@ func devCases() map[string]Case {
 		"DEV-18": {
 			Family: "dev", Slug: "an-iscsi-lun-the-allow-list-names",
 			Discover: &simplyblockv1alpha2.DiscoverSpec{
+				EnableLogicalBlockDevices: ptr.To(true),
 				DeviceFilter: &simplyblockv1alpha2.DeviceFilter{
-					EnableLogicalBlockDevices: ptr.To(true),
-					BlockAllowList:            []string{"/dev/sdb", "/dev/vdb"},
+					BlockAllowList: []string{"/dev/sdb", "/dev/vdb"},
 				},
 				ForceJournalDevice: ptr.To(true),
 			},

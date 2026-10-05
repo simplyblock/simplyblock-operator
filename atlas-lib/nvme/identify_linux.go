@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/simplyblock/atlas/bounded"
 )
 
 // nvmeIoctlAdminCmd is NVME_IOCTL_ADMIN_CMD: _IOWR('N', 0x41, struct
@@ -43,11 +46,26 @@ type nvmePassthruCmd struct {
 	result      uint32
 }
 
+// identifyTimeoutMs is the command timeout handed to the kernel with the
+// Identify, so a command that reaches the controller is failed by the kernel
+// instead of waiting out the default admin timeout.
+const identifyTimeoutMs = uint32(bounded.ReadTimeout / time.Millisecond)
+
 // identifyControllerMNAN issues an NVMe Identify Controller admin command on
 // the controller character device (e.g., "/dev/nvme0") and returns its MNAN
 // field (Maximum Number of Allowed Namespaces), the most namespaces the
 // controller's subsystem may hold.
+//
+// The open and the ioctl run under bounded.ReadTimeout. A controller can leave
+// the live state between the sysfs read that chose it and the ioctl, and the
+// kernel then holds the command until the controller reconnects or is deleted.
 func identifyControllerMNAN(devicePath string) (uint32, error) {
+	return bounded.Call("identify "+devicePath, bounded.ReadTimeout, func() (uint32, error) {
+		return identifyControllerMNANUnbounded(devicePath)
+	})
+}
+
+func identifyControllerMNANUnbounded(devicePath string) (uint32, error) {
 	f, err := os.OpenFile(devicePath, os.O_RDONLY, 0)
 	if err != nil {
 		return 0, fmt.Errorf("open %s: %w", devicePath, err)
@@ -56,11 +74,12 @@ func identifyControllerMNAN(devicePath string) (uint32, error) {
 
 	buf := make([]byte, identifyControllerLen)
 	cmd := nvmePassthruCmd{
-		opcode:  nvmeAdminIdentify,
-		nsid:    0, // Identify Controller ignores NSID
-		addr:    uint64(uintptr(unsafe.Pointer(&buf[0]))),
-		dataLen: identifyControllerLen,
-		cdw10:   nvmeIdentifyCNSCtrl, // CNS in the low byte
+		opcode:    nvmeAdminIdentify,
+		nsid:      0, // Identify Controller ignores NSID
+		addr:      uint64(uintptr(unsafe.Pointer(&buf[0]))),
+		dataLen:   identifyControllerLen,
+		cdw10:     nvmeIdentifyCNSCtrl, // CNS in the low byte
+		timeoutMs: identifyTimeoutMs,
 	}
 	_, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), nvmeIoctlAdminCmd, uintptr(unsafe.Pointer(&cmd)))
 	// Keep buf alive until the kernel has finished writing into it via addr.

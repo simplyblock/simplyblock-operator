@@ -73,6 +73,7 @@ func takenWorker() tree {
 		t2.files[dir+"/vendor"] = "0x1b36"
 		t2.files[dir+"/device"] = "0x0010"
 		t2.files[dir+"/numa_node"] = "-1"
+		t2.files[dir+"/driver_override"] = "(null)"
 		t2.links[dir+"/driver"] = "../../../bus/pci/drivers/uio_pci_generic"
 		t2.dirs = append(t2.dirs, dir+"/uio/"+c.uio)
 	}
@@ -83,9 +84,17 @@ func takenWorker() tree {
 	t2.files[ahci+"/vendor"] = "0x8086"
 	t2.files[ahci+"/device"] = "0x2922"
 	t2.files[ahci+"/numa_node"] = "0"
+	t2.files[ahci+"/driver_override"] = "(null)"
 	t2.links[ahci+"/driver"] = "../../../bus/pci/drivers/ahci"
 
 	t2.dirs = append(t2.dirs, "bus/pci/drivers/uio_pci_generic", "bus/pci/drivers/nvme")
+
+	// The write targets a rebind uses. They are attributes the kernel always
+	// presents, and a tree without them is a tree no bind could ever be tested
+	// against.
+	t2.files["bus/pci/drivers/uio_pci_generic/unbind"] = ""
+	t2.files["bus/pci/drivers/nvme/bind"] = ""
+	t2.files["bus/pci/drivers_probe"] = ""
 	return t2
 }
 
@@ -393,5 +402,84 @@ func TestCheckHoldersReportsWhatItCouldNotDetermine(t *testing.T) {
 		if device.Free() {
 			t.Errorf("%s was marked free by a check that never ran", device.Address)
 		}
+	}
+}
+
+func TestReclaimIdleHandsBackOnlyTheControllersNothingIsDriving(t *testing.T) {
+	// The state a fleet that has run this product before is in: every NVMe
+	// controller on a userspace driver, most of them left behind by a
+	// deployment that is gone, one still in service. The disks behind the
+	// abandoned ones are what the next run has to see, and taking the one in
+	// service would pull a storage node's disks out from under it.
+	h := takenWorker()
+	h.links["1234/fd/3"] = "/dev/uio2"
+	h.files["1234/comm"] = "spdk_tgt"
+	root := h.write(t)
+	cfg := Config{SysfsRoot: root, ProcRoot: root, DevRoot: "/dev"}
+
+	devices, err := Scan(cfg)
+	if err != nil {
+		t.Fatalf("scan the bus: %v", err)
+	}
+	checked, err := CheckHolders(cfg, NVMeControllers(devices))
+	if err != nil {
+		t.Fatalf("check the holders: %v", err)
+	}
+
+	reclaimed, err := ReclaimIdle(cfg, checked)
+	if err != nil {
+		t.Fatalf("reclaim the idle controllers: %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, device := range reclaimed {
+		got[device.Address] = true
+	}
+	for _, want := range []string{"0000:00:03.0", "0000:00:04.0", "0000:00:05.0"} {
+		if !got[want] {
+			t.Errorf("%s was left on its userspace driver, and its disk stays invisible", want)
+		}
+	}
+	if got["0000:00:02.0"] {
+		t.Error("reclaimed the controller spdk_tgt is driving")
+	}
+
+	// Nothing was written for the one in service. An override left behind would
+	// send the next probe to the kernel driver on its own, which is the rebind
+	// this refused, deferred.
+	override := func(slot string) string {
+		t.Helper()
+		content, err := os.ReadFile(
+			filepath.Join(root, "bus", "pci", "devices", slot, "driver_override"))
+		if err != nil {
+			t.Fatalf("read the driver_override of %s: %v", slot, err)
+		}
+		return strings.TrimSpace(string(content))
+	}
+	if got := override("0000:00:02.0"); got != "(null)" {
+		t.Errorf("the driver_override of a controller in service is %q, and it was left unset", got)
+	}
+	if got := override("0000:00:03.0"); got != "" {
+		t.Errorf("the driver_override of a reclaimed controller is %q, and a rebind clears it", got)
+	}
+}
+
+func TestReclaimIdleLeavesAControllerItCouldNotCheck(t *testing.T) {
+	// An unchecked controller and an idle one are indistinguishable once the
+	// error is dropped, and one of them is somebody's running storage node.
+	root := takenWorker().write(t)
+	cfg := Config{SysfsRoot: root, ProcRoot: filepath.Join(root, "nonexistent")}
+
+	devices, err := Scan(cfg)
+	if err != nil {
+		t.Fatalf("scan the bus: %v", err)
+	}
+
+	reclaimed, err := ReclaimIdle(cfg, NVMeControllers(devices))
+	if err != nil {
+		t.Fatalf("reclaim the idle controllers: %v", err)
+	}
+	if len(reclaimed) != 0 {
+		t.Errorf("reclaimed %d controller(s) whose holders were never read", len(reclaimed))
 	}
 }

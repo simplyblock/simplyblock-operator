@@ -15,6 +15,7 @@ const (
 type Event struct {
 	Kind  string // one of the Event* constants
 	Scope Scope
+	ID    string // the stream's `id:` field; names the record when a deleted event has no body
 	Data  []byte // JSON: an array for a snapshot, a single object otherwise
 }
 

@@ -6,8 +6,7 @@ metadata:
 spec:
   action: Discover
   discover:
-    deviceFilter:
-      enableLogicalBlockDevices: true
+    enableLogicalBlockDevices: true
     forceJournalDevice: true
 status:
   environment: K3s

@@ -11,6 +11,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -70,12 +71,12 @@ func TestAnAbsentConfigMapKeepsTheOperatorsOwnBehavior(t *testing.T) {
 	}
 
 	// The partition waiver is what the operator raised before this package
-	// existed, so an installation that states no filter still gets it.
+	// existed, so an installation that states nothing still gets it.
 	spec := config.DiscoverSpec()
-	if spec == nil || spec.DeviceFilter == nil {
-		t.Fatalf("the run carries no device filter: %+v", spec)
+	if spec == nil {
+		t.Fatal("the installation raises no run")
 	}
-	if !ptr.BoolFromOrFalse(spec.DeviceFilter.EnablePartitionedDevices) {
+	if !ptr.BoolFromOrFalse(spec.EnablePartitionedDevices) {
 		t.Error("the partition waiver was dropped; a fleet that has held data reports nothing")
 	}
 }
@@ -143,6 +144,34 @@ func TestAManagedInstallationRaisesNoRun(t *testing.T) {
 	}
 }
 
+// The partition waiver is a statement about the run, not a member of the device
+// filter, so an installation stating a filter and no waiver still gets the
+// waiver. It is read off the run as written, because where the field sits is
+// what is under test.
+func TestAStatedFilterKeepsThePartitionWaiver(t *testing.T) {
+	config, err := loadFrom(t, configMap(`
+enabled: true
+deviceFilter:
+  pcieDenyList:
+    - "0000:00:1f.0"
+`))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	raw, err := json.Marshal(config.DiscoverSpec())
+	if err != nil {
+		t.Fatalf("marshaling the run: %v", err)
+	}
+	var run map[string]any
+	if err := json.Unmarshal(raw, &run); err != nil {
+		t.Fatalf("reading the run back: %v", err)
+	}
+	if run["enablePartitionedDevices"] != true {
+		t.Errorf("the run is %s, want enablePartitionedDevices true beside the stated filter", raw)
+	}
+}
+
 // The document the chart renders, read back whole. It is one case rather than one
 // per field because the failure it guards against is the document not being read
 // at all.
@@ -159,9 +188,9 @@ tolerations:
     value: dedicated
     effect: NoSchedule
 enableControlPlaneNodes: true
+enableLogicalBlockDevices: true
+enablePartitionedDevices: false
 deviceFilter:
-  enableLogicalBlockDevices: true
-  enablePartitionedDevices: false
   blockDenyList:
     - /dev/sda
   driveSizeRange: 1T-16T
@@ -209,15 +238,15 @@ draft:
 	if !ptr.BoolFromOrFalse(spec.EnableControlPlaneNodes) {
 		t.Error("enableControlPlaneNodes was dropped")
 	}
+	if !ptr.BoolFromOrFalse(spec.EnableLogicalBlockDevices) {
+		t.Error("enableLogicalBlockDevices was dropped")
+	}
 	if spec.DeviceFilter == nil {
 		t.Fatal("the stated device filter was dropped")
 	}
-	if !ptr.BoolFromOrFalse(spec.DeviceFilter.EnableLogicalBlockDevices) {
-		t.Error("enableLogicalBlockDevices was dropped")
-	}
 	// Stated false, and false is what the run gets: the waiver is the default for
 	// an installation that says nothing, not an override of one that says no.
-	if ptr.BoolFromOrFalse(spec.DeviceFilter.EnablePartitionedDevices) {
+	if ptr.BoolFromOrFalse(spec.EnablePartitionedDevices) {
 		t.Error("the stated partition refusal was overridden by the default waiver")
 	}
 	if len(spec.DeviceFilter.BlockDenyList) != 1 || spec.DeviceFilter.BlockDenyList[0] != "/dev/sda" {

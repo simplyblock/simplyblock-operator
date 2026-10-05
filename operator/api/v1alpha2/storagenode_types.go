@@ -28,7 +28,7 @@ import (
 // StorageNodePhase is where the operator has got to with this node. The first two
 // values are the operator's own provisioning path; the rest are its reading of the
 // lifecycle status.status carries in the control plane's own spelling.
-// +kubebuilder:validation:Enum=Pending;Provisioning;Online;Removing;Offline;Degraded;Failed
+// +kubebuilder:validation:Enum=Pending;Provisioning;Online;Removing;Removed;Offline;Degraded;Failed
 type StorageNodePhase string
 
 const (
@@ -43,9 +43,13 @@ const (
 	// carrying its share.
 	StorageNodePhaseOnline StorageNodePhase = "Online"
 
-	// StorageNodePhaseRemoving: a StorageNodeOps with action Remove is draining
-	// it.
+	// StorageNodePhaseRemoving: the control plane is removing the node, from the
+	// removal being accepted until its devices and volumes have moved off.
 	StorageNodePhaseRemoving StorageNodePhase = "Removing"
+
+	// StorageNodePhaseRemoved: the control plane has removed the node. It is the
+	// last phase a node reaches, and nothing brings it back into service.
+	StorageNodePhaseRemoved StorageNodePhase = "Removed"
 
 	// StorageNodePhaseOffline: out of service and reachable, which is where
 	// Shutdown, Suspend, and a host maintenance window leave it.
@@ -106,8 +110,9 @@ const (
 
 // JournalManagerSpec tunes the journal managers on one storage node.
 type JournalManagerSpec struct {
-	// Count is the number of journal managers to configure.
-	// +kubebuilder:validation:Minimum=1
+	// Count is the number of journal managers to configure. The control plane
+	// requires at least 3.
+	// +kubebuilder:validation:Minimum=3
 	// +optional
 	Count *int32 `json:"count,omitempty"`
 
@@ -498,6 +503,11 @@ type StorageNodeStatus struct {
 	// +optional
 	UUID string `json:"uuid,omitempty"`
 
+	// NodeAddTaskID is the control-plane task the last add of this node created. It is how
+	// a node that is still being added reads why its own add is failing.
+	// +optional
+	NodeAddTaskID string `json:"nodeAddTaskID,omitempty"`
+
 	// Status is the lifecycle the control plane reports: online, suspended,
 	// offline, in_creation, in_restart, in_shutdown, unreachable, or timeout. The
 	// values are the control plane's, which is why they are neither PascalCase nor
@@ -507,7 +517,7 @@ type StorageNodeStatus struct {
 
 	// Health is the health flag the control plane reports.
 	// +optional
-	Health bool `json:"health,omitempty"`
+	Health bool `json:"health"`
 
 	// Hostname is the node hostname as the control plane reports it.
 	// +optional
