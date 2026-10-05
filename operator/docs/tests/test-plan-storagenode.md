@@ -531,6 +531,7 @@ Files: `operator/internal/controllers/node/drain_test.go`, `peertargets_test.go`
 | U-496 | A refusal for a reason that does not pass is final, even while the cluster is busy                                                                       | Negative   | `TestARefusalForAReasonThatDoesNotPassIsFinal`                                                                                                          |
 | U-497 | `prepare-removal` refused while the cluster is still rebalancing holds rather than leaving the node offline                                              | Regression | `TestAnAdmissionRefusedForAReasonThatPassesWaits`                                                                                                       |
 | U-498 | A 409 to the removal's graceful shutdown holds with `RemovalDeferred`, naming the reason (2026-10-05-shutdown-precondition-read-as-final)                | Regression | `TestAShutdownTheControlPlaneCannotRunYetWaits`                                                                                                         |
+| U-512 | A DELETE refused without a reason on a cluster degraded only by this removal is final (2026-10-06-bare-refusal-held-on-own-degradation)                  | Regression | `TestABareDeleteRefusalOnAClusterDegradedOnlyByThisRemovalIsFinal`                                                                                      |
 | U-473 | `MigratingDevices` sends `prepare-removal` once the node is offline (2026-10-02)                                                                         | Positive   | `TestMigratingDevicesPreparesTheRemovalOfAnOfflineNode`                                                                                                 |
 | U-474 | A refused admission fails the operation and says the node is left offline for a Restart (2026-10-02)                                                     | Regression | `TestARefusedAdmissionEndsTheDrainAndSaysTheNodeIsOffline`                                                                                              |
 | U-475 | Nothing is sent while the node is still online, suspended, or `in_shutdown`                                                                              | Negative   | `TestMigratingDevicesWaitsForTheShutdownToLand`                                                                                                         |
@@ -998,17 +999,17 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 414       | 309     | 105         |
+| Unit        | 415       | 310     | 105         |
 | Integration | 54        | 0       | 54          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **499**   | **309** | **190**     |
+| **Total**   | **500**   | **310** | **190**     |
 
 Eight further scenarios are struck through: they describe a system this one no
 longer is, and each names the row that replaced it. They are excluded from the
 counts.
 
-Two hundred and twenty-nine distinct test functions cover the three hundred and nine
+Two hundred and thirty distinct test functions cover the three hundred and ten
 covered scenarios, because a table-driven test satisfies one identifier per
 subtest and several rows are two halves of one assertion.
 

@@ -39,15 +39,18 @@ import (
 // previously fetched one cluster at a time, and a list DTO thinner than the
 // detail one would have silently zeroed whatever it omitted.
 type ClusterDTO struct {
-	ID                string `json:"id"`
-	Name              string `json:"name"`
-	NQN               string `json:"nqn"`
-	Status            string `json:"status"`
-	Rebalancing       bool   `json:"is_re_balancing"`
-	Shrinking         bool   `json:"is_shrinking"`
-	NDCS              int    `json:"distr_ndcs"`
-	NPCS              int    `json:"distr_npcs"`
-	MaxFaultTolerance int    `json:"max_fault_tolerance"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	NQN         string `json:"nqn"`
+	Status      string `json:"status"`
+	Rebalancing bool   `json:"is_re_balancing"`
+	Shrinking   bool   `json:"is_shrinking"`
+	// DegradedByRemoval says the cluster is degraded only because of the node
+	// being removed, false on a control plane that does not report it.
+	DegradedByRemoval bool `json:"is_degraded_by_removal"`
+	NDCS              int  `json:"distr_ndcs"`
+	NPCS              int  `json:"distr_npcs"`
+	MaxFaultTolerance int  `json:"max_fault_tolerance"`
 }
 
 // ClusterSubscription streams every cluster, decodes them into an in-memory
