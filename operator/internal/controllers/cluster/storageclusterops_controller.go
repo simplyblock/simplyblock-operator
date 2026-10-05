@@ -273,7 +273,14 @@ func (r *StorageClusterOpsReconciler) advance(
 	current := machine.CurrentState()
 
 	if ops.Spec.Abort {
-		return r.unwind(ctx, ops, machine, current)
+		if machine.CanAbort() {
+			return r.unwind(ctx, ops, current)
+		}
+		// Refused, and the operation runs on: returning here would refuse again
+		// on every pass, with the step never run and its deadline never read.
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, AbortRefused, AbortRefused,
+			"The abort arrived at step %s, which the control plane is part-way through "+
+				"and cannot be stopped; the operation is running on", current)
 	}
 
 	if machine.TimeoutReached() {
@@ -403,29 +410,10 @@ func (r *StorageClusterOpsReconciler) nextStep(
 	return current, fmt.Errorf("step %s declares no successor and is not terminal", current)
 }
 
-// unwind honors spec.abort where the graph allows it, and reports an abort that
-// arrived too late rather than half-undoing the work.
-//
-// The refusal is the point. A step with no abort edge has already asked the
-// control plane for something it is part-way through, and stopping there would
-// leave nothing driving the cluster back to a state somebody can reason about.
+// unwind ends an operation whose abort the graph allows at the current step.
 func (r *StorageClusterOpsReconciler) unwind(
-	ctx context.Context,
-	ops *simplyblockv1alpha2.StorageClusterOps,
-	machine *statemachine.Machine[step],
-	current step,
+	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps, current step,
 ) (ctrl.Result, error) {
-	// The machine is asked rather than a table beside it, and it is asked rather
-	// than the graphs, because it was built for this operation's action: a step
-	// two actions share can be abortable in one of them.
-	if !machine.CanAbort() {
-		// Not a failure of the operation: it carries on. What the user asked
-		// for cannot be done, and saying so is the whole of the response.
-		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, fmt.Sprintf(
-			"the abort arrived at step %s, which the control plane is part-way through "+
-				"and cannot be stopped; the operation is running on", current))
-	}
-
 	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal,
 		OperationAborted, OperationAborted,
 		"The operation was aborted at step %s", current)

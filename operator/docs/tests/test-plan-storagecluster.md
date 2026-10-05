@@ -108,6 +108,7 @@ File: `operator/internal/controllers/cluster/storagecluster_controller_test.go`
 | U-69  | `status.phase` follows the control plane's lifecycle string                                                  | Positive   | `TestThePhaseFollowsTheControlPlanesStatus`                                                |
 | U-99  | A rebalance is read as the phase over `active` and `degraded`, and over no not-serving status                | Positive   | `TestARebalancingClusterReportsItsPhase`, `TestARebalanceIsReadOverTheServingStatusesOnly` |
 | U-100 | A removal in progress is read as `Shrinking` over `active` and `degraded`, and over a rebalance (2026-10-02) | Regression | `TestAShrinkingClusterReportsItsPhase`, `TestARemovalInProgressReadsAsShrinking`           |
+| U-106 | A refused abort lets the walk carry on and is honored once safe (2026-10-05)                                 | Regression | `TestARefusedAbortLetsTheWalkBringTheNodeBack`                                             |
 | U-70  | `status.tasks` holds running and pending only, capped at 20, in the control plane's order                    | Boundary   | `TestTheTaskWindowHoldsOnlyWhatIsRunning`                                                  |
 | U-71  | A task that leaves the window emits `TaskCompleted`                                                          | Positive   | `TestATaskLeavingTheWindowEmitsAnEvent`                                                    |
 | U-72  | The task read fails: the recorded window is kept rather than emptied                                         | Negative   | `TestAFailedTaskReadLeavesTheWindowAlone`                                                  |
@@ -481,11 +482,11 @@ against a real API server under real concurrency.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 184       | 168     | 16          |
+| Unit        | 185       | 169     | 16          |
 | Integration | 32        | 13      | 19          |
 | E2E         | 13        | 0       | 13          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **232**   | **181** | **51**      |
+| **Total**   | **233**   | **182** | **51**      |
 
 The unit count excludes the six struck-through rows, which the rework removed
 rather than left uncovered, and includes the `U-CM-`, `U-SM-`, `U-CP-`, and

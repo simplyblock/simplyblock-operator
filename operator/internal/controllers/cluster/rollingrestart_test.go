@@ -11,8 +11,12 @@ package cluster
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
@@ -454,5 +458,62 @@ func TestASkippedNodeIsReportedAsSkippedRatherThanRestarted(t *testing.T) {
 	if !strings.Contains(ops.Status.Message, "1 of 2") || !strings.Contains(ops.Status.Message, nodeB) {
 		t.Errorf("message = %q, want it to count one of two restarted and name the skipped node",
 			ops.Status.Message)
+	}
+}
+
+// abortedAtShutdown is a one-node rolling restart at ShuttingDownNode, a step
+// with no abort edge, with spec.abort already set.
+func abortedAtShutdown(deadline *metav1.Time) (*simplyblockv1alpha2.StorageClusterOps, *simplyblockv1alpha2.StorageCluster) {
+	ops := newTestOps(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart,
+		func(o *simplyblockv1alpha2.StorageClusterOps) {
+			o.Spec.Abort = true
+			o.Status.Phase = simplyblockv1alpha2.StorageClusterOpsPhaseRunning
+			o.Status.Step = statemachine.KubeSnapshot{
+				State: string(stepShuttingDownNode), Deadline: deadline,
+			}
+			o.Status.RollingRestart = &simplyblockv1alpha2.RollingRestartStatus{Nodes: []string{nodeA}}
+		})
+	cluster := newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+		c.Status.ActiveOpsRef = testOpsName
+	})
+	return ops, cluster
+}
+
+// Regression: 2026-10-05-abort-refused-freezes-walk — an abort refused at a step
+// with no abort edge returned before the step ran, so with spec.abort still set
+// the walk never advanced and the node it had shut down stayed offline.
+func TestARefusedAbortLetsTheWalkBringTheNodeBack(t *testing.T) {
+	fleet := newRollingFleet(nodeA)
+	fleet.status[nodeA] = utils.NodeStatusOffline
+	api := rollingAPI(fleet)
+	rec := &recorder{}
+	ops, cluster := abortedAtShutdown(nil)
+	r := newOpsReconciler(t, api, rec, cluster, ops)
+
+	got, _ := reconcileOps(t, r, 20)
+	// Refused while the node is down, honored at Rebalancing once it is back.
+	if got.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseAborted ||
+		got.Status.Step.State != string(stepRebalancing) {
+		t.Fatalf("phase = %q at step %q, want Aborted at Rebalancing (message %q)",
+			got.Status.Phase, got.Status.Step.State, got.Status.Message)
+	}
+	if api.restartNodeCalls != 1 || !rec.has(AbortRefused) {
+		t.Errorf("restarts = %d, AbortRefused emitted = %t, want 1 and true",
+			api.restartNodeCalls, rec.has(AbortRefused))
+	}
+}
+
+// Regression: 2026-10-05-abort-refused-freezes-walk — the same early return
+// skipped the step deadline, so a step held by a refused abort never timed out.
+func TestARefusedAbortDoesNotSuspendTheStepDeadline(t *testing.T) {
+	fleet := newRollingFleet(nodeA)
+	fleet.status[nodeA] = utils.NodeStatusInShutdown
+	expired := metav1.NewTime(time.Now().Add(-time.Minute))
+	ops, cluster := abortedAtShutdown(&expired)
+	r := newOpsReconciler(t, rollingAPI(fleet), &recorder{}, cluster, ops)
+
+	got, _ := reconcileOps(t, r, 3)
+	if got.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseFailed {
+		t.Errorf("phase = %q, want Failed: the step is past its deadline", got.Status.Phase)
 	}
 }
