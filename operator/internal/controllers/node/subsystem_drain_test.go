@@ -134,3 +134,34 @@ func TestAFinishedSubsystemMoveCountsEveryVolumeItCarried(t *testing.T) {
 		t.Errorf("drain = %+v, want the 3 volumes the subsystem's move carried", got.Status.Drain)
 	}
 }
+
+// Regression: 2026-10-06-drain-replicas-of-moved-siblings — the replica
+// exclusion was built from the volumes still on the drained node, so a sibling
+// whose primary had already moved, mid-cutover or after a retried move,
+// contributed none of its replicas, and the move could be sent onto one of
+// them, which the control plane refuses.
+func TestASubsystemsTargetAvoidsTheReplicasOfSiblingsOffTheNode(t *testing.T) {
+	moved := publishedUnder(replicatedOn("volume-2", "pvc-2", "node-3333"), subsystemA)
+	moved.PrimaryNodeUUID = "node-5555"
+	moved.Nodes = []string{
+		"https://cp/api/v2/clusters/" + opsClusterID + "/storage-nodes/node-5555/",
+		"https://cp/api/v2/clusters/" + opsClusterID + "/storage-nodes/node-3333/",
+	}
+	api := aControlPlane().
+		withPeer(opsPeerID, nodeStatusOnline).
+		withPeer("node-3333", nodeStatusOnline).
+		withPeer("node-4444", nodeStatusOnline).
+		holding(publishedUnder(replicatedOn("volume-1", "pvc-1", opsPeerID), subsystemA), moved)
+	mover := &scriptedMover{}
+	r, _ := aDraining(t, api, mover,
+		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", false),
+		aPersistentVolume("pv-2", "volume-2"), aClaim("pv-2", false))
+
+	if _, err := performing(t, r, aDrain(), stepMigratingVolumes); err != nil {
+		t.Fatalf("migrating: %v", err)
+	}
+	if len(mover.started) != 1 || mover.started[0].TargetNodeUUID != "node-4444" {
+		t.Errorf("moves raised = %+v, want one headed for node-4444, the peer holding a replica of "+
+			"no member: node-3333 holds pvc-2's", mover.started)
+	}
+}

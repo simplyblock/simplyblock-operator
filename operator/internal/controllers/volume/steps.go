@@ -48,6 +48,38 @@ const (
 	migrationStatusCanceled = "canceled"
 )
 
+// subsystemOnTarget reports whether the volume's whole subsystem is on the
+// target node already, which is a move that has happened: most often through
+// an operation naming a sibling that held the subsystem before this one could.
+// The control plane refuses a migration onto the node a volume is on, and
+// retrying that refusal until the step's deadline would fail an operation
+// whose request is already true.
+//
+// The named volume being there is not enough. The control plane moves the
+// members' records to the target one at a time during a cutover, and a
+// migration this operator does not lock, a registered VolumeMigration or one
+// started outside Kubernetes, can be in the middle of one. A subsystem split
+// between the target and another node is waited on rather than reported moved.
+func (r *PersistentVolumeOpsReconciler) subsystemOnTarget(
+	ctx context.Context, subject *subject, volume lvol.Volume,
+) (bool, error) {
+	if volume.StorageNodeID == "" || volume.StorageNodeID != subject.targetUUID {
+		return false, nil
+	}
+	members, err := r.API.SubsystemVolumes(ctx, subject.clusterUUID, volume.NQN)
+	if err != nil {
+		return false, fmt.Errorf("list the volumes of subsystem %s: %w", volume.NQN, err)
+	}
+	for _, member := range members {
+		if member.StorageNodeID != "" && member.StorageNodeID != subject.targetUUID {
+			return false, fmt.Errorf("subsystem %s is on node %s only in part (volume %s is on %s); "+
+				"a cutover is in progress and is waited on", volume.NQN, subject.targetUUID,
+				member.ID, member.StorageNodeID)
+		}
+	}
+	return true, nil
+}
+
 // errAlreadyOnTarget is a volume whose subsystem is already on the node the
 // operation names. It ends the operation as succeeded with nothing migrated,
 // which is a distinct outcome from both a step that finished and one that
@@ -140,20 +172,22 @@ func (r *PersistentVolumeOpsReconciler) createMigration(
 		return fatalf("volume %s publishes under no subsystem, so its migration cannot be addressed",
 			subject.handle.VolumeID)
 	}
-	// A subsystem already on the target is a move that has happened, most often
-	// through an operation naming a sibling that held the subsystem before this
-	// one could. The control plane refuses a migration onto the node a volume is
-	// on, and retrying that refusal until the step's deadline would fail an
-	// operation whose request is already true.
-	if volume.StorageNodeID != "" && volume.StorageNodeID == subject.targetUUID {
-		return errAlreadyOnTarget
-	}
 
 	// Made under a claim on the step: a pass that read the operation before
 	// the previous one recorded its migration loses the claim and creates
 	// nothing.
 	var migration controlplane.Migration
+	//
+	// The already-there shortcut runs under the same claim, so a pass reading
+	// a superseded copy of the operation loses it and cannot finish a newer
+	// operation as Succeeded past the cleanup that one still owes.
 	claimed, err := r.once(ctx, ops, func() error {
+		if there, err := r.subsystemOnTarget(ctx, subject, volume); err != nil || there {
+			if there {
+				return errAlreadyOnTarget
+			}
+			return err
+		}
 		var err error
 		migration, err = r.API.CreateMigration(ctx, subject.clusterUUID, volume.NQN, subject.targetUUID)
 		if err != nil {

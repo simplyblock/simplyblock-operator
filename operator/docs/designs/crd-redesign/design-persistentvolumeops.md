@@ -378,13 +378,17 @@ Migrate
 | `Verifying`  | Delete the validation Jobs and clear the husks the checks left | No validation Job and no dead controller remain |
 
 **A subsystem already on the target is a move that has happened.** `Validating`
-reads the volume before it creates anything, and a volume the control plane reports
-on the target node ends the operation as `Succeeded`, with `TargetNodeIsSource` and
-no migration created. It is the ordinary outcome for an operation naming a sibling
-of a volume another operation has just moved there (§6). The control plane refuses
-a migration onto the node a volume is on, so creating one would only fail at the
-step's deadline. A creation that reports the target as its source is canceled and
-ends the same way.
+reads the volume before it creates anything, and a subsystem whose every member the
+control plane reports on the target node ends the operation as `Succeeded`, with
+`TargetNodeIsSource` and no migration created. It is the ordinary outcome for an
+operation naming a sibling of a volume another operation has just moved there (§6).
+The control plane refuses a migration onto the node a volume is on, so creating one
+would only fail at the step's deadline. A subsystem only partly on the target is
+in the middle of a cutover this operation does not lock, a registered
+`VolumeMigration` or one started outside Kubernetes, and is waited on. The check
+runs under the step's claim, like the create it stands in for, so a pass reading a
+superseded copy of the operation cannot finish it past the cleanup it still owes. A
+creation that reports the target as its source is canceled and ends the same way.
 
 **A create the control plane refuses outright fails the operation at once.** A
 400 is a request the control plane will never accept: a target serving as the
@@ -518,7 +522,9 @@ each end up holding part of it.
 
 **An operation past `Pending` holds its whole subsystem and does not read the
 membership again.** It was admitted holding every member, and only its own terminal
-path releases any of them. Reading the membership on every pass would cost two
+path releases any of them. It confirms only its named volume's lock, through the
+uncached reader when the cache has not caught up with its own write, and it gives no
+lock back on any path but its terminal one. Reading the membership on every pass would cost two
 control-plane calls on each pass of an operation that runs for hours. A volume that
 joins the subsystem after admission is not locked; an operation naming it is refused
 by the control plane while the migration runs, and finds the subsystem already on
@@ -527,6 +533,16 @@ the target afterward (§5).
 **The release clears every annotation naming the operation**, found by the
 annotation itself rather than by the membership, because the membership can change
 while the operation runs and the annotation is exactly what the operation took.
+
+**Every read the lock acts on is uncached.** The members are read through the
+uncached reader before they are patched, so a patch is never made against a copy the
+cache has not updated, and a conflict means another writer rather than the
+operation's own earlier write. The release finds its volumes the same way, because a
+release that gives back a partial acquisition would not find in the cache the
+annotations it had just written. A conflicting release reads the volume again,
+checks its ownership again, and retries. A `Pending` operation whose acquisition
+fails on any path, a conflict, a refused write, or a holder that cannot be read,
+gives back everything it took.
 
 **It is a lock rather than a note because it has the three properties
 [`design-crd-model.md`](design-crd-model.md) §3.2 requires of one.** Acquisition is
