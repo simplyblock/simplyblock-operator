@@ -282,6 +282,23 @@ checkLogCollector() {
   fi
 }
 
+# checkNUMAPlugin asserts that the chart does not render the NUMA device plugin.
+#
+# The operator builds it from the StorageCluster and deletes it with the last
+# one. A chart-rendered copy beside it is two writers of the same DaemonSet, and
+# the chart's would be reverted on every operator pass and reverting the
+# operator's on every upgrade.
+checkNUMAPlugin() {
+  local present
+  present="$(render standalone)"
+  if grep -qxF "DaemonSet/simplyblock-numa-resource-plugin" <<<"$present"; then
+    echo "  numa plugin: the chart renders a DaemonSet the operator already owns"
+    fail=1
+  else
+    echo "  numa plugin: left to the operator"
+  fi
+}
+
 check standalone "${COMMON[@]}"
 check managed "${COMMON[@]}"
 check empty "${OPERATOR[@]}"
@@ -289,5 +306,6 @@ checkEmpty
 checkPair
 checkVendoredCRDs
 checkLogCollector
+checkNUMAPlugin
 
 exit "$fail"

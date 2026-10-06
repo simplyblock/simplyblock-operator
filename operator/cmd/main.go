@@ -567,6 +567,7 @@ func main() {
 		TLSProvider:      tlsProvider,
 		TLSMutualEnabled: tlsMutualEnabled,
 		Workload:         storageNodeWorkload,
+		NUMAPluginImage:  os.Getenv(nodecontroller.NUMAPluginImageEnv),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeWorkload")
 		os.Exit(1)
