@@ -315,17 +315,22 @@ func TestSnapshotterSidecarEnablesGroupSnapshots(t *testing.T) {
 	}
 }
 
-// The node plugin's pods are marked for the log collector. The controller's are
-// not, and this does not ask for them.
+// Both plugins' pods are marked for the log collector.
 //
-// Regression: 2026-10-06-graylog-receives-nothing — the node plugin, which
-// connects and disconnects every NVMe path a volume uses, was never marked, so
-// its logs never reached Graylog.
-func TestTheNodePluginIsShippedToTheLogCollector(t *testing.T) {
-	ds := nodeDaemonSet(testDriver("simplyblock"), testImage)
+// Regression: 2026-10-06-graylog-receives-nothing — neither plugin was marked:
+// not the node plugin, which connects and disconnects every NVMe path a volume
+// uses, and not the controller, which creates, expands, and snapshots them. So
+// their logs never reached Graylog.
+func TestBothPluginsAreShippedToTheLogCollector(t *testing.T) {
+	d := testDriver("simplyblock")
 
-	if got := ds.Spec.Template.Annotations[utils.AnnotationLogCollector]; got != "true" {
-		t.Errorf("node plugin pod template %s = %q, want \"true\"",
-			utils.AnnotationLogCollector, got)
+	for name, template := range map[string]map[string]string{
+		"node plugin":       nodeDaemonSet(d, testImage).Spec.Template.Annotations,
+		"controller plugin": controllerStatefulSet(d, testImage).Spec.Template.Annotations,
+	} {
+		if got := template[utils.AnnotationLogCollector]; got != "true" {
+			t.Errorf("%s pod template %s = %q, want \"true\"",
+				name, utils.AnnotationLogCollector, got)
+		}
 	}
 }

@@ -289,7 +289,10 @@ func controllerStatefulSet(d *simplyblockv1alpha2.SimplyblockDriver, image strin
 			Replicas:    d.Spec.ControllerReplicas,
 			Selector:    &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      labels,
+					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
+				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: n.controllerServiceAccount,
 					NodeSelector:       d.Spec.ControllerNodeSelector,
