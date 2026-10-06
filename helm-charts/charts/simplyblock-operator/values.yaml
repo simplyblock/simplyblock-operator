@@ -17,11 +17,11 @@ image:
     pullPolicy: Always
   simplyblock:
     repository: quay.io/simplyblock-io/simplyblock
-    tag: "26.4.0-Beta1"
+    tag: "26.4.0-beta1"
     pullPolicy: Always
   operator:
     repository: quay.io/simplyblock-io/simplyblock-operator
-    tag: "v26.4.0-Beta1"
+    tag: "v26.4.0-beta1"
     pullPolicy: Always
   rebalancer:
     repository: quay.io/simplyblock-io/simplyblock-rebalancer
@@ -980,7 +980,7 @@ controlCenter:
     repository: simplyblock-io/control-center
     # inherits .Chart.AppVersion when unset. This chart's appVersion is a
     # floating tag, so pin a released console tag here for production.
-    tag: "v26.4.0-Beta1"
+    tag: "v26.4.0-beta1"
     pullPolicy: IfNotPresent
   imagePullSecrets: []
 
@@ -1118,7 +1118,7 @@ controlCenter:
       registry: ""
       repository: simplyblock-io/control-center-mock
       # inherits .Chart.AppVersion when unset
-      tag: "v26.4.0-Beta1"
+      tag: "v26.4.0-beta1"
       pullPolicy: IfNotPresent
     # small-healthy | medium-degraded | large-scale | dr-failover | chaos,
     # or auto for a seeded random pick
