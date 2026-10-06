@@ -23,7 +23,7 @@ COPY csi-driver/cmd/ cmd/
 COPY csi-driver/internal/ internal/
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -o spdkcsi ./cmd/
 
-FROM simplyblock/spdkcsi:base_image_nfs
+FROM simplyblock/spdkcsi:base_image
 
 USER root
 WORKDIR /app
