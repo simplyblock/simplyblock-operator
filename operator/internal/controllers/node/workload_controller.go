@@ -65,6 +65,10 @@ type StorageNodeWorkloadReconciler struct {
 	TLSMutualEnabled bool
 	TLSProvider      string
 
+	// NUMAPluginImage is the NUMA device plugin's image. Empty takes
+	// DefaultNUMAPluginImage.
+	NUMAPluginImage string
+
 	// Workload writes the per-node ConfigMap, which is the one object here whose
 	// contents come from the nodes rather than from the cluster.
 	Workload *Workload
@@ -90,6 +94,9 @@ func (r *StorageNodeWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&discoveryv1.EndpointSlice{}).
+		// The NUMA plugin is shared and is not owned by any one cluster, so it
+		// is watched by name instead.
+		Watches(&appsv1.DaemonSet{}, handler.EnqueueRequestsFromMapFunc(r.clustersOfNUMAPlugin)).
 		Watches(&simplyblockv1alpha2.StorageNode{},
 			handler.EnqueueRequestsFromMapFunc(r.clusterOf)).
 		// The spdk-proxy EndpointSlices are built from the pod list, so a pod
@@ -171,13 +178,19 @@ func (r *StorageNodeWorkloadReconciler) Reconcile(
 ) (ctrl.Result, error) {
 	var cluster simplyblockv1alpha2.StorageCluster
 	if err := r.Get(ctx, req.NamespacedName, &cluster); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+		// A cluster that is gone may have been the last one the shared NUMA
+		// plugin was for.
+		return ctrl.Result{}, r.releaseNUMAPlugin(ctx)
 	}
 
 	// Kubernetes garbage collection tears the workload down with the cluster, so
-	// a cluster on its way out needs nothing done to it here.
+	// a cluster on its way out needs nothing done to it here, beyond the part
+	// of the workload that lives outside its namespace and is shared.
 	if !cluster.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.releaseNUMAPlugin(ctx)
 	}
 
 	// One reading of the node set feeds both halves that depend on it. The
@@ -232,6 +245,7 @@ func (r *StorageNodeWorkloadReconciler) workloadSteps(
 			return r.enrollWorkers(ctx, cluster, nodes)
 		}},
 		{"the daemon set", r.reconcileDaemonSet},
+		{"the NUMA plugin", r.reconcileNUMAPlugin},
 	}
 }
 
