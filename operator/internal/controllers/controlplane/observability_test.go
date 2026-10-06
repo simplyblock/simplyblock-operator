@@ -12,6 +12,8 @@ package controlplane
 import (
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -112,6 +114,38 @@ func TestEveryDatabaseProcessClassIsShippedToTheLogCollector(t *testing.T) {
 		if got := annotations[utils.AnnotationLogCollector]; got != enabled {
 			t.Errorf("process class %s %s = %q, want \"true\"",
 				class, utils.AnnotationLogCollector, got)
+		}
+	}
+}
+
+// Every workload the install applies is marked for the log collector: the
+// database's operator and its exporter, the object store, the management API
+// and the service pools beside it, and the index Job.
+//
+// Regression: 2026-10-06-graylog-receives-nothing — the FoundationDB operator,
+// the exporter, and MinIO were never marked, so their logs never reached
+// Graylog while the services beside them did.
+func TestEveryWorkloadTheInstallAppliesIsShippedToTheLogCollector(t *testing.T) {
+	cp := localControlPlane()
+	objects := append(foundationDBObjects(cp),
+		append(datastoreObjects(cp), managementAPIObjects(cp)...)...)
+	objects = append(objects, indexJob(cp))
+
+	for _, obj := range objects {
+		var template *corev1.PodTemplateSpec
+		switch typed := obj.(type) {
+		case *appsv1.Deployment:
+			template = &typed.Spec.Template
+		case *appsv1.StatefulSet:
+			template = &typed.Spec.Template
+		case *batchv1.Job:
+			template = &typed.Spec.Template
+		default:
+			continue
+		}
+		if got := template.Annotations[utils.AnnotationLogCollector]; got != enabled {
+			t.Errorf("%s pod template %s = %q, want \"true\"",
+				obj.GetName(), utils.AnnotationLogCollector, got)
 		}
 	}
 }
