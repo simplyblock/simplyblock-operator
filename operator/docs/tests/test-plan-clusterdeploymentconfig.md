@@ -144,35 +144,40 @@ File: `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-61     | `configName` unset: a generated name that cannot collide with the first run                                  | Boundary | —    |
 | U-62     | Discovery changes nothing: no cluster, no node, no control-plane write                                       | Negative | —    |
 
-### The Automatic First Run (design §8.4)
+### The Requested First Run and Its Seed (design §8.4)
 
-File: `operator/internal/controllers/deployment/bootstrap_test.go`
+Files: `operator/internal/controllers/deployment/draftseed_test.go` and
+`operator/internal/controllers/deployment/probeidentity_test.go`
 
-The run these rows cover is the one nobody asks for. Probing puts a Job on every
-worker, so the guard is most of the behavior: `U-168` to `U-172` are the states
-that decline, and each of them is enough on its own.
+No run is raised by the operator. `U-167` to `U-177` covered the automatic first
+run and its guard, and are retired with it. What replaces them is the seed a run
+states on its own spec and the identity the operator creates for its probes.
 
-| #     | Scenario                                                                              | Type       | Test                                            |
-|-------|---------------------------------------------------------------------------------------|------------|-------------------------------------------------|
-| U-167 | An install with nothing in it: one `Discover` run, narrowing nothing                  | Positive   | `TestAFreshInstallRaisesOneDiscoveryRun`        |
-| U-168 | A previous result of any of the three kinds: declined, and it says which              | Negative   | `TestAPreviousResultDeclinesTheRun`             |
-| U-169 | A restart after the first run: nothing further is raised                              | Negative   | `TestARestartRaisesNothingFurther`              |
-| U-170 | An object already carrying that name: left as it is, not replaced                     | Boundary   | `TestAnObjectByThatNameIsNotReplaced`           |
-| U-171 | A cluster with no node to inspect: no run                                             | Negative   | `TestAClusterWithNothingToInspectRaisesNoRun`   |
-| U-172 | A fleet whose every worker is cordoned: no run                                        | Negative   | `TestACordonedFleetRaisesNoRun`                 |
-| U-173 | One usable worker: enough to raise it                                                 | Boundary   | `TestAWorkerIsEnoughToRaiseTheRun`              |
-| U-174 | The run waives a partition table, so a fleet that has held data is not reported empty | Positive   | `TestTheInitialRunWaivesAPartitionTable`        |
-| U-175 | One replica asks, because the three reads are not idempotent                          | Positive   | `TestTheCheckIsLeaderElected`                   |
-| U-176 | The operator's own webhook not serving yet: the create is waited out, not lost        | Regression | `TestTheRunOutlastsAWebhookThatIsNotServingYet` |
-| U-177 | A webhook that answered and refused: not retried, because waiting changes nothing     | Negative   | `TestARejectedRunIsNotRetried`                  |
+| #         | Scenario                                                                                     | Type     | Test                                           |
+|-----------|----------------------------------------------------------------------------------------------|----------|------------------------------------------------|
+| ~~U-167~~ | An install with nothing in it raises one `Discover` run. Retired: nothing raises a run       | —        | —                                              |
+| ~~U-168~~ | A previous result declines the automatic run. Retired with it                                | —        | —                                              |
+| ~~U-169~~ | A restart raises nothing further. Retired with it                                            | —        | —                                              |
+| ~~U-170~~ | An object under the run's name is left as it is. Retired with it                             | —        | —                                              |
+| ~~U-171~~ | A cluster with no node raises no run. Retired with it                                        | —        | —                                              |
+| ~~U-172~~ | A cordoned fleet raises no run. Retired with it                                              | —        | —                                              |
+| ~~U-173~~ | One usable worker is enough to raise it. Retired with it                                     | —        | —                                              |
+| ~~U-174~~ | The automatic run waives a partition table. Retired with it                                  | —        | —                                              |
+| ~~U-175~~ | One replica asks. Retired with it                                                            | —        | —                                              |
+| ~~U-176~~ | A webhook not yet serving is waited out. Retired with it                                     | —        | —                                              |
+| ~~U-177~~ | A refused run is not retried. Retired with it                                                | —        | —                                              |
+| U-231     | A run's `spec.discover.seed` is what its draft proposes for the cluster                      | Positive | `TestTheStatedLayoutSeedsTheInitialRunsDraft`  |
+| U-232     | The seed's edge flag and images reach the document                                           | Positive | `TestTheStatedDraftFieldsReachTheDocument`     |
+| U-233     | A run with no seed gets discovery's own proposal                                             | Negative | `TestARunWithNoSeedGetsNone`                   |
+| U-234     | A field the seed leaves out stays derived                                                    | Boundary | `TestAnUnstatedFieldStaysDerived`              |
+| U-235     | A growth run is not seeded with a layout                                                     | Negative | `TestAGrowthDraftIsNotSeeded`                  |
+| U-236     | A probing run creates its ServiceAccount, Role, and binding, and its Jobs run as the account | Positive | `TestAProbeRunCreatesItsOwnIdentity`           |
+| U-237     | The probe Role grants create and update on ConfigMaps and nothing else                       | Negative | `TestTheProbeRoleGrantsOnlyWhatTheReportNeeds` |
+| U-238     | The identity is owned by the run                                                             | Positive | `TestTheProbeIdentityIsOwnedByTheRun`          |
+| U-239     | A second pass creates nothing further                                                        | Boundary | `TestAProbeRunsIdentityIsCreatedOnce`          |
 
-`U-176` is the row a fresh install turns on. An `OperatorOps` is validated by a
-webhook this same operator serves, so the create races the webhook server the
-manager is still starting, and `Start` is not a loop: the single attempt lost the
-draft for the lifetime of the installation, and an administrator found an empty
-namespace where the fleet's disks should have been (2026-09-20). `U-177` is what
-keeps the remedy from becoming a write repeated until the deadline against a
-webhook that already gave its answer.
+`U-231` is the row the seed turns on: every member of it is immutable on the
+cluster the draft expands into, so a reviewer approving a guess cannot undo it.
 
 ### OperatorOps Lifecycle (design §7)
 

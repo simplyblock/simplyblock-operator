@@ -1,5 +1,4 @@
-// What an installation's stated cluster layout does to the document a discovery
-// run writes.
+// What a run's stated seed does to the document a discovery run writes.
 //
 // The seed exists for the fields a wrong guess is expensive to undo, which is
 // mostly the fields that are immutable on the StorageCluster a draft expands
@@ -8,9 +7,8 @@
 // rather than a reading; enableDriveFormat is spent during provisioning rather
 // than held as cluster state, and undoing it means restoring a backup.
 //
-// It applies to the one run the operator raised for this installation and to no
-// other, which is the half of this the label carries and the half every case
-// below is about.
+// It applies to the run that states it and to no other, because it lives on that
+// run's spec.discover.seed and nothing else carries it.
 
 package deployment
 
@@ -22,41 +20,40 @@ import (
 
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
-	"github.com/simplyblock/simplyblock-operator/internal/bootstrap"
 	discoverypkg "github.com/simplyblock/simplyblock-operator/internal/discovery"
 )
 
-// statedLayout is an installation that decided the things discovery can only
-// guess at.
-func statedLayout() *bootstrap.Config {
-	return &bootstrap.Config{
-		Draft: bootstrap.DraftConfig{
-			EdgeCluster: ptr.To(true),
-			Images: bootstrap.ImagesConfig{
-				SPDK:      "quay.io/simplyblock-io/spdk:v26.2.6",
-				SPDKProxy: "quay.io/simplyblock-io/spdk-proxy:v26.2.6",
+// statedLayout is a run's seed: the things its author decided that discovery can
+// only guess at.
+func statedLayout() *simplyblockv1alpha2.DraftSeed {
+	return &simplyblockv1alpha2.DraftSeed{
+		EdgeCluster: ptr.To(true),
+		Images: &simplyblockv1alpha2.DeploymentImages{
+			SPDK:      &simplyblockv1alpha2.ImageSpec{Image: "quay.io/simplyblock-io/spdk:v26.2.6"},
+			SPDKProxy: &simplyblockv1alpha2.ImageSpec{Image: "quay.io/simplyblock-io/spdk-proxy:v26.2.6"},
+		},
+		Cluster: &simplyblockv1alpha2.DraftSeedCluster{
+			Name: "fleet-cluster",
+			Stripe: &simplyblockv1alpha2.StripeSpec{
+				DataChunks:   ptr.To(int32(4)),
+				ParityChunks: ptr.To(int32(2)),
 			},
-			Cluster: bootstrap.ClusterConfig{
-				Name: "fleet-cluster",
-				Stripe: &simplyblockv1alpha2.StripeSpec{
-					DataChunks:   ptr.To(int32(4)),
-					ParityChunks: ptr.To(int32(2)),
-				},
-				MaxSubsystemCount:        ptr.To(int32(50)),
-				EnableDriveFormat:        ptr.To(false),
-				EnableChecksumValidation: ptr.To(true),
-				EnableAtomicity4K:        ptr.To(true),
-			},
+			MaxSubsystemCount:        ptr.To(int32(50)),
+			EnableDriveFormat:        ptr.To(false),
+			EnableChecksumValidation: ptr.To(true),
+			EnableAtomicity4K:        ptr.To(true),
 		},
 	}
 }
 
-// initialRun is the run the operator raised for this installation, marked as such.
+// seeded is a discovery spec stating the layout.
+func seeded() *simplyblockv1alpha2.DiscoverSpec {
+	return &simplyblockv1alpha2.DiscoverSpec{Seed: statedLayout()}
+}
+
+// initialRun is a run with a name, which is all draftFor reads of it.
 func initialRun() *simplyblockv1alpha2.OperatorOps {
-	return &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{
-		Name:   "initial-discovery",
-		Labels: map[string]string{InitialDiscoveryLabel: "true"},
-	}}
+	return &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "initial-discovery"}}
 }
 
 func noteMentioning(notes []string, want string) bool {
@@ -73,8 +70,7 @@ func noteMentioning(notes []string, want string) bool {
 func TestTheStatedLayoutSeedsTheInitialRunsDraft(t *testing.T) {
 	r := &OperatorOpsReconciler{}
 
-	draft, notes, err := r.draftFor(initialRun(), &simplyblockv1alpha2.DiscoverSpec{},
-		discoverypkg.Plan{}, statedLayout())
+	draft, notes, err := r.draftFor(initialRun(), seeded(), discoverypkg.Plan{})
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
 	}
@@ -120,8 +116,7 @@ func TestTheStatedLayoutSeedsTheInitialRunsDraft(t *testing.T) {
 func TestTheStatedDraftFieldsReachTheDocument(t *testing.T) {
 	r := &OperatorOpsReconciler{}
 
-	draft, _, err := r.draftFor(initialRun(), &simplyblockv1alpha2.DiscoverSpec{},
-		discoverypkg.Plan{}, statedLayout())
+	draft, _, err := r.draftFor(initialRun(), seeded(), discoverypkg.Plan{})
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
 	}
@@ -146,19 +141,15 @@ func TestTheStatedDraftFieldsReachTheDocument(t *testing.T) {
 	}
 }
 
-// A run somebody wrote is not the run this installation was configured for, and
-// its draft is discovery's own proposal.
-//
-// Without this, a second discovery run months later would silently re-apply a
-// layout stated at install time, over a fleet that has since changed.
-func TestARunNobodyLabeledGetsNoSeed(t *testing.T) {
+// A run that states no seed gets discovery's own proposal.
+func TestARunWithNoSeedGetsNone(t *testing.T) {
 	r := &OperatorOpsReconciler{}
 	theirs := &simplyblockv1alpha2.OperatorOps{
 		ObjectMeta: metav1.ObjectMeta{Name: "discover-again"},
 	}
 
 	draft, _, err := r.draftFor(theirs, &simplyblockv1alpha2.DiscoverSpec{},
-		discoverypkg.Plan{}, statedLayout())
+		discoverypkg.Plan{})
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
 	}
@@ -168,24 +159,24 @@ func TestARunNobodyLabeledGetsNoSeed(t *testing.T) {
 		t.Fatal("the draft proposes no cluster")
 	}
 	if cluster.Name == "fleet-cluster" {
-		t.Error("a hand-written run was given the installation's stated cluster name")
+		t.Error("a run that stated no seed was given a cluster name")
 	}
 	if ptr.IntFrom(cluster.MaxSubsystemCount, 0) != int(discoverypkg.DefaultMaxSubsystemCount) {
 		t.Errorf("maxSubsystemCount = %v, want discovery's own %d",
 			cluster.MaxSubsystemCount, discoverypkg.DefaultMaxSubsystemCount)
 	}
 	if !ptr.BoolFromOrFalse(cluster.EnableDriveFormat) {
-		t.Error("a hand-written run was given the installation's refusal to format drives")
+		t.Error("a run that stated no seed was given a refusal to format drives")
 	}
 	if cluster.EnableChecksumValidation != nil {
 		t.Errorf("enableChecksumValidation = %v, want the cluster's own default to decide",
 			cluster.EnableChecksumValidation)
 	}
 	if draft.Spec.EdgeCluster != nil {
-		t.Error("a hand-written run's draft was called an edge deployment")
+		t.Error("a run that stated no seed has an edge draft")
 	}
 	if draft.Spec.Images != nil {
-		t.Errorf("images = %+v, want a hand-written run's draft to pin none", draft.Spec.Images)
+		t.Errorf("images = %+v, want a run that stated no seed to pin none", draft.Spec.Images)
 	}
 }
 
@@ -194,12 +185,11 @@ func TestARunNobodyLabeledGetsNoSeed(t *testing.T) {
 // more.
 func TestAnUnstatedFieldStaysDerived(t *testing.T) {
 	r := &OperatorOpsReconciler{}
-	partial := &bootstrap.Config{Draft: bootstrap.DraftConfig{
-		Cluster: bootstrap.ClusterConfig{EnableChecksumValidation: ptr.To(true)},
+	partial := &simplyblockv1alpha2.DiscoverSpec{Seed: &simplyblockv1alpha2.DraftSeed{
+		Cluster: &simplyblockv1alpha2.DraftSeedCluster{EnableChecksumValidation: ptr.To(true)},
 	}}
 
-	draft, _, err := r.draftFor(initialRun(), &simplyblockv1alpha2.DiscoverSpec{},
-		discoverypkg.Plan{}, partial)
+	draft, _, err := r.draftFor(initialRun(), partial, discoverypkg.Plan{})
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
 	}
@@ -228,9 +218,10 @@ func TestAnUnstatedFieldStaysDerived(t *testing.T) {
 // admission would refuse beside a clusterRef.
 func TestAGrowthDraftIsNotSeeded(t *testing.T) {
 	r := &OperatorOpsReconciler{}
-	spec := &simplyblockv1alpha2.DiscoverSpec{ClusterRef: "simplyblock-cluster"}
+	spec := seeded()
+	spec.ClusterRef = "simplyblock-cluster"
 
-	draft, _, err := r.draftFor(initialRun(), spec, discoverypkg.Plan{}, statedLayout())
+	draft, _, err := r.draftFor(initialRun(), spec, discoverypkg.Plan{})
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
 	}

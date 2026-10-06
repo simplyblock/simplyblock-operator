@@ -4,12 +4,15 @@
 # cluster and this is what an administrator applies afterward, or edits into their
 # own manifests.
 #
-# Most deployments need none of it. A fresh install raises one discovery run by
-# itself, which inspects the fleet and writes a ClusterDeploymentConfig in Draft;
-# reviewing that draft and setting `approved: true` on it is the whole deployment.
-# The document below is what that draft looks like, for a deployment somebody
-# would rather write than review, and for the fields a draft leaves for a reviewer
-# to fill in.
+# Most deployments start from a discovery run. It inspects the fleet and writes a
+# ClusterDeploymentConfig in Draft, and reviewing that draft and setting
+# `approved: true` on it is the whole deployment. Nothing raises the run by
+# itself: it is the first document below, applied once the ControlPlane and the
+# SimplyblockDriver exist. The ClusterDeploymentConfig after it is what that draft
+# looks like, for a deployment somebody would rather write than review, and for the
+# fields a draft leaves for a reviewer to fill in.
+#
+# Apply the first document alone to run discovery, then:
 #
 #   kubectl get clusterdeploymentconfigs -n simplyblock
 #   kubectl edit  clusterdeploymentconfig <name> -n simplyblock   # set approved: true
@@ -17,6 +20,31 @@
 # The document creates the StorageCluster and its StorageNodes. Applying a
 # StorageCluster of the same name alongside it is refused with ClusterExists,
 # because a config creates or adds and never reconciles a difference.
+---
+# A discovery run. It probes every worker its filters allow, then writes a draft
+# ClusterDeploymentConfig and changes nothing else. Every field below is optional.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: initial-discovery
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    # Restricts which workers are inspected.
+    # nodeSelector:
+    #   node-role.kubernetes.io/storage: ""
+    # What the probe pods and the draft's storage nodes tolerate.
+    # tolerations:
+    #   - operator: Exists
+    # What the draft proposes for the fields a reading cannot settle. Each is
+    # fixed on the cluster once it exists, so a value stated here is one a
+    # reviewer is not asked to guess at.
+    # seed:
+    #   cluster:
+    #     name: simplyblock-cluster
+    #     maxSubsystemCount: 50
+    #     enableChecksumValidation: true
 ---
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ClusterDeploymentConfig

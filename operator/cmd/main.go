@@ -739,21 +739,6 @@ func main() {
 			"a discovery run will read the distribution from the nodes alone")
 	}
 
-	// The discovery run's probe Jobs run the operator's own image, so that a Job
-	// cannot be a version out of step with the operator that created it. The
-	// image is read from the environment rather than from the running pod,
-	// because a pod may name its image by a tag the registry has since moved and
-	// what a Job needs is the reference the operator was deployed with.
-	// A fresh install raises one discovery run by itself, so an administrator
-	// finds a draft of what the fleet has rather than an empty namespace. It is
-	// declined the moment anything already exists (design-clusterdeploymentconfig.md §8).
-	if err := (&deployment.InitialDiscovery{
-		Client:    mgr.GetClient(),
-		Namespace: operatorNamespace,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to add the initial discovery check")
-		os.Exit(1)
-	}
 	if err := (&deployment.ClusterDeploymentConfigReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
@@ -763,13 +748,17 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ClusterDeploymentConfig")
 		os.Exit(1)
 	}
+	// The discovery run's probe Jobs run the operator's own image, so that a Job
+	// cannot be a version out of step with the operator that created it. The
+	// image is read from the environment rather than from the running pod,
+	// because a pod may name its image by a tag the registry has since moved and
+	// what a Job needs is the reference the operator was deployed with.
 	if err := (&deployment.OperatorOpsReconciler{
 		Client:     mgr.GetClient(),
 		Scheme:     mgr.GetScheme(),
 		Recorder:   mgr.GetEventRecorder("operatorops-controller"),
 		Discovery:  operatorOpsDiscovery,
 		ProbeImage: os.Getenv(deployment.NodeProbeImageEnv),
-		Namespace:  operatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OperatorOps")
 		os.Exit(1)

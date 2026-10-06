@@ -28,7 +28,6 @@ OPERATOR=(
   "ValidatingWebhookConfiguration/simplyblock-operator-validating-webhook-configuration"
   "ServiceAccount/simplyblock-operator"
   "Service/simplyblock-csi-link"
-  "ConfigMap/simplyblock-bootstrap"
 )
 
 # Objects the standalone and managed profiles render on top of OPERATOR.
@@ -192,10 +191,9 @@ checkVendoredCRDs() {
 #
 # The profile exists for an administrator who writes the ControlPlane and the
 # SimplyblockDriver by hand after the install. A chart-rendered one beside theirs
-# is a second CSI deployment, or a control plane they did not ask for, and the
-# discovery run is a draft cluster proposed from workers they did not choose.
+# is a second CSI deployment, or a control plane they did not ask for.
 checkEmpty() {
-  local present unwanted bootstrap
+  local present unwanted
   local clean=1
 
   present="$(render empty)"
@@ -213,18 +211,8 @@ checkEmpty() {
     fi
   done
 
-  bootstrap="$(helm template sb "$CHART" --namespace simplyblock \
-    "${CAPABILITIES[@]}" \
-    --set deployment.profile=empty \
-    --show-only templates/bootstrap-configmap.yaml 2>/dev/null)"
-  if ! grep -qE '^ +enabled: false$' <<<"$bootstrap"; then
-    echo "  empty: the bootstrap ConfigMap does not decline the discovery run"
-    clean=0
-    fail=1
-  fi
-
   if [ "$clean" -eq 1 ]; then
-    echo "  empty: no ControlPlane, no SimplyblockDriver, no discovery run"
+    echo "  empty: no ControlPlane, no SimplyblockDriver"
   fi
 }
 
