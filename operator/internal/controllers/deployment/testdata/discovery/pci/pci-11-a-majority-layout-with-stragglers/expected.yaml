@@ -23,7 +23,9 @@ spec:
     family: Debian
   nodeSets:
   - groups:
-    - devices:
+    - dataInterfaces:
+      - eth1
+      devices:
         nvme:
         - 0000:5e:00.0
         - 0000:5f:00.0
@@ -52,7 +54,9 @@ spec:
       - worker-18
       - worker-19
       - worker-20
-    - devices:
+    - dataInterfaces:
+      - eth1
+      devices:
         nvme:
         - 0000:3b:00.0
         - 0000:3c:00.0
@@ -67,7 +71,9 @@ spec:
       - worker-24
       - worker-25
       - worker-26
-    - devices:
+    - dataInterfaces:
+      - eth1
+      devices:
         nvme:
         - 0000:2b:00.0
         - 0000:2b:00.1
@@ -75,7 +81,9 @@ spec:
       name: group-3-nvme-2x3T
       workers:
       - worker-27
-    - devices:
+    - dataInterfaces:
+      - eth1
+      devices:
         nvme:
         - 0000:2c:00.0
         - 0000:2c:00.1
@@ -83,7 +91,9 @@ spec:
       name: group-4-nvme-2x3T
       workers:
       - worker-28
-    - devices:
+    - dataInterfaces:
+      - eth1
+      devices:
         nvme:
         - 0000:2d:00.0
         - 0000:2d:00.1
@@ -91,7 +101,9 @@ spec:
       name: group-5-nvme-2x3T
       workers:
       - worker-29
-    - devices:
+    - dataInterfaces:
+      - eth1
+      devices:
         nvme:
         - 0000:2e:00.0
         - 0000:2e:00.1
@@ -99,7 +111,9 @@ spec:
       name: group-6-nvme-2x3T
       workers:
       - worker-30
-    - devices:
+    - dataInterfaces:
+      - eth1
+      devices:
         nvme:
         - 0000:2f:00.0
         - 0000:2f:00.1
@@ -107,7 +121,9 @@ spec:
       name: group-7-nvme-2x3T
       workers:
       - worker-31
-    - devices:
+    - dataInterfaces:
+      - eth1
+      devices:
         nvme:
         - "0000:30:00.0"
         - "0000:30:00.1"

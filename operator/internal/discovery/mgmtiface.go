@@ -84,12 +84,22 @@ func ManagementInterface(report nodeprobe.Report, nodeAddress string) string {
 // interface, and a draft that named one anyway would produce a storage node the
 // rest of the fleet cannot reach.
 func ManagementOf(report nodeprobe.Report, nodeAddress string) Management {
+	return managementOf(report, nodeAddress, nil)
+}
+
+// managementOf applies the ladder, passing over every interface that shares
+// hardware with avoid: the data interfaces, when the management interface is
+// chosen after them.
+func managementOf(report nodeprobe.Report, nodeAddress string, avoid map[string]bool) Management {
 	index := interfacesByName(report)
 
 	var candidates []nodeprobe.Interface
 	for _, iface := range report.Interfaces {
-		holdsNodeAddress := nodeAddress != "" && slices.Contains(iface.Addresses, nodeAddress)
+		holdsNodeAddress := holdsAddress(iface, nodeAddress)
 		if !servesManagement(iface, holdsNodeAddress) {
+			continue
+		}
+		if !holdsNodeAddress && sharesHardware(iface.Name, index, avoid) {
 			continue
 		}
 		if holdsNodeAddress {
@@ -242,10 +252,29 @@ func simplicity(kind inventory.LinkKind) int {
 // nowhere, so an interface holding only those holds nothing usable. An
 // unspecified or loopback address is the same case read differently.
 func reachable(address string) bool {
-	ip := net.ParseIP(address)
+	ip := ipOf(address)
 	if ip == nil {
 		return false
 	}
 	return !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() &&
 		!ip.IsLoopback() && !ip.IsUnspecified()
+}
+
+// ipOf is the IP an address names, read with or without the prefix length the
+// probe reports it with, and nil for one that does not parse.
+func ipOf(address string) net.IP {
+	if ip, _, err := net.ParseCIDR(address); err == nil {
+		return ip
+	}
+	return net.ParseIP(address)
+}
+
+// holdsAddress reports whether an interface holds the address given, which
+// Kubernetes states without a prefix length and the probe reports with one.
+func holdsAddress(iface nodeprobe.Interface, address string) bool {
+	want := net.ParseIP(address)
+	if want == nil {
+		return false
+	}
+	return slices.ContainsFunc(iface.Addresses, func(held string) bool { return want.Equal(ipOf(held)) })
 }

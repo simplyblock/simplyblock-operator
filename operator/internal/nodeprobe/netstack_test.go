@@ -116,3 +116,24 @@ func TestAReportFromTheSchemaBeforeTheStackIsRefused(t *testing.T) {
 		t.Errorf("the report is version %d, and the kind and the stack arrived at version 4", ReportVersion)
 	}
 }
+
+func TestAReportFromBeforeThePrefixLengthIsRefused(t *testing.T) {
+	// A version-8 report carries its addresses without a prefix length, and a
+	// reader that took it as current would have no network to compare between
+	// two workers and would compare nothing. Refusing it re-runs the probe.
+	before := []byte(`{"version":8,"node":"worker-1"}`)
+
+	if _, err := Decode(before); err == nil {
+		t.Fatal("a report from before the prefix length was accepted")
+	}
+}
+
+func TestTheReportCarriesEachAddressWithItsPrefixLength(t *testing.T) {
+	report := FromInventory("worker-1", time.Time{}, inventory.Inventory{
+		Interfaces: []inventory.Interface{{Name: "eth0", Addresses: []string{"10.10.0.1/24"}}},
+	}, nil)
+
+	if got := report.Interfaces[0].Addresses; len(got) != 1 || got[0] != "10.10.0.1/24" {
+		t.Errorf("eth0 carries %v, want 10.10.0.1/24", got)
+	}
+}

@@ -46,7 +46,12 @@ import (
 // operator, drafts exactly the enumeration-order names this version exists to
 // replace, and says nothing about having done so. Refusing it re-runs the probe,
 // which is cheap and correct.
-const ReportVersion = 8
+//
+// Version 9 carries each interface address with its prefix length, and is a bump
+// for the same reason. A version-8 address names no network, so a reader
+// comparing the networks of two workers would find nothing to compare and pass
+// a fleet whose links cannot reach each other.
+const ReportVersion = 9
 
 // Report is one worker's inventory as the probe found it.
 type Report struct {
@@ -310,10 +315,12 @@ type Interface struct {
 	VLAN  *VLAN  `json:"vlan,omitempty"`
 	VXLAN *VXLAN `json:"vxlan,omitempty"`
 
-	// Addresses are the IP addresses the interface holds, without a prefix
-	// length. They are what makes a management interface identifiable: the one
-	// a draft names is the one carrying the address the cluster already reaches
-	// the machine on.
+	// Addresses are the IP addresses the interface holds, in CIDR notation such
+	// as 10.10.0.1/24. They are what makes a management interface identifiable:
+	// the one a draft names is the one carrying the address the cluster already
+	// reaches the machine on. The prefix length is what says which network the
+	// address is on, which is how two workers' links are told to be on one
+	// network or on two.
 	Addresses []string `json:"addresses,omitempty"`
 }
 

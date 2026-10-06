@@ -146,8 +146,12 @@ type Interface struct {
 	// Config.InterfaceLinks for the same reason VLAN does.
 	VXLAN *VXLANOverlay
 
-	// Addresses are the IP addresses assigned to the interface, as plain
-	// addresses without a prefix length, in the order the host reports them.
+	// Addresses are the IP addresses assigned to the interface in CIDR
+	// notation, such as 10.10.0.1/24, in the order the host reports them. The
+	// prefix length is kept because it is the only reading that says which
+	// network an address is on: two machines whose addresses share a prefix can
+	// reach each other directly, and the address alone does not say how long
+	// that prefix is.
 	//
 	// They do not come from sysfs, which does not carry them. They are read
 	// through Config.InterfaceAddresses, and a caller that supplies none gets
@@ -157,7 +161,7 @@ type Interface struct {
 }
 
 // AddressReader answers which IP addresses each interface holds, by interface
-// name.
+// name, in CIDR notation.
 //
 // It is a seam because sysfs does not carry addresses and the kernel's own
 // answer is namespace-scoped: a process reading it reports the addresses of the
@@ -183,11 +187,12 @@ func LocalAddresses() (map[string][]string, error) {
 			continue
 		}
 		for _, addr := range addrs {
-			ip, _, err := net.ParseCIDR(addr.String())
+			ip, network, err := net.ParseCIDR(addr.String())
 			if err != nil {
 				continue
 			}
-			out[iface.Name] = append(out[iface.Name], ip.String())
+			ones, _ := network.Mask.Size()
+			out[iface.Name] = append(out[iface.Name], fmt.Sprintf("%s/%d", ip, ones))
 		}
 	}
 	return out, nil
