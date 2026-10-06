@@ -345,16 +345,16 @@ where `IOPS` and `ThroughputBytesPerSec` are queried from Prometheus using the m
 
 **Prometheus metric sources:**
 
-| Metric                               | Label                | Value                      |
-|--------------------------------------|----------------------|----------------------------|
-| `lvol_read_io_ps{cluster, lvol}`     | `lvol` = volume UUID | read IOPS                  |
-| `lvol_write_io_ps{cluster, lvol}`    | `lvol` = volume UUID | write IOPS                 |
-| `lvol_read_bytes_ps{cluster, lvol}`  | `lvol` = volume UUID | read throughput (bytes/s)  |
-| `lvol_write_bytes_ps{cluster, lvol}` | `lvol` = volume UUID | write throughput (bytes/s) |
+| Metric                                                   | Label                | Value                       |
+|----------------------------------------------------------|----------------------|-----------------------------|
+| `simplyblock_lvol_read_operations_total{cluster, lvol}`  | `lvol` = volume UUID | cumulative read operations  |
+| `simplyblock_lvol_write_operations_total{cluster, lvol}` | `lvol` = volume UUID | cumulative write operations |
+| `simplyblock_lvol_read_bytes_total{cluster, lvol}`       | `lvol` = volume UUID | cumulative bytes read       |
+| `simplyblock_lvol_write_bytes_total{cluster, lvol}`      | `lvol` = volume UUID | cumulative bytes written    |
 
-`IOPS = lvol_read_io_ps + lvol_write_io_ps`, `ThroughputBytesPerSec = lvol_read_bytes_ps + lvol_write_bytes_ps`.
+`IOPS` is the five-minute rate of the read and write operation counters summed, and `ThroughputBytesPerSec` is the same for the byte counters.
 
-These metrics are exported by the control plane from its own Prometheus scrape of the SPDK statistics. `atlas-lib`'s `prometheus.Provider.VolumeIO` (`atlas-lib/prometheus/volumeio.go`) queries all four metrics in a single query and merges the results by volume UUID.
+These counters are exported by the control plane's v2 metrics endpoint. `atlas-lib`'s `prometheus.Provider.VolumeIO` (`atlas-lib/prometheus/volumeio.go`) queries both rates in a single query and merges the results by volume UUID.
 
 **Default weights:**
 

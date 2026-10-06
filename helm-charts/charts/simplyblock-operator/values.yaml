@@ -814,6 +814,10 @@ reloader:
       image:
         name: quay.io/simplyblock-io/reloader
         tag: v1.3.0
+      pod:
+        # Ships the pod's logs to Graylog through the chart's fluent-bit.
+        annotations:
+          log-collector/enabled: "true"
       nodeSelector: {}
       tolerations: []
 

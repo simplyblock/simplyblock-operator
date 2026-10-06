@@ -25,6 +25,7 @@ import (
 
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // The object store's images and its fixed configuration.
@@ -184,8 +185,11 @@ sleep infinity
 			Replicas:    ptr.To(int32(1)),
 			Selector:    &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
-				Spec:       spec,
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      labels,
+					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
+				},
+				Spec: spec,
 			},
 			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{claim},
 		},

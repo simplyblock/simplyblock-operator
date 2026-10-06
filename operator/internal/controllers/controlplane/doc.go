@@ -33,6 +33,13 @@
 // and every one is non-essential in the phase table, so they stay where they
 // are. [componentTable] lists what is installed and therefore watched.
 //
+// The install still tells the control plane whether that half is there.
+// spec.source.local.observability becomes ENABLE_MONITORING and
+// MONITORING_SECRET on the management API, which the control plane reads when
+// the first cluster is created to open the Graylog input the log collector ships
+// to and to create the Grafana user. Without them it records monitoring as
+// disabled for good, and Graylog receives nothing.
+//
 // # Why the datastore step applies an object store
 //
 // design-controlplane.md §4.2 names ApplyingDatastore "the document store the

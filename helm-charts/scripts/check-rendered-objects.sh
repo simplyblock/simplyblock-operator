@@ -228,11 +228,66 @@ checkEmpty() {
   fi
 }
 
+# checkLogCollector asserts that every workload the chart renders is marked for
+# the log collector, with every optional workload switched on.
+#
+# fluent-bit ships only pods annotated log-collector/enabled=true, so a workload
+# left unmarked never reaches Graylog. The observability stack itself is exempt:
+# Graylog shipping its own logs into itself is a loop that fails with it.
+checkLogCollector() {
+  local yq="${YQ:-yq}"
+  local unmarked
+  local -a exempt=(
+    "Deployment/simplyblock-graylog"
+    "Deployment/simplyblock-grafana"
+    "Deployment/simplyblock-thanos"
+    "StatefulSet/simplyblock-opensearch"
+    "Deployment/mongodb-kubernetes-operator"
+    "DaemonSet/simplyblock-fluent-bit"
+  )
+
+  # The render and the query each report their own failure. Read through one
+  # pipeline with only pipefail set, a failed step leaves the list empty, and an
+  # empty list is exactly what a fully marked chart produces.
+  local rendered
+  if ! rendered="$(helm template sb "$CHART" --namespace simplyblock \
+    "${CAPABILITIES[@]}" \
+    --set deployment.profile=standalone \
+    --set controlplane.observability.enabled=true \
+    --set controlplane.csiHostpathDriver.enabled=true \
+    --set snapshotcontroller.create=true)"; then
+    echo "  log collector: RENDER FAILED"
+    fail=1
+    return
+  fi
+  if ! unmarked="$("$yq" -N 'select(.kind == "Deployment" or .kind == "DaemonSet" or
+      .kind == "StatefulSet" or .kind == "Job" or .kind == "CronJob") |
+      select(.spec.template.metadata.annotations["log-collector/enabled"] != "true") |
+      .kind + "/" + .metadata.name' <<<"$rendered")"; then
+    echo "  log collector: QUERY FAILED (${yq})"
+    fail=1
+    return
+  fi
+  for want in "${exempt[@]}"; do
+    unmarked="$(grep -vxF "$want" <<<"$unmarked")"
+  done
+
+  if [ -n "$unmarked" ]; then
+    while read -r workload; do
+      echo "  log collector: ${workload} is not marked log-collector/enabled=true"
+    done <<<"$unmarked"
+    fail=1
+  else
+    echo "  log collector: every workload outside the observability stack is marked"
+  fi
+}
+
 check standalone "${COMMON[@]}"
 check managed "${COMMON[@]}"
 check empty "${OPERATOR[@]}"
 checkEmpty
 checkPair
 checkVendoredCRDs
+checkLogCollector
 
 exit "$fail"

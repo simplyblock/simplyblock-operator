@@ -22,6 +22,7 @@ import (
 
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 const (
@@ -79,7 +80,10 @@ func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver, image string) *apps
 		Spec: appsv1.DaemonSetSpec{
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      labels,
+					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
+				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: n.nodeServiceAccount,
 					NodeSelector:       d.Spec.NodeSelector,
@@ -287,7 +291,10 @@ func controllerStatefulSet(d *simplyblockv1alpha2.SimplyblockDriver, image strin
 			Replicas:    d.Spec.ControllerReplicas,
 			Selector:    &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      labels,
+					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
+				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: n.controllerServiceAccount,
 					NodeSelector:       d.Spec.ControllerNodeSelector,

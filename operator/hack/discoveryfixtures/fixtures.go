@@ -14,6 +14,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -372,8 +373,37 @@ func at(speed int) ifaceOpt {
 }
 
 // holding is the addresses the interface carries.
+//
+// The probe reports each with its prefix length. An address a case writes
+// without one is put on a /24, the ordinary size of a storage or management
+// network, a loopback address on the /8 the kernel gives it, and an IPv6
+// address on a /64.
 func holding(addresses ...string) ifaceOpt {
-	return func(i *nodeprobe.Interface) { i.Addresses = addresses }
+	return func(i *nodeprobe.Interface) {
+		i.Addresses = make([]string, 0, len(addresses))
+		for _, address := range addresses {
+			i.Addresses = append(i.Addresses, withPrefix(address))
+		}
+	}
+}
+
+// withPrefix is the address with the prefix length holding puts it on, or as
+// written when it carries one.
+func withPrefix(address string) string {
+	if strings.Contains(address, "/") {
+		return address
+	}
+	ip := net.ParseIP(address)
+	switch {
+	case ip == nil:
+		return address
+	case ip.IsLoopback() && ip.To4() != nil:
+		return address + "/8"
+	case ip.To4() != nil:
+		return address + "/24"
+	default:
+		return address + "/64"
+	}
 }
 
 // on is the memory node the interface's hardware hangs off.
@@ -406,9 +436,15 @@ func peered() ifaceOpt {
 	return func(i *nodeprobe.Interface) { i.Peered = true }
 }
 
-// frames is the interface's MTU, for a case about jumbo frames.
-func frames(mtu int) ifaceOpt {
-	return func(i *nodeprobe.Interface) { i.MTU = mtu }
+// jumboFrames is an MTU of 9000, for a case about jumbo frames.
+func jumboFrames() ifaceOpt {
+	return func(i *nodeprobe.Interface) { i.MTU = 9000 }
+}
+
+// driven is the kernel driver bound to the interface's hardware, for a case
+// that sets a Mellanox card beside another vendor's.
+func driven(driver string) ifaceOpt {
+	return func(i *nodeprobe.Interface) { i.Driver = driver }
 }
 
 // slotted is the PCI address of the interface's hardware.

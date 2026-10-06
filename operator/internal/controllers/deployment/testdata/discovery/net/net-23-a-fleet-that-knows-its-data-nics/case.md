@@ -2,7 +2,7 @@
 
 **Mutation.** A run told that `ens5f1` and `ens5f2` are the data NICs
 
-**Expected.** **Contested.** `dataInterfaces` is never written, so the draft leaves the data plane unnamed. See §14, gap G-24
+**Expected.** Both named for data and `eth0` for management, by ranking: no input names the data NICs. See §14, gap G-24
 
 **Harness.** `CM`
 

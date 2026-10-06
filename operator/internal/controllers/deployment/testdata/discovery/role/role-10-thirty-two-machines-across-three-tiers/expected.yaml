@@ -23,7 +23,9 @@ spec:
     family: Debian
   nodeSets:
   - groups:
-    - devices:
+    - dataInterfaces:
+      - eth1
+      devices:
         nvme:
         - 0000:5e:00.0
         - 0000:5f:00.0
@@ -38,7 +40,9 @@ spec:
       - worker-04
     name: infra
   - groups:
-    - devices:
+    - dataInterfaces:
+      - eth1
+      devices:
         nvme:
         - 0000:5e:00.0
         - 0000:5f:00.0
@@ -74,7 +78,9 @@ spec:
       - worker-32
     name: discovered
   - groups:
-    - devices:
+    - dataInterfaces:
+      - eth1
+      devices:
         nvme:
         - 0000:5e:00.0
         - 0000:5f:00.0

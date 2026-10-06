@@ -57,6 +57,25 @@ func TestTheInterfaceHoldingTheNodeAddressWins(t *testing.T) {
 	}
 }
 
+// The probe reports an address with its prefix length, and Kubernetes reports
+// the node's address without one. The two are still the same address.
+func TestTheNodeAddressMatchesAnAddressCarryingItsPrefix(t *testing.T) {
+	report := report("worker-1")
+	report.Interfaces = []nodeprobe.Interface{
+		iface(eth1, func(i *nodeprobe.Interface) {
+			i.Addresses = []string{"10.10.10.113/24"}
+			i.SpeedMbps = 40000
+		}),
+		iface(eth0, func(i *nodeprobe.Interface) {
+			i.Addresses = []string{"192.168.10.113/24"}
+		}),
+	}
+
+	if got := ManagementInterface(report, "192.168.10.113"); got != eth0 {
+		t.Errorf("named %q, want the interface holding the node's address", got)
+	}
+}
+
 // TestTheInterfaceHoldingTheNodeAddressWinsWhateverItsKind is the same rule on
 // the machines it was failing on.
 //
