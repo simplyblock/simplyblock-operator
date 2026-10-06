@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/simplyblock/atlas/ptr"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 func containerNamed(containers []corev1.Container, name string) *corev1.Container {
@@ -311,5 +312,20 @@ func TestSnapshotterSidecarEnablesGroupSnapshots(t *testing.T) {
 	}
 	if !slices.Contains(snapshotter.Args, "--feature-gates=CSIVolumeGroupSnapshot=true") {
 		t.Errorf("snapshotter args carry no CSIVolumeGroupSnapshot gate: %v", snapshotter.Args)
+	}
+}
+
+// The node plugin's pods are marked for the log collector. The controller's are
+// not, and this does not ask for them.
+//
+// Regression: 2026-10-06-graylog-receives-nothing — the node plugin, which
+// connects and disconnects every NVMe path a volume uses, was never marked, so
+// its logs never reached Graylog.
+func TestTheNodePluginIsShippedToTheLogCollector(t *testing.T) {
+	ds := nodeDaemonSet(testDriver("simplyblock"), testImage)
+
+	if got := ds.Spec.Template.Annotations[utils.AnnotationLogCollector]; got != "true" {
+		t.Errorf("node plugin pod template %s = %q, want \"true\"",
+			utils.AnnotationLogCollector, got)
 	}
 }
