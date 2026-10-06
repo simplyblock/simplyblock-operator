@@ -40,6 +40,11 @@ jobs:
           VERSION="${TAG#v}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # OLM names the ClusterServiceVersion <name>.v<version>, a Kubernetes
+          # object name: lowercase only. A pre-release tag such as
+          # v26.4.0-Beta1 bundles as 26.4.0-beta1 (still valid SemVer); the
+          # images keep the release tag.
+          echo "bundle_version=$(printf %s "$VERSION" | tr 'A-Z' 'a-z')" >> "$GITHUB_OUTPUT"
 
       # build-operator (this job's dependency) already pushed the release's
       # images to Quay directly, so `make bundle` below can resolve digests
@@ -62,7 +67,7 @@ jobs:
       - name: Generate bundle
         run: |
           make bundle \
-            VERSION=${{ steps.version.outputs.version }} \
+            VERSION=${{ steps.version.outputs.bundle_version }} \
             IMG_TAG=${{ steps.version.outputs.tag }}
 
       - name: Package bundle as release asset
