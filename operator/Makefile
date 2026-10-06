@@ -17,7 +17,7 @@ OPENSHIFT_VERSION ?= v4.19
 # Related images deployed by the operator (used in relatedImages for airgap support)
 CLUSTER_IMAGE_BASE ?= quay.io/simplyblock-io/simplyblock
 CLUSTER_IMAGE_TAG  ?= 26.4.0-beta1
-SPDK_IMAGE_BASE    ?= quay.io/simplyblock-io/ultra
+SPDK_IMAGE_BASE    ?= public.ecr.aws/simply-block/ultra
 SPDK_IMAGE_TAG     ?= main-latest
 
 YQ_CSV_EXPR = .metadata.annotations.containerImage = strenv(OPERATOR_IMG) \
@@ -322,8 +322,12 @@ bundle: yq verify-config-yaml verify-crd-kustomization ## Generate bundle manife
 	  "https://quay.io/v2/simplyblock-io/simplyblock/manifests/$(CLUSTER_IMAGE_TAG)" \
 	  -H "Accept: $(MANIFEST_ACCEPT)" \
 	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	SPDK_REPO=$$(printf %s "$(SPDK_IMAGE_BASE)" | cut -d/ -f2-); \
+	SPDK_TOKEN=$$(curl -s "https://public.ecr.aws/token/?scope=repository:$$SPDK_REPO:pull" \
+	  | sed -n 's/.*"token":"\([^"]*\)".*/\1/p'); \
 	SPDK_DIGEST=$$(curl -sI \
-	  "https://quay.io/v2/simplyblock-io/ultra/manifests/$(SPDK_IMAGE_TAG)" \
+	  "https://public.ecr.aws/v2/$$SPDK_REPO/manifests/$(SPDK_IMAGE_TAG)" \
+	  -H "Authorization: Bearer $$SPDK_TOKEN" \
 	  -H "Accept: $(MANIFEST_ACCEPT)" \
 	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
 	REBALANCER_DIGEST=$$(curl -sI \
