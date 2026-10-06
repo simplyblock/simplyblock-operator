@@ -2893,6 +2893,186 @@ spec:
                       NodeSelector restricts which workers are inspected. Empty inspects every
                       schedulable worker, and it is exclusive with Workers.
                     type: object
+                  seed:
+                    description: |-
+                      Seed states what the draft proposes for the fields discovery can only
+                      guess at, which are mostly the ones that cannot be changed on the cluster
+                      the draft expands into. A field left out stays what discovery derives from
+                      the fleet. A growth document, which names a cluster rather than describing
+                      one, takes no layout from it.
+                    properties:
+                      cluster:
+                        description: Cluster seeds the cluster the draft proposes.
+                        properties:
+                          enableAtomicity4K:
+                            description: |-
+                              EnableAtomicity4K makes 4K writes atomic, which is what lets checksum
+                              validation run on a device whose logical block size is under 4K. It
+                              requires EnableChecksumValidation.
+                            type: boolean
+                          enableChecksumValidation:
+                            description: EnableChecksumValidation verifies checksums
+                              on read.
+                            type: boolean
+                          enableDriveFormat:
+                            description: |-
+                              EnableDriveFormat formats every device the draft names before a storage
+                              node takes it.
+                            type: boolean
+                          maxSubsystemCount:
+                            description: |-
+                              MaxSubsystemCount is the number of NVMe-oF subsystems each storage node
+                              serves.
+                            format: int32
+                            maximum: 75
+                            minimum: 10
+                            type: integer
+                          name:
+                            description: |-
+                              Name is the StorageCluster's name, held to what the control plane accepts:
+                              it derives names from it and refuses a longer one, which a document would
+                              otherwise carry through approval to a CreatingCluster step that cannot
+                              succeed.
+                            maxLength: 37
+                            type: string
+                          stripe:
+                            description: Stripe is the erasure-coding layout.
+                            properties:
+                              dataChunks:
+                                description: DataChunks is the number of data chunks
+                                  per stripe (ndcs).
+                                format: int32
+                                minimum: 1
+                                type: integer
+                              parityChunks:
+                                description: |-
+                                  ParityChunks is the number of parity chunks per stripe (npcs), and
+                                  therefore how many chunk losses a stripe survives.
+                                format: int32
+                                minimum: 0
+                                type: integer
+                            type: object
+                            x-kubernetes-validations:
+                            - message: the erasure-coding scheme must be one of 1+0,
+                                1+1, 2+1, 4+1, 1+2, 2+2, or 4+2, written as dataChunks+parityChunks,
+                                and an unstated half is 1
+                              rule: '[has(self.dataChunks) ? self.dataChunks : 1,
+                                has(self.parityChunks) ? self.parityChunks : 1] in
+                                [[1, 0], [1, 1], [2, 1], [4, 1], [1, 2], [2, 2], [4,
+                                2]]'
+                        type: object
+                        x-kubernetes-validations:
+                        - message: enableAtomicity4K requires enableChecksumValidation
+                          rule: '!has(self.enableAtomicity4K) || !self.enableAtomicity4K
+                            || (has(self.enableChecksumValidation) && self.enableChecksumValidation)'
+                      edgeCluster:
+                        description: EdgeCluster marks the draft as an edge deployment.
+                        type: boolean
+                      images:
+                        description: |-
+                          Images pins the images the draft states. A slot left empty takes the
+                          operator's own default.
+                        properties:
+                          nodeAgent:
+                            description: |-
+                              NodeAgent is the image the storage-node DaemonSet runs: the agent the
+                              control plane drives a worker through, and the two init containers that
+                              configure the host before it starts. The expansion writes it to
+                              StorageCluster.spec.storageNodes, which is where the retired
+                              StorageNodeSet.spec.clusterImage went.
+
+                              It is the same artifact the control plane itself runs, which is why
+                              spec.storageNodes.image defaults to the ControlPlane singleton's: the agent
+                              and the tasks that call it are one codebase, and version skew between them
+                              is what breaks a node add.
+
+                              It is spent only where the document creates the cluster. A document that
+                              names an existing one in ClusterRef adds nodes to a DaemonSet that is
+                              already running under an image the cluster states, and this slot is ignored
+                              the same way Cluster is.
+                            properties:
+                              image:
+                                description: |-
+                                  Image is the repository and tag, optionally digest-pinned. An empty value
+                                  is not written downstream, so the field it would fill keeps its own
+                                  default rather than being overridden with nothing.
+
+                                  The registry set is the one every image field in this API is held to,
+                                  which is what keeps a reviewed document from naming a build nobody
+                                  published.
+                                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                                type: string
+                              imagePullPolicy:
+                                default: Always
+                                description: |-
+                                  ImagePullPolicy is when that image is pulled. It defaults to Always,
+                                  because every image this product ships by default is a moving tag and a
+                                  node brought up after a release otherwise runs what its kubelet held.
+                                enum:
+                                - Always
+                                - Never
+                                - IfNotPresent
+                                type: string
+                            type: object
+                          spdk:
+                            description: |-
+                              SPDK is the SPDK image, which the expansion writes onto every
+                              StorageNode.spec.config it creates rather than onto the cluster: the field
+                              is per node so that a later rollout can walk the fleet one machine at a
+                              time, and a document states the fleet's starting point.
+                            properties:
+                              image:
+                                description: |-
+                                  Image is the repository and tag, optionally digest-pinned. An empty value
+                                  is not written downstream, so the field it would fill keeps its own
+                                  default rather than being overridden with nothing.
+
+                                  The registry set is the one every image field in this API is held to,
+                                  which is what keeps a reviewed document from naming a build nobody
+                                  published.
+                                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                                type: string
+                              imagePullPolicy:
+                                default: Always
+                                description: |-
+                                  ImagePullPolicy is when that image is pulled. It defaults to Always,
+                                  because every image this product ships by default is a moving tag and a
+                                  node brought up after a release otherwise runs what its kubelet held.
+                                enum:
+                                - Always
+                                - Never
+                                - IfNotPresent
+                                type: string
+                            type: object
+                          spdkProxy:
+                            description: SPDKProxy is the SPDK proxy image, written
+                              per node for the reason SPDK is.
+                            properties:
+                              image:
+                                description: |-
+                                  Image is the repository and tag, optionally digest-pinned. An empty value
+                                  is not written downstream, so the field it would fill keeps its own
+                                  default rather than being overridden with nothing.
+
+                                  The registry set is the one every image field in this API is held to,
+                                  which is what keeps a reviewed document from naming a build nobody
+                                  published.
+                                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                                type: string
+                              imagePullPolicy:
+                                default: Always
+                                description: |-
+                                  ImagePullPolicy is when that image is pulled. It defaults to Always,
+                                  because every image this product ships by default is a moving tag and a
+                                  node brought up after a release otherwise runs what its kubelet held.
+                                enum:
+                                - Always
+                                - Never
+                                - IfNotPresent
+                                type: string
+                            type: object
+                        type: object
+                    type: object
                   tolerations:
                     description: |-
                       Tolerations are what the probe pods tolerate, and what the draft states

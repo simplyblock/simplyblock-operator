@@ -6,9 +6,9 @@ package deployment
 
 import (
 	"context"
-	batchv1 "k8s.io/api/batch/v1"
 	"testing"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
