@@ -249,6 +249,52 @@ type LocalControlPlane struct {
 	// +kubebuilder:default={}
 	// +optional
 	TLS ControlPlaneTLS `json:"tls,omitempty"`
+
+	// Observability connects this control plane to the monitoring stack
+	// installed beside it: Graylog, Grafana, and OpenSearch. Absent leaves
+	// monitoring off.
+	// +optional
+	Observability *ControlPlaneObservability `json:"observability,omitempty"`
+}
+
+// ControlPlaneObservability is whether the control plane provisions the
+// monitoring stack, and the credential it does that with.
+//
+// The control plane provisions it once, when the first storage cluster is
+// created: it opens the Graylog input the log collector ships to, creates the
+// Grafana user every cluster's dashboards use, and widens the OpenSearch result
+// window. It records the decision with the deployment, so enabling monitoring
+// after the first cluster exists sets the environment but does not provision
+// anything.
+// +kubebuilder:validation:XValidation:rule="!has(self.secretRef) || (has(self.secretRef.name) && size(self.secretRef.name) > 0)",message="secretRef.name must not be empty: a pod reading a Secret with no name does not start"
+// +kubebuilder:validation:XValidation:rule="!has(self.enableMonitoring) || !self.enableMonitoring || has(self.secretRef)",message="enableMonitoring requires secretRef: the control plane cannot provision the monitoring stack without its admin password"
+type ControlPlaneObservability struct {
+	// EnableMonitoring provisions the monitoring stack when the first storage
+	// cluster is created. Unset is off.
+	// +optional
+	EnableMonitoring bool `json:"enableMonitoring,omitempty"`
+
+	// SecretRef names a Secret in this namespace holding the monitoring stack's
+	// admin password under the key MONITORING_SECRET. Required when
+	// EnableMonitoring is set, and its name must not be empty. A pod naming a
+	// Secret that does not exist does not start.
+	// +optional
+	SecretRef *corev1.LocalObjectReference `json:"secretRef,omitempty"`
+}
+
+// MonitoringEnabled reports whether the control plane is to provision the
+// monitoring stack.
+func (l *LocalControlPlane) MonitoringEnabled() bool {
+	return l != nil && l.Observability != nil && l.Observability.EnableMonitoring
+}
+
+// MonitoringSecretRef is the Secret holding the monitoring stack's admin
+// password, or nil when none is named.
+func (l *LocalControlPlane) MonitoringSecretRef() *corev1.LocalObjectReference {
+	if l == nil || l.Observability == nil {
+		return nil
+	}
+	return l.Observability.SecretRef
 }
 
 // ManagedControlPlane is a control plane somewhere else, which this cluster's

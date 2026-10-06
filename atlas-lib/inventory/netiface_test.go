@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -247,7 +248,7 @@ func TestTheAddressesComeFromTheReader(t *testing.T) {
 	ifaces, err := ReadInterfaces(Config{
 		SysfsRoot: filepath.Join(root, "sys"),
 		InterfaceAddresses: func() (map[string][]string, error) {
-			return map[string][]string{"eth0": {"192.168.10.113", "fe80::1"}}, nil
+			return map[string][]string{"eth0": {"192.168.10.113/24", "fe80::1/64"}}, nil
 		},
 	})
 	if err != nil {
@@ -258,12 +259,37 @@ func TestTheAddressesComeFromTheReader(t *testing.T) {
 	for _, iface := range ifaces {
 		byName[iface.Name] = iface
 	}
-	if got := byName["eth0"].Addresses; len(got) != 2 || got[0] != "192.168.10.113" {
+	if got := byName["eth0"].Addresses; len(got) != 2 || got[0] != "192.168.10.113/24" {
 		t.Errorf("eth0 carries %v", got)
 	}
 	if got := byName["eth1"].Addresses; len(got) != 0 {
 		t.Errorf("eth1 carries %v, want none", got)
 	}
+}
+
+// The local reader keeps each address's prefix length.
+//
+// Two machines are on one network when their addresses share a prefix, and the
+// address alone does not say which prefix: 10.10.0.1 and 10.10.0.2 are one
+// network as a /24 and two as a /32. A reading that dropped the length left a
+// draft unable to tell a fleet whose storage links are on one network from one
+// whose links are not. Loopback is the interface every machine has, holding
+// 127.0.0.1/8, so the case needs no fixture.
+func TestLocalAddressesCarryTheirPrefixLength(t *testing.T) {
+	addresses, err := LocalAddresses()
+	if err != nil {
+		t.Fatalf("read the local addresses: %v", err)
+	}
+
+	for name, held := range addresses {
+		if slices.Contains(held, "127.0.0.1/8") {
+			return
+		}
+		if slices.Contains(held, "127.0.0.1") {
+			t.Fatalf("%s holds the loopback address without its prefix length: %v", name, held)
+		}
+	}
+	t.Fatalf("no interface holds 127.0.0.1/8: %v", addresses)
 }
 
 // A reader that fails costs the addresses and not the interfaces, because a

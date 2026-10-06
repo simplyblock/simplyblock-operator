@@ -525,6 +525,7 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 		}
 
 		kube := p.KubeNodes[report.Node]
+		mgmt, data := Planes(report, kube.InternalIP)
 		plan.Workers = append(plan.Workers, Worker{
 			Name:            report.Node,
 			Report:          report,
@@ -532,9 +533,14 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 			Class:           class,
 			PlacementReason: why,
 			Kube:            kube,
-			Mgmt:            ManagementOf(report, kube.InternalIP),
+			Mgmt:            mgmt,
+			Data:            data,
 		})
 	}
+
+	var misaligned []Refusal
+	plan.Workers, misaligned = alignNetworks(plan.Workers)
+	plan.Refusals = append(plan.Refusals, misaligned...)
 
 	if len(plan.Workers) > 0 {
 		plan.NodeSets = builder.Build(grouper.Group(plan.Workers))

@@ -1,0 +1,1 @@
+worker-04: declined by data network because it holds no data interface on 10.20.0.0/24, and the fleet's data networks are 10.20.0.0/24, held by 3 of its 4 workers

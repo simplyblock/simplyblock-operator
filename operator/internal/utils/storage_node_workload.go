@@ -267,11 +267,9 @@ func BuildStorageNodeDaemonSet(
 		mainMounts = append(mainMounts, tlsMounts...)
 	}
 
-	var podAnnotations map[string]string
+	podAnnotations := map[string]string{AnnotationLogCollector: "true"}
 	if tlsEnabled && tlsSecretResourceVersion != "" {
-		podAnnotations = map[string]string{
-			AnnotationTLSSecretRevision: tlsSecretResourceVersion,
-		}
+		podAnnotations[AnnotationTLSSecretRevision] = tlsSecretResourceVersion
 	}
 
 	// The DaemonSet is named and selected per-StorageNodeSet so that multiple

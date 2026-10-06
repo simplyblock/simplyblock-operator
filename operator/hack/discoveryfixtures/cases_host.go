@@ -142,9 +142,11 @@ func capturedHost(path, name, address string, memory statedMemory) nodeprobe.Rep
 		// The addresses a host holds are the kernel's to answer over netlink,
 		// which a transcript does not capture and a fixture must therefore
 		// state. It is the management address of the node object this worker
-		// gets, so the two agree the way they do on a machine.
+		// gets, so the two agree the way they do on a machine, and it is a /32
+		// because that is how GCP hands an instance its primary address: the
+		// subnet is reached through a route rather than through the prefix.
 		InterfaceAddresses: func() (map[string][]string, error) {
-			return map[string][]string{"eth0": {address}}, nil
+			return map[string][]string{"eth0": {address + "/32"}}, nil
 		},
 		// The tags and network identifiers are netlink's too, and these hosts
 		// have no VLAN or VXLAN, so the answer is stated as none rather than

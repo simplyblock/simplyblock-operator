@@ -30,6 +30,8 @@ spec:
     type: RollingUpdate
   template:
     metadata:
+      annotations:
+        log-collector/enabled: "true"
       labels:
         app.kubernetes.io/name: snapshot-controller
     spec:

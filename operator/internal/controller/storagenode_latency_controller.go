@@ -349,6 +349,9 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 			BackoffLimit:            &backoffLimit,
 			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
+				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
 					NodeSelector:  map[string]string{"kubernetes.io/hostname": node.Status.Hostname},

@@ -61,6 +61,18 @@ func bonded(addresses map[string][]string) []nodeprobe.Interface {
 	}
 }
 
+// jumbo is a physical NIC at MTU 9000 and the speed given, on a Mellanox card
+// unless a case says otherwise: the shape a data interface is chosen from.
+func jumbo(name string, speed int, opts ...ifaceOpt) nodeprobe.Interface {
+	return nic(name, inventory.LinkPhysical, append([]ifaceOpt{at(speed), jumboFrames(), on(0)}, opts...)...)
+}
+
+// slow is eth0 as an addressed 1G NIC at the standard MTU, which no rule takes
+// for data and which is left for management once the data interfaces are chosen.
+func slow(address string) nodeprobe.Interface {
+	return nic("eth0", inventory.LinkPhysical, at(1000), driven("igb"), holding(address))
+}
+
 func netCases() map[string]Case {
 	// The cluster's own plumbing, which every worker of every Kubernetes fleet
 	// carries and none of it is a management interface.
@@ -180,7 +192,7 @@ func netCases() map[string]Case {
 			nic("ens5f0", inventory.LinkPhysical, at(100000), holding("192.168.20.1")))),
 
 		"NET-25": unknown(netHost("worker-01",
-			nic("eth0", inventory.LinkPhysical, at(10000), frames(9000), holding("192.168.10.1")),
+			nic("eth0", inventory.LinkPhysical, at(10000), jumboFrames(), holding("192.168.10.1")),
 			nic("eth1", inventory.LinkPhysical, at(10000), holding("10.10.11.1")))),
 
 		"NET-26": unknown(netHost("worker-01",
@@ -249,6 +261,150 @@ func netCases() map[string]Case {
 		"NET-41": known(netHost("worker-01", bonded(map[string][]string{"bond0": {reachedAt}})...)),
 
 		"NET-42": known(netHost("worker-01", bonded(map[string][]string{"bond0": {reachedAt}})...)),
+
+		"NET-43": unknown(netHost("worker-01",
+			slow("192.168.10.1"),
+			jumbo("ens5f0", 25000, holding("192.168.20.1")),
+			jumbo("ens5f1", 25000, holding("192.168.21.1")))),
+
+		"NET-44": unknown(netHost("worker-01",
+			slow("192.168.10.1"),
+			jumbo("ens5f0", 25000, holding("192.168.20.1")),
+			jumbo("ens6f0", 25000, driven("ice"), holding("192.168.21.1")))),
+
+		"NET-45": unknown(netHost("worker-01",
+			jumbo("ens5f0", 25000, holding("192.168.20.1")),
+			jumbo("ens6f0", 100000, holding("192.168.21.1")))),
+
+		"NET-46": unknown(netHost("worker-01",
+			nic("eth0", inventory.LinkPhysical, at(1000), jumboFrames(), holding("192.168.10.1")),
+			nic("eth1", inventory.LinkPhysical, at(10000), holding("192.168.11.1")))),
+
+		"NET-47": unknown(netHost("worker-01",
+			slow("192.168.10.1"),
+			jumbo("eth1", 10000, holding("192.168.11.1")))),
+
+		"NET-48": unknown(netHost("worker-01",
+			nic("bond0", inventory.LinkBond, jumboFrames(), over("ens5f0", "ens5f1"),
+				holding("192.168.20.1")),
+			jumbo("ens5f0", 25000, under("bond0")),
+			jumbo("ens5f1", 25000, under("bond0")),
+			jumbo("ens6f0", 50000, holding("192.168.21.1")),
+			slow("192.168.10.1"))),
+
+		"NET-49": unknown(netHost("worker-01",
+			nic("bond0", inventory.LinkBond, jumboFrames(), over("ens5f0", "ens5f1"),
+				holding("192.168.20.1")),
+			jumbo("ens5f0", 25000, under("bond0")),
+			jumbo("ens5f1", 25000, under("bond0")),
+			jumbo("ens6f0", 100000, driven("ice"), holding("192.168.21.1")),
+			slow("192.168.10.1"))),
+
+		"NET-50": unknown(netHost("worker-01",
+			nic("bond0", inventory.LinkBond, jumboFrames(), over("ens5f0", "ens5f1"),
+				holding("192.168.20.1")),
+			nic("bond1", inventory.LinkBond, jumboFrames(), over("ens6f0", "ens6f1"),
+				holding("192.168.21.1")),
+			jumbo("ens5f0", 25000, under("bond0")),
+			jumbo("ens5f1", 25000, under("bond0")),
+			jumbo("ens6f0", 25000, under("bond1")),
+			jumbo("ens6f1", 25000, under("bond1")),
+			slow("192.168.10.1"))),
+
+		"NET-51": unknown(netHost("worker-01",
+			slow("192.168.10.1"),
+			jumbo("ens16np0", 40000))),
+
+		"NET-52": unknown(netHost("worker-01",
+			slow("192.168.10.1"),
+			jumbo("ens5f0", 25000, holding("2001:db8::20:1")))),
+
+		"NET-53": unknown(netHost("worker-01",
+			slow("192.168.10.1"),
+			jumbo("ens5f0", 25000, linkState("down"), holding("192.168.20.1")))),
+
+		"NET-54": known(netHost("worker-01",
+			jumbo("ens5f0", 25000, holding(reachedAt)))),
+
+		"NET-55": known(netHost("worker-01",
+			jumbo("ens5f0", 25000, holding(reachedAt)),
+			jumbo("ens5f1", 25000, holding("192.168.21.1")))),
+
+		"NET-56": unknown(netHost("worker-01",
+			jumbo("ens5f0", 25000, holding("192.168.20.1")))),
+
+		"NET-57": unknown(
+			netHost("worker-01",
+				slow("192.168.10.1"),
+				jumbo("ens5f0", 25000, holding("192.168.20.1"))),
+			netHost("worker-02",
+				slow("192.168.10.2"))),
+
+		"NET-58": unknown(
+			netHost("worker-01", slow("10.10.10.1")),
+			netHost("worker-02", slow("10.10.10.2")),
+			netHost("worker-03", slow("10.10.10.3")),
+			netHost("worker-04", slow("10.10.20.4"))),
+
+		"NET-59": unknown(
+			netHost("worker-01", slow("10.10.10.1")),
+			netHost("worker-02", slow("10.10.20.2"))),
+
+		"NET-60": unknown(
+			netHost("worker-01", slow("10.10.10.1/32")),
+			netHost("worker-02", slow("10.10.10.2/32")),
+			netHost("worker-03", slow("10.10.10.3/32"))),
+
+		"NET-61": unknown(
+			netHost("worker-01", slow("10.10.10.1"), jumbo("ens5f0", 25000, holding("10.20.0.1"))),
+			netHost("worker-02", slow("10.10.10.2"), jumbo("ens5f0", 25000, holding("10.20.0.2"))),
+			netHost("worker-03", slow("10.10.10.3"), jumbo("ens5f0", 25000, holding("10.20.0.3"))),
+			netHost("worker-04", slow("10.10.10.4"), jumbo("ens5f0", 25000, holding("10.21.0.4")))),
+
+		"NET-62": unknown(
+			netHost("worker-01", slow("10.10.10.1"),
+				jumbo("ens5f0", 25000, holding("10.20.0.1")), jumbo("ens5f1", 25000, holding("10.21.0.1"))),
+			netHost("worker-02", slow("10.10.10.2"),
+				jumbo("ens5f0", 25000, holding("10.20.0.2")), jumbo("ens5f1", 25000, holding("10.21.0.2"))),
+			netHost("worker-03", slow("10.10.10.3"),
+				jumbo("ens5f0", 25000, holding("10.20.0.3")), jumbo("ens5f1", 25000, holding("10.21.0.3")))),
+
+		"NET-63": unknown(
+			netHost("worker-01", slow("10.10.10.1"),
+				jumbo("ens5f0", 25000, holding("10.20.0.1")), jumbo("ens5f1", 25000, holding("10.21.0.1"))),
+			netHost("worker-02", slow("10.10.10.2"), jumbo("ens5f0", 25000, holding("10.20.0.2"))),
+			netHost("worker-03", slow("10.10.10.3"), jumbo("ens5f0", 25000, holding("10.20.0.3")))),
+
+		"NET-64": unknown(
+			netHost("worker-01", slow("10.10.10.1"), jumbo("ens5f0", 25000, holding("10.20.0.1"))),
+			netHost("worker-02", slow("10.10.10.2")),
+			netHost("worker-03", slow("10.10.10.3"))),
+
+		"NET-65": unknown(
+			netHost("worker-01", slow("10.10.10.1"), jumbo("ens5f0", 25000, holding("10.20.0.1"))),
+			netHost("worker-02", slow("10.10.10.2"), jumbo("ens6f0", 25000, holding("10.20.0.2")))),
+
+		"NET-66": unknown(
+			netHost("worker-01", slow("10.10.10.1"), jumbo("ens5f0", 25000, holding("10.20.0.1"))),
+			netHost("worker-02", slow("10.10.10.2"), jumbo("ens5f0", 25000, holding("10.21.0.2")))),
+
+		"NET-67": unknown(
+			netHost("worker-01", slow("10.10.10.1"), jumbo("ens5f0", 25000, holding("10.20.0.1/32"))),
+			netHost("worker-02", slow("10.10.10.2"), jumbo("ens5f0", 25000, holding("10.20.0.2/32")))),
+
+		"NET-68": unknown(
+			netHost("worker-01", slow("10.10.10.1"), jumbo("ens5f0", 25000, holding("10.20.0.1/32"))),
+			netHost("worker-02", slow("10.10.10.2"))),
+
+		"NET-69": unknown(
+			netHost("worker-01", slow("10.10.10.1"),
+				jumbo("ens5f0", 25000, holding("10.20.0.1", "10.30.0.1"))),
+			netHost("worker-02", slow("10.10.10.2"),
+				jumbo("ens5f0", 25000, holding("10.21.0.2", "10.30.0.2")))),
+
+		"NET-70": unknown(netHost("worker-01",
+			slow("10.10.10.1"),
+			jumbo("ens5f0", 25000, holding("169.254.1.1/16", "10.20.0.1")))),
 	}
 
 	// A bond whose members sit in two sockets, which has no memory node at all.
@@ -315,10 +471,38 @@ func netCases() map[string]Case {
 		"NET-40": "an-interface-naming-no-kind",
 		"NET-41": "a-bonded-data-path-ranked-for-placement",
 		"NET-42": "what-the-draft-says-about-a-bonded-host",
+		"NET-43": "two-alike-jumbo-nics-for-data",
+		"NET-44": "a-mellanox-nic-beside-another-vendors",
+		"NET-45": "jumbo-nics-of-unlike-speeds",
+		"NET-46": "a-slow-jumbo-nic-and-a-fast-standard-one",
+		"NET-47": "a-jumbo-nic-at-the-speed-floor",
+		"NET-48": "a-bond-against-a-single-nic-of-its-speed",
+		"NET-49": "a-faster-nic-against-a-bond",
+		"NET-50": "two-alike-bonds-for-data",
+		"NET-51": "a-jumbo-nic-holding-no-address",
+		"NET-52": "a-jumbo-nic-holding-only-ipv6",
+		"NET-53": "a-jumbo-nic-that-is-down",
+		"NET-54": "the-node-address-on-the-only-jumbo-nic",
+		"NET-55": "the-node-address-on-one-of-two-jumbo-nics",
+		"NET-56": "one-jumbo-nic-and-nothing-else",
+		"NET-57": "two-workers-only-one-with-a-data-nic",
+		"NET-58": "one-worker-managing-off-the-fleets-network",
+		"NET-59": "two-workers-on-two-management-networks",
+		"NET-60": "management-addresses-that-are-host-routes",
+		"NET-61": "one-worker-off-the-fleets-data-network",
+		"NET-62": "two-data-networks-on-every-worker",
+		"NET-63": "a-second-data-network-on-one-worker",
+		"NET-64": "a-data-nic-on-one-worker-of-three",
+		"NET-65": "one-data-network-under-two-names",
+		"NET-66": "two-workers-on-two-data-networks",
+		"NET-67": "data-addresses-that-are-host-routes",
+		"NET-68": "a-host-route-data-nic-beside-a-worker-without-one",
+		"NET-69": "data-nics-sharing-only-a-second-address",
+		"NET-70": "a-data-nic-whose-first-address-is-link-local",
 	}
 	gaps := map[string]string{
 		"NET-04": "G-7", "NET-22": "G-23", "NET-23": "G-24", "NET-27": "G-26",
-		"NET-41": "G-27", "NET-42": "G-28", "NET-06": "G-25",
+		"NET-41": "G-27", "NET-42": "G-28", "NET-06": "G-25", "NET-57": "G-29",
 	}
 	for id, slug := range slugs {
 		entry := cases[id]

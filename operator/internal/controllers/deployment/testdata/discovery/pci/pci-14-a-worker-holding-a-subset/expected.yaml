@@ -23,7 +23,9 @@ spec:
     family: Debian
   nodeSets:
   - groups:
-    - devices:
+    - dataInterfaces:
+      - eth1
+      devices:
         nvme:
         - 0000:5e:00.0
         - 0000:5f:00.0
@@ -34,7 +36,9 @@ spec:
       workers:
       - worker-01
       - worker-02
-    - devices:
+    - dataInterfaces:
+      - eth1
+      devices:
         nvme:
         - 0000:5e:00.0
         - 0000:5f:00.0
