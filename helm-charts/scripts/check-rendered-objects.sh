@@ -246,16 +246,28 @@ checkLogCollector() {
     "DaemonSet/simplyblock-fluent-bit"
   )
 
-  unmarked="$(helm template sb "$CHART" --namespace simplyblock \
+  # The render and the query each report their own failure. Read through one
+  # pipeline with only pipefail set, a failed step leaves the list empty, and an
+  # empty list is exactly what a fully marked chart produces.
+  local rendered
+  if ! rendered="$(helm template sb "$CHART" --namespace simplyblock \
     "${CAPABILITIES[@]}" \
     --set deployment.profile=standalone \
     --set controlplane.observability.enabled=true \
     --set controlplane.csiHostpathDriver.enabled=true \
-    --set snapshotcontroller.create=true 2>/dev/null |
-    "$yq" -N 'select(.kind == "Deployment" or .kind == "DaemonSet" or
+    --set snapshotcontroller.create=true)"; then
+    echo "  log collector: RENDER FAILED"
+    fail=1
+    return
+  fi
+  if ! unmarked="$("$yq" -N 'select(.kind == "Deployment" or .kind == "DaemonSet" or
       .kind == "StatefulSet" or .kind == "Job" or .kind == "CronJob") |
       select(.spec.template.metadata.annotations["log-collector/enabled"] != "true") |
-      .kind + "/" + .metadata.name')"
+      .kind + "/" + .metadata.name' <<<"$rendered")"; then
+    echo "  log collector: QUERY FAILED (${yq})"
+    fail=1
+    return
+  fi
   for want in "${exempt[@]}"; do
     unmarked="$(grep -vxF "$want" <<<"$unmarked")"
   done
