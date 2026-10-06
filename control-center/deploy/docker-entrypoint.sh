@@ -20,6 +20,7 @@ TOKEN_CONF=${RUNTIME_DIR}/token.conf
 UPSTREAMS_CONF=${RUNTIME_DIR}/upstreams.conf
 MODULES_CONF=${RUNTIME_DIR}/modules.conf
 CP_AUTH_CONF=${RUNTIME_DIR}/cp-auth.conf
+GL_AUTH_CONF=${RUNTIME_DIR}/graylog-auth.conf
 NJS_MODULE=/usr/lib/nginx/modules/ngx_http_js_module.so
 mkdir -p "${RUNTIME_DIR}"
 : > "${MODULES_CONF}"
@@ -61,6 +62,28 @@ if [ -n "${SB_CONTROLPLANE_URL}" ]; then
     echo "      the control plane upstream stays disabled, its responses cannot be scrubbed." >&2
   fi
 fi
+
+# The log store: Graylog's search API (the control plane's observability stack,
+# which fluent-bit ships the pods' logs to). Read-only and scrubbed like the
+# control plane upstream -- log lines can carry credentials -- so it is enabled
+# only with the njs filter, and only for the search endpoints.
+SB_GRAYLOG_URL=${SB_GRAYLOG_URL:-}
+SB_GRAYLOG_URL=${SB_GRAYLOG_URL%/}
+: "${SB_GRAYLOG_USER:=admin}"
+GL_ON=false
+GL_OFF=""
+if [ -z "${SB_GRAYLOG_URL}" ]; then
+  GL_OFF="no log store (Graylog) is configured for this console"
+elif [ ! -r "${NJS_MODULE}" ]; then
+  GL_OFF="the response filter of the log store (njs) is missing from this console image"
+  echo "WARN: SB_GRAYLOG_URL is set but the njs module (${NJS_MODULE}) is missing: the log store stays disabled." >&2
+elif [ ! -r "${SB_GRAYLOG_TOKEN_FILE:-/nonexistent}" ] && [ ! -r "${SB_GRAYLOG_PASSWORD_FILE:-/nonexistent}" ]; then
+  GL_OFF="the credentials of the log store are not mounted (SB_GRAYLOG_PASSWORD_FILE or SB_GRAYLOG_TOKEN_FILE)"
+  echo "WARN: SB_GRAYLOG_URL is set but no credentials are mounted: the log store stays disabled." >&2
+else
+  echo "load_module ${NJS_MODULE};" > "${MODULES_CONF}"
+  GL_ON=true
+fi
 up() { [ -n "$1" ] && echo true || echo false; }
 
 # ---- 1. runtime configuration ----------------------------------------------
@@ -76,10 +99,13 @@ window.SB_CONFIG = {
   promBase: "/prometheus/api/v1",
   agentBase: "/operator/v1/agent",
   cpBase: "/controlplane/api/v2",
+  graylogBase: "/graylog/api",
   // which optional upstreams this pod proxies: a screen whose source is off
   // says so instead of failing
   upstreams: {operator: $(up "${SB_OPERATOR_URL:-}"), helm: $(up "${SB_HELM_URL:-}"),
-    prometheus: $(up "${SB_PROMETHEUS_URL:-}"), controlPlane: ${CP_ON}},
+    prometheus: $(up "${SB_PROMETHEUS_URL:-}"), controlPlane: ${CP_ON}, graylog: ${GL_ON}},
+  // why the log explorer falls back to the live tail, when it does
+  graylogOff: "${GL_OFF}",
   namespace: "${SB_NAMESPACE}",
   drNamespace: "${SB_DR_NAMESPACE}",
   mode: "${SB_MODE}",
@@ -205,7 +231,57 @@ elif [ -n "${SB_CONTROLPLANE_URL}" ]; then
 else
   unavailable /controlplane/ "the control plane API"
 fi
-echo "upstreams: operator=${SB_OPERATOR_URL:-none} helm=${SB_HELM_URL:-none} prometheus=${SB_PROMETHEUS_URL:-none} controlplane=$([ "${CP_ON}" = true ] && echo "${SB_CONTROLPLANE_URL}" || echo none)"
+RESOLVER=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf 2>/dev/null)
+case "${RESOLVER}" in *:*) RESOLVER="[${RESOLVER}]" ;; esac
+[ -n "${RESOLVER}" ] || RESOLVER=127.0.0.11
+if [ "${GL_ON}" = "true" ]; then
+  GL_TLS=""
+  case "${SB_GRAYLOG_URL}" in
+    https://*)
+      GL_HOST=${SB_GRAYLOG_URL#https://}; GL_HOST=${GL_HOST%%/*}; GL_HOST=${GL_HOST%%:*}
+      GL_TLS="proxy_ssl_server_name on;
+    proxy_ssl_name ${GL_HOST};"
+      if [ -n "${SB_GRAYLOG_CA_FILE:-}" ]; then
+        GL_TLS="${GL_TLS}
+    proxy_ssl_verify on;
+    proxy_ssl_trusted_certificate ${SB_GRAYLOG_CA_FILE};"
+      fi ;;
+  esac
+  # js_import once per http context; the control plane block may have done it
+  grep -q "js_import sbredact" "${UPSTREAMS_CONF}" || echo "  js_import sbredact from /etc/nginx/njs/redact.js;" >> "${UPSTREAMS_CONF}"
+  cat >> "${UPSTREAMS_CONF}" <<EOF
+  # log store (Graylog), read-only: only the universal search endpoints, GET
+  # only, credentials attached here (never by the browser), every response
+  # parsed and scrubbed of credentials (redact.js, fail closed).
+  location ~ ^/graylog/api/search/universal/(absolute|relative)\$ {
+    limit_except GET { deny all; }
+    include ${GL_AUTH_CONF};
+    resolver ${RESOLVER} valid=30s;
+    resolver_timeout 5s;
+    set \$sb_graylog "${SB_GRAYLOG_URL}";
+    rewrite ^/graylog/api/(.*)\$ /api/\$1 break;
+    proxy_pass \$sb_graylog;
+    proxy_http_version 1.1;
+    proxy_set_header Host            \$proxy_host;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header Accept          "application/json";
+    proxy_set_header Accept-Encoding "";
+    proxy_set_header Cookie          "";
+    proxy_set_header X-Requested-By  "simplyblock-control-center";
+    proxy_read_timeout 60s;
+    ${GL_TLS}
+    js_header_filter sbredact.headers;
+    js_body_filter sbredact.logbody;
+  }
+  location /graylog/ {
+    default_type application/json;
+    return 403 '{"kind":"Status","apiVersion":"v1","status":"Failure","code":403,"reason":"Forbidden","message":"the console reads only the search endpoints of the log store"}';
+  }
+EOF
+else
+  unavailable /graylog/ "the log store (${GL_OFF})"
+fi
+echo "upstreams: operator=${SB_OPERATOR_URL:-none} helm=${SB_HELM_URL:-none} prometheus=${SB_PROMETHEUS_URL:-none} controlplane=$([ "${CP_ON}" = true ] && echo "${SB_CONTROLPLANE_URL}" || echo none) graylog=$([ "${GL_ON}" = true ] && echo "${SB_GRAYLOG_URL}" || echo "none: ${GL_OFF}")"
 
 # ---- 3. the proxied token --------------------------------------------------
 write_token() {
@@ -232,6 +308,21 @@ write_cp_auth() {
   fi
 }
 
+# Graylog: an access token (sent as "<token>:token") or the user's password,
+# as HTTP Basic, re-read with the other credentials.
+write_graylog_auth() {
+  [ "${GL_ON}" = "true" ] || { : > "${GL_AUTH_CONF}"; return 0; }
+  if [ -r "${SB_GRAYLOG_TOKEN_FILE:-/nonexistent}" ]; then
+    cred="$(tr -d '\r\n' < "${SB_GRAYLOG_TOKEN_FILE}"):token"
+  elif [ -r "${SB_GRAYLOG_PASSWORD_FILE:-/nonexistent}" ]; then
+    cred="${SB_GRAYLOG_USER}:$(tr -d '\r\n' < "${SB_GRAYLOG_PASSWORD_FILE}")"
+  else
+    : > "${GL_AUTH_CONF}"; return 1
+  fi
+  printf 'proxy_set_header Authorization "Basic %s";\n' "$(printf '%s' "${cred}" | base64 | tr -d '\n')" > "${GL_AUTH_CONF}.new"
+  mv "${GL_AUTH_CONF}.new" "${GL_AUTH_CONF}"
+}
+
 if [ "${SB_AUTH_MODE}" = "serviceaccount" ]; then
   if ! write_token; then
     echo "FATAL: SB_AUTH_MODE=serviceaccount but ${TOKEN_FILE} is not readable." >&2
@@ -243,7 +334,8 @@ else
   : > "${TOKEN_CONF}"
 fi
 write_cp_auth
-if [ "${SB_AUTH_MODE}" = "serviceaccount" ] || [ -n "${SB_CONTROLPLANE_TOKEN_FILE:-}" ]; then
+write_graylog_auth || echo "WARN: could not read the log store's credentials" >&2
+if [ "${SB_AUTH_MODE}" = "serviceaccount" ] || [ -n "${SB_CONTROLPLANE_TOKEN_FILE:-}" ] || [ "${GL_ON}" = "true" ]; then
   # Refresh well inside the projected token's lifetime and reload nginx so the
   # new value is picked up. A reload is graceful: in-flight requests finish.
   (
@@ -252,6 +344,7 @@ if [ "${SB_AUTH_MODE}" = "serviceaccount" ] || [ -n "${SB_CONTROLPLANE_TOKEN_FIL
         echo "WARN: could not re-read ${TOKEN_FILE}" >&2
       fi
       write_cp_auth
+      write_graylog_auth || true
       nginx -s reload 2>/dev/null || true
     done
   ) &

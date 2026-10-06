@@ -60,14 +60,14 @@ const KIND_GROUP = {pplan: "dr.simplyblock.io", drpath: "dr.simplyblock.io", pap
   raction: "dr.simplyblock.io", tbubble: "dr.simplyblock.io", tsched: "dr.simplyblock.io", restore: "dr.simplyblock.io",
   drconfig: "dr.simplyblock.io", siteprofile: "sitemap.simplyblock.io", dhcpserver: "sitemap.simplyblock.io",
   sitedeploy: "storage.simplyblock.io"};
-const ENTITY_GROUP = {drhub: "dr.simplyblock.io"};
+const ENTITY_GROUP = {drhub: "dr.simplyblock.io", labelrequest: "dr.simplyblock.io"};
 // Without the operator API the Kubernetes clusters are the hub's OCM
 // ManagedClusters (cpapi.jsx hubK8s), so reading them is a question about
 // that group, not the operator's proposed one.
 if (!upstreamOn("operator")) ENTITY_GROUP.k8scluster = "cluster.open-cluster-management.io";
 const ENTITY_RESOURCE = {k8scluster: "managedclusters", storagecluster: "storageclusters", storagepool: "storagepools", backupop: "backups",
   replicationpolicy: "replicationpolicies", backuppolicy: "backuppolicies", drpolicy: "drpolicies", application: "protectedapplications", role: "clusterroles", binding: "accessgrants",
-  drhub: "protectedapplications"};
+  drhub: "protectedapplications", labelrequest: "labelrequests"};
 const VERB_OF = {read: "get", create: "create", update: "update", delete: "delete", backup: "create", restoresource: "get",
   failover: "create", relocate: "create", restart: "create", test: "create", drrestore: "create", override: "override"};
 
@@ -125,6 +125,8 @@ function nsOf(entity, o, op) {
   }
   if (entity === "storagecluster" || entity === "backuppolicy") return clusterIdsOf(o).map(id => N.clusters[id]).filter(Boolean);
   if (entity === "replicationpolicy" || entity === "drpolicy") return [N.dr];
+  // a LabelRequest is created in the DR ops namespace
+  if (entity === "labelrequest") return [N.dr];
   // DR hub kinds: namespaced ones are judged in their own namespace, cluster-scoped ones at cluster scope
   if (entity === "drhub") return o.namespace ? [o.namespace] : ["*"];
   if (entity === "application") {
