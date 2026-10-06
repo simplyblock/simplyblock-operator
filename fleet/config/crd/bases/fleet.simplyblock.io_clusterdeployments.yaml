@@ -866,10 +866,11 @@ spec:
                                   on these nodes.
                                 properties:
                                   count:
-                                    description: Count is the number of journal managers
-                                      to configure.
+                                    description: |-
+                                      Count is the number of journal managers to configure. The control plane
+                                      requires at least 3.
                                     format: int32
-                                    minimum: 1
+                                    minimum: 3
                                     type: integer
                                   percentPerDevice:
                                     description: PercentPerDevice is the share of
