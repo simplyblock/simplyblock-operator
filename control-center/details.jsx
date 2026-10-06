@@ -1,3 +1,9 @@
+// A value no source reported: said so, rather than a dash that reads as "none".
+const NR = ({what}) => <span className="nr" style={{color: "var(--dim2)"}} title={what ? `${what} is not reported by any source in this deployment` : undefined}>not reported</span>;
+const nr = (v, what) => v === null || v === undefined || v === "" || (typeof v === "number" && !Number.isFinite(v)) ? <NR what={what} /> : v;
+const nrBytes = (v, what, dp) => typeof v === "number" && Number.isFinite(v) && v > 0 ? fmtBytes(v, dp) : <NR what={what} />;
+// Where a section's data came from (the control plane API, the dr-agent inventory, a draft).
+const FromTag = ({what}) => <span className="srctag" title={`Reported by ${what}`}><Icon n="list" s={10} />{what}</span>;
 const Props = ({rows}) => (
   <dl className="props">{rows.filter(Boolean).map(([k, v], i) => (
     <React.Fragment key={i}><dt>{k}</dt><dd>{v === null || v === undefined || v === "" ? <span style={{color: "var(--dim2)"}}>—</span> : v}</dd></React.Fragment>
@@ -24,14 +30,15 @@ const NavCard = ({icon, title, sub, count, onClick}) => (
 const NicTable = ({nics, mgmt, data}) => (
   <div className="card"><div className="bd" style={{padding: 0}}>
     <table className="dt"><thead><tr><th>Interface</th><th>Address</th><th>MAC</th><th>Speed</th><th>Socket</th><th>State</th><th>Role</th></tr></thead>
-      <tbody>{(nics || []).map(n => (
-        <tr key={n.name}>
+      <tbody>{(nics || []).length === 0 && <tr><td colSpan={7} style={{color: "var(--dim2)"}}>No NIC is reported for this host.</td></tr>}
+        {(nics || []).map(n => (
+        <tr key={n.name || n.address}>
           <td className="mono" style={{fontWeight: 600}}>{n.name}</td>
           <td className="mono">{n.address}</td>
-          <td className="mono" style={{color: "var(--dim)"}}>{n.mac}</td>
-          <td className="mono">{n.speed} GbE</td>
-          <td className="mono">{n.socket}</td>
-          <td><TrafficLight status={n.state === "up" ? "online" : "offline"} /></td>
+          <td className="mono" style={{color: "var(--dim)"}}>{nr(n.mac, "MAC")}</td>
+          <td className="mono">{n.speed ? `${n.speed} GbE` : <NR what="link speed" />}</td>
+          <td className="mono">{nr(n.socket, "NUMA socket")}</td>
+          <td>{n.state ? <TrafficLight status={n.state === "up" ? "online" : "offline"} /> : <NR what="link state" />}</td>
           <td>{mgmt === n.name ? <span className="badge k8s">management</span>
             : (data || []).includes(n.name) ? <span className="badge">data</span>
             : <span style={{color: "var(--dim2)"}}>—</span>}</td>
@@ -289,7 +296,11 @@ function ClusterDetail({o: c, nav}) {
 
 function HostDetail({o: h, nav}) {
   const candidate = h.status === "discovered" || h.status === "inspecting" || h.status === "inspected";
-  const sockets = h.socketsUsed && h.socketsUsed.length ? h.socketsUsed : Array.from({length: h.sockets || 0}, (_, s) => s);
+  // devices without a reported NUMA socket are grouped under "socket not reported"
+  const sockets = [...new Set([...(h.socketsUsed && h.socketsUsed.length ? h.socketsUsed : Array.from({length: h.sockets || 0}, (_, s) => s)),
+    ...h.devices.map(d => d.socket === undefined ? null : d.socket)])];
+  const src = h.sources || {};
+  const from = (...fields) => [...new Set(fields.map(f => src[f]).filter(Boolean))].join(" + ");
   if (candidate) return (
     <div>
       <DetailHead obj={h} title={h.hostname}
@@ -347,25 +358,28 @@ function HostDetail({o: h, nav}) {
       {h.counts.nodes === 0 && h.status === "available" && <div className="banner" style={{color: "var(--accent)", background: "var(--accent-soft)", borderColor: "var(--accent-line)"}}>
         <Icon n="plus" s={15} /><span><b>Prepared and labelled.</b> {h.counts.free} unassigned device(s) — this host can take a new storage node or receive a migrated one.</span></div>}
       <div className="stats">
-        <Stat k="NUMA sockets" v={h.socketsUsed && h.socketsUsed.length ? `${h.socketsUsed.length} of ${h.sockets}` : h.sockets} s={h.socketsUsed && h.socketsUsed.length ? `socket ${h.socketsUsed.join(", ")} in use` : "all in use"} />
-        <Stat k="vCPU / cores" v={h.vcpu} />
-        <Stat k="System RAM" v={fmtBytes(h.memory, 0)} />
-        <Stat k="Hugepages" v={fmtBytes(h.hugepages.allocated, 0)} s={`of ${fmtBytes(h.hugepages.reserved, 0)} reserved`} />
-        <Stat k="Devices" v={`${h.counts.assigned}/${h.counts.devices}`} s="assigned" />
+        <Stat k="NUMA sockets" v={h.sockets ? (h.socketsUsed && h.socketsUsed.length ? `${h.socketsUsed.length} of ${h.sockets}` : h.sockets) : h.socketsUsed && h.socketsUsed.length ? h.socketsUsed.length : "not reported"}
+          s={h.socketsUsed && h.socketsUsed.length ? `socket ${h.socketsUsed.join(", ")} in use` : h.sockets ? "all in use" : "no source reports the NUMA layout"} />
+        <Stat k="vCPUs" v={h.vcpu || "not reported"} s={src.vcpu_count || ""} />
+        <Stat k="System RAM" v={h.memory ? fmtBytes(h.memory, 0) : "not reported"} s={src.memory_total || ""} />
+        <Stat k="Hugepages" v={h.hugepages.reserved ? fmtBytes(h.hugepages.reserved, 1) : "not reported"}
+          s={h.hugepages.reserved ? (h.hugepages.allocated ? `${fmtBytes(h.hugepages.allocated, 1)} given to the storage plane` : "reserved") : ""} />
+        <Stat k="Devices" v={`${h.counts.assigned}/${h.counts.devices}`} s={src.devices ? "assigned" : "no source reports devices"} />
         <Stat k="Raw capacity" v={fmtBytes(h.capacity.total)} s={`${fmtBytes(h.capacity.used)} claimed`} />
       </div>
-      <div className="sech"><h2>Devices by NUMA socket</h2><span className="ln"></span><span className="count">{h.counts.free} unassigned</span></div>      <div className="card"><div className="bd" style={{padding: 0}}>
+      <div className="sech"><h2>Devices by NUMA socket</h2><span className="ln"></span><span className="count">{h.counts.free} unassigned</span>{src.devices && <FromTag what={src.devices} />}</div>      <div className="card"><div className="bd" style={{padding: 0}}>
         <table className="dt"><thead><tr><th>Socket</th><th>Kind</th><th>PCIe</th><th>Block device</th><th>Model</th><th style={{textAlign: "right"}}>Size</th><th>Assignment</th></tr></thead>
           <tbody>
-            {sockets.map(s => h.devices.filter(d => d.socket === s).map(d => (
+            {h.devices.length === 0 && <tr><td colSpan={7} style={{color: "var(--dim2)"}}>{src.devices ? "No device on this host." : "No source reports this host's devices."}</td></tr>}
+            {sockets.map(s => h.devices.filter(d => (d.socket === undefined ? null : d.socket) === s).map(d => (
               <tr key={d.id}>
-                <td className="mono">{d.socket}</td>
+                <td className="mono">{s === null ? <NR what="NUMA socket" /> : d.socket}</td>
                 <td><span className="badge">{d.kind}</span></td>
                 <td className="mono">{d.pcie || "—"}</td>
                 <td className="mono">{d.blockdev || "—"}</td>
                 <td style={{color: "var(--dim)"}}>{d.model}</td>
-                <td className="mono" style={{textAlign: "right"}}>{fmtBytes(d.size)}</td>
-                <td>{d.assignedNodeId
+                <td className="mono" style={{textAlign: "right"}}>{d.size ? fmtBytes(d.size) : <NR what="size" />}</td>
+                <td>{d.selected && !d.assignedNodeId ? <span style={{color: "var(--accent)"}}>selected in the draft</span> : d.assignedNodeId
                   ? <Ref onClick={() => nav.openNode(h.clusterId, d.assignedNodeId)} label={regName(d.assignedNodeId, "storage node")} />
                   : d.reserved ? <span style={{color: "var(--warn)"}}>reserved · awaiting node restart</span>
                   : <span style={{color: "var(--dim2)"}}>unassigned</span>}</td>
@@ -375,25 +389,33 @@ function HostDetail({o: h, nav}) {
           </tbody></table>
       </div></div>
       <div className="sech"><h2>Network interfaces</h2><span className="ln"></span>
-        {h.mgmtNic && <span className="count">mgmt {h.mgmtNic} · data {(h.dataNics || []).join(", ") || "—"}</span>}</div>
+        {(h.mgmtNic || (h.dataNics || []).length > 0) && <span className="count">mgmt {h.mgmtNic || "not reported"} · data {(h.dataNics || []).join(", ") || "not reported"}</span>}
+        {src.nics && <FromTag what={src.nics} />}</div>
       <NicTable nics={h.nics} mgmt={h.mgmtNic} data={h.dataNics} />
       <div className="dcols">
         <div className="card"><h3>Host properties</h3><div className="bd" style={{paddingTop: 2, paddingBottom: 2}}>
           <Props rows={[
             ["Hostname", h.hostname], ["Management IP", h.mgmtIp], ["Status", <TrafficLight status={h.status} />],
-            ["Zone", h.zoneId ? <Ref onClick={() => nav.openZone(h.zoneId)} label={h.zone || regName(h.zoneId, "zone")} /> : null],
-            ["Region", h.region], ["Rack", h.rack], ["Cabinet", h.cabinet],
-            ["Device class", h.hostClass],
+            ["Zone", h.zoneId ? <Ref onClick={() => nav.openZone(h.zoneId)} label={h.zone || regName(h.zoneId, "zone")} /> : nr(h.zone, "the zone")],
+            ["Region", nr(h.region, "the region")], ["Rack", nr(h.rack, "the rack")], ["Cabinet", nr(h.cabinet, "the cabinet")],
+            ["Device class", nr(h.hostClass, "the device class")],
             ["Control plane services", h.controlPlane ? "yes" : "no"],
-            ["NUMA sockets in use", h.socketsUsed ? h.socketsUsed.join(", ") : "all"],
-            ["Memory per storage-plane pod", h.memoryPerPod ? fmtBytes(h.memoryPerPod, 0) : null],
-            ["Management NIC", h.mgmtNic], ["Data NICs", (h.dataNics || []).join(", ") || null],
+            ["NUMA sockets in use", h.socketsUsed && h.socketsUsed.length ? h.socketsUsed.join(", ") : h.sockets ? "all" : <NR what="the NUMA layout" />],
+            ["Memory per storage-plane pod", nrBytes(h.memoryPerPod, "memory per storage-plane pod", 0)],
+            ["Management NIC", nr(h.mgmtNic, "the management NIC")], ["Data NICs", nr((h.dataNics || []).join(", "), "the data NICs")],
             ["Storage nodes", h.nodeIds.length
               ? <span style={{display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap"}}>{h.nodeIds.map(id => <Ref key={id} onClick={() => nav.openNode(h.clusterId, id)} label={regName(id, shortId(id))} />)}</span>
               : null],
             ["Cluster", <Ref onClick={() => nav.openCluster(h.clusterId)} label={regName(h.clusterId)} />],
-            ["Prepared", fmtDate(h.preparedAt)]
+            ["Prepared", h.preparedAt ? fmtDate(h.preparedAt) : <NR what="the preparation time" />]
           ]} /></div></div>
+        {Object.keys(src).length > 0 && <div className="card"><h3>Sources</h3><div className="bd" style={{paddingTop: 2, paddingBottom: 2}}>
+          <Props rows={[
+            ["Devices", from("devices")], ["NICs", from("nics", "data_nics", "mgmt_nic")],
+            ["vCPUs, RAM, hugepages", from("vcpu_count", "memory_total", "hugepages_reserved")],
+            ["Zone, region, rack, cabinet", from("zone", "region", "rack_id", "cabinet_id")],
+            ["Storage-plane memory, sockets", from("memory_per_pod", "numa_sockets_used")]
+          ].map(([k, v]) => [k, v || <NR />])} /></div></div>}
         <div className="card"><h3>Labels</h3><div className="bd">
           <div className="labels">{Object.entries(h.labels).map(([k, v]) => <span className="lab" key={k}><i>{k}</i>{v}</span>)}</div>
         </div></div>
@@ -462,20 +484,23 @@ function NodeDetail({o: n, nav}) {
       <div className="stats">
         <Stat k="Capacity used" v={pct(n.capacity.used, n.capacity.total).toFixed(0) + "%"} s={`${fmtBytes(n.capacity.used)} of ${fmtBytes(n.capacity.total)}`} />
         <Stat k="Devices" v={n.counts.devices} s={`${n.counts.devicesOnline} online`} />
-        <Stat k="vCPU reserved" v={n.cpuReserved} s={`of ${n.cpuCount} cores on host`} />
-        <Stat k="System RAM" v={fmtBytes(n.memory.used, 0)} s={`used of ${fmtBytes(n.memory.total, 0)}`} />
-        <Stat k="RAM reserved" v={fmtBytes(n.memory.reserved, 0)} s="requests/limits" />
-        <Stat k="Hugepages" v={fmtBytes(n.hugepages.used, 0)} s={`of ${fmtBytes(n.hugepages.total, 0)} allocated`} />
+        <Stat k="vCPU reserved" v={nr(n.cpuReserved)} s={n.cpuCount ? `of ${n.cpuCount} vCPUs on the host` : ""} />
+        <Stat k="System RAM" v={n.memory.total ? fmtBytes(n.memory.total, 0) : "not reported"} s={n.memory.used ? `${fmtBytes(n.memory.used, 0)} in use` : "use not reported"} />
+        <Stat k="Storage-plane memory" v={n.memory.reserved ? fmtBytes(n.memory.reserved, 0) : "not reported"} s="SPDK (from hugepages)" />
+        <Stat k="Hugepages" v={n.hugepages.total ? fmtBytes(n.hugepages.total, 0) : "not reported"} s={n.hugepages.used ? `${fmtBytes(n.hugepages.used, 0)} in use` : "on the host; use not reported"} />
       </div>
       <div className="dcols" style={{marginTop: 12}}>
         <div className="card"><h3>Resource reservation</h3><div className="bd">
-          <AllocBar label="System memory in use" used={n.memory.used} total={n.memory.total} color="var(--ok)" />
-          <AllocBar label="Reserved for this node" used={n.memory.reserved} total={n.memory.total} color="var(--accent)" />
-          <AllocBar label="Hugepages in use" used={n.hugepages.used} total={n.hugepages.total} color="var(--ro)" />
+          {/* a usage the control plane does not record is said to be unknown, not drawn as 0 */}
+          {n.memory.used != null ? <AllocBar label="System memory in use" used={n.memory.used} total={n.memory.total} color="var(--ok)" />
+            : <div className="kv"><div><span>System memory in use</span><b><NR what="memory in use" /></b></div></div>}
+          {n.memory.reserved && n.memory.total ? <AllocBar label="Storage-plane memory (SPDK)" used={n.memory.reserved} total={n.memory.total} color="var(--accent)" /> : null}
+          {n.hugepages.used != null ? <AllocBar label="Hugepages in use" used={n.hugepages.used} total={n.hugepages.total} color="var(--ro)" />
+            : <div className="kv"><div><span>Hugepages on the host</span><b>{nrBytes(n.hugepages.total, "hugepages", 0)}</b></div><div><span>Hugepages in use</span><b><NR what="hugepages in use" /></b></div></div>}
           <div className="kv" style={{marginTop: 10}}>
-            <div><span>vCPU reserved</span><b>{n.cpuReserved}</b></div>
-            <div><span>Cores on host</span><b>{n.cpuCount}</b></div>
-            <div><span>SPDK</span><b>{n.spdk}</b></div>
+            <div><span>vCPU reserved</span><b>{nr(n.cpuReserved)}</b></div>
+            <div><span>vCPUs on host</span><b>{nr(n.cpuCount)}</b></div>
+            <div><span>SPDK version</span><b>{nr(n.spdk, "the SPDK version")}</b></div>
           </div>
         </div></div>
         <IOCards o={n} />
@@ -490,21 +515,25 @@ function NodeDetail({o: n, nav}) {
         <div className="card"><h3>Node properties</h3><div className="bd" style={{paddingTop: 2, paddingBottom: 2}}>
           <Props rows={[
             ["Hostname", n.hostname], ["Management IP", n.mgmtIp],
-            ["Data paths", (n.dataNics || []).length
+            ["Data NICs", (n.dataNics || []).length
               ? <span style={{display: "flex", flexDirection: "column", gap: 2, alignItems: "flex-end"}}>
-                  {n.dataNics.map(x => <span key={x.name + x.ip}>{x.name} · {x.ip}:{x.port}</span>)}
+                  {n.dataNics.map(x => <span key={x.name + x.ip}>{x.name || <NR what="interface name" />} · {x.ip}:{x.port}{x.trtype ? ` · ${x.trtype}` : ""}</span>)}
                 </span>
-              : n.ip],
-            ["Multipathing", n.multipath ? "yes — two paths" : "no — single path"],
+              : n.dataNics ? "none" : <NR what="the data NICs" />],
+            ["Multipathing", n.anaPaths > 1
+              ? <span>yes — ANA, {n.anaPaths} paths: this node{n.secondaryId ? <>, secondary <Ref onClick={() => nav.openNode(n.clusterId, n.secondaryId)} label={regName(n.secondaryId, shortId(n.secondaryId))} /></> : null}{n.tertiaryId ? <>, tertiary <Ref onClick={() => nav.openNode(n.clusterId, n.tertiaryId)} label={regName(n.tertiaryId, shortId(n.tertiaryId))} /></> : null}{(n.dataNics || []).length > 1 ? `; ${n.dataNics.length} data NICs each` : ""}</span>
+              : (n.dataNics || []).length > 1 ? `yes — ${n.dataNics.length} data NICs` : n.anaPaths ? "no — single path (no secondary node)" : <NR what="the node's paths" />],
             ["Status", <TrafficLight status={n.status} />],
-            ["Failure domain", n.failureDomain], ["Physical label", n.physicalLabel],
+            ["Failure domain", n.failureDomain === null || n.failureDomain === undefined ? <span style={{color: "var(--dim2)"}}>not set</span> : n.failureDomain],
+            ["Physical label", nr(n.physicalLabel, "a physical label")],
             ["Host", n.hostId ? <Ref onClick={() => nav.openHost(n.clusterId, n.hostId)} label={regName(n.hostId, "host")} /> : null],
             ["Cluster", <Ref onClick={() => nav.openCluster(n.clusterId)} label={regName(n.clusterId)} />],
-            ["vCPU reserved", n.cpuReserved], ["Max subsystems", n.maxSubsystems], ["CPU cores", n.cpuCount],
-            ["System memory", fmtBytes(n.memory.total, 0)],
-            ["Memory reserved", fmtBytes(n.memory.reserved, 0)],
-            ["Memory in use", fmtBytes(n.memory.used, 0)],
-            ["Hugepages", `${fmtBytes(n.hugepages.used, 0)} / ${fmtBytes(n.hugepages.total, 0)}`], ["SPDK", n.spdk]
+            ["vCPU reserved", nr(n.cpuReserved)], ["Max subsystems", nr(n.maxSubsystems)], ["vCPUs on host", nr(n.cpuCount)],
+            ["System memory", nrBytes(n.memory.total, "system memory", 0)],
+            ["Storage-plane memory (SPDK)", nrBytes(n.memory.reserved, "storage-plane memory", 0)],
+            ["Memory in use", n.memory.used != null ? fmtBytes(n.memory.used, 0) : <NR what="memory in use" />],
+            ["Hugepages", n.hugepages.used != null ? `${fmtBytes(n.hugepages.used, 0)} / ${fmtBytes(n.hugepages.total, 0)}` : <>{nrBytes(n.hugepages.total, "hugepages", 0)} <span style={{color: "var(--dim2)"}}>(use not reported)</span></>],
+            ["SPDK version", nr(n.spdk, "the SPDK version")]
           ]} /></div></div>
         <div className="card"><h3>I/O totals</h3><div className="bd">
           <div className="stats">

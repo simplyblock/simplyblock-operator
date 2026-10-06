@@ -736,6 +736,8 @@ const cpRaw = {
   clusters: () => cpGet("/clusters/").then(r => (r || []).map(dropSecrets)),
   nodes: cid => cpGet(`/clusters/${cid}/storage-nodes/`),
   devices: (cid, nid) => cpGet(`/clusters/${cid}/storage-nodes/${nid}/devices/`),
+  // the node's data NICs: [{"ID", "Device name", "Address", "Net type", "Status"}]
+  nics: (cid, nid) => cpGet(`/clusters/${cid}/storage-nodes/${nid}/nics`),
   pools: cid => cpGet(`/clusters/${cid}/storage-pools/`),
   volumes: (cid, pid) => cpGet(`/clusters/${cid}/storage-pools/${pid}/volumes/`),
   snapshots: (cid, pid) => cpGet(`/clusters/${cid}/storage-pools/${pid}/snapshots/`),
@@ -754,9 +756,14 @@ async function cpSites() {
   const [profiles, deploys] = await Promise.all([k8s.list("SiteProfile").catch(() => []), k8s.list("StorageSiteDeployment", {
     allNamespaces: true
   }).catch(() => [])]);
-  const byHost = {};
+  const byHost = {},
+    invByHost = {};
   profiles.forEach(p => (((p.status || {}).inventory || {}).nodes || []).forEach(n => {
     byHost[n.name] = p.metadata.name;
+    invByHost[n.name] = {
+      node: n,
+      site: p.metadata.name
+    };
   }));
   const byCluster = {};
   deploys.forEach(d => {
@@ -767,7 +774,9 @@ async function cpSites() {
   return {
     byHost,
     byCluster,
-    profiles
+    profiles,
+    invByHost,
+    deploys
   };
 }
 const siteOf = (sites, clusterId, nodes) => sites.byCluster[clusterId] || (nodes || []).map(n => sites.byHost[hostKey(n.hostname)]).find(Boolean) || "";
@@ -784,18 +793,29 @@ const knownStatus = st => {
   if (/new/.test(x)) return "in_creation";
   return "offline";
 };
-const wireNode = (n, site) => ({
+// A storage node's data NICs from the control plane's nics list; the port is
+// the node's volume subsystem port.
+const wireNics = (nics, n) => (nics || []).map(x => ({
+  name: x["Device name"] || x.if_name || "",
+  ip: x.Address || x.ip4_address || "",
+  port: n.lvol_subsys_port,
+  state: String(x.Status || x.status || "").toLowerCase() === "online" ? "up" : x.Status || x.status || null,
+  trtype: x["Net type"] || x.trtype || null
+}));
+// ANA multipath: a volume of this node is also reachable through its
+// secondary (and tertiary) node -- that is simplyblock's multipathing.
+const anaPaths = n => 1 + (n.secondary_node_id ? 1 : 0) + (n.tertiary_node_id ? 1 : 0);
+const wireNode = (n, site, nics) => ({
   uuid: n.id,
   cluster_id: n.cluster_id,
   host_id: `${n.cluster_id}:${hostKey(n.hostname)}`,
   hostname: hostKey(n.hostname),
   mgmt_ip: n.mgmt_ip,
   status: knownStatus(n.status),
-  data_nics: [{
-    name: "",
-    ip: n.mgmt_ip,
-    port: n.lvol_subsys_port
-  }],
+  data_nics: nics ? wireNics(nics, n) : null,
+  ana_paths: anaPaths(n),
+  secondary_node_id: n.secondary_node_id || null,
+  tertiary_node_id: n.tertiary_node_id || null,
   failure_domain: n.failure_domain >= 0 ? n.failure_domain : null,
   size_total: cpCap(n).size_total || 0,
   size_util: cpCap(n).size_used || 0,
@@ -803,9 +823,13 @@ const wireNode = (n, site) => ({
   devices_online: n.online_device_count || 0,
   cpu_count: n.cpu_total_count,
   vcpu_reserved: n.cpu_spdk_count,
-  memory_total: n.memory,
-  memory_reserved: n.spdk_mem,
-  hugepages_total: n.hugepage_memory,
+  // in-use memory/hugepages and the SPDK version are not part of the record
+  memory_total: n.memory || null,
+  memory_reserved: n.spdk_mem || null,
+  hugepages_total: n.hugepage_memory || null,
+  memory_used: null,
+  hugepages_used: null,
+  spdk_version: null,
   max_subsystem_count: n.lvols_max || null,
   lvols: n.lvols || 0,
   site: site || ""
@@ -1017,11 +1041,151 @@ const clusterOfPool = async pid => {
   if (!cid) throw new ApiError(404, `pool ${pid} not found in the control plane`, `/pools/${pid}`, "NotFound");
   return cid;
 };
+
+// ---- hosts: one machine, every source that knows something about it --------
+// Kubernetes quantities ("16", "15500m", "32Gi", "8589934592") as numbers.
+const QTY = {
+  Ki: 2 ** 10,
+  Mi: 2 ** 20,
+  Gi: 2 ** 30,
+  Ti: 2 ** 40,
+  Pi: 2 ** 50,
+  k: 1e3,
+  M: 1e6,
+  G: 1e9,
+  T: 1e12,
+  P: 1e15,
+  m: 1e-3
+};
+const qty = q => {
+  const m = /^([0-9.]+)([a-zA-Z]*)$/.exec(String(q === undefined || q === null ? "" : q).trim());
+  if (!m) return null;
+  const v = parseFloat(m[1]) * (m[2] ? QTY[m[2]] || NaN : 1);
+  return Number.isFinite(v) ? v : null;
+};
+const hugepagesOf = rl => {
+  const ks = Object.keys(rl || {}).filter(k => k.startsWith("hugepages-"));
+  return ks.length ? ks.reduce((t, k) => t + (qty(rl[k]) || 0), 0) : null;
+};
+const hostDevice = d => ({
+  id: d.id,
+  kind: d.bdev_type === "nvme" ? "nvme" : "block",
+  numa_socket: null,
+  pcie_address: d.pcie_address || null,
+  device_name: d.device_path || d.nvme_controller || null,
+  serial_number: d.serial_number || null,
+  model_number: d.model || null,
+  size: d.size || 0,
+  assigned_node_id: d.storage_node_id || null,
+  status: d.status
+});
+// The draft group that names this host as a worker, when the storage was
+// deployed from the hub (StorageSiteDeployment): its NICs, sockets, devices.
+const draftGroupOf = (deploys, host) => {
+  for (const d of deploys || []) {
+    const dr = (d.status || {}).draft || {};
+    for (const set of dr.nodeSets || []) for (const g of set.groups || []) {
+      if ((g.workers || []).includes(host)) return {
+        group: g,
+        cluster: dr.cluster || {},
+        name: d.metadata.name
+      };
+    }
+  }
+  return null;
+};
+const CPS = "control plane API",
+  INV = "dr-agent inventory";
+// Every field a source knows is set with the source it came from (h.sources);
+// a field no source knows stays unset, and the view says so.
+function mergeHost(h, sites) {
+  const src = {};
+  const set = (field, v, from) => {
+    if (v === null || v === undefined || v === "" || Array.isArray(v) && !v.length || typeof v === "number" && !Number.isFinite(v)) return;
+    h[field] = v;
+    src[field] = from;
+  };
+  const ns = h._nodes;
+  const max = f => {
+    const v = ns.map(f).filter(x => typeof x === "number" && x > 0);
+    return v.length ? Math.max(...v) : null;
+  };
+  const sum = f => {
+    const v = ns.map(f).filter(x => typeof x === "number" && x > 0);
+    return v.length ? v.reduce((a, b) => a + b, 0) : null;
+  };
+  // the control plane: what its storage nodes recorded of the machine
+  set("vcpu_count", max(n => n.cpu_total_count), CPS);
+  set("memory_total", max(n => n.memory), CPS);
+  set("hugepages_reserved", max(n => n.hugepage_memory), CPS);
+  set("hugepages_allocated", sum(n => n.spdk_mem), CPS);
+  set("memory_per_pod", max(n => n.spdk_mem), CPS);
+  if (h._devsKnown) src.devices = CPS;
+  if (h._nicsKnown) {
+    src.nics = CPS;
+    set("data_nics", h.nics.map(x => x.name).filter(Boolean), CPS);
+  }
+  // dr-agent: the Kubernetes node (zone, region, rack, cabinet, capacity)
+  const inv = (sites.invByHost || {})[h.hostname];
+  if (inv) {
+    const n = inv.node,
+      cap = n.capacity || {};
+    set("zone", n.zone, INV);
+    set("zone_id", n.zone ? zoneId(inv.site, n.zone) : null, INV);
+    set("region", n.region, INV);
+    set("rack_id", n.rack, INV);
+    set("cabinet_id", n.cabinet, INV);
+    set("k8s_cluster", inv.site, INV);
+    // the node's own view of the machine wins over what a storage node recorded
+    set("vcpu_count", qty(cap.cpu), INV);
+    set("memory_total", qty(cap.memory), INV);
+    set("hugepages_reserved", hugepagesOf(cap), INV);
+    if (n.ready === false && h.status === "available") h.status = "unavailable";
+  }
+  // a hub-driven deployment: the draft that placed storage on this host
+  const dg = draftGroupOf(sites.deploys, h.hostname);
+  if (dg) {
+    const g = dg.group,
+      from = `StorageSiteDeployment ${dg.name}`;
+    set("mgmt_nic", g.mgmtInterface, from);
+    if (!src.data_nics) set("data_nics", g.dataInterfaces, from);
+    set("numa_sockets_used", (dg.cluster.socketsToUse || []).map(x => parseInt(x, 10)).filter(x => !isNaN(x)), from);
+    if (!src.memory_per_pod) set("memory_per_pod", qty(g.spdkSystemMemory), from);
+    ((g.devices || {}).nvme || []).forEach(pcie => {
+      if (!h.devices.some(d => d.pcie_address === pcie)) {
+        h.devices.push({
+          id: `draft:${pcie}`,
+          kind: "nvme",
+          numa_socket: null,
+          pcie_address: pcie,
+          size: 0,
+          assigned_node_id: null,
+          selected: true
+        });
+      }
+    });
+    if (!src.devices && h.devices.length) src.devices = from;
+  }
+  const kinds = [...new Set(h.devices.map(d => d.kind))];
+  if (src.devices) set("host_class", kinds.length ? kinds.join(" + ") : null, src.devices);
+  h.devices_assigned = h.devices.filter(d => d.assigned_node_id).length;
+  h.devices_free = h.devices.length - h.devices_assigned;
+  h.nvme_count = h.devices.filter(d => d.kind === "nvme").length;
+  h.sources = src;
+  delete h._nodes;
+  delete h._devsKnown;
+  delete h._nicsKnown;
+  return h;
+}
 const cp = {
   on: cpOn,
   clusters: () => cpBundles().then(bs => bs.map(b => wireCluster(b.c, b.nodes, b.pools, b.site))),
   cluster: cid => cpBundle(cid).then(b => wireCluster(b.c, b.nodes, b.pools, b.site)),
-  nodes: cid => cpBundle(cid).then(b => b.nodes.map(n => wireNode(n, b.site))),
+  nodes: async cid => {
+    const b = await cpBundle(cid);
+    const nics = await Promise.all(b.nodes.map(n => cpRaw.nics(cid, n.id).catch(() => null)));
+    return b.nodes.map((n, i) => wireNode(n, b.site, nics[i]));
+  },
   node: async nid => (await cp.nodes(await clusterOfNode(nid))).find(n => n.uuid === nid),
   devices: async nid => {
     const cid = await clusterOfNode(nid);
@@ -1109,9 +1273,10 @@ const cp = {
   },
   // a storage node runs on one machine; the host view is that machine
   hosts: async cid => {
-    const b = await cpBundle(cid);
+    const [b, sites] = await Promise.all([cpBundle(cid), cpSites()]);
+    const [devs, nics] = await Promise.all([Promise.all(b.nodes.map(n => cpRaw.devices(cid, n.id).catch(() => null))), Promise.all(b.nodes.map(n => cpRaw.nics(cid, n.id).catch(() => null)))]);
     const by = {};
-    b.nodes.forEach(n => {
+    b.nodes.forEach((n, i) => {
       const k = hostKey(n.hostname);
       const h = by[k] = by[k] || {
         uuid: `${cid}:${k}`,
@@ -1122,16 +1287,25 @@ const cp = {
         status: "unavailable",
         storage_node_ids: [],
         devices: [],
+        nics: [],
         size_total: 0,
         size_assigned: 0,
-        k8s_cluster: b.site || null
+        k8s_cluster: b.site || null,
+        _nodes: [],
+        _devsKnown: true,
+        _nicsKnown: true
       };
       h.storage_node_ids.push(n.id);
+      h._nodes.push(n);
       if (n.status === "online") h.status = "available";
       h.size_total += cpCap(n).size_total || 0;
       h.size_assigned += cpCap(n).size_total || 0;
+      if (devs[i]) devs[i].forEach(d => h.devices.push(hostDevice(d)));else h._devsKnown = false;
+      if (nics[i]) wireNics(nics[i], n).forEach(x => {
+        if (!h.nics.some(y => y.name === x.name)) h.nics.push(x);
+      });else h._nicsKnown = false;
     });
-    return Object.values(by);
+    return Object.values(by).map(h => mergeHost(h, sites));
   },
   host: async hid => {
     const cid = String(hid).split(":")[0];
@@ -1281,17 +1455,31 @@ const hubK8s = {
   hosts: async id => {
     const s = await hubSite(id);
     const storageNodes = (await Promise.all(s.storage.map(c => cp.nodes(c.uuid).catch(() => [])))).flat();
-    return s.nodes.map(n => ({
-      uuid: `node:${s.name}:${n.name}`,
-      hostname: n.name,
-      status: n.ready ? "available" : "unavailable",
-      zone: n.zone || null,
-      zone_id: n.zone ? zoneId(s.name, n.zone) : null,
-      k8s_cluster: s.name,
-      source: "kubernetes",
-      storage_node_ids: storageNodes.filter(x => x.hostname === n.name).map(x => x.uuid),
-      devices: []
-    }));
+    return s.nodes.map(n => {
+      const cap = n.capacity || {},
+        h = {
+          uuid: `node:${s.name}:${n.name}`,
+          hostname: n.name,
+          status: n.ready ? "available" : "unavailable",
+          zone: n.zone || null,
+          zone_id: n.zone ? zoneId(s.name, n.zone) : null,
+          region: n.region || null,
+          rack_id: n.rack || null,
+          cabinet_id: n.cabinet || null,
+          k8s_cluster: s.name,
+          source: "kubernetes",
+          vcpu_count: qty(cap.cpu),
+          memory_total: qty(cap.memory),
+          hugepages_reserved: hugepagesOf(cap),
+          storage_node_ids: storageNodes.filter(x => x.hostname === n.name).map(x => x.uuid),
+          devices: []
+        };
+      h.sources = {};
+      ["zone", "region", "rack_id", "cabinet_id", "vcpu_count", "memory_total", "hugepages_reserved"].forEach(f => {
+        if (h[f]) h.sources[f] = INV;
+      });
+      return h;
+    });
   },
   zones: async id => {
     const ss = id ? [await hubSite(id)] : await hubSites();
@@ -2221,14 +2409,16 @@ const normHost = h => reg({
   hostClass: h.host_class || null,
   status: h.status,
   source: h.source || "manual",
-  sockets: h.numa_sockets,
+  sockets: h.numa_sockets || null,
   controlPlane: !!h.control_plane,
+  // which source reported each field (control plane API, dr-agent inventory, a draft)
+  sources: h.sources || {},
   kubelet: h.kubelet_version,
   roles: h.roles || [],
   k8sLabels: h.k8s_labels || {},
   inspection: h.inspection || null,
-  vcpu: h.vcpu_count,
-  memory: h.memory_total,
+  vcpu: h.vcpu_count || null,
+  memory: h.memory_total || null,
   memoryPerPod: h.memory_per_pod || null,
   socketsUsed: h.numa_sockets_used || null,
   mgmtNic: h.mgmt_nic || null,
@@ -2242,8 +2432,8 @@ const normHost = h => reg({
     state: n.state
   })),
   hugepages: {
-    reserved: h.hugepages_reserved,
-    allocated: h.hugepages_allocated
+    reserved: h.hugepages_reserved || null,
+    allocated: h.hugepages_allocated || null
   },
   devices: (h.devices || []).map(d => ({
     id: d.id,
@@ -2256,20 +2446,22 @@ const normHost = h => reg({
     size: d.size,
     assignedNodeId: d.assigned_node_id,
     reserved: !!d.reserved,
-    reservedFor: d.reserved_for_node_id
+    reservedFor: d.reserved_for_node_id,
+    selected: !!d.selected
   })),
   nodeIds: h.storage_node_ids || [],
+  // counts never render as "undefined": derived from the devices when a source left them out
   counts: {
     devices: (h.devices || []).length,
-    assigned: h.devices_assigned,
-    free: h.devices_free,
-    nvme: h.nvme_count,
-    blockFree: h.block_free_count,
+    assigned: h.devices_assigned !== undefined ? h.devices_assigned : (h.devices || []).filter(d => d.assigned_node_id).length,
+    free: h.devices_free !== undefined ? h.devices_free : (h.devices || []).filter(d => !d.assigned_node_id).length,
+    nvme: h.nvme_count || 0,
+    blockFree: h.block_free_count || 0,
     nodes: (h.storage_node_ids || []).length
   },
   capacity: {
-    total: h.size_total,
-    used: h.size_assigned
+    total: h.size_total || 0,
+    used: h.size_assigned || 0
   },
   preparedAt: h.prepared_at,
   labels: h.labels || {}
@@ -2383,14 +2575,21 @@ const normNode = n => reg({
   hostname: n.hostname,
   ip: n.data_nics && n.data_nics[0] ? n.data_nics[0].ip : null,
   port: n.data_nics && n.data_nics[0] ? n.data_nics[0].port : 4420,
-  dataNics: (n.data_nics || []).map(x => ({
+  // null: the source did not report the node's NICs (not "none")
+  dataNics: n.data_nics ? n.data_nics.map(x => ({
     name: x.name,
     ip: x.ip,
     port: x.port,
     socket: x.numa_socket,
-    state: x.state
-  })),
-  multipath: (n.data_nics || []).length > 1,
+    state: x.state,
+    trtype: x.trtype
+  })) : null,
+  // simplyblock multipathing is ANA: this node plus its secondary (and
+  // tertiary) serve the same volumes; extra data NICs add paths per node
+  anaPaths: n.ana_paths || null,
+  secondaryId: n.secondary_node_id || null,
+  tertiaryId: n.tertiary_node_id || null,
+  multipath: (n.ana_paths || 0) > 1 || (n.data_nics || []).length > 1,
   op: n.op ? {
     kind: n.op.kind,
     phase: n.op.phase,
@@ -2414,8 +2613,8 @@ const normNode = n => reg({
   bw: bwOf(n.io_stats),
   hist: histOf(n.io_history),
   counts: {
-    devices: n.devices_count,
-    devicesOnline: n.devices_online
+    devices: n.devices_count || 0,
+    devicesOnline: n.devices_online || 0
   },
   cpuCount: n.cpu_count,
   cpuReserved: n.vcpu_reserved,
@@ -17179,6 +17378,32 @@ Object.assign(window, {
 })();
 // ---- details.jsx ----
 (function(){
+// A value no source reported: said so, rather than a dash that reads as "none".
+const NR = ({
+  what
+}) => /*#__PURE__*/React.createElement("span", {
+  className: "nr",
+  style: {
+    color: "var(--dim2)"
+  },
+  title: what ? `${what} is not reported by any source in this deployment` : undefined
+}, "not reported");
+const nr = (v, what) => v === null || v === undefined || v === "" || typeof v === "number" && !Number.isFinite(v) ? /*#__PURE__*/React.createElement(NR, {
+  what: what
+}) : v;
+const nrBytes = (v, what, dp) => typeof v === "number" && Number.isFinite(v) && v > 0 ? fmtBytes(v, dp) : /*#__PURE__*/React.createElement(NR, {
+  what: what
+});
+// Where a section's data came from (the control plane API, the dr-agent inventory, a draft).
+const FromTag = ({
+  what
+}) => /*#__PURE__*/React.createElement("span", {
+  className: "srctag",
+  title: `Reported by ${what}`
+}, /*#__PURE__*/React.createElement(Icon, {
+  n: "list",
+  s: 10
+}), what);
 const Props = ({
   rows
 }) => /*#__PURE__*/React.createElement("dl", {
@@ -17259,8 +17484,13 @@ const NicTable = ({
   }
 }, /*#__PURE__*/React.createElement("table", {
   className: "dt"
-}, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Interface"), /*#__PURE__*/React.createElement("th", null, "Address"), /*#__PURE__*/React.createElement("th", null, "MAC"), /*#__PURE__*/React.createElement("th", null, "Speed"), /*#__PURE__*/React.createElement("th", null, "Socket"), /*#__PURE__*/React.createElement("th", null, "State"), /*#__PURE__*/React.createElement("th", null, "Role"))), /*#__PURE__*/React.createElement("tbody", null, (nics || []).map(n => /*#__PURE__*/React.createElement("tr", {
-  key: n.name
+}, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Interface"), /*#__PURE__*/React.createElement("th", null, "Address"), /*#__PURE__*/React.createElement("th", null, "MAC"), /*#__PURE__*/React.createElement("th", null, "Speed"), /*#__PURE__*/React.createElement("th", null, "Socket"), /*#__PURE__*/React.createElement("th", null, "State"), /*#__PURE__*/React.createElement("th", null, "Role"))), /*#__PURE__*/React.createElement("tbody", null, (nics || []).length === 0 && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+  colSpan: 7,
+  style: {
+    color: "var(--dim2)"
+  }
+}, "No NIC is reported for this host.")), (nics || []).map(n => /*#__PURE__*/React.createElement("tr", {
+  key: n.name || n.address
 }, /*#__PURE__*/React.createElement("td", {
   className: "mono",
   style: {
@@ -17273,12 +17503,16 @@ const NicTable = ({
   style: {
     color: "var(--dim)"
   }
-}, n.mac), /*#__PURE__*/React.createElement("td", {
+}, nr(n.mac, "MAC")), /*#__PURE__*/React.createElement("td", {
   className: "mono"
-}, n.speed, " GbE"), /*#__PURE__*/React.createElement("td", {
+}, n.speed ? `${n.speed} GbE` : /*#__PURE__*/React.createElement(NR, {
+  what: "link speed"
+})), /*#__PURE__*/React.createElement("td", {
   className: "mono"
-}, n.socket), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(TrafficLight, {
+}, nr(n.socket, "NUMA socket")), /*#__PURE__*/React.createElement("td", null, n.state ? /*#__PURE__*/React.createElement(TrafficLight, {
   status: n.state === "up" ? "online" : "offline"
+}) : /*#__PURE__*/React.createElement(NR, {
+  what: "link state"
 })), /*#__PURE__*/React.createElement("td", null, mgmt === n.name ? /*#__PURE__*/React.createElement("span", {
   className: "badge k8s"
 }, "management") : (data || []).includes(n.name) ? /*#__PURE__*/React.createElement("span", {
@@ -17839,9 +18073,12 @@ function HostDetail({
   nav
 }) {
   const candidate = h.status === "discovered" || h.status === "inspecting" || h.status === "inspected";
-  const sockets = h.socketsUsed && h.socketsUsed.length ? h.socketsUsed : Array.from({
+  // devices without a reported NUMA socket are grouped under "socket not reported"
+  const sockets = [...new Set([...(h.socketsUsed && h.socketsUsed.length ? h.socketsUsed : Array.from({
     length: h.sockets || 0
-  }, (_, s) => s);
+  }, (_, s) => s)), ...h.devices.map(d => d.socket === undefined ? null : d.socket)])];
+  const src = h.sources || {};
+  const from = (...fields) => [...new Set(fields.map(f => src[f]).filter(Boolean))].join(" + ");
   if (candidate) return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
     obj: h,
     title: h.hostname,
@@ -18010,22 +18247,24 @@ function HostDetail({
     className: "stats"
   }, /*#__PURE__*/React.createElement(Stat, {
     k: "NUMA sockets",
-    v: h.socketsUsed && h.socketsUsed.length ? `${h.socketsUsed.length} of ${h.sockets}` : h.sockets,
-    s: h.socketsUsed && h.socketsUsed.length ? `socket ${h.socketsUsed.join(", ")} in use` : "all in use"
+    v: h.sockets ? h.socketsUsed && h.socketsUsed.length ? `${h.socketsUsed.length} of ${h.sockets}` : h.sockets : h.socketsUsed && h.socketsUsed.length ? h.socketsUsed.length : "not reported",
+    s: h.socketsUsed && h.socketsUsed.length ? `socket ${h.socketsUsed.join(", ")} in use` : h.sockets ? "all in use" : "no source reports the NUMA layout"
   }), /*#__PURE__*/React.createElement(Stat, {
-    k: "vCPU / cores",
-    v: h.vcpu
+    k: "vCPUs",
+    v: h.vcpu || "not reported",
+    s: src.vcpu_count || ""
   }), /*#__PURE__*/React.createElement(Stat, {
     k: "System RAM",
-    v: fmtBytes(h.memory, 0)
+    v: h.memory ? fmtBytes(h.memory, 0) : "not reported",
+    s: src.memory_total || ""
   }), /*#__PURE__*/React.createElement(Stat, {
     k: "Hugepages",
-    v: fmtBytes(h.hugepages.allocated, 0),
-    s: `of ${fmtBytes(h.hugepages.reserved, 0)} reserved`
+    v: h.hugepages.reserved ? fmtBytes(h.hugepages.reserved, 1) : "not reported",
+    s: h.hugepages.reserved ? h.hugepages.allocated ? `${fmtBytes(h.hugepages.allocated, 1)} given to the storage plane` : "reserved" : ""
   }), /*#__PURE__*/React.createElement(Stat, {
     k: "Devices",
     v: `${h.counts.assigned}/${h.counts.devices}`,
-    s: "assigned"
+    s: src.devices ? "assigned" : "no source reports devices"
   }), /*#__PURE__*/React.createElement(Stat, {
     k: "Raw capacity",
     v: fmtBytes(h.capacity.total),
@@ -18036,7 +18275,9 @@ function HostDetail({
     className: "ln"
   }), /*#__PURE__*/React.createElement("span", {
     className: "count"
-  }, h.counts.free, " unassigned")), "      ", /*#__PURE__*/React.createElement("div", {
+  }, h.counts.free, " unassigned"), src.devices && /*#__PURE__*/React.createElement(FromTag, {
+    what: src.devices
+  })), "      ", /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "bd",
@@ -18049,11 +18290,18 @@ function HostDetail({
     style: {
       textAlign: "right"
     }
-  }, "Size"), /*#__PURE__*/React.createElement("th", null, "Assignment"))), /*#__PURE__*/React.createElement("tbody", null, sockets.map(s => h.devices.filter(d => d.socket === s).map(d => /*#__PURE__*/React.createElement("tr", {
+  }, "Size"), /*#__PURE__*/React.createElement("th", null, "Assignment"))), /*#__PURE__*/React.createElement("tbody", null, h.devices.length === 0 && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    colSpan: 7,
+    style: {
+      color: "var(--dim2)"
+    }
+  }, src.devices ? "No device on this host." : "No source reports this host's devices.")), sockets.map(s => h.devices.filter(d => (d.socket === undefined ? null : d.socket) === s).map(d => /*#__PURE__*/React.createElement("tr", {
     key: d.id
   }, /*#__PURE__*/React.createElement("td", {
     className: "mono"
-  }, d.socket), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("span", {
+  }, s === null ? /*#__PURE__*/React.createElement(NR, {
+    what: "NUMA socket"
+  }) : d.socket), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("span", {
     className: "badge"
   }, d.kind)), /*#__PURE__*/React.createElement("td", {
     className: "mono"
@@ -18068,7 +18316,13 @@ function HostDetail({
     style: {
       textAlign: "right"
     }
-  }, fmtBytes(d.size)), /*#__PURE__*/React.createElement("td", null, d.assignedNodeId ? /*#__PURE__*/React.createElement(Ref, {
+  }, d.size ? fmtBytes(d.size) : /*#__PURE__*/React.createElement(NR, {
+    what: "size"
+  })), /*#__PURE__*/React.createElement("td", null, d.selected && !d.assignedNodeId ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "var(--accent)"
+    }
+  }, "selected in the draft") : d.assignedNodeId ? /*#__PURE__*/React.createElement(Ref, {
     onClick: () => nav.openNode(h.clusterId, d.assignedNodeId),
     label: regName(d.assignedNodeId, "storage node")
   }) : d.reserved ? /*#__PURE__*/React.createElement("span", {
@@ -18083,9 +18337,11 @@ function HostDetail({
     className: "sech"
   }, /*#__PURE__*/React.createElement("h2", null, "Network interfaces"), /*#__PURE__*/React.createElement("span", {
     className: "ln"
-  }), h.mgmtNic && /*#__PURE__*/React.createElement("span", {
+  }), (h.mgmtNic || (h.dataNics || []).length > 0) && /*#__PURE__*/React.createElement("span", {
     className: "count"
-  }, "mgmt ", h.mgmtNic, " \xB7 data ", (h.dataNics || []).join(", ") || "—")), /*#__PURE__*/React.createElement(NicTable, {
+  }, "mgmt ", h.mgmtNic || "not reported", " \xB7 data ", (h.dataNics || []).join(", ") || "not reported"), src.nics && /*#__PURE__*/React.createElement(FromTag, {
+    what: src.nics
+  })), /*#__PURE__*/React.createElement(NicTable, {
     nics: h.nics,
     mgmt: h.mgmtNic,
     data: h.dataNics
@@ -18105,7 +18361,9 @@ function HostDetail({
     })], ["Zone", h.zoneId ? /*#__PURE__*/React.createElement(Ref, {
       onClick: () => nav.openZone(h.zoneId),
       label: h.zone || regName(h.zoneId, "zone")
-    }) : null], ["Region", h.region], ["Rack", h.rack], ["Cabinet", h.cabinet], ["Device class", h.hostClass], ["Control plane services", h.controlPlane ? "yes" : "no"], ["NUMA sockets in use", h.socketsUsed ? h.socketsUsed.join(", ") : "all"], ["Memory per storage-plane pod", h.memoryPerPod ? fmtBytes(h.memoryPerPod, 0) : null], ["Management NIC", h.mgmtNic], ["Data NICs", (h.dataNics || []).join(", ") || null], ["Storage nodes", h.nodeIds.length ? /*#__PURE__*/React.createElement("span", {
+    }) : nr(h.zone, "the zone")], ["Region", nr(h.region, "the region")], ["Rack", nr(h.rack, "the rack")], ["Cabinet", nr(h.cabinet, "the cabinet")], ["Device class", nr(h.hostClass, "the device class")], ["Control plane services", h.controlPlane ? "yes" : "no"], ["NUMA sockets in use", h.socketsUsed && h.socketsUsed.length ? h.socketsUsed.join(", ") : h.sockets ? "all" : /*#__PURE__*/React.createElement(NR, {
+      what: "the NUMA layout"
+    })], ["Memory per storage-plane pod", nrBytes(h.memoryPerPod, "memory per storage-plane pod", 0)], ["Management NIC", nr(h.mgmtNic, "the management NIC")], ["Data NICs", nr((h.dataNics || []).join(", "), "the data NICs")], ["Storage nodes", h.nodeIds.length ? /*#__PURE__*/React.createElement("span", {
       style: {
         display: "flex",
         gap: 8,
@@ -18119,7 +18377,19 @@ function HostDetail({
     }))) : null], ["Cluster", /*#__PURE__*/React.createElement(Ref, {
       onClick: () => nav.openCluster(h.clusterId),
       label: regName(h.clusterId)
-    })], ["Prepared", fmtDate(h.preparedAt)]]
+    })], ["Prepared", h.preparedAt ? fmtDate(h.preparedAt) : /*#__PURE__*/React.createElement(NR, {
+      what: "the preparation time"
+    })]]
+  }))), Object.keys(src).length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Sources"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      paddingTop: 2,
+      paddingBottom: 2
+    }
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: [["Devices", from("devices")], ["NICs", from("nics", "data_nics", "mgmt_nic")], ["vCPUs, RAM, hugepages", from("vcpu_count", "memory_total", "hugepages_reserved")], ["Zone, region, rack, cabinet", from("zone", "region", "rack_id", "cabinet_id")], ["Storage-plane memory, sockets", from("memory_per_pod", "numa_sockets_used")]].map(([k, v]) => [k, v || /*#__PURE__*/React.createElement(NR, null)])
   }))), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("h3", null, "Labels"), /*#__PURE__*/React.createElement("div", {
@@ -18279,20 +18549,20 @@ function NodeDetail({
     s: `${n.counts.devicesOnline} online`
   }), /*#__PURE__*/React.createElement(Stat, {
     k: "vCPU reserved",
-    v: n.cpuReserved,
-    s: `of ${n.cpuCount} cores on host`
+    v: nr(n.cpuReserved),
+    s: n.cpuCount ? `of ${n.cpuCount} vCPUs on the host` : ""
   }), /*#__PURE__*/React.createElement(Stat, {
     k: "System RAM",
-    v: fmtBytes(n.memory.used, 0),
-    s: `used of ${fmtBytes(n.memory.total, 0)}`
+    v: n.memory.total ? fmtBytes(n.memory.total, 0) : "not reported",
+    s: n.memory.used ? `${fmtBytes(n.memory.used, 0)} in use` : "use not reported"
   }), /*#__PURE__*/React.createElement(Stat, {
-    k: "RAM reserved",
-    v: fmtBytes(n.memory.reserved, 0),
-    s: "requests/limits"
+    k: "Storage-plane memory",
+    v: n.memory.reserved ? fmtBytes(n.memory.reserved, 0) : "not reported",
+    s: "SPDK (from hugepages)"
   }), /*#__PURE__*/React.createElement(Stat, {
     k: "Hugepages",
-    v: fmtBytes(n.hugepages.used, 0),
-    s: `of ${fmtBytes(n.hugepages.total, 0)} allocated`
+    v: n.hugepages.total ? fmtBytes(n.hugepages.total, 0) : "not reported",
+    s: n.hugepages.used ? `${fmtBytes(n.hugepages.used, 0)} in use` : "on the host; use not reported"
   })), /*#__PURE__*/React.createElement("div", {
     className: "dcols",
     style: {
@@ -18302,27 +18572,35 @@ function NodeDetail({
     className: "card"
   }, /*#__PURE__*/React.createElement("h3", null, "Resource reservation"), /*#__PURE__*/React.createElement("div", {
     className: "bd"
-  }, /*#__PURE__*/React.createElement(AllocBar, {
+  }, n.memory.used != null ? /*#__PURE__*/React.createElement(AllocBar, {
     label: "System memory in use",
     used: n.memory.used,
     total: n.memory.total,
     color: "var(--ok)"
-  }), /*#__PURE__*/React.createElement(AllocBar, {
-    label: "Reserved for this node",
+  }) : /*#__PURE__*/React.createElement("div", {
+    className: "kv"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "System memory in use"), /*#__PURE__*/React.createElement("b", null, /*#__PURE__*/React.createElement(NR, {
+    what: "memory in use"
+  })))), n.memory.reserved && n.memory.total ? /*#__PURE__*/React.createElement(AllocBar, {
+    label: "Storage-plane memory (SPDK)",
     used: n.memory.reserved,
     total: n.memory.total,
     color: "var(--accent)"
-  }), /*#__PURE__*/React.createElement(AllocBar, {
+  }) : null, n.hugepages.used != null ? /*#__PURE__*/React.createElement(AllocBar, {
     label: "Hugepages in use",
     used: n.hugepages.used,
     total: n.hugepages.total,
     color: "var(--ro)"
-  }), /*#__PURE__*/React.createElement("div", {
+  }) : /*#__PURE__*/React.createElement("div", {
+    className: "kv"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "Hugepages on the host"), /*#__PURE__*/React.createElement("b", null, nrBytes(n.hugepages.total, "hugepages", 0))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "Hugepages in use"), /*#__PURE__*/React.createElement("b", null, /*#__PURE__*/React.createElement(NR, {
+    what: "hugepages in use"
+  })))), /*#__PURE__*/React.createElement("div", {
     className: "kv",
     style: {
       marginTop: 10
     }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "vCPU reserved"), /*#__PURE__*/React.createElement("b", null, n.cpuReserved)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "Cores on host"), /*#__PURE__*/React.createElement("b", null, n.cpuCount)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "SPDK"), /*#__PURE__*/React.createElement("b", null, n.spdk))))), /*#__PURE__*/React.createElement(IOCards, {
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "vCPU reserved"), /*#__PURE__*/React.createElement("b", null, nr(n.cpuReserved))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "vCPUs on host"), /*#__PURE__*/React.createElement("b", null, nr(n.cpuCount))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "SPDK version"), /*#__PURE__*/React.createElement("b", null, nr(n.spdk, "the SPDK version")))))), /*#__PURE__*/React.createElement(IOCards, {
     o: n
   })), /*#__PURE__*/React.createElement("div", {
     className: "sech"
@@ -18356,7 +18634,7 @@ function NodeDetail({
       paddingBottom: 2
     }
   }, /*#__PURE__*/React.createElement(Props, {
-    rows: [["Hostname", n.hostname], ["Management IP", n.mgmtIp], ["Data paths", (n.dataNics || []).length ? /*#__PURE__*/React.createElement("span", {
+    rows: [["Hostname", n.hostname], ["Management IP", n.mgmtIp], ["Data NICs", (n.dataNics || []).length ? /*#__PURE__*/React.createElement("span", {
       style: {
         display: "flex",
         flexDirection: "column",
@@ -18365,15 +18643,37 @@ function NodeDetail({
       }
     }, n.dataNics.map(x => /*#__PURE__*/React.createElement("span", {
       key: x.name + x.ip
-    }, x.name, " \xB7 ", x.ip, ":", x.port))) : n.ip], ["Multipathing", n.multipath ? "yes — two paths" : "no — single path"], ["Status", /*#__PURE__*/React.createElement(TrafficLight, {
+    }, x.name || /*#__PURE__*/React.createElement(NR, {
+      what: "interface name"
+    }), " \xB7 ", x.ip, ":", x.port, x.trtype ? ` · ${x.trtype}` : ""))) : n.dataNics ? "none" : /*#__PURE__*/React.createElement(NR, {
+      what: "the data NICs"
+    })], ["Multipathing", n.anaPaths > 1 ? /*#__PURE__*/React.createElement("span", null, "yes \u2014 ANA, ", n.anaPaths, " paths: this node", n.secondaryId ? /*#__PURE__*/React.createElement(React.Fragment, null, ", secondary ", /*#__PURE__*/React.createElement(Ref, {
+      onClick: () => nav.openNode(n.clusterId, n.secondaryId),
+      label: regName(n.secondaryId, shortId(n.secondaryId))
+    })) : null, n.tertiaryId ? /*#__PURE__*/React.createElement(React.Fragment, null, ", tertiary ", /*#__PURE__*/React.createElement(Ref, {
+      onClick: () => nav.openNode(n.clusterId, n.tertiaryId),
+      label: regName(n.tertiaryId, shortId(n.tertiaryId))
+    })) : null, (n.dataNics || []).length > 1 ? `; ${n.dataNics.length} data NICs each` : "") : (n.dataNics || []).length > 1 ? `yes — ${n.dataNics.length} data NICs` : n.anaPaths ? "no — single path (no secondary node)" : /*#__PURE__*/React.createElement(NR, {
+      what: "the node's paths"
+    })], ["Status", /*#__PURE__*/React.createElement(TrafficLight, {
       status: n.status
-    })], ["Failure domain", n.failureDomain], ["Physical label", n.physicalLabel], ["Host", n.hostId ? /*#__PURE__*/React.createElement(Ref, {
+    })], ["Failure domain", n.failureDomain === null || n.failureDomain === undefined ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim2)"
+      }
+    }, "not set") : n.failureDomain], ["Physical label", nr(n.physicalLabel, "a physical label")], ["Host", n.hostId ? /*#__PURE__*/React.createElement(Ref, {
       onClick: () => nav.openHost(n.clusterId, n.hostId),
       label: regName(n.hostId, "host")
     }) : null], ["Cluster", /*#__PURE__*/React.createElement(Ref, {
       onClick: () => nav.openCluster(n.clusterId),
       label: regName(n.clusterId)
-    })], ["vCPU reserved", n.cpuReserved], ["Max subsystems", n.maxSubsystems], ["CPU cores", n.cpuCount], ["System memory", fmtBytes(n.memory.total, 0)], ["Memory reserved", fmtBytes(n.memory.reserved, 0)], ["Memory in use", fmtBytes(n.memory.used, 0)], ["Hugepages", `${fmtBytes(n.hugepages.used, 0)} / ${fmtBytes(n.hugepages.total, 0)}`], ["SPDK", n.spdk]]
+    })], ["vCPU reserved", nr(n.cpuReserved)], ["Max subsystems", nr(n.maxSubsystems)], ["vCPUs on host", nr(n.cpuCount)], ["System memory", nrBytes(n.memory.total, "system memory", 0)], ["Storage-plane memory (SPDK)", nrBytes(n.memory.reserved, "storage-plane memory", 0)], ["Memory in use", n.memory.used != null ? fmtBytes(n.memory.used, 0) : /*#__PURE__*/React.createElement(NR, {
+      what: "memory in use"
+    })], ["Hugepages", n.hugepages.used != null ? `${fmtBytes(n.hugepages.used, 0)} / ${fmtBytes(n.hugepages.total, 0)}` : /*#__PURE__*/React.createElement(React.Fragment, null, nrBytes(n.hugepages.total, "hugepages", 0), " ", /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim2)"
+      }
+    }, "(use not reported)"))], ["SPDK version", nr(n.spdk, "the SPDK version")]]
   }))), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("h3", null, "I/O totals"), /*#__PURE__*/React.createElement("div", {
