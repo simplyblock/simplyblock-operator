@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -80,6 +81,13 @@ func (ns *Server) NodeStageVolume(
 	}
 
 	vc := req.GetVolumeContext()
+	if vc == nil {
+		// A statically provisioned PV can carry no csi.volumeAttributes, which
+		// arrives here as a nil map. The volume's identity is re-resolved from its
+		// handle by refreshVolumeContext regardless, so an empty context is enough
+		// to stage; a nil one would panic on the first write below.
+		vc = map[string]string{}
+	}
 	vc["stagingParentPath"] = stagingParentPath
 	ns.refreshVolumeContext(ctx, volumeID, vc)
 
@@ -95,7 +103,7 @@ func (ns *Server) NodeStageVolume(
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	ns.rememberStagedVolume(ctx, volumeID, vc, artifact, req.GetVolumeCapability())
+	ns.rememberStagedVolume(ctx, volumeID, vc, artifact, plan, req.GetVolumeCapability())
 
 	// The CSI spec passes VolumeContext to this RPC and to nothing after it, so
 	// what the later RPCs need is written beside the staging path.
@@ -280,7 +288,32 @@ func (ns *Server) attachPlan(
 	}
 	node := ns.stack.node(hostNQN, ns.priorFormat(volumeID, vc))
 	volume := stackVolume(stagingTargetPath, vc, volCap)
-	return planFor(node, connection, volume, vdoOptions(vc), shapeFor(vc, volCap)), nil
+	shape := ns.attachShape(volumeID, shapeFor(vc, volCap))
+	return planFor(node, connection, volume, vdoOptions(vc), shape), nil
+}
+
+// attachShape decides whether a stage or heal builds the dmLinear indirection.
+// A volume's stack never gains or loses the layer under a staged consumer:
+// with a stack record the record decides (the layer is there or it is not),
+// and only a fresh stage, which has none, follows SPDKCSI_DM_INDIRECTION. A
+// record that cannot be read keeps the shape without the layer, which is what
+// every volume staged before the indirection existed is.
+func (ns *Server) attachShape(volumeID string, shape stackShape) stackShape {
+	record, err := ns.stack.store.Load(volumeID)
+	switch {
+	case errors.Is(err, volstack.ErrNoRecord):
+		if dmIndirectionEnabled() {
+			return indirect(shape)
+		}
+		return shape
+	case err != nil:
+		klog.Warningf("volume %s: stack record unreadable (%v); staging without the dm indirection", volumeID, err)
+		return shape
+	}
+	if slices.Contains(recordedLayers(record), layerDMLinear) {
+		return indirect(shape)
+	}
+	return shape
 }
 
 // teardownPlan is the plan an unstage walks, which is the shape that was built
@@ -590,7 +623,7 @@ func (ns *Server) refreshVolumeContext(ctx context.Context, volumeID string, vc 
 			// The source volume was deleted by a migration with --delete-source.
 			// The replication relationship survives it and names the active
 			// volume on the target cluster, which is what this redirects to.
-			connInfo = ns.redirectToActiveVolume(ctx, sbcClient, spdkVol.VolumeID, volumeID, vc)
+			connInfo = redirectToActiveVolume(ctx, sbcClient, spdkVol.VolumeID, volumeID, vc)
 		}
 		if connInfo == nil {
 			klog.Warningf("failed to fetch volume connection info for %s: %v", volumeID, infoErr)
@@ -612,6 +645,7 @@ func (ns *Server) rememberStagedVolume(
 	volumeID string,
 	vc map[string]string,
 	artifact volstack.Artifact,
+	plan volstack.Plan,
 	volCap *csi.VolumeCapability,
 ) {
 	if device, ok := artifact.Device(); ok {
@@ -629,8 +663,31 @@ func (ns *Server) rememberStagedVolume(
 	// The device carries this filesystem, because the layer either put it there
 	// or refused to stage a device carrying another.
 	fsType := stagedFsType(vc, volCap)
+	if fsType == "" {
+		// Nobody named it: the layer mounted what the device carries, or
+		// formatted a blank device as its default, and knows which.
+		fsType = planFsType(plan)
+	}
+	if fsType == "" {
+		return
+	}
 	vc[stagedFsTypeKey] = fsType
 	ns.recordOnDiskFilesystem(ctx, volumeID, vc, fsType)
+}
+
+// planFsType is the filesystem the plan's filesystem layer stands for after
+// it acted (layers.FilesystemParams), "" when the plan has none.
+func planFsType(plan volstack.Plan) string {
+	for _, l := range plan {
+		recorded, ok := l.(interface{ Params() any })
+		if !ok {
+			continue
+		}
+		if p, ok := recorded.Params().(layers.FilesystemParams); ok {
+			return p.FsType
+		}
+	}
+	return ""
 }
 
 // priorFormat is what the volume is recorded as carrying, for the layer that
@@ -697,13 +754,15 @@ func (ns *Server) volumeIsBeingDeleted(ctx context.Context, volumeID string) boo
 }
 
 // stagedFsType returns the filesystem a volume was staged with: the one
-// recorded at stage time when it is there, and otherwise the one the volume
-// capability asks for, which is all a volume staged by an older driver has.
+// recorded at stage time when it is there, else the one the volume capability
+// asks for, else "" -- no opinion, which lets the filesystem layer mount what
+// the device carries instead of refusing an XFS volume for not being the ext4
+// nobody asked for (a static PV without fsType, 2026-10-03).
 func stagedFsType(volumeContext map[string]string, volCap *csi.VolumeCapability) string {
 	if fsType := strings.TrimSpace(volumeContext[stagedFsTypeKey]); fsType != "" {
 		return fsType
 	}
-	return fsTypeOrDefault(volCap)
+	return volCap.GetMount().GetFsType()
 }
 
 // fsTypeOrDefault returns the requested filesystem type, defaulting to ext4.

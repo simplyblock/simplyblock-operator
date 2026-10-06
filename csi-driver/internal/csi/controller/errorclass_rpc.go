@@ -108,6 +108,24 @@ func classifyValidateVolumeCapabilitiesError(err error) classifiedError {
 func classifyListSnapshotsError(err error) classifiedError {
 	return classifiedError{ListSnapshotsErrorClassifier.Classify(err), err}
 }
+func classifyEnableVolumeReplicationError(err error) classifiedError {
+	return classifiedError{EnableVolumeReplicationErrorClassifier.Classify(err), err}
+}
+func classifyDisableVolumeReplicationError(err error) classifiedError {
+	return classifiedError{DisableVolumeReplicationErrorClassifier.Classify(err), err}
+}
+func classifyGetVolumeReplicationInfoError(err error) classifiedError {
+	return classifiedError{GetVolumeReplicationInfoErrorClassifier.Classify(err), err}
+}
+func classifyPromoteVolumeError(err error) classifiedError {
+	return classifiedError{PromoteVolumeErrorClassifier.Classify(err), err}
+}
+func classifyDemoteVolumeError(err error) classifiedError {
+	return classifiedError{DemoteVolumeErrorClassifier.Classify(err), err}
+}
+func classifyResyncVolumeError(err error) classifiedError {
+	return classifiedError{ResyncVolumeErrorClassifier.Classify(err), err}
+}
 
 // Dispositions reused across RPCs.
 var (
@@ -120,6 +138,10 @@ var (
 	// resolveConflict: a 409 must be resolved by looking up the existing object
 	// (same source and params → return it as success, otherwise AlreadyExists).
 	resolveConflict = controlPlaneErrorClass{Idempotent: true}
+	// cutoverInFlight: a 409 on a replication verb means a cutover is
+	// currently running, not a conflicting object to resolve → ABORTED,
+	// retryable, since Ramen re-drives every reconcile until it clears.
+	cutoverInFlight = controlPlaneErrorClass{Code: codes.Aborted, Retryable: true}
 )
 
 // Preconfigured per-RPC classifiers. Every RPC that talks to the control plane
@@ -154,4 +176,40 @@ var (
 	// ListSnapshotsErrorClassifier has no operation-specific statuses: every
 	// status is handled generically.
 	ListSnapshotsErrorClassifier = errorClassifier{}
+
+	// EnableVolumeReplicationErrorClassifier: a different-policy attach is a
+	// 412 (design §10), already generic (FailedPrecondition); a 404 means the
+	// volume itself does not exist.
+	EnableVolumeReplicationErrorClassifier = errorClassifier{overrides: map[int]controlPlaneErrorClass{
+		http.StatusNotFound: sourceNotFound,
+	}}
+	// DisableVolumeReplicationErrorClassifier: a 409 means a cutover is in
+	// flight (design §10), not a conflicting object to resolve.
+	DisableVolumeReplicationErrorClassifier = errorClassifier{overrides: map[int]controlPlaneErrorClass{
+		http.StatusNotFound: sourceNotFound,
+		http.StatusConflict: cutoverInFlight,
+	}}
+	GetVolumeReplicationInfoErrorClassifier = errorClassifier{overrides: map[int]controlPlaneErrorClass{
+		http.StatusNotFound: sourceNotFound,
+	}}
+	// PromoteVolumeErrorClassifier: a 409 on a planned promote means demote is
+	// still converging (design §5.2) -- reuses cutoverInFlight's ABORTED,
+	// retryable disposition, since the vendored csi-addons controller
+	// auto-escalates ANY FAILED_PRECONDITION to force=true inline with no
+	// wait-and-retry grace period of its own. A 412 falls through to the
+	// generic classifier's FailedPrecondition unchanged: that is the one case
+	// meant to let the controller's own escalation take over.
+	PromoteVolumeErrorClassifier = errorClassifier{overrides: map[int]controlPlaneErrorClass{
+		http.StatusNotFound: sourceNotFound,
+		http.StatusConflict: cutoverInFlight,
+	}}
+	// DemoteVolumeErrorClassifier classifies only genuine backend failures.
+	// "Not yet done" (202) is not an error at atlas-lib's DemoteVolume, so it
+	// never reaches this classifier -- the RPC handler checks it directly.
+	DemoteVolumeErrorClassifier = errorClassifier{overrides: map[int]controlPlaneErrorClass{
+		http.StatusNotFound: sourceNotFound,
+	}}
+	ResyncVolumeErrorClassifier = errorClassifier{overrides: map[int]controlPlaneErrorClass{
+		http.StatusNotFound: sourceNotFound,
+	}}
 )

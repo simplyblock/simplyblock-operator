@@ -144,7 +144,7 @@ func TestTheAddCarriesWhatTheNodeSaysAboutItself(t *testing.T) {
 	}
 
 	r, _ := aSteadyNode(t, aControlPlane())
-	params := r.addParams(node, cluster)
+	params := r.addParams(context.Background(), node, cluster)
 
 	if params.SPDKImage != "example.test/spdk:v1" ||
 		params.SPDKProxyImage != "example.test/spdk-proxy:v1" ||
@@ -181,7 +181,7 @@ func TestTheAddCarriesWhatTheNodeSaysAboutItself(t *testing.T) {
 func TestAnUnstatedJournalShareIsTheDefaultAndTheCountIsNot(t *testing.T) {
 	r, _ := aSteadyNode(t, aControlPlane())
 
-	params := r.addParams(anUnprovisionedNode(stepPosting), anOpsCluster())
+	params := r.addParams(context.Background(), anUnprovisionedNode(stepPosting), anOpsCluster())
 
 	if params.JMPercent != 3 {
 		t.Errorf("the journal share is %d%%, want the default 3", params.JMPercent)
@@ -206,30 +206,30 @@ func TestAFaultGroupIsSentAsTheIndexTheClusterMapsItTo(t *testing.T) {
 
 	named := anUnprovisionedNode(stepPosting)
 	named.Spec.Config.FailureDomain = "rack-1"
-	if index := r.addParams(named, cluster).FailureDomain; index == nil || *index != 3 {
+	if index := r.addParams(context.Background(), named, cluster).FailureDomain; index == nil || *index != 3 {
 		t.Errorf("failureDomain = %v, want the index the cluster maps rack-1 to", index)
 	}
 
 	mappedNumber := anUnprovisionedNode(stepPosting)
 	mappedNumber.Spec.Config.FailureDomain = "2"
-	if index := r.addParams(mappedNumber, cluster).FailureDomain; index == nil || *index != 5 {
+	if index := r.addParams(context.Background(), mappedNumber, cluster).FailureDomain; index == nil || *index != 5 {
 		t.Errorf("failureDomain = %v, want the mapped index over the label's number", index)
 	}
 
 	unmappedNumber := anUnprovisionedNode(stepPosting)
 	unmappedNumber.Spec.Config.FailureDomain = "4"
-	if index := r.addParams(unmappedNumber, cluster).FailureDomain; index == nil || *index != 4 {
+	if index := r.addParams(context.Background(), unmappedNumber, cluster).FailureDomain; index == nil || *index != 4 {
 		t.Errorf("failureDomain = %v, want the number an unmapped numeric label spells", index)
 	}
 
 	unmappedName := anUnprovisionedNode(stepPosting)
 	unmappedName.Spec.Config.FailureDomain = "rack-9"
-	if index := r.addParams(unmappedName, cluster).FailureDomain; index != nil {
+	if index := r.addParams(context.Background(), unmappedName, cluster).FailureDomain; index != nil {
 		t.Errorf("failureDomain = %v, want none for a name the cluster has no index for",
 			index)
 	}
 
-	if index := r.addParams(anUnprovisionedNode(stepPosting), cluster).FailureDomain; index != nil {
+	if index := r.addParams(context.Background(), anUnprovisionedNode(stepPosting), cluster).FailureDomain; index != nil {
 		t.Errorf("failureDomain = %v, want none for a node that declares no group", index)
 	}
 }

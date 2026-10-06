@@ -88,6 +88,42 @@ func TestASingleManagementAPIInstanceStaysExpressible(t *testing.T) {
 	}
 }
 
+// AdminTokenSecretRef reaches the management API as SB_ADMIN_TOKENS, sourced
+// via secretKeyRef rather than a literal value, so this operator never itself
+// reads the plaintext. It is what lets a cluster this control plane manages
+// remotely authenticate a CreateCluster call.
+func TestAnAdminTokenSecretRefReachesTheManagementAPIsEnvironment(t *testing.T) {
+	cp := localControlPlane()
+	cp.Spec.Source.Local.AdminTokenSecretRef = &corev1.LocalObjectReference{Name: "hub-admin-token"}
+
+	api := findDeployment(t, managementAPIObjects(cp), ComponentWebAPI)
+	env := findEnvVar(t, api, "SB_ADMIN_TOKENS")
+
+	if env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
+		t.Fatalf("SB_ADMIN_TOKENS is not sourced from a Secret: %#v", env)
+	}
+	if env.ValueFrom.SecretKeyRef.Name != "hub-admin-token" {
+		t.Errorf("secretKeyRef.name = %q, want %q", env.ValueFrom.SecretKeyRef.Name, "hub-admin-token")
+	}
+	if env.ValueFrom.SecretKeyRef.Key != "token" {
+		t.Errorf("secretKeyRef.key = %q, want %q", env.ValueFrom.SecretKeyRef.Key, "token")
+	}
+}
+
+// Absent names no additional credential: the management API runs exactly as
+// it always has, authenticating only this operator's own service account.
+func TestNoAdminTokenSecretRefMeansNoExtraEnvVar(t *testing.T) {
+	cp := localControlPlane()
+
+	api := findDeployment(t, managementAPIObjects(cp), ComponentWebAPI)
+
+	for _, e := range api.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "SB_ADMIN_TOKENS" {
+			t.Fatalf("SB_ADMIN_TOKENS set with no adminTokenSecretRef: %#v", e)
+		}
+	}
+}
+
 // Every workload built from the control plane's own image runs it, so an upgrade
 // that writes one image onto the entity moves all of them.
 func TestEveryWorkloadOfTheControlPlaneRunsTheSpecsImage(t *testing.T) {
@@ -414,6 +450,32 @@ func TestTheServicePoolsRunWhatTheyDeclare(t *testing.T) {
 	}
 }
 
+// Regression: the tasks-runner-backup-merge container must name the module the
+// control-plane image ships, or it crash-loops ("python3: can't open file") and
+// pins the whole tasks pod. sbcli main's task-runner rework (#1226) ships it as
+// backup_merge_service.py; the older integrate_csi_addons_p0 image named it
+// tasks_runner_backup_merge.py (2026-10-01). The control plane now runs sbcli
+// main (integrate_csi_addons_p0 merged into it on 2026-10-05). A .py-suffix
+// check does not catch a wrong name, so pin it.
+func TestTheBackupMergeRunnerNamesItsRealModule(t *testing.T) {
+	cp := localControlPlane()
+	d := findDeployment(t, managementAPIObjects(cp), ComponentTasks)
+	const want = "simplyblock_core/services/backup_merge_service.py"
+	found := false
+	for _, container := range d.Spec.Template.Spec.Containers {
+		if container.Name != "tasks-runner-backup-merge" {
+			continue
+		}
+		found = true
+		if len(container.Command) != 2 || container.Command[1] != want {
+			t.Errorf("tasks-runner-backup-merge runs %v, want python3 %q", container.Command, want)
+		}
+	}
+	if !found {
+		t.Fatal("no tasks-runner-backup-merge container in the tasks deployment")
+	}
+}
+
 // The control plane's account is granted exec on pods, which is the strongest
 // thing in its role and the one an audit has to be able to find. Losing it would
 // stop the control plane driving the storage nodes' processes, which is not a
@@ -535,5 +597,36 @@ func podSpecOf(obj client.Object) *corev1.PodSpec {
 		return &typed.Spec.Template.Spec
 	default:
 		return nil
+	}
+}
+
+// The Control Center reads every storage cluster through the management API
+// with its own service account; the chart names it in the operator's
+// environment and the management API trusts it next to the operator.
+func TestExtraAdminServiceAccountsReachTheManagementAPI(t *testing.T) {
+	t.Setenv(extraAdminAccountsEnv,
+		" system:serviceaccount:simplyblock:console , not-an-account,system:serviceaccount:a:b:c,"+
+			"system:serviceaccount:simplyblock:console")
+	cp := localControlPlane()
+
+	api := findDeployment(t, managementAPIObjects(cp), ComponentWebAPI)
+	env := findEnvVar(t, api, "SB_K8S_ADMIN_SERVICE_ACCOUNTS")
+
+	want := "system:serviceaccount:" + cp.Namespace + ":simplyblock-operator,system:serviceaccount:simplyblock:console"
+	if env.Value != want {
+		t.Errorf("SB_K8S_ADMIN_SERVICE_ACCOUNTS = %q, want %q", env.Value, want)
+	}
+}
+
+// Without the operator's variable the management API trusts the operator alone.
+func TestNoExtraAdminServiceAccountsMeansTheOperatorAlone(t *testing.T) {
+	t.Setenv(extraAdminAccountsEnv, "")
+	cp := localControlPlane()
+
+	api := findDeployment(t, managementAPIObjects(cp), ComponentWebAPI)
+	env := findEnvVar(t, api, "SB_K8S_ADMIN_SERVICE_ACCOUNTS")
+
+	if want := "system:serviceaccount:" + cp.Namespace + ":simplyblock-operator"; env.Value != want {
+		t.Errorf("SB_K8S_ADMIN_SERVICE_ACCOUNTS = %q, want %q", env.Value, want)
 	}
 }

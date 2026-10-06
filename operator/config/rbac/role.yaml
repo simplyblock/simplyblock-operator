@@ -177,6 +177,44 @@ rules:
   - update
   - watch
 - apiGroups:
+  - cluster.open-cluster-management.io
+  resources:
+  - managedclusters
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - csiaddons.openshift.io
+  resources:
+  - csiaddonsnodes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - csiaddons.openshift.io
+  resources:
+  - csiaddonsnodes/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
   - discovery.k8s.io
   resources:
   - endpointslices
@@ -295,7 +333,9 @@ rules:
   - storagenodes
   - storagepoolops
   - storagepools
+  - storagesitedeployments
   - tasks
+  - testfailovers
   - volumemigrations
   verbs:
   - create
@@ -330,7 +370,9 @@ rules:
   - storagenodes/finalizers
   - storagepoolops/finalizers
   - storagepools/finalizers
+  - storagesitedeployments/finalizers
   - tasks/finalizers
+  - testfailovers/finalizers
   - volumemigrations/finalizers
   verbs:
   - update
@@ -362,7 +404,9 @@ rules:
   - storagenodesets/status
   - storagepoolops/status
   - storagepools/status
+  - storagesitedeployments/status
   - tasks/status
+  - testfailovers/status
   - volumegroupsnapshotops/status
   - volumemigrations/status
   verbs:
@@ -388,4 +432,28 @@ rules:
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - view.open-cluster-management.io
+  resources:
+  - managedclusterviews
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - work.open-cluster-management.io
+  resources:
+  - manifestworks
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
   - watch

@@ -172,6 +172,20 @@ func findDeployment(t *testing.T, objects []client.Object, name string) *appsv1.
 	return d
 }
 
+// findEnvVar locates a container env entry by name in a Deployment's first
+// container, failing rather than returning a zero value so a missing entry
+// reads as the assertion it is instead of a nil-field panic later.
+func findEnvVar(t *testing.T, d *appsv1.Deployment, name string) corev1.EnvVar {
+	t.Helper()
+	for _, e := range d.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == name {
+			return e
+		}
+	}
+	t.Fatalf("no %q env var on %s", name, d.Name)
+	return corev1.EnvVar{}
+}
+
 func findClusterRole(t *testing.T, objects []client.Object, name string) *rbacv1.ClusterRole {
 	t.Helper()
 	obj := findObject(objects, name)

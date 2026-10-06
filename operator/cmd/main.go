@@ -38,6 +38,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -53,6 +54,7 @@ import (
 
 	volumegroupsnapshotv1beta1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
 	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
+	workv1 "open-cluster-management.io/api/work/v1"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -82,10 +84,44 @@ var (
 const (
 	openShiftConfigAPIGroup = "config.openshift.io"
 	certManagerAPIGroup     = "cert-manager.io"
+	// ocmWorkGroupVersion is OCM's work API group/version, and ocmManifestWorkResource
+	// the ManifestWork resource within it. ManifestWork is served only on the hub;
+	// a managed cluster serves the SAME group/version for AppliedManifestWork (the
+	// work-agent's local record) but NOT ManifestWork, so the presence check must
+	// be resource-level, not group-level — a group-level check sees the group as
+	// served everywhere AppliedManifestWork exists. The TestFailover controller
+	// watches ManifestWork, so it is registered only where ManifestWork is served.
+	ocmWorkGroupVersion     = "work.open-cluster-management.io/v1"
+	ocmManifestWorkResource = "manifestworks"
 )
 
 type serverGroupsGetter interface {
 	ServerGroups() (*metav1.APIGroupList, error)
+}
+
+type serverResourcesGetter interface {
+	ServerResourcesForGroupVersion(groupVersion string) (*metav1.APIResourceList, error)
+}
+
+// serverHasResource reports whether the API server serves the named resource in
+// the given group/version. Used to skip a controller that watches a kind the
+// cluster does not serve, since a watch whose cache can never sync takes the
+// whole manager down at startup. A group/version the server does not serve at
+// all is reported as absent rather than an error.
+func serverHasResource(discoveryClient serverResourcesGetter, groupVersion, resource string) (bool, error) {
+	list, err := discoveryClient.ServerResourcesForGroupVersion(groupVersion)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("discover resources for %s: %w", groupVersion, err)
+	}
+	for _, r := range list.APIResources {
+		if r.Name == resource {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func init() {
@@ -106,6 +142,9 @@ func init() {
 	// external-snapshotter VolumeSnapshot: the VolumeGroupSnapshotOps restore
 	// enumerates a group snapshot's member snapshots (design §7.4).
 	utilruntime.Must(snapshotv1.AddToScheme(scheme))
+	// OCM ManifestWork: the TestFailover controller places the bubble PV/PVC on a
+	// recovery cluster through it (design-test-failover.md §7.6).
+	utilruntime.Must(workv1.Install(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -169,7 +208,9 @@ func main() {
 			"turn it back on while migrations raised against it drain. A rename and a scope "+
 			"change make a new CRD rather than a new version, so an in-flight migration cannot "+
 			"be carried across.")
+	var csiLinkEnabled bool
 	var csiLinkAddr, csiLinkCertPath, csiLinkCertName, csiLinkCertKey, csiLinkAudience string
+	flag.BoolVar(&csiLinkEnabled, "csi-link", false, "Serve the CSI link.")
 	flag.StringVar(&csiLinkAddr, "csi-link-bind-address", ":9500",
 		"The address the CSI link endpoint binds to.")
 	flag.StringVar(&csiLinkCertPath, "csi-link-cert-path", "",
@@ -332,27 +373,29 @@ func main() {
 	// plugins; a reconciler reaching a node goes through it, and treats
 	// link.ErrNoSession as a requeue rather than a failure.
 	//
-	// Always served, because both plugins always dial it. TLS when a
-	// certificate is configured, plaintext when none is.
-	var certFile, keyFile string
-	if csiLinkCertPath != "" {
-		certFile = filepath.Join(csiLinkCertPath, csiLinkCertName)
-		keyFile = filepath.Join(csiLinkCertPath, csiLinkCertKey)
+	// Off by default, on with --csi-link. TLS when a certificate is
+	// configured, plaintext when none is.
+	if csiLinkEnabled {
+		var certFile, keyFile string
+		if csiLinkCertPath != "" {
+			certFile = filepath.Join(csiLinkCertPath, csiLinkCertName)
+			keyFile = filepath.Join(csiLinkCertPath, csiLinkCertKey)
+		}
+		csiPeers, err := csilink.Setup(mgr, csilink.Config{
+			BindAddress:              csiLinkAddr,
+			CertFile:                 certFile,
+			KeyFile:                  keyFile,
+			Namespace:                operatorNamespace,
+			Audiences:                []string{csiLinkAudience},
+			NodeServiceAccount:       "simplyblock-csi-node-sa",
+			ControllerServiceAccount: "simplyblock-csi-controller-sa",
+		})
+		if err != nil {
+			setupLog.Error(err, "unable to set up the CSI link")
+			os.Exit(1)
+		}
+		_ = csiPeers // handed to reconcilers as they start using it
 	}
-	csiPeers, err := csilink.Setup(mgr, csilink.Config{
-		BindAddress:              csiLinkAddr,
-		CertFile:                 certFile,
-		KeyFile:                  keyFile,
-		Namespace:                operatorNamespace,
-		Audiences:                []string{csiLinkAudience},
-		NodeServiceAccount:       "simplyblock-csi-node-sa",
-		ControllerServiceAccount: "simplyblock-csi-controller-sa",
-	})
-	if err != nil {
-		setupLog.Error(err, "unable to set up the CSI link")
-		os.Exit(1)
-	}
-	_ = csiPeers // handed to reconcilers as they start using it
 
 	// Control-plane SSE push subscriptions: one leader-only manager, streams
 	// driven by scopes that reconcilers register (the StorageNode controller adds
@@ -518,6 +561,14 @@ func main() {
 	controlPlaneEndpoint := controlplanecontroller.NewEndpointResolver(
 		mgr.GetClient(), operatorNamespace)
 
+	// What a managed control plane's CreateCluster and ClusterByName calls
+	// authenticate with, read from the same ControlPlane object
+	// (spec.source.managed.credentialsSecretRef) for the same reason: a
+	// StorageCluster CR applied against a remote control plane has no other
+	// credential to create its backend identity with.
+	controlPlaneCredential := controlplanecontroller.NewCredentialResolver(
+		mgr.GetClient(), operatorNamespace)
+
 	if err := (&controlplanecontroller.ControlPlaneReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -538,7 +589,7 @@ func main() {
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Recorder:     mgr.GetEventRecorder("storagecluster-controller"),
-		API:          clustercontroller.NewControlPlane(controlPlaneEndpoint),
+		API:          clustercontroller.NewControlPlane(controlPlaneEndpoint, controlPlaneCredential),
 		Namespace:    operatorNamespace,
 		Clusters:     clusterSubscription,
 		Tasks:        taskSubscription,
@@ -572,10 +623,11 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&pool.StoragePoolReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       mgr.GetScheme(),
-		Recorder:     mgr.GetEventRecorder("storagepool-controller"),
-		VolumeScopes: volumeScopes,
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Recorder:         mgr.GetEventRecorder("storagepool-controller"),
+		VolumeScopes:     volumeScopes,
+		EndpointResolver: controlPlaneEndpoint,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StoragePool")
 		os.Exit(1)
@@ -806,7 +858,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storageclusterops-controller"),
-		API:      clustercontroller.NewControlPlane(controlPlaneEndpoint),
+		API:      clustercontroller.NewControlPlane(controlPlaneEndpoint, controlPlaneCredential),
 		Clusters: clusterSubscription,
 		Nodes:    nodeSubscription,
 		Tasks:    taskSubscription,
@@ -842,8 +894,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.ReplicationPolicyReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		EndpointResolver: controlPlaneEndpoint,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationPolicy")
 		os.Exit(1)
@@ -856,8 +909,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.ReplicationPairReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		EndpointResolver: controlPlaneEndpoint,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationPair")
 		os.Exit(1)
@@ -885,6 +939,55 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "VolumeGroupSnapshotOps")
 		os.Exit(1)
+	}
+	// The TestFailover controller watches OCM ManifestWork, which only the hub
+	// serves; registering it where the work API is absent leaves a watch whose
+	// cache never syncs and the manager exits at startup, taking every other
+	// controller with it. It is a hub-only drill, so skip it off the hub.
+	workDiscovery, err := discovery.NewDiscoveryClientForConfig(cfg)
+	if err != nil {
+		setupLog.Error(err, "unable to build a discovery client to check for the OCM work API")
+		os.Exit(1)
+	}
+	hasManifestWork, err := serverHasResource(workDiscovery, ocmWorkGroupVersion, ocmManifestWorkResource)
+	if err != nil {
+		setupLog.Error(err, "unable to determine whether the OCM ManifestWork resource is served")
+		os.Exit(1)
+	}
+	registerOCMControllers := func() error {
+		if err := (&controller.TestFailoverReconciler{
+			Client:   mgr.GetClient(),
+			Scheme:   mgr.GetScheme(),
+			Recorder: mgr.GetEventRecorder("testfailover-controller"),
+		}).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("controller TestFailover: %w", err)
+		}
+		// A managed site's storage deployment is requested from the hub through
+		// the same work API, so the controller is hub-only too.
+		if err := (&controller.StorageSiteDeploymentReconciler{
+			Client:   mgr.GetClient(),
+			Scheme:   mgr.GetScheme(),
+			Recorder: mgr.GetEventRecorder("storagesitedeployment-controller"),
+		}).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("controller StorageSiteDeployment: %w", err)
+		}
+		return nil
+	}
+	if hasManifestWork {
+		if err := registerOCMControllers(); err != nil {
+			setupLog.Error(err, "unable to create controller")
+			os.Exit(1)
+		}
+	} else {
+		// OCM may be installed after the operator (the DR stack brings it): keep
+		// looking, and start the controllers once ManifestWork is served.
+		setupLog.Info("OCM ManifestWork resource not served yet; the TestFailover and "+
+			"StorageSiteDeployment controllers start once it is (hub-only)",
+			"groupVersion", ocmWorkGroupVersion, "resource", ocmManifestWorkResource)
+		if err := mgr.Add(&ocmLateStart{log: setupLog, disc: workDiscovery, register: registerOCMControllers}); err != nil {
+			setupLog.Error(err, "unable to add the OCM ManifestWork watcher")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 

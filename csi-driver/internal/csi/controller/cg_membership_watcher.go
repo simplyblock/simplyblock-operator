@@ -16,6 +16,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -42,6 +43,17 @@ type membershipClient interface {
 	GetConsistencyGroup(ctx context.Context, groupID string) (*controlplane.ConsistencyGroupSummary, error)
 	JoinConsistencyGroupMember(ctx context.Context, groupID, lvolID string) error
 	DetachConsistencyGroupMember(ctx context.Context, groupID, lvolID string) error
+	PlanConsistencyGroupJoin(ctx context.Context, groupID, lvolID string) (*controlplane.JoinPlan, error)
+	ColocateConsistencyGroupMember(ctx context.Context, groupID, lvolID string, clientSwapReady bool) error
+}
+
+// migrationRequester asks the operator to live-migrate a PersistentVolume's
+// backing volume to a storage node, through a VolumeMigration: the operator
+// attaches the target paths on the consumer host before the backend moves the
+// data, which only it can do. Ensure creates the request once (by name) and
+// reports its phase; "" while the operator has not picked it up.
+type migrationRequester interface {
+	Ensure(ctx context.Context, name, pvName, targetNodeUUID string) (string, error)
 }
 
 // cgMembershipWatcher reconciles PVC label state to backend group membership.
@@ -52,12 +64,29 @@ type cgMembershipWatcher struct {
 	// pool; production wires clusters.Client, tests substitute a stub.
 	clientFor func(ctx context.Context, clusterID, poolRef string) (membershipClient, error)
 	recorder  record.EventRecorder
+	// migrations runs the pre-join live migration of a volume off its group's
+	// pinned node (co-location design §5); nil disables it, and an off-pin
+	// join stays refused as before.
+	migrations migrationRequester
+	// colocate moves a member into its group's subsystem after the join; off
+	// by default, because the backend refuses the move for an attached volume
+	// until the node plugin swaps paths (design §6).
+	colocate bool
+	// clientSwapReady asserts every node stages volumes behind the
+	// device-mapper indirection and swaps paths itself (design §6).
+	clientSwapReady bool
 }
 
 // StartConsistencyGroupLabelWatcher runs the membership watcher until ctx is
 // canceled. It is a no-op (with a log line) when kube is nil, mirroring how
 // the annotation helpers degrade without an in-cluster config.
-func StartConsistencyGroupLabelWatcher(ctx context.Context, kube kubernetes.Interface, driverName string) {
+//
+// dyn, when non-nil, lets the watcher request the pre-join live migration of a
+// volume off its group's pinned node (a VolumeMigration); without it an
+// off-pin join stays refused.
+func StartConsistencyGroupLabelWatcher(
+	ctx context.Context, kube kubernetes.Interface, dyn dynamic.Interface, driverName string,
+) {
 	if kube == nil {
 		klog.Warning("consistency-group label watcher disabled: no Kubernetes client")
 		return
@@ -72,6 +101,12 @@ func StartConsistencyGroupLabelWatcher(ctx context.Context, kube kubernetes.Inte
 		},
 		recorder: broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "spdkcsi-cg-membership"}),
 	}
+	preJoin, colocate, swapReady := watcherOptions()
+	if preJoin && dyn != nil {
+		watcher.migrations = newVolumeMigrations(dyn)
+	}
+	watcher.colocate = colocate
+	watcher.clientSwapReady = swapReady
 
 	factory := informers.NewSharedInformerFactory(kube, membershipResync)
 	informer := factory.Core().V1().PersistentVolumeClaims().Informer()
@@ -136,7 +171,7 @@ func (w *cgMembershipWatcher) reconcile(ctx context.Context, pvc *corev1.Persist
 
 	switch {
 	case label != "" && groupID == "":
-		return w.join(ctx, client, pvc, label, handle.VolumeID)
+		return w.join(ctx, client, pvc, pv.Name, label, handle.VolumeID)
 	case label == "" && groupID != "":
 		return w.detach(ctx, client, pvc, groupID, handle.VolumeID)
 	case label != "" && groupID != "":
@@ -152,14 +187,20 @@ func (w *cgMembershipWatcher) reconcile(ctx context.Context, pvc *corev1.Persist
 				"volume is a member of consistency group %q but the PVC is labeled %q; "+
 					"membership is one-way, so relabeling cannot move a volume between groups",
 				group.Name, label)
+			return nil
 		}
+		return w.colocateMember(ctx, client, pvc, groupID, label, handle.VolumeID)
 	}
 	return nil
 }
 
+// preJoinMigrationName is the VolumeMigration a late join requests for a
+// volume: one per volume, so a resync finds the request it already made.
+func preJoinMigrationName(lvolID string) string { return "cg-join-" + lvolID }
+
 func (w *cgMembershipWatcher) join(
 	ctx context.Context, client membershipClient,
-	pvc *corev1.PersistentVolumeClaim, label, lvolID string,
+	pvc *corev1.PersistentVolumeClaim, pvName, label, lvolID string,
 ) error {
 	group, err := client.ResolveConsistencyGroupByName(ctx, label)
 	if err != nil {
@@ -174,15 +215,95 @@ func (w *cgMembershipWatcher) join(
 	}
 	if err := client.JoinConsistencyGroupMember(ctx, group.ID, lvolID); err != nil {
 		if errors.Is(err, controlplane.ErrMembershipRefused) {
-			w.recorder.Eventf(pvc, corev1.EventTypeWarning, "ConsistencyGroupJoinRefused",
-				"volume cannot join consistency group %q: %v", label, err)
-			return nil
+			return w.joinRefused(ctx, client, pvc, pvName, label, group.ID, lvolID, err)
 		}
 		return fmt.Errorf("join consistency group %q: %w", label, err)
 	}
 	w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupJoined",
 		"volume joined consistency group %q; it is included from the next generation", label)
+	return w.colocateMember(ctx, client, pvc, group.ID, label, lvolID)
+}
+
+// joinRefused turns a refused join into the pre-join migration when the only
+// obstacle is placement: the backend's plan says the volume (with its
+// subsystem siblings) must first move to the group's pinned node. Anything
+// else stays a refusal on the PVC.
+func (w *cgMembershipWatcher) joinRefused(
+	ctx context.Context, client membershipClient, pvc *corev1.PersistentVolumeClaim,
+	pvName, label, groupID, lvolID string, refusal error,
+) error {
+	refuse := func(err error) error {
+		w.recorder.Eventf(pvc, corev1.EventTypeWarning, "ConsistencyGroupJoinRefused",
+			"volume cannot join consistency group %q: %v", label, err)
+		return nil
+	}
+	if w.migrations == nil {
+		return refuse(refusal)
+	}
+	plan, err := client.PlanConsistencyGroupJoin(ctx, groupID, lvolID)
+	if err != nil {
+		if errors.Is(err, controlplane.ErrMembershipRefused) {
+			return refuse(err)
+		}
+		return fmt.Errorf("plan the join to consistency group %q: %w", label, err)
+	}
+	if !plan.Has(controlplane.JoinStepMigrate) || plan.TargetNodeID == "" {
+		return refuse(refusal)
+	}
+	name := preJoinMigrationName(lvolID)
+	phase, err := w.migrations.Ensure(ctx, name, pvName, plan.TargetNodeID)
+	if err != nil {
+		return fmt.Errorf("request the pre-join migration of %s: %w", pvName, err)
+	}
+	switch phase {
+	case migrationCompleted:
+		// Moved: the placement precondition holds now. The resync or the next
+		// PVC event joins; joining here would race the backend's record switch
+		// of the last subsystem sibling.
+		w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupMigrated",
+			"volume moved to the group's node %s; joining consistency group %q on the next pass",
+			plan.TargetNodeID, label)
+	case migrationFailed, migrationAborted:
+		w.recorder.Eventf(pvc, corev1.EventTypeWarning, "ConsistencyGroupMigrationFailed",
+			"the migration to consistency group %q's node %s ended %s; delete VolumeMigration %s to retry",
+			label, plan.TargetNodeID, phase, name)
+	default:
+		w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupMigrating",
+			"volume is off consistency group %q's node: migrating it (with %d volume(s) of its "+
+				"subsystem) to node %s through VolumeMigration %s before the join", label,
+			len(plan.MigrateLvolIDs), plan.TargetNodeID, name)
+	}
 	return nil
+}
+
+// The VolumeMigration phases the watcher acts on (operator api/v1alpha1).
+const (
+	migrationCompleted = "Completed"
+	migrationFailed    = "Failed"
+	migrationAborted   = "Aborted"
+)
+
+// colocateMember moves a current member into its group's subsystem when the
+// watcher is configured to; a refusal (moves disabled, or a connected host and
+// no client swap) is a Normal event, since the member is valid where it is.
+func (w *cgMembershipWatcher) colocateMember(
+	ctx context.Context, client membershipClient, pvc *corev1.PersistentVolumeClaim,
+	groupID, label, lvolID string,
+) error {
+	if !w.colocate {
+		return nil
+	}
+	err := client.ColocateConsistencyGroupMember(ctx, groupID, lvolID, w.clientSwapReady)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, controlplane.ErrColocationRefused):
+		w.recorder.Eventf(pvc, corev1.EventTypeNormal, "ConsistencyGroupColocationDeferred",
+			"volume stays in its own subsystem for now (consistency group %q): %v", label, err)
+		return nil
+	default:
+		return fmt.Errorf("co-locate with consistency group %q: %w", label, err)
+	}
 }
 
 func (w *cgMembershipWatcher) detach(

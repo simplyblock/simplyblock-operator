@@ -28,6 +28,11 @@ import (
 	"fmt"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	csiaddonsidentity "github.com/csi-addons/spec/lib/go/identity"
+	csiaddonsreplication "github.com/csi-addons/spec/lib/go/replication"
+	csiaddonsvolumegroup "github.com/csi-addons/spec/lib/go/volumegroup"
+	"google.golang.org/grpc"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog"
@@ -40,6 +45,7 @@ import (
 	"github.com/simplyblock/csi-driver/internal/config"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"github.com/simplyblock/csi-driver/internal/csi/controller"
+	csiaddonsidentityserver "github.com/simplyblock/csi-driver/internal/csi/csiaddons/identity"
 	"github.com/simplyblock/csi-driver/internal/csi/identity"
 	"github.com/simplyblock/csi-driver/internal/csi/node"
 	"github.com/simplyblock/csi-driver/internal/csilink"
@@ -89,12 +95,20 @@ func Run(conf *config.Config) {
 	// its own in-cluster config + clientset. A missing in-cluster config is
 	// non-fatal, and the features that need it degrade to no-ops.
 	var kubeClient kubernetes.Interface
+	var dynClient dynamic.Interface
 	if k8sConfig, err := rest.InClusterConfig(); err != nil {
 		klog.Warningf("no in-cluster config; Kubernetes API features disabled: %v", err)
 	} else if clientset, err := kubernetes.NewForConfig(k8sConfig); err != nil {
 		klog.Warningf("failed to create kubernetes client; Kubernetes API features disabled: %v", err)
 	} else {
 		kubeClient = clientset
+		// The consistency-group watcher requests VolumeMigrations (the
+		// pre-join live migration) without importing the operator's types.
+		if d, err := dynamic.NewForConfig(k8sConfig); err != nil {
+			klog.Warningf("failed to create dynamic client; pre-join migrations disabled: %v", err)
+		} else {
+			dynClient = d
+		}
 	}
 
 	if conf.IsNodeServer {
@@ -117,7 +131,7 @@ func Run(conf *config.Config) {
 		// without a Kubernetes client, like the other kube-backed features.
 		watcherCtx, watcherCancel := context.WithCancel(context.Background())
 		defer watcherCancel()
-		controller.StartConsistencyGroupLabelWatcher(watcherCtx, kubeClient, conf.DriverName)
+		controller.StartConsistencyGroupLabelWatcher(watcherCtx, kubeClient, dynClient, conf.DriverName)
 	}
 
 	// The link to the operator, when enabled. It is independent of the CSI
@@ -131,8 +145,29 @@ func Run(conf *config.Config) {
 		}
 	}
 
+	// The csi-addons Identity and Replication services register alongside the
+	// CSI services on the same socket. Identity is always registered (it just
+	// answers capability probes); Replication only when this process serves
+	// the controller (cs is nil on a node-only process).
+	register := []func(*grpc.Server){
+		func(gs *grpc.Server) {
+			csiaddonsidentity.RegisterIdentityServer(gs, csiaddonsidentityserver.New(conf.DriverName, conf.DriverVersion))
+		},
+	}
+	if cs != nil {
+		register = append(register, func(gs *grpc.Server) {
+			csiaddonsreplication.RegisterControllerServer(gs, cs)
+		})
+		// The csi-addons VolumeGroup service (design §14.3): the stock
+		// controller-manager dials it to form a backend consistency group before
+		// replicating the group as one unit.
+		register = append(register, func(gs *grpc.Server) {
+			csiaddonsvolumegroup.RegisterControllerServer(gs, cs)
+		})
+	}
+
 	s := csicommon.NewNonBlockingGRPCServer()
-	s.Start(conf.Endpoint, ids, cs, ns)
+	s.Start(conf.Endpoint, ids, cs, ns, register...)
 	s.Wait()
 }
 

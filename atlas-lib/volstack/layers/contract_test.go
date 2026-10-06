@@ -68,6 +68,13 @@ func shippedLayers() map[string]volstack.Layer {
 			Ops:         newFakeFS(),
 			Content:     fakeReader{reading: blockdev.Reading{Content: blockdev.ContentBlank}},
 		}),
+		"dmLinear": NewDMLinear(DMLinearConfig{
+			Name:   DMLinearName("vol-x"),
+			Mapper: newFakeMapper(),
+			Resolve: func(path string) (blockdev.Device, error) {
+				return blockdev.Device{Path: path, Major: 253, Minor: 1}, nil
+			},
+		}),
 	}
 }
 

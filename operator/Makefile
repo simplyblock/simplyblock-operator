@@ -177,11 +177,11 @@ lint-config: golangci-lint ## Verify golangci-lint linter configuration
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
 	mkdir -p build
-	go build -o build/manager cmd/main.go
+	go build -o build/manager ./cmd
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
-	go run ./cmd/main.go
+	go run ./cmd
 
 # The API upgrade tool, built on its own and not in the operator image: it is a
 # prerequisite for running the new operator, so shipping it inside that

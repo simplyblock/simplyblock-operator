@@ -15,6 +15,7 @@ import (
 	"os"
 	"strings"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/errs/deferrers"
 	"github.com/simplyblock/atlas/lvol"
 	"k8s.io/klog"
@@ -38,6 +39,10 @@ type Config struct {
 	ClusterID       string `json:"cluster_id"`
 	ClusterEndpoint string `json:"cluster_endpoint"`
 	ClusterSecret   string `json:"cluster_secret"`
+	// Local marks a cluster of the site this driver runs on (written by the
+	// site's operator); an entry without it belongs to another site, kept so
+	// that a failed-over volume's handle still resolves.
+	Local bool `json:"local,omitempty"`
 }
 
 // Info is the secret file as a whole.
@@ -85,6 +90,24 @@ func Load() (Info, error) {
 	return clusters, nil
 }
 
+// Local returns the ids of the clusters the secret marks local, and whether
+// the secret marks any: a secret written by an operator that predates the
+// flag marks none, and callers then fall back to treating every cluster as
+// local.
+func Local() (map[string]bool, bool, error) {
+	clusters, err := Load()
+	if err != nil {
+		return nil, false, err
+	}
+	local := map[string]bool{}
+	for _, cluster := range clusters.Clusters {
+		if cluster.Local {
+			local[cluster.ClusterID] = true
+		}
+	}
+	return local, len(local) > 0, nil
+}
+
 // List returns the ID of every cluster in the secret.
 func List() ([]string, error) {
 	clusters, err := Load()
@@ -102,33 +125,9 @@ func List() ([]string, error) {
 // pool. poolIDOrName may be a pool UUID (used as-is), a pool name (resolved via
 // the API), or empty (no pool context, so only cluster-level operations work).
 func Client(ctx context.Context, clusterID, poolIDOrName string) (*controlplane.ClusterClient, error) {
-	clusters, err := Load()
+	clusterConfig, credential, err := resolve(clusterID)
 	if err != nil {
 		return nil, err
-	}
-
-	var clusterConfig *Config
-	for _, cluster := range clusters.Clusters {
-		if cluster.ClusterID == clusterID {
-			clusterConfig = &cluster
-			break
-		}
-	}
-
-	if clusterConfig == nil {
-		return nil, fmt.Errorf("failed to find secret for clusterID %s: %w", clusterID, controlplane.ErrClusterNotFound)
-	}
-
-	if clusterConfig.ClusterEndpoint == "" {
-		return nil, fmt.Errorf("invalid cluster configuration for clusterID %s: missing endpoint", clusterID)
-	}
-
-	credential := credentialFor(clusterConfig)
-	if credential == "" {
-		return nil, fmt.Errorf(
-			"invalid cluster configuration for clusterID %s: no cluster_secret and no API token available",
-			clusterID,
-		)
 	}
 
 	klog.Infof("Simplyblock client created for ClusterID:%s, Endpoint:%s",
@@ -150,6 +149,54 @@ func Client(ctx context.Context, clusterID, poolIDOrName string) (*controlplane.
 	}
 
 	return client, nil
+}
+
+// ReplicationClient creates the generated, atlas-lib control-plane client for
+// a cluster, sharing this package's secret.json resolution and credential
+// precedence with Client. It is a sibling rather than a Client return-type
+// change: Client's hand-rolled controlplane.ClusterClient is what every
+// existing Volume/Snapshot/Clone RPC already depends on, and only the
+// Replication service (csi-addons) is built against the generated client.
+func ReplicationClient(_ context.Context, clusterID string) (*atlascp.Client, error) {
+	clusterConfig, credential, err := resolve(clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return atlascp.New(atlascp.Config{Endpoint: clusterConfig.ClusterEndpoint, Token: credential})
+}
+
+// resolve looks up the named cluster's endpoint and credential in the driver's
+// secret.json. It is the lookup Client and ReplicationClient share, so a
+// cluster missing from the secret is invisible to neither or both, never one.
+func resolve(clusterID string) (*Config, string, error) {
+	clusters, err := Load()
+	if err != nil {
+		return nil, "", err
+	}
+
+	var clusterConfig *Config
+	for _, cluster := range clusters.Clusters {
+		if cluster.ClusterID == clusterID {
+			clusterConfig = &cluster
+			break
+		}
+	}
+
+	if clusterConfig == nil {
+		return nil, "", fmt.Errorf("failed to find secret for clusterID %s: %w", clusterID, controlplane.ErrClusterNotFound)
+	}
+	if clusterConfig.ClusterEndpoint == "" {
+		return nil, "", fmt.Errorf("invalid cluster configuration for clusterID %s: missing endpoint", clusterID)
+	}
+
+	credential := credentialFor(clusterConfig)
+	if credential == "" {
+		return nil, "", fmt.Errorf(
+			"invalid cluster configuration for clusterID %s: no cluster_secret and no API token available",
+			clusterID,
+		)
+	}
+	return clusterConfig, credential, nil
 }
 
 // credentialFor returns the bearer credential for a cluster: the API token when

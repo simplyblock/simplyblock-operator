@@ -67,8 +67,24 @@ const (
 // +kubebuilder:rbac:groups=apps,resources=daemonsets;statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts;configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete;escalate;bind
+// rbac-justified: rbac.go's csiAddonsRole/csiAddonsRoleBinding are a
+// namespaced Role, not a ClusterRole (CSIAddonsNode is namespaced) -- this
+// mirrors the ClusterRole marker above for the same reason: the manager
+// creates RBAC on behalf of the sidecars it deploys, and escalate/bind is
+// what Kubernetes' escalation prevention requires to do that, capped by the
+// manager's own role, which is why the resources this grants are named
+// individually below rather than left open-ended.
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete;escalate;bind
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=csidrivers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=snapshot.storage.k8s.io,resources=volumesnapshotclasses,verbs=get;list;watch;create;update;patch;delete
+// rbac-justified: the csi-addons sidecar (rbac.go's csiAddonsRole) needs to
+// publish and update its own CSIAddonsNode and hold its own leader-election
+// Lease, and the manager creates that namespaced Role on the sidecar's
+// behalf -- RBAC escalation prevention requires the manager to already hold
+// what it grants, capped by holding only these same resources itself.
+// +kubebuilder:rbac:groups=csiaddons.openshift.io,resources=csiaddonsnodes,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups=csiaddons.openshift.io,resources=csiaddonsnodes/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;delete
 
 // SimplyblockDriverReconciler applies the CSI driver deployment.
 type SimplyblockDriverReconciler struct {
@@ -281,6 +297,7 @@ func (r *SimplyblockDriverReconciler) desired(
 	for _, crb := range clusterRoleBindings(d) {
 		objects = append(objects, crb)
 	}
+	objects = append(objects, csiAddonsRole(d), csiAddonsRoleBinding(d), csiAddonsAuthDelegatorBinding(d))
 	objects = append(objects, nodeDaemonSet(d, image), controllerStatefulSet(d, image), csiDriver(d))
 
 	// The class is this deployment's and is applied wherever the kinds exist,

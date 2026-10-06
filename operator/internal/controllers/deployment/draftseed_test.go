@@ -15,6 +15,7 @@
 package deployment
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -73,7 +74,7 @@ func noteMentioning(notes []string, want string) bool {
 func TestTheStatedLayoutSeedsTheInitialRunsDraft(t *testing.T) {
 	r := &OperatorOpsReconciler{}
 
-	draft, notes, err := r.draftFor(initialRun(), &simplyblockv1alpha2.DiscoverSpec{},
+	draft, notes, err := r.draftFor(context.Background(), initialRun(), &simplyblockv1alpha2.DiscoverSpec{},
 		discoverypkg.Plan{}, statedLayout())
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
@@ -120,7 +121,7 @@ func TestTheStatedLayoutSeedsTheInitialRunsDraft(t *testing.T) {
 func TestTheStatedDraftFieldsReachTheDocument(t *testing.T) {
 	r := &OperatorOpsReconciler{}
 
-	draft, _, err := r.draftFor(initialRun(), &simplyblockv1alpha2.DiscoverSpec{},
+	draft, _, err := r.draftFor(context.Background(), initialRun(), &simplyblockv1alpha2.DiscoverSpec{},
 		discoverypkg.Plan{}, statedLayout())
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
@@ -157,7 +158,7 @@ func TestARunNobodyLabeledGetsNoSeed(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "discover-again"},
 	}
 
-	draft, _, err := r.draftFor(theirs, &simplyblockv1alpha2.DiscoverSpec{},
+	draft, _, err := r.draftFor(context.Background(), theirs, &simplyblockv1alpha2.DiscoverSpec{},
 		discoverypkg.Plan{}, statedLayout())
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
@@ -198,7 +199,7 @@ func TestAnUnstatedFieldStaysDerived(t *testing.T) {
 		Cluster: bootstrap.ClusterConfig{EnableChecksumValidation: ptr.To(true)},
 	}}
 
-	draft, _, err := r.draftFor(initialRun(), &simplyblockv1alpha2.DiscoverSpec{},
+	draft, _, err := r.draftFor(context.Background(), initialRun(), &simplyblockv1alpha2.DiscoverSpec{},
 		discoverypkg.Plan{}, partial)
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
@@ -230,7 +231,7 @@ func TestAGrowthDraftIsNotSeeded(t *testing.T) {
 	r := &OperatorOpsReconciler{}
 	spec := &simplyblockv1alpha2.DiscoverSpec{ClusterRef: "simplyblock-cluster"}
 
-	draft, _, err := r.draftFor(initialRun(), spec, discoverypkg.Plan{}, statedLayout())
+	draft, _, err := r.draftFor(context.Background(), initialRun(), spec, discoverypkg.Plan{}, statedLayout())
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
 	}

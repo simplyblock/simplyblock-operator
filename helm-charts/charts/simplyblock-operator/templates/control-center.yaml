@@ -227,6 +227,9 @@ spec:
     - name: http
       port: {{ $cc.service.port }}
       targetPort: http
+      {{- with $cc.service.nodePort }}
+      nodePort: {{ . }}
+      {{- end }}
   selector:
     {{- include "sbcc.selectorLabels" . | nindent 4 }}
 {{- if $cc.ingress.enabled }}

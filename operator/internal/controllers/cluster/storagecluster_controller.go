@@ -46,6 +46,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 const (
@@ -200,6 +201,14 @@ type CSIClusterEntry struct {
 	ClusterID       string `json:"cluster_id"`
 	ClusterEndpoint string `json:"cluster_endpoint"`
 	ClusterSecret   string `json:"cluster_secret"`
+	// Local marks a cluster this operator manages, i.e. the storage of the
+	// Kubernetes cluster the driver runs on, as opposed to an entry another
+	// site registered so that a failed-over volume's handle still resolves.
+	// The driver's csi-addons Replication RPCs act on the LOCAL member of a
+	// replication chain: a volume's PV keeps the handle it was created with
+	// across fail-overs, and the chain of relationships behind it alternates
+	// between the sites.
+	Local bool `json:"local,omitempty"`
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch;create;update;patch;delete
@@ -530,7 +539,13 @@ func (r *StorageClusterReconciler) upgradeClaim(
 		return adoption{}, false, nil
 	}
 
-	found, err := r.API.Cluster(ctx, uuid)
+	// This read authenticates as the cluster itself, using the secret the
+	// upgrade Secret names, rather than as this operator's own Kubernetes
+	// identity: the control plane this cluster belongs to may be a
+	// ControlPlane.spec.source.managed one, on a different Kubernetes
+	// cluster, where a Kubernetes TokenReview of this operator's own
+	// service-account token can never succeed.
+	found, err := r.API.Cluster(webapi.WithBearerToken(ctx, clusterSecret), uuid)
 	if err != nil {
 		// The Secret names a cluster the control plane does not have. That is
 		// worth retrying rather than failing: the control plane may be
@@ -666,7 +681,8 @@ func (r *StorageClusterReconciler) sync(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if secret, err := r.clusterSecret(ctx, cluster); err == nil && secret != "" {
+	secret, err := r.clusterSecret(ctx, cluster)
+	if err == nil && secret != "" {
 		if err := r.upsertCSICredentials(ctx, cluster.Status.UUID, secret); err != nil {
 			log.Error(err, "the CSI credentials entry could not be restored",
 				"cluster", cluster.Name)
@@ -674,13 +690,24 @@ func (r *StorageClusterReconciler) sync(
 		}
 	}
 
-	reading, err := r.reading(ctx, cluster.Status.UUID)
+	// Every read below authenticates as this cluster, using its own recorded
+	// secret, rather than as this operator's own Kubernetes identity: the
+	// control plane this cluster belongs to may be a
+	// ControlPlane.spec.source.managed one, on a different Kubernetes
+	// cluster, where a Kubernetes TokenReview of this operator's own
+	// service-account token can never succeed.
+	readCtx := ctx
+	if secret != "" {
+		readCtx = webapi.WithBearerToken(ctx, secret)
+	}
+
+	reading, err := r.reading(readCtx, cluster.Status.UUID)
 	if err != nil {
 		log.Error(err, "the cluster could not be read", "cluster", cluster.Name)
 		return ctrl.Result{RequeueAfter: clusterResync}, nil
 	}
 
-	tasks := r.readTasks(ctx, cluster)
+	tasks := r.readTasks(readCtx, cluster)
 
 	ftt := int32(reading.MaxFaultTolerance) //nolint:gosec // a fault tolerance is a small count
 	err = r.writeStatus(ctx, cluster, func(status *simplyblockv1alpha2.StorageClusterStatus) {
@@ -875,7 +902,15 @@ func (r *StorageClusterReconciler) teardown(
 
 	if cluster.Status.UUID != "" {
 		r.closeStreams(cluster.Status.UUID)
-		if err := r.API.DeleteCluster(ctx, cluster.Status.UUID); err != nil {
+		// Authenticates as this cluster, using its own recorded secret, for
+		// the same reason sync() does: the control plane this cluster
+		// belongs to may be a ControlPlane.spec.source.managed one, on a
+		// different Kubernetes cluster than this operator.
+		deleteCtx := ctx
+		if secret, err := r.clusterSecret(ctx, cluster); err == nil && secret != "" {
+			deleteCtx = webapi.WithBearerToken(ctx, secret)
+		}
+		if err := r.API.DeleteCluster(deleteCtx, cluster.Status.UUID); err != nil {
 			log.Error(err, "the cluster could not be deleted; retrying",
 				"cluster", cluster.Name, "uuid", cluster.Status.UUID)
 			return ctrl.Result{RequeueAfter: clusterRetry}, nil
@@ -1092,24 +1127,91 @@ func (r *StorageClusterReconciler) clusterSecret(
 }
 
 // upsertCSICredentials adds or replaces this cluster's entry in the aggregate
-// Secret the CSI driver reads.
+// Secret the CSI driver reads, and registers every other cluster of the
+// same control plane beside it.
+//
+// A volume replicated to another site is promoted there under a PV that
+// keeps the handle it was created with -- the handle names the cluster the
+// volume came from -- so that site's driver must be able to reach the
+// control plane for that cluster too. Each operator therefore writes, next
+// to its own cluster (Local), one entry per other cluster the control plane
+// lists, with the secret the list carries (empty when the control plane
+// withholds it: the driver then authenticates with its API token). Entries
+// another operator on this Kubernetes cluster marked Local are left alone;
+// a foreign entry whose cluster the control plane no longer lists is
+// dropped. Until this, the cross-registration was a manual merge of the
+// sites' secrets (realbed deploy.sh csi).
 func (r *StorageClusterReconciler) upsertCSICredentials(
 	ctx context.Context, clusterID, clusterSecret string,
 ) error {
+	endpoint := r.API.Endpoint(ctx)
+	peers, err := r.API.Clusters(ctx)
+	if err != nil {
+		// The own entry must never wait on the peer list: the driver reaches
+		// this cluster through it. Peers are registered on the next sync.
+		logf.FromContext(ctx).Info("the control plane's cluster list could not be read; "+
+			"other clusters are registered with the CSI driver on the next sync", "error", err.Error())
+		peers = nil
+	}
 	return r.editCSICredentials(ctx, func(creds *CSICredentials) {
-		entry := CSIClusterEntry{
+		mergeCSICredentials(creds, CSIClusterEntry{
 			ClusterID:       clusterID,
-			ClusterEndpoint: utils.ENDPOINT,
+			ClusterEndpoint: endpoint,
 			ClusterSecret:   clusterSecret,
-		}
-		for i := range creds.Clusters {
-			if creds.Clusters[i].ClusterID == clusterID {
-				creds.Clusters[i] = entry
-				return
-			}
-		}
-		creds.Clusters = append(creds.Clusters, entry)
+			Local:           true,
+		}, peers, err == nil)
 	})
+}
+
+// mergeCSICredentials writes own into creds and, when the control plane's
+// cluster list was read, one non-local entry per other cluster of that
+// list, pruning non-local entries the list no longer has.
+func mergeCSICredentials(creds *CSICredentials, own CSIClusterEntry, peers []utils.ClusterListEntry, listed bool) {
+	replaced := false
+	for i := range creds.Clusters {
+		if creds.Clusters[i].ClusterID == own.ClusterID {
+			creds.Clusters[i] = own
+			replaced = true
+		}
+	}
+	if !replaced {
+		creds.Clusters = append(creds.Clusters, own)
+	}
+	if !listed {
+		return
+	}
+	known := map[string]bool{}
+	for _, p := range peers {
+		known[p.UUID] = true
+		if p.UUID == own.ClusterID {
+			continue
+		}
+		entry := CSIClusterEntry{ClusterID: p.UUID, ClusterEndpoint: own.ClusterEndpoint, ClusterSecret: p.Secret}
+		found := false
+		for i := range creds.Clusters {
+			if creds.Clusters[i].ClusterID != p.UUID {
+				continue
+			}
+			found = true
+			if creds.Clusters[i].Local {
+				break // another operator here manages it; its entry stands
+			}
+			if entry.ClusterSecret == "" {
+				entry.ClusterSecret = creds.Clusters[i].ClusterSecret
+			}
+			creds.Clusters[i] = entry
+		}
+		if !found {
+			creds.Clusters = append(creds.Clusters, entry)
+		}
+	}
+	kept := creds.Clusters[:0]
+	for _, e := range creds.Clusters {
+		if e.Local || known[e.ClusterID] {
+			kept = append(kept, e)
+		}
+	}
+	creds.Clusters = kept
 }
 
 // removeCSICredentials drops this cluster's entry from it.

@@ -13,6 +13,7 @@ import (
 	"context"
 
 	"github.com/simplyblock/atlas/blockdev"
+	"github.com/simplyblock/atlas/devmapper"
 	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nvme"
@@ -55,6 +56,10 @@ type NodeConfig struct {
 	// it nil, and the reading decides alone.
 	PriorFormat func(ctx context.Context, volume Volume) (string, error)
 
+	// Mapper runs the device-mapper commands of the dmLinear indirection, and
+	// defaults to the host's dmsetup.
+	Mapper layers.DMMapper
+
 	// Resolve answers what the kernel says about a device path, and defaults to
 	// blockdev.ResolveDevice. It is a seam only because the logical-volume layer
 	// creates a device-mapper node and has to describe it upward, which a test
@@ -95,6 +100,21 @@ func NewNode(cfg NodeConfig) *Node {
 }
 
 // fabric is the bottom layer of every plan: one namespace, attached.
+// dmLinear is the indirection between the fabric and what uses the volume
+// (docs/consistency-group-colocation.md §6 in sbcli): its device survives a
+// move of the volume's namespace to another subsystem.
+func (n *Node) dmLinear(volume Volume) volstack.Layer {
+	mapper := n.cfg.Mapper
+	if mapper == nil {
+		mapper = devmapper.New(nil)
+	}
+	return layers.NewDMLinear(layers.DMLinearConfig{
+		Name:    layers.DMLinearName(volume.UUID),
+		Mapper:  mapper,
+		Resolve: n.cfg.Resolve,
+	})
+}
+
 func (n *Node) fabric(connection lvol.Connection) volstack.Layer {
 	return layers.NewFabric(layers.FabricConfig{
 		Connection: connection,
@@ -109,6 +129,7 @@ func (n *Node) fabric(connection lvol.Connection) volstack.Layer {
 func (n *Node) filesystem(volume Volume) volstack.Layer {
 	return layers.NewFilesystem(layers.FilesystemConfig{
 		FsType:                volume.FsType,
+		DefaultFsType:         volume.DefaultFsType,
 		StagingPath:           volume.StagingPath,
 		MountFlags:            volume.MountFlags,
 		FormatOptions:         volume.FormatOptions,

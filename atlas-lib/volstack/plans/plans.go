@@ -52,8 +52,13 @@ type Volume struct {
 
 	// FsType is the filesystem this volume is. It decides what a blank device is
 	// formatted as, and it is also the only filesystem that will be mounted: a
-	// device carrying another is refused.
+	// device carrying another is refused. Empty: whatever the device carries,
+	// and DefaultFsType for a blank one.
 	FsType string
+
+	// DefaultFsType is what a blank device is formatted as when FsType names
+	// nothing.
+	DefaultFsType string
 
 	// MountFlags are the flags the volume asked for, ahead of the ones the
 	// filesystem layer derives from the filesystem itself.
@@ -176,6 +181,20 @@ func (n *Node) RawBlock(connection lvol.Connection) volstack.Plan {
 // filesystem is staged from.
 func (n *Node) Plain(connection lvol.Connection, volume Volume) volstack.Plan {
 	return volstack.Plan{n.fabric(connection), n.filesystem(volume)}
+}
+
+// IndirectRawBlock is `fabric` → `dmLinear`: a raw block volume behind the
+// device-mapper indirection, so the device the pod holds survives a move of
+// the volume's namespace to another subsystem (the indirection's Heal re-points
+// it at the namespace the fabric brought up).
+func (n *Node) IndirectRawBlock(connection lvol.Connection, volume Volume) volstack.Plan {
+	return volstack.Plan{n.fabric(connection), n.dmLinear(volume)}
+}
+
+// IndirectPlain is `fabric` → `dmLinear` → `filesystem`: Plain with the
+// indirection under the filesystem, so a namespace move does not unmount it.
+func (n *Node) IndirectPlain(connection lvol.Connection, volume Volume) volstack.Plan {
+	return volstack.Plan{n.fabric(connection), n.dmLinear(volume), n.filesystem(volume)}
 }
 
 // LVM is `fabric` → `lvmPhysicalVolume` → `lvmVolumeGroup` → `lvmLogicalVolume`

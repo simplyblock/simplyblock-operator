@@ -72,6 +72,7 @@ func aProvisioner(t *testing.T, worker *corev1.Node, node *simplyblockv1alpha2.S
 		Scheme:   scheme,
 		Recorder: events.NewFakeRecorder(64),
 		API:      countingBackend{adds: &adds},
+		Workload: &Workload{Client: apiClient},
 	}, cluster, apiClient, &adds
 }
 
