@@ -1,0 +1,267 @@
+# simplyblock Control Center
+
+The web console for storage clusters, hosts, nodes, devices, pools, volumes,
+replication and disaster recovery.
+
+> Part of the [simplyblock-operator](../README.md) monorepo. This directory
+> holds the console sources and everything needed to package them as a pod;
+> the Helm templates live in the
+> [simplyblock-operator chart](../helm-charts/charts/simplyblock-operator) and
+> are switched on with `--set controlCenter.enabled=true`.
+
+**Layout.** The console itself — `index.html` and the `.jsx` sources it
+references — lives at the root of this directory. `deploy/` holds the image
+build (`Dockerfile`, nginx configuration, entrypoint, `build/prepare.mjs`) and
+`deploy/k8s/` the plain-manifest equivalent of the chart templates for
+installs that do not use Helm. `mock/` is the console's test backend: one Go
+binary that impersonates all three upstreams with generated, coherent data —
+see [mock/README.md](mock/README.md).
+
+## Testing the UI
+
+The console needs no cluster to be tested. `mock/` fakes the Kubernetes API
+(simplyblock CRDs, Ramen CRDs, core objects), the operator API and Prometheus:
+reads come from seeded test data sets, writes persist and fire watch events
+without doing anything real, and a simulator advances operations through their
+phases so the UI sees live transitions.
+
+```sh
+cd control-center/mock && go run . --serve-ui ..     # http://localhost:8080
+```
+
+In a cluster, `--set controlCenter.mock.enabled=true` deploys the mock next to
+the console and points the console's proxy at it — the console image itself
+runs completely unmodified.
+
+The console is a static document transpiled in the browser, served by nginx,
+with an in-pod reverse proxy in front of the three APIs it is allowed to use.
+There is no build step for the application itself and no server-side code.
+
+```
+browser ──► nginx (this pod) ──┬──► kube-apiserver          /k8s/*
+                               ├──► simplyblock-operator    /operator/v1/*
+                               └──► Prometheus              /prometheus/api/v1/*
+```
+
+Everything else is refused by the server block. The browser only ever makes
+same-origin requests, which is what keeps a cluster credential out of it.
+
+## Build
+
+From this directory:
+
+```sh
+docker build -t quay.io/simplyblock-io/control-center:26.3.0 -f deploy/Dockerfile .
+```
+
+CI builds the image from `.github/workflows/control_center_build.yaml` whenever
+something under `control-center/` changes.
+
+Four things happen at build time (`deploy/build/prepare.mjs`):
+
+1. **The fixture backend is stripped.** Everything between `MOCK:START` and
+   `MOCK:END` in `index.html` is removed and the build fails if any
+   `mock-*.jsx` reference survives. No fixture data ships to a cluster.
+2. **React, Babel and both typefaces are vendored** into `/vendor`, and the
+   development React builds the design preview pins are swapped for the
+   production ones. Inter and IBM Plex Mono come from fontsource and are served
+   from the pod, replacing the Google Fonts link — the mono carries every UUID
+   and CRD field name in the console, so losing it to a blocked CDN would not be
+   cosmetic. The brand mark is vendored too and read from `SB_LOGO_URL`, because
+   `img-src` is `'self'`. Together with step 3 this is what lets the pod run
+   with no network egress at all.
+3. **No external subresource may survive.** The build scans every shipped file,
+   not just `index.html` — the logo lives in `app.jsx`, which is how it went
+   unnoticed once. The check covers `src=` and `<link href=`; a plain `<a href>`
+   is a navigation target, needs no egress, and does not fail the build.
+4. Only the files `index.html` actually references are copied in.
+
+`--build-arg KEEP_MOCKS=1` keeps the fixture backend, for a demo image that
+runs with no cluster behind it.
+
+## Install
+
+With the chart, alongside the operator:
+
+```sh
+helm upgrade --install -n simplyblock simplyblock-operator \
+  simplyblock/simplyblock-operator \
+  --set controlCenter.enabled=true
+kubectl -n simplyblock port-forward svc/simplyblock-operator-control-center 8080:80
+```
+
+The chart templates (`control-center.yaml`, `control-center-rbac.yaml`,
+`control-center-networkpolicy.yaml` and `_control_center_helpers.tpl`) are
+self-contained — they define their own `sbcc.*` helpers rather than calling the
+host chart's. All of the console's values sit under the `controlCenter:` key;
+`deploy/k8s/` holds the same objects as plain manifests if you are not using
+Helm. Verify before applying:
+
+```sh
+helm template cc helm-charts/charts/simplyblock-operator \
+  --set controlCenter.enabled=true | kubectl apply --dry-run=client -f -
+```
+
+`controlCenter.rbac.create` must stay `true` in `serviceaccount` mode. Without
+it the proxied token has no permissions, every request returns 403 and the
+console renders empty.
+
+## Runtime configuration
+
+One image serves any cluster: `config.js` is generated at container start from
+the environment, into the writable scratch mount. Nothing is baked in.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SB_MODE` | `full` | `full`: the storage console with a Disaster recovery section. `dr`: the DR-only console — see below |
+| `SB_NAMESPACE` | `simplyblock` | namespace the console manages |
+| `SB_DR_NAMESPACE` | `ramen-ops` | Ramen's ops namespace on the DR hub: default namespace of discovered ProtectedApplications and of the access review |
+| `SB_AUTH_MODE` | `serviceaccount` | `serviceaccount` or `passthrough` — see below |
+| `SB_K8S_API` | `https://kubernetes.default.svc` | API server |
+| `SB_K8S_HOST` | `kubernetes.default.svc` | SNI and Host — must be on the API server's certificate |
+| `SB_K8S_CA_FILE` | the projected SA CA | CA bundle used to verify it |
+| `SB_OPERATOR_URL` | `http://simplyblock-operator:8080` | operator API; empty disables the proxy location (answers a 503 Status) |
+| `SB_CONTROLPLANE_URL` | empty | management API v2 (fully qualified: nginx resolves it per request); needs the njs module, GET only, every response scrubbed of credentials |
+| `SB_CONTROLPLANE_TOKEN_FILE` | empty | a static admin token for the control plane; else the proxied ServiceAccount token (the operator must list the account in `SB_EXTRA_ADMIN_SERVICE_ACCOUNTS`) |
+| `SB_CONTROLPLANE_CA_FILE`, `SB_CONTROLPLANE_CLIENT_CERT`, `SB_CONTROLPLANE_CLIENT_KEY` | empty | TLS to an https control plane: CA to verify it, client certificate where it requires one |
+| `SB_GRAYLOG_URL` | empty | the log store: Graylog's search API, which the Logs view reads (fully qualified, resolved per request); needs the njs module, GET on `/api/search/universal/{absolute,relative}` only, every response scrubbed of credentials (field names and credential-looking text in log lines). Empty: the Logs view falls back to a pod's live tail from the Kubernetes API |
+| `SB_GRAYLOG_USER`, `SB_GRAYLOG_PASSWORD_FILE` | `admin`, empty | HTTP Basic credentials attached by the proxy; the chart mounts the observability stack's own secret |
+| `SB_GRAYLOG_TOKEN_FILE` | empty | a Graylog access token instead (sent as `<token>:token`); wins over the password |
+| `SB_GRAYLOG_CA_FILE` | empty | CA to verify an https Graylog |
+| `SB_HELM_URL` | `http://simplyblock-operator:8080` | Helm release view; empty disables it |
+| `SB_PROMETHEUS_URL` | `http://simplyblock-prometheus:9090` | metrics; empty disables it |
+| `SB_LOGO_URL` | `vendor/logo-white.svg` | brand mark, vendored into the image |
+| `SB_MOCK` | `false` | `true` runs on fixtures (needs a `KEEP_MOCKS=1` image) |
+| `SB_TOKEN_REFRESH_SECONDS` | `600` | how often the proxied token is re-read |
+
+Pointing `SB_K8S_API` at anything other than the in-cluster service means
+moving `SB_K8S_HOST` and `SB_K8S_CA_FILE` with it: TLS verification stays on,
+so the name has to match the certificate and the CA has to be one you mount.
+
+## Disaster recovery and the DR-only console
+
+The Disaster recovery section is a thin client of the DR hub
+([simplyblock-dr](https://github.com/simplyblock/simplyblock-dr)): every screen
+is a CR of `dr.simplyblock.io/v1alpha1` read through the Kubernetes API proxy
+(ProtectionPlan, DRPath, ProtectedApplication, RecoveryPlan, RecoveryAction,
+TestBubble, TestSchedule, RestoreAction, DRConfig, plus `SiteProfile` and
+`DHCPServer` from `sitemap.simplyblock.io`), and every write is a CR write with
+the caller's RBAC. The site mapper (ADR 0020) shows up as the application's
+site-mapping verdict and findings (VM networks per declared path, guest
+addresses and their DHCP reservations), the resolution inbox on the dashboard,
+guest address verification in action reports, and the renderings and DHCP
+servers per site profile.
+There is no DR REST API. When the CRDs are absent the section says so.
+
+`SB_MODE=dr` is the same image stripped down to that section, for a DR hub
+that has **no simplyblock control plane**: the Clusters, Kubernetes and Control
+plane sections do not exist, nothing reads the storage CRDs or the operator
+API, and the only upstream nginx proxies is the Kubernetes API (the operator,
+Helm and Prometheus locations answer a 503 `Status` unless their URL is set —
+point `SB_PROMETHEUS_URL` at a Prometheus that scrapes dr-hub if you want the
+metrics). The identity and its rules come from `SelfSubjectReview` and
+`SelfSubjectRulesReview` in `SB_DR_NAMESPACE` instead of the operator's
+`/access/self`. The `dr-simplyblock-hub` chart deploys this mode with
+`--set console.enabled=true` (values under `console:`; `console.role` picks
+which of its `dr-viewer` / `dr-operator` / `dr-admin` roles the console's
+ServiceAccount holds in `serviceaccount` mode). In the design preview,
+`?mode=dr` on the fixture backend shows the same thing.
+
+The interaction rules follow the DR design: directions are declared `DRPath`s
+and never inferred (the run-action dialog offers paths whose `actions` include
+the kind, never a target cluster); readiness is the gate — a `NotReady` path
+needs an override reason, and the hub's webhook checks the `override` verb on
+`recoveryactions`; inventory is read-only; finished runs are immutable and the
+console only ever shows the report the hub wrote.
+
+## Who can do what
+
+**This is the decision to get right.** In `serviceaccount` mode the pod attaches
+its own ServiceAccount token to every proxied request. The browser holds no
+credential — good — but the console's authority is then the ClusterRole in
+`deploy/k8s/rbac.yaml`, shared by **everyone who can reach the Service**. There
+is no per-user identity and nothing in the audit log attributing an action to a
+person.
+
+So authentication in front of the Service is required. In order of preference:
+
+1. **`SB_AUTH_MODE=passthrough` behind an OIDC/OAuth2 proxy** that injects the
+   user's own bearer token. Kubernetes then enforces that user's RBAC, the
+   audit log names them, and the pod needs no permissions at all — set
+   `controlCenter.rbac.create=false`.
+2. **`serviceaccount` behind an authenticating proxy.** One shared role, but at
+   least the door is locked.
+3. **No Ingress: `kubectl port-forward`.** The console inherits whoever holds
+   the kubeconfig. This is the default in the chart values and the safest place
+   to start.
+
+Basic auth is shipped as an annotation placeholder in the Ingress so the
+manifest is not silently open. Replace it; do not just delete it.
+
+### What the role grants
+
+Read across the simplyblock CRDs, core objects, and the Ramen kinds as
+*instances only* — redefining `ramendr.openshift.io` CRDs breaks a supported
+RHACM install. Writes are deliberately narrow:
+
+- **create** on the `*Ops` kinds. An action is not a verb against an entity: a
+  shutdown, restart, migration or failover is an Ops object the operator
+  reconciles. Nothing here grants delete on a StorageCluster, node, device,
+  pool or volume.
+- **create/delete** on `ReplicationPair` and `ReplicationPolicy` — these are
+  configuration, and the operator refuses the delete while anything still
+  references them.
+- **patch** on PVCs, because a PVC annotation is the entire membership model for
+  both replication and backup policies.
+- **get/list** on Secrets, for the Helm release view only (Helm stores releases
+  as Secrets). No other Secret is read: a backup `credentialsSecretRef` is only
+  ever shown by name.
+
+## Security posture
+
+- non-root (uid 101), `readOnlyRootFilesystem`, all capabilities dropped,
+  `RuntimeDefault` seccomp
+- two writable mounts, both `emptyDir` in memory: `/tmp/nginx` for the generated
+  config, the proxied token and nginx's temp files, and `/etc/nginx/conf.d`
+  because the image renders its server block from a template at startup
+- CSP with no external origin — nothing is fetched off-cluster. `unsafe-eval` is
+  required because Babel transpiles in the browser; see the caveat below. The
+  headers live in an included snippet and are repeated in every location that
+  sets its own `Cache-Control`, because nginx discards inherited `add_header`
+  directives as soon as a level declares one of its own — `always` does not
+  change that, and declaring them once at server level would have dropped them
+  from the document itself
+- `DENY` framing, `nosniff`, `no-referrer`
+- a NetworkPolicy capping egress to the three upstreams plus DNS
+  (`controlCenter.networkPolicy.enabled` in the chart, or the plain manifest in
+  `deploy/k8s/ingress.yaml`). The API-server rule ships as the RFC1918 ranges,
+  because the right value is cluster-specific — **narrow it** to your API
+  server endpoint (`kubectl get endpoints kubernetes -n default`) or your
+  service CIDR. A rule with ports and no `to:` selector would allow 443 to the
+  whole internet
+- the projected ServiceAccount token is re-read on a timer and nginx reloaded,
+  because a token read once at startup expires while the pod still runs
+
+## Probes and scaling
+
+`/healthz` is served by nginx directly and deliberately **not** proxied, so a
+probe reports on this container rather than on the health of the cluster behind
+it. The console keeps no server-side state — its location lives in the browser's
+`localStorage` — so replicas need no coordination and a rolling update is safe.
+
+## Caveats
+
+**Babel in the browser.** The document is transpiled on load, which costs about
+a second on first paint and forces `unsafe-eval` in the CSP. For a shipped
+product this should become a real build step — bundle the `.jsx` at image build
+time and drop both the Babel vendor file and `unsafe-eval`. The change is
+confined to `prepare.mjs` and the CSP header; no application code moves.
+
+**`index.html` is `no-store`.** The `.jsx` sources cache for an hour, but the
+shell must not, or a rolling update would leave a stale document loading new
+sources.
+
+**The API surface is still partly inferred.** `CRD-MAIN.md` records which parts
+of the console read real `storage.simplyblock.io/v1alpha1` fields and which
+still run on `operator /proposed/*` because no CRD models them yet. The proxy
+routes both; the second set will move as the CRDs land.
