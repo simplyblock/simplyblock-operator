@@ -16,9 +16,9 @@ OPENSHIFT_VERSION ?= v4.19
 
 # Related images deployed by the operator (used in relatedImages for airgap support)
 CLUSTER_IMAGE_BASE ?= quay.io/simplyblock-io/simplyblock
-CLUSTER_IMAGE_TAG  ?= 26.2.6-PRE
+CLUSTER_IMAGE_TAG  ?= 26.4.0-Beta1
 SPDK_IMAGE_BASE    ?= quay.io/simplyblock-io/ultra
-SPDK_IMAGE_TAG     ?= R26.2-PRE-latest
+SPDK_IMAGE_TAG     ?= main-latest
 
 YQ_CSV_EXPR = .metadata.annotations.containerImage = strenv(OPERATOR_IMG) \
   | .spec.relatedImages = [{"name": "simplyblock-operator", "image": strenv(OPERATOR_IMG)}, \
