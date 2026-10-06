@@ -15,11 +15,11 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// clusterRoleComponents are the five ClusterRole and ClusterRoleBinding pairs
-// the plugins need: one for the node plugin, and one per controller-plugin
+// clusterRoleComponents are the six ClusterRole and ClusterRoleBinding pairs the
+// plugins need: one for each plugin itself, and one per controller-plugin
 // sidecar that talks to the API server.
 var clusterRoleComponents = []string{
-	nodeComponent, "provisioner", "attacher", "resizer", "health-monitor",
+	nodeComponent, controllerComponent, "provisioner", "attacher", "resizer", "health-monitor",
 }
 
 // nodeComponent is the one component whose role binds the node plugin's account
@@ -32,6 +32,11 @@ const nodeComponent = "node"
 // sixth ClusterRole, per rbac-hardening's preference for the narrowest scope
 // that works. See rbac.go's csiAddonsRoleRules.
 const csiAddonsComponent = "csi-addons"
+
+// controllerComponent is the controller plugin's own role, separate from the
+// sidecars that share its account, so a rule added for one is not granted to
+// the other.
+const controllerComponent = "controller"
 
 // objectNames is the whole naming surface of one deployment.
 type objectNames struct {

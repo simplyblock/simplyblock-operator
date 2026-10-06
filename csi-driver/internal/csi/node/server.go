@@ -8,6 +8,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/simplyblock/atlas/lvol"
+	export "github.com/simplyblock/atlas/nfsexport"
 	"github.com/simplyblock/atlas/nvme"
 
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
@@ -40,6 +41,7 @@ type Server struct {
 	// It is a field for the reason repairFabric is one: it reaches sysfs and the
 	// mount table directly, and a test has neither.
 	identifyStaged func(ctx context.Context, stagingTargetPath string) (lvol.Connection, error)
+	unstagePNFSFn  func(context.Context, string, export.Spec) error
 	volumeLocks    *csicommon.VolumeLocks
 	kubeClient     kubernetes.Interface
 	manager        *sbkube.Manager
