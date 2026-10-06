@@ -33,6 +33,7 @@ const LAYER_META = {
   siteprofiles: {label: "Site profiles", icon: "k8s"}, siteprofile: {icon: "k8s"},
   dhcpservers: {label: "DHCP servers", icon: "link"}, dhcpserver: {icon: "link"},
   sitedeploys: {label: "Site storage", icon: "cluster"}, sitedeploy: {icon: "cluster"},
+  logs: {label: "Logs", icon: "list"},
   drconfig: {label: "DR configuration", icon: "gauge"},
   slots: {label: "Replication slots", icon: "volume"}, slot: {icon: "volume"},
   replops: {label: "Operations", icon: "clock"}, replop: {icon: "clock"},
@@ -69,7 +70,7 @@ const pRestore = id => [{t: "dr"}, {t: "restores"}, {t: "restore", id}];
 const pSProf = id => [{t: "dr"}, {t: "siteprofiles"}, {t: "siteprofile", id}];
 const pDhcp = id => [{t: "dr"}, {t: "dhcpservers"}, {t: "dhcpserver", id}];
 // a managed site's storage deployment belongs to the clusters, not to DR
-const pSiteDeploy = id => [{t: "sitedeploys"}, {t: "sitedeploy", id}];
+const pSiteDeploy = id => [{t: "clusters"}, {t: "sitedeploys"}, {t: "sitedeploy", id}];
 const pPair = id => [{t: "dr"}, {t: "pairs"}, {t: "pair", id}];
 const pSlot = id => [{t: "dr"}, {t: "slots"}, {t: "slot", id}];
 const pReplOp = id => [{t: "dr"}, {t: "replops"}, {t: "replop", id}];
@@ -493,6 +494,8 @@ function OverviewView({seg, parent, nav, prefs, rev, up, upLabel}) {
   const mayCreate = seg.t === "clusters" ? acc.canAnywhere("create", "k8scluster") : acc.canCreateIn(createKind, parentObj);
   const createWhy = mayCreate ? "" : seg.t === "clusters" ? "Needs create on nodepoolallocations at cluster scope" : acc.whyCreateIn(createKind, parentObj);
   // §5.5: a denied create is disabled with the reason, not hidden
+  const mayLabel = acc.canAnywhere("create", "labelrequest");
+  const labelWhy = mayLabel ? "" : "Needs create on labelrequests.dr.simplyblock.io: labels are applied through a LabelRequest";
   const gateCreate = el => !el ? null : mayCreate ? el : React.cloneElement(el, {disabled: true, title: createWhy, onClick: undefined});
   // §5.1: a scope the caller may not read is a 403, not an empty list
   const layerProbe = parentObj && parentObj.kind ? Object.assign({kind: cfg.kind}, parentObj.kind === "cluster" ? {clusterId: parentObj.id} : parentObj.kind === "pool" ? {poolId: parentObj.id, clusterId: parentObj.clusterId}
@@ -527,8 +530,11 @@ function OverviewView({seg, parent, nav, prefs, rev, up, upLabel}) {
     <>
       <Toolbar {...{items, q, setQ, filters, setFilters, density, setDensity}} kind={cfg.kind} scope={scope}
         sort={activeSort} setSort={setSort} count={filtered.length} onRefresh={reload}
-        extra={gateCreate(seg.t === "clusters" ? <><button className="btn sitestorage" onClick={() => nav.siteStorage()}><Icon n="cluster" s={12} />Site storage</button><button className="btn primary" onClick={() => window.__ui.dialog(deployFromDialog(nav), {kind: "cluster", id: "new"})}><Icon n="plus" s={12} />Deploy cluster</button></>
-          : seg.t === "k8s" ? <button className="btn labelsbtn" onClick={() => window.__ui.dialog(labelDialog(), {kind: "labels", id: "new"})}><Icon n="list" s={12} />Label for DR</button>
+        extra={seg.t === "clusters" ? <><button className="btn sitestorage" onClick={() => nav.siteStorage()}><Icon n="cluster" s={12} />Site storage</button>{gateCreate(<button className="btn primary" onClick={() => window.__ui.dialog(deployFromDialog(nav), {kind: "cluster", id: "new"})}><Icon n="plus" s={12} />Deploy cluster</button>)}</>
+          // labelling goes through a LabelRequest: its own permission, not "create a cluster"
+          : seg.t === "k8s" ? (mayLabel ? <button className="btn labelsbtn" onClick={() => window.__ui.dialog(labelDialog(), {kind: "labels", id: "new"})}><Icon n="list" s={12} />Label for DR</button>
+            : React.cloneElement(<button className="btn labelsbtn" onClick={() => window.__ui.dialog(labelDialog(), {kind: "labels", id: "new"})}><Icon n="list" s={12} />Label for DR</button>, {disabled: true, title: labelWhy, onClick: undefined}))
+          : gateCreate(seg.t === "__none__" ? null
           : seg.t === "deployconfigs" && parent && parent.t === "k8sc" ? <button className="btn primary" onClick={() => nav.deployWizard(parent.id)}><Icon n="plus" s={12} />Deploy a cluster</button>
           : seg.t === "pools" && parent && parent.t === "cluster" ? <button className="btn primary" onClick={() => window.__ui.dialog(newPoolDialog(REG[parent.id] || {id: parent.id, name: "this cluster"}), {kind: "pool", id: "new"})}><Icon n="plus" s={12} />New pool</button>
           : seg.t === "plans" ? <button className="btn primary" onClick={() => window.__ui.dialog(newPPlanDialog(), {kind: "pplan", id: "new"})}><Icon n="plus" s={12} />New plan</button>
@@ -658,8 +664,15 @@ function App() {
   const [rawPath, setPath] = useLocal(DR_ONLY ? "sb.drpath" : "sb.path", ROOT_PATH);
   // a stored path may name a layer that no longer exists (renamed kinds) — fall back to the root;
   // in DR-only mode anything outside the DR section is unreachable
-  const path = useMemo(() => Array.isArray(rawPath) && rawPath.length && rawPath.every(s => LAYER_META[s.t])
-    && (!DR_ONLY || (rawPath[0].t === "dr" && !rawPath.some(s => STORAGE_DR_LAYERS.includes(s.t)))) ? rawPath : ROOT_PATH, [rawPath]);
+  const path = useMemo(() => {
+    const ok = Array.isArray(rawPath) && rawPath.length && rawPath.every(s => LAYER_META[s.t])
+      && (!DR_ONLY || (rawPath[0].t === "logs" && rawPath.length === 1) || (rawPath[0].t === "dr" && !rawPath.some(s => STORAGE_DR_LAYERS.includes(s.t))));
+    if (!ok) return ROOT_PATH;
+    // a managed site's storage lives under Clusters, never under DR (an older
+    // stored path still names it below the DR section)
+    const sd = rawPath.findIndex(s => s.t === "sitedeploys");
+    return sd >= 0 && !DR_ONLY ? [{t: "clusters"}, ...rawPath.slice(sd)] : rawPath;
+  }, [rawPath]);
   const [theme, setTheme] = useLocal("sb.theme", "light");
   const [density, setDensity] = useLocal("sb.density", "340px");
   const [sort, setSort] = useLocal("sb.sort", "health");
@@ -767,7 +780,16 @@ function App() {
     k8s: () => go([{t: "k8s"}]),
     openCgroup: gid => (REG[gid] ? Promise.resolve(REG[gid]) : api.cgroup(gid)).then(g => go(pCg(g.clusterId, g.id))).catch(() => {}),
     drLayer: l => go([{t: "dr"}, {t: l}]),
-    siteStorage: () => go([{t: "sitedeploys"}]),
+    siteStorage: () => go([{t: "clusters"}, {t: "sitedeploys"}]),
+    // the log explorer on a query (LogsView reads it from the URL)
+    logs: params => {
+      const f = Object.assign({}, DEFAULT_LOG_FILTER, params || {});
+      if (params && (params.from || params.to)) f.range = "";
+      try { window.history.replaceState(null, "", window.location.pathname + window.location.search + hashOfFilter(f)); } catch (e) {}
+      // an open explorer takes the new query; a closed one reads it from the URL
+      try { window.dispatchEvent(new CustomEvent("sb-logs-query", {detail: f})); } catch (e) {}
+      go([{t: "logs"}]);
+    },
     openMPath: id => go(pMp(id)),
     openAppGroup: (pid, id) => go(pAg(pid, id)),
     zones: () => go([{t: "dr"}, {t: "zones"}]),
@@ -781,6 +803,8 @@ function App() {
     k8sDetail: kid => go(pK(kid)),
     root: () => go(ROOT_PATH)
   }), [go]);
+  // entry points in other files (panels, DR runs) open the log explorer through it
+  window.__nav = nav;
 
   useEffect(() => {
     const h = e => {
@@ -799,7 +823,7 @@ function App() {
   const parentSeg = path[path.length - 2];
   const apiHint = cur.id ? DETAIL_API[cur.t] : VIEWS[cur.t] ? VIEWS[cur.t].api(parentSeg || {}) : "—";
   const s0 = path[0] && path[0].t;
-  const section = s0 === "dr" ? "dr" : s0 === "k8s" ? "k8s" : s0 === "cp" ? "cp" : "clusters";
+  const section = s0 === "dr" ? "dr" : s0 === "k8s" ? "k8s" : s0 === "cp" ? "cp" : s0 === "logs" ? "logs" : "clusters";
   const drVisible = DR_ONLY || acc.canAnywhere("read", "drhub") || acc.canAnywhere("read", "drpolicy") || acc.canAnywhere("read", "replicationpolicy") || acc.canAnywhere("read", "application");
   const upOne = path.length > 1 ? () => go(path.slice(0, -1)) : null;
   const upLabel = path.length > 1 ? segLabel(path[path.length - 2]) : "";
@@ -818,10 +842,12 @@ function App() {
           {acc.canAnywhere("read", "k8scluster") && <button className={section === "k8s" ? "on" : ""} onClick={() => nav.k8s()} title="Kubernetes"><Icon n="k8s" s={13} /><span className="swlabel">Kubernetes</span></button>}
           {drVisible && <button className={section === "dr" ? "on" : ""} onClick={() => nav.dr()} title="Disaster recovery"><Icon n="shield" s={13} /><span className="swlabel">Disaster recovery</span></button>}
           <button className={section === "cp" ? "on" : ""} onClick={() => nav.cp()} title="Control plane"><Icon n="host" s={13} /><span className="swlabel">Control plane</span></button>
+          <button className={"sw-logs" + (section === "logs" ? " on" : "")} onClick={() => nav.logs()} title="Logs"><Icon n="list" s={13} /><span className="swlabel">Logs</span></button>
         </div>}
         {DR_ONLY && <div className="sectionsw">
           <button className="on" onClick={() => nav.dr()} title="Disaster recovery"><Icon n="shield" s={13} /><span className="swlabel">Disaster recovery</span></button>
           <button className={cur.t === "drconfig" ? "on" : ""} onClick={() => nav.drLayer("drconfig")} title="DR configuration"><Icon n="gauge" s={13} /><span className="swlabel">Configuration</span></button>
+          <button className={"sw-logs" + (cur.t === "logs" ? " on" : "")} onClick={() => nav.logs()} title="Logs"><Icon n="list" s={13} /><span className="swlabel">Logs</span></button>
         </div>}
         {!DR_ONLY && section === "clusters" && <div className="switcher">
           <button className="swbtn" onClick={() => setMenu(!menu)}>
@@ -881,6 +907,8 @@ function App() {
         ? <DRConfigView key={viewKey} nav={nav} />
         : cur.t === "cp"
         ? <ControlPlaneView key={viewKey} nav={nav} />
+        : cur.t === "logs"
+        ? <LogsView key={viewKey} nav={nav} />
         : cur.t === "discovery"
         ? <DiscoveryView key={viewKey} kid={(path.find(x => x.t === "k8sc") || {}).id} nav={nav} />
         : cur.t === "deploywizard"

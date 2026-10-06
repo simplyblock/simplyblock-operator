@@ -124,6 +124,10 @@ the environment, into the writable scratch mount. Nothing is baked in.
 | `SB_CONTROLPLANE_URL` | empty | management API v2 (fully qualified: nginx resolves it per request); needs the njs module, GET only, every response scrubbed of credentials |
 | `SB_CONTROLPLANE_TOKEN_FILE` | empty | a static admin token for the control plane; else the proxied ServiceAccount token (the operator must list the account in `SB_EXTRA_ADMIN_SERVICE_ACCOUNTS`) |
 | `SB_CONTROLPLANE_CA_FILE`, `SB_CONTROLPLANE_CLIENT_CERT`, `SB_CONTROLPLANE_CLIENT_KEY` | empty | TLS to an https control plane: CA to verify it, client certificate where it requires one |
+| `SB_GRAYLOG_URL` | empty | the log store: Graylog's search API, which the Logs view reads (fully qualified, resolved per request); needs the njs module, GET on `/api/search/universal/{absolute,relative}` only, every response scrubbed of credentials (field names and credential-looking text in log lines). Empty: the Logs view falls back to a pod's live tail from the Kubernetes API |
+| `SB_GRAYLOG_USER`, `SB_GRAYLOG_PASSWORD_FILE` | `admin`, empty | HTTP Basic credentials attached by the proxy; the chart mounts the observability stack's own secret |
+| `SB_GRAYLOG_TOKEN_FILE` | empty | a Graylog access token instead (sent as `<token>:token`); wins over the password |
+| `SB_GRAYLOG_CA_FILE` | empty | CA to verify an https Graylog |
 | `SB_HELM_URL` | `http://simplyblock-operator:8080` | Helm release view; empty disables it |
 | `SB_PROMETHEUS_URL` | `http://simplyblock-prometheus:9090` | metrics; empty disables it |
 | `SB_LOGO_URL` | `vendor/logo-white.svg` | brand mark, vendored into the image |

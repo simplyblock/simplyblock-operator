@@ -23,7 +23,10 @@ spec:
     family: Debian
   nodeSets:
   - groups:
-    - devices:
+    - dataInterfaces:
+      - ens5f1
+      - ens5f2
+      devices:
         nvme:
         - 0000:5e:00.0
         - 0000:5e:00.1

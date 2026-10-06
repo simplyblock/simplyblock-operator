@@ -24,7 +24,9 @@ spec:
     family: Debian
   nodeSets:
   - groups:
-    - devices:
+    - dataInterfaces:
+      - eth1
+      devices:
         block:
         - /dev/sdb
         - /dev/sdc

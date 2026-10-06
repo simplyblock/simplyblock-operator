@@ -736,6 +736,8 @@ const cpRaw = {
   clusters: () => cpGet("/clusters/").then(r => (r || []).map(dropSecrets)),
   nodes: cid => cpGet(`/clusters/${cid}/storage-nodes/`),
   devices: (cid, nid) => cpGet(`/clusters/${cid}/storage-nodes/${nid}/devices/`),
+  // the node's data NICs: [{"ID", "Device name", "Address", "Net type", "Status"}]
+  nics: (cid, nid) => cpGet(`/clusters/${cid}/storage-nodes/${nid}/nics`),
   pools: cid => cpGet(`/clusters/${cid}/storage-pools/`),
   volumes: (cid, pid) => cpGet(`/clusters/${cid}/storage-pools/${pid}/volumes/`),
   snapshots: (cid, pid) => cpGet(`/clusters/${cid}/storage-pools/${pid}/snapshots/`),
@@ -754,9 +756,14 @@ async function cpSites() {
   const [profiles, deploys] = await Promise.all([k8s.list("SiteProfile").catch(() => []), k8s.list("StorageSiteDeployment", {
     allNamespaces: true
   }).catch(() => [])]);
-  const byHost = {};
+  const byHost = {},
+    invByHost = {};
   profiles.forEach(p => (((p.status || {}).inventory || {}).nodes || []).forEach(n => {
     byHost[n.name] = p.metadata.name;
+    invByHost[n.name] = {
+      node: n,
+      site: p.metadata.name
+    };
   }));
   const byCluster = {};
   deploys.forEach(d => {
@@ -767,7 +774,9 @@ async function cpSites() {
   return {
     byHost,
     byCluster,
-    profiles
+    profiles,
+    invByHost,
+    deploys
   };
 }
 const siteOf = (sites, clusterId, nodes) => sites.byCluster[clusterId] || (nodes || []).map(n => sites.byHost[hostKey(n.hostname)]).find(Boolean) || "";
@@ -784,18 +793,29 @@ const knownStatus = st => {
   if (/new/.test(x)) return "in_creation";
   return "offline";
 };
-const wireNode = (n, site) => ({
+// A storage node's data NICs from the control plane's nics list; the port is
+// the node's volume subsystem port.
+const wireNics = (nics, n) => (nics || []).map(x => ({
+  name: x["Device name"] || x.if_name || "",
+  ip: x.Address || x.ip4_address || "",
+  port: n.lvol_subsys_port,
+  state: String(x.Status || x.status || "").toLowerCase() === "online" ? "up" : x.Status || x.status || null,
+  trtype: x["Net type"] || x.trtype || null
+}));
+// ANA multipath: a volume of this node is also reachable through its
+// secondary (and tertiary) node -- that is simplyblock's multipathing.
+const anaPaths = n => 1 + (n.secondary_node_id ? 1 : 0) + (n.tertiary_node_id ? 1 : 0);
+const wireNode = (n, site, nics) => ({
   uuid: n.id,
   cluster_id: n.cluster_id,
   host_id: `${n.cluster_id}:${hostKey(n.hostname)}`,
   hostname: hostKey(n.hostname),
   mgmt_ip: n.mgmt_ip,
   status: knownStatus(n.status),
-  data_nics: [{
-    name: "",
-    ip: n.mgmt_ip,
-    port: n.lvol_subsys_port
-  }],
+  data_nics: nics ? wireNics(nics, n) : null,
+  ana_paths: anaPaths(n),
+  secondary_node_id: n.secondary_node_id || null,
+  tertiary_node_id: n.tertiary_node_id || null,
   failure_domain: n.failure_domain >= 0 ? n.failure_domain : null,
   size_total: cpCap(n).size_total || 0,
   size_util: cpCap(n).size_used || 0,
@@ -803,9 +823,13 @@ const wireNode = (n, site) => ({
   devices_online: n.online_device_count || 0,
   cpu_count: n.cpu_total_count,
   vcpu_reserved: n.cpu_spdk_count,
-  memory_total: n.memory,
-  memory_reserved: n.spdk_mem,
-  hugepages_total: n.hugepage_memory,
+  // in-use memory/hugepages and the SPDK version are not part of the record
+  memory_total: n.memory || null,
+  memory_reserved: n.spdk_mem || null,
+  hugepages_total: n.hugepage_memory || null,
+  memory_used: null,
+  hugepages_used: null,
+  spdk_version: null,
   max_subsystem_count: n.lvols_max || null,
   lvols: n.lvols || 0,
   site: site || ""
@@ -1017,11 +1041,151 @@ const clusterOfPool = async pid => {
   if (!cid) throw new ApiError(404, `pool ${pid} not found in the control plane`, `/pools/${pid}`, "NotFound");
   return cid;
 };
+
+// ---- hosts: one machine, every source that knows something about it --------
+// Kubernetes quantities ("16", "15500m", "32Gi", "8589934592") as numbers.
+const QTY = {
+  Ki: 2 ** 10,
+  Mi: 2 ** 20,
+  Gi: 2 ** 30,
+  Ti: 2 ** 40,
+  Pi: 2 ** 50,
+  k: 1e3,
+  M: 1e6,
+  G: 1e9,
+  T: 1e12,
+  P: 1e15,
+  m: 1e-3
+};
+const qty = q => {
+  const m = /^([0-9.]+)([a-zA-Z]*)$/.exec(String(q === undefined || q === null ? "" : q).trim());
+  if (!m) return null;
+  const v = parseFloat(m[1]) * (m[2] ? QTY[m[2]] || NaN : 1);
+  return Number.isFinite(v) ? v : null;
+};
+const hugepagesOf = rl => {
+  const ks = Object.keys(rl || {}).filter(k => k.startsWith("hugepages-"));
+  return ks.length ? ks.reduce((t, k) => t + (qty(rl[k]) || 0), 0) : null;
+};
+const hostDevice = d => ({
+  id: d.id,
+  kind: d.bdev_type === "nvme" ? "nvme" : "block",
+  numa_socket: null,
+  pcie_address: d.pcie_address || null,
+  device_name: d.device_path || d.nvme_controller || null,
+  serial_number: d.serial_number || null,
+  model_number: d.model || null,
+  size: d.size || 0,
+  assigned_node_id: d.storage_node_id || null,
+  status: d.status
+});
+// The draft group that names this host as a worker, when the storage was
+// deployed from the hub (StorageSiteDeployment): its NICs, sockets, devices.
+const draftGroupOf = (deploys, host) => {
+  for (const d of deploys || []) {
+    const dr = (d.status || {}).draft || {};
+    for (const set of dr.nodeSets || []) for (const g of set.groups || []) {
+      if ((g.workers || []).includes(host)) return {
+        group: g,
+        cluster: dr.cluster || {},
+        name: d.metadata.name
+      };
+    }
+  }
+  return null;
+};
+const CPS = "control plane API",
+  INV = "dr-agent inventory";
+// Every field a source knows is set with the source it came from (h.sources);
+// a field no source knows stays unset, and the view says so.
+function mergeHost(h, sites) {
+  const src = {};
+  const set = (field, v, from) => {
+    if (v === null || v === undefined || v === "" || Array.isArray(v) && !v.length || typeof v === "number" && !Number.isFinite(v)) return;
+    h[field] = v;
+    src[field] = from;
+  };
+  const ns = h._nodes;
+  const max = f => {
+    const v = ns.map(f).filter(x => typeof x === "number" && x > 0);
+    return v.length ? Math.max(...v) : null;
+  };
+  const sum = f => {
+    const v = ns.map(f).filter(x => typeof x === "number" && x > 0);
+    return v.length ? v.reduce((a, b) => a + b, 0) : null;
+  };
+  // the control plane: what its storage nodes recorded of the machine
+  set("vcpu_count", max(n => n.cpu_total_count), CPS);
+  set("memory_total", max(n => n.memory), CPS);
+  set("hugepages_reserved", max(n => n.hugepage_memory), CPS);
+  set("hugepages_allocated", sum(n => n.spdk_mem), CPS);
+  set("memory_per_pod", max(n => n.spdk_mem), CPS);
+  if (h._devsKnown) src.devices = CPS;
+  if (h._nicsKnown) {
+    src.nics = CPS;
+    set("data_nics", h.nics.map(x => x.name).filter(Boolean), CPS);
+  }
+  // dr-agent: the Kubernetes node (zone, region, rack, cabinet, capacity)
+  const inv = (sites.invByHost || {})[h.hostname];
+  if (inv) {
+    const n = inv.node,
+      cap = n.capacity || {};
+    set("zone", n.zone, INV);
+    set("zone_id", n.zone ? zoneId(inv.site, n.zone) : null, INV);
+    set("region", n.region, INV);
+    set("rack_id", n.rack, INV);
+    set("cabinet_id", n.cabinet, INV);
+    set("k8s_cluster", inv.site, INV);
+    // the node's own view of the machine wins over what a storage node recorded
+    set("vcpu_count", qty(cap.cpu), INV);
+    set("memory_total", qty(cap.memory), INV);
+    set("hugepages_reserved", hugepagesOf(cap), INV);
+    if (n.ready === false && h.status === "available") h.status = "unavailable";
+  }
+  // a hub-driven deployment: the draft that placed storage on this host
+  const dg = draftGroupOf(sites.deploys, h.hostname);
+  if (dg) {
+    const g = dg.group,
+      from = `StorageSiteDeployment ${dg.name}`;
+    set("mgmt_nic", g.mgmtInterface, from);
+    if (!src.data_nics) set("data_nics", g.dataInterfaces, from);
+    set("numa_sockets_used", (dg.cluster.socketsToUse || []).map(x => parseInt(x, 10)).filter(x => !isNaN(x)), from);
+    if (!src.memory_per_pod) set("memory_per_pod", qty(g.spdkSystemMemory), from);
+    ((g.devices || {}).nvme || []).forEach(pcie => {
+      if (!h.devices.some(d => d.pcie_address === pcie)) {
+        h.devices.push({
+          id: `draft:${pcie}`,
+          kind: "nvme",
+          numa_socket: null,
+          pcie_address: pcie,
+          size: 0,
+          assigned_node_id: null,
+          selected: true
+        });
+      }
+    });
+    if (!src.devices && h.devices.length) src.devices = from;
+  }
+  const kinds = [...new Set(h.devices.map(d => d.kind))];
+  if (src.devices) set("host_class", kinds.length ? kinds.join(" + ") : null, src.devices);
+  h.devices_assigned = h.devices.filter(d => d.assigned_node_id).length;
+  h.devices_free = h.devices.length - h.devices_assigned;
+  h.nvme_count = h.devices.filter(d => d.kind === "nvme").length;
+  h.sources = src;
+  delete h._nodes;
+  delete h._devsKnown;
+  delete h._nicsKnown;
+  return h;
+}
 const cp = {
   on: cpOn,
   clusters: () => cpBundles().then(bs => bs.map(b => wireCluster(b.c, b.nodes, b.pools, b.site))),
   cluster: cid => cpBundle(cid).then(b => wireCluster(b.c, b.nodes, b.pools, b.site)),
-  nodes: cid => cpBundle(cid).then(b => b.nodes.map(n => wireNode(n, b.site))),
+  nodes: async cid => {
+    const b = await cpBundle(cid);
+    const nics = await Promise.all(b.nodes.map(n => cpRaw.nics(cid, n.id).catch(() => null)));
+    return b.nodes.map((n, i) => wireNode(n, b.site, nics[i]));
+  },
   node: async nid => (await cp.nodes(await clusterOfNode(nid))).find(n => n.uuid === nid),
   devices: async nid => {
     const cid = await clusterOfNode(nid);
@@ -1109,9 +1273,10 @@ const cp = {
   },
   // a storage node runs on one machine; the host view is that machine
   hosts: async cid => {
-    const b = await cpBundle(cid);
+    const [b, sites] = await Promise.all([cpBundle(cid), cpSites()]);
+    const [devs, nics] = await Promise.all([Promise.all(b.nodes.map(n => cpRaw.devices(cid, n.id).catch(() => null))), Promise.all(b.nodes.map(n => cpRaw.nics(cid, n.id).catch(() => null)))]);
     const by = {};
-    b.nodes.forEach(n => {
+    b.nodes.forEach((n, i) => {
       const k = hostKey(n.hostname);
       const h = by[k] = by[k] || {
         uuid: `${cid}:${k}`,
@@ -1122,16 +1287,25 @@ const cp = {
         status: "unavailable",
         storage_node_ids: [],
         devices: [],
+        nics: [],
         size_total: 0,
         size_assigned: 0,
-        k8s_cluster: b.site || null
+        k8s_cluster: b.site || null,
+        _nodes: [],
+        _devsKnown: true,
+        _nicsKnown: true
       };
       h.storage_node_ids.push(n.id);
+      h._nodes.push(n);
       if (n.status === "online") h.status = "available";
       h.size_total += cpCap(n).size_total || 0;
       h.size_assigned += cpCap(n).size_total || 0;
+      if (devs[i]) devs[i].forEach(d => h.devices.push(hostDevice(d)));else h._devsKnown = false;
+      if (nics[i]) wireNics(nics[i], n).forEach(x => {
+        if (!h.nics.some(y => y.name === x.name)) h.nics.push(x);
+      });else h._nicsKnown = false;
     });
-    return Object.values(by);
+    return Object.values(by).map(h => mergeHost(h, sites));
   },
   host: async hid => {
     const cid = String(hid).split(":")[0];
@@ -1281,17 +1455,31 @@ const hubK8s = {
   hosts: async id => {
     const s = await hubSite(id);
     const storageNodes = (await Promise.all(s.storage.map(c => cp.nodes(c.uuid).catch(() => [])))).flat();
-    return s.nodes.map(n => ({
-      uuid: `node:${s.name}:${n.name}`,
-      hostname: n.name,
-      status: n.ready ? "available" : "unavailable",
-      zone: n.zone || null,
-      zone_id: n.zone ? zoneId(s.name, n.zone) : null,
-      k8s_cluster: s.name,
-      source: "kubernetes",
-      storage_node_ids: storageNodes.filter(x => x.hostname === n.name).map(x => x.uuid),
-      devices: []
-    }));
+    return s.nodes.map(n => {
+      const cap = n.capacity || {},
+        h = {
+          uuid: `node:${s.name}:${n.name}`,
+          hostname: n.name,
+          status: n.ready ? "available" : "unavailable",
+          zone: n.zone || null,
+          zone_id: n.zone ? zoneId(s.name, n.zone) : null,
+          region: n.region || null,
+          rack_id: n.rack || null,
+          cabinet_id: n.cabinet || null,
+          k8s_cluster: s.name,
+          source: "kubernetes",
+          vcpu_count: qty(cap.cpu),
+          memory_total: qty(cap.memory),
+          hugepages_reserved: hugepagesOf(cap),
+          storage_node_ids: storageNodes.filter(x => x.hostname === n.name).map(x => x.uuid),
+          devices: []
+        };
+      h.sources = {};
+      ["zone", "region", "rack_id", "cabinet_id", "vcpu_count", "memory_total", "hugepages_reserved"].forEach(f => {
+        if (h[f]) h.sources[f] = INV;
+      });
+      return h;
+    });
   },
   zones: async id => {
     const ss = id ? [await hubSite(id)] : await hubSites();
@@ -2221,14 +2409,16 @@ const normHost = h => reg({
   hostClass: h.host_class || null,
   status: h.status,
   source: h.source || "manual",
-  sockets: h.numa_sockets,
+  sockets: h.numa_sockets || null,
   controlPlane: !!h.control_plane,
+  // which source reported each field (control plane API, dr-agent inventory, a draft)
+  sources: h.sources || {},
   kubelet: h.kubelet_version,
   roles: h.roles || [],
   k8sLabels: h.k8s_labels || {},
   inspection: h.inspection || null,
-  vcpu: h.vcpu_count,
-  memory: h.memory_total,
+  vcpu: h.vcpu_count || null,
+  memory: h.memory_total || null,
   memoryPerPod: h.memory_per_pod || null,
   socketsUsed: h.numa_sockets_used || null,
   mgmtNic: h.mgmt_nic || null,
@@ -2242,8 +2432,8 @@ const normHost = h => reg({
     state: n.state
   })),
   hugepages: {
-    reserved: h.hugepages_reserved,
-    allocated: h.hugepages_allocated
+    reserved: h.hugepages_reserved || null,
+    allocated: h.hugepages_allocated || null
   },
   devices: (h.devices || []).map(d => ({
     id: d.id,
@@ -2256,20 +2446,22 @@ const normHost = h => reg({
     size: d.size,
     assignedNodeId: d.assigned_node_id,
     reserved: !!d.reserved,
-    reservedFor: d.reserved_for_node_id
+    reservedFor: d.reserved_for_node_id,
+    selected: !!d.selected
   })),
   nodeIds: h.storage_node_ids || [],
+  // counts never render as "undefined": derived from the devices when a source left them out
   counts: {
     devices: (h.devices || []).length,
-    assigned: h.devices_assigned,
-    free: h.devices_free,
-    nvme: h.nvme_count,
-    blockFree: h.block_free_count,
+    assigned: h.devices_assigned !== undefined ? h.devices_assigned : (h.devices || []).filter(d => d.assigned_node_id).length,
+    free: h.devices_free !== undefined ? h.devices_free : (h.devices || []).filter(d => !d.assigned_node_id).length,
+    nvme: h.nvme_count || 0,
+    blockFree: h.block_free_count || 0,
     nodes: (h.storage_node_ids || []).length
   },
   capacity: {
-    total: h.size_total,
-    used: h.size_assigned
+    total: h.size_total || 0,
+    used: h.size_assigned || 0
   },
   preparedAt: h.prepared_at,
   labels: h.labels || {}
@@ -2383,14 +2575,21 @@ const normNode = n => reg({
   hostname: n.hostname,
   ip: n.data_nics && n.data_nics[0] ? n.data_nics[0].ip : null,
   port: n.data_nics && n.data_nics[0] ? n.data_nics[0].port : 4420,
-  dataNics: (n.data_nics || []).map(x => ({
+  // null: the source did not report the node's NICs (not "none")
+  dataNics: n.data_nics ? n.data_nics.map(x => ({
     name: x.name,
     ip: x.ip,
     port: x.port,
     socket: x.numa_socket,
-    state: x.state
-  })),
-  multipath: (n.data_nics || []).length > 1,
+    state: x.state,
+    trtype: x.trtype
+  })) : null,
+  // simplyblock multipathing is ANA: this node plus its secondary (and
+  // tertiary) serve the same volumes; extra data NICs add paths per node
+  anaPaths: n.ana_paths || null,
+  secondaryId: n.secondary_node_id || null,
+  tertiaryId: n.tertiary_node_id || null,
+  multipath: (n.ana_paths || 0) > 1 || (n.data_nics || []).length > 1,
   op: n.op ? {
     kind: n.op.kind,
     phase: n.op.phase,
@@ -2414,8 +2613,8 @@ const normNode = n => reg({
   bw: bwOf(n.io_stats),
   hist: histOf(n.io_history),
   counts: {
-    devices: n.devices_count,
-    devicesOnline: n.devices_online
+    devices: n.devices_count || 0,
+    devicesOnline: n.devices_online || 0
   },
   cpuCount: n.cpu_count,
   cpuReserved: n.vcpu_reserved,
@@ -6698,8 +6897,11 @@ async function patchHubLabels(changes) {
     results: out
   };
 }
-const labelDialog = () => ({
-  title: "Label for DR",
+
+// pre: {cluster, kind, objects} to open on one object (the per-object
+// "Label…" actions of PVCs and their workloads)
+const labelDialog = (pre = {}) => ({
+  title: pre.title || "Label for DR",
   confirm: "Apply",
   done: "Labels applied",
   desc: "The labels DR selects by: the replicated StorageClasses, the zones and regions of nodes, the app label and consistency group of PVCs, and the app label and tier of workloads. A managed site's objects are labelled by its dr-agent through a LabelRequest, kept 7 days on the hub as the record.",
@@ -6732,7 +6934,7 @@ const labelDialog = () => ({
       label: "Cluster",
       type: "select",
       required: true,
-      def: (sites[0] || {}).name || HUB,
+      def: pre.cluster || (sites[0] || {}).name || HUB,
       options: sites.map(c => ({
         v: c.name,
         l: `${c.name} (managed site, through its dr-agent)`
@@ -6745,14 +6947,14 @@ const labelDialog = () => ({
       label: "Objects",
       type: "select",
       required: true,
-      def: "StorageClass",
+      def: pre.kind || "StorageClass",
       options: LABEL_KIND_OPTIONS
     }, {
       k: "objects",
       label: `${LABEL_KIND_OPTIONS.find(o => o.v === kind).l} — with their DR labels now`,
       type: "multiselect",
       required: true,
-      def: [],
+      def: pre.objects || [],
       options: objs.map(o => ({
         v: objId(o),
         l: objLabel(o, keys)
@@ -6835,12 +7037,57 @@ const labelDialog = () => ({
     if (late.length) window.__toast(`${late.length} PVC${late.length === 1 ? "" : "s"}: the consistency group is a late join (see the LabelRequest)`);
   }
 });
+
+// The cluster a Kubernetes-tab object lives on, as the dialog names it: a
+// managed site by name, anything else the hub.
+function labelClusterOf(k8sClusterId) {
+  const c = k8sClusterId && REG[k8sClusterId];
+  const name = c ? c.name : k8sClusterId;
+  return name && name !== "hub" && name !== "local-cluster" && (!c || c.source !== "hub") ? name : HUB;
+}
+const WORKLOAD_KINDS = {
+  virtualmachine: "VirtualMachine",
+  deployment: "Deployment",
+  statefulset: "StatefulSet"
+};
+// The per-object "Label…" actions of a PVC and of the workload that mounts it.
+function labelActionsForPvc(o) {
+  const cluster = labelClusterOf(o.k8sClusterId);
+  const out = [{
+    label: "Label…",
+    icon: "list",
+    op: "create",
+    entity: "labelrequest",
+    dialog: labelDialog({
+      title: `Label ${o.namespace}/${o.name}`,
+      cluster,
+      kind: "PersistentVolumeClaim",
+      objects: [`PersistentVolumeClaim/${o.namespace}/${o.name}`]
+    })
+  }];
+  const wk = WORKLOAD_KINDS[String(o.workloadKind || "").toLowerCase()];
+  if (o.workload && wk) out.push({
+    label: `Label ${wk === "VirtualMachine" ? "VM" : wk.toLowerCase()} ${o.workload}…`,
+    icon: "list",
+    op: "create",
+    entity: "labelrequest",
+    dialog: labelDialog({
+      title: `Label ${wk} ${o.namespace}/${o.workload}`,
+      cluster,
+      kind: "Workload",
+      objects: [`${wk}/${o.namespace}/${o.workload}`]
+    })
+  });
+  return out;
+}
 Object.assign(window, {
   labelDialog,
   LABEL_KEYS,
   siteObjects,
   labelChanges,
-  labelValues
+  labelValues,
+  labelActionsForPvc,
+  labelClusterOf
 });
 })();
 // ---- agent.jsx ----
@@ -6911,7 +7158,9 @@ const normContainer = c => ({
     limit: c.disk_limit
   },
   restarts: c.restarts,
-  uptimeH: c.uptime_h
+  uptimeH: c.uptime_h,
+  // the pod's containers: a pod log names one of them when there are several
+  containers: c.containers || []
 });
 const normFdb = b => ({
   id: b.id,
@@ -6964,6 +7213,7 @@ const podContainer = p => {
     name: p.metadata.name,
     group: podGroup(p),
     image: (cs[0] || {}).image || "",
+    containers: cs.map(c => c.name),
     state: (p.status || {}).phase === "Running" && ready ? "running" : String((p.status || {}).phase || "unknown").toLowerCase(),
     cpu_cores_alloc: lim("cpu"),
     cpu_pct: 0,
@@ -6977,16 +7227,32 @@ const podContainer = p => {
   };
 };
 const LOG_LEVEL = /\b(DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL|CRITICAL)\b/i;
-async function podLogs(name) {
+const levelOf = msg => {
+  const lv = (LOG_LEVEL.exec(msg || "") || [])[1] || "INFO";
+  return lv.toUpperCase().replace("WARNING", "WARN").replace("CRITICAL", "ERROR").replace("FATAL", "ERROR");
+};
+const POD_LOG_TAIL = 500;
+// A pod's log, straight from the Kubernetes API: the live tail, oldest line
+// first (the order the API writes them).
+//
+// Accept must not be text/plain. The API server negotiates the response type
+// of a GET against its object serializers (JSON, YAML, protobuf) before it
+// streams the log, so "Accept: text/plain" is refused with 406 "only the
+// following media types are accepted: application/json, application/yaml,
+// application/vnd.kubernetes.protobuf" (k8s.io/apiserver handlers/get.go).
+// kubectl sends "application/json, */*"; the body is plain text either way.
+// A pod with several containers needs ?container=, or the API answers 400.
+async function podLogs(name, container, tail) {
+  const n = tail || POD_LOG_TAIL;
   const path = pathFor("Pod", {
     name,
     subresource: "log"
-  }) + "?tailLines=300&timestamps=true";
+  }) + `?tailLines=${n}&timestamps=true` + (container ? `&container=${encodeURIComponent(container)}` : "");
   let res;
   try {
     res = await fetch(window.SB_CONFIG.k8sBase + path, {
       headers: {
-        Accept: "text/plain",
+        Accept: "application/json, */*",
         Authorization: `Bearer ${window.SB_CONFIG.token}`
       }
     });
@@ -7005,11 +7271,12 @@ async function podLogs(name) {
     const sp = line.indexOf(" ");
     const ts = sp > 0 ? line.slice(0, sp) : "",
       msg = sp > 0 ? line.slice(sp + 1) : line;
-    const lv = (LOG_LEVEL.exec(msg) || [])[1] || "INFO";
     return {
       ts,
-      level: lv.toUpperCase().replace("WARNING", "WARN").replace("CRITICAL", "ERROR").replace("FATAL", "ERROR"),
-      msg
+      level: levelOf(msg),
+      msg,
+      pod: name,
+      container: container || ""
     };
   });
 }
@@ -7019,7 +7286,7 @@ const agent = {
   containers: () => upstreamOn("operator") ? areq(AGENT_BASE, "/control-plane/containers").then(r => r.map(normContainer)) : k8s.list("Pod").then(ps => ps.map(p => Object.assign(normContainer(podContainer(p)), {
     metrics: false
   }))),
-  containerLogs: name => upstreamOn("operator") ? areq(AGENT_BASE, `/control-plane/containers/${name}/logs`) : podLogs(name),
+  containerLogs: (name, container) => upstreamOn("operator") ? areq(AGENT_BASE, `/control-plane/containers/${name}/logs`) : podLogs(name, container),
   fdbBackups: () => areq(AGENT_BASE, "/control-plane/fdb/backups").then(r => r.map(normFdb)),
   fdbRestore: id => asend(AGENT_BASE, "POST", `/control-plane/fdb/backups/${id}/restore`),
   nodeLogs: (nid, stream) => areq(AGENT_BASE, `/nodes/${nid}/logs/${stream}`),
@@ -7049,7 +7316,10 @@ Object.assign(window, {
   normContainer,
   normFdb,
   podContainer,
-  memQty
+  memQty,
+  podLogs,
+  levelOf,
+  POD_LOG_TAIL
 });
 })();
 // ---- ui.jsx ----
@@ -7553,7 +7823,8 @@ const KIND_GROUP = {
   sitedeploy: "storage.simplyblock.io"
 };
 const ENTITY_GROUP = {
-  drhub: "dr.simplyblock.io"
+  drhub: "dr.simplyblock.io",
+  labelrequest: "dr.simplyblock.io"
 };
 // Without the operator API the Kubernetes clusters are the hub's OCM
 // ManagedClusters (cpapi.jsx hubK8s), so reading them is a question about
@@ -7570,7 +7841,8 @@ const ENTITY_RESOURCE = {
   application: "protectedapplications",
   role: "clusterroles",
   binding: "accessgrants",
-  drhub: "protectedapplications"
+  drhub: "protectedapplications",
+  labelrequest: "labelrequests"
 };
 const VERB_OF = {
   read: "get",
@@ -7712,6 +7984,8 @@ function nsOf(entity, o, op) {
   }
   if (entity === "storagecluster" || entity === "backuppolicy") return clusterIdsOf(o).map(id => N.clusters[id]).filter(Boolean);
   if (entity === "replicationpolicy" || entity === "drpolicy") return [N.dr];
+  // a LabelRequest is created in the DR ops namespace
+  if (entity === "labelrequest") return [N.dr];
   // DR hub kinds: namespaced ones are judged in their own namespace, cluster-scoped ones at cluster scope
   if (entity === "drhub") return o.namespace ? [o.namespace] : ["*"];
   if (entity === "application") {
@@ -11236,7 +11510,9 @@ const ACTIONS = {
       confirm: "Expand",
       run: v => api.pvcResize(o.id, Number(v.size) * GBn)
     }
-  }],
+  },
+  // the DR labels of this claim and of the workload that mounts it
+  ...labelActionsForPvc(o)],
   cgroup: o => [{
     label: "Take group snapshot",
     icon: "camera",
@@ -13456,7 +13732,16 @@ function ClusterLogPanel({
     className: "spacer"
   }), /*#__PURE__*/React.createElement("span", {
     className: "count"
-  }, rows.length, " / ", all.length), /*#__PURE__*/React.createElement(CopyBtn, {
+  }, rows.length, " / ", all.length), /*#__PURE__*/React.createElement(LogsLink, {
+    label: "Shipped logs",
+    params: cluster.site ? {
+      site: cluster.site,
+      range: "1h"
+    } : {
+      q: `"${cluster.id}"`,
+      range: "24h"
+    }
+  }), /*#__PURE__*/React.createElement(CopyBtn, {
     get: () => rows.map(l => [l.ts, l.nodeId || "None", l.event, l.level, l.message, l.storageId === null || l.storageId === undefined ? "None" : l.storageId, l.vuid || "None", l.recordStatus].join(" | ")).join("\n")
   }), /*#__PURE__*/React.createElement("span", {
     className: "live"
@@ -13651,31 +13936,52 @@ function ControlPlanePanel() {
     s: 11
   })))))))), name && /*#__PURE__*/React.createElement(ContainerLogs, {
     names: list.map(c => c.name),
+    containersOf: Object.fromEntries(list.map(c => [c.name, c.containers || []])),
     name: name,
     setName: setSel
   }));
 }
 function ContainerLogs({
   names,
+  containersOf,
   name,
   setName
 }) {
   const [q, setQ] = useState("");
   const [lvl, setLvl] = useState("");
+  const cs = (containersOf || {})[name] || [];
+  const [ctr, setCtr] = useState("");
+  // a pod with several containers needs one named; default to the first
+  const container = cs.length > 1 ? cs.includes(ctr) ? ctr : cs[0] : "";
   const {
     data,
     loading,
     error,
     reload
-  } = useResource("clog|" + name, () => agent.containerLogs(name), 4000);
+  } = useResource("clog|" + name + "|" + container, () => agent.containerLogs(name, container), 4000);
   const lines = (data || []).filter(l => (!lvl || l.level === lvl) && (!q || l.msg.toLowerCase().includes(q.toLowerCase())));
+  const toExplorer = () => window.__nav && window.__nav.logs({
+    pod: name,
+    container: container || undefined,
+    range: "1h"
+  });
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "sech"
   }, /*#__PURE__*/React.createElement("h2", null, "Container logs"), /*#__PURE__*/React.createElement("span", {
     className: "ln"
   }), /*#__PURE__*/React.createElement(SourceTag, {
-    what: "kubectl logs"
-  })), /*#__PURE__*/React.createElement("div", {
+    what: upstreamOn("operator") ? "operator agent" : `live tail, last ${POD_LOG_TAIL} lines`
+  }), window.__nav && /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    style: {
+      marginLeft: 8
+    },
+    onClick: toExplorer,
+    title: "Shipped logs: any time range, keyword search, oldest first"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "search",
+    s: 11
+  }), "Search shipped logs")), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement(LogStream, {
     lines: lines,
@@ -13687,11 +13993,22 @@ function ContainerLogs({
     }, /*#__PURE__*/React.createElement("select", {
       className: "sel",
       value: name,
-      onChange: e => setName(e.target.value)
+      onChange: e => {
+        setName(e.target.value);
+        setCtr("");
+      }
     }, names.map(n => /*#__PURE__*/React.createElement("option", {
       key: n,
       value: n
-    }, n))), /*#__PURE__*/React.createElement("select", {
+    }, n))), cs.length > 1 && /*#__PURE__*/React.createElement("select", {
+      className: "sel",
+      value: container,
+      onChange: e => setCtr(e.target.value),
+      title: "container"
+    }, cs.map(c => /*#__PURE__*/React.createElement("option", {
+      key: c,
+      value: c
+    }, c))), /*#__PURE__*/React.createElement("select", {
       className: "sel",
       value: lvl,
       onChange: e => setLvl(e.target.value)
@@ -14006,7 +14323,17 @@ function NodeLogPanel({
     className: "ln"
   }), /*#__PURE__*/React.createElement(SourceTag, {
     what: "node agent"
-  })), /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginLeft: 8
+    }
+  }, /*#__PURE__*/React.createElement(LogsLink, {
+    label: "Shipped logs of this node",
+    params: {
+      source: String(node.hostname || "").split("_")[0],
+      range: "1h"
+    }
+  }))), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement(LogStream, {
     lines: lines,
@@ -14239,6 +14566,8 @@ Object.assign(window, {
   Tabs,
   LogStream,
   CopyBtn,
+  LEVEL_C,
+  shortTs,
   TasksPanel,
   AlertsPanel,
   ClusterLogPanel,
@@ -14250,6 +14579,845 @@ Object.assign(window, {
   AllocBar,
   ControlPlaneView,
   CpClusters
+});
+})();
+// ---- logs.jsx ----
+(function(){
+// ---------------------------------------------------------------------------
+// LOG EXPLORER
+//
+// The shipped logs of every pod fluent-bit collects (the hub's control plane
+// and, where the sites ship to the hub, the sites' simplyblock namespaces):
+// Graylog's search API behind the console's proxy (/graylog/api/, GET only,
+// credentials injected server-side, responses scrubbed by redact.js).
+//
+// Oldest line first. A query is a keyword filter (simple mode: words AND-ed,
+// "quoted phrases", -word or NOT word; or raw Graylog/Lucene syntax), a time
+// range (relative preset or absolute from/to) and source filters (site,
+// namespace, pod, container, level). The whole query lives in the URL
+// (#logs?...), so a link reproduces it.
+//
+// Without Graylog the view falls back to the live tail of a pod straight from
+// the Kubernetes API; without either it says why logs are not available.
+// ---------------------------------------------------------------------------
+const LGC = window.SB_CONFIG;
+const graylogOn = () => !!LGC.mock || !!LGC.graylogBase && !!(LGC.upstreams && LGC.upstreams.graylog);
+const graylogOffReason = () => LGC.graylogOff || "no log store (Graylog) is configured for this console";
+const LOG_PAGE = 200;
+// OpenSearch serves offset + limit up to its max_result_window (10,000 by
+// default); a page beyond it is refused, so the explorer asks for a narrower
+// range instead.
+const LOG_WINDOW_MAX = 10000;
+const LOG_FIELDS = ["timestamp", "source", "message", "kubernetes_namespace_name", "kubernetes_pod_name", "kubernetes_container_name", "kubernetes_host"];
+const LOG_RANGES = [["15m", 900, "15 min"], ["1h", 3600, "1 hour"], ["6h", 21600, "6 hours"], ["24h", 86400, "24 hours"], ["7d", 604800, "7 days"]];
+const rangeSecs = k => (LOG_RANGES.find(r => r[0] === k) || LOG_RANGES[1])[1];
+const LEVEL_TERMS = {
+  ERROR: ["ERROR", "FATAL", "CRITICAL"],
+  WARN: ["WARN", "WARNING"],
+  INFO: ["INFO"],
+  DEBUG: ["DEBUG"]
+};
+
+// ---- query building --------------------------------------------------------
+// Lucene's reserved characters in a bare word; a quoted phrase only needs its
+// quotes and backslashes escaped.
+const luceneWord = w => w.replace(/([+\-&|!(){}[\]^"~*?:\\/])/g, "\\$1");
+const lucenePhrase = p => '"' + p.replace(/(["\\])/g, "\\$1") + '"';
+// simple mode: words AND-ed, "quoted phrases", -word / NOT word excluded
+function simpleQuery(text) {
+  const out = [];
+  const re = /(?:(-|NOT\s+))?(?:"([^"]*)"|(\S+))/g;
+  let m;
+  while (m = re.exec(String(text || ""))) {
+    const neg = !!m[1];
+    if (m[3] !== undefined && /^(AND|OR|NOT)$/.test(m[3])) continue;
+    const term = m[2] !== undefined ? m[2].trim() ? lucenePhrase(m[2]) : "" : luceneWord(m[3]);
+    if (!term) continue;
+    out.push(neg ? `NOT ${term}` : term);
+  }
+  return out.join(" AND ");
+}
+const fieldIs = (f, v) => `${f}:${lucenePhrase(v)}`;
+const anyOf = (f, vs) => vs.length === 1 ? fieldIs(f, vs[0]) : `${f}:(${vs.map(lucenePhrase).join(" OR ")})`;
+// The effective Graylog query of a filter state, and its parts for display.
+function buildLogQuery(f, siteNodes) {
+  const parts = [];
+  const kw = f.adv ? String(f.q || "").trim() : simpleQuery(f.q);
+  if (kw) parts.push(f.adv ? `(${kw})` : kw);
+  if (f.ns) parts.push(fieldIs("kubernetes_namespace_name", f.ns));
+  if (f.pod) parts.push(fieldIs("kubernetes_pod_name", f.pod));
+  if (f.container) parts.push(fieldIs("kubernetes_container_name", f.container));
+  if (f.source) parts.push(fieldIs("source", f.source));else if (f.site) {
+    const ns = (siteNodes || {})[f.site] || [];
+    // a site whose nodes are not known yet matches nothing rather than everything
+    parts.push(ns.length ? anyOf("source", ns) : fieldIs("source", `__no_known_node_of_${f.site}`));
+  }
+  if (f.level) parts.push(`message:(${(LEVEL_TERMS[f.level] || [f.level]).join(" OR ")})`);
+  return parts.length ? parts.join(" AND ") : "*";
+}
+
+// The time window a filter state means right now: relative presets end now.
+function logWindow(f, now) {
+  const t = now || Date.now();
+  if (f.from || f.to) {
+    const from = f.from ? Date.parse(f.from) : t - rangeSecs("1h") * 1000;
+    const to = f.to ? Date.parse(f.to) : t;
+    return {
+      from: new Date(Math.min(from, to)),
+      to: new Date(Math.max(from, to)),
+      live: !f.to
+    };
+  }
+  return {
+    from: new Date(t - rangeSecs(f.range) * 1000),
+    to: new Date(t),
+    live: true
+  };
+}
+
+// ---- permalink -------------------------------------------------------------
+const LOG_KEYS = ["q", "adv", "range", "from", "to", "site", "ns", "pod", "container", "source", "level", "follow"];
+const DEFAULT_LOG_FILTER = {
+  q: "",
+  adv: false,
+  range: "1h",
+  from: "",
+  to: "",
+  site: "",
+  ns: "",
+  pod: "",
+  container: "",
+  source: "",
+  level: "",
+  follow: false
+};
+function filterFromHash(hash) {
+  const h = String(hash || "");
+  const i = h.indexOf("?");
+  if (!/^#logs\b/.test(h)) return null;
+  const p = new URLSearchParams(i >= 0 ? h.slice(i + 1) : "");
+  const f = Object.assign({}, DEFAULT_LOG_FILTER);
+  LOG_KEYS.forEach(k => {
+    if (p.has(k)) f[k] = p.get(k);
+  });
+  f.adv = f.adv === true || f.adv === "1";
+  f.follow = f.follow === true || f.follow === "1";
+  if (!LOG_RANGES.some(r => r[0] === f.range)) f.range = "1h";
+  return f;
+}
+function hashOfFilter(f) {
+  const p = new URLSearchParams();
+  LOG_KEYS.forEach(k => {
+    const v = f[k];
+    if (v === true) p.set(k, "1");else if (v && v !== DEFAULT_LOG_FILTER[k]) p.set(k, v);
+  });
+  const s = p.toString();
+  return "#logs" + (s ? "?" + s : "");
+}
+// A link to #logs opens the explorer: the shell restores its location from
+// localStorage, so point it at the logs layer before the shell mounts.
+if (filterFromHash(window.location.hash)) {
+  try {
+    localStorage.setItem(LGC.mode === "dr" ? "sb.drpath" : "sb.path", JSON.stringify([{
+      t: "logs"
+    }]));
+  } catch (e) {}
+}
+
+// ---- transport -------------------------------------------------------------
+const glMsg = m => {
+  const x = m.message || m;
+  const msg = String(x.message || x.full_message || "");
+  return {
+    id: x._id || `${x.timestamp}|${x.source}|${msg.slice(0, 40)}`,
+    ts: x.timestamp || "",
+    source: x.source || x.kubernetes_host || "",
+    ns: x.kubernetes_namespace_name || "",
+    pod: x.kubernetes_pod_name || "",
+    container: x.kubernetes_container_name || "",
+    level: levelOf(msg),
+    msg
+  };
+};
+async function glGet(path) {
+  if (!graylogOn()) throw notInDeployment("The log store (Graylog)", "is not part of this deployment: " + graylogOffReason(), path);
+  let res;
+  try {
+    res = await fetch((LGC.graylogBase || "/graylog/api") + path, {
+      headers: {
+        Accept: "application/json"
+      }
+    });
+  } catch (e) {
+    throw new ApiError(0, "Cannot reach the log store (Graylog)", path, "Unreachable");
+  }
+  let body = null;
+  try {
+    body = await res.json();
+  } catch (e) {}
+  const failed = body && body.kind === "Status" && body.status === "Failure";
+  if (!res.ok || failed) {
+    const msg = body && (body.message || body.type) || res.statusText || "Request failed";
+    const e = new ApiError(body && body.code || res.status, msg, path, body && body.reason || null);
+    e.source = "log store (Graylog)";
+    throw e;
+  }
+  return body || {};
+}
+const logs = {
+  // GET /search/universal/absolute — oldest first, one page
+  search: async ({
+    query,
+    from,
+    to,
+    offset,
+    limit
+  }) => {
+    const p = new URLSearchParams({
+      query: query || "*",
+      from: from.toISOString(),
+      to: to.toISOString(),
+      offset: String(offset || 0),
+      limit: String(limit || LOG_PAGE),
+      sort: "timestamp:asc",
+      fields: LOG_FIELDS.join(","),
+      decorate: "false"
+    });
+    const r = await glGet("/search/universal/absolute?" + p.toString());
+    return {
+      total: Number(r.total_results) || 0,
+      lines: (r.messages || []).map(glMsg),
+      builtQuery: r.built_query || null
+    };
+  }
+};
+
+// Values to filter by: the hub's own pods and nodes, the sites' nodes from
+// their dr-agent inventory, and whatever the loaded lines carry.
+async function logSourcesKnown() {
+  const [pods, hubNodes, sites] = await Promise.all([k8s.list("Pod").catch(() => []), k8s.list("Node").catch(() => []), (typeof hubSites === "function" ? hubSites() : Promise.resolve([])).catch(() => [])]);
+  const siteNodes = {
+    hub: hubNodes.map(n => n.metadata.name)
+  };
+  sites.forEach(s => {
+    siteNodes[s.name] = (s.nodes || []).map(n => n.name);
+  });
+  return {
+    siteNodes,
+    pods: pods.map(p => ({
+      name: p.metadata.name,
+      ns: p.metadata.namespace || NS(),
+      containers: ((p.spec || {}).containers || []).map(c => c.name)
+    }))
+  };
+}
+
+// ---- view ------------------------------------------------------------------
+const toLocalInput = d => {
+  if (!d || isNaN(d)) return "";
+  const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return z.toISOString().slice(0, 16);
+};
+const fromLocalInput = v => {
+  if (!v) return "";
+  const d = new Date(v);
+  return isNaN(d) ? "" : d.toISOString();
+};
+const fmtLineTs = s => (s || "").replace("T", " ").replace(/Z$/, "");
+function LogsView({
+  nav
+}) {
+  const [f, setF] = useState(() => filterFromHash(window.location.hash) || Object.assign({}, DEFAULT_LOG_FILTER));
+  const set = patch => setF(p => Object.assign({}, p, patch));
+  useEffect(() => {
+    const h = e => e.detail && setF(Object.assign({}, DEFAULT_LOG_FILTER, e.detail));
+    window.addEventListener("sb-logs-query", h);
+    return () => window.removeEventListener("sb-logs-query", h);
+  }, []);
+  // keep the URL in step: the address bar is the permalink of what is shown
+  useEffect(() => {
+    try {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search + hashOfFilter(f));
+    } catch (e) {}
+  }, [f]);
+  useEffect(() => () => {
+    try {
+      if (/^#logs\b/.test(window.location.hash)) window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    } catch (e) {}
+  }, []);
+  const store = graylogOn();
+  return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Logs"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  }), /*#__PURE__*/React.createElement(SourceTag, {
+    what: store ? "log store (Graylog), shipped by fluent-bit" : "live tail from the Kubernetes API"
+  })), store ? /*#__PURE__*/React.createElement(LogExplorer, {
+    f: f,
+    set: set,
+    setF: setF
+  }) : /*#__PURE__*/React.createElement(LiveTail, {
+    f: f,
+    set: set
+  }));
+}
+function LogExplorer({
+  f,
+  set,
+  setF
+}) {
+  const [qDraft, setQDraft] = useState(f.q);
+  useEffect(() => setQDraft(f.q), [f.q]);
+  const {
+    data: known
+  } = useResource("logsrc", () => logSourcesKnown());
+  const siteNodes = (known || {}).siteNodes || {};
+  const query = buildLogQuery(f, siteNodes);
+  const [run, setRun] = useState(0);
+  const [st, setSt] = useState({
+    loading: true,
+    error: null,
+    lines: [],
+    total: 0,
+    win: null,
+    offset: 0,
+    capped: false
+  });
+  const listRef = useRef(null);
+  const atEnd = useRef(true);
+  const key = JSON.stringify([query, f.range, f.from, f.to, f.follow, run]);
+
+  // a new query: the first page, or with follow the newest page
+  useEffect(() => {
+    let dead = false;
+    const win = logWindow(f);
+    setSt(p => Object.assign({}, p, {
+      loading: true,
+      error: null
+    }));
+    (async () => {
+      try {
+        let r = await logs.search({
+          query,
+          from: win.from,
+          to: win.to,
+          offset: 0,
+          limit: LOG_PAGE
+        });
+        let offset = 0;
+        if (f.follow && r.total > LOG_PAGE) {
+          offset = Math.max(0, Math.min(r.total, LOG_WINDOW_MAX) - LOG_PAGE);
+          r = Object.assign(await logs.search({
+            query,
+            from: win.from,
+            to: win.to,
+            offset,
+            limit: LOG_PAGE
+          }), {
+            total: r.total
+          });
+        }
+        if (!dead) setSt({
+          loading: false,
+          error: null,
+          lines: r.lines,
+          total: r.total,
+          win,
+          offset,
+          capped: r.total > LOG_WINDOW_MAX
+        });
+      } catch (e) {
+        if (!dead) setSt({
+          loading: false,
+          error: e,
+          lines: [],
+          total: 0,
+          win,
+          offset: 0,
+          capped: false
+        });
+      }
+    })();
+    return () => {
+      dead = true;
+    };
+  }, [key]);
+
+  // follow: append what arrived since the last line, every few seconds
+  useEffect(() => {
+    if (!f.follow || !st.win || !st.win.live || st.error) return;
+    const i = setInterval(async () => {
+      const last = st.lines.length ? st.lines[st.lines.length - 1].ts : st.win.from.toISOString();
+      try {
+        const r = await logs.search({
+          query,
+          from: new Date(last),
+          to: new Date(),
+          offset: 0,
+          limit: 500
+        });
+        setSt(p => {
+          const seen = new Set(p.lines.map(l => l.id));
+          const add = r.lines.filter(l => !seen.has(l.id));
+          return add.length ? Object.assign({}, p, {
+            lines: p.lines.concat(add),
+            total: p.total + add.length
+          }) : p;
+        });
+      } catch (e) {}
+    }, 5000);
+    return () => clearInterval(i);
+  }, [f.follow, st.win, st.error, st.lines.length && st.lines[st.lines.length - 1].id, query]);
+  useEffect(() => {
+    const el = listRef.current;
+    if (el && f.follow && atEnd.current) el.scrollTop = el.scrollHeight;
+  }, [st.lines.length, f.follow]);
+  const loaded = st.offset + st.lines.length;
+  const more = !f.follow && loaded < Math.min(st.total, LOG_WINDOW_MAX);
+  const loadMore = async () => {
+    if (!more || st.loading) return;
+    setSt(p => Object.assign({}, p, {
+      loading: true
+    }));
+    try {
+      const r = await logs.search({
+        query,
+        from: st.win.from,
+        to: st.win.to,
+        offset: loaded,
+        limit: LOG_PAGE
+      });
+      setSt(p => Object.assign({}, p, {
+        loading: false,
+        lines: p.lines.concat(r.lines)
+      }));
+    } catch (e) {
+      setSt(p => Object.assign({}, p, {
+        loading: false,
+        error: e
+      }));
+    }
+  };
+  const onScroll = e => {
+    const el = e.target;
+    atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    if (atEnd.current && more) loadMore();
+  };
+
+  // filter values: known sources plus what the loaded lines carry
+  const uniq = xs => [...new Set(xs.filter(Boolean))].sort();
+  const pods = (known || {}).pods || [];
+  const nsOpts = uniq(pods.map(p => p.ns).concat(st.lines.map(l => l.ns), [f.ns]));
+  const podOpts = uniq(pods.filter(p => !f.ns || p.ns === f.ns).map(p => p.name).concat(st.lines.filter(l => !f.ns || l.ns === f.ns).map(l => l.pod), [f.pod]));
+  const ctrOpts = uniq(pods.filter(p => !f.pod || p.name === f.pod).flatMap(p => p.containers).concat(st.lines.filter(l => !f.pod || l.pod === f.pod).map(l => l.container), [f.container]));
+  const siteOpts = uniq(Object.keys(siteNodes).concat([f.site]));
+  const srcOpts = uniq((f.site ? siteNodes[f.site] || [] : Object.values(siteNodes).flat()).concat(st.lines.map(l => l.source), [f.source]));
+  const text = () => st.lines.map(l => `${l.ts} ${l.source} ${l.ns}/${l.pod}/${l.container} ${l.level} ${l.msg}`).join("\n");
+  const download = () => {
+    try {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([text() + "\n"], {
+        type: "text/plain"
+      }));
+      a.download = `logs-${st.win ? st.win.from.toISOString() : "now"}.log`.replace(/:/g, "-");
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (e) {}
+  };
+  const win = st.win || logWindow(f);
+  const sel = (label, k, opts, all) => /*#__PURE__*/React.createElement("select", {
+    className: "sel lx-" + k,
+    value: f[k] || "",
+    title: label,
+    onChange: e => set({
+      [k]: e.target.value,
+      ...(k === "ns" ? {
+        pod: "",
+        container: ""
+      } : k === "pod" ? {
+        container: ""
+      } : k === "site" ? {
+        source: ""
+      } : {})
+    })
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, all), opts.map(o => /*#__PURE__*/React.createElement("option", {
+    key: o,
+    value: o
+  }, o)));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card lx"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ptools",
+    style: {
+      flexWrap: "wrap",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "search",
+    style: {
+      minWidth: 280,
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "search",
+    s: 13,
+    c: "var(--dim2)"
+  }), /*#__PURE__*/React.createElement("input", {
+    className: "lx-q",
+    value: qDraft,
+    placeholder: f.adv ? 'Graylog query, e.g. message:"lvol" AND NOT level:debug' : 'Keywords, "a phrase", -exclude',
+    onChange: e => setQDraft(e.target.value),
+    onKeyDown: e => {
+      if (e.key === "Enter") set({
+        q: e.target.value
+      });
+    },
+    onBlur: e => e.target.value !== f.q && set({
+      q: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "chip lx-adv",
+    title: "Write the query in Graylog (Lucene) syntax instead"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: f.adv,
+    onChange: e => set({
+      adv: e.target.checked
+    })
+  }), " Query syntax"), LOG_RANGES.map(([k,, l]) => /*#__PURE__*/React.createElement("button", {
+    key: k,
+    className: "chip lx-range" + (!f.from && !f.to && f.range === k ? " on" : ""),
+    title: `last ${l}`,
+    style: !f.from && !f.to && f.range === k ? {
+      borderColor: "var(--info)",
+      color: "var(--info)"
+    } : null,
+    onClick: () => set({
+      range: k,
+      from: "",
+      to: ""
+    })
+  }, k)), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: "var(--dim)"
+    }
+  }, "from"), /*#__PURE__*/React.createElement("input", {
+    type: "datetime-local",
+    className: "sel lx-from",
+    value: toLocalInput(f.from ? new Date(f.from) : null),
+    onChange: e => set({
+      from: fromLocalInput(e.target.value)
+    })
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: "var(--dim)"
+    }
+  }, "to"), /*#__PURE__*/React.createElement("input", {
+    type: "datetime-local",
+    className: "sel lx-to",
+    value: toLocalInput(f.to ? new Date(f.to) : null),
+    onChange: e => set({
+      to: fromLocalInput(e.target.value),
+      follow: false
+    }),
+    title: "empty: now"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "ptools",
+    style: {
+      flexWrap: "wrap",
+      gap: 6,
+      marginTop: 6
+    }
+  }, sel("Site or cluster", "site", siteOpts, "All sites"), sel("Node", "source", srcOpts, "All nodes"), sel("Namespace", "ns", nsOpts, "All namespaces"), sel("Pod", "pod", podOpts, "All pods"), sel("Container", "container", ctrOpts, "All containers"), /*#__PURE__*/React.createElement("select", {
+    className: "sel lx-level",
+    value: f.level,
+    onChange: e => set({
+      level: e.target.value
+    })
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "All levels"), ["ERROR", "WARN", "INFO", "DEBUG"].map(l => /*#__PURE__*/React.createElement("option", {
+    key: l,
+    value: l
+  }, l))), /*#__PURE__*/React.createElement("label", {
+    className: "chip lx-follow",
+    title: "Append new lines as they arrive (relative ranges and open-ended absolute ranges)"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: f.follow,
+    disabled: !!f.to,
+    onChange: e => set({
+      follow: e.target.checked
+    })
+  }), " Follow"), /*#__PURE__*/React.createElement("button", {
+    className: "chip lx-clear",
+    onClick: () => setF(Object.assign({}, DEFAULT_LOG_FILTER))
+  }, "Clear"), /*#__PURE__*/React.createElement("div", {
+    className: "spacer"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "count lx-count"
+  }, st.lines.length, st.total > st.lines.length ? ` of ${st.total}` : ""), /*#__PURE__*/React.createElement(CopyBtn, {
+    get: () => window.location.href,
+    label: "Copy link"
+  }), /*#__PURE__*/React.createElement(CopyBtn, {
+    get: text,
+    label: "Copy lines"
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "chip lx-download",
+    onClick: download
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "cloud",
+    s: 12
+  }), "Download"), /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: () => setRun(r => r + 1)
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "refresh",
+    s: 12
+  }), "Run")), /*#__PURE__*/React.createElement("div", {
+    className: "lx-effective",
+    style: {
+      fontSize: 11,
+      color: "var(--dim)",
+      margin: "6px 0",
+      overflowWrap: "anywhere"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "mono lx-query"
+  }, query), " \xB7 ", /*#__PURE__*/React.createElement("span", {
+    className: "lx-window"
+  }, fmtLineTs(win.from.toISOString()), " \u2192 ", f.to ? fmtLineTs(win.to.toISOString()) : "now"), " \xB7 oldest first \xB7 Graylog"), st.capped && /*#__PURE__*/React.createElement("div", {
+    className: "banner lx-capped"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 14
+  }), /*#__PURE__*/React.createElement("span", null, st.total, " lines match. The log store serves the first ", LOG_WINDOW_MAX.toLocaleString(), " of a query: narrow the time range or the filter to see the rest.")), st.error ? /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(ErrorState, {
+    error: st.error,
+    onRetry: () => setRun(r => r + 1)
+  })) : /*#__PURE__*/React.createElement("div", {
+    className: "logstream lx-lines",
+    ref: listRef,
+    onScroll: onScroll,
+    style: {
+      maxHeight: 560
+    }
+  }, st.loading && !st.lines.length ? /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "loading\u2026") : !st.lines.length ? /*#__PURE__*/React.createElement("div", {
+    className: "lmsg lx-empty"
+  }, "No log lines match this query in this time range.") : st.lines.map(l => /*#__PURE__*/React.createElement("div", {
+    className: "lrow lx-row",
+    key: l.id
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "lts"
+  }, fmtLineTs(l.ts)), /*#__PURE__*/React.createElement("span", {
+    className: "lts",
+    style: {
+      minWidth: 0,
+      color: "var(--dim2)"
+    },
+    title: `${l.source} · ${l.ns}/${l.pod}/${l.container}`
+  }, l.pod || l.source, l.container ? "/" + l.container : ""), /*#__PURE__*/React.createElement("span", {
+    className: "llvl",
+    style: {
+      color: LEVEL_C[l.level] || "var(--dim)"
+    }
+  }, l.level), /*#__PURE__*/React.createElement("span", {
+    className: "lmsgtxt"
+  }, l.msg))), more && /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "chip lx-more",
+    onClick: loadMore
+  }, st.loading ? "loading…" : `Load ${Math.min(LOG_PAGE, Math.min(st.total, LOG_WINDOW_MAX) - loaded)} more`)), f.follow && /*#__PURE__*/React.createElement("div", {
+    className: "lmsg lx-following"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "live"
+  }, /*#__PURE__*/React.createElement("i", null), "following"))));
+}
+
+// Without a log store: the live tail of one pod from the Kubernetes API, the
+// keyword and time filters applied to those lines.
+function LiveTail({
+  f,
+  set
+}) {
+  const {
+    data: pods,
+    error: pErr
+  } = useResource("ltpods", () => k8s.list("Pod"));
+  const list = (pods || []).map(p => ({
+    name: p.metadata.name,
+    containers: ((p.spec || {}).containers || []).map(c => c.name)
+  }));
+  const pod = f.pod && list.some(p => p.name === f.pod) ? f.pod : (list[0] || {}).name || "";
+  const cs = (list.find(p => p.name === pod) || {}).containers || [];
+  const container = cs.length > 1 ? cs.includes(f.container) ? f.container : cs[0] : "";
+  const [tail, setTail] = useState(POD_LOG_TAIL);
+  const {
+    data,
+    loading,
+    error,
+    reload
+  } = useResource("lt|" + pod + "|" + container + "|" + tail, () => pod ? podLogs(pod, container, tail) : Promise.resolve([]), f.follow ? 4000 : 0);
+  const win = logWindow(f);
+  const words = [];
+  const re = /(?:(-|NOT\s+))?(?:"([^"]*)"|(\S+))/g;
+  let m;
+  while (m = re.exec(f.q || "")) {
+    const t = (m[2] !== undefined ? m[2] : m[3]).toLowerCase();
+    if (t && !/^(and|or|not)$/.test(t)) words.push({
+      neg: !!m[1],
+      t
+    });
+  }
+  const inWin = l => {
+    const t = Date.parse(l.ts);
+    return isNaN(t) || t >= win.from.getTime() && t <= win.to.getTime();
+  };
+  const lines = (data || []).filter(l => inWin(l) && (!f.level || l.level === f.level) && words.every(w => l.msg.toLowerCase().includes(w.t) !== w.neg));
+  if (pErr) return /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(ErrorState, {
+    error: notInDeployment("Logs", `are not available in this deployment: ${graylogOffReason()}, and the console may not read pods here (${pErr.message})`)
+  })));
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "banner lx-livetail",
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 14
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Live tail, last ", tail, " lines."), " No log store is configured (", graylogOffReason(), "), so this reads the pod's log from the Kubernetes API: no history beyond those lines.")), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement(LogStream, {
+    lines: lines,
+    loading: loading,
+    error: error,
+    onRetry: reload,
+    height: 560,
+    empty: pod ? "No lines match the current filter." : "No pod to read.",
+    tools: /*#__PURE__*/React.createElement("div", {
+      className: "ptools",
+      style: {
+        flexWrap: "wrap",
+        gap: 6
+      }
+    }, /*#__PURE__*/React.createElement("select", {
+      className: "sel lt-pod",
+      value: pod,
+      onChange: e => set({
+        pod: e.target.value,
+        container: ""
+      })
+    }, list.map(p => /*#__PURE__*/React.createElement("option", {
+      key: p.name,
+      value: p.name
+    }, p.name))), cs.length > 1 && /*#__PURE__*/React.createElement("select", {
+      className: "sel lt-container",
+      value: container,
+      onChange: e => set({
+        container: e.target.value
+      })
+    }, cs.map(c => /*#__PURE__*/React.createElement("option", {
+      key: c,
+      value: c
+    }, c))), /*#__PURE__*/React.createElement("select", {
+      className: "sel lt-tail",
+      value: tail,
+      onChange: e => setTail(Number(e.target.value))
+    }, [200, 500, 2000, 5000].map(n => /*#__PURE__*/React.createElement("option", {
+      key: n,
+      value: n
+    }, "last ", n, " lines"))), /*#__PURE__*/React.createElement("select", {
+      className: "sel",
+      value: f.level,
+      onChange: e => set({
+        level: e.target.value
+      })
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "All levels"), ["ERROR", "WARN", "INFO", "DEBUG"].map(l => /*#__PURE__*/React.createElement("option", {
+      key: l,
+      value: l
+    }, l))), /*#__PURE__*/React.createElement("div", {
+      className: "search",
+      style: {
+        minWidth: 220
+      }
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "search",
+      s: 13,
+      c: "var(--dim2)"
+    }), /*#__PURE__*/React.createElement("input", {
+      className: "lt-q",
+      value: f.q,
+      placeholder: "Keywords, \"a phrase\", -exclude",
+      onChange: e => set({
+        q: e.target.value
+      })
+    })), LOG_RANGES.map(([k]) => /*#__PURE__*/React.createElement("button", {
+      key: k,
+      className: "chip" + (!f.from && !f.to && f.range === k ? " on" : ""),
+      onClick: () => set({
+        range: k,
+        from: "",
+        to: ""
+      })
+    }, k)), /*#__PURE__*/React.createElement("label", {
+      className: "chip"
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: f.follow,
+      onChange: e => set({
+        follow: e.target.checked
+      })
+    }), " Follow"), /*#__PURE__*/React.createElement("div", {
+      className: "spacer"
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "count lt-count"
+    }, lines.length), /*#__PURE__*/React.createElement(CopyBtn, {
+      get: () => lines.map(l => `${l.ts} ${l.level} ${l.msg}`).join("\n")
+    }))
+  })));
+}
+
+// A chip that opens the explorer on a query; entry points from the control
+// plane, nodes, clusters and DR runs.
+const LogsLink = ({
+  params,
+  label
+}) => window.__nav && window.__nav.logs ? /*#__PURE__*/React.createElement("button", {
+  className: "chip lx-link",
+  onClick: () => window.__nav.logs(params),
+  title: "Shipped logs: any time range, keyword search, oldest first"
+}, /*#__PURE__*/React.createElement(Icon, {
+  n: "search",
+  s: 11
+}), label || "Search logs") : null;
+Object.assign(window, {
+  LogsView,
+  LogsLink,
+  logs,
+  graylogOn,
+  buildLogQuery,
+  simpleQuery,
+  filterFromHash,
+  hashOfFilter,
+  logWindow,
+  DEFAULT_LOG_FILTER
 });
 })();
 // ---- rbac-admin.jsx ----
@@ -16290,6 +17458,32 @@ Object.assign(window, {
 })();
 // ---- details.jsx ----
 (function(){
+// A value no source reported: said so, rather than a dash that reads as "none".
+const NR = ({
+  what
+}) => /*#__PURE__*/React.createElement("span", {
+  className: "nr",
+  style: {
+    color: "var(--dim2)"
+  },
+  title: what ? `${what} is not reported by any source in this deployment` : undefined
+}, "not reported");
+const nr = (v, what) => v === null || v === undefined || v === "" || typeof v === "number" && !Number.isFinite(v) ? /*#__PURE__*/React.createElement(NR, {
+  what: what
+}) : v;
+const nrBytes = (v, what, dp) => typeof v === "number" && Number.isFinite(v) && v > 0 ? fmtBytes(v, dp) : /*#__PURE__*/React.createElement(NR, {
+  what: what
+});
+// Where a section's data came from (the control plane API, the dr-agent inventory, a draft).
+const FromTag = ({
+  what
+}) => /*#__PURE__*/React.createElement("span", {
+  className: "srctag",
+  title: `Reported by ${what}`
+}, /*#__PURE__*/React.createElement(Icon, {
+  n: "list",
+  s: 10
+}), what);
 const Props = ({
   rows
 }) => /*#__PURE__*/React.createElement("dl", {
@@ -16370,8 +17564,13 @@ const NicTable = ({
   }
 }, /*#__PURE__*/React.createElement("table", {
   className: "dt"
-}, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Interface"), /*#__PURE__*/React.createElement("th", null, "Address"), /*#__PURE__*/React.createElement("th", null, "MAC"), /*#__PURE__*/React.createElement("th", null, "Speed"), /*#__PURE__*/React.createElement("th", null, "Socket"), /*#__PURE__*/React.createElement("th", null, "State"), /*#__PURE__*/React.createElement("th", null, "Role"))), /*#__PURE__*/React.createElement("tbody", null, (nics || []).map(n => /*#__PURE__*/React.createElement("tr", {
-  key: n.name
+}, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Interface"), /*#__PURE__*/React.createElement("th", null, "Address"), /*#__PURE__*/React.createElement("th", null, "MAC"), /*#__PURE__*/React.createElement("th", null, "Speed"), /*#__PURE__*/React.createElement("th", null, "Socket"), /*#__PURE__*/React.createElement("th", null, "State"), /*#__PURE__*/React.createElement("th", null, "Role"))), /*#__PURE__*/React.createElement("tbody", null, (nics || []).length === 0 && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+  colSpan: 7,
+  style: {
+    color: "var(--dim2)"
+  }
+}, "No NIC is reported for this host.")), (nics || []).map(n => /*#__PURE__*/React.createElement("tr", {
+  key: n.name || n.address
 }, /*#__PURE__*/React.createElement("td", {
   className: "mono",
   style: {
@@ -16384,12 +17583,16 @@ const NicTable = ({
   style: {
     color: "var(--dim)"
   }
-}, n.mac), /*#__PURE__*/React.createElement("td", {
+}, nr(n.mac, "MAC")), /*#__PURE__*/React.createElement("td", {
   className: "mono"
-}, n.speed, " GbE"), /*#__PURE__*/React.createElement("td", {
+}, n.speed ? `${n.speed} GbE` : /*#__PURE__*/React.createElement(NR, {
+  what: "link speed"
+})), /*#__PURE__*/React.createElement("td", {
   className: "mono"
-}, n.socket), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(TrafficLight, {
+}, nr(n.socket, "NUMA socket")), /*#__PURE__*/React.createElement("td", null, n.state ? /*#__PURE__*/React.createElement(TrafficLight, {
   status: n.state === "up" ? "online" : "offline"
+}) : /*#__PURE__*/React.createElement(NR, {
+  what: "link state"
 })), /*#__PURE__*/React.createElement("td", null, mgmt === n.name ? /*#__PURE__*/React.createElement("span", {
   className: "badge k8s"
 }, "management") : (data || []).includes(n.name) ? /*#__PURE__*/React.createElement("span", {
@@ -16950,9 +18153,12 @@ function HostDetail({
   nav
 }) {
   const candidate = h.status === "discovered" || h.status === "inspecting" || h.status === "inspected";
-  const sockets = h.socketsUsed && h.socketsUsed.length ? h.socketsUsed : Array.from({
+  // devices without a reported NUMA socket are grouped under "socket not reported"
+  const sockets = [...new Set([...(h.socketsUsed && h.socketsUsed.length ? h.socketsUsed : Array.from({
     length: h.sockets || 0
-  }, (_, s) => s);
+  }, (_, s) => s)), ...h.devices.map(d => d.socket === undefined ? null : d.socket)])];
+  const src = h.sources || {};
+  const from = (...fields) => [...new Set(fields.map(f => src[f]).filter(Boolean))].join(" + ");
   if (candidate) return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
     obj: h,
     title: h.hostname,
@@ -17121,22 +18327,24 @@ function HostDetail({
     className: "stats"
   }, /*#__PURE__*/React.createElement(Stat, {
     k: "NUMA sockets",
-    v: h.socketsUsed && h.socketsUsed.length ? `${h.socketsUsed.length} of ${h.sockets}` : h.sockets,
-    s: h.socketsUsed && h.socketsUsed.length ? `socket ${h.socketsUsed.join(", ")} in use` : "all in use"
+    v: h.sockets ? h.socketsUsed && h.socketsUsed.length ? `${h.socketsUsed.length} of ${h.sockets}` : h.sockets : h.socketsUsed && h.socketsUsed.length ? h.socketsUsed.length : "not reported",
+    s: h.socketsUsed && h.socketsUsed.length ? `socket ${h.socketsUsed.join(", ")} in use` : h.sockets ? "all in use" : "no source reports the NUMA layout"
   }), /*#__PURE__*/React.createElement(Stat, {
-    k: "vCPU / cores",
-    v: h.vcpu
+    k: "vCPUs",
+    v: h.vcpu || "not reported",
+    s: src.vcpu_count || ""
   }), /*#__PURE__*/React.createElement(Stat, {
     k: "System RAM",
-    v: fmtBytes(h.memory, 0)
+    v: h.memory ? fmtBytes(h.memory, 0) : "not reported",
+    s: src.memory_total || ""
   }), /*#__PURE__*/React.createElement(Stat, {
     k: "Hugepages",
-    v: fmtBytes(h.hugepages.allocated, 0),
-    s: `of ${fmtBytes(h.hugepages.reserved, 0)} reserved`
+    v: h.hugepages.reserved ? fmtBytes(h.hugepages.reserved, 1) : "not reported",
+    s: h.hugepages.reserved ? h.hugepages.allocated ? `${fmtBytes(h.hugepages.allocated, 1)} given to the storage plane` : "reserved" : ""
   }), /*#__PURE__*/React.createElement(Stat, {
     k: "Devices",
     v: `${h.counts.assigned}/${h.counts.devices}`,
-    s: "assigned"
+    s: src.devices ? "assigned" : "no source reports devices"
   }), /*#__PURE__*/React.createElement(Stat, {
     k: "Raw capacity",
     v: fmtBytes(h.capacity.total),
@@ -17147,7 +18355,9 @@ function HostDetail({
     className: "ln"
   }), /*#__PURE__*/React.createElement("span", {
     className: "count"
-  }, h.counts.free, " unassigned")), "      ", /*#__PURE__*/React.createElement("div", {
+  }, h.counts.free, " unassigned"), src.devices && /*#__PURE__*/React.createElement(FromTag, {
+    what: src.devices
+  })), "      ", /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "bd",
@@ -17160,11 +18370,18 @@ function HostDetail({
     style: {
       textAlign: "right"
     }
-  }, "Size"), /*#__PURE__*/React.createElement("th", null, "Assignment"))), /*#__PURE__*/React.createElement("tbody", null, sockets.map(s => h.devices.filter(d => d.socket === s).map(d => /*#__PURE__*/React.createElement("tr", {
+  }, "Size"), /*#__PURE__*/React.createElement("th", null, "Assignment"))), /*#__PURE__*/React.createElement("tbody", null, h.devices.length === 0 && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    colSpan: 7,
+    style: {
+      color: "var(--dim2)"
+    }
+  }, src.devices ? "No device on this host." : "No source reports this host's devices.")), sockets.map(s => h.devices.filter(d => (d.socket === undefined ? null : d.socket) === s).map(d => /*#__PURE__*/React.createElement("tr", {
     key: d.id
   }, /*#__PURE__*/React.createElement("td", {
     className: "mono"
-  }, d.socket), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("span", {
+  }, s === null ? /*#__PURE__*/React.createElement(NR, {
+    what: "NUMA socket"
+  }) : d.socket), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("span", {
     className: "badge"
   }, d.kind)), /*#__PURE__*/React.createElement("td", {
     className: "mono"
@@ -17179,7 +18396,13 @@ function HostDetail({
     style: {
       textAlign: "right"
     }
-  }, fmtBytes(d.size)), /*#__PURE__*/React.createElement("td", null, d.assignedNodeId ? /*#__PURE__*/React.createElement(Ref, {
+  }, d.size ? fmtBytes(d.size) : /*#__PURE__*/React.createElement(NR, {
+    what: "size"
+  })), /*#__PURE__*/React.createElement("td", null, d.selected && !d.assignedNodeId ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "var(--accent)"
+    }
+  }, "selected in the draft") : d.assignedNodeId ? /*#__PURE__*/React.createElement(Ref, {
     onClick: () => nav.openNode(h.clusterId, d.assignedNodeId),
     label: regName(d.assignedNodeId, "storage node")
   }) : d.reserved ? /*#__PURE__*/React.createElement("span", {
@@ -17194,9 +18417,11 @@ function HostDetail({
     className: "sech"
   }, /*#__PURE__*/React.createElement("h2", null, "Network interfaces"), /*#__PURE__*/React.createElement("span", {
     className: "ln"
-  }), h.mgmtNic && /*#__PURE__*/React.createElement("span", {
+  }), (h.mgmtNic || (h.dataNics || []).length > 0) && /*#__PURE__*/React.createElement("span", {
     className: "count"
-  }, "mgmt ", h.mgmtNic, " \xB7 data ", (h.dataNics || []).join(", ") || "—")), /*#__PURE__*/React.createElement(NicTable, {
+  }, "mgmt ", h.mgmtNic || "not reported", " \xB7 data ", (h.dataNics || []).join(", ") || "not reported"), src.nics && /*#__PURE__*/React.createElement(FromTag, {
+    what: src.nics
+  })), /*#__PURE__*/React.createElement(NicTable, {
     nics: h.nics,
     mgmt: h.mgmtNic,
     data: h.dataNics
@@ -17216,7 +18441,9 @@ function HostDetail({
     })], ["Zone", h.zoneId ? /*#__PURE__*/React.createElement(Ref, {
       onClick: () => nav.openZone(h.zoneId),
       label: h.zone || regName(h.zoneId, "zone")
-    }) : null], ["Region", h.region], ["Rack", h.rack], ["Cabinet", h.cabinet], ["Device class", h.hostClass], ["Control plane services", h.controlPlane ? "yes" : "no"], ["NUMA sockets in use", h.socketsUsed ? h.socketsUsed.join(", ") : "all"], ["Memory per storage-plane pod", h.memoryPerPod ? fmtBytes(h.memoryPerPod, 0) : null], ["Management NIC", h.mgmtNic], ["Data NICs", (h.dataNics || []).join(", ") || null], ["Storage nodes", h.nodeIds.length ? /*#__PURE__*/React.createElement("span", {
+    }) : nr(h.zone, "the zone")], ["Region", nr(h.region, "the region")], ["Rack", nr(h.rack, "the rack")], ["Cabinet", nr(h.cabinet, "the cabinet")], ["Device class", nr(h.hostClass, "the device class")], ["Control plane services", h.controlPlane ? "yes" : "no"], ["NUMA sockets in use", h.socketsUsed && h.socketsUsed.length ? h.socketsUsed.join(", ") : h.sockets ? "all" : /*#__PURE__*/React.createElement(NR, {
+      what: "the NUMA layout"
+    })], ["Memory per storage-plane pod", nrBytes(h.memoryPerPod, "memory per storage-plane pod", 0)], ["Management NIC", nr(h.mgmtNic, "the management NIC")], ["Data NICs", nr((h.dataNics || []).join(", "), "the data NICs")], ["Storage nodes", h.nodeIds.length ? /*#__PURE__*/React.createElement("span", {
       style: {
         display: "flex",
         gap: 8,
@@ -17230,7 +18457,19 @@ function HostDetail({
     }))) : null], ["Cluster", /*#__PURE__*/React.createElement(Ref, {
       onClick: () => nav.openCluster(h.clusterId),
       label: regName(h.clusterId)
-    })], ["Prepared", fmtDate(h.preparedAt)]]
+    })], ["Prepared", h.preparedAt ? fmtDate(h.preparedAt) : /*#__PURE__*/React.createElement(NR, {
+      what: "the preparation time"
+    })]]
+  }))), Object.keys(src).length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Sources"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      paddingTop: 2,
+      paddingBottom: 2
+    }
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: [["Devices", from("devices")], ["NICs", from("nics", "data_nics", "mgmt_nic")], ["vCPUs, RAM, hugepages", from("vcpu_count", "memory_total", "hugepages_reserved")], ["Zone, region, rack, cabinet", from("zone", "region", "rack_id", "cabinet_id")], ["Storage-plane memory, sockets", from("memory_per_pod", "numa_sockets_used")]].map(([k, v]) => [k, v || /*#__PURE__*/React.createElement(NR, null)])
   }))), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("h3", null, "Labels"), /*#__PURE__*/React.createElement("div", {
@@ -17390,20 +18629,20 @@ function NodeDetail({
     s: `${n.counts.devicesOnline} online`
   }), /*#__PURE__*/React.createElement(Stat, {
     k: "vCPU reserved",
-    v: n.cpuReserved,
-    s: `of ${n.cpuCount} cores on host`
+    v: nr(n.cpuReserved),
+    s: n.cpuCount ? `of ${n.cpuCount} vCPUs on the host` : ""
   }), /*#__PURE__*/React.createElement(Stat, {
     k: "System RAM",
-    v: fmtBytes(n.memory.used, 0),
-    s: `used of ${fmtBytes(n.memory.total, 0)}`
+    v: n.memory.total ? fmtBytes(n.memory.total, 0) : "not reported",
+    s: n.memory.used ? `${fmtBytes(n.memory.used, 0)} in use` : "use not reported"
   }), /*#__PURE__*/React.createElement(Stat, {
-    k: "RAM reserved",
-    v: fmtBytes(n.memory.reserved, 0),
-    s: "requests/limits"
+    k: "Storage-plane memory",
+    v: n.memory.reserved ? fmtBytes(n.memory.reserved, 0) : "not reported",
+    s: "SPDK (from hugepages)"
   }), /*#__PURE__*/React.createElement(Stat, {
     k: "Hugepages",
-    v: fmtBytes(n.hugepages.used, 0),
-    s: `of ${fmtBytes(n.hugepages.total, 0)} allocated`
+    v: n.hugepages.total ? fmtBytes(n.hugepages.total, 0) : "not reported",
+    s: n.hugepages.used ? `${fmtBytes(n.hugepages.used, 0)} in use` : "on the host; use not reported"
   })), /*#__PURE__*/React.createElement("div", {
     className: "dcols",
     style: {
@@ -17413,27 +18652,35 @@ function NodeDetail({
     className: "card"
   }, /*#__PURE__*/React.createElement("h3", null, "Resource reservation"), /*#__PURE__*/React.createElement("div", {
     className: "bd"
-  }, /*#__PURE__*/React.createElement(AllocBar, {
+  }, n.memory.used != null ? /*#__PURE__*/React.createElement(AllocBar, {
     label: "System memory in use",
     used: n.memory.used,
     total: n.memory.total,
     color: "var(--ok)"
-  }), /*#__PURE__*/React.createElement(AllocBar, {
-    label: "Reserved for this node",
+  }) : /*#__PURE__*/React.createElement("div", {
+    className: "kv"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "System memory in use"), /*#__PURE__*/React.createElement("b", null, /*#__PURE__*/React.createElement(NR, {
+    what: "memory in use"
+  })))), n.memory.reserved && n.memory.total ? /*#__PURE__*/React.createElement(AllocBar, {
+    label: "Storage-plane memory (SPDK)",
     used: n.memory.reserved,
     total: n.memory.total,
     color: "var(--accent)"
-  }), /*#__PURE__*/React.createElement(AllocBar, {
+  }) : null, n.hugepages.used != null ? /*#__PURE__*/React.createElement(AllocBar, {
     label: "Hugepages in use",
     used: n.hugepages.used,
     total: n.hugepages.total,
     color: "var(--ro)"
-  }), /*#__PURE__*/React.createElement("div", {
+  }) : /*#__PURE__*/React.createElement("div", {
+    className: "kv"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "Hugepages on the host"), /*#__PURE__*/React.createElement("b", null, nrBytes(n.hugepages.total, "hugepages", 0))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "Hugepages in use"), /*#__PURE__*/React.createElement("b", null, /*#__PURE__*/React.createElement(NR, {
+    what: "hugepages in use"
+  })))), /*#__PURE__*/React.createElement("div", {
     className: "kv",
     style: {
       marginTop: 10
     }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "vCPU reserved"), /*#__PURE__*/React.createElement("b", null, n.cpuReserved)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "Cores on host"), /*#__PURE__*/React.createElement("b", null, n.cpuCount)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "SPDK"), /*#__PURE__*/React.createElement("b", null, n.spdk))))), /*#__PURE__*/React.createElement(IOCards, {
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "vCPU reserved"), /*#__PURE__*/React.createElement("b", null, nr(n.cpuReserved))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "vCPUs on host"), /*#__PURE__*/React.createElement("b", null, nr(n.cpuCount))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "SPDK version"), /*#__PURE__*/React.createElement("b", null, nr(n.spdk, "the SPDK version")))))), /*#__PURE__*/React.createElement(IOCards, {
     o: n
   })), /*#__PURE__*/React.createElement("div", {
     className: "sech"
@@ -17467,7 +18714,7 @@ function NodeDetail({
       paddingBottom: 2
     }
   }, /*#__PURE__*/React.createElement(Props, {
-    rows: [["Hostname", n.hostname], ["Management IP", n.mgmtIp], ["Data paths", (n.dataNics || []).length ? /*#__PURE__*/React.createElement("span", {
+    rows: [["Hostname", n.hostname], ["Management IP", n.mgmtIp], ["Data NICs", (n.dataNics || []).length ? /*#__PURE__*/React.createElement("span", {
       style: {
         display: "flex",
         flexDirection: "column",
@@ -17476,15 +18723,37 @@ function NodeDetail({
       }
     }, n.dataNics.map(x => /*#__PURE__*/React.createElement("span", {
       key: x.name + x.ip
-    }, x.name, " \xB7 ", x.ip, ":", x.port))) : n.ip], ["Multipathing", n.multipath ? "yes — two paths" : "no — single path"], ["Status", /*#__PURE__*/React.createElement(TrafficLight, {
+    }, x.name || /*#__PURE__*/React.createElement(NR, {
+      what: "interface name"
+    }), " \xB7 ", x.ip, ":", x.port, x.trtype ? ` · ${x.trtype}` : ""))) : n.dataNics ? "none" : /*#__PURE__*/React.createElement(NR, {
+      what: "the data NICs"
+    })], ["Multipathing", n.anaPaths > 1 ? /*#__PURE__*/React.createElement("span", null, "yes \u2014 ANA, ", n.anaPaths, " paths: this node", n.secondaryId ? /*#__PURE__*/React.createElement(React.Fragment, null, ", secondary ", /*#__PURE__*/React.createElement(Ref, {
+      onClick: () => nav.openNode(n.clusterId, n.secondaryId),
+      label: regName(n.secondaryId, shortId(n.secondaryId))
+    })) : null, n.tertiaryId ? /*#__PURE__*/React.createElement(React.Fragment, null, ", tertiary ", /*#__PURE__*/React.createElement(Ref, {
+      onClick: () => nav.openNode(n.clusterId, n.tertiaryId),
+      label: regName(n.tertiaryId, shortId(n.tertiaryId))
+    })) : null, (n.dataNics || []).length > 1 ? `; ${n.dataNics.length} data NICs each` : "") : (n.dataNics || []).length > 1 ? `yes — ${n.dataNics.length} data NICs` : n.anaPaths ? "no — single path (no secondary node)" : /*#__PURE__*/React.createElement(NR, {
+      what: "the node's paths"
+    })], ["Status", /*#__PURE__*/React.createElement(TrafficLight, {
       status: n.status
-    })], ["Failure domain", n.failureDomain], ["Physical label", n.physicalLabel], ["Host", n.hostId ? /*#__PURE__*/React.createElement(Ref, {
+    })], ["Failure domain", n.failureDomain === null || n.failureDomain === undefined ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim2)"
+      }
+    }, "not set") : n.failureDomain], ["Physical label", nr(n.physicalLabel, "a physical label")], ["Host", n.hostId ? /*#__PURE__*/React.createElement(Ref, {
       onClick: () => nav.openHost(n.clusterId, n.hostId),
       label: regName(n.hostId, "host")
     }) : null], ["Cluster", /*#__PURE__*/React.createElement(Ref, {
       onClick: () => nav.openCluster(n.clusterId),
       label: regName(n.clusterId)
-    })], ["vCPU reserved", n.cpuReserved], ["Max subsystems", n.maxSubsystems], ["CPU cores", n.cpuCount], ["System memory", fmtBytes(n.memory.total, 0)], ["Memory reserved", fmtBytes(n.memory.reserved, 0)], ["Memory in use", fmtBytes(n.memory.used, 0)], ["Hugepages", `${fmtBytes(n.hugepages.used, 0)} / ${fmtBytes(n.hugepages.total, 0)}`], ["SPDK", n.spdk]]
+    })], ["vCPU reserved", nr(n.cpuReserved)], ["Max subsystems", nr(n.maxSubsystems)], ["vCPUs on host", nr(n.cpuCount)], ["System memory", nrBytes(n.memory.total, "system memory", 0)], ["Storage-plane memory (SPDK)", nrBytes(n.memory.reserved, "storage-plane memory", 0)], ["Memory in use", n.memory.used != null ? fmtBytes(n.memory.used, 0) : /*#__PURE__*/React.createElement(NR, {
+      what: "memory in use"
+    })], ["Hugepages", n.hugepages.used != null ? `${fmtBytes(n.hugepages.used, 0)} / ${fmtBytes(n.hugepages.total, 0)}` : /*#__PURE__*/React.createElement(React.Fragment, null, nrBytes(n.hugepages.total, "hugepages", 0), " ", /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim2)"
+      }
+    }, "(use not reported)"))], ["SPDK version", nr(n.spdk, "the SPDK version")]]
   }))), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("h3", null, "I/O totals"), /*#__PURE__*/React.createElement("div", {
@@ -31418,7 +32687,19 @@ function RActionDetail({
     className: "dcols"
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "card"
-  }, /*#__PURE__*/React.createElement("h3", null, "Journal \xB7 ", a.steps.length, " steps", !a.terminal ? " · live" : ""), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("h3", null, "Journal \xB7 ", a.steps.length, " steps", !a.terminal ? " · live" : "", /*#__PURE__*/React.createElement("span", {
+    style: {
+      float: "right"
+    }
+  }, /*#__PURE__*/React.createElement(LogsLink, {
+    label: "Logs of this run",
+    params: {
+      q: a.appName || a.planName || "",
+      from: a.startTime || "",
+      to: a.completionTime || "",
+      follow: !a.terminal
+    }
+  }))), /*#__PURE__*/React.createElement("div", {
     className: "bd"
   }, /*#__PURE__*/React.createElement(WorkflowTimeline, {
     steps: a.steps,
@@ -32634,12 +33915,6 @@ function DrHubHome({
     count: "\u2192",
     onClick: () => nav.drLayer("dhcpservers")
   }), /*#__PURE__*/React.createElement(NavCard, {
-    icon: "cluster",
-    title: "Site storage",
-    sub: "moved to Clusters: deploy a managed site's storage cluster there",
-    count: "\u2192",
-    onClick: () => nav.siteStorage()
-  }), /*#__PURE__*/React.createElement(NavCard, {
     icon: "gauge",
     title: "DR configuration",
     sub: "agents, Ramen, archive, executor",
@@ -33687,6 +34962,10 @@ const LAYER_META = {
   sitedeploy: {
     icon: "cluster"
   },
+  logs: {
+    label: "Logs",
+    icon: "list"
+  },
   drconfig: {
     label: "DR configuration",
     icon: "gauge"
@@ -33923,6 +35202,8 @@ const pDhcp = id => [{
 }];
 // a managed site's storage deployment belongs to the clusters, not to DR
 const pSiteDeploy = id => [{
+  t: "clusters"
+}, {
   t: "sitedeploys"
 }, {
   t: "sitedeploy",
@@ -34891,6 +36172,8 @@ function OverviewView({
   const mayCreate = seg.t === "clusters" ? acc.canAnywhere("create", "k8scluster") : acc.canCreateIn(createKind, parentObj);
   const createWhy = mayCreate ? "" : seg.t === "clusters" ? "Needs create on nodepoolallocations at cluster scope" : acc.whyCreateIn(createKind, parentObj);
   // §5.5: a denied create is disabled with the reason, not hidden
+  const mayLabel = acc.canAnywhere("create", "labelrequest");
+  const labelWhy = mayLabel ? "" : "Needs create on labelrequests.dr.simplyblock.io: labels are applied through a LabelRequest";
   const gateCreate = el => !el ? null : mayCreate ? el : React.cloneElement(el, {
     disabled: true,
     title: createWhy,
@@ -34978,13 +36261,13 @@ function OverviewView({
     setSort: setSort,
     count: filtered.length,
     onRefresh: reload,
-    extra: gateCreate(seg.t === "clusters" ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+    extra: seg.t === "clusters" ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
       className: "btn sitestorage",
       onClick: () => nav.siteStorage()
     }, /*#__PURE__*/React.createElement(Icon, {
       n: "cluster",
       s: 12
-    }), "Site storage"), /*#__PURE__*/React.createElement("button", {
+    }), "Site storage"), gateCreate(/*#__PURE__*/React.createElement("button", {
       className: "btn primary",
       onClick: () => window.__ui.dialog(deployFromDialog(nav), {
         kind: "cluster",
@@ -34993,7 +36276,9 @@ function OverviewView({
     }, /*#__PURE__*/React.createElement(Icon, {
       n: "plus",
       s: 12
-    }), "Deploy cluster")) : seg.t === "k8s" ? /*#__PURE__*/React.createElement("button", {
+    }), "Deploy cluster")))
+    // labelling goes through a LabelRequest: its own permission, not "create a cluster"
+    : seg.t === "k8s" ? mayLabel ? /*#__PURE__*/React.createElement("button", {
       className: "btn labelsbtn",
       onClick: () => window.__ui.dialog(labelDialog(), {
         kind: "labels",
@@ -35002,7 +36287,20 @@ function OverviewView({
     }, /*#__PURE__*/React.createElement(Icon, {
       n: "list",
       s: 12
-    }), "Label for DR") : seg.t === "deployconfigs" && parent && parent.t === "k8sc" ? /*#__PURE__*/React.createElement("button", {
+    }), "Label for DR") : React.cloneElement(/*#__PURE__*/React.createElement("button", {
+      className: "btn labelsbtn",
+      onClick: () => window.__ui.dialog(labelDialog(), {
+        kind: "labels",
+        id: "new"
+      })
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "list",
+      s: 12
+    }), "Label for DR"), {
+      disabled: true,
+      title: labelWhy,
+      onClick: undefined
+    }) : gateCreate(seg.t === "__none__" ? null : seg.t === "deployconfigs" && parent && parent.t === "k8sc" ? /*#__PURE__*/React.createElement("button", {
       className: "btn primary",
       onClick: () => nav.deployWizard(parent.id)
     }, /*#__PURE__*/React.createElement(Icon, {
@@ -35558,7 +36856,16 @@ function App() {
   const [rawPath, setPath] = useLocal(DR_ONLY ? "sb.drpath" : "sb.path", ROOT_PATH);
   // a stored path may name a layer that no longer exists (renamed kinds) — fall back to the root;
   // in DR-only mode anything outside the DR section is unreachable
-  const path = useMemo(() => Array.isArray(rawPath) && rawPath.length && rawPath.every(s => LAYER_META[s.t]) && (!DR_ONLY || rawPath[0].t === "dr" && !rawPath.some(s => STORAGE_DR_LAYERS.includes(s.t))) ? rawPath : ROOT_PATH, [rawPath]);
+  const path = useMemo(() => {
+    const ok = Array.isArray(rawPath) && rawPath.length && rawPath.every(s => LAYER_META[s.t]) && (!DR_ONLY || rawPath[0].t === "logs" && rawPath.length === 1 || rawPath[0].t === "dr" && !rawPath.some(s => STORAGE_DR_LAYERS.includes(s.t)));
+    if (!ok) return ROOT_PATH;
+    // a managed site's storage lives under Clusters, never under DR (an older
+    // stored path still names it below the DR section)
+    const sd = rawPath.findIndex(s => s.t === "sitedeploys");
+    return sd >= 0 && !DR_ONLY ? [{
+      t: "clusters"
+    }, ...rawPath.slice(sd)] : rawPath;
+  }, [rawPath]);
   const [theme, setTheme] = useLocal("sb.theme", "light");
   const [density, setDensity] = useLocal("sb.density", "340px");
   const [sort, setSort] = useLocal("sb.sort", "health");
@@ -35712,8 +37019,27 @@ function App() {
       t: l
     }]),
     siteStorage: () => go([{
+      t: "clusters"
+    }, {
       t: "sitedeploys"
     }]),
+    // the log explorer on a query (LogsView reads it from the URL)
+    logs: params => {
+      const f = Object.assign({}, DEFAULT_LOG_FILTER, params || {});
+      if (params && (params.from || params.to)) f.range = "";
+      try {
+        window.history.replaceState(null, "", window.location.pathname + window.location.search + hashOfFilter(f));
+      } catch (e) {}
+      // an open explorer takes the new query; a closed one reads it from the URL
+      try {
+        window.dispatchEvent(new CustomEvent("sb-logs-query", {
+          detail: f
+        }));
+      } catch (e) {}
+      go([{
+        t: "logs"
+      }]);
+    },
     openMPath: id => go(pMp(id)),
     openAppGroup: (pid, id) => go(pAg(pid, id)),
     zones: () => go([{
@@ -35741,6 +37067,8 @@ function App() {
     k8sDetail: kid => go(pK(kid)),
     root: () => go(ROOT_PATH)
   }), [go]);
+  // entry points in other files (panels, DR runs) open the log explorer through it
+  window.__nav = nav;
   useEffect(() => {
     const h = e => {
       if (/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
@@ -35768,7 +37096,7 @@ function App() {
   const parentSeg = path[path.length - 2];
   const apiHint = cur.id ? DETAIL_API[cur.t] : VIEWS[cur.t] ? VIEWS[cur.t].api(parentSeg || {}) : "—";
   const s0 = path[0] && path[0].t;
-  const section = s0 === "dr" ? "dr" : s0 === "k8s" ? "k8s" : s0 === "cp" ? "cp" : "clusters";
+  const section = s0 === "dr" ? "dr" : s0 === "k8s" ? "k8s" : s0 === "cp" ? "cp" : s0 === "logs" ? "logs" : "clusters";
   const drVisible = DR_ONLY || acc.canAnywhere("read", "drhub") || acc.canAnywhere("read", "drpolicy") || acc.canAnywhere("read", "replicationpolicy") || acc.canAnywhere("read", "application");
   const upOne = path.length > 1 ? () => go(path.slice(0, -1)) : null;
   const upLabel = path.length > 1 ? segLabel(path[path.length - 2]) : "";
@@ -35838,7 +37166,16 @@ function App() {
     s: 13
   }), /*#__PURE__*/React.createElement("span", {
     className: "swlabel"
-  }, "Control plane"))), DR_ONLY && /*#__PURE__*/React.createElement("div", {
+  }, "Control plane")), /*#__PURE__*/React.createElement("button", {
+    className: "sw-logs" + (section === "logs" ? " on" : ""),
+    onClick: () => nav.logs(),
+    title: "Logs"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "list",
+    s: 13
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "swlabel"
+  }, "Logs"))), DR_ONLY && /*#__PURE__*/React.createElement("div", {
     className: "sectionsw"
   }, /*#__PURE__*/React.createElement("button", {
     className: "on",
@@ -35858,7 +37195,16 @@ function App() {
     s: 13
   }), /*#__PURE__*/React.createElement("span", {
     className: "swlabel"
-  }, "Configuration"))), !DR_ONLY && section === "clusters" && /*#__PURE__*/React.createElement("div", {
+  }, "Configuration")), /*#__PURE__*/React.createElement("button", {
+    className: "sw-logs" + (cur.t === "logs" ? " on" : ""),
+    onClick: () => nav.logs(),
+    title: "Logs"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "list",
+    s: 13
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "swlabel"
+  }, "Logs"))), !DR_ONLY && section === "clusters" && /*#__PURE__*/React.createElement("div", {
     className: "switcher"
   }, /*#__PURE__*/React.createElement("button", {
     className: "swbtn",
@@ -35979,6 +37325,9 @@ function App() {
     key: viewKey,
     nav: nav
   }) : cur.t === "cp" ? /*#__PURE__*/React.createElement(ControlPlaneView, {
+    key: viewKey,
+    nav: nav
+  }) : cur.t === "logs" ? /*#__PURE__*/React.createElement(LogsView, {
     key: viewKey,
     nav: nav
   }) : cur.t === "discovery" ? /*#__PURE__*/React.createElement(DiscoveryView, {

@@ -266,3 +266,38 @@ func mainEnvOf(t *testing.T, ds *appsv1.DaemonSet) map[string]string {
 	}
 	return env
 }
+
+// logCollectorOn is the annotation value the log collector ships.
+const logCollectorOn = "true"
+
+// The storage node's agent pods are marked for the log collector, alongside
+// whatever other annotation the TLS rollout puts on them.
+//
+// Regression: 2026-10-06-graylog-receives-nothing — the agent that starts and
+// supervises SPDK on every storage node was never marked, so its logs never
+// reached Graylog while the SPDK pod it creates was.
+func TestTheStorageNodeAgentIsShippedToTheLogCollector(t *testing.T) {
+	sn := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
+	}
+
+	for _, tc := range []struct {
+		name       string
+		tlsEnabled bool
+		revision   string
+	}{
+		{name: "without TLS"},
+		{name: "with a TLS revision", tlsEnabled: true, revision: "42"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ds := BuildStorageNodeDaemonSet(sn, tc.tlsEnabled, false, "", tc.revision, "")
+			annotations := ds.Spec.Template.Annotations
+			if got := annotations[AnnotationLogCollector]; got != logCollectorOn {
+				t.Errorf("pod template %s = %q, want \"true\"", AnnotationLogCollector, got)
+			}
+			if tc.revision != "" && annotations[AnnotationTLSSecretRevision] != tc.revision {
+				t.Errorf("the TLS revision annotation was lost: %v", annotations)
+			}
+		})
+	}
+}

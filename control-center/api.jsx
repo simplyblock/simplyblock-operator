@@ -307,21 +307,26 @@ const normHost = h => reg({
   rack: h.rack_id || null, cabinet: h.cabinet_id || null, k8sCluster: h.k8s_cluster || null,
   migrationTaint: h.migration_taint || null,
   hostClass: h.host_class || null,
-  status: h.status, source: h.source || "manual", sockets: h.numa_sockets, controlPlane: !!h.control_plane,
+  status: h.status, source: h.source || "manual", sockets: h.numa_sockets || null, controlPlane: !!h.control_plane,
+  // which source reported each field (control plane API, dr-agent inventory, a draft)
+  sources: h.sources || {},
   kubelet: h.kubelet_version, roles: h.roles || [], k8sLabels: h.k8s_labels || {},
   inspection: h.inspection || null,
-  vcpu: h.vcpu_count, memory: h.memory_total,
+  vcpu: h.vcpu_count || null, memory: h.memory_total || null,
   memoryPerPod: h.memory_per_pod || null, socketsUsed: h.numa_sockets_used || null,
   mgmtNic: h.mgmt_nic || null, dataNics: h.data_nics || [],
   nics: (h.nics || []).map(n => ({name: n.name, mac: n.mac, speed: n.speed_gbps, address: n.address, socket: n.numa_socket, state: n.state})),
-  hugepages: {reserved: h.hugepages_reserved, allocated: h.hugepages_allocated},
+  hugepages: {reserved: h.hugepages_reserved || null, allocated: h.hugepages_allocated || null},
   devices: (h.devices || []).map(d => ({id: d.id, kind: d.kind, socket: d.numa_socket, pcie: d.pcie_address,
     blockdev: d.device_name, serial: d.serial_number, model: d.model_number, size: d.size,
-    assignedNodeId: d.assigned_node_id, reserved: !!d.reserved, reservedFor: d.reserved_for_node_id})),
+    assignedNodeId: d.assigned_node_id, reserved: !!d.reserved, reservedFor: d.reserved_for_node_id, selected: !!d.selected})),
   nodeIds: h.storage_node_ids || [],
-  counts: {devices: (h.devices || []).length, assigned: h.devices_assigned, free: h.devices_free,
-    nvme: h.nvme_count, blockFree: h.block_free_count, nodes: (h.storage_node_ids || []).length},
-  capacity: {total: h.size_total, used: h.size_assigned},
+  // counts never render as "undefined": derived from the devices when a source left them out
+  counts: {devices: (h.devices || []).length,
+    assigned: h.devices_assigned !== undefined ? h.devices_assigned : (h.devices || []).filter(d => d.assigned_node_id).length,
+    free: h.devices_free !== undefined ? h.devices_free : (h.devices || []).filter(d => !d.assigned_node_id).length,
+    nvme: h.nvme_count || 0, blockFree: h.block_free_count || 0, nodes: (h.storage_node_ids || []).length},
+  capacity: {total: h.size_total || 0, used: h.size_assigned || 0},
   preparedAt: h.prepared_at, labels: h.labels || {}
 });
 // A discovery run: the inventory pass, and the filter it ran with. The filter
@@ -381,15 +386,19 @@ const normDeployConfig = o => {
 const normNode = n => reg({
   kind: "node", id: n.uuid, clusterId: n.cluster_id, hostId: n.host_id, zoneId: n.zone_id || null, hostname: n.hostname,
   ip: (n.data_nics && n.data_nics[0] ? n.data_nics[0].ip : null), port: (n.data_nics && n.data_nics[0] ? n.data_nics[0].port : 4420),
-  dataNics: (n.data_nics || []).map(x => ({name: x.name, ip: x.ip, port: x.port, socket: x.numa_socket, state: x.state})),
-  multipath: (n.data_nics || []).length > 1,
+  // null: the source did not report the node's NICs (not "none")
+  dataNics: n.data_nics ? n.data_nics.map(x => ({name: x.name, ip: x.ip, port: x.port, socket: x.numa_socket, state: x.state, trtype: x.trtype})) : null,
+  // simplyblock multipathing is ANA: this node plus its secondary (and
+  // tertiary) serve the same volumes; extra data NICs add paths per node
+  anaPaths: n.ana_paths || null, secondaryId: n.secondary_node_id || null, tertiaryId: n.tertiary_node_id || null,
+  multipath: (n.ana_paths || 0) > 1 || (n.data_nics || []).length > 1,
   op: n.op ? {kind: n.op.kind, phase: n.op.phase, phaseIndex: n.op.phase_index || 0, phases: n.op.phases || [],
     volumesMoved: n.op.volumes_moved || 0, targetHostname: n.op.target_hostname || null, sourceHostname: n.op.source_hostname || null,
     startedAt: n.op.started_at, taskId: n.op.task_id} : null,
   mgmtIp: n.mgmt_ip, failureDomain: n.failure_domain, physicalLabel: n.physical_label, status: n.status,
   capacity: {total: n.size_total, used: n.size_util},
   iops: ioOf(n.io_stats), bw: bwOf(n.io_stats), hist: histOf(n.io_history),
-  counts: {devices: n.devices_count, devicesOnline: n.devices_online},
+  counts: {devices: n.devices_count || 0, devicesOnline: n.devices_online || 0},
   cpuCount: n.cpu_count, cpuReserved: n.vcpu_reserved, maxSubsystems: n.max_subsystem_count || null,
   memory: {total: n.memory_total, reserved: n.memory_reserved, used: n.memory_used},
   hugepages: {total: n.hugepages_total, used: n.hugepages_used},

@@ -124,6 +124,21 @@ spec:
               value: /etc/simplyblock/tls/tls.key
             {{- end }}
             {{- end }}
+            {{- $glURL := include "sbcc.graylogUrl" . }}
+            # the log store (Graylog search API), read-only via the proxy
+            - name: SB_GRAYLOG_URL
+              value: {{ $glURL | quote }}
+            {{- if $glURL }}
+            - name: SB_GRAYLOG_USER
+              value: {{ $cc.logStore.user | default "admin" | quote }}
+            {{- if $cc.logStore.tokenSecret }}
+            - name: SB_GRAYLOG_TOKEN_FILE
+              value: /etc/simplyblock/graylog/token
+            {{- else }}
+            - name: SB_GRAYLOG_PASSWORD_FILE
+              value: /etc/simplyblock/graylog/password
+            {{- end }}
+            {{- end }}
             - name: SB_MOCK
               value: "false"
             - name: SB_LISTEN_PORT
@@ -162,6 +177,11 @@ spec:
             {{- if $cpURL }}
             {{- include "simplyblock.tlsVolumeMount" . | nindent 12 }}
             {{- end }}
+            {{- if $glURL }}
+            - name: graylog-credentials
+              mountPath: /etc/simplyblock/graylog
+              readOnly: true
+            {{- end }}
       volumes:
         - name: nginx-tmp
           emptyDir: {medium: Memory, sizeLimit: 16Mi}
@@ -177,6 +197,21 @@ spec:
         {{- end }}
         {{- if $cpURL }}
         {{- include "simplyblock.clientTlsVolume" (dict "ctx" . "clientSecret" "simplyblock-control-center-client-tls") | nindent 8 }}
+        {{- end }}
+        {{- if $glURL }}
+        - name: graylog-credentials
+          secret:
+            {{- if $cc.logStore.tokenSecret }}
+            secretName: {{ $cc.logStore.tokenSecret }}
+            items:
+              - key: token
+                path: token
+            {{- else }}
+            secretName: {{ include "sbcc.graylogPasswordSecret" . }}
+            items:
+              - key: {{ include "sbcc.graylogPasswordKey" . }}
+                path: password
+            {{- end }}
         {{- end }}
 ---
 apiVersion: v1

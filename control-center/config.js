@@ -7,6 +7,8 @@ window.SB_CONFIG = {
   helmBase: "/helm/v1",
   promBase: "/prometheus/api/v1",
   agentBase: "/operator/v1/agent",
+  // the log store (Graylog search API) behind the console's proxy
+  graylogBase: "/graylog/api",
   namespace: "simplyblock",
   // "full": the storage control plane console with a DR section.
   // "dr":   the DR-only console for a hub without a simplyblock control plane

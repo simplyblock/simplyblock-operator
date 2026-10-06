@@ -21,9 +21,42 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 func TestTheBaselineJobToleratesWhatTheStorageNodesDo(t *testing.T) {
+	tolerations := []corev1.Toleration{{
+		Key:      "io.simplyblock.node-type",
+		Operator: corev1.TolerationOpEqual,
+		Value:    "storage-plane",
+		Effect:   corev1.TaintEffectNoSchedule,
+	}}
+
+	job := createdBaselineJob(t, tolerations)
+
+	if got := job.Spec.Template.Spec.Tolerations; len(got) != 1 || got[0].Key != "io.simplyblock.node-type" {
+		t.Errorf("the Job tolerates %+v, want the cluster's taint", got)
+	}
+}
+
+// The measurement's pod is marked for the log collector, so a baseline that
+// fails reaches Graylog before the Job's TTL removes the pod.
+//
+// Regression: 2026-10-06-graylog-receives-nothing — the baseline pods were
+// never marked, so their logs were gone once the Job was collected.
+func TestTheBaselineJobIsShippedToTheLogCollector(t *testing.T) {
+	job := createdBaselineJob(t, nil)
+
+	if got := job.Spec.Template.Annotations[utils.AnnotationLogCollector]; got != "true" {
+		t.Errorf("baseline pod template %s = %q, want \"true\"", utils.AnnotationLogCollector, got)
+	}
+}
+
+// createdBaselineJob runs the reconciler's Job creation against a fake client
+// for one storage node of a cluster with the given tolerations, and returns
+// the one Job it created.
+func createdBaselineJob(t *testing.T, tolerations []corev1.Toleration) batchv1.Job {
+	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
@@ -32,12 +65,6 @@ func TestTheBaselineJobToleratesWhatTheStorageNodesDo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tolerations := []corev1.Toleration{{
-		Key:      "io.simplyblock.node-type",
-		Operator: corev1.TolerationOpEqual,
-		Value:    "storage-plane",
-		Effect:   corev1.TaintEffectNoSchedule,
-	}}
 	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "simplyblock"},
 		Spec: simplyblockv1alpha2.StorageClusterSpec{
@@ -69,7 +96,5 @@ func TestTheBaselineJobToleratesWhatTheStorageNodesDo(t *testing.T) {
 	if len(jobs.Items) != 1 {
 		t.Fatalf("created %d Jobs, want 1", len(jobs.Items))
 	}
-	if got := jobs.Items[0].Spec.Template.Spec.Tolerations; len(got) != 1 || got[0].Key != "io.simplyblock.node-type" {
-		t.Errorf("the Job tolerates %+v, want the cluster's taint", got)
-	}
+	return jobs.Items[0]
 }

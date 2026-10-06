@@ -2,7 +2,7 @@
 
 **Mutation.** A run told that `ens5f0` is the management interface
 
-**Expected.** **Contested.** No input expresses it, so the ranking decides regardless. See §14, gap G-23
+**Expected.** **Contested.** No input expresses it. The 25G `eth0` goes to data and `ens5f0` to management by ranking alone. See §14, gap G-23
 
 **Harness.** `CM`
 

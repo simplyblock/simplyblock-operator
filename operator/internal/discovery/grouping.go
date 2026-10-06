@@ -65,6 +65,12 @@ type Worker struct {
 	// different things describe different groups however identical their disks
 	// are.
 	Mgmt Management
+
+	// Data are the interfaces the draft names for data traffic, ascending by
+	// name, and empty when the machine has none that qualify. They are part of
+	// what makes two workers groupable for the same reason the management
+	// interface is.
+	Data []string
 }
 
 // Addresses is how the draft names this worker's devices, ascending and without
@@ -107,6 +113,10 @@ type Group struct {
 	// management address to, which is why it is on the group rather than on the
 	// workers: a NodeGroup names one.
 	MgmtInterface string
+
+	// DataInterfaces are the interfaces every worker in the group carries data
+	// traffic on, empty when they serve data on the management interface.
+	DataInterfaces []string
 }
 
 // Grouper puts workers into groups.
@@ -136,14 +146,15 @@ func (GroupByHardware) Group(workers []Worker) []Group {
 
 	for _, worker := range workers {
 		addresses := worker.Addresses()
-		signature := worker.Class.signature(addresses, worker.Mgmt.Name)
+		signature := worker.Class.signature(addresses, worker.Mgmt.Name, worker.Data)
 
 		group, seen := bySignature[signature]
 		if !seen {
 			group = &Group{
-				Class:         worker.Class,
-				Addresses:     addresses,
-				MgmtInterface: worker.Mgmt.Name,
+				Class:          worker.Class,
+				Addresses:      addresses,
+				MgmtInterface:  worker.Mgmt.Name,
+				DataInterfaces: worker.Data,
 			}
 			bySignature[signature] = group
 			order = append(order, signature)
@@ -171,16 +182,17 @@ func (GroupByHardware) Group(workers []Worker) []Group {
 }
 
 // signature is the key two workers must agree on to share a group: the class,
-// the addresses, and the management interface, hashed so that a hundred
-// addresses do not become a hundred-element map key.
+// the addresses, the management interface, and the data interfaces, hashed so
+// that a hundred addresses do not become a hundred-element map key.
 //
-// The interface is in the key because a NodeGroup names one for every worker it
-// lists. Two machines with identical disks that call their NICs different things
+// The interfaces are in the key because a NodeGroup names them for every worker
+// it lists. Two machines with identical disks that call their NICs different things
 // cannot be described by one group, and grouping them anyway would write a
 // document that is wrong for whichever of them lost.
-func (c DeviceClass) signature(addresses []string, mgmtInterface string) string {
+func (c DeviceClass) signature(addresses []string, mgmtInterface string, dataInterfaces []string) string {
 	digest := sha256.Sum256([]byte(
-		string(c) + "\x00" + mgmtInterface + "\x00" + strings.Join(addresses, "\x00")))
+		string(c) + "\x00" + mgmtInterface + "\x00" + strings.Join(dataInterfaces, ",") +
+			"\x00" + strings.Join(addresses, "\x00")))
 	return hex.EncodeToString(digest[:])
 }
 
@@ -299,9 +311,10 @@ func nodeGroupOf(group Group) simplyblockv1alpha2.NodeGroup {
 	}
 
 	out := simplyblockv1alpha2.NodeGroup{
-		Name:          group.Name,
-		Workers:       workers,
-		MgmtInterface: group.MgmtInterface,
+		Name:           group.Name,
+		Workers:        workers,
+		MgmtInterface:  group.MgmtInterface,
+		DataInterfaces: group.DataInterfaces,
 	}
 	if len(group.Addresses) > 0 {
 		selection := &simplyblockv1alpha2.DeviceSelection{}

@@ -155,6 +155,7 @@ mirror's own file for the events it emits.
 | U-98  | A device that empties and fills again: a second crossing and a second event                          | Boundary   | `TestADeviceOverItsClustersThresholdIsWarnedAboutOnce` |
 | U-99  | A device under the threshold: nothing is announced                                                   | Negative   | `TestADeviceUnderTheThresholdIsNotWarnedAbout`         |
 | U-100 | A cluster declaring no threshold: the default applies rather than no warning                         | Boundary   | `TestAClusterWithNoThresholdFallsBackToTheDefault`     |
+| U-152 | The capacity query names the v2 exporter's metrics, so a device is found (2026-10-05)                | Regression | `TestDeviceCapacityReadsV2ExporterNames`               |
 
 ### The Readings (design §4.4)
 

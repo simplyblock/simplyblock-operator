@@ -2,7 +2,7 @@ apiVersion: v1
 data:
   report.json: |-
     {
-      "version": 8,
+      "version": 9,
       "node": "worker-01",
       "probedAt": "2026-09-18T09:00:00Z",
       "cpu": {
@@ -115,7 +115,7 @@ data:
             "bond0"
           ],
           "addresses": [
-            "192.168.10.1"
+            "192.168.10.1/24"
           ]
         },
         {
@@ -153,7 +153,7 @@ data:
           "loopback": true,
           "kind": "loopback",
           "addresses": [
-            "127.0.0.1"
+            "127.0.0.1/8"
           ]
         },
         {
@@ -166,7 +166,7 @@ data:
           "numaNode": 0,
           "kind": "physical",
           "addresses": [
-            "192.168.20.1"
+            "192.168.20.1/24"
           ]
         }
       ],

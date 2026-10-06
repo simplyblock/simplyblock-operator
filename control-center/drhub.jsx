@@ -1768,7 +1768,9 @@ function RActionDetail({o: a, nav}) {
       </div>
       <div className="dcols">
         <div>
-          <div className="card"><h3>Journal · {a.steps.length} steps{!a.terminal ? " · live" : ""}</h3><div className="bd"><WorkflowTimeline steps={a.steps} log={a.log} /></div></div>
+          <div className="card"><h3>Journal · {a.steps.length} steps{!a.terminal ? " · live" : ""}
+            <span style={{float: "right"}}><LogsLink label="Logs of this run" params={{q: a.appName || a.planName || "", from: a.startTime || "", to: a.completionTime || "", follow: !a.terminal}} /></span></h3>
+            <div className="bd"><WorkflowTimeline steps={a.steps} log={a.log} /></div></div>
           <EventLog log={a.log} />
         </div>
         <div>
@@ -2106,7 +2108,6 @@ function DrHubHome({nav}) {
         <NavCard icon="cloud" title="Restores" sub="from S3 backups onto rebuilt sites" count="→" onClick={() => nav.drLayer("restores")} />
         <NavCard icon="k8s" title="Site profiles" sub="per-cluster inventory and bindings" count="→" onClick={() => nav.drLayer("siteprofiles")} />
         <NavCard icon="link" title="DHCP servers" sub="guest address reservations per site" count="→" onClick={() => nav.drLayer("dhcpservers")} />
-        <NavCard icon="cluster" title="Site storage" sub="moved to Clusters: deploy a managed site's storage cluster there" count="→" onClick={() => nav.siteStorage()} />
         <NavCard icon="gauge" title="DR configuration" sub="agents, Ramen, archive, executor" count="→" onClick={() => nav.drLayer("drconfig")} />
       </div>
     </div>
