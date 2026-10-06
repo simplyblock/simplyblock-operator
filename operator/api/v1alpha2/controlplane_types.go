@@ -266,6 +266,7 @@ type LocalControlPlane struct {
 // window. It records the decision with the deployment, so enabling monitoring
 // after the first cluster exists sets the environment but does not provision
 // anything.
+// +kubebuilder:validation:XValidation:rule="!has(self.secretRef) || (has(self.secretRef.name) && size(self.secretRef.name) > 0)",message="secretRef.name must not be empty: a pod reading a Secret with no name does not start"
 // +kubebuilder:validation:XValidation:rule="!has(self.enableMonitoring) || !self.enableMonitoring || has(self.secretRef)",message="enableMonitoring requires secretRef: the control plane cannot provision the monitoring stack without its admin password"
 type ControlPlaneObservability struct {
 	// EnableMonitoring provisions the monitoring stack when the first storage
@@ -275,8 +276,8 @@ type ControlPlaneObservability struct {
 
 	// SecretRef names a Secret in this namespace holding the monitoring stack's
 	// admin password under the key MONITORING_SECRET. Required when
-	// EnableMonitoring is set. A pod naming a Secret that does not exist does
-	// not start.
+	// EnableMonitoring is set, and its name must not be empty. A pod naming a
+	// Secret that does not exist does not start.
 	// +optional
 	SecretRef *corev1.LocalObjectReference `json:"secretRef,omitempty"`
 }

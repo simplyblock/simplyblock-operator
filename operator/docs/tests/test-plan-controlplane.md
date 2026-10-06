@@ -288,6 +288,7 @@ installation rows additionally need the FoundationDB CRDs installed into
 | I-42 | `spec.source.managed.replicas` of 1: accepted, since an edge deployment may want it  | Boundary | —                                                 |
 | I-43 | `observability.enableMonitoring` without `secretRef`: rejected by the CEL rule       | Negative | `TestControlPlaneCELRequiresASecretForMonitoring` |
 | I-44 | `observability` with `enableMonitoring` unset: accepted with no `secretRef`          | Boundary | `TestControlPlaneCELRequiresASecretForMonitoring` |
+| I-45 | `observability.secretRef` with an empty name, monitoring on or off: rejected         | Negative | `TestControlPlaneCELRequiresASecretForMonitoring` |
 | I-12 | `ControlPlaneOps.spec.action` outside the enum: rejected by admission                | Negative | —                                                 |
 | I-13 | `ControlPlaneOps.spec.controlPlaneRef` changed after creation: rejected              | Negative | —                                                 |
 | I-14 | Short names `cp` and `cpops` resolve to the same lists as the full kinds             | Positive | —                                                 |

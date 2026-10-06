@@ -1064,9 +1064,10 @@ only when the management API carries `ENABLE_MONITORING=true` and the admin
 password as `MONITORING_SECRET`, and it records the outcome with the deployment,
 so a control plane whose first cluster was created without them stays without
 monitoring. `enableMonitoring` sets the first, and `secretRef` names the Secret
-holding the second under the key `MONITORING_SECRET`; a CEL rule refuses the first
+holding the second under the key `MONITORING_SECRET`. One CEL rule refuses the first
 without the second, because the control plane refuses that combination only when
-the first cluster is created. The chart renders the block from
+the first cluster is created, and another refuses a `secretRef` with an empty name,
+which would hand both pods a Secret reference that names nothing. The chart renders the block from
 `controlplane.observability.enabled`, naming the `simplyblock-grafana-secrets`
 Secret it renders beside it.
 

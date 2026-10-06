@@ -162,6 +162,7 @@ func TestControlPlaneCELRequiresASecretForMonitoring(t *testing.T) {
 		name          string
 		observability *simplyblockv1alpha2.ControlPlaneObservability
 		wantDenied    bool
+		wantReason    string
 	}{
 		{
 			name: "monitoring with its secret",
@@ -178,6 +179,23 @@ func TestControlPlaneCELRequiresASecretForMonitoring(t *testing.T) {
 			name:          "monitoring without its secret",
 			observability: &simplyblockv1alpha2.ControlPlaneObservability{EnableMonitoring: true},
 			wantDenied:    true,
+		},
+		{
+			name: "monitoring with a secret that names nothing",
+			observability: &simplyblockv1alpha2.ControlPlaneObservability{
+				EnableMonitoring: true,
+				SecretRef:        &corev1.LocalObjectReference{},
+			},
+			wantDenied: true,
+			wantReason: "secretRef.name must not be empty",
+		},
+		{
+			name: "a secret that names nothing is refused with monitoring off too",
+			observability: &simplyblockv1alpha2.ControlPlaneObservability{
+				SecretRef: &corev1.LocalObjectReference{Name: ""},
+			},
+			wantDenied: true,
+			wantReason: "secretRef.name must not be empty",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -201,8 +219,12 @@ func TestControlPlaneCELRequiresASecretForMonitoring(t *testing.T) {
 				t.Fatal("monitoring was enabled with no secret, and the control plane " +
 					"refuses that when the first cluster is created")
 			case tc.wantDenied:
-				if !strings.Contains(err.Error(), "enableMonitoring requires secretRef") {
-					t.Errorf("denied with %q, want the rule's own message", err)
+				reason := tc.wantReason
+				if reason == "" {
+					reason = "enableMonitoring requires secretRef"
+				}
+				if !strings.Contains(err.Error(), reason) {
+					t.Errorf("denied with %q, want %q", err, reason)
 				}
 			case err != nil:
 				t.Fatalf("a legal block was denied: %v", err)
