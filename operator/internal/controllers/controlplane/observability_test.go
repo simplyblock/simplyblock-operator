@@ -13,11 +13,17 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 const testMonitoringSecret = "simplyblock-grafana-secrets"
+
+// enabled is how both an environment flag and the log collector's annotation
+// spell on.
+const enabled = "true"
 
 // A control plane with monitoring enabled tells the management API so, and gives
 // it and the admin pod the admin password from the named Secret.
@@ -36,7 +42,7 @@ func TestMonitoringEnabledReachesTheControlPlanesEnvironment(t *testing.T) {
 	objects := managementAPIObjects(cp)
 
 	api := findDeployment(t, objects, ComponentWebAPI).Spec.Template.Spec.Containers[0]
-	if got := envNamed(api.Env, "ENABLE_MONITORING"); got == nil || got.Value != "true" {
+	if got := envNamed(api.Env, "ENABLE_MONITORING"); got == nil || got.Value != enabled {
 		t.Errorf("management API ENABLE_MONITORING = %v, want \"true\"", got)
 	}
 
@@ -89,4 +95,23 @@ func envNamed(env []corev1.EnvVar, name string) *corev1.EnvVar {
 		}
 	}
 	return nil
+}
+
+// Every process class of the database is marked for the log collector. The
+// FoundationDB operator replaces general.podTemplate wholesale for a class that
+// overrides it, so a mark on general alone reaches neither storage nor log.
+//
+// Regression: 2026-10-06-graylog-receives-nothing — no database pod was marked,
+// so the processes holding every cluster definition never reached Graylog.
+func TestEveryDatabaseProcessClassIsShippedToTheLogCollector(t *testing.T) {
+	cluster := foundationDBCluster(localControlPlane())
+
+	for _, class := range []string{"general", "storage", "log"} {
+		annotations, _, _ := unstructured.NestedStringMap(cluster.Object,
+			"spec", "processes", class, "podTemplate", "metadata", "annotations")
+		if got := annotations[utils.AnnotationLogCollector]; got != enabled {
+			t.Errorf("process class %s %s = %q, want \"true\"",
+				class, utils.AnnotationLogCollector, got)
+		}
+	}
 }

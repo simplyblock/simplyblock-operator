@@ -45,6 +45,7 @@ import (
 
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // The FoundationDB group, and the version of it this install writes.
@@ -345,6 +346,7 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 	peerTLS := fdbPeerTLS(cp)
 	classTemplate := func(class string) map[string]any {
 		template := map[string]any{
+			"metadata": logCollectorMetadata(),
 			"spec": map[string]any{
 				"serviceAccountName": fdbPodServiceAccount,
 				"containers": []any{
@@ -382,6 +384,7 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 	general := map[string]any{
 		"customParameters": []any{"knob_disable_posix_kernel_aio=1"},
 		"podTemplate": map[string]any{
+			"metadata": logCollectorMetadata(),
 			"spec": map[string]any{
 				"serviceAccountName": fdbPodServiceAccount,
 				"containers":         []any{fdbContainer(fdb, peerTLS)},
@@ -448,6 +451,15 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 	obj.SetName(ComponentFDBCluster)
 	obj.SetNamespace(cp.Namespace)
 	return obj
+}
+
+// logCollectorMetadata marks a database pod for the log collector. Each process
+// class gets its own copy, because the FoundationDB operator replaces
+// general.podTemplate wholesale for a class that overrides it.
+func logCollectorMetadata() map[string]any {
+	return map[string]any{
+		"annotations": map[string]any{utils.AnnotationLogCollector: "true"},
+	}
 }
 
 // fdbContainer is the resource envelope and security context of the database

@@ -66,6 +66,7 @@ import (
 
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // indexJobAttempts is how many times the backfill runs before Kubernetes
@@ -144,7 +145,7 @@ func indexJob(cp *simplyblockv1alpha2.ControlPlane) *batchv1.Job {
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels:      labels,
-					Annotations: map[string]string{"log-collector/enabled": "true"},
+					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
 				},
 				Spec: spec,
 			},

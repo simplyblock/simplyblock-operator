@@ -29,6 +29,7 @@ import (
 
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // fdbExporterImage turns FoundationDB's machine-readable status into Prometheus
@@ -317,7 +318,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels:      labels,
-					Annotations: map[string]string{"log-collector/enabled": "true"},
+					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
 				},
 				Spec: spec,
 			},
@@ -458,7 +459,7 @@ func servicePoolDeployment(
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels:      labels,
-					Annotations: map[string]string{"log-collector/enabled": "true"},
+					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
 				},
 				Spec: spec,
 			},
@@ -534,7 +535,7 @@ func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploy
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels:      labels,
-					Annotations: map[string]string{"log-collector/enabled": "true"},
+					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
 				},
 				Spec: spec,
 			},
