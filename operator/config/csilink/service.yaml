@@ -1,0 +1,29 @@
+# The endpoint the CSI node and controller pods dial to reach the operator.
+#
+# The connection runs this way round on purpose: nothing listens on a node, so
+# the deployment needs no per-node ingress, no address discovery, and no
+# NetworkPolicy beyond a pod reaching a Service. The operator issues its RPCs
+# back down the connection the CSI pod opened.
+#
+# It is a kustomization of its own, outside config/default, because that one
+# carries namePrefix and this name is not free to change: the plugins resolve
+# simplyblock-csi-link by name (internal/controllers/driver/link.go), and a
+# prefixed Service is one nothing dials. The chart renders the same Service from
+# templates/csi-link-svc.yaml for an installation that does not use the bundle.
+apiVersion: v1
+kind: Service
+metadata:
+  name: simplyblock-csi-link
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  type: ClusterIP
+  selector:
+    control-plane: controller-manager
+    app.kubernetes.io/name: simplyblock-operator
+  ports:
+    - name: csi-link
+      port: 9500
+      targetPort: 9500
+      protocol: TCP
