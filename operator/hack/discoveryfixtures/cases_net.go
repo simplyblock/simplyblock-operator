@@ -391,6 +391,20 @@ func netCases() map[string]Case {
 		"NET-67": unknown(
 			netHost("worker-01", slow("10.10.10.1"), jumbo("ens5f0", 25000, holding("10.20.0.1/32"))),
 			netHost("worker-02", slow("10.10.10.2"), jumbo("ens5f0", 25000, holding("10.20.0.2/32")))),
+
+		"NET-68": unknown(
+			netHost("worker-01", slow("10.10.10.1"), jumbo("ens5f0", 25000, holding("10.20.0.1/32"))),
+			netHost("worker-02", slow("10.10.10.2"))),
+
+		"NET-69": unknown(
+			netHost("worker-01", slow("10.10.10.1"),
+				jumbo("ens5f0", 25000, holding("10.20.0.1", "10.30.0.1"))),
+			netHost("worker-02", slow("10.10.10.2"),
+				jumbo("ens5f0", 25000, holding("10.21.0.2", "10.30.0.2")))),
+
+		"NET-70": unknown(netHost("worker-01",
+			slow("10.10.10.1"),
+			jumbo("ens5f0", 25000, holding("169.254.1.1/16", "10.20.0.1")))),
 	}
 
 	// A bond whose members sit in two sockets, which has no memory node at all.
@@ -482,6 +496,9 @@ func netCases() map[string]Case {
 		"NET-65": "one-data-network-under-two-names",
 		"NET-66": "two-workers-on-two-data-networks",
 		"NET-67": "data-addresses-that-are-host-routes",
+		"NET-68": "a-host-route-data-nic-beside-a-worker-without-one",
+		"NET-69": "data-nics-sharing-only-a-second-address",
+		"NET-70": "a-data-nic-whose-first-address-is-link-local",
 	}
 	gaps := map[string]string{
 		"NET-04": "G-7", "NET-22": "G-23", "NET-23": "G-24", "NET-27": "G-26",

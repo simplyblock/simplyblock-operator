@@ -55,7 +55,7 @@ func alignManagement(workers []Worker) ([]Worker, []Refusal) {
 	networks := make([][]netip.Prefix, len(workers))
 	support := map[netip.Prefix]int{}
 	for i, worker := range workers {
-		networks[i] = networksOf(interfacesByName(worker.Report)[worker.Mgmt.Name], false)
+		networks[i] = networksOf(interfacesByName(worker.Report)[worker.Mgmt.Name])
 		for _, network := range networks[i] {
 			support[network]++
 		}
@@ -99,7 +99,10 @@ func alignManagement(workers []Worker) ([]Worker, []Refusal) {
 // every worker serves data on its management interface instead.
 //
 // An interface holding no comparable network, a host route only, is kept as it
-// is and counts as neither holding nor missing a network.
+// is and counts as neither holding nor missing a network. Unless every worker
+// left names a data interface, none does: the control plane binds the data
+// interfaces once for the whole cluster, and a worker without them would be
+// handed interfaces it does not have.
 func alignData(workers []Worker) ([]Worker, []Refusal) {
 	held := make([][]netip.Prefix, len(workers))
 	for i, worker := range workers {
@@ -128,6 +131,12 @@ func alignData(workers []Worker) ([]Worker, []Refusal) {
 		}
 		worker.Data = onNetworks(worker, fleet)
 		kept = append(kept, worker)
+	}
+
+	if slices.ContainsFunc(kept, func(worker Worker) bool { return len(worker.Data) == 0 }) {
+		for i := range kept {
+			kept[i].Data = nil
+		}
 	}
 	return kept, refusals
 }
@@ -188,7 +197,7 @@ func dataNetworksOf(worker Worker) []netip.Prefix {
 	index := interfacesByName(worker.Report)
 	out := make([]netip.Prefix, 0, len(worker.Data))
 	for _, name := range worker.Data {
-		out = append(out, networksOf(index[name], true)...)
+		out = append(out, dataNetworkOf(index[name])...)
 	}
 	slices.SortFunc(out, comparePrefixes)
 	return slices.Compact(out)
@@ -200,7 +209,7 @@ func onNetworks(worker Worker, networks []netip.Prefix) []string {
 	index := interfacesByName(worker.Report)
 	var out []string
 	for _, name := range worker.Data {
-		held := networksOf(index[name], true)
+		held := dataNetworkOf(index[name])
 		if len(held) == 0 || slices.ContainsFunc(held, func(network netip.Prefix) bool {
 			return slices.Contains(networks, network)
 		}) {
@@ -211,23 +220,39 @@ func onNetworks(worker Worker, networks []netip.Prefix) []string {
 }
 
 // networksOf is the networks an interface's addresses are on, ascending and
-// without repeats, leaving out a host route, which names no network, and an
-// address nothing could reach the machine on. ipv4Only keeps the IPv4 networks
-// alone, which are the only ones the control plane serves data on.
-func networksOf(iface nodeprobe.Interface, ipv4Only bool) []netip.Prefix {
+// without repeats, leaving out the addresses networkOf names none for.
+func networksOf(iface nodeprobe.Interface) []netip.Prefix {
 	var out []netip.Prefix
 	for _, address := range iface.Addresses {
-		prefix, err := netip.ParsePrefix(address)
-		if err != nil || !reachable(address) || prefix.IsSingleIP() {
-			continue
+		if network, named := networkOf(address); named {
+			out = append(out, network)
 		}
-		if ipv4Only && !prefix.Addr().Is4() {
-			continue
-		}
-		out = append(out, prefix.Masked())
 	}
 	slices.SortFunc(out, comparePrefixes)
 	return slices.Compact(out)
+}
+
+// dataNetworkOf is the network of a data interface's first IPv4 address, the
+// only one the control plane listens on, or none when that address names none.
+func dataNetworkOf(iface nodeprobe.Interface) []netip.Prefix {
+	first, found := firstIPv4(iface)
+	if !found {
+		return nil
+	}
+	if network, named := networkOf(first); named {
+		return []netip.Prefix{network}
+	}
+	return nil
+}
+
+// networkOf is the network an address is on. A host route names none, and
+// neither does an address nothing could reach the machine on.
+func networkOf(address string) (netip.Prefix, bool) {
+	prefix, err := netip.ParsePrefix(address)
+	if err != nil || !reachable(address) || prefix.IsSingleIP() {
+		return netip.Prefix{}, false
+	}
+	return prefix.Masked(), true
 }
 
 // comparePrefixes orders networks by address, then by prefix length.

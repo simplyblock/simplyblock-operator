@@ -147,12 +147,12 @@ func dataInterfaces(report nodeprobe.Report, index map[string]nodeprobe.Interfac
 //
 // A physical NIC, a bond, or a team qualifies: a data interface is the link
 // itself, and a VLAN or a bridge on top of one is somebody's network design for
-// a reviewer to name rather than a reading. It has to be up, and it has to hold
-// an IPv4 address: the control plane reads a data
-// interface's address with `ip -j address show` and keeps the first `inet`
-// entry only, then opens its listeners on that address and skips an interface
-// that has none. An interface holding only IPv6 addresses is accepted by the
-// control plane and serves nothing.
+// a reviewer to name rather than a reading. It has to be up, and its first IPv4
+// address has to be reachable: the control plane reads a data interface's
+// address with `ip -j address show` and keeps the first `inet` entry only, then
+// opens its listeners on that address and skips an interface that has none. An
+// interface holding only IPv6 addresses is accepted by the control plane and
+// serves nothing, and one whose first IPv4 address is link-local serves on that.
 func servesData(iface nodeprobe.Interface) bool {
 	switch interfaceKind(iface) {
 	case inventory.LinkPhysical, inventory.LinkBond, inventory.LinkTeam:
@@ -162,9 +162,19 @@ func servesData(iface nodeprobe.Interface) bool {
 	if iface.State != "" && iface.State != "up" && iface.State != "unknown" {
 		return false
 	}
-	return slices.ContainsFunc(iface.Addresses, func(address string) bool {
-		return reachable(address) && ipOf(address).To4() != nil
-	})
+	first, found := firstIPv4(iface)
+	return found && reachable(first)
+}
+
+// firstIPv4 is the first IPv4 address an interface holds, in the order the
+// host reports them, which is the one address the control plane serves data on.
+func firstIPv4(iface nodeprobe.Interface) (string, bool) {
+	for _, address := range iface.Addresses {
+		if ip := ipOf(address); ip != nil && ip.To4() != nil {
+			return address, true
+		}
+	}
+	return "", false
 }
 
 // driverOf is the driver behind an interface: its own for a NIC, and the one
