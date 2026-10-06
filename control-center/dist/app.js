@@ -12032,16 +12032,18 @@ function Field({
     }, /*#__PURE__*/React.createElement(Icon, {
       n: "x",
       s: 10
-    })))), /*#__PURE__*/React.createElement("select", {
+    })))), opts2.length > 0 ? /*#__PURE__*/React.createElement("select", {
       className: "finput sm chipadd",
       value: "",
       onChange: e => e.target.value && setVal(sel.concat(e.target.value))
     }, /*#__PURE__*/React.createElement("option", {
       value: ""
-    }, opts2.length ? f.addLabel || "— add —" : f.empty || "nothing more to add"), opts2.map(o => /*#__PURE__*/React.createElement("option", {
+    }, f.addLabel || "— add —"), opts2.map(o => /*#__PURE__*/React.createElement("option", {
       key: o.v,
       value: o.v
-    }, o.l)))), verr ? /*#__PURE__*/React.createElement("span", {
+    }, o.l))) : !sel.length && /*#__PURE__*/React.createElement("span", {
+      className: "rempty"
+    }, f.empty || "nothing to add")), verr ? /*#__PURE__*/React.createElement("span", {
       className: "fhint",
       style: {
         color: "var(--bad)"
@@ -12185,7 +12187,7 @@ function Field({
     // Header and rows share one grid template, so the columns line up whatever
     // a cell holds. Each column has a floor (c.min); below the sum of the
     // floors the box scrolls sideways instead of letting cells overlap.
-    const colMin = c => c.min || (c.type === "multi" ? 170 : c.type === "number" ? 72 : c.readonly ? 110 : c.type === "select" ? 130 : 110);
+    const colMin = c => c.min || (c.type === "multi" ? 130 : c.type === "number" ? 64 : c.readonly ? 90 : c.type === "select" ? 120 : 90);
     const extra = [ra ? `${ra.width || 72}px` : null, f.reorder ? "52px" : null, !fixed ? "28px" : null].filter(Boolean);
     const template = f.cols.map(c => `minmax(${colMin(c)}px, ${c.flex || 1}fr)`).concat(extra).join(" ");
     const floor = f.cols.reduce((a, c) => a + colMin(c), 0) + extra.reduce((a, x) => a + parseInt(x, 10), 0) + 6 * (f.cols.length + extra.length);
@@ -12228,17 +12230,20 @@ function Field({
           }, /*#__PURE__*/React.createElement(Icon, {
             n: "x",
             s: 9
-          })))), /*#__PURE__*/React.createElement("select", {
+          })))), rest.length > 0 ? /*#__PURE__*/React.createElement("select", {
             className: "finput sm radd",
             value: "",
-            disabled: off || !rest.length,
+            disabled: off,
+            title: c.addLabel || "add",
             onChange: e => e.target.value && set(i, c.k, cur.concat(e.target.value))
           }, /*#__PURE__*/React.createElement("option", {
             value: ""
-          }, rest.length ? c.addLabel || "+ add" : c.empty || "—"), rest.map(o => /*#__PURE__*/React.createElement("option", {
+          }, c.addLabel || "+ add"), rest.map(o => /*#__PURE__*/React.createElement("option", {
             key: o.v,
             value: o.v
-          }, o.l))));
+          }, o.l))) : !cur.length && c.empty ? /*#__PURE__*/React.createElement("span", {
+            className: "rempty"
+          }, c.empty) : null);
         }
         const cur = r[c.k] || "";
         const known = opts.some(o => o.v === cur);
@@ -12311,10 +12316,13 @@ function Field({
         className: "chip rowact",
         title: ra.title || ra.label,
         disabled: off || !!(checks[i] && checks[i].status === "busy"),
-        onClick: () => runCheck(() => ra.run(r, vals || {}, i), x => setChecks(c => Object.assign({}, c, {
+        onClick: () => runCheck(() => ra.run(r, vals || {}, i, {
+          reprepare,
+          setAll
+        }), x => setChecks(c => Object.assign({}, c, {
           [i]: x
         })))
-      }, ra.label || "Test"), f.reorder && /*#__PURE__*/React.createElement("span", {
+      }, typeof ra.label === "function" ? ra.label(r) : ra.label || "Test"), f.reorder && /*#__PURE__*/React.createElement("span", {
         className: "rmove"
       }, /*#__PURE__*/React.createElement("button", {
         type: "button",
@@ -12607,13 +12615,13 @@ function LanesField({
     className: "flabel"
   }, f.label, " ", /*#__PURE__*/React.createElement("em", null, "(", chosen.length, " of ", items.length, ")")), !items.length ? /*#__PURE__*/React.createElement("div", {
     className: "fempty"
-  }, f.empty || "Nothing to choose from.") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("select", {
+  }, f.empty || "Nothing to choose from.") : /*#__PURE__*/React.createElement(React.Fragment, null, rest.length > 0 && /*#__PURE__*/React.createElement("select", {
     className: "finput sm laneadd",
     value: "",
     onChange: e => e.target.value && put(e.target.value, Math.max(1, lanes - 1))
   }, /*#__PURE__*/React.createElement("option", {
     value: ""
-  }, rest.length ? f.addLabel || "— add —" : "everything is in a lane"), rest.map(x => /*#__PURE__*/React.createElement("option", {
+  }, f.addLabel || "— add —"), rest.map(x => /*#__PURE__*/React.createElement("option", {
     key: x.v,
     value: x.v
   }, x.l, x.sub ? ` — ${x.sub}` : ""))), /*#__PURE__*/React.createElement("div", {
@@ -29555,14 +29563,15 @@ const tierCols = (disc, cluster, nss) => [{
   k: "name",
   label: "Tier",
   placeholder: "db",
-  flex: 0.7
+  flex: 0.6,
+  min: 70
 }, {
   k: "kinds",
   label: "Resource types",
   type: "multi",
   options: RESOURCE_TYPE_OPTIONS,
   addLabel: "+ type",
-  flex: 1.6
+  flex: 1.5
 }, {
   k: "labels",
   label: "Labels",
@@ -29570,14 +29579,14 @@ const tierCols = (disc, cluster, nss) => [{
   options: r => tierLabelOptions(disc, cluster, nss, r),
   addLabel: "+ label",
   empty: "no labels reported",
-  flex: 1.8
+  flex: 1.6
 }, {
   k: "ready",
   label: "Ready when",
   type: "multi",
   options: GATE_TYPE_OPTIONS,
   addLabel: "+ gate",
-  flex: 1.4
+  flex: 1.3
 }];
 const GATE_TEMPLATES = [{
   v: "tcp",
@@ -29821,18 +29830,25 @@ const protectAppDialogDR = (plans, cfg) => ({
       type: "text",
       required: true,
       placeholder: "shop",
-      validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label: lower-case letters, digits and \"-\"." : x && (apps || []).some(a => a.name === x && a.namespace === (v.namespace || opsNs)) ? `${x} is protected already.` : null
-    }, {
+      validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label: lower-case letters, digits and \"-\"." : x && (apps || []).some(a => a.name === x && a.namespace === (v.appKind === "managed" ? v.namespace : opsNs)) ? `${x} is protected already.` : null
+    },
+    // A discovered application's DR objects (ProtectedApplication, DRPC) live
+    // in the hub's Ramen operations namespace, which the hub's configuration
+    // names: no choice to make. A managed application's live next to its
+    // OCM Placement.
+    discovered ? {
+      k: "nOps",
+      type: "note",
+      icon: "check",
+      label: `Its DR objects are kept in the hub namespace ${opsNs} (Ramen operations namespace).`
+    } : {
       k: "namespace",
-      label: "Namespace of the ProtectedApplication",
-      type: discovered ? "select" : "text",
+      label: "Placement namespace — where the application's OCM Placement lives",
+      type: "text",
       required: true,
-      def: discovered ? opsNs : "",
-      options: discovered ? [{
-        v: opsNs,
-        l: `${opsNs} (Ramen's ops namespace)`
-      }] : undefined,
-      placeholder: "the Placement's namespace"
+      def: "",
+      placeholder: "the Placement's namespace",
+      validate: x => x && !DNS_LABEL_RE.test(x) ? "A namespace name." : null
     }, {
       k: "source",
       label: "Source site",
@@ -30000,9 +30016,10 @@ const protectAppDialogDR = (plans, cfg) => ({
         }
       } : {})
     });
+    const opsNs = cfg && cfg.ramen && cfg.ramen.opsNamespace || DR_NS();
     return drhub.createApp({
       name: v.name.trim(),
-      namespace: v.namespace.trim(),
+      namespace: v.appKind === "managed" ? (v.namespace || "").trim() : opsNs,
       spec
     });
   }
@@ -30111,7 +30128,7 @@ const rplanFields = (v, paths, apps, fixedPath) => {
     k: "nNs",
     type: "note",
     icon: nss.length === 1 || chosenNs.length === 1 ? "check" : "alert",
-    label: !items.length ? `No protected application is on ${path ? path.name : "the path"} yet: protect applications along it first.` : chosenNs.length === 1 ? `Namespace of the protected applications (RecoveryPlan namespace): ${chosenNs[0]}` : nss.length === 1 ? `Namespace of the protected applications (RecoveryPlan namespace): ${nss[0]}` : `The applications on this path are in ${nss.join(", ")}: a recovery plan holds applications of one namespace, which it is created in.`
+    label: !items.length ? `No protected application is on ${path ? path.name : "the path"} yet: protect applications along it first.` : chosenNs.length === 1 ? `Kept in the hub namespace of the DR objects (Ramen operations namespace): ${chosenNs[0]}` : nss.length === 1 ? `Kept in the hub namespace of the DR objects (Ramen operations namespace): ${nss[0]}` : `The applications on this path are in ${nss.join(", ")}: a recovery plan holds applications of one namespace, which it is created in.`
   }, {
     k: "apps",
     label: "Applications by priority — lane 1 moves first",
@@ -30294,323 +30311,364 @@ const dhcpAnswerOf = (st, servers, found) => {
     lines
   };
 };
-const editBindingsDialog = s => ({
-  title: `Bindings of ${s.name}`,
-  confirm: "Save",
-  done: "SiteProfile updated",
-  desc: "How this site's networks map for recovered VMs (ADR 0020): the NAD each logical role is on here, the guest subnet of each role with the host ids never handed out, and the DHCP server the reservations are rendered to. Proposals come from what the site's dr-agent reports.",
-  prepare: () => Promise.all([drhub.dhcpServers(), drhub.discovery(), drhub.siteProfiles().catch(() => []), drhub.paths().catch(() => [])]).then(([ds, disc, profiles, paths]) => ({
-    servers: ds.filter(d => d.site === s.name),
-    disc,
-    others: profiles.filter(p => p.name !== s.name),
-    paths
-  })),
-  fields: (v, prep) => {
-    const {
-      servers = [],
+const editBindingsDialog = s => {
+  // the single registered server preselected as the site default while the
+  // default field is not shown: saving uses it when no default was chosen
+  let lastOnlyOne = "";
+  return {
+    title: `Bindings of ${s.name}`,
+    confirm: "Save",
+    done: "SiteProfile updated",
+    desc: "How this site's networks map for recovered VMs (ADR 0020): the NAD each logical role is on here, the guest subnet of each role with the host ids never handed out, and the DHCP server the reservations are rendered to. Proposals come from what the site's dr-agent reports.",
+    prepare: () => Promise.all([drhub.dhcpServers(), drhub.discovery(), drhub.siteProfiles().catch(() => []), drhub.paths().catch(() => [])]).then(([ds, disc, profiles, paths]) => ({
+      servers: ds.filter(d => d.site === s.name),
       disc,
-      others = [],
-      paths = []
-    } = prep || {};
-    const d = discOf(disc, s.name);
-    const cur = srvRef((s.spec || {}).dhcpServerRef);
-    const unregistered = n => n && !servers.some(x => x.name === n);
-    // the isolated test networks of this site, and the server to propose for
-    // its guest networks: registered first, else a discovered one to register
-    const testNads = testNadsOf(disc, s.name, paths);
-    // the NADs of the roles that have a guest network (all bound roles when none has one yet)
-    // (the profile's own bindings while the form has no values yet: the defaults)
-    const gnetsNow = v.gnets || gnetRows(s.spec || {}),
-      lnetsNow = v.lnets || lnetRows(s.spec || {});
-    const guestRoles = gnetsNow.map(g => g.role).filter(Boolean);
-    const roleNads = lnetsNow.filter(l => !guestRoles.length || guestRoles.includes(l.role)).map(l => l.nad);
-    const prop = proposeDHCPServer(disc, s.name, roleNads, servers, testNads);
-    // the site default never proposes a name nothing registered
-    const dhcpDef = cur && !unregistered(cur) ? cur : prop.registered || "";
-    // every guest network already reaches a registered server: nothing to register
-    const served = gnetsNow.length > 0 && gnetsNow.every(g => g.dhcpServerRef ? !unregistered(g.dhcpServerRef) : !!((v.dhcp !== undefined ? v.dhcp : dhcpDef) && !unregistered(v.dhcp !== undefined ? v.dhcp : dhcpDef)));
-    const nadOpts = (d && d.nads || []).map(n => ({
-      v: nadRef(n),
-      l: `${nadRef(n)}${n.vlan ? ` (VLAN ${n.vlan})` : ""}${n.type ? ` ${n.type}` : ""}`
-    }));
-    const roles = uniqSorted(others.flatMap(p => ((p.spec || {}).logicalNetworks || []).map(l => l.role)).concat(((s.spec || {}).logicalNetworks || []).map(l => l.role), (v.lnets || []).map(l => l.role), ["app"]));
-    const roleNad = role => ((v.lnets || []).find(l => l.role === role) || {}).nad || "";
-    const pairs = proposeRoles(disc, s.name, others.map(p => ({
-      name: p.name,
-      spec: p.spec
-    })));
-    const found = d && d.dhcpServers || [];
-    const proposedGuest = (role, nad) => {
-      const sub = nadSubnet(disc, s.name, nad);
-      const srv = dhcpServersOn(disc, s.name, nad).map(f => servers.find(x => x.dnsmasq && x.dnsmasq.namespace === f.namespace && x.dnsmasq.configMap === f.hostsConfigMap)).find(Boolean);
-      return {
-        role,
-        cidr: sub.cidr,
-        reservedHostIDs: sub.cidr ? proposedReserved(disc, s.name, nad, sub.cidr).join(", ") : "1, 2",
-        dhcpServerRef: srv && srv.name !== dhcpDef ? srv.name : ""
+      others: profiles.filter(p => p.name !== s.name),
+      paths
+    })),
+    fields: (v, prep) => {
+      const {
+        servers = [],
+        disc,
+        others = [],
+        paths = []
+      } = prep || {};
+      const d = discOf(disc, s.name);
+      const cur = srvRef((s.spec || {}).dhcpServerRef);
+      const unregistered = n => n && !servers.some(x => x.name === n);
+      // the isolated test networks of this site, and the server to propose for
+      // its guest networks: registered first, else a discovered one to register
+      const testNads = testNadsOf(disc, s.name, paths);
+      // the NADs of the roles that have a guest network (all bound roles when none has one yet)
+      // (the profile's own bindings while the form has no values yet: the defaults)
+      const gnetsNow = v.gnets || gnetRows(s.spec || {}),
+        lnetsNow = v.lnets || lnetRows(s.spec || {});
+      const guestRoles = gnetsNow.map(g => g.role).filter(Boolean);
+      const roleNads = lnetsNow.filter(l => !guestRoles.length || guestRoles.includes(l.role)).map(l => l.nad);
+      const prop = proposeDHCPServer(disc, s.name, roleNads, servers, testNads);
+      // the site default never proposes a name nothing registered
+      const dhcpDef = cur && !unregistered(cur) ? cur : prop.registered || "";
+      // every guest network already reaches a registered server: nothing to register
+      const served = gnetsNow.length > 0 && gnetsNow.every(g => g.dhcpServerRef ? !unregistered(g.dhcpServerRef) : !!((v.dhcp !== undefined ? v.dhcp : dhcpDef) && !unregistered(v.dhcp !== undefined ? v.dhcp : dhcpDef)));
+      const nadOpts = (d && d.nads || []).map(n => ({
+        v: nadRef(n),
+        l: `${nadRef(n)}${n.vlan ? ` (VLAN ${n.vlan})` : ""}${n.type ? ` ${n.type}` : ""}`
+      }));
+      const roles = uniqSorted(others.flatMap(p => ((p.spec || {}).logicalNetworks || []).map(l => l.role)).concat(((s.spec || {}).logicalNetworks || []).map(l => l.role), (v.lnets || []).map(l => l.role), ["app"]));
+      const roleNad = role => ((v.lnets || []).find(l => l.role === role) || {}).nad || "";
+      const pairs = proposeRoles(disc, s.name, others.map(p => ({
+        name: p.name,
+        spec: p.spec
+      })));
+      const foundAll = d && d.dhcpServers || [];
+      // test-network (bubble) servers serve the isolated test network, never a
+      // guest network: not offered here
+      const found = foundAll.filter(f => !isBubbleServer(disc, s.name, f, testNads));
+      const bubbles = foundAll.length - found.length;
+      const registeredFor = f => servers.find(x => x.dnsmasq && f && x.dnsmasq.namespace === f.namespace && x.dnsmasq.configMap === f.hostsConfigMap);
+      // with one registered server on the guest networks' segment (or nothing
+      // reported to tell), that server is the site default; the default field
+      // only matters with several servers, several guest networks, or a single
+      // server that serves another segment
+      const onlyOne = servers.length === 1 && (prop.registered ? prop.registered === servers[0].name : !d) ? servers[0].name : "";
+      lastOnlyOne = onlyOne;
+      const showDefault = servers.length > 1 || gnetsNow.length > 1 || servers.length === 1 && !onlyOne;
+      const siteDefault = (v.dhcp !== undefined ? v.dhcp : dhcpDef) || onlyOne;
+      const proposedGuest = (role, nad) => {
+        const sub = nadSubnet(disc, s.name, nad);
+        const srv = dhcpServersOn(disc, s.name, nad).map(f => servers.find(x => x.dnsmasq && x.dnsmasq.namespace === f.namespace && x.dnsmasq.configMap === f.hostsConfigMap)).find(Boolean);
+        return {
+          role,
+          cidr: sub.cidr,
+          reservedHostIDs: sub.cidr ? proposedReserved(disc, s.name, nad, sub.cidr).join(", ") : "1, 2",
+          dhcpServerRef: srv && srv.name !== dhcpDef ? srv.name : ""
+        };
       };
-    };
-    return [!servers.length && {
-      k: "n0",
-      type: "note",
-      label: found.length ? `No DHCP server is registered for ${s.name}; ${found.length} found on its networks — register one below.` : `No DHCP server is registered for ${s.name}. Register one under Disaster recovery → DHCP servers; until then guest addresses are not reserved on this site.`
-    }, !d && {
-      k: "nRep",
-      type: "note",
-      label: `dr-agent on ${s.name} has not reported its networks: nothing can be proposed; bind by hand with the override.`
-    }, pairs.length > 0 && {
-      k: "pair",
-      type: "apply",
-      label: "Proposed role bindings",
-      button: "Accept the proposal",
-      hint: () => pairs.map(x => `${x.role} ← ${x.nad} (${x.why})`).join("; "),
-      apply: vv => {
-        const lnets = pairs.map(x => ({
-          role: x.role,
-          nad: x.nad
-        })).concat((vv.lnets || []).filter(l => !pairs.some(x => x.role === l.role)));
-        const gnets = pairs.map(x => (vv.gnets || []).find(g => g.role === x.role) || proposedGuest(x.role, x.nad)).concat((vv.gnets || []).filter(g => !pairs.some(x => x.role === g.role)));
-        return {
-          lnets,
-          gnets
-        };
-      },
-      done: "Accepted: the bindings below are filled in; review them before saving."
-    }, {
-      k: "bindOverride",
-      label: "Bind by hand (roles, NADs and subnets as text)",
-      type: "checkbox",
-      def: false
-    }, {
-      k: "lnets",
-      label: "Logical networks — role → NAD on this site",
-      type: "rows",
-      max: 8,
-      addLabel: "Add network",
-      def: lnetRows(s.spec || {}),
-      cols: v.bindOverride ? LNET_COLS : [{
-        k: "role",
-        label: "Role",
-        type: "select",
-        blank: "— role —",
-        options: roles.map(r => ({
-          v: r,
-          l: r
-        })),
-        flex: 0.8
-      }, {
-        k: "nad",
-        label: "NetworkAttachmentDefinition",
-        type: "select",
-        blank: "— NAD —",
-        options: nadOpts,
-        unknown: x => `${x} (not on ${s.name})`,
-        flex: 2.4
-      }],
-      add: () => ({
-        role: roles.find(r => !(v.lnets || []).some(l => l.role === r)) || "app",
-        nad: ""
-      }),
-      rowError: (r, i, rows) => rows.filter(x => x.role === r.role).length > 1 ? `Role ${r.role} is bound twice.` : !v.bindOverride && r.nad && d && !nadOpts.some(o => o.v === r.nad) ? `${r.nad} is not a NAD of ${s.name}.` : null,
-      rowsBlock: true
-    }, {
-      k: "gnets",
-      label: "Guest networks — the subnet of each role here",
-      type: "rows",
-      max: 8,
-      addLabel: "Add subnet",
-      def: gnetRows(s.spec || {}),
-      cols: v.bindOverride ? gnetCols(servers) : [{
-        k: "role",
-        label: "Role",
-        type: "select",
-        blank: "— role —",
-        options: (v.lnets || []).map(l => ({
-          v: l.role,
-          l: l.role
-        })),
-        flex: 0.7
-      }, {
-        k: "cidr",
-        label: "Guest subnet",
-        placeholder: "proposed from the NAD",
-        flex: 1.3
-      }, {
-        k: "reservedHostIDs",
-        label: "Reserved host ids",
-        placeholder: "1, 2",
-        flex: 0.9
-      }, {
-        k: "dhcpServerRef",
-        label: "DHCP server",
-        type: "select",
-        blank: "— the site's default —",
-        options: servers.map(x => ({
-          v: x.name,
-          l: x.name
-        })),
-        unknown: x => `${x} (not registered)`,
-        flex: 1.1
-      }],
-      sync: x => {
-        if (v.bindOverride || !x) return undefined;
-        let changed = false;
-        const n = x.map(g => {
-          if (g.cidr || !roleNad(g.role)) return g;
-          const p2 = proposedGuest(g.role, roleNad(g.role));
-          if (!p2.cidr) return g;
-          changed = true;
-          return Object.assign({}, g, {
-            cidr: p2.cidr,
-            reservedHostIDs: g.reservedHostIDs || p2.reservedHostIDs,
-            dhcpServerRef: g.dhcpServerRef || p2.dhcpServerRef
-          });
-        });
-        return changed ? n : undefined;
-      },
-      add: () => {
-        const role = ((v.lnets || []).find(l => !(v.gnets || []).some(g => g.role === l.role)) || {}).role || "app";
-        return proposedGuest(role, roleNad(role));
-      },
-      rowError: r => guestRowError(disc, s.name, r, roleNad(r.role), servers) || (r.cidr && !v.bindOverride && !roleNad(r.role) ? `Role ${r.role} has no NAD on ${s.name}: bind it above.` : null),
-      rowsBlock: true,
-      rowInfo: r => {
-        const ips = nadAddresses(disc, s.name, roleNad(r.role));
-        const sub = nadSubnet(disc, s.name, roleNad(r.role));
-        return sub.cidr ? `${sub.cidr} from ${sub.source}${ips.length ? `; VMs at ${ips.slice(0, 4).join(", ")}` : ""}` : null;
-      },
-      rowAction: {
-        label: "Ask",
-        title: "Ask the DHCP servers on this role's NAD for an address (a short-lived pod on the network; dr-admin)",
-        run: r => {
-          const nad = roleNad(r.role);
-          if (!nad) throw new Error(`Bind role ${r.role} to a NAD first.`);
-          return drhub.probeDHCP({
-            cluster: s.name,
-            nad
-          }).then(st => dhcpAnswerOf(st, servers, found));
-        }
-      },
-      hint: `The DHCP servers registered for ${s.name}: ${servers.map(x => x.name).join(", ") || "none"}. "Ask" finds servers outside the cluster too; those cannot take reservations from the hub.`
-    },
-    // stays after it registered the server, so its answer stays readable
-    (!prop.registered && prop.discovered && !served || v._regUsed) && {
-      k: "regUse",
-      type: "apply",
-      refresh: true,
-      label: "Proposed DHCP server",
-      button: v._regUsed ? "Registered" : "Register and use",
-      disabled: vv => !!vv._regUsed,
-      hint: () => {
-        const f = prop.discovered;
-        if (!f) return `registered as ${v._regUsed}`;
-        return `${f.namespace}/${f.owner || f.pod} on ${(f.nads || []).map(n => `${n.nad}${(n.ips || []).length ? ` @${n.ips[0]}` : ""}`).join(", ")}, reservations in ${f.namespace}/${f.hostsConfigMap}` + (unregistered(cur) ? `. It is registered as ${cur}, the name this profile already uses, so the guest networks that name it work as they are.` : ". It is registered and set as the site's DHCP server.");
-      },
-      apply: async vv => {
-        const f = prop.discovered;
-        const name = unregistered(cur) ? cur : dns63(`${s.name}-${(f.owner || f.pod).split("/").pop()}`);
-        await drhub.createDHCPServer({
-          name,
-          site: s.name,
-          namespace: f.namespace,
-          configMap: f.hostsConfigMap
-        });
-        // rows that named an unregistered server fall back to the site default
-        return {
-          _regUsed: name,
-          dhcp: name,
-          gnets: (vv.gnets || []).map(g => g.dhcpServerRef && g.dhcpServerRef !== name && unregistered(g.dhcpServerRef) ? Object.assign({}, g, {
-            dhcpServerRef: ""
-          }) : g)
-        };
-      },
-      done: "Registered and set as the site's DHCP server; review the bindings, then save."
-    }, found.length > 0 && {
-      k: "found",
-      label: `DHCP servers found on ${s.name}'s networks`,
-      type: "rows",
-      fixed: true,
-      def: found.map(f => ({
-        pod: `${f.namespace}/${f.owner || f.pod}`,
-        nad: (f.nads || []).map(n => `${n.nad}${(n.ips || []).length ? ` @${n.ips[0]}` : ""}`).join(", "),
-        ranges: (f.ranges || []).join("; "),
-        hosts: f.hostsConfigMap ? `${f.namespace}/${f.hostsConfigMap}` : "",
-        _f: f
-      })),
-      cols: [{
-        k: "pod",
-        label: "Server",
-        readonly: true,
-        flex: 1.3
-      }, {
-        k: "nad",
-        label: "On",
-        readonly: true,
-        flex: 1.6
-      }, {
-        k: "ranges",
-        label: "Ranges",
-        readonly: true,
-        flex: 1.4
-      }, {
-        k: "hosts",
-        label: "Reservations ConfigMap",
-        readonly: true,
-        flex: 1.2
-      }],
-      rowInfo: r => {
-        const reg = servers.find(x => x.dnsmasq && r._f && x.dnsmasq.namespace === r._f.namespace && x.dnsmasq.configMap === r._f.hostsConfigMap);
-        const bubble = r._f && isBubbleServer(disc, s.name, r._f, testNads) ? "test network (bubble) server: it serves the isolated test network, not a guest network" : null;
-        return [bubble, reg ? `registered as ${reg.name}` : r._f && !r._f.hostsConfigMap ? "reads no hosts file from a ConfigMap: the hub cannot render reservations to it" : null].filter(Boolean).join("; ") || null;
-      },
-      rowAction: {
-        label: "Register",
-        title: "Register this server for the site: dr-hub renders the reservations into its ConfigMap",
-        run: r => {
-          const f = r._f;
-          if (!f || !f.hostsConfigMap) throw new Error("This server reads no hosts file from a ConfigMap.");
-          if (servers.some(x => x.dnsmasq && x.dnsmasq.namespace === f.namespace && x.dnsmasq.configMap === f.hostsConfigMap)) return {
-            status: "ok",
-            text: "registered already"
+      return [!servers.length && {
+        k: "n0",
+        type: "note",
+        label: found.length ? `No DHCP server is registered for ${s.name}; ${found.length} found on its networks — register one below.` : `No DHCP server is registered for ${s.name}. Register one under Disaster recovery → DHCP servers; until then guest addresses are not reserved on this site.`
+      }, !d && {
+        k: "nRep",
+        type: "note",
+        label: `dr-agent on ${s.name} has not reported its networks: nothing can be proposed; bind by hand with the override.`
+      }, pairs.length > 0 && {
+        k: "pair",
+        type: "apply",
+        label: "Proposed role bindings",
+        button: "Accept the proposal",
+        hint: () => pairs.map(x => `${x.role} ← ${x.nad} (${x.why})`).join("; "),
+        apply: vv => {
+          const lnets = pairs.map(x => ({
+            role: x.role,
+            nad: x.nad
+          })).concat((vv.lnets || []).filter(l => !pairs.some(x => x.role === l.role)));
+          const gnets = pairs.map(x => (vv.gnets || []).find(g => g.role === x.role) || proposedGuest(x.role, x.nad)).concat((vv.gnets || []).filter(g => !pairs.some(x => x.role === g.role)));
+          return {
+            lnets,
+            gnets
           };
-          const name = dns63(`${s.name}-${(f.owner || f.pod).split("/").pop()}`);
-          return drhub.createDHCPServer({
+        },
+        done: "Accepted: the bindings below are filled in; review them before saving."
+      }, {
+        k: "bindOverride",
+        label: "Bind by hand (roles, NADs and subnets as text)",
+        type: "checkbox",
+        def: false
+      }, {
+        k: "lnets",
+        label: "Logical networks — role → NAD on this site",
+        type: "rows",
+        max: 8,
+        addLabel: "Add network",
+        def: lnetRows(s.spec || {}),
+        cols: v.bindOverride ? LNET_COLS : [{
+          k: "role",
+          label: "Role",
+          type: "select",
+          blank: "— role —",
+          options: roles.map(r => ({
+            v: r,
+            l: r
+          })),
+          flex: 0.8
+        }, {
+          k: "nad",
+          label: "NetworkAttachmentDefinition",
+          type: "select",
+          blank: "— NAD —",
+          options: nadOpts,
+          unknown: x => `${x} (not on ${s.name})`,
+          flex: 2.4
+        }],
+        add: () => ({
+          role: roles.find(r => !(v.lnets || []).some(l => l.role === r)) || "app",
+          nad: ""
+        }),
+        rowError: (r, i, rows) => rows.filter(x => x.role === r.role).length > 1 ? `Role ${r.role} is bound twice.` : !v.bindOverride && r.nad && d && !nadOpts.some(o => o.v === r.nad) ? `${r.nad} is not a NAD of ${s.name}.` : null,
+        rowsBlock: true
+      }, {
+        k: "gnets",
+        label: "Guest networks — the subnet of each role here",
+        type: "rows",
+        max: 8,
+        addLabel: "Add subnet",
+        def: gnetRows(s.spec || {}),
+        cols: v.bindOverride ? gnetCols(servers) : [{
+          k: "role",
+          label: "Role",
+          type: "select",
+          blank: "— role —",
+          options: (v.lnets || []).map(l => ({
+            v: l.role,
+            l: l.role
+          })),
+          flex: 0.7
+        }, {
+          k: "cidr",
+          label: "Guest subnet",
+          placeholder: "proposed from the NAD",
+          flex: 1.3
+        }, {
+          k: "reservedHostIDs",
+          label: "Reserved host ids",
+          placeholder: "1, 2",
+          flex: 0.9
+        }, servers.length > 0 && {
+          k: "dhcpServerRef",
+          label: "DHCP server",
+          type: "select",
+          blank: `site default (${siteDefault || "none"})`,
+          options: servers.filter(x => !(servers.length === 1 && x.name === siteDefault)).map(x => ({
+            v: x.name,
+            l: x.name
+          })),
+          unknown: x => `${x} (not registered)`,
+          flex: 1.1
+        }].filter(Boolean),
+        sync: x => {
+          if (v.bindOverride || !x) return undefined;
+          let changed = false;
+          const n = x.map(g => {
+            if (g.cidr || !roleNad(g.role)) return g;
+            const p2 = proposedGuest(g.role, roleNad(g.role));
+            if (!p2.cidr) return g;
+            changed = true;
+            return Object.assign({}, g, {
+              cidr: p2.cidr,
+              reservedHostIDs: g.reservedHostIDs || p2.reservedHostIDs,
+              dhcpServerRef: g.dhcpServerRef || p2.dhcpServerRef
+            });
+          });
+          return changed ? n : undefined;
+        },
+        add: () => {
+          const role = ((v.lnets || []).find(l => !(v.gnets || []).some(g => g.role === l.role)) || {}).role || "app";
+          return proposedGuest(role, roleNad(role));
+        },
+        rowError: r => guestRowError(disc, s.name, r, roleNad(r.role), servers) || (r.cidr && !v.bindOverride && !roleNad(r.role) ? `Role ${r.role} has no NAD on ${s.name}: bind it above.` : null),
+        rowsBlock: true,
+        rowInfo: r => {
+          const ips = nadAddresses(disc, s.name, roleNad(r.role));
+          const sub = nadSubnet(disc, s.name, roleNad(r.role));
+          return sub.cidr ? `${sub.cidr} from ${sub.source}${ips.length ? `; VMs at ${ips.slice(0, 4).join(", ")}` : ""}` : null;
+        },
+        rowAction: {
+          label: "Ask",
+          title: "Ask the DHCP servers on this role's NAD for an address (a short-lived pod on the network; dr-admin)",
+          run: r => {
+            const nad = roleNad(r.role);
+            if (!nad) throw new Error(`Bind role ${r.role} to a NAD first.`);
+            return drhub.probeDHCP({
+              cluster: s.name,
+              nad
+            }).then(st => dhcpAnswerOf(st, servers, found));
+          }
+        },
+        hint: servers.length ? `A role's own DHCP server wins over the site default. Registered for ${s.name}: ${servers.map(x => x.name).join(", ")}. "Ask" finds servers outside the cluster too; those cannot take reservations from the hub.` : `No DHCP server registered for ${s.name}: guest addresses are not reserved until one is registered and used (below). "Ask" finds servers outside the cluster too; those cannot take reservations from the hub.`
+      },
+      // stays after it registered the server, so its answer stays readable
+      (!prop.registered && prop.discovered && !served || v._regUsed) && {
+        k: "regUse",
+        type: "apply",
+        refresh: true,
+        label: "Proposed DHCP server",
+        button: v._regUsed ? "Registered" : "Register and use",
+        disabled: vv => !!vv._regUsed,
+        hint: () => {
+          const f = prop.discovered;
+          if (!f) return `registered as ${v._regUsed}`;
+          return `${f.namespace}/${f.owner || f.pod} on ${(f.nads || []).map(n => `${n.nad}${(n.ips || []).length ? ` @${n.ips[0]}` : ""}`).join(", ")}, reservations in ${f.namespace}/${f.hostsConfigMap}` + (unregistered(cur) ? `. It is registered as ${cur}, the name this profile already uses, so the guest networks that name it work as they are.` : ". It is registered and set as the site's DHCP server.");
+        },
+        apply: async vv => {
+          const f = prop.discovered;
+          const name = unregistered(cur) ? cur : dns63(`${s.name}-${(f.owner || f.pod).split("/").pop()}`);
+          await drhub.createDHCPServer({
             name,
             site: s.name,
             namespace: f.namespace,
             configMap: f.hostsConfigMap
-          }).then(() => ({
-            status: "ok",
-            text: `registered as ${name}; reopen the bindings to choose it`
-          }));
+          });
+          // rows that named an unregistered server fall back to the site default
+          return {
+            _regUsed: name,
+            dhcp: name,
+            gnets: (vv.gnets || []).map(g => g.dhcpServerRef && g.dhcpServerRef !== name && unregistered(g.dhcpServerRef) ? Object.assign({}, g, {
+              dhcpServerRef: ""
+            }) : g)
+          };
+        },
+        done: "Registered and set as the site's DHCP server; review the bindings, then save."
+      }, found.length > 0 && {
+        k: "found",
+        label: `DHCP servers found on ${s.name}'s networks${bubbles ? ` (${bubbles} test-network server${bubbles > 1 ? "s" : ""} not shown)` : ""}`,
+        type: "rows",
+        fixed: true,
+        def: found.map(f => ({
+          pod: `${f.namespace}/${f.owner || f.pod}`,
+          nad: (f.nads || []).map(n => `${n.nad}${(n.ips || []).length ? ` @${n.ips[0]}` : ""}`).join(", "),
+          ranges: (f.ranges || []).join("; "),
+          hosts: f.hostsConfigMap ? `${f.namespace}/${f.hostsConfigMap}` : "",
+          _f: f
+        })),
+        cols: [{
+          k: "pod",
+          label: "Server",
+          readonly: true,
+          flex: 1.3
+        }, {
+          k: "nad",
+          label: "On",
+          readonly: true,
+          flex: 1.6
+        }, {
+          k: "ranges",
+          label: "Ranges",
+          readonly: true,
+          flex: 1.4
+        }, {
+          k: "hosts",
+          label: "Reservations ConfigMap",
+          readonly: true,
+          flex: 1.2
+        }],
+        rowInfo: r => {
+          const reg = servers.find(x => x.dnsmasq && r._f && x.dnsmasq.namespace === r._f.namespace && x.dnsmasq.configMap === r._f.hostsConfigMap);
+          return reg ? `registered as ${reg.name}` : r._f && !r._f.hostsConfigMap ? "reads no hosts file from a ConfigMap: the hub cannot render reservations to it" : null;
+        },
+        rowAction: {
+          label: r => registeredFor(r._f) ? "Use" : "Register and use",
+          width: 118,
+          title: "Register this server for the site (dr-hub renders the reservations into its ConfigMap) and select it for the guest networks",
+          run: async (r, vv, i, ctx) => {
+            const f = r._f;
+            if (!f || !f.hostsConfigMap) throw new Error("This server reads no hosts file from a ConfigMap.");
+            const known = registeredFor(f);
+            const name = known ? known.name : dns63(`${s.name}-${(f.owner || f.pod).split("/").pop()}`);
+            if (!known) await drhub.createDHCPServer({
+              name,
+              site: s.name,
+              namespace: f.namespace,
+              configMap: f.hostsConfigMap
+            });
+            // the dialog's server list was loaded when it opened: load it again
+            // so the selects offer the new server, then select it
+            if (ctx && ctx.reprepare) await ctx.reprepare();
+            const onNads = (f.nads || []).map(n => n.nad);
+            const def = vv.dhcp || name;
+            if (ctx && ctx.setAll) ctx.setAll({
+              dhcp: def,
+              gnets: (vv.gnets || []).map(g => !g.dhcpServerRef && def !== name && onNads.includes(roleNad(g.role)) ? Object.assign({}, g, {
+                dhcpServerRef: name
+              }) : g)
+            });
+            return {
+              status: "ok",
+              text: known ? `${name} selected` : `registered as ${name} and selected`
+            };
+          }
         }
-      }
-    }, unregistered(cur) && {
-      k: "nCur",
-      type: "note",
-      label: `This profile names the DHCP server ${cur}, which is not registered for ${s.name}: its reservations are rendered nowhere. ${prop.discovered && !prop.registered ? "Register and use the proposed server above (it keeps the name " + cur + "), or choose a registered one." : "Choose a registered server, or register one."}`
-    }, {
-      k: "dhcp",
-      label: "DHCP server of the site (default for every guest network)",
-      type: "select",
-      def: dhcpDef,
-      options: [{
-        v: "",
-        l: "— none —"
-      }].concat(servers.map(x => ({
-        v: x.name,
-        l: `${x.name} (${x.target || x.type})`
-      })), unregistered(cur) ? [{
-        v: cur,
-        l: `${cur} (not registered)`
-      }] : []),
-      validate: x => unregistered(x) ? `DHCP server ${x} is not registered for ${s.name}.` : null
-    }].filter(Boolean);
-  },
-  run: v => drhub.patchSiteProfile(s, bindingsSpec(Object.assign({}, v, {
-    dhcp: v.dhcp && v.dhcp.trim() ? v.dhcp.trim() : ""
-  })))
-});
+      }, unregistered(cur) && {
+        k: "nCur",
+        type: "note",
+        label: `This profile names the DHCP server ${cur}, which is not registered for ${s.name}: its reservations are rendered nowhere. ${prop.discovered && !prop.registered ? "Register and use the proposed server above (it keeps the name " + cur + "), or choose a registered one." : "Choose a registered server, or register one."}`
+      }, !servers.length && !unregistered(cur) && {
+        k: "nNoSrv",
+        type: "note",
+        icon: "alert",
+        label: found.length ? `No DHCP server registered for ${s.name}: "Register and use" one of the servers found above.` : `No DHCP server registered for ${s.name}, and none found on its networks: register one under Disaster recovery → DHCP servers.`
+      }, servers.length > 0 && !showDefault && !unregistered(cur) && {
+        k: "nOne",
+        type: "note",
+        icon: "check",
+        label: `Guest networks without their own server use ${siteDefault}, the site's DHCP server.`
+      }, (servers.length > 0 || unregistered(cur)) && (showDefault || unregistered(cur)) && {
+        k: "dhcp",
+        label: "DHCP server of the site (default for every guest network)",
+        type: "select",
+        def: dhcpDef || onlyOne,
+        hint: "A role's own DHCP server wins over this default. Registering a server does not use it: select it here or for a role.",
+        options: [{
+          v: "",
+          l: "— none —"
+        }].concat(servers.map(x => ({
+          v: x.name,
+          l: `${x.name} (${x.target || x.type})`
+        })), unregistered(cur) ? [{
+          v: cur,
+          l: `${cur} (not registered)`
+        }] : []),
+        validate: x => unregistered(x) ? `DHCP server ${x} is not registered for ${s.name}.` : null
+      }].filter(Boolean);
+    },
+    run: v => {
+      const chosen = v.dhcp && v.dhcp.trim() ? v.dhcp.trim() : "";
+      return drhub.patchSiteProfile(s, bindingsSpec(Object.assign({}, v, {
+        dhcp: chosen || lastOnlyOne
+      })));
+    }
+  };
+};
 const newDHCPServerDialog = (sites, profiles) => ({
   title: "Register a DHCP server",
   confirm: "Create",

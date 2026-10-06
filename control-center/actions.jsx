@@ -1509,10 +1509,12 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
         <span className="flabel">{f.label} <em>({sel.length})</em></span>
         <div className="chipbox">
           {sel.map(x => <span key={x} className="chip mono">{x}<button type="button" className="kebab" title={`Remove ${x}`} onClick={() => setVal(sel.filter(y => y !== x))}><Icon n="x" s={10} /></button></span>)}
-          <select className="finput sm chipadd" value="" onChange={e => e.target.value && setVal(sel.concat(e.target.value))}>
-            <option value="">{opts2.length ? (f.addLabel || "— add —") : (f.empty || "nothing more to add")}</option>
-            {opts2.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
-          </select>
+          {opts2.length > 0
+            ? <select className="finput sm chipadd" value="" onChange={e => e.target.value && setVal(sel.concat(e.target.value))}>
+              <option value="">{f.addLabel || "— add —"}</option>
+              {opts2.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+            </select>
+            : !sel.length && <span className="rempty">{f.empty || "nothing to add"}</span>}
         </div>
         {verr ? <span className="fhint" style={{color: "var(--bad)"}}>{verr}</span>
           : f.hint && <span className="fhint" style={{color: "var(--dim)"}}>{typeof f.hint === "function" ? f.hint(val, vals || {}) : f.hint}</span>}
@@ -1575,7 +1577,7 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
     // Header and rows share one grid template, so the columns line up whatever
     // a cell holds. Each column has a floor (c.min); below the sum of the
     // floors the box scrolls sideways instead of letting cells overlap.
-    const colMin = c => c.min || (c.type === "multi" ? 170 : c.type === "number" ? 72 : c.readonly ? 110 : c.type === "select" ? 130 : 110);
+    const colMin = c => c.min || (c.type === "multi" ? 130 : c.type === "number" ? 64 : c.readonly ? 90 : c.type === "select" ? 120 : 90);
     const extra = [ra ? `${ra.width || 72}px` : null, f.reorder ? "52px" : null, !fixed ? "28px" : null].filter(Boolean);
     const template = f.cols.map(c => `minmax(${colMin(c)}px, ${c.flex || 1}fr)`).concat(extra).join(" ");
     const floor = f.cols.reduce((a, c) => a + colMin(c), 0) + extra.reduce((a, x) => a + parseInt(x, 10), 0) + 6 * (f.cols.length + extra.length);
@@ -1591,9 +1593,11 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
           return <span key={c.k} className="rmulti" style={w}>
             {cur.map(x => <span key={x} className="chip mono" style={{fontSize: 10.5}}>{(opts.find(o => o.v === x) || {l: x}).l}
               <button type="button" className="kebab" disabled={off} title={`Remove ${x}`} onClick={() => set(i, c.k, cur.filter(y => y !== x))}><Icon n="x" s={9} /></button></span>)}
-            <select className="finput sm radd" value="" disabled={off || !rest.length} onChange={e => e.target.value && set(i, c.k, cur.concat(e.target.value))}>
-              <option value="">{rest.length ? (c.addLabel || "+ add") : (c.empty || "—")}</option>
-              {rest.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}</select>
+            {rest.length > 0
+              ? <select className="finput sm radd" value="" disabled={off} title={c.addLabel || "add"} onChange={e => e.target.value && set(i, c.k, cur.concat(e.target.value))}>
+                <option value="">{c.addLabel || "+ add"}</option>
+                {rest.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}</select>
+              : !cur.length && c.empty ? <span className="rempty">{c.empty}</span> : null}
           </span>;
         }
         const cur = r[c.k] || "";
@@ -1625,7 +1629,7 @@ function Field({f, val, setVal, vals, setAll, reprepare}) {
                   {f.cols.map(c => cell(r, i, c))}
                   {ra && <button type="button" className="chip rowact" title={ra.title || ra.label}
                     disabled={off || !!(checks[i] && checks[i].status === "busy")}
-                    onClick={() => runCheck(() => ra.run(r, vals || {}, i), x => setChecks(c => Object.assign({}, c, {[i]: x})))}>{ra.label || "Test"}</button>}
+                    onClick={() => runCheck(() => ra.run(r, vals || {}, i, {reprepare, setAll}), x => setChecks(c => Object.assign({}, c, {[i]: x})))}>{typeof ra.label === "function" ? ra.label(r) : (ra.label || "Test")}</button>}
                   {f.reorder && <span className="rmove">
                     <button type="button" className="kebab rowup" title="Move up" disabled={off || i === 0} onClick={() => move(i, -1)}>↑</button>
                     <button type="button" className="kebab rowdown" title="Move down" disabled={off || i === rows.length - 1} onClick={() => move(i, 1)}>↓</button></span>}
@@ -1758,10 +1762,10 @@ function LanesField({f, val, setVal, vals}) {
     <div className="field lanes">
       <span className="flabel">{f.label} <em>({chosen.length} of {items.length})</em></span>
       {!items.length ? <div className="fempty">{f.empty || "Nothing to choose from."}</div> : <>
-        <select className="finput sm laneadd" value="" onChange={e => e.target.value && put(e.target.value, Math.max(1, lanes - 1))}>
-          <option value="">{rest.length ? (f.addLabel || "— add —") : "everything is in a lane"}</option>
+        {rest.length > 0 && <select className="finput sm laneadd" value="" onChange={e => e.target.value && put(e.target.value, Math.max(1, lanes - 1))}>
+          <option value="">{f.addLabel || "— add —"}</option>
           {rest.map(x => <option key={x.v} value={x.v}>{x.l}{x.sub ? ` — ${x.sub}` : ""}</option>)}
-        </select>
+        </select>}
         <div style={{display: "flex", flexDirection: "column", gap: 6, marginTop: 6}}>
           {Array.from({length: lanes}, (_, i) => i + 1).map(p => (
             <div key={p} className="lane" data-priority={p} style={{border: "1px dashed var(--line)", borderRadius: 6, padding: 6, minHeight: 30}}
