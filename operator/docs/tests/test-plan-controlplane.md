@@ -168,6 +168,8 @@ would be the old `Degraded` under a new name.
 | U-183     | The `Job` against a database that demands no client certificate: no TLS material and no `FDB_TLS_*`, so the step waits on no `Secret`                                                                    | Negative | `TestTheIndexJobCarriesNoCertificateWhenTheDatabaseAsksForNone`       |
 | U-184     | The `Job` carries an `activeDeadlineSeconds` within the step's budget, so one whose pods are never created is reported `Failed` rather than staying active                                               | Boundary | `TestTheIndexJobFailsOnItsOwnDeadline`                                |
 | U-185     | The failure message separates `BackoffLimitExceeded` from `DeadlineExceeded`, and the second sends its reader to whether a pod exists at all                                                             | Boundary | `TestTheFailureMessageSeparatesARefusalFromABackfillThatNeverStarted` |
+| U-186     | `observability` with `enableMonitoring` and a `secretRef`: the management API carries `ENABLE_MONITORING=true`, and it and the admin pod read `MONITORING_SECRET` from that Secret                       | Positive | `TestMonitoringEnabledReachesTheControlPlanesEnvironment`             |
+| U-187     | No `observability` block: `ENABLE_MONITORING=false`, and no workload names a monitoring Secret                                                                                                           | Negative | `TestMonitoringStaysOffWithoutTheObservabilityBlock`                  |
 
 ### TLS (design §5.1, §12 Q2)
 
@@ -270,32 +272,34 @@ installation rows additionally need the FoundationDB CRDs installed into
 
 ### Admission (design §3.2)
 
-| #    | Scenario                                                                             | Type     | Test |
-|------|--------------------------------------------------------------------------------------|----------|------|
-| I-01 | `spec.source` omitted: rejected as `Required`                                        | Negative | —    |
-| I-02 | Both `managed` and `external` set: rejected by the CEL rule                          | Negative | —    |
-| I-03 | Neither set: rejected by the same rule                                               | Boundary | —    |
-| I-04 | `spec.source` changed from `managed` to `external`: rejected as immutable            | Negative | —    |
-| I-05 | `spec.source.managed.image` outside the trusted registries: rejected                 | Negative | —    |
-| I-06 | `spec.source.external.endpoint` malformed: rejected by the pattern                   | Negative | —    |
-| I-07 | `spec.source.external.credentialsSecretRef` omitted: rejected as `Required`          | Negative | —    |
-| I-08 | `spec.source.managed.foundationDB.replicas` of 0: rejected by the minimum            | Boundary | —    |
-| I-09 | `spec.source.managed.foundationDB.replicas` unset: defaulted to 3                    | Boundary | —    |
-| I-40 | `spec.source.managed.replicas` unset: defaulted to 2, matching what the chart ships  | Boundary | —    |
-| I-41 | `spec.source.managed.replicas` of 0: rejected by the minimum                         | Boundary | —    |
-| I-42 | `spec.source.managed.replicas` of 1: accepted, since an edge deployment may want it  | Boundary | —    |
-| I-12 | `ControlPlaneOps.spec.action` outside the enum: rejected by admission                | Negative | —    |
-| I-13 | `ControlPlaneOps.spec.controlPlaneRef` changed after creation: rejected              | Negative | —    |
-| I-14 | Short names `cp` and `cpops` resolve to the same lists as the full kinds             | Positive | —    |
-| I-30 | A `ControlPlaneOps` naming an external `ControlPlane`: denied by the webhook         | Negative | —    |
-| I-31 | The same for `action: Restart` and for `action: Upgrade`, with one message shape     | Negative | —    |
-| I-32 | A `ControlPlaneOps` naming a managed `ControlPlane`: admitted                        | Positive | —    |
-| I-33 | A `ControlPlaneOps` naming no `ControlPlane` at all: denied, naming the ref          | Negative | —    |
-| I-34 | The webhook runs on `create` only, so a status update on an existing one is admitted | Boundary | —    |
-| I-35 | The webhook denies rather than erroring when the target is external                  | Negative | —    |
-| I-36 | `spec.action` of `Backup`: accepted by the enum                                      | Positive | —    |
-| I-37 | `spec.backup.blobStore` omitted for `action: Backup`: rejected as `Required`         | Negative | —    |
-| I-38 | `spec.restart.components` with duplicate entries: rejected by `listType=set`         | Negative | —    |
+| #    | Scenario                                                                             | Type     | Test                                              |
+|------|--------------------------------------------------------------------------------------|----------|---------------------------------------------------|
+| I-01 | `spec.source` omitted: rejected as `Required`                                        | Negative | —                                                 |
+| I-02 | Both `managed` and `external` set: rejected by the CEL rule                          | Negative | —                                                 |
+| I-03 | Neither set: rejected by the same rule                                               | Boundary | —                                                 |
+| I-04 | `spec.source` changed from `managed` to `external`: rejected as immutable            | Negative | —                                                 |
+| I-05 | `spec.source.managed.image` outside the trusted registries: rejected                 | Negative | —                                                 |
+| I-06 | `spec.source.external.endpoint` malformed: rejected by the pattern                   | Negative | —                                                 |
+| I-07 | `spec.source.external.credentialsSecretRef` omitted: rejected as `Required`          | Negative | —                                                 |
+| I-08 | `spec.source.managed.foundationDB.replicas` of 0: rejected by the minimum            | Boundary | —                                                 |
+| I-09 | `spec.source.managed.foundationDB.replicas` unset: defaulted to 3                    | Boundary | —                                                 |
+| I-40 | `spec.source.managed.replicas` unset: defaulted to 2, matching what the chart ships  | Boundary | —                                                 |
+| I-41 | `spec.source.managed.replicas` of 0: rejected by the minimum                         | Boundary | —                                                 |
+| I-42 | `spec.source.managed.replicas` of 1: accepted, since an edge deployment may want it  | Boundary | —                                                 |
+| I-43 | `observability.enableMonitoring` without `secretRef`: rejected by the CEL rule       | Negative | `TestControlPlaneCELRequiresASecretForMonitoring` |
+| I-44 | `observability` with `enableMonitoring` unset: accepted with no `secretRef`          | Boundary | `TestControlPlaneCELRequiresASecretForMonitoring` |
+| I-12 | `ControlPlaneOps.spec.action` outside the enum: rejected by admission                | Negative | —                                                 |
+| I-13 | `ControlPlaneOps.spec.controlPlaneRef` changed after creation: rejected              | Negative | —                                                 |
+| I-14 | Short names `cp` and `cpops` resolve to the same lists as the full kinds             | Positive | —                                                 |
+| I-30 | A `ControlPlaneOps` naming an external `ControlPlane`: denied by the webhook         | Negative | —                                                 |
+| I-31 | The same for `action: Restart` and for `action: Upgrade`, with one message shape     | Negative | —                                                 |
+| I-32 | A `ControlPlaneOps` naming a managed `ControlPlane`: admitted                        | Positive | —                                                 |
+| I-33 | A `ControlPlaneOps` naming no `ControlPlane` at all: denied, naming the ref          | Negative | —                                                 |
+| I-34 | The webhook runs on `create` only, so a status update on an existing one is admitted | Boundary | —                                                 |
+| I-35 | The webhook denies rather than erroring when the target is external                  | Negative | —                                                 |
+| I-36 | `spec.action` of `Backup`: accepted by the enum                                      | Positive | —                                                 |
+| I-37 | `spec.backup.blobStore` omitted for `action: Backup`: rejected as `Required`         | Negative | —                                                 |
+| I-38 | `spec.restart.components` with duplicate entries: rejected by `listType=set`         | Negative | —                                                 |
 
 ### Controller Behavior Under a Real API Server (design §4, §7)
 

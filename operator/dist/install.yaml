@@ -2302,6 +2302,42 @@ spec:
                           chart it replaces took, and a deployment migrating off the chart has the
                           value already written down.
                         type: object
+                      observability:
+                        description: |-
+                          Observability connects this control plane to the monitoring stack
+                          installed beside it: Graylog, Grafana, and OpenSearch. Absent leaves
+                          monitoring off.
+                        properties:
+                          enableMonitoring:
+                            description: |-
+                              EnableMonitoring provisions the monitoring stack when the first storage
+                              cluster is created. Unset is off.
+                            type: boolean
+                          secretRef:
+                            description: |-
+                              SecretRef names a Secret in this namespace holding the monitoring stack's
+                              admin password under the key MONITORING_SECRET. Required when
+                              EnableMonitoring is set. A pod naming a Secret that does not exist does
+                              not start.
+                            properties:
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                            type: object
+                            x-kubernetes-map-type: atomic
+                        type: object
+                        x-kubernetes-validations:
+                        - message: 'enableMonitoring requires secretRef: the control
+                            plane cannot provision the monitoring stack without its
+                            admin password'
+                          rule: '!has(self.enableMonitoring) || !self.enableMonitoring
+                            || has(self.secretRef)'
                       replicas:
                         default: 2
                         description: |-

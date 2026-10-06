@@ -93,6 +93,32 @@ func prometheusEnv() []corev1.EnvVar {
 	}
 }
 
+// monitoringSecretKey is the key the monitoring stack's admin password is read
+// from in the Secret the spec names. The chart's Secret carries it under this
+// key, and the control plane reads an environment variable of the same name.
+const monitoringSecretKey = "MONITORING_SECRET"
+
+// monitoringSecretEnv hands the monitoring stack's admin password to a container
+// that provisions it: the management API, which opens the Graylog input and
+// creates the Grafana user when the first cluster is created, and the admin pod,
+// whose command-line tooling does the same for a management node. Nothing is
+// returned when the spec names no Secret.
+func monitoringSecretEnv(managed *simplyblockv1alpha2.LocalControlPlane) []corev1.EnvVar {
+	ref := managed.MonitoringSecretRef()
+	if ref == nil {
+		return nil
+	}
+	return []corev1.EnvVar{{
+		Name: monitoringSecretKey,
+		ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: *ref,
+				Key:                  monitoringSecretKey,
+			},
+		},
+	}}
+}
+
 // namespaceEnv tells a container which namespace it is in, which is how the
 // control plane addresses the Kubernetes objects it manages.
 func namespaceEnv() corev1.EnvVar {
