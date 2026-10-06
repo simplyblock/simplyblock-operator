@@ -209,20 +209,37 @@ func TestASeriesWithNoIdentityLabelIsDropped(t *testing.T) {
 	}
 }
 
-// Load is what a volume is doing in both directions at once, so reads and
-// writes are summed rather than reported separately.
-func TestVolumeIOSumsReadsAndWrites(t *testing.T) {
-	api := &stubAPI{vector: model.Vector{
-		sample("lvol_read_io_ps", volumeLabels(), 1482),
-		sample("lvol_write_io_ps", volumeLabels(), 617),
-		sample("lvol_read_bytes_ps", volumeLabels(), 6070272),
-		sample("lvol_write_bytes_ps", volumeLabels(), 2529280),
-	}}
+// Load is what a volume is doing in both directions at once. The v2 exporter
+// publishes cumulative counters, so the provider asks Prometheus for the rate of
+// the read and write counters summed per volume, in one query so that both
+// figures describe the same instant. The summed series carry a kind label naming
+// which figure they are, because rate() drops the metric name.
+func TestVolumeIOReadsTheRateOfTheV2Counters(t *testing.T) {
+	ioSample := func(kind string, value float64) *model.Sample {
+		return &model.Sample{
+			Metric: model.Metric{"lvol": testVolume, "kind": model.LabelValue(kind)},
+			Value:  model.SampleValue(value),
+		}
+	}
+	api := &stubAPI{vector: model.Vector{ioSample("ops", 2099), ioSample("bytes", 8599552)}}
 
 	got, err := NewWithAPI(api).VolumeIO(context.Background(), testCluster)
 	if err != nil {
 		t.Fatalf("VolumeIO: %v", err)
 	}
+
+	if len(api.queries) != 1 {
+		t.Fatalf("issued %d queries, want 1: %v", len(api.queries), api.queries)
+	}
+	for _, want := range []string{
+		"rate(simplyblock_lvol_read_operations_total", "rate(simplyblock_lvol_write_operations_total",
+		"rate(simplyblock_lvol_read_bytes_total", "rate(simplyblock_lvol_write_bytes_total", testCluster,
+	} {
+		if !strings.Contains(api.queries[0], want) {
+			t.Errorf("query %q does not mention %q", api.queries[0], want)
+		}
+	}
+
 	io := got[testVolume]
 	if io.IOPS != 2099 {
 		t.Errorf("IOPS = %v, want 2099", io.IOPS)
