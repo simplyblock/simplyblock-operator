@@ -9,6 +9,7 @@ name: "Repo: Release"
 #     │                └─ build-operator ─┬─ release-operator ──┤ (OLM bundle)
 #     │                                   └─ package-operator-chart ─┐
 #     └─ package-csi-chart ──────────────────────────────────────┴─ merge-helm ─┴─ release-helm (FTPS publish)
+#                                                                                       └─ commit-helm-charts (PR against main)
 #
 #   build-operator ─ release-control-center (Control Center image; nothing waits on it)
 
@@ -24,7 +25,8 @@ on:
         type: string
 
 permissions:
-  contents: write   # operator release attaches the OLM bundle to the GitHub release
+  contents: write       # the OLM bundle upload and the commit-helm-charts branch push
+  pull-requests: write  # commit-helm-charts opens the pull request against main
 
 jobs:
   setup:
@@ -146,3 +148,61 @@ jobs:
           protocol: ftps
           server-dir: /
           local-dir: ./merged-charts/
+
+  # The published repository is rebuilt from the committed charts on every
+  # release, and the FTPS sync deletes whatever the rebuild lacks. This pull
+  # request commits the charts just published, so the next release keeps them.
+  commit-helm-charts:
+    name: Commit released helm charts
+    needs: [setup, release-helm]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: latest
+
+      - name: Download operator chart artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: helm-charts-operator
+          path: packaged/operator
+
+      - name: Download csi chart artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: helm-charts-csi
+          path: packaged/csi
+
+      - name: Add the released charts
+        run: |
+          helm-charts/scripts/add-released-charts.sh packaged/operator helm-charts/charts https://install.simplyblock.io/helm
+          helm-charts/scripts/add-released-charts.sh packaged/csi csi-driver/charts/spdk-csi https://install.simplyblock.io/helm
+          rm -rf packaged
+
+      - name: Open the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ needs.setup.outputs.version }}"
+          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+            echo "The charts of $VERSION are already committed"
+            exit 0
+          fi
+          BRANCH="release/helm-charts-$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git add helm-charts/charts csi-driver/charts/spdk-csi
+          git commit -m "chore(helm): commit the $VERSION charts"
+          git push --force origin "$BRANCH"
+          if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[]')" ]; then
+            gh pr create --base main --head "$BRANCH" \
+              --title "chore(helm): commit the $VERSION charts" \
+              --body "Commits the operator and spdk-csi charts that $VERSION published to https://install.simplyblock.io/helm. Merge it before the next release: the next release rebuilds the published repository from the committed charts and deletes any chart missing from main."
+          fi
