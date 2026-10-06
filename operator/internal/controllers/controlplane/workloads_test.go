@@ -450,17 +450,17 @@ func TestTheServicePoolsRunWhatTheyDeclare(t *testing.T) {
 	}
 }
 
-// Regression: 2026-10-01 — the tasks-runner-backup-merge container named a module
-// that does not exist in the control-plane image (backup_merge_service.py); the
-// real service is tasks_runner_backup_merge.py, like every other tasks-runner-*.
-// The container crash-looped ("python3: can't open file
-// '/app/simplyblock_core/services/backup_merge_service.py'"), which pinned the
-// whole tasks pod in CrashLoopBackOff. A .py-suffix check does not catch it, so
-// pin the real module name.
+// Regression: the tasks-runner-backup-merge container must name the module the
+// control-plane image ships, or it crash-loops ("python3: can't open file") and
+// pins the whole tasks pod. sbcli main's task-runner rework (#1226) ships it as
+// backup_merge_service.py; the older integrate_csi_addons_p0 image named it
+// tasks_runner_backup_merge.py (2026-10-01). The control plane now runs sbcli
+// main (integrate_csi_addons_p0 merged into it on 2026-10-05). A .py-suffix
+// check does not catch a wrong name, so pin it.
 func TestTheBackupMergeRunnerNamesItsRealModule(t *testing.T) {
 	cp := localControlPlane()
 	d := findDeployment(t, managementAPIObjects(cp), ComponentTasks)
-	const want = "simplyblock_core/services/tasks_runner_backup_merge.py"
+	const want = "simplyblock_core/services/backup_merge_service.py"
 	found := false
 	for _, container := range d.Spec.Template.Spec.Containers {
 		if container.Name != "tasks-runner-backup-merge" {
