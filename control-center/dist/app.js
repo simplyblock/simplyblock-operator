@@ -6231,6 +6231,40 @@ function dhcpServersOn(disc, cluster, nad) {
   const target = d.nads.find(x => nadRef(x) === nad);
   return d.dhcpServers.filter(s => (s.nads || []).some(sn => sn.nad === nad || target && seg(d.nads.find(x => nadRef(x) === sn.nad)) === seg(target) && seg(target) !== "|"));
 }
+// The DHCP server of a path's isolated test network (DRPath
+// spec.test.dhcpServerRef), chosen among the DHCPServers registered for the
+// target cluster: those dr-agent sees serving the isolated NAD first; a
+// server on another network is marked as such. candidate is a server found
+// on the NAD that is not registered yet (offered as "Register and use").
+function testDHCPChoice(disc, servers, cluster, nad) {
+  const d = discOf(disc, cluster);
+  const found = d && d.dhcpServers || [];
+  const onNad = nad ? dhcpServersOn(disc, cluster, nad) : [];
+  const same = (x, f) => x.dnsmasq && x.dnsmasq.namespace === f.namespace && x.dnsmasq.configMap === f.hostsConfigMap;
+  const mine = (servers || []).filter(x => x.site === cluster);
+  const rows = mine.map(x => {
+    const serves = onNad.some(f => same(x, f));
+    const seen = found.find(f => same(x, f));
+    const where = seen ? (seen.nads || []).map(n => n.nad).join(", ") : "";
+    return {
+      v: x.name,
+      serves,
+      l: serves ? `${x.name} — serves ${nad} (isolated test network)` : seen ? `${x.name} — on ${where}: production network, not recommended` : `${x.name} — not seen on any network by dr-agent`
+    };
+  }).sort((a, b) => (b.serves ? 1 : 0) - (a.serves ? 1 : 0) || a.v.localeCompare(b.v));
+  const recommended = (rows.find(r => r.serves) || {}).v || "";
+  const candidate = recommended ? null : onNad.find(f => f.hostsConfigMap && !mine.some(x => same(x, f))) || null;
+  return {
+    options: rows.map(r => ({
+      v: r.v,
+      l: r.l
+    })),
+    recommended,
+    candidate
+  };
+}
+// The name a discovered server is registered under for a cluster.
+const dhcpServerName = (cluster, f) => dns63(`${cluster}-${(f.owner || f.pod).split("/").pop()}`);
 // The isolated test (bubble) networks of a site: the isolated NAD of every
 // DRPath that tests on it, and the one the site itself reports.
 function testNadsOf(disc, cluster, paths) {
@@ -6636,6 +6670,8 @@ Object.assign(window, {
   nadAddresses,
   nadSubnet,
   dhcpServersOn,
+  testDHCPChoice,
+  dhcpServerName,
   proposedReserved,
   guestRowError,
   proposeRoles,
@@ -29236,7 +29272,7 @@ const RECENT_OPTIONS = ["168h", "336h", "720h", "2160h"].map(x => ({
   v: x,
   l: `${x} (${Number(x.slice(0, -1)) / 24} days)`
 }));
-const pathFields = (plan, disc, paths, v, fixedSites) => {
+const pathFields = (plan, disc, paths, v, fixedSites, servers) => {
   const sites = plan ? plan.sites : [];
   const site = n => sites.find(s => s.name === n);
   const auto = v.from && v.to ? `${v.from}-to-${v.to}`.slice(0, 63) : "";
@@ -29304,7 +29340,7 @@ const pathFields = (plan, disc, paths, v, fixedSites) => {
     empty: `${v.to || "The target"} reports no NetworkAttachmentDefinition.`,
     def: prop ? prop.nad : "",
     sync: x => !x && prop && prop.nad ? prop.nad : undefined
-  }, (v.actions || []).includes("Test") && {
+  }, ...testDHCPFields(disc, servers, target, v), (v.actions || []).includes("Test") && {
     k: "cap",
     label: "Test: max clone capacity (empty: no limit)",
     type: "text",
@@ -29321,6 +29357,48 @@ const pathFields = (plan, disc, paths, v, fixedSites) => {
     label: "Announcement hand-over on move",
     type: "checkbox",
     def: false
+  }].filter(Boolean);
+};
+// The test network's DHCP server (DRPath spec.test.dhcpServerRef): a
+// registered server of the target, the one serving the isolated NAD
+// preselected; none registered there, the server found on it is offered as
+// "Register and use" (the form's choices are loaded again afterwards).
+const testDHCPFields = (disc, servers, target, v) => {
+  if (!(v.actions || []).includes("Test") || !target || !v.nad) return [];
+  const ch = testDHCPChoice(disc, servers, target.cluster, v.nad);
+  const f = ch.candidate;
+  return [ch.options.length > 0 && {
+    k: "dhcp",
+    label: `Test: DHCP server of the test network on ${v.to}`,
+    type: "select",
+    blank: "— none: the test network's DHCP serves the reservations by other means —",
+    options: ch.options,
+    def: ch.recommended,
+    sync: x => !x && ch.recommended ? ch.recommended : undefined
+  }, f && {
+    k: "dhcpReg",
+    type: "apply",
+    refresh: true,
+    label: `Test: DHCP server of the test network on ${v.to}`,
+    button: "Register and use",
+    hint: () => `${f.namespace}/${f.owner || f.pod} serves ${v.nad}; reservations in ${f.namespace}/${f.hostsConfigMap}`,
+    apply: async () => {
+      const name = dhcpServerName(target.cluster, f);
+      await drhub.createDHCPServer({
+        name,
+        site: target.cluster,
+        namespace: f.namespace,
+        configMap: f.hostsConfigMap
+      });
+      return {
+        dhcp: name
+      };
+    },
+    done: "Registered and selected as the test network's DHCP server."
+  }, !ch.options.length && !f && {
+    k: "nDhcp",
+    type: "note",
+    label: `No DHCP server is registered for ${target.cluster} or found on ${v.nad}: test copies get their reserved addresses only if the test network's DHCP serves the reservations by other means.`
   }].filter(Boolean);
 };
 const pathSpec = (plan, v) => ({
@@ -29340,6 +29418,8 @@ const pathBody = (plan, v) => Object.assign(pathSpec(plan, v), (v.actions || [])
     }
   } : {}, v.recent ? {
     recentWithin: v.recent
+  } : {}, v.dhcp ? {
+    dhcpServerRef: v.dhcp
   } : {})
 } : {});
 const newPathDialog = (plans, prefill) => ({
@@ -29347,13 +29427,14 @@ const newPathDialog = (plans, prefill) => ({
   confirm: "Create path",
   done: "DRPath created",
   desc: "A DR path is a declared direction between two sites of a plan, and the set of actions allowed along it. The fields are proposed from the plan and what its sites report.",
-  prepare: () => Promise.all([drhub.discovery(), drhub.paths()]).then(([disc, paths]) => {
+  prepare: () => Promise.all([drhub.discovery(), drhub.paths(), drhub.dhcpServers().catch(() => [])]).then(([disc, paths, servers]) => {
     window.__lastPaths = paths;
     const plan = plans.find(p => p.name === (prefill || {}).plan) || plans[0];
     const first = proposePaths(plan, disc, paths).find(x => !x.exists);
     return {
       disc,
       paths,
+      servers,
       first: Object.assign({}, first || {}, prefill || {})
     };
   }),
@@ -29361,6 +29442,7 @@ const newPathDialog = (plans, prefill) => ({
     const {
       disc,
       paths,
+      servers,
       first
     } = prep || {};
     const plan = plans.find(p => p.name === v.plan) || plans[0];
@@ -29378,7 +29460,7 @@ const newPathDialog = (plans, prefill) => ({
     }, ...pathFields(plan, disc, paths, Object.assign({
       from: (first || {}).from,
       to: (first || {}).to
-    }, v), false).map(f => f.k === "from" ? Object.assign({
+    }, v), false, servers).map(f => f.k === "from" ? Object.assign({
       def: (first || {}).from
     }, f) : f.k === "to" ? Object.assign({
       def: (first || {}).to
@@ -29401,17 +29483,26 @@ const proposePathsDialog = plans => ({
   confirm: "Create the accepted paths",
   done: "DRPaths created",
   desc: "Each ordered pair of a plan's sites is a possible direction. The proposals are prefilled from the plan and what the sites report; accept the ones you want, edit them in place, or open one in the full form.",
-  prepare: () => Promise.all([drhub.discovery(), drhub.paths()]).then(([disc, paths]) => ({
+  prepare: () => Promise.all([drhub.discovery(), drhub.paths(), drhub.dhcpServers().catch(() => [])]).then(([disc, paths, servers]) => ({
     disc,
-    paths
+    paths,
+    servers
   })),
   fields: (v, prep) => {
     const {
       disc,
-      paths
+      paths,
+      servers
     } = prep || {};
     const plan = plans.find(p => p.name === v.plan) || plans[0];
     const props = proposePaths(plan, disc, paths);
+    const clusterOfSite = to => (plan && plan.sites.find(x => x.name === to) || {}).cluster;
+    const dhcpOf = r => testDHCPChoice(disc, servers, clusterOfSite(r.to), r.nad);
+    // servers found on a proposal's test network that are not registered yet
+    const toRegister = (v.proposals || []).filter(r => r.accept === "yes" && (r.actions || []).includes("Test") && r.nad).map(r => ({
+      r,
+      c: dhcpOf(r)
+    })).filter(x => !x.c.options.length && x.c.candidate).filter((x, i, all) => all.findIndex(y => clusterOfSite(y.r.to) === clusterOfSite(x.r.to) && y.c.candidate.hostsConfigMap === x.c.candidate.hostsConfigMap) === i);
     const open = props.filter(x => !x.exists);
     const nadOpts = to => {
       const s = plan && plan.sites.find(x => x.name === to);
@@ -29450,7 +29541,8 @@ const proposePathsDialog = plans => ({
           to: o.to,
           name: o.name,
           actions: o.actions,
-          nad: o.nad
+          nad: o.nad,
+          dhcp: testDHCPChoice(disc, servers, clusterOfSite(o.to), o.nad).recommended
         });
         return JSON.stringify(want.map(key)) === JSON.stringify((x || []).map(key)) && (x || []).every(r => r.plan === (plan || {}).name) ? undefined : want;
       },
@@ -29502,6 +29594,13 @@ const proposePathsDialog = plans => ({
         blank: "— none —",
         options: r => nadOpts(r.to),
         flex: 1.4
+      }, {
+        k: "dhcp",
+        label: "Test DHCP",
+        type: "select",
+        blank: "— none —",
+        options: r => (r.actions || []).includes("Test") && r.nad ? dhcpOf(r).options : [],
+        flex: 1.4
       }],
       rowError: r => r.accept !== "yes" ? null : pathError(plan, (paths || []).concat([]), {
         from: r.from,
@@ -29529,6 +29628,33 @@ const proposePathsDialog = plans => ({
           };
         }
       }
+    }, toRegister.length > 0 && {
+      k: "dhcpReg",
+      type: "apply",
+      refresh: true,
+      label: "DHCP servers of the test networks",
+      button: "Register and use",
+      hint: () => toRegister.map(x => `${x.c.candidate.namespace}/${x.c.candidate.owner || x.c.candidate.pod} on ${x.r.nad} (${clusterOfSite(x.r.to)})`).join("; ") + " — not registered yet",
+      apply: async vv => {
+        const names = {};
+        for (const x of toRegister) {
+          const cl = clusterOfSite(x.r.to),
+            name = dhcpServerName(cl, x.c.candidate);
+          await drhub.createDHCPServer({
+            name,
+            site: cl,
+            namespace: x.c.candidate.namespace,
+            configMap: x.c.candidate.hostsConfigMap
+          });
+          names[cl + "|" + x.r.nad] = name;
+        }
+        return {
+          proposals: (vv.proposals || []).map(r => names[clusterOfSite(r.to) + "|" + r.nad] && !r.dhcp ? Object.assign({}, r, {
+            dhcp: names[clusterOfSite(r.to) + "|" + r.nad]
+          }) : r)
+        };
+      },
+      done: "Registered; each proposal testing on that network uses it."
     }].filter(Boolean);
   },
   run: async v => {
@@ -29542,6 +29668,7 @@ const proposePathsDialog = plans => ({
         to: r.to,
         actions: r.actions,
         nad: r.nad,
+        dhcp: r.dhcp,
         recent: "720h"
       })
     });
@@ -32130,7 +32257,11 @@ function DRPathDetail({
     rows: [["From", /*#__PURE__*/React.createElement(Mono, null, p.from)], ["To", /*#__PURE__*/React.createElement(Mono, null, p.to)], ["Plan", /*#__PURE__*/React.createElement(Ref, {
       label: p.planName,
       onClick: () => nav.openPlanByName(p.planName)
-    })], ["Actions", p.actions.join(", ")], ["Announcement hand-over", p.announcementHandover ? "yes" : "no"], p.test && ["Test mode", p.test.mode], p.test && ["Isolated NAD", /*#__PURE__*/React.createElement(Mono, null, p.test.isolatedNad)], p.test && ["Max clone capacity", /*#__PURE__*/React.createElement(Mono, null, (p.test.quotas || {}).maxCloneCapacity)], p.test && ["test-recent window", /*#__PURE__*/React.createElement(Mono, null, p.test.recentWithin || "720h")]]
+    })], ["Actions", p.actions.join(", ")], ["Announcement hand-over", p.announcementHandover ? "yes" : "no"], p.test && ["Test mode", p.test.mode], p.test && ["Isolated NAD", /*#__PURE__*/React.createElement(Mono, null, p.test.isolatedNad)], p.test && ["Test DHCP server", p.test.dhcpServerRef ? /*#__PURE__*/React.createElement(Mono, null, p.test.dhcpServerRef) : /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim)"
+      }
+    }, "none \u2014 the test network serves the reservations by other means")], p.test && ["Max clone capacity", /*#__PURE__*/React.createElement(Mono, null, (p.test.quotas || {}).maxCloneCapacity)], p.test && ["test-recent window", /*#__PURE__*/React.createElement(Mono, null, p.test.recentWithin || "720h")]]
   }), /*#__PURE__*/React.createElement("p", {
     className: "mdesc",
     style: {

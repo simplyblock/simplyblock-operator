@@ -350,6 +350,30 @@ function dhcpServersOn(disc, cluster, nad) {
   const target = d.nads.find(x => nadRef(x) === nad);
   return d.dhcpServers.filter(s => (s.nads || []).some(sn => sn.nad === nad || (target && seg(d.nads.find(x => nadRef(x) === sn.nad)) === seg(target) && seg(target) !== "|")));
 }
+// The DHCP server of a path's isolated test network (DRPath
+// spec.test.dhcpServerRef), chosen among the DHCPServers registered for the
+// target cluster: those dr-agent sees serving the isolated NAD first; a
+// server on another network is marked as such. candidate is a server found
+// on the NAD that is not registered yet (offered as "Register and use").
+function testDHCPChoice(disc, servers, cluster, nad) {
+  const d = discOf(disc, cluster);
+  const found = (d && d.dhcpServers) || [];
+  const onNad = nad ? dhcpServersOn(disc, cluster, nad) : [];
+  const same = (x, f) => x.dnsmasq && x.dnsmasq.namespace === f.namespace && x.dnsmasq.configMap === f.hostsConfigMap;
+  const mine = (servers || []).filter(x => x.site === cluster);
+  const rows = mine.map(x => {
+    const serves = onNad.some(f => same(x, f));
+    const seen = found.find(f => same(x, f));
+    const where = seen ? (seen.nads || []).map(n => n.nad).join(", ") : "";
+    return {v: x.name, serves, l: serves ? `${x.name} — serves ${nad} (isolated test network)`
+      : seen ? `${x.name} — on ${where}: production network, not recommended` : `${x.name} — not seen on any network by dr-agent`};
+  }).sort((a, b) => (b.serves ? 1 : 0) - (a.serves ? 1 : 0) || a.v.localeCompare(b.v));
+  const recommended = (rows.find(r => r.serves) || {}).v || "";
+  const candidate = recommended ? null : (onNad.find(f => f.hostsConfigMap && !mine.some(x => same(x, f))) || null);
+  return {options: rows.map(r => ({v: r.v, l: r.l})), recommended, candidate};
+}
+// The name a discovered server is registered under for a cluster.
+const dhcpServerName = (cluster, f) => dns63(`${cluster}-${(f.owner || f.pod).split("/").pop()}`);
 // The isolated test (bubble) networks of a site: the isolated NAD of every
 // DRPath that tests on it, and the one the site itself reports.
 function testNadsOf(disc, cluster, paths) {
@@ -582,7 +606,7 @@ Object.assign(window, {uniqSorted, nadRef, AGENT_VIEW, DEFAULT_SC_SELECTOR, DEFA
   agentStatusOf, loadDiscovery, discOf, clusterOptions, zoneOptions, regionOptions, siteRowError, veleroProposal, labelsMatch, scMatches,
   parseSelector, selectorText, selectorMatchesLabels, namespaceOptions, pvcPairs, pvcMatches, tierKindsOf, objectsOf, objectPairs,
   tierSelectorCheck, gateSelectorCheck, isolatedNadOf, proposePaths, pathError, bubbleNamespace, proposeTestID, testIDError,
-  parseCidr, cidrContains, hostIdOf, inferCidr, nadAddresses, nadSubnet, dhcpServersOn, proposedReserved, guestRowError, proposeRoles,
+  parseCidr, cidrContains, hostIdOf, inferCidr, nadAddresses, nadSubnet, dhcpServersOn, testDHCPChoice, dhcpServerName, proposedReserved, guestRowError, proposeRoles,
   testNadsOf, isBubbleServer, proposeDHCPServer,
   nsInfra, nsElsewhere, nsHoldings,
   proposePVCSelector, pvcSelectorOptions, RESOURCE_TYPE_OPTIONS, GATE_TYPE_OPTIONS, tierLabelOptions, gateCommand, serviceTargets, podPairOptions,
