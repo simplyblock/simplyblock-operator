@@ -137,26 +137,25 @@ File: `operator/internal/webhook/storagedevice_validator_test.go`
 File: `operator/internal/controller/storagedevice_collector_test.go`, and the
 mirror's own file for the events it emits.
 
-| #     | Scenario                                                                                                                                              | Type       | Test                                                    |
-|-------|-------------------------------------------------------------------------------------------------------------------------------------------------------|------------|---------------------------------------------------------|
-| U-89  | A device found for the first time: `DeviceDiscovered`, on the node                                                                                    | Positive   | `TestDiscoveryIsAnnouncedOnTheNode`                     |
-| U-74  | A phase change is announced once, and a settled device announces nothing                                                                              | Positive   | `TestAPhaseChangeIsAnnouncedOnceOnTheDevice`            |
-| U-75  | A device that was `Online` when first seen is not announced as recovered                                                                              | Negative   | `TestRecoveryIsAnnouncedButDiscoveryIsNot`              |
-| U-90  | The size and the phase of each device are published as gauges                                                                                         | Positive   | `TestTheCollectorPublishesEachDevicesSizeAndPhase`      |
-| U-91  | A device's phase gauge is 1 for its phase and 0 for every other                                                                                       | Boundary   | `TestTheCollectorPublishesEachDevicesSizeAndPhase`      |
-| U-92  | The per-node device count and failed count match the objects                                                                                          | Positive   | `TestTheCollectorCountsANodesDevicesAndItsFailedOnes`   |
-| U-147 | A `Migrated` device is not counted as failed, and has its own phase series (2026-10-02)                                                               | Regression | `TestTheCollectorDoesNotCountAMigratedDeviceAsFailed`   |
-| U-93  | What a device holds is published from Prometheus, one query per cluster                                                                               | Positive   | `TestTheCollectorPublishesUsedBytesFromPrometheus`      |
-| U-94  | No Prometheus: no used-bytes series, and every other gauge still published                                                                            | Negative   | `TestWithoutPrometheusTheRestIsStillPublished`          |
-| U-95  | A Prometheus that errors: the gauges that do not come from it are unaffected                                                                          | Negative   | `TestABrokenPrometheusDoesNotStopTheOtherGauges`        |
-| U-96  | A device that went away leaves no series behind                                                                                                       | Boundary   | `TestTheCollectorDropsTheSeriesOfADeviceThatIsGone`     |
-| U-120 | A device that went away leaves no crossing behind, so a replacement of the same name is warned about                                                  | Boundary   | `TestTheCollectorForgetsADeviceThatWentAway`            |
-| U-97  | A device over its cluster's warning threshold: `DeviceNearlyFull`, once                                                                               | Positive   | `TestADeviceOverItsClustersThresholdIsWarnedAboutOnce`  |
-| U-98  | A device that empties and fills again: a second crossing and a second event                                                                           | Boundary   | `TestADeviceOverItsClustersThresholdIsWarnedAboutOnce`  |
-| U-99  | A device under the threshold: nothing is announced                                                                                                    | Negative   | `TestADeviceUnderTheThresholdIsNotWarnedAbout`          |
-| U-100 | A cluster declaring no threshold: the default applies rather than no warning                                                                          | Boundary   | `TestAClusterWithNoThresholdFallsBackToTheDefault`      |
-| U-152 | The device capacity query names the v2 exporter's metrics, so a device is found and `DeviceNearlyFull` can fire (2026-10-05-capacity-v2-metric-names) | Regression | `TestDeviceCapacityReadsTheNamesTheV2ExporterPublishes` |
-| U-153 | A capacity sample with a zero total is not sampled, and its utilization is 0 rather than a division (2026-10-05-capacity-v2-metric-names)             | Regression | `TestACapacityWithNoTotalIsNotSampled`                  |
+| #     | Scenario                                                                                             | Type       | Test                                                   |
+|-------|------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------|
+| U-89  | A device found for the first time: `DeviceDiscovered`, on the node                                   | Positive   | `TestDiscoveryIsAnnouncedOnTheNode`                    |
+| U-74  | A phase change is announced once, and a settled device announces nothing                             | Positive   | `TestAPhaseChangeIsAnnouncedOnceOnTheDevice`           |
+| U-75  | A device that was `Online` when first seen is not announced as recovered                             | Negative   | `TestRecoveryIsAnnouncedButDiscoveryIsNot`             |
+| U-90  | The size and the phase of each device are published as gauges                                        | Positive   | `TestTheCollectorPublishesEachDevicesSizeAndPhase`     |
+| U-91  | A device's phase gauge is 1 for its phase and 0 for every other                                      | Boundary   | `TestTheCollectorPublishesEachDevicesSizeAndPhase`     |
+| U-92  | The per-node device count and failed count match the objects                                         | Positive   | `TestTheCollectorCountsANodesDevicesAndItsFailedOnes`  |
+| U-147 | A `Migrated` device is not counted as failed, and has its own phase series (2026-10-02)              | Regression | `TestTheCollectorDoesNotCountAMigratedDeviceAsFailed`  |
+| U-93  | What a device holds is published from Prometheus, one query per cluster                              | Positive   | `TestTheCollectorPublishesUsedBytesFromPrometheus`     |
+| U-94  | No Prometheus: no used-bytes series, and every other gauge still published                           | Negative   | `TestWithoutPrometheusTheRestIsStillPublished`         |
+| U-95  | A Prometheus that errors: the gauges that do not come from it are unaffected                         | Negative   | `TestABrokenPrometheusDoesNotStopTheOtherGauges`       |
+| U-96  | A device that went away leaves no series behind                                                      | Boundary   | `TestTheCollectorDropsTheSeriesOfADeviceThatIsGone`    |
+| U-120 | A device that went away leaves no crossing behind, so a replacement of the same name is warned about | Boundary   | `TestTheCollectorForgetsADeviceThatWentAway`           |
+| U-97  | A device over its cluster's warning threshold: `DeviceNearlyFull`, once                              | Positive   | `TestADeviceOverItsClustersThresholdIsWarnedAboutOnce` |
+| U-98  | A device that empties and fills again: a second crossing and a second event                          | Boundary   | `TestADeviceOverItsClustersThresholdIsWarnedAboutOnce` |
+| U-99  | A device under the threshold: nothing is announced                                                   | Negative   | `TestADeviceUnderTheThresholdIsNotWarnedAbout`         |
+| U-100 | A cluster declaring no threshold: the default applies rather than no warning                         | Boundary   | `TestAClusterWithNoThresholdFallsBackToTheDefault`     |
+| U-152 | The capacity query names the v2 exporter's metrics, so a device is found (2026-10-05)                | Regression | `TestDeviceCapacityReadsV2ExporterNames`               |
 
 ### The Readings (design §4.4)
 
@@ -295,24 +294,24 @@ Full reconcile loop against a real Kubernetes API server via `envtest`.
 A live cluster with real storage hardware. Two of these destroy capacity and are
 marked accordingly.
 
-| #    | Scenario                                                                                                                                                                                         | Type     | Test |
-|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| E-01 | A node comes up: one object appears per device, with capacity and hardware                                                                                                                       | Positive | —    |
-| E-02 | The hardware fields match what the host reports for the same device                                                                                                                              | Positive | —    |
-| E-03 | Writing to the cluster: the readings climb on the devices holding the data                                                                                                                       | Positive | —    |
-| E-04 | Capacity is unevenly distributed: one device is near full while the cluster is not                                                                                                               | Boundary | —    |
-| E-14 | A device crossing its cluster's threshold: `DeviceNearlyFull` on the device (blocked until the capacity metric names were fixed, 2026-10-05; once per crossing, again only after dropping under) | Positive | —    |
-| E-05 | A device is pulled from a running node: `DeviceDisappeared`, the object is deleted                                                                                                               | Negative | —    |
-| E-06 | The node's own `3/4` summary and the four objects agree                                                                                                                                          | Positive | —    |
-| E-07 | `action: Restart` on a wedged device: it recycles and rejoins                                                                                                                                    | Positive | —    |
-| E-08 | The node's other devices keep serving I/O throughout that restart                                                                                                                                | Positive | —    |
-| E-09 | `action: Test`: the device leaves service, is tested, and returns                                                                                                                                | Positive | —    |
-| E-10 | `action: Remove` on a cluster with redundancy to spare (destructive)                                                                                                                             | Positive | —    |
-| E-11 | `action: Remove` on a cluster at its redundancy limit: refused (destructive setup)                                                                                                               | Negative | —    |
-| E-12 | A node restart: the objects survive rather than churning                                                                                                                                         | Boundary | —    |
-| E-13 | An eight-hundred-device fleet: listing and watching stay affordable                                                                                                                              | Boundary | —    |
-| E-15 | `action: Fail` on a serving device: the cluster rebuilds its redundancy elsewhere                                                                                                                | Positive | —    |
-| E-16 | A `Fail` refused because a volume migration is running on another node                                                                                                                           | Negative | —    |
+| #    | Scenario                                                                           | Type     | Test |
+|------|------------------------------------------------------------------------------------|----------|------|
+| E-01 | A node comes up: one object appears per device, with capacity and hardware         | Positive | —    |
+| E-02 | The hardware fields match what the host reports for the same device                | Positive | —    |
+| E-03 | Writing to the cluster: the readings climb on the devices holding the data         | Positive | —    |
+| E-04 | Capacity is unevenly distributed: one device is near full while the cluster is not | Boundary | —    |
+| E-14 | A device crossing its cluster's threshold: `DeviceNearlyFull` on the device        | Positive | —    |
+| E-05 | A device is pulled from a running node: `DeviceDisappeared`, the object is deleted | Negative | —    |
+| E-06 | The node's own `3/4` summary and the four objects agree                            | Positive | —    |
+| E-07 | `action: Restart` on a wedged device: it recycles and rejoins                      | Positive | —    |
+| E-08 | The node's other devices keep serving I/O throughout that restart                  | Positive | —    |
+| E-09 | `action: Test`: the device leaves service, is tested, and returns                  | Positive | —    |
+| E-10 | `action: Remove` on a cluster with redundancy to spare (destructive)               | Positive | —    |
+| E-11 | `action: Remove` on a cluster at its redundancy limit: refused (destructive setup) | Negative | —    |
+| E-12 | A node restart: the objects survive rather than churning                           | Boundary | —    |
+| E-13 | An eight-hundred-device fleet: listing and watching stay affordable                | Boundary | —    |
+| E-15 | `action: Fail` on a serving device: the cluster rebuilds its redundancy elsewhere  | Positive | —    |
+| E-16 | A `Fail` refused because a volume migration is running on another node             | Negative | —    |
 
 ---
 

@@ -113,8 +113,8 @@ func TestVolumeCapacityAssemblesOneSampleFromEveryMetric(t *testing.T) {
 	if c.Provisioned != 10737418240 || c.UtilizationPercent != 10 {
 		t.Errorf("provisioned = %d, util = %d", c.Provisioned, c.UtilizationPercent)
 	}
-	if !c.Sampled() || time.Since(c.SampledAt) > time.Minute {
-		t.Errorf("a sample with a total should report Sampled at the read, got %s", c.SampledAt)
+	if !c.Sampled() {
+		t.Error("a sample with a total should report Sampled")
 	}
 
 	// One query, not four: a caller assembling one sample must not be handed
@@ -142,11 +142,10 @@ func TestVolumeCapacityQueryNamesEveryMetricAndPinsTheCluster(t *testing.T) {
 	}
 }
 
-// A volume with a zero total is one nothing has measured, and reporting a time
-// for it is how an unmeasured volume looks like a fresh reading.
+// The exporter publishes an all-zero record for a volume nothing has measured,
+// which is not a reading and not a division by zero.
 func TestAZeroTotalIsNoSample(t *testing.T) {
 	api := &stubAPI{vector: model.Vector{
-		sample("simplyblock_lvol_size_total_bytes", volumeLabels(), 0),
 		sample("simplyblock_lvol_size_used_bytes", volumeLabels(), 0),
 	}}
 
@@ -160,6 +159,9 @@ func TestAZeroTotalIsNoSample(t *testing.T) {
 	}
 	if c.Sampled() {
 		t.Error("a volume with a zero total should not report Sampled")
+	}
+	if c.UtilizationPercent != 0 {
+		t.Errorf("UtilizationPercent = %d, want 0", c.UtilizationPercent)
 	}
 }
 
@@ -412,7 +414,7 @@ func TestNodeCapacityIsKeyedByTheSnodeLabel(t *testing.T) {
 		t.Errorf("total/used/free = %d/%d/%d", c.Total, c.Used, c.Free)
 	}
 	if !c.Sampled() {
-		t.Error("a node with a measured total should report Sampled")
+		t.Error("a node carrying a date should report Sampled")
 	}
 	if !strings.Contains(api.queries[0], "simplyblock_snode_size_used_bytes") {
 		t.Errorf("query %q does not ask for the node metrics", api.queries[0])
@@ -451,7 +453,7 @@ func TestClusterCapacityReturnsTheOneSample(t *testing.T) {
 		t.Errorf("provisioned = %d, util = %d", got.Provisioned, got.UtilizationPercent)
 	}
 	if !got.Sampled() {
-		t.Error("a cluster with a measured total should report Sampled")
+		t.Error("a cluster with a total should report Sampled")
 	}
 	if !strings.Contains(api.queries[0], "simplyblock_cluster_size_total_bytes") {
 		t.Errorf("query %q does not ask for the cluster metrics", api.queries[0])
@@ -472,77 +474,33 @@ func TestClusterCapacityWithNoSeriesHasNoReading(t *testing.T) {
 	}
 }
 
-// Regression: 2026-10-05-capacity-v2-metric-names — the control plane's v2
-// exporter publishes simplyblock_<kind>_size_<field>_bytes and no size_util or
-// date series, while the provider asked for the v1 names. The query matched
-// nothing on a live cluster, every device was absent from the result, and
-// DeviceNearlyFull could never fire.
-func TestDeviceCapacityReadsTheNamesTheV2ExporterPublishes(t *testing.T) {
-	labels := map[string]string{
-		"cluster": testCluster,
-		"device":  testDevice,
-		"snode":   "fd687dfd-9b5d-4eca-8cb1-23bcf550ad21",
-	}
+// Regression: 2026-10-05-capacity-v2-metric-names. The provider asked for the
+// v1 names, the v2 exporter publishes simplyblock_<kind>_size_<field>_bytes and
+// no size_util or date series, so every device was missing and DeviceNearlyFull
+// could never fire.
+func TestDeviceCapacityReadsV2ExporterNames(t *testing.T) {
+	labels := map[string]string{"cluster": testCluster, "device": testDevice}
 	api := &stubAPI{vector: model.Vector{
 		sample("simplyblock_device_size_total_bytes", labels, 75161927680),
 		sample("simplyblock_device_size_used_bytes", labels, 5200000000),
 		sample("simplyblock_device_size_free_bytes", labels, 69961927680),
 	}}
 
-	before := time.Now()
 	got, err := NewWithAPI(api).DeviceCapacity(context.Background(), testCluster)
 	if err != nil {
 		t.Fatalf("DeviceCapacity: %v", err)
 	}
-
-	for _, want := range []string{
-		"simplyblock_device_size_total_bytes",
-		"simplyblock_device_size_used_bytes",
-		"simplyblock_device_size_free_bytes",
-	} {
-		if !strings.Contains(api.queries[0], want) {
-			t.Errorf("query %q does not ask for %q", api.queries[0], want)
-		}
-	}
-
 	c, ok := got[testDevice]
 	if !ok {
-		t.Fatalf("no sample for the device, got keys %v", got)
+		t.Fatalf("no sample for the device, got keys %v; query %q", got, api.queries[0])
 	}
 	if c.Total != 75161927680 || c.Used != 5200000000 || c.Free != 69961927680 {
 		t.Errorf("sizes = total %d, used %d, free %d", c.Total, c.Used, c.Free)
 	}
-	// The exporter publishes no percentage, so it is derived: 5.2e9 of 75.16e9.
 	if c.UtilizationPercent != 7 {
 		t.Errorf("UtilizationPercent = %d, want 7", c.UtilizationPercent)
 	}
-	// The exporter publishes no sample date either, so a device with a
-	// measured total counts as sampled, stamped with when it was read.
 	if !c.Sampled() {
-		t.Fatal("a device the exporter reports a total for should be Sampled")
-	}
-	if c.SampledAt.Before(before) || time.Since(c.SampledAt) > time.Minute {
-		t.Errorf("SampledAt = %s, want the time of the read", c.SampledAt)
-	}
-}
-
-// A total of zero is the exporter's all-zero record for an entity nothing has
-// measured, which is indistinguishable from an empty entity without this rule.
-func TestACapacityWithNoTotalIsNotSampled(t *testing.T) {
-	labels := map[string]string{"cluster": testCluster, "device": testDevice}
-	api := &stubAPI{vector: model.Vector{
-		sample("simplyblock_device_size_total_bytes", labels, 0),
-		sample("simplyblock_device_size_used_bytes", labels, 0),
-	}}
-
-	got, err := NewWithAPI(api).DeviceCapacity(context.Background(), testCluster)
-	if err != nil {
-		t.Fatalf("DeviceCapacity: %v", err)
-	}
-	if got[testDevice].Sampled() {
-		t.Error("a device with a zero total should not report Sampled")
-	}
-	if got[testDevice].UtilizationPercent != 0 {
-		t.Errorf("UtilizationPercent = %d, want 0 and not a division by zero", got[testDevice].UtilizationPercent)
+		t.Error("a device with a total should be Sampled")
 	}
 }

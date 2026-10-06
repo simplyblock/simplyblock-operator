@@ -2,7 +2,7 @@
 // storage pools. The five share this file because they share a shape: the
 // control plane's v2 exporter publishes the same size gauges under each prefix,
 // so the only thing that differs is the prefix and the label naming the entity.
-// The exporter publishes no percentage and no sample date, so both are derived.
+// It publishes no percentage and no sample date, so both are derived.
 
 package prometheus
 
@@ -30,12 +30,11 @@ type Capacity struct {
 	// over-provisioned pool may exceed Total. The exporter publishes it only for
 	// clusters and storage nodes; it is zero for the other kinds.
 	Provisioned int64
-	// UtilizationPercent is Used over Total, rounded. The exporter publishes
-	// no percentage, so it is derived here.
+	// UtilizationPercent is Used over Total, rounded.
 	UtilizationPercent int32
-	// SampledAt is when this package read the sample, because the exporter
-	// publishes no date of its own. It is the zero time for an entity whose
-	// total is zero, which is how a never-measured entity is told from an empty one.
+	// SampledAt is when this package read the sample; the exporter has no date
+	// of its own. It is the zero time when the total is zero, which is how an
+	// entity nothing has measured is told from an empty one.
 	SampledAt time.Time
 }
 
@@ -47,9 +46,6 @@ func (c Capacity) Sampled() bool { return !c.SampledAt.IsZero() }
 // The entity a capacity sample belongs to, as the exporter names it: the metric
 // prefix, and the label carrying the entity's UUID.
 const (
-	// exporterNamespace is the prefix the v2 exporter puts on every metric name.
-	exporterNamespace = "simplyblock_"
-
 	volumeMetricPrefix = "lvol"
 	volumeIDLabel      = "lvol"
 	deviceMetricPrefix = "device"
@@ -147,20 +143,14 @@ func (p *Provider) PoolCapacity(
 
 // capacity assembles the samples for one entity kind. The metric names are
 // derived from the prefix rather than listed per kind, because the exporter
-// publishes the same set under each and a divergence between them would be a
+// publishes the same set under both and a divergence between them would be a
 // change in the control plane rather than a choice made here.
-//
-// The v2 exporter publishes no percentage and no sample date. Utilization is
-// derived from used over total, and an entity with a measured total counts as
-// sampled, stamped with the time of this read.
 func (p *Provider) capacity(
 	ctx context.Context,
 	prefix, idLabel, clusterUUID string,
 ) (map[string]Capacity, error) {
-	total := exporterNamespace + prefix + "_size_total_bytes"
-	used := exporterNamespace + prefix + "_size_used_bytes"
-	free := exporterNamespace + prefix + "_size_free_bytes"
-	prov := exporterNamespace + prefix + "_size_provisioned_bytes"
+	name := func(field string) string { return "simplyblock_" + prefix + "_size_" + field + "_bytes" }
+	total, used, free, prov := name("total"), name("used"), name("free"), name("provisioned")
 
 	families, err := p.queryFamilyByLabel(
 		ctx, []string{total, used, free, prov}, idLabel, clusterUUID,
@@ -178,8 +168,6 @@ func (p *Provider) capacity(
 			Free:        whole(series[free]),
 			Provisioned: whole(series[prov]),
 		}
-		// A zero total is the exporter's all-zero record for an entity nothing
-		// has measured, so it is neither sampled nor a division.
 		if c.Total > 0 {
 			c.UtilizationPercent = int32(math.Round(float64(c.Used) / float64(c.Total) * 100))
 			c.SampledAt = readAt
