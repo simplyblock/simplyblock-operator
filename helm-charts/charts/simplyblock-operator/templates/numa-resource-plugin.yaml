@@ -30,6 +30,8 @@ spec:
       app: simplyblock-numa-resource-plugin
   template:
     metadata:
+      annotations:
+        log-collector/enabled: "true"
       labels:
         app: simplyblock-numa-resource-plugin
     spec:

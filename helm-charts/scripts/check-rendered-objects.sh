@@ -228,11 +228,54 @@ checkEmpty() {
   fi
 }
 
+# checkLogCollector asserts that every workload the chart renders is marked for
+# the log collector, with every optional workload switched on.
+#
+# fluent-bit ships only pods annotated log-collector/enabled=true, so a workload
+# left unmarked never reaches Graylog. The observability stack itself is exempt:
+# Graylog shipping its own logs into itself is a loop that fails with it.
+checkLogCollector() {
+  local yq="${YQ:-yq}"
+  local unmarked
+  local -a exempt=(
+    "Deployment/simplyblock-graylog"
+    "Deployment/simplyblock-grafana"
+    "Deployment/simplyblock-thanos"
+    "StatefulSet/simplyblock-opensearch"
+    "Deployment/mongodb-kubernetes-operator"
+    "DaemonSet/simplyblock-fluent-bit"
+  )
+
+  unmarked="$(helm template sb "$CHART" --namespace simplyblock \
+    "${CAPABILITIES[@]}" \
+    --set deployment.profile=standalone \
+    --set controlplane.observability.enabled=true \
+    --set controlplane.csiHostpathDriver.enabled=true \
+    --set snapshotcontroller.create=true 2>/dev/null |
+    "$yq" -N 'select(.kind == "Deployment" or .kind == "DaemonSet" or
+      .kind == "StatefulSet" or .kind == "Job" or .kind == "CronJob") |
+      select(.spec.template.metadata.annotations["log-collector/enabled"] != "true") |
+      .kind + "/" + .metadata.name')"
+  for want in "${exempt[@]}"; do
+    unmarked="$(grep -vxF "$want" <<<"$unmarked")"
+  done
+
+  if [ -n "$unmarked" ]; then
+    while read -r workload; do
+      echo "  log collector: ${workload} is not marked log-collector/enabled=true"
+    done <<<"$unmarked"
+    fail=1
+  else
+    echo "  log collector: every workload outside the observability stack is marked"
+  fi
+}
+
 check standalone "${COMMON[@]}"
 check managed "${COMMON[@]}"
 check empty "${OPERATOR[@]}"
 checkEmpty
 checkPair
 checkVendoredCRDs
+checkLogCollector
 
 exit "$fail"
