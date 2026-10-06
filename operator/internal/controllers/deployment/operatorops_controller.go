@@ -56,7 +56,6 @@ import (
 	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 
-	"github.com/simplyblock/simplyblock-operator/internal/bootstrap"
 	discoverypkg "github.com/simplyblock/simplyblock-operator/internal/discovery"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
@@ -134,18 +133,6 @@ type OperatorOpsReconciler struct {
 	// the probe binary ships in it beside the manager, so a Job cannot be a
 	// version out of step with the operator that created it.
 	ProbeImage string
-
-	// ProbeServiceAccount is the account the probe writes its report as. It
-	// needs create and update on ConfigMaps in the operator's namespace and
-	// nothing else. Empty is DefaultNodeProbeServiceAccount, which is what the
-	// chart creates.
-	ProbeServiceAccount string
-
-	// Namespace is the operator's own, which is where the installation's
-	// bootstrap ConfigMap lives. A run may be anywhere -- a cluster managing this
-	// one raises runs in the namespace it chooses -- so the configuration is not
-	// looked for beside the run.
-	Namespace string
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=operatorops,verbs=get;list;watch;create;update;patch;delete
@@ -486,6 +473,11 @@ func (r *OperatorOpsReconciler) probe(
 		return false, err
 	}
 
+	account, err := r.ensureProbeIdentity(ctx, ops.Namespace, ops.Name, owner)
+	if err != nil {
+		return false, err
+	}
+
 	waiting, failed := 0, []string{}
 	for _, worker := range ops.Status.Workers {
 		if _, arrived := reports[worker]; arrived {
@@ -497,7 +489,7 @@ func (r *OperatorOpsReconciler) probe(
 			Run:                ops.Name,
 			Node:               worker,
 			Image:              r.ProbeImage,
-			ServiceAccountName: r.probeServiceAccount(),
+			ServiceAccountName: account,
 			Owner:              owner,
 			// A probe is pinned with spec.nodeName, which bypasses the
 			// scheduler and not the taints: a tainted worker keeps the pod off
@@ -616,28 +608,7 @@ func (r *OperatorOpsReconciler) write(
 			plan.ExplainWithin(maxEventMessage-len(refusalPreamble)))
 	}
 
-	// Read here rather than at startup: the draft half of the configuration is
-	// spent minutes after the operator came up, and an installation that corrected
-	// a number between the install and this step meant the correction. A document
-	// that cannot be read is reported once and then treated as absent, which
-	// leaves every number to what this run found.
-	//
-	// A configuration that could not be read is not the same as one that is not
-	// there, and this step cannot proceed through it. The document it is about to
-	// write is the one the next reconcile finds already present and leaves alone,
-	// so a draft written without the installation's seed keeps the numbers this
-	// run found for good: the API recovering afterward restores nothing. The
-	// error requeues instead, which is what the read being transient asks for.
-	installation, err := bootstrap.Load(ctx, r.Client, r.Namespace)
-	switch {
-	case errors.Is(err, bootstrap.ErrUnreadable):
-		return false, err
-	case err != nil:
-		logf.FromContext(ctx).Error(err, "the installation's bootstrap configuration "+
-			"could not be parsed; the draft states what this run found")
-	}
-
-	config, notes, err := r.draftFor(ops, spec, plan, installation)
+	config, notes, err := r.draftFor(ops, spec, plan)
 	if err != nil {
 		// A fleet the run read and cannot draft a document for. The reason names
 		// the worker and the shape of its disks, and the run's own message is one
@@ -708,25 +679,15 @@ func (r *OperatorOpsReconciler) draftFor(
 	ops *simplyblockv1alpha2.OperatorOps,
 	spec *simplyblockv1alpha2.DiscoverSpec,
 	plan discoverypkg.Plan,
-	installation *bootstrap.Config,
 ) (*simplyblockv1alpha2.ClusterDeploymentConfig, []string, error) {
 	name := spec.ConfigName
 	if name == "" {
 		name = configNamePrefix + ops.Name
 	}
 
-	// The installation's stated layout applies to the run the operator raised for
-	// it and to no other. A run somebody wrote months later describes whatever the
-	// fleet has become, and re-applying an install-time decision over it would be
-	// a correction nobody made and nothing records.
-	seed := (*simplyblockv1alpha2.ClusterTemplate)(nil)
-	var images *simplyblockv1alpha2.DeploymentImages
-	var edge *bool
-	if ops.Labels[InitialDiscoveryLabel] == "true" {
-		seed = installation.Seed()
-		images = installation.DraftImages()
-		edge = installation.Draft.EdgeCluster
-	}
+	// The seed is what this run's author decided, and it applies to this run's
+	// draft alone: a later run states its own.
+	seed, images, edge := draftSeed(spec.Seed)
 
 	config := &simplyblockv1alpha2.ClusterDeploymentConfig{
 		ObjectMeta: metav1.ObjectMeta{
@@ -860,15 +821,6 @@ func (r *OperatorOpsReconciler) reportsFor(
 		reports[report.Node] = report
 	}
 	return reports, nil
-}
-
-// probeServiceAccount is the account the probes run as, defaulted to the one
-// the chart creates.
-func (r *OperatorOpsReconciler) probeServiceAccount() string {
-	if r.ProbeServiceAccount != "" {
-		return r.ProbeServiceAccount
-	}
-	return nodeProbeServiceAccount()
 }
 
 // abort stops a run at its next step.

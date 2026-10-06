@@ -270,6 +270,71 @@ type DiscoverSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	ClusterRef string `json:"clusterRef,omitempty"`
+
+	// Seed states what the draft proposes for the fields discovery can only
+	// guess at, which are mostly the ones that cannot be changed on the cluster
+	// the draft expands into. A field left out stays what discovery derives from
+	// the fleet. A growth document, which names a cluster rather than describing
+	// one, takes no layout from it.
+	// +optional
+	Seed *DraftSeed `json:"seed,omitempty"`
+}
+
+// DraftSeed is the part of the draft an administrator decides rather than a
+// worker's hardware.
+type DraftSeed struct {
+	// EdgeCluster marks the draft as an edge deployment.
+	// +optional
+	EdgeCluster *bool `json:"edgeCluster,omitempty"`
+
+	// Images pins the images the draft states. A slot left empty takes the
+	// operator's own default.
+	// +optional
+	Images *DeploymentImages `json:"images,omitempty"`
+
+	// Cluster seeds the cluster the draft proposes.
+	// +optional
+	Cluster *DraftSeedCluster `json:"cluster,omitempty"`
+}
+
+// DraftSeedCluster seeds the cluster a draft proposes, member for member what
+// ClusterTemplate holds, with every member optional because a seed states only
+// what its author decided.
+// +kubebuilder:validation:XValidation:rule="!has(self.enableAtomicity4K) || !self.enableAtomicity4K || (has(self.enableChecksumValidation) && self.enableChecksumValidation)",message="enableAtomicity4K requires enableChecksumValidation"
+type DraftSeedCluster struct {
+	// Name is the StorageCluster's name, held to what the control plane accepts:
+	// it derives names from it and refuses a longer one, which a document would
+	// otherwise carry through approval to a CreatingCluster step that cannot
+	// succeed.
+	// +kubebuilder:validation:MaxLength=37
+	// +optional
+	Name string `json:"name,omitempty"`
+
+	// Stripe is the erasure-coding layout.
+	// +optional
+	Stripe *StripeSpec `json:"stripe,omitempty"`
+
+	// MaxSubsystemCount is the number of NVMe-oF subsystems each storage node
+	// serves.
+	// +kubebuilder:validation:Minimum=10
+	// +kubebuilder:validation:Maximum=75
+	// +optional
+	MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
+
+	// EnableDriveFormat formats every device the draft names before a storage
+	// node takes it.
+	// +optional
+	EnableDriveFormat *bool `json:"enableDriveFormat,omitempty"`
+
+	// EnableChecksumValidation verifies checksums on read.
+	// +optional
+	EnableChecksumValidation *bool `json:"enableChecksumValidation,omitempty"`
+
+	// EnableAtomicity4K makes 4K writes atomic, which is what lets checksum
+	// validation run on a device whose logical block size is under 4K. It
+	// requires EnableChecksumValidation.
+	// +optional
+	EnableAtomicity4K *bool `json:"enableAtomicity4K,omitempty"`
 }
 
 // OperatorOpsSpec is one operation to perform against the operator itself.
