@@ -5888,11 +5888,60 @@ function parseSelector(text, opts) {
 const selectorText = sel => Object.entries(sel && sel.matchLabels || {}).map(([k, v]) => `${k}=${v}`).concat((sel && sel.matchExpressions || []).filter(e => e.operator === "Exists").map(e => `${e.key} exists`)).join(", ");
 const selectorMatchesLabels = (sel, labels) => labelsMatch(labels, sel.matchLabels) && (sel.matchExpressions || []).every(e => e.operator !== "Exists" || Object.prototype.hasOwnProperty.call(labels || {}, e.key));
 const nsReport = (disc, cluster, ns) => ((discOf(disc, cluster) || {}).namespaces || []).find(n => n.namespace === ns) || null;
-// The application namespaces a cluster reports.
-const namespaceOptions = (disc, cluster) => ((discOf(disc, cluster) || {}).namespaces || []).map(n => ({
+// Namespaces that hold infrastructure, not an application: platform and
+// DR-stack namespaces, a managed cluster's own namespace (OCM), and one that
+// holds nothing but NetworkAttachmentDefinitions.
+const INFRA_NS_RE = /^(kube-|cattle-|sitemap-|open-cluster-management|ramen|velero|simplyblock|dr-|openshift|local-path|kubevirt|cdi$|multus|calico|tigera|metallb|cert-manager|longhorn|fleet-|olm$|operators$)/;
+const nsCounts = n => ({
+  pvcs: (n.pvcs || []).length,
+  workloads: (n.workloads || []).length
+});
+function nsInfra(disc, cluster, n) {
+  if (INFRA_NS_RE.test(n.namespace)) return true;
+  if ((disc ? disc.clusters : []).some(c => c.name === n.namespace)) return true;
+  const c = nsCounts(n);
+  return !c.pvcs && !c.workloads && ((discOf(disc, cluster) || {}).nads || []).some(x => x.namespace === n.namespace);
+}
+// The application namespaces a cluster reports: infrastructure hidden, the
+// ones that hold something first, empty ones marked as such.
+const namespaceOptions = (disc, cluster, site) => ((discOf(disc, cluster) || {}).namespaces || []).filter(n => !nsInfra(disc, cluster, n)).map(n => Object.assign({
+  n
+}, nsCounts(n))).sort((a, b) => (b.pvcs + b.workloads > 0) - (a.pvcs + a.workloads > 0) || b.pvcs - a.pvcs || b.workloads - a.workloads || a.n.namespace.localeCompare(b.n.namespace)).map(({
+  n,
+  pvcs,
+  workloads
+}) => ({
   v: n.namespace,
-  l: `${n.namespace} — ${(n.pvcs || []).length} PVC${(n.pvcs || []).length === 1 ? "" : "s"}, ${(n.workloads || []).length} workload${(n.workloads || []).length === 1 ? "" : "s"}${n.protected ? " (protected)" : ""}`
+  l: pvcs + workloads === 0 ? `${n.namespace} — (empty on ${site || cluster})` : `${n.namespace} — ${pvcs} PVC${pvcs === 1 ? "" : "s"}, ${workloads} workload${workloads === 1 ? "" : "s"}${n.protected ? " (protected)" : ""}`
 }));
+// Namespaces of these names that hold something on the other clusters: where
+// an application is when the chosen source site's namespaces are empty.
+function nsElsewhere(disc, cluster, namespaces) {
+  return (disc ? disc.clusters : []).filter(c => c.name !== cluster).flatMap(c => (namespaces || []).map(ns => {
+    const r = nsReport(disc, c.name, ns);
+    const k = r ? nsCounts(r) : {
+      pvcs: 0,
+      workloads: 0
+    };
+    return {
+      cluster: c.name,
+      namespace: ns,
+      pvcs: k.pvcs,
+      workloads: k.workloads
+    };
+  })).filter(x => x.pvcs || x.workloads);
+}
+// The PVCs and workloads the namespaces hold on a cluster (null: not reported).
+function nsHoldings(disc, cluster, namespaces) {
+  if (!reported(disc, cluster, namespaces)) return null;
+  return (namespaces || []).map(ns => nsCounts(nsReport(disc, cluster, ns))).reduce((a, c) => ({
+    pvcs: a.pvcs + c.pvcs,
+    workloads: a.workloads + c.workloads
+  }), {
+    pvcs: 0,
+    workloads: 0
+  });
+}
 // The label pairs of the PVCs in the namespaces, with how many each matches.
 function pvcPairs(disc, cluster, namespaces) {
   const pvcs = (namespaces || []).flatMap(ns => (nsReport(disc, cluster, ns) || {}).pvcs || []);
@@ -6181,6 +6230,39 @@ function dhcpServersOn(disc, cluster, nad) {
   const seg = n => n ? `${n.bridge || n.master || ""}|${n.vlan || ""}` : "";
   const target = d.nads.find(x => nadRef(x) === nad);
   return d.dhcpServers.filter(s => (s.nads || []).some(sn => sn.nad === nad || target && seg(d.nads.find(x => nadRef(x) === sn.nad)) === seg(target) && seg(target) !== "|"));
+}
+// The isolated test (bubble) networks of a site: the isolated NAD of every
+// DRPath that tests on it, and the one the site itself reports.
+function testNadsOf(disc, cluster, paths) {
+  const own = isolatedNadOf(disc, cluster);
+  return uniqSorted((paths || []).filter(p => p.to === cluster && p.test && p.test.isolatedNad).map(p => p.test.isolatedNad).concat(own ? [own] : []));
+}
+// A DHCP server that serves a test bubble's isolated network (its NAD is a
+// test NAD, or shares one's bridge and VLAN): it must not be proposed for a
+// guest network, whose reservations it would never answer.
+function isBubbleServer(disc, cluster, server, testNads) {
+  const d = discOf(disc, cluster);
+  const seg = n => n ? `${n.bridge || n.master || ""}|${n.vlan || ""}` : "";
+  const nadOf = ref => (d && d.nads || []).find(x => nadRef(x) === ref);
+  const tests = (testNads || []).map(t => seg(nadOf(t))).filter(x => x && x !== "|");
+  return (server.nads || []).some(sn => (testNads || []).includes(sn.nad) || tests.includes(seg(nadOf(sn.nad))) || /drtest|bubble|isolat/.test(sn.nad || ""));
+}
+// The DHCP server to propose for a site's guest networks: a registered one
+// that serves one of the roles' NADs first, else an in-cluster server found on
+// one of them that reads its hosts from a ConfigMap (it can be registered).
+// Test-bubble servers are never proposed. Never a name nothing registered.
+function proposeDHCPServer(disc, cluster, roleNads, servers, testNads) {
+  const found = uniqSorted((roleNads || []).filter(Boolean)).flatMap(n => dhcpServersOn(disc, cluster, n)).filter((f, i, xs) => xs.indexOf(f) === i && !isBubbleServer(disc, cluster, f, testNads));
+  const regOf = f => (servers || []).find(x => x.dnsmasq && x.dnsmasq.namespace === f.namespace && x.dnsmasq.configMap === f.hostsConfigMap);
+  const reg = found.map(regOf).find(Boolean);
+  if (reg) return {
+    registered: reg.name,
+    discovered: found.find(f => regOf(f) === reg) || null
+  };
+  return {
+    registered: null,
+    discovered: found.find(f => f.hostsConfigMap) || null
+  };
 }
 // The reserved host ids a guest network proposes: the gateway's (.1) and
 // every DHCP server's own on the segment.
@@ -6557,6 +6639,12 @@ Object.assign(window, {
   proposedReserved,
   guestRowError,
   proposeRoles,
+  testNadsOf,
+  isBubbleServer,
+  proposeDHCPServer,
+  nsInfra,
+  nsElsewhere,
+  nsHoldings,
   proposePVCSelector,
   pvcSelectorOptions,
   RESOURCE_TYPE_OPTIONS,
@@ -11813,7 +11901,8 @@ function Field({
   val,
   setVal,
   vals,
-  setAll
+  setAll,
+  reprepare
 }) {
   const [opts, setOpts] = useState(f.options || null);
   const [loading, setLoading] = useState(!!f.load);
@@ -11869,10 +11958,19 @@ function Field({
     }, /*#__PURE__*/React.createElement("button", {
       type: "button",
       className: "btn",
-      disabled: !!(f.disabled && f.disabled(vals || {})),
-      onClick: () => {
+      disabled: !!(f.disabled && f.disabled(vals || {})) || !!(r && r.status === "busy"),
+      onClick: async () => {
+        // apply may be asynchronous (it creates an object first) and may
+        // ask for the form's choices to be loaded again (f.refresh)
+        setChecks({
+          all: {
+            status: "busy",
+            text: "working…"
+          }
+        });
         try {
-          const patch = f.apply(vals || {});
+          const patch = await f.apply(vals || {});
+          if (f.refresh && reprepare) await reprepare();
           if (patch && setAll) setAll(patch);
           setChecks({
             all: {
@@ -11884,7 +11982,7 @@ function Field({
           setChecks({
             all: {
               status: "bad",
-              text: e.message
+              text: e && e.message || String(e)
             }
           });
         }
@@ -11922,13 +12020,7 @@ function Field({
     }, /*#__PURE__*/React.createElement("span", {
       className: "flabel"
     }, f.label, " ", /*#__PURE__*/React.createElement("em", null, "(", sel.length, ")")), /*#__PURE__*/React.createElement("div", {
-      className: "chipbox",
-      style: {
-        display: "flex",
-        gap: 6,
-        flexWrap: "wrap",
-        alignItems: "center"
-      }
+      className: "chipbox"
     }, sel.map(x => /*#__PURE__*/React.createElement("span", {
       key: x,
       className: "chip mono"
@@ -12021,7 +12113,7 @@ function Field({
         opacity: 0.5
       } : undefined
     }, rows.map((r, i) => /*#__PURE__*/React.createElement("div", {
-      className: "schedrow",
+      className: "schedrow kvrow",
       key: i
     }, /*#__PURE__*/React.createElement("input", {
       className: "finput sm",
@@ -12090,19 +12182,24 @@ function Field({
       setVal(n);
       setChecks({});
     };
+    // Header and rows share one grid template, so the columns line up whatever
+    // a cell holds. Each column has a floor (c.min); below the sum of the
+    // floors the box scrolls sideways instead of letting cells overlap.
+    const colMin = c => c.min || (c.type === "multi" ? 170 : c.type === "number" ? 72 : c.readonly ? 110 : c.type === "select" ? 130 : 110);
+    const extra = [ra ? `${ra.width || 72}px` : null, f.reorder ? "52px" : null, !fixed ? "28px" : null].filter(Boolean);
+    const template = f.cols.map(c => `minmax(${colMin(c)}px, ${c.flex || 1}fr)`).concat(extra).join(" ");
+    const floor = f.cols.reduce((a, c) => a + colMin(c), 0) + extra.reduce((a, x) => a + parseInt(x, 10), 0) + 6 * (f.cols.length + extra.length);
+    const gridRow = {
+      gridTemplateColumns: template
+    };
     const cell = (r, i, c) => {
       const w = {
-        flex: c.flex || 1,
-        minWidth: 0
+        minWidth: 0,
+        width: "100%"
       };
       if (c.readonly) return /*#__PURE__*/React.createElement("span", {
         key: c.k,
-        className: "finput sm mono rocell",
-        style: Object.assign({}, w, {
-          background: "transparent",
-          border: "none",
-          alignSelf: "center"
-        }),
+        className: "mono rocell",
         title: c.label
       }, (c.show ? c.show(r) : r[c.k]) || "—");
       if (c.type === "select" || c.type === "multi") {
@@ -12112,12 +12209,8 @@ function Field({
           const rest = opts.filter(o => !cur.includes(o.v));
           return /*#__PURE__*/React.createElement("span", {
             key: c.k,
-            style: Object.assign({}, w, {
-              display: "flex",
-              gap: 4,
-              flexWrap: "wrap",
-              alignItems: "center"
-            })
+            className: "rmulti",
+            style: w
           }, cur.map(x => /*#__PURE__*/React.createElement("span", {
             key: x,
             className: "chip mono",
@@ -12136,7 +12229,7 @@ function Field({
             n: "x",
             s: 9
           })))), /*#__PURE__*/React.createElement("select", {
-            className: "finput sm",
+            className: "finput sm radd",
             value: "",
             disabled: off || !rest.length,
             onChange: e => e.target.value && set(i, c.k, cur.concat(e.target.value))
@@ -12190,54 +12283,39 @@ function Field({
     }, /*#__PURE__*/React.createElement("span", {
       className: "flabel"
     }, f.label, " ", /*#__PURE__*/React.createElement("em", null, "(", rows.length, f.max ? ` of ${f.max}` : "", ")")), /*#__PURE__*/React.createElement("div", {
-      className: "schedbox",
+      className: "schedbox rgridbox",
       style: off ? {
         opacity: 0.5
       } : undefined
     }, /*#__PURE__*/React.createElement("div", {
-      className: "schedrow head"
+      className: "rgridin",
+      style: {
+        minWidth: floor
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "schedrow rgrid head",
+      style: gridRow
     }, f.cols.map(c => /*#__PURE__*/React.createElement("span", {
       key: c.k,
-      className: "sl",
-      style: {
-        flex: c.flex || 1
-      }
-    }, c.label)), ra && /*#__PURE__*/React.createElement("span", {
-      style: {
-        width: 52
-      }
-    }), f.reorder && /*#__PURE__*/React.createElement("span", {
-      style: {
-        width: 44
-      }
-    }), !fixed && /*#__PURE__*/React.createElement("span", {
-      style: {
-        width: 24
-      }
-    })), rows.map((r, i) => {
+      className: "sl"
+    }, c.label)), ra && /*#__PURE__*/React.createElement("span", null), f.reorder && /*#__PURE__*/React.createElement("span", null), !fixed && /*#__PURE__*/React.createElement("span", null)), rows.map((r, i) => {
       const rerr = f.rowError && f.rowError(r, i, rows, vals || {});
       const rinfo = !rerr && f.rowInfo && f.rowInfo(r, i, rows, vals || {});
       return /*#__PURE__*/React.createElement(React.Fragment, {
         key: i
       }, /*#__PURE__*/React.createElement("div", {
-        className: "schedrow"
+        className: "schedrow rgrid",
+        style: gridRow
       }, f.cols.map(c => cell(r, i, c)), ra && /*#__PURE__*/React.createElement("button", {
         type: "button",
         className: "chip rowact",
-        style: {
-          width: 52,
-          justifyContent: "center"
-        },
         title: ra.title || ra.label,
         disabled: off || !!(checks[i] && checks[i].status === "busy"),
         onClick: () => runCheck(() => ra.run(r, vals || {}, i), x => setChecks(c => Object.assign({}, c, {
           [i]: x
         })))
       }, ra.label || "Test"), f.reorder && /*#__PURE__*/React.createElement("span", {
-        style: {
-          width: 44,
-          display: "flex"
-        }
+        className: "rmove"
       }, /*#__PURE__*/React.createElement("button", {
         type: "button",
         className: "kebab rowup",
@@ -12263,22 +12341,18 @@ function Field({
         n: "x",
         s: 11
       }))), checks[i] && /*#__PURE__*/React.createElement("div", {
-        style: {
-          padding: "0 0 4px 2px"
-        }
+        className: "rnote"
       }, /*#__PURE__*/React.createElement(CheckResult, {
         r: checks[i]
       })), rerr && /*#__PURE__*/React.createElement("div", {
-        className: "fhint rowerr",
+        className: "fhint rowerr rnote",
         style: {
-          color: "var(--bad)",
-          margin: "0 0 4px 2px"
+          color: "var(--bad)"
         }
       }, rerr), rinfo && /*#__PURE__*/React.createElement("div", {
-        className: "fhint rowinfo",
+        className: "fhint rowinfo rnote",
         style: {
-          color: "var(--dim)",
-          margin: "0 0 4px 2px"
+          color: "var(--dim)"
         }
       }, rinfo));
     }), !fixed && /*#__PURE__*/React.createElement("button", {
@@ -12289,7 +12363,7 @@ function Field({
     }, /*#__PURE__*/React.createElement(Icon, {
       n: "plus",
       s: 11
-    }), f.addLabel || "Add")), f.validate && f.validate(val, vals || {}) && /*#__PURE__*/React.createElement("span", {
+    }), f.addLabel || "Add"))), f.validate && f.validate(val, vals || {}) && /*#__PURE__*/React.createElement("span", {
       className: "fhint",
       style: {
         color: "var(--bad)"
@@ -12672,6 +12746,11 @@ function Dialog({
     });
   }, []);
   const allFields = prep ? resolve(vals, prep) : [];
+  // the form's choices loaded again (after an apply created an object); the
+  // values entered so far are kept
+  const reprepare = () => Promise.resolve().then(spec.prepare || (() => ({}))).then(p => setPrep(p || {}), () => {});
+  // a dialog with a multi-column row editor or priority lanes gets the wide modal
+  const wide = !!spec.wide || allFields.some(f => f.type === "rows" && (f.cols || []).length >= 3 || f.type === "lanes");
   const fields = allFields.filter(f => f.type !== "note");
   const invalid = !prep || fields.some(f => f.required && (vals[f.k] === undefined || vals[f.k] === "" || Array.isArray(vals[f.k]) && !vals[f.k].length) || f.match && vals[f.k] !== f.match || f.validate && f.validate(vals[f.k], vals)
   // a row error blocks saving when the field says so (a selector that matches nothing)
@@ -12700,7 +12779,7 @@ function Dialog({
     className: "ovl",
     onClick: onClose
   }, /*#__PURE__*/React.createElement("div", {
-    className: "modal",
+    className: "modal" + (wide ? " wide" : ""),
     onClick: e => e.stopPropagation()
   }, /*#__PURE__*/React.createElement("div", {
     className: "mhead"
@@ -12730,7 +12809,8 @@ function Dialog({
     setVal: v => setVals(s => Object.assign({}, s, {
       [f.k]: v
     })),
-    setAll: patch => setVals(s => Object.assign({}, s, patch))
+    setAll: patch => setVals(s => Object.assign({}, s, patch)),
+    reprepare: reprepare
   })), err && /*#__PURE__*/React.createElement("div", {
     className: "banner",
     style: {
@@ -29591,10 +29671,24 @@ const gateAnswerOf = st => {
     lines
   };
 };
-const tierFields = (v, disc, cluster, nss, target) => {
+// When the chosen namespaces hold nothing on the source site: say so, and
+// name the sites where namespaces of these names hold PVCs or workloads.
+const elsewhereNote = (disc, cluster, nss, siteOf, what) => {
+  const h = nsHoldings(disc, cluster, nss);
+  if (!nss.length || !h || (what === "pvcs" ? h.pvcs : h.workloads)) return null;
+  const there = nsElsewhere(disc, cluster, nss);
+  const nameOf = c => siteOf && siteOf(c) || c;
+  return `No ${what === "pvcs" ? "PVCs" : "workloads"} in ${nss.join(", ")} on ${nameOf(cluster)} — is the application running on another site?` + (there.length ? ` ${there.map(x => `${x.namespace} holds ${x.pvcs} PVC${x.pvcs === 1 ? "" : "s"} and ${x.workloads} workload${x.workloads === 1 ? "" : "s"} on ${nameOf(x.cluster)}`).join("; ")}: choose that site as the source.` : "");
+};
+const tierFields = (v, disc, cluster, nss, target, siteOf) => {
   const tierNames = (v.tiers || []).map(r => r.name).filter(Boolean);
   const prop = proposeTiers(disc, cluster, nss);
-  return [{
+  const noWork = elsewhereNote(disc, cluster, nss, siteOf, "workloads");
+  return [noWork && {
+    k: "nTierWhere",
+    type: "note",
+    label: `${noWork} Only the config tier can be proposed from here.`
+  }, {
     k: "propose",
     label: "Tiers proposed from what the namespaces hold",
     type: "apply",
@@ -29661,7 +29755,7 @@ const tierFields = (v, disc, cluster, nss, target) => {
       }
     },
     hint: "A check runs in a pod of the application (never inside a VM guest) on every pass of the restore. TCP and HTTP checks are built from the namespaces' Services; only a custom check takes a command."
-  }];
+  }].filter(Boolean);
 };
 const protectAppDialogDR = (plans, cfg) => ({
   title: "Protect an application",
@@ -29691,6 +29785,8 @@ const protectAppDialogDR = (plans, cfg) => ({
     const cluster = src ? src.cluster : "";
     const nss = v.nsOverride ? csv(v.nsText) : v.namespaces || [];
     const pvcOpts = pvcSelectorOptions(disc, cluster, nss);
+    const siteOf = c => (plan && plan.sites.find(x => x.cluster === c) || {}).name || c;
+    const noPvc = discovered => discovered && elsewhereNote(disc, cluster, nss, siteOf, "pvcs");
     const target = () => ({
       plan: v.plan,
       site: v.source,
@@ -29778,7 +29874,7 @@ const protectAppDialogDR = (plans, cfg) => ({
       type: "chips",
       required: true,
       def: [],
-      options: namespaceOptions(disc, cluster),
+      options: namespaceOptions(disc, cluster, src ? src.name : cluster),
       addLabel: "— add a namespace —",
       empty: cluster ? discOf(disc, cluster) && discOf(disc, cluster).namespaces ? "no other namespace reported" : `dr-agent on ${cluster} has not reported its namespaces` : "choose the source site first",
       // a new set of namespaces gets its PVC selector proposed again
@@ -29789,8 +29885,12 @@ const protectAppDialogDR = (plans, cfg) => ({
           pvcSel: proposePVCSelector(disc, cluster, vv.namespaces || [])
         };
       },
-      hint: "System namespaces are not offered."
-    }), discovered && nss.length > 0 && !reported(disc, cluster, nss) && {
+      hint: "Platform, DR-stack and network-only namespaces are not offered; namespaces holding PVCs or workloads come first."
+    }), noPvc(discovered) && {
+      k: "nWhere",
+      type: "note",
+      label: noPvc(discovered)
+    }, discovered && nss.length > 0 && !reported(disc, cluster, nss) && {
       k: "nRep",
       type: "note",
       label: `dr-agent on ${cluster} has not reported ${nss.filter(n => !nsReport(disc, cluster, n)).join(", ")}: the selector and tiers cannot be checked.`
@@ -29824,7 +29924,7 @@ const protectAppDialogDR = (plans, cfg) => ({
       type: "text",
       placeholder: "leave empty to let the hub generate one from tiers",
       validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label." : null
-    }, ...(discovered && !(v.recipe || "").trim() ? tierFields(v, disc, cluster, nss, target) : []), {
+    }, ...(discovered && !(v.recipe || "").trim() ? tierFields(v, disc, cluster, nss, target, siteOf) : []), {
       k: "probes",
       label: "Health probes — what a move waits for on the target",
       type: "rows",
@@ -30199,20 +30299,36 @@ const editBindingsDialog = s => ({
   confirm: "Save",
   done: "SiteProfile updated",
   desc: "How this site's networks map for recovered VMs (ADR 0020): the NAD each logical role is on here, the guest subnet of each role with the host ids never handed out, and the DHCP server the reservations are rendered to. Proposals come from what the site's dr-agent reports.",
-  prepare: () => Promise.all([drhub.dhcpServers(), drhub.discovery(), drhub.siteProfiles().catch(() => [])]).then(([ds, disc, profiles]) => ({
+  prepare: () => Promise.all([drhub.dhcpServers(), drhub.discovery(), drhub.siteProfiles().catch(() => []), drhub.paths().catch(() => [])]).then(([ds, disc, profiles, paths]) => ({
     servers: ds.filter(d => d.site === s.name),
     disc,
-    others: profiles.filter(p => p.name !== s.name)
+    others: profiles.filter(p => p.name !== s.name),
+    paths
   })),
   fields: (v, prep) => {
     const {
       servers = [],
       disc,
-      others = []
+      others = [],
+      paths = []
     } = prep || {};
     const d = discOf(disc, s.name);
     const cur = srvRef((s.spec || {}).dhcpServerRef);
     const unregistered = n => n && !servers.some(x => x.name === n);
+    // the isolated test networks of this site, and the server to propose for
+    // its guest networks: registered first, else a discovered one to register
+    const testNads = testNadsOf(disc, s.name, paths);
+    // the NADs of the roles that have a guest network (all bound roles when none has one yet)
+    // (the profile's own bindings while the form has no values yet: the defaults)
+    const gnetsNow = v.gnets || gnetRows(s.spec || {}),
+      lnetsNow = v.lnets || lnetRows(s.spec || {});
+    const guestRoles = gnetsNow.map(g => g.role).filter(Boolean);
+    const roleNads = lnetsNow.filter(l => !guestRoles.length || guestRoles.includes(l.role)).map(l => l.nad);
+    const prop = proposeDHCPServer(disc, s.name, roleNads, servers, testNads);
+    // the site default never proposes a name nothing registered
+    const dhcpDef = cur && !unregistered(cur) ? cur : prop.registered || "";
+    // every guest network already reaches a registered server: nothing to register
+    const served = gnetsNow.length > 0 && gnetsNow.every(g => g.dhcpServerRef ? !unregistered(g.dhcpServerRef) : !!((v.dhcp !== undefined ? v.dhcp : dhcpDef) && !unregistered(v.dhcp !== undefined ? v.dhcp : dhcpDef)));
     const nadOpts = (d && d.nads || []).map(n => ({
       v: nadRef(n),
       l: `${nadRef(n)}${n.vlan ? ` (VLAN ${n.vlan})` : ""}${n.type ? ` ${n.type}` : ""}`
@@ -30231,7 +30347,7 @@ const editBindingsDialog = s => ({
         role,
         cidr: sub.cidr,
         reservedHostIDs: sub.cidr ? proposedReserved(disc, s.name, nad, sub.cidr).join(", ") : "1, 2",
-        dhcpServerRef: srv ? srv.name : ""
+        dhcpServerRef: srv && srv.name !== dhcpDef ? srv.name : ""
       };
     };
     return [!servers.length && {
@@ -30376,6 +30492,39 @@ const editBindingsDialog = s => ({
         }
       },
       hint: `The DHCP servers registered for ${s.name}: ${servers.map(x => x.name).join(", ") || "none"}. "Ask" finds servers outside the cluster too; those cannot take reservations from the hub.`
+    },
+    // stays after it registered the server, so its answer stays readable
+    (!prop.registered && prop.discovered && !served || v._regUsed) && {
+      k: "regUse",
+      type: "apply",
+      refresh: true,
+      label: "Proposed DHCP server",
+      button: v._regUsed ? "Registered" : "Register and use",
+      disabled: vv => !!vv._regUsed,
+      hint: () => {
+        const f = prop.discovered;
+        if (!f) return `registered as ${v._regUsed}`;
+        return `${f.namespace}/${f.owner || f.pod} on ${(f.nads || []).map(n => `${n.nad}${(n.ips || []).length ? ` @${n.ips[0]}` : ""}`).join(", ")}, reservations in ${f.namespace}/${f.hostsConfigMap}` + (unregistered(cur) ? `. It is registered as ${cur}, the name this profile already uses, so the guest networks that name it work as they are.` : ". It is registered and set as the site's DHCP server.");
+      },
+      apply: async vv => {
+        const f = prop.discovered;
+        const name = unregistered(cur) ? cur : dns63(`${s.name}-${(f.owner || f.pod).split("/").pop()}`);
+        await drhub.createDHCPServer({
+          name,
+          site: s.name,
+          namespace: f.namespace,
+          configMap: f.hostsConfigMap
+        });
+        // rows that named an unregistered server fall back to the site default
+        return {
+          _regUsed: name,
+          dhcp: name,
+          gnets: (vv.gnets || []).map(g => g.dhcpServerRef && g.dhcpServerRef !== name && unregistered(g.dhcpServerRef) ? Object.assign({}, g, {
+            dhcpServerRef: ""
+          }) : g)
+        };
+      },
+      done: "Registered and set as the site's DHCP server; review the bindings, then save."
     }, found.length > 0 && {
       k: "found",
       label: `DHCP servers found on ${s.name}'s networks`,
@@ -30411,7 +30560,8 @@ const editBindingsDialog = s => ({
       }],
       rowInfo: r => {
         const reg = servers.find(x => x.dnsmasq && r._f && x.dnsmasq.namespace === r._f.namespace && x.dnsmasq.configMap === r._f.hostsConfigMap);
-        return reg ? `registered as ${reg.name}` : r._f && !r._f.hostsConfigMap ? "reads no hosts file from a ConfigMap: the hub cannot render reservations to it" : null;
+        const bubble = r._f && isBubbleServer(disc, s.name, r._f, testNads) ? "test network (bubble) server: it serves the isolated test network, not a guest network" : null;
+        return [bubble, reg ? `registered as ${reg.name}` : r._f && !r._f.hostsConfigMap ? "reads no hosts file from a ConfigMap: the hub cannot render reservations to it" : null].filter(Boolean).join("; ") || null;
       },
       rowAction: {
         label: "Register",
@@ -30435,11 +30585,15 @@ const editBindingsDialog = s => ({
           }));
         }
       }
+    }, unregistered(cur) && {
+      k: "nCur",
+      type: "note",
+      label: `This profile names the DHCP server ${cur}, which is not registered for ${s.name}: its reservations are rendered nowhere. ${prop.discovered && !prop.registered ? "Register and use the proposed server above (it keeps the name " + cur + "), or choose a registered one." : "Choose a registered server, or register one."}`
     }, {
       k: "dhcp",
       label: "DHCP server of the site (default for every guest network)",
       type: "select",
-      def: cur,
+      def: dhcpDef,
       options: [{
         v: "",
         l: "— none —"
