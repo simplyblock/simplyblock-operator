@@ -38,7 +38,9 @@ const normContainer = c => ({
   cpu: {alloc: c.cpu_cores_alloc, pct: c.cpu_pct},
   mem: {used: c.mem_used, limit: c.mem_limit},
   disk: {used: c.disk_used, limit: c.disk_limit},
-  restarts: c.restarts, uptimeH: c.uptime_h
+  restarts: c.restarts, uptimeH: c.uptime_h,
+  // the pod's containers: a pod log names one of them when there are several
+  containers: c.containers || []
 });
 const normFdb = b => ({
   id: b.id, version: b.version, createdAt: b.created_at, size: b.size, type: b.type,
@@ -69,25 +71,40 @@ const podContainer = p => {
   const lim = k => cs.reduce((s, c) => s + (k === "cpu" ? cpuQty : memQty)((((c.resources || {}).limits) || {})[k]), 0);
   const started = (p.status || {}).startTime ? Date.parse(p.status.startTime) : null;
   const ready = st.length > 0 && st.every(c => c.ready);
-  return {name: p.metadata.name, group: podGroup(p), image: (cs[0] || {}).image || "",
+  return {name: p.metadata.name, group: podGroup(p), image: (cs[0] || {}).image || "", containers: cs.map(c => c.name),
     state: (p.status || {}).phase === "Running" && ready ? "running" : String((p.status || {}).phase || "unknown").toLowerCase(),
     cpu_cores_alloc: lim("cpu"), cpu_pct: 0, mem_used: 0, mem_limit: lim("memory"), disk_used: 0, disk_limit: 0,
     restarts: st.reduce((s, c) => s + (c.restartCount || 0), 0),
     uptime_h: started ? Math.max(0, Math.round((Date.now() - started) / 36e5)) : 0, metrics: false};
 };
 const LOG_LEVEL = /\b(DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL|CRITICAL)\b/i;
-async function podLogs(name) {
-  const path = pathFor("Pod", {name, subresource: "log"}) + "?tailLines=300&timestamps=true";
+const levelOf = msg => {
+  const lv = (LOG_LEVEL.exec(msg || "") || [])[1] || "INFO";
+  return lv.toUpperCase().replace("WARNING", "WARN").replace("CRITICAL", "ERROR").replace("FATAL", "ERROR");
+};
+const POD_LOG_TAIL = 500;
+// A pod's log, straight from the Kubernetes API: the live tail, oldest line
+// first (the order the API writes them).
+//
+// Accept must not be text/plain. The API server negotiates the response type
+// of a GET against its object serializers (JSON, YAML, protobuf) before it
+// streams the log, so "Accept: text/plain" is refused with 406 "only the
+// following media types are accepted: application/json, application/yaml,
+// application/vnd.kubernetes.protobuf" (k8s.io/apiserver handlers/get.go).
+// kubectl sends "application/json, */*"; the body is plain text either way.
+// A pod with several containers needs ?container=, or the API answers 400.
+async function podLogs(name, container, tail) {
+  const n = tail || POD_LOG_TAIL;
+  const path = pathFor("Pod", {name, subresource: "log"}) + `?tailLines=${n}&timestamps=true` + (container ? `&container=${encodeURIComponent(container)}` : "");
   let res;
-  try { res = await fetch(window.SB_CONFIG.k8sBase + path, {headers: {Accept: "text/plain", Authorization: `Bearer ${window.SB_CONFIG.token}`}}); }
+  try { res = await fetch(window.SB_CONFIG.k8sBase + path, {headers: {Accept: "application/json, */*", Authorization: `Bearer ${window.SB_CONFIG.token}`}}); }
   catch (e) { throw new ApiError(0, "Cannot reach the Kubernetes API", path, "Unreachable"); }
   const text = await res.text();
   if (!res.ok) { let b = null; try { b = JSON.parse(text); } catch (e) {} throw new ApiError(res.status, (b && b.message) || "Request failed", path, (b && b.reason) || null); }
   return text.split("\n").filter(Boolean).map(line => {
     const sp = line.indexOf(" ");
     const ts = sp > 0 ? line.slice(0, sp) : "", msg = sp > 0 ? line.slice(sp + 1) : line;
-    const lv = (LOG_LEVEL.exec(msg) || [])[1] || "INFO";
-    return {ts, level: lv.toUpperCase().replace("WARNING", "WARN").replace("CRITICAL", "ERROR").replace("FATAL", "ERROR"), msg};
+    return {ts, level: levelOf(msg), msg, pod: name, container: container || ""};
   });
 }
 
@@ -97,7 +114,7 @@ const agent = {
   containers: () => upstreamOn("operator")
     ? areq(AGENT_BASE, "/control-plane/containers").then(r => r.map(normContainer))
     : k8s.list("Pod").then(ps => ps.map(p => Object.assign(normContainer(podContainer(p)), {metrics: false}))),
-  containerLogs: name => upstreamOn("operator") ? areq(AGENT_BASE, `/control-plane/containers/${name}/logs`) : podLogs(name),
+  containerLogs: (name, container) => upstreamOn("operator") ? areq(AGENT_BASE, `/control-plane/containers/${name}/logs`) : podLogs(name, container),
   fdbBackups: () => areq(AGENT_BASE, "/control-plane/fdb/backups").then(r => r.map(normFdb)),
   fdbRestore: id => asend(AGENT_BASE, "POST", `/control-plane/fdb/backups/${id}/restore`),
   nodeLogs: (nid, stream) => areq(AGENT_BASE, `/nodes/${nid}/logs/${stream}`),
@@ -114,4 +131,4 @@ const SourceTag = ({what}) => (
   <span className="srctag" title={`Not part of control plane API v2 — read from ${what}`}><Icon n="alert" s={10} />{what}</span>
 );
 
-Object.assign(window, {agent, AGENT_BASE, PROM_BASE, SourceTag, normContainer, normFdb, podContainer, memQty});
+Object.assign(window, {agent, AGENT_BASE, PROM_BASE, SourceTag, normContainer, normFdb, podContainer, memQty, podLogs, levelOf, POD_LOG_TAIL});

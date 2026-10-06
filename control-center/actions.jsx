@@ -1266,6 +1266,8 @@ const ACTIONS = {
           min: gb(o.requested), def: gb(o.requested), required: true},
         {k: "n35", type: "note", label: `Currently ${fmtBytes(o.requested)}. Shrinking a claim is refused.`}
       ], confirm: "Expand", run: v => api.pvcResize(o.id, Number(v.size) * GBn)}},
+    // the DR labels of this claim and of the workload that mounts it
+    ...labelActionsForPvc(o)
   ],
 
   cgroup: o => [
