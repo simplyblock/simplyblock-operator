@@ -23,13 +23,15 @@ spec:
     family: Debian
   nodeSets:
   - groups:
-    - devices:
+    - dataInterfaces:
+      - eth0
+      devices:
         nvme:
         - 0000:5e:00.0
         - 0000:5e:00.1
         - 0000:5e:00.2
         - 0000:5e:00.3
-      mgmtInterface: eth0
+      mgmtInterface: eth1
       name: group-1-nvme-4x3T
       workers:
       - worker-01

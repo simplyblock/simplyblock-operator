@@ -23,7 +23,9 @@ spec:
     family: Debian
   nodeSets:
   - groups:
-    - devices:
+    - dataInterfaces:
+      - eth1
+      devices:
         nvme:
         - "10000:01:00.0"
         - "10000:02:00.0"

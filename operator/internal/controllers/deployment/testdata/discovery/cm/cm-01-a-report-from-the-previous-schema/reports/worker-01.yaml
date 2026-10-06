@@ -128,7 +128,7 @@ data:
       "interfaces": [
         {
           "addresses": [
-            "10.10.10.1"
+            "10.10.10.1/24"
           ],
           "driver": "mlx5_core",
           "kind": "physical",
@@ -140,7 +140,7 @@ data:
         },
         {
           "addresses": [
-            "10.10.11.1"
+            "10.10.11.1/24"
           ],
           "driver": "mlx5_core",
           "kind": "physical",
@@ -170,7 +170,7 @@ data:
       },
       "node": "worker-01",
       "probedAt": "2026-09-18T09:00:00Z",
-      "version": 7
+      "version": 8
     }
 kind: ConfigMap
 metadata:

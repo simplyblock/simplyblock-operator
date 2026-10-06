@@ -2,7 +2,7 @@ apiVersion: v1
 data:
   report.json: |-
     {
-      "version": 8,
+      "version": 9,
       "node": "worker-13",
       "probedAt": "2026-09-18T09:00:00Z",
       "cpu": {
@@ -98,7 +98,7 @@ data:
           "numaNode": 0,
           "kind": "physical",
           "addresses": [
-            "10.10.10.13"
+            "10.10.10.13/24"
           ]
         },
         {
@@ -110,7 +110,7 @@ data:
           "numaNode": 1,
           "kind": "physical",
           "addresses": [
-            "10.10.11.13"
+            "10.10.11.13/24"
           ]
         }
       ],
