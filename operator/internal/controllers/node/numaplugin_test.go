@@ -45,7 +45,7 @@ func mustHaveNUMAPlugin(t *testing.T, r *StorageNodeWorkloadReconciler) *appsv1.
 
 func anotherCluster() *simplyblockv1alpha2.StorageCluster {
 	cluster := aSizedCluster()
-	cluster.Name = "another-cluster"
+	cluster.Name = "a-second-numa-cluster"
 	return cluster
 }
 
