@@ -9,6 +9,8 @@ name: "Repo: Release"
 #     │                └─ build-operator ─┬─ release-operator ──┤ (OLM bundle)
 #     │                                   └─ package-operator-chart ─┐
 #     └─ package-csi-chart ──────────────────────────────────────┴─ merge-helm ─┴─ release-helm (FTPS publish)
+#
+#   build-operator ─ release-control-center (Control Center image; nothing waits on it)
 
 on:
   push:
@@ -84,6 +86,17 @@ jobs:
     name: Release operator
     needs: [setup, build-operator]
     uses: ./.github/workflows/operator_release.yaml
+    with:
+      version: ${{ needs.setup.outputs.version }}
+    secrets: inherit
+
+  # Control Center (quay image). Skips itself while the console sources are
+  # not committed, and nothing downstream depends on it: the chart ships with
+  # controlCenter.enabled=false.
+  release-control-center:
+    name: Release control center
+    needs: [setup, build-operator]
+    uses: ./.github/workflows/control_center_release.yaml
     with:
       version: ${{ needs.setup.outputs.version }}
     secrets: inherit
