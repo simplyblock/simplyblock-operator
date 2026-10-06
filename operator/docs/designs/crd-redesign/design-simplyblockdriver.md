@@ -93,8 +93,8 @@ place, and §5 is what it does with them.
 - Specify which version ordering the deployment requires, and what the operator
   does when it does not hold (§5).
 - Specify how a deployment the chart installed becomes this kind's, without
-  deleting an object, restarting a plugin that did not have to restart, or
-  changing a running configuration (§4.3).
+  deleting an object, restarting every plugin at once, or changing a running
+  configuration the spec cannot express (§4.3).
 - Specify how many of these objects a Kubernetes cluster holds, and what stops a
   second one (§3.4).
 
@@ -460,6 +460,15 @@ for it.
 it is the plugin that creates and deletes volumes. Existing attachments survive
 it, which is why the word is `Unavailable` rather than a claim about data.
 
+**A controller pod that holds a rollout is deleted.** A `StatefulSet` replaces its
+pods in order and waits for each to be ready, so a controller pod that is unready
+on a stale revision is never moved to the revision that would fix it. After
+unready for two minutes, with the `StatefulSet` mid-rollout and the pod not on the
+update revision, the controller deletes the pod and the `StatefulSet` recreates it
+at the update revision. A pod already on the update revision is left alone,
+because a replacement would fail the same way. `ControllerPodRecycled` is the
+event (§6.1).
+
 **`nodesTotal` of zero is reported rather than failed.** A `nodeSelector` that
 matches no worker is a configuration a person wrote, and the phase that suits it
 is one that says so in `status.message` rather than one that pretends the
@@ -561,22 +570,46 @@ default is a reconfiguration of a live deployment on the pass that adopts it, an
 still needs the seeding, either from the tool or by setting `driver.driverName`
 and the rest in `values.yaml` before the chart upgrade applies the object.
 
-**The first reconcile after adoption has to be a no-op**, because these objects
-were rendered from Helm values and are about to be rendered from a spec. A field
-the translation cannot express is not a translation that fails visibly. It is a
-running deployment reconfigured on the reconcile that adopts it, which is the
-property [`design-api-upgrade.md`](design-api-upgrade.md) §12.3 captures and
-diffs for.
+**The first reconcile after adoption rolls the plugins, one at a time.** The
+objects were rendered from Helm values and are now rendered from a spec, and this
+operator's pod template carries what no earlier chart release did: csi-link's
+`--link*` arguments, the downward-API `POD_NAME` and `POD_UID`, the link token and
+CA volumes, the `stack-records` host path, and a snapshotter feature gate. A
+template that differs rolls the node `DaemonSet` (`maxUnavailable: 1`) and the
+controller `StatefulSet`. This was seen on a 26.2.7 install upgraded to this
+operator (2026-10-05). csi-link is always on and has no spec surface, so there
+is no option adoption could decline it with.
+
+**The rollout does not interrupt attached volumes.** A volume is an NVMe-oF
+connection the kernel holds, so a node plugin that restarts costs a worker the
+ability to attach or detach for the seconds it is down, and nothing more. Node
+plugins killed under sustained I/O cost none of it (2026-10-05, zero errors in an
+fio run with verification), and a controller plugin that is down stops
+provisioning and leaves existing attachments alone (§4.2). What adoption must not
+do is change a property the spec cannot express, which is what the three
+refusals of step 2 are for. [`design-api-upgrade.md`](design-api-upgrade.md)
+§12.3's capture and diff is expected to find the csi-link additions and nothing
+else.
 
 | Running state                                            | Field                                                                                           |
 |----------------------------------------------------------|-------------------------------------------------------------------------------------------------|
-| `image.csi`                                              | `spec.image`                                                                                    |
+| `image.csi`                                              | Nothing, unless somebody chose it (below)                                                       |
 | `Always`, the chart's pull policy                        | `spec.imagePullPolicy`, whose default is the same, so only a release that changed it translates |
 | The name the live `CSIDriver` carries, from `driverName` | `spec.driverName`, read from the registration rather than defaulted                             |
 | `controller.replicas`                                    | `spec.controllerReplicas`                                                                       |
 | `controller.nodeSelector`, `controller.tolerations`      | `spec.controllerNodeSelector`, `spec.controllerTolerations` (§3.1)                              |
 | `snapshotclass.create`, `snapshotcontroller.create`      | `spec.enableVolumeSnapshots` (§3.1)                                                             |
 | The six sidecar image and tag values                     | `spec.sidecarImages`, written only where the release pinned one (§3.1)                          |
+
+**The running plugin image is not copied into `spec.image`.** The operator's pod
+template passes `--link*` to both plugins, and a plugin built before csi-link does
+not define the flag. Seeding `spdkcsi:v26.2.7` from the running pods made both
+plugins exit with `flag provided but not defined: -link` and the rollout stop
+there (2026-10-05). An empty `spec.image` takes the plugin this operator ships,
+which is the pairing it was tested as. An image a person chose, in a registry or at
+a tag the chart's default does not name, is translated, and has to be a build that
+accepts `--link`. No release can be named as the first that does: the csi-link
+commit is in no tagged release yet, so the controller does not guess one.
 
 **`driverName` is read rather than defaulted, and it is the row that would cost
 the most.** The field is immutable (§3.2), so a translation that omits it defaults
@@ -791,18 +824,19 @@ The kind is new, so both tables are new infrastructure.
 
 ### 6.1 Kubernetes events
 
-| Event                                                        | Type      | Reason              | On                  |
-|--------------------------------------------------------------|-----------|---------------------|---------------------|
-| The deployment reached `Ready`                               | `Normal`  | `DriverReady`       | `SimplyblockDriver` |
-| A node plugin is not ready and the phase became `Degraded`   | `Warning` | `DriverDegraded`    | `SimplyblockDriver` |
-| The controller plugin is not running                         | `Warning` | `DriverUnavailable` | `SimplyblockDriver` |
-| The driver is newer than the control plane it calls          | `Warning` | `VersionSkew`       | `SimplyblockDriver` |
-| The driver is more than one release behind the control plane | `Warning` | `VersionTooOld`     | `SimplyblockDriver` |
-| A `nodeSelector` matches no schedulable worker               | `Normal`  | `NoMatchingWorkers` | `SimplyblockDriver` |
-| The snapshot controller was applied                          | `Normal`  | `SnapshotsEnabled`  | `SimplyblockDriver` |
-| A running deployment was taken over rather than created      | `Normal`  | `DriverAdopted`     | `SimplyblockDriver` |
-| Adoption stopped on what the spec cannot change              | `Warning` | `AdoptionRefused`   | `SimplyblockDriver` |
-| A second object reached the API server past the webhook      | `Warning` | `DuplicateDriver`   | `SimplyblockDriver` |
+| Event                                                        | Type      | Reason                  | On                  |
+|--------------------------------------------------------------|-----------|-------------------------|---------------------|
+| The deployment reached `Ready`                               | `Normal`  | `DriverReady`           | `SimplyblockDriver` |
+| A node plugin is not ready and the phase became `Degraded`   | `Warning` | `DriverDegraded`        | `SimplyblockDriver` |
+| The controller plugin is not running                         | `Warning` | `DriverUnavailable`     | `SimplyblockDriver` |
+| The driver is newer than the control plane it calls          | `Warning` | `VersionSkew`           | `SimplyblockDriver` |
+| The driver is more than one release behind the control plane | `Warning` | `VersionTooOld`         | `SimplyblockDriver` |
+| A `nodeSelector` matches no schedulable worker               | `Normal`  | `NoMatchingWorkers`     | `SimplyblockDriver` |
+| The snapshot controller was applied                          | `Normal`  | `SnapshotsEnabled`      | `SimplyblockDriver` |
+| A running deployment was taken over rather than created      | `Normal`  | `DriverAdopted`         | `SimplyblockDriver` |
+| A controller pod stuck on a stale revision was deleted       | `Warning` | `ControllerPodRecycled` | `SimplyblockDriver` |
+| Adoption stopped on what the spec cannot change              | `Warning` | `AdoptionRefused`       | `SimplyblockDriver` |
+| A second object reached the API server past the webhook      | `Warning` | `DuplicateDriver`       | `SimplyblockDriver` |
 
 **`VersionSkew` and `VersionTooOld` are the two the kind was built for.** Every
 other row here reports a deployment's health, and these two report combinations
@@ -868,8 +902,9 @@ immutability marker.
 The risk unit tests do not reach is the skew itself, which needs a driver and a
 control plane at two versions and a volume to attach, and it is where §1 says the
 failure actually lands. Adoption has one of the same shape: a chart-installed
-cluster with attached volumes, upgraded, is the only place where a plugin that
-restarts when it did not have to shows up as anything a test can see.
+cluster with attached volumes, upgraded, is the only place where the rollout the
+first reconcile starts shows up as anything a test can see: whether attachments
+survive it and whether the controller pod comes back.
 
 ---
 

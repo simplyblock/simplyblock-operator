@@ -102,45 +102,50 @@ File: `operator/internal/controllers/driver/simplyblockdriver_adoption_test.go`
 Every row seeds the fake client with the objects a chart install leaves behind,
 carrying the Helm labels and annotations a live release writes.
 
-| #        | Scenario                                                                                | Type         | Test                                                    |
-|----------|-----------------------------------------------------------------------------------------|--------------|---------------------------------------------------------|
-| U-54     | A namespace holding the chart's objects: each one is taken over, none recreated         | Positive     | `TestAdoptionKeepsTheObject`                            |
-| U-55     | The `DaemonSet`'s UID and creation timestamp are the ones it had before                 | Boundary     | `TestAdoptionKeepsTheObject`                            |
-| U-56     | An empty namespace: every object is created, and `status.origin` is `Created`           | Negative     | `TestOrigin`                                            |
-| U-57     | `status.origin` is `Adopted` where any object was met rather than created               | Positive     | `TestOrigin`                                            |
-| U-58     | `status.origin` survives a later reconcile that creates a missing object                | Boundary     | `TestOriginIsNotRevised`                                |
-| U-59     | A `SimplyblockDriver` named `simplyblock` derives the names the chart writes            | Positive     | `TestNamesReproduceTheChart`                            |
-| U-60     | A driver named otherwise derives a disjoint set and adopts nothing                      | Negative     | `TestNamesOfASecondDriverAreDisjoint`                   |
-| U-61     | The namespaced objects come out with a controller reference                             | Positive     | `TestNamespacedObjectsBecomeChildren`                   |
-| U-62     | The cluster-scoped objects come out with `managed-by` and no owner reference            | Positive     | `TestClusterScopedObjectsCarryTheLabel`                 |
-| U-63     | The Helm labels and the two `meta.helm.sh` annotations are gone afterward               | Positive     | `TestHelmMetadataRemovalPatch`                          |
-| U-64     | `helm.sh/resource-policy: keep` is present afterward, and was added where absent        | Boundary     | `TestKeepThroughHelmIsAdditive`                         |
-| U-65     | An object carrying no Helm metadata is not annotated with the resource policy           | Negative     | `TestOnlyHelmsObjectsAreKept`                           |
-| U-66     | The live `CSIDriver` names a driver other than `spec.driverName`: refused               | Negative     | `TestAdoptionRefusesOnADriverNameItCannotChange`        |
-| U-67     | A refusal holds the phase at `Installing` and changes no adopted object                 | Negative     | `TestAdoptionRefusesOnADriverNameItCannotChange`        |
-| U-68     | A refusal still publishes `nodesReady`, `nodesTotal`, and `controllerReady`             | Boundary     | —                                                       |
-| ~~U-69~~ | ~~The resolved control-plane endpoint differs from the adopted `ConfigMap`'s: refused~~ | ~~Negative~~ | Retired: the credentials Secret is the StorageCluster's |
-| ~~U-70~~ | ~~The resolved credentials differ from the adopted `Secret`'s: refused~~                | ~~Negative~~ | Retired: the credentials Secret is the StorageCluster's |
-| ~~U-71~~ | ~~Endpoint and credentials agree: the objects are adopted and not rewritten~~           | ~~Negative~~ | Retired: the credentials Secret is the StorageCluster's |
-| U-72     | The cluster serves the snapshot API: nothing installed, `snapshotSupport` `Detected`    | Boundary     | —                                                       |
-| U-73     | `ConfigMap/simplyblock-clusters` is not touched                                         | Negative     | —                                                       |
-| ~~U-74~~ | ~~The sidecar images become the operator's, and the driver image is left alone~~        | ~~Boundary~~ | Superseded by U-83                                      |
-| U-75     | A second reconcile after adoption applies nothing and re-emits no event                 | Negative     | —                                                       |
-| U-76     | An object that is not the oldest in the cluster applies nothing                         | Negative     | `TestASecondDriverAppliesNothing`                       |
-| U-77     | It holds at `Installing` and names the holder of the deployment in `status.message`     | Negative     | `TestASecondDriverAppliesNothing`                       |
-| U-78     | It emits `DuplicateDriver`, and the oldest object emits none                            | Negative     | `TestASecondDriverAppliesNothing`                       |
-| U-79     | Equal creation timestamps: namespace and name break the tie the same way for both       | Boundary     | `TestATieIsBrokenTheSameWayEveryTime`                   |
-| U-80     | The oldest object reconciles normally while a younger one exists                        | Positive     | —                                                       |
-| U-83     | A release that pinned a sidecar: the pin lands in `spec.sidecarImages`, unchanged       | Positive     | `TestOneSidecarOverrideReachesOnlyItsOwn`               |
-| U-84     | A sidecar at the chart version's default: no override, and it moves to this release's   | Boundary     | —                                                       |
-| U-85     | `spec.sidecarImages` unset: every sidecar takes the version this operator ships         | Positive     | `TestSidecarsDefaultToTheOperatorsRelease`              |
-| U-86     | One override set: it reaches its own container and no other                             | Boundary     | `TestOneSidecarOverrideReachesOnlyItsOwn`               |
-| U-87     | The snapshot controller's image is not overridable and is not installed either          | Negative     | `TestSidecarsAreSixAndExcludeTheSnapshotController`     |
-| U-101    | The running node plugin's `SB_TLS_CONNECT` agrees with what `spec.tls` would produce    | Positive     | `TestAdoptionRefusesOnATLSModeMismatch`                 |
-| U-102    | Running is TLS, `spec.tls` says plaintext: refused                                      | Negative     | `TestAdoptionRefusesOnATLSModeMismatch`                 |
-| U-103    | Running is plaintext, `spec.tls` asks for TLS: refused                                  | Negative     | `TestAdoptionRefusesOnATLSModeMismatch`                 |
-| U-104    | Running is TLS anonymous, `spec.tls` asks for mutual: refused                           | Negative     | `TestAdoptionRefusesOnATLSModeMismatch`                 |
-| U-105    | Both agree on mutual TLS: adopted                                                       | Positive     | `TestAdoptionRefusesOnATLSModeMismatch`                 |
+| #        | Scenario                                                                                                                          | Type         | Test                                                    |
+|----------|-----------------------------------------------------------------------------------------------------------------------------------|--------------|---------------------------------------------------------|
+| U-54     | A namespace holding the chart's objects: each one is taken over, none recreated                                                   | Positive     | `TestAdoptionKeepsTheObject`                            |
+| U-55     | The `DaemonSet`'s UID and creation timestamp are the ones it had before                                                           | Boundary     | `TestAdoptionKeepsTheObject`                            |
+| U-56     | An empty namespace: every object is created, and `status.origin` is `Created`                                                     | Negative     | `TestOrigin`                                            |
+| U-57     | `status.origin` is `Adopted` where any object was met rather than created                                                         | Positive     | `TestOrigin`                                            |
+| U-58     | `status.origin` survives a later reconcile that creates a missing object                                                          | Boundary     | `TestOriginIsNotRevised`                                |
+| U-59     | A `SimplyblockDriver` named `simplyblock` derives the names the chart writes                                                      | Positive     | `TestNamesReproduceTheChart`                            |
+| U-60     | A driver named otherwise derives a disjoint set and adopts nothing                                                                | Negative     | `TestNamesOfASecondDriverAreDisjoint`                   |
+| U-61     | The namespaced objects come out with a controller reference                                                                       | Positive     | `TestNamespacedObjectsBecomeChildren`                   |
+| U-62     | The cluster-scoped objects come out with `managed-by` and no owner reference                                                      | Positive     | `TestClusterScopedObjectsCarryTheLabel`                 |
+| U-63     | The Helm labels and the two `meta.helm.sh` annotations are gone afterward                                                         | Positive     | `TestHelmMetadataRemovalPatch`                          |
+| U-64     | `helm.sh/resource-policy: keep` is present afterward, and was added where absent                                                  | Boundary     | `TestKeepThroughHelmIsAdditive`                         |
+| U-65     | An object carrying no Helm metadata is not annotated with the resource policy                                                     | Negative     | `TestOnlyHelmsObjectsAreKept`                           |
+| U-66     | The live `CSIDriver` names a driver other than `spec.driverName`: refused                                                         | Negative     | `TestAdoptionRefusesOnADriverNameItCannotChange`        |
+| U-67     | A refusal holds the phase at `Installing` and changes no adopted object                                                           | Negative     | `TestAdoptionRefusesOnADriverNameItCannotChange`        |
+| U-68     | A refusal still publishes `nodesReady`, `nodesTotal`, and `controllerReady`                                                       | Boundary     | —                                                       |
+| ~~U-69~~ | ~~The resolved control-plane endpoint differs from the adopted `ConfigMap`'s: refused~~                                           | ~~Negative~~ | Retired: the credentials Secret is the StorageCluster's |
+| ~~U-70~~ | ~~The resolved credentials differ from the adopted `Secret`'s: refused~~                                                          | ~~Negative~~ | Retired: the credentials Secret is the StorageCluster's |
+| ~~U-71~~ | ~~Endpoint and credentials agree: the objects are adopted and not rewritten~~                                                     | ~~Negative~~ | Retired: the credentials Secret is the StorageCluster's |
+| U-72     | The cluster serves the snapshot API: nothing installed, `snapshotSupport` `Detected`                                              | Boundary     | —                                                       |
+| U-73     | `ConfigMap/simplyblock-clusters` is not touched                                                                                   | Negative     | —                                                       |
+| ~~U-74~~ | ~~The sidecar images become the operator's, and the driver image is left alone~~                                                  | ~~Boundary~~ | Superseded by U-83                                      |
+| U-75     | A second reconcile after adoption applies nothing and re-emits no event                                                           | Negative     | —                                                       |
+| U-76     | An object that is not the oldest in the cluster applies nothing                                                                   | Negative     | `TestASecondDriverAppliesNothing`                       |
+| U-77     | It holds at `Installing` and names the holder of the deployment in `status.message`                                               | Negative     | `TestASecondDriverAppliesNothing`                       |
+| U-78     | It emits `DuplicateDriver`, and the oldest object emits none                                                                      | Negative     | `TestASecondDriverAppliesNothing`                       |
+| U-79     | Equal creation timestamps: namespace and name break the tie the same way for both                                                 | Boundary     | `TestATieIsBrokenTheSameWayEveryTime`                   |
+| U-80     | The oldest object reconciles normally while a younger one exists                                                                  | Positive     | —                                                       |
+| U-83     | A release that pinned a sidecar: the pin lands in `spec.sidecarImages`, unchanged                                                 | Positive     | `TestOneSidecarOverrideReachesOnlyItsOwn`               |
+| U-84     | A sidecar at the chart version's default: no override, and it moves to this release's                                             | Boundary     | —                                                       |
+| U-85     | `spec.sidecarImages` unset: every sidecar takes the version this operator ships                                                   | Positive     | `TestSidecarsDefaultToTheOperatorsRelease`              |
+| U-86     | One override set: it reaches its own container and no other                                                                       | Boundary     | `TestOneSidecarOverrideReachesOnlyItsOwn`               |
+| U-87     | The snapshot controller's image is not overridable and is not installed either                                                    | Negative     | `TestSidecarsAreSixAndExcludeTheSnapshotController`     |
+| U-101    | The running node plugin's `SB_TLS_CONNECT` agrees with what `spec.tls` would produce                                              | Positive     | `TestAdoptionRefusesOnATLSModeMismatch`                 |
+| U-102    | Running is TLS, `spec.tls` says plaintext: refused                                                                                | Negative     | `TestAdoptionRefusesOnATLSModeMismatch`                 |
+| U-103    | Running is plaintext, `spec.tls` asks for TLS: refused                                                                            | Negative     | `TestAdoptionRefusesOnATLSModeMismatch`                 |
+| U-104    | Running is TLS anonymous, `spec.tls` asks for mutual: refused                                                                     | Negative     | `TestAdoptionRefusesOnATLSModeMismatch`                 |
+| U-105    | Both agree on mutual TLS: adopted                                                                                                 | Positive     | `TestAdoptionRefusesOnATLSModeMismatch`                 |
+| U-106    | A controller pod unready on a stale revision past the grace period is deleted, with an event (2026-10-05-driver-adoption-rollout) | Regression   | `TestAControllerPodStuckOnAStaleRevisionIsRecycled`     |
+| U-107    | A pod inside the grace period is left alone, and the requeue is the rest of it                                                    | Boundary     | `TestAControllerPodInsideTheGracePeriodIsLeftAlone`     |
+| U-108    | A pod already on the update revision is left alone                                                                                | Negative     | `TestAControllerPodOnTheUpdateRevisionIsLeftAlone`      |
+| U-109    | A ready pod on a stale revision, an ordinary rolling update, is left alone                                                        | Negative     | `TestAReadyControllerPodOnAStaleRevisionIsLeftAlone`    |
+| U-110    | An unready pod with no rollout in progress is left alone                                                                          | Negative     | `TestAnUnreadyControllerPodWithNoRolloutIsLeftAlone`    |
 
 `U-55` is the row that holds design §4.3's in-place claim. An object with a new
 UID is an object that was deleted and reapplied, which for the node `DaemonSet`
@@ -329,21 +334,22 @@ marked by anything else stays.
 A live deployment with a real kubelet, because a CSI driver that is applied but
 not registered fails only when a workload asks for a volume.
 
-| #    | Scenario                                                                               | Type     | Test |
-|------|----------------------------------------------------------------------------------------|----------|------|
-| E-01 | A fresh `SimplyblockDriver`: the driver registers and a volume provisions              | Positive | —    |
-| E-02 | A node plugin killed on one worker: `Degraded`, and other workers still attach         | Positive | —    |
-| E-03 | The controller plugin killed: `Unavailable`, and existing attachments survive          | Negative | —    |
-| E-04 | The controller plugin returns: provisioning resumes without intervention               | Positive | —    |
-| E-05 | A CSI driver older than the control plane: the skew is visible in both gauges          | Negative | —    |
-| E-06 | `spec.image` changed: the rollout replaces both plugins and the phase recovers         | Positive | —    |
-| E-07 | Sustained I/O across a node-plugin restart: the data path is unaffected                | Positive | —    |
-| E-08 | A cluster with no snapshot API: the CRDs and a controller appear, and a snapshot works | Positive | —    |
-| E-09 | A chart-installed cluster upgraded: the driver is adopted and no plugin pod restarts   | Positive | —    |
-| E-10 | Volumes stay attached and I/O continues across the reconcile that adopts               | Positive | —    |
-| E-11 | `helm uninstall` after adoption: the driver keeps running and volumes keep attaching   | Positive | —    |
-| E-12 | Deleting the adopted `SimplyblockDriver`: every object goes, cluster-scoped included   | Positive | —    |
-| E-13 | A second object created while the webhook is down: the running driver is untouched     | Negative | —    |
+| #    | Scenario                                                                                                                         | Type       | Test                                                                                    |
+|------|----------------------------------------------------------------------------------------------------------------------------------|------------|-----------------------------------------------------------------------------------------|
+| E-01 | A fresh `SimplyblockDriver`: the driver registers and a volume provisions                                                        | Positive   | —                                                                                       |
+| E-02 | A node plugin killed on one worker: `Degraded`, and other workers still attach                                                   | Positive   | —                                                                                       |
+| E-03 | The controller plugin killed: `Unavailable`, and existing attachments survive                                                    | Negative   | —                                                                                       |
+| E-04 | The controller plugin returns: provisioning resumes without intervention                                                         | Positive   | —                                                                                       |
+| E-05 | A CSI driver older than the control plane: the skew is visible in both gauges                                                    | Negative   | —                                                                                       |
+| E-06 | `spec.image` changed: the rollout replaces both plugins and the phase recovers                                                   | Positive   | —                                                                                       |
+| E-07 | Sustained I/O across a node-plugin restart: the data path is unaffected                                                          | Positive   | —                                                                                       |
+| E-08 | A cluster with no snapshot API: the CRDs and a controller appear, and a snapshot works                                           | Positive   | —                                                                                       |
+| E-09 | A chart-installed cluster upgraded: the driver is adopted in place and the plugins roll one at a time to the operator's template | Positive   | —                                                                                       |
+| E-10 | Volumes stay attached and I/O continues across the reconcile that adopts and the rollout it starts                               | Positive   | —                                                                                       |
+| E-11 | `helm uninstall` after adoption: the driver keeps running, volumes keep attaching, and the credentials Secret stays              | Positive   | `helm-charts/scripts/check-rendered-objects.sh` (`checkCredentialsKept`) for the Secret |
+| E-14 | A controller pod crash-looping on a stale revision is deleted after the grace period and the driver returns to `Ready`           | Regression | —                                                                                       |
+| E-12 | Deleting the adopted `SimplyblockDriver`: every object goes, cluster-scoped included                                             | Positive   | —                                                                                       |
+| E-13 | A second object created while the webhook is down: the running driver is untouched                                               | Negative   | —                                                                                       |
 
 ---
 
@@ -380,8 +386,9 @@ protection the installer would otherwise have applied before `helm upgrade`.
 1. Install the chart at defaults and provision a volume onto a running workload.
 2. Create a `SimplyblockDriver` named `simplyblock`, with the spec translated
    from the release's values, without running any step of the upgrade sequence.
-3. Confirm every object of design §4.3's table is adopted in place, that no pod
-   restarted, and that the volume stayed attached throughout.
+3. Confirm every object of design §4.3's table is adopted in place, that the
+   plugins roll once and one node plugin at a time, and that the volume stayed
+   attached throughout.
 4. Confirm `helm.sh/resource-policy: keep` is on each of them, and that the Helm
    labels and `meta.helm.sh` annotations are gone.
 5. Run `helm uninstall` and confirm the driver survives and still attaches a
@@ -412,11 +419,11 @@ row for.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 101       | 64      | 37          |
+| Unit        | 106       | 69      | 37          |
 | Integration | 23        | 0       | 23          |
-| E2E         | 13        | 0       | 13          |
+| E2E         | 14        | 0       | 14          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **140**   | **64**  | **76**      |
+| **Total**   | **146**   | **69**  | **77**      |
 
 `I-12`, `U-74`, and `U-69` to `U-71` are superseded or retired and are not in the
 counts.
