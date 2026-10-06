@@ -1436,7 +1436,7 @@ const runCheck = (fn, set) => {
   Promise.resolve().then(fn).then(set, e => set({status: "bad", text: (e && e.message) || "the check failed"}));
 };
 
-function Field({f, val, setVal, vals, setAll}) {
+function Field({f, val, setVal, vals, setAll, reprepare}) {
   const [opts, setOpts] = useState(f.options || null);
   const [loading, setLoading] = useState(!!f.load);
   const [checks, setChecks] = useState({});
@@ -1473,13 +1473,17 @@ function Field({f, val, setVal, vals, setAll}) {
       <div className="field">
         <span className="flabel">{f.label}</span>
         <div style={{display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap"}}>
-          <button type="button" className="btn" disabled={!!(f.disabled && f.disabled(vals || {}))}
-            onClick={() => {
+          <button type="button" className="btn" disabled={!!(f.disabled && f.disabled(vals || {})) || !!(r && r.status === "busy")}
+            onClick={async () => {
+              // apply may be asynchronous (it creates an object first) and may
+              // ask for the form's choices to be loaded again (f.refresh)
+              setChecks({all: {status: "busy", text: "working…"}});
               try {
-                const patch = f.apply(vals || {});
+                const patch = await f.apply(vals || {});
+                if (f.refresh && reprepare) await reprepare();
                 if (patch && setAll) setAll(patch);
                 setChecks({all: {status: "ok", text: f.done || "Applied: review the fields below before saving."}});
-              } catch (e) { setChecks({all: {status: "bad", text: e.message}}); }
+              } catch (e) { setChecks({all: {status: "bad", text: (e && e.message) || String(e)}}); }
             }}>
             <Icon n="check" s={11} />{f.button || "Apply"}</button>
           {f.hint && <span className="fhint" style={{marginTop: 0, color: "var(--dim)"}}>{typeof f.hint === "function" ? f.hint(vals || {}) : f.hint}</span>}
@@ -1501,7 +1505,7 @@ function Field({f, val, setVal, vals, setAll}) {
     return (
       <div className="field">
         <span className="flabel">{f.label} <em>({sel.length})</em></span>
-        <div className="chipbox" style={{display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center"}}>
+        <div className="chipbox">
           {sel.map(x => <span key={x} className="chip mono">{x}<button type="button" className="kebab" title={`Remove ${x}`} onClick={() => setVal(sel.filter(y => y !== x))}><Icon n="x" s={10} /></button></span>)}
           <select className="finput sm chipadd" value="" onChange={e => e.target.value && setVal(sel.concat(e.target.value))}>
             <option value="">{opts2.length ? (f.addLabel || "— add —") : (f.empty || "nothing more to add")}</option>
@@ -1540,7 +1544,7 @@ function Field({f, val, setVal, vals, setAll}) {
         <span className="flabel">{f.label} <em>({rows.length} of {f.max || 50})</em></span>
         <div className="schedbox" style={off ? {opacity: 0.5} : undefined}>
           {rows.map((r, i) => (
-            <div className="schedrow" key={i}>
+            <div className="schedrow kvrow" key={i}>
               <input className="finput sm" placeholder="key" value={r.k} disabled={off} onChange={e => set(i, "k", e.target.value)} />
               <span className="sl">=</span>
               <input className="finput sm" placeholder="value" value={r.v} disabled={off} onChange={e => set(i, "v", e.target.value)} />
@@ -1566,18 +1570,26 @@ function Field({f, val, setVal, vals, setAll}) {
     const off = !!(f.disabled && f.disabled(vals || {}));
     const fixed = !!f.fixed;
     const move = (i, d) => { const j = i + d; if (j < 0 || j >= rows.length) return; const n = rows.slice(); [n[i], n[j]] = [n[j], n[i]]; setVal(n); setChecks({}); };
+    // Header and rows share one grid template, so the columns line up whatever
+    // a cell holds. Each column has a floor (c.min); below the sum of the
+    // floors the box scrolls sideways instead of letting cells overlap.
+    const colMin = c => c.min || (c.type === "multi" ? 170 : c.type === "number" ? 72 : c.readonly ? 110 : c.type === "select" ? 130 : 110);
+    const extra = [ra ? `${ra.width || 72}px` : null, f.reorder ? "52px" : null, !fixed ? "28px" : null].filter(Boolean);
+    const template = f.cols.map(c => `minmax(${colMin(c)}px, ${c.flex || 1}fr)`).concat(extra).join(" ");
+    const floor = f.cols.reduce((a, c) => a + colMin(c), 0) + extra.reduce((a, x) => a + parseInt(x, 10), 0) + 6 * (f.cols.length + extra.length);
+    const gridRow = {gridTemplateColumns: template};
     const cell = (r, i, c) => {
-      const w = {flex: c.flex || 1, minWidth: 0};
-      if (c.readonly) return <span key={c.k} className="finput sm mono rocell" style={Object.assign({}, w, {background: "transparent", border: "none", alignSelf: "center"})} title={c.label}>{(c.show ? c.show(r) : r[c.k]) || "—"}</span>;
+      const w = {minWidth: 0, width: "100%"};
+      if (c.readonly) return <span key={c.k} className="mono rocell" title={c.label}>{(c.show ? c.show(r) : r[c.k]) || "—"}</span>;
       if (c.type === "select" || c.type === "multi") {
         const opts = (typeof c.options === "function" ? c.options(r, i, vals || {}) : c.options) || [];
         if (c.type === "multi") {
           const cur = r[c.k] || [];
           const rest = opts.filter(o => !cur.includes(o.v));
-          return <span key={c.k} style={Object.assign({}, w, {display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center"})}>
+          return <span key={c.k} className="rmulti" style={w}>
             {cur.map(x => <span key={x} className="chip mono" style={{fontSize: 10.5}}>{(opts.find(o => o.v === x) || {l: x}).l}
               <button type="button" className="kebab" disabled={off} title={`Remove ${x}`} onClick={() => set(i, c.k, cur.filter(y => y !== x))}><Icon n="x" s={9} /></button></span>)}
-            <select className="finput sm" value="" disabled={off || !rest.length} onChange={e => e.target.value && set(i, c.k, cur.concat(e.target.value))}>
+            <select className="finput sm radd" value="" disabled={off || !rest.length} onChange={e => e.target.value && set(i, c.k, cur.concat(e.target.value))}>
               <option value="">{rest.length ? (c.addLabel || "+ add") : (c.empty || "—")}</option>
               {rest.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}</select>
           </span>;
@@ -1600,31 +1612,31 @@ function Field({f, val, setVal, vals, setAll}) {
     return (
       <label className="field">
         <span className="flabel">{f.label} <em>({rows.length}{f.max ? ` of ${f.max}` : ""})</em></span>
-        <div className="schedbox" style={off ? {opacity: 0.5} : undefined}>
-          <div className="schedrow head">{f.cols.map(c => <span key={c.k} className="sl" style={{flex: c.flex || 1}}>{c.label}</span>)}{ra && <span style={{width: 52}}></span>}{f.reorder && <span style={{width: 44}}></span>}{!fixed && <span style={{width: 24}}></span>}</div>
+        <div className="schedbox rgridbox" style={off ? {opacity: 0.5} : undefined}><div className="rgridin" style={{minWidth: floor}}>
+          <div className="schedrow rgrid head" style={gridRow}>{f.cols.map(c => <span key={c.k} className="sl">{c.label}</span>)}{ra && <span></span>}{f.reorder && <span></span>}{!fixed && <span></span>}</div>
           {rows.map((r, i) => {
             const rerr = f.rowError && f.rowError(r, i, rows, vals || {});
             const rinfo = !rerr && f.rowInfo && f.rowInfo(r, i, rows, vals || {});
             return (
               <React.Fragment key={i}>
-                <div className="schedrow">
+                <div className="schedrow rgrid" style={gridRow}>
                   {f.cols.map(c => cell(r, i, c))}
-                  {ra && <button type="button" className="chip rowact" style={{width: 52, justifyContent: "center"}} title={ra.title || ra.label}
+                  {ra && <button type="button" className="chip rowact" title={ra.title || ra.label}
                     disabled={off || !!(checks[i] && checks[i].status === "busy")}
                     onClick={() => runCheck(() => ra.run(r, vals || {}, i), x => setChecks(c => Object.assign({}, c, {[i]: x})))}>{ra.label || "Test"}</button>}
-                  {f.reorder && <span style={{width: 44, display: "flex"}}>
+                  {f.reorder && <span className="rmove">
                     <button type="button" className="kebab rowup" title="Move up" disabled={off || i === 0} onClick={() => move(i, -1)}>↑</button>
                     <button type="button" className="kebab rowdown" title="Move down" disabled={off || i === rows.length - 1} onClick={() => move(i, 1)}>↓</button></span>}
                   {!fixed && <button type="button" className="kebab rowdel" title="Remove" disabled={off} onClick={() => { setVal(rows.filter((_, j) => j !== i)); setChecks({}); }}><Icon n="x" s={11} /></button>}
                 </div>
-                {checks[i] && <div style={{padding: "0 0 4px 2px"}}><CheckResult r={checks[i]} /></div>}
-                {rerr && <div className="fhint rowerr" style={{color: "var(--bad)", margin: "0 0 4px 2px"}}>{rerr}</div>}
-                {rinfo && <div className="fhint rowinfo" style={{color: "var(--dim)", margin: "0 0 4px 2px"}}>{rinfo}</div>}
+                {checks[i] && <div className="rnote"><CheckResult r={checks[i]} /></div>}
+                {rerr && <div className="fhint rowerr rnote" style={{color: "var(--bad)"}}>{rerr}</div>}
+                {rinfo && <div className="fhint rowinfo rnote" style={{color: "var(--dim)"}}>{rinfo}</div>}
               </React.Fragment>);
           })}
           {!fixed && <button type="button" className="schedadd" disabled={off || (f.max && rows.length >= f.max)} onClick={() => setVal(rows.concat(f.add ? f.add(rows, vals || {}) : {}))}>
             <Icon n="plus" s={11} />{f.addLabel || "Add"}</button>}
-        </div>
+        </div></div>
         {f.validate && f.validate(val, vals || {}) && <span className="fhint" style={{color: "var(--bad)"}}>{f.validate(val, vals || {})}</span>}
         {f.hint && <span className="fhint">{typeof f.hint === "function" ? f.hint(val, vals || {}) : f.hint}</span>}
       </label>
@@ -1791,6 +1803,11 @@ function Dialog({spec, obj, removes, onClose}) {
       .then(p => { setVals(defaults(p)); setPrep(p); });
   }, []);
   const allFields = prep ? resolve(vals, prep) : [];
+  // the form's choices loaded again (after an apply created an object); the
+  // values entered so far are kept
+  const reprepare = () => Promise.resolve().then(spec.prepare || (() => ({}))).then(p => setPrep(p || {}), () => {});
+  // a dialog with a multi-column row editor or priority lanes gets the wide modal
+  const wide = !!spec.wide || allFields.some(f => (f.type === "rows" && (f.cols || []).length >= 3) || f.type === "lanes");
   const fields = allFields.filter(f => f.type !== "note");
   const invalid = !prep || fields.some(f => (f.required && (vals[f.k] === undefined || vals[f.k] === "" || (Array.isArray(vals[f.k]) && !vals[f.k].length)))
     || (f.match && vals[f.k] !== f.match) || (f.validate && f.validate(vals[f.k], vals))
@@ -1811,7 +1828,7 @@ function Dialog({spec, obj, removes, onClose}) {
   }, []);
   return (
     <div className="ovl" onClick={onClose}>
-      <div className="modal" onClick={e => e.stopPropagation()}>
+      <div className={"modal" + (wide ? " wide" : "")} onClick={e => e.stopPropagation()}>
         <div className="mhead">
           <h3>{spec.title}</h3>
           <button className="tbtn" style={{color: "var(--dim)"}} onClick={onClose}><Icon n="x" s={13} /></button>
@@ -1822,7 +1839,7 @@ function Dialog({spec, obj, removes, onClose}) {
           {allFields.map(f => f.type === "note"
             ? <Field key={f.k || f.label} f={f} />
             : <Field key={f.k} f={f} val={vals[f.k]} vals={vals} setVal={v => setVals(s => Object.assign({}, s, {[f.k]: v}))}
-                setAll={patch => setVals(s => Object.assign({}, s, patch))} />)}
+                setAll={patch => setVals(s => Object.assign({}, s, patch))} reprepare={reprepare} />)}
           {err && <div className="banner" style={{marginTop: 10, marginBottom: 0}}><Icon n="alert" s={14} />{err}</div>}
         </div>
         <div className="mfoot">

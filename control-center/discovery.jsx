@@ -153,9 +153,40 @@ const selectorMatchesLabels = (sel, labels) => labelsMatch(labels, sel.matchLabe
   (sel.matchExpressions || []).every(e => e.operator !== "Exists" || Object.prototype.hasOwnProperty.call(labels || {}, e.key));
 
 const nsReport = (disc, cluster, ns) => (((discOf(disc, cluster) || {}).namespaces) || []).find(n => n.namespace === ns) || null;
-// The application namespaces a cluster reports.
-const namespaceOptions = (disc, cluster) => ((((discOf(disc, cluster) || {}).namespaces) || [])).map(n => ({v: n.namespace,
-  l: `${n.namespace} — ${(n.pvcs || []).length} PVC${(n.pvcs || []).length === 1 ? "" : "s"}, ${(n.workloads || []).length} workload${(n.workloads || []).length === 1 ? "" : "s"}${n.protected ? " (protected)" : ""}`}));
+// Namespaces that hold infrastructure, not an application: platform and
+// DR-stack namespaces, a managed cluster's own namespace (OCM), and one that
+// holds nothing but NetworkAttachmentDefinitions.
+const INFRA_NS_RE = /^(kube-|cattle-|sitemap-|open-cluster-management|ramen|velero|simplyblock|dr-|openshift|local-path|kubevirt|cdi$|multus|calico|tigera|metallb|cert-manager|longhorn|fleet-|olm$|operators$)/;
+const nsCounts = n => ({pvcs: (n.pvcs || []).length, workloads: (n.workloads || []).length});
+function nsInfra(disc, cluster, n) {
+  if (INFRA_NS_RE.test(n.namespace)) return true;
+  if ((disc ? disc.clusters : []).some(c => c.name === n.namespace)) return true;
+  const c = nsCounts(n);
+  return !c.pvcs && !c.workloads && (((discOf(disc, cluster) || {}).nads) || []).some(x => x.namespace === n.namespace);
+}
+// The application namespaces a cluster reports: infrastructure hidden, the
+// ones that hold something first, empty ones marked as such.
+const namespaceOptions = (disc, cluster, site) => ((((discOf(disc, cluster) || {}).namespaces) || []))
+  .filter(n => !nsInfra(disc, cluster, n))
+  .map(n => Object.assign({n}, nsCounts(n)))
+  .sort((a, b) => (b.pvcs + b.workloads > 0) - (a.pvcs + a.workloads > 0) || b.pvcs - a.pvcs || b.workloads - a.workloads || a.n.namespace.localeCompare(b.n.namespace))
+  .map(({n, pvcs, workloads}) => ({v: n.namespace,
+    l: pvcs + workloads === 0 ? `${n.namespace} — (empty on ${site || cluster})`
+      : `${n.namespace} — ${pvcs} PVC${pvcs === 1 ? "" : "s"}, ${workloads} workload${workloads === 1 ? "" : "s"}${n.protected ? " (protected)" : ""}`}));
+// Namespaces of these names that hold something on the other clusters: where
+// an application is when the chosen source site's namespaces are empty.
+function nsElsewhere(disc, cluster, namespaces) {
+  return (disc ? disc.clusters : []).filter(c => c.name !== cluster).flatMap(c => (namespaces || []).map(ns => {
+    const r = nsReport(disc, c.name, ns);
+    const k = r ? nsCounts(r) : {pvcs: 0, workloads: 0};
+    return {cluster: c.name, namespace: ns, pvcs: k.pvcs, workloads: k.workloads};
+  })).filter(x => x.pvcs || x.workloads);
+}
+// The PVCs and workloads the namespaces hold on a cluster (null: not reported).
+function nsHoldings(disc, cluster, namespaces) {
+  if (!reported(disc, cluster, namespaces)) return null;
+  return (namespaces || []).map(ns => nsCounts(nsReport(disc, cluster, ns))).reduce((a, c) => ({pvcs: a.pvcs + c.pvcs, workloads: a.workloads + c.workloads}), {pvcs: 0, workloads: 0});
+}
 // The label pairs of the PVCs in the namespaces, with how many each matches.
 function pvcPairs(disc, cluster, namespaces) {
   const pvcs = (namespaces || []).flatMap(ns => ((nsReport(disc, cluster, ns) || {}).pvcs || []));
@@ -318,6 +349,34 @@ function dhcpServersOn(disc, cluster, nad) {
   const seg = n => n ? `${n.bridge || n.master || ""}|${n.vlan || ""}` : "";
   const target = d.nads.find(x => nadRef(x) === nad);
   return d.dhcpServers.filter(s => (s.nads || []).some(sn => sn.nad === nad || (target && seg(d.nads.find(x => nadRef(x) === sn.nad)) === seg(target) && seg(target) !== "|")));
+}
+// The isolated test (bubble) networks of a site: the isolated NAD of every
+// DRPath that tests on it, and the one the site itself reports.
+function testNadsOf(disc, cluster, paths) {
+  const own = isolatedNadOf(disc, cluster);
+  return uniqSorted((paths || []).filter(p => p.to === cluster && p.test && p.test.isolatedNad).map(p => p.test.isolatedNad).concat(own ? [own] : []));
+}
+// A DHCP server that serves a test bubble's isolated network (its NAD is a
+// test NAD, or shares one's bridge and VLAN): it must not be proposed for a
+// guest network, whose reservations it would never answer.
+function isBubbleServer(disc, cluster, server, testNads) {
+  const d = discOf(disc, cluster);
+  const seg = n => n ? `${n.bridge || n.master || ""}|${n.vlan || ""}` : "";
+  const nadOf = ref => ((d && d.nads) || []).find(x => nadRef(x) === ref);
+  const tests = (testNads || []).map(t => seg(nadOf(t))).filter(x => x && x !== "|");
+  return (server.nads || []).some(sn => (testNads || []).includes(sn.nad) || tests.includes(seg(nadOf(sn.nad))) || /drtest|bubble|isolat/.test(sn.nad || ""));
+}
+// The DHCP server to propose for a site's guest networks: a registered one
+// that serves one of the roles' NADs first, else an in-cluster server found on
+// one of them that reads its hosts from a ConfigMap (it can be registered).
+// Test-bubble servers are never proposed. Never a name nothing registered.
+function proposeDHCPServer(disc, cluster, roleNads, servers, testNads) {
+  const found = uniqSorted((roleNads || []).filter(Boolean)).flatMap(n => dhcpServersOn(disc, cluster, n))
+    .filter((f, i, xs) => xs.indexOf(f) === i && !isBubbleServer(disc, cluster, f, testNads));
+  const regOf = f => (servers || []).find(x => x.dnsmasq && x.dnsmasq.namespace === f.namespace && x.dnsmasq.configMap === f.hostsConfigMap);
+  const reg = found.map(regOf).find(Boolean);
+  if (reg) return {registered: reg.name, discovered: found.find(f => regOf(f) === reg) || null};
+  return {registered: null, discovered: found.find(f => f.hostsConfigMap) || null};
 }
 // The reserved host ids a guest network proposes: the gateway's (.1) and
 // every DHCP server's own on the segment.
@@ -524,5 +583,7 @@ Object.assign(window, {uniqSorted, nadRef, AGENT_VIEW, DEFAULT_SC_SELECTOR, DEFA
   parseSelector, selectorText, selectorMatchesLabels, namespaceOptions, pvcPairs, pvcMatches, tierKindsOf, objectsOf, objectPairs,
   tierSelectorCheck, gateSelectorCheck, isolatedNadOf, proposePaths, pathError, bubbleNamespace, proposeTestID, testIDError,
   parseCidr, cidrContains, hostIdOf, inferCidr, nadAddresses, nadSubnet, dhcpServersOn, proposedReserved, guestRowError, proposeRoles,
+  testNadsOf, isBubbleServer, proposeDHCPServer,
+  nsInfra, nsElsewhere, nsHoldings,
   proposePVCSelector, pvcSelectorOptions, RESOURCE_TYPE_OPTIONS, GATE_TYPE_OPTIONS, tierLabelOptions, gateCommand, serviceTargets, podPairOptions,
   proposeTiers, tierEditorSpec, tierEditorRows, tierRowError, tierRowInfo, gateRowError, nsReport, reported});

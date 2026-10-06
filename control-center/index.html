@@ -499,6 +499,27 @@ button.rbit{cursor:pointer}button.rbit:hover{border-color:var(--accent)}.rbit.on
 .ferr{display:flex;align-items:center;gap:6px;color:var(--bad);font-size:12px;margin-top:10px}
 .seg{display:inline-flex;border:1px solid var(--line2);border-radius:6px;overflow:hidden;height:30px}
 .seg button{background:var(--panel);border:0;padding:0 12px;font:inherit;font-size:12px;color:var(--dim);cursor:pointer}.seg button.on{background:var(--accent);color:#fff}
+/* dialogs: a multi-column row editor gets the wide modal, and its header and
+   rows share one grid template (actions.jsx Field "rows") so columns line up;
+   below the columns' floors the editor scrolls sideways instead of overlapping */
+.modal.wide{width:min(1120px,100%)}
+.rgridbox{overflow-x:auto}
+.schedrow.rgrid{display:grid;gap:6px;align-items:center;margin-bottom:5px}
+.schedrow.rgrid>*{min-width:0}
+.schedrow.rgrid>.finput,.schedrow.rgrid>select.finput,.schedrow.rgrid>input.finput{width:100%;min-width:0;flex:none}
+.schedrow.rgrid.head{align-items:end;margin-bottom:4px}
+.schedrow.rgrid.head .sl{white-space:normal;overflow-wrap:anywhere;line-height:1.25}
+.rocell{display:block;font-size:11.5px;line-height:1.35;padding:4px 2px;color:var(--text);overflow-wrap:anywhere}
+.rmulti{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
+.rmulti>.radd{flex:1 1 96px;min-width:96px;width:auto}
+.rmove{display:flex;gap:2px}
+.schedrow.rgrid>.rowact{width:100%;justify-content:center}
+.rnote{margin:0 0 6px 2px}
+@media(max-width:640px){.modal.wide{width:100%}}
+.chipbox{display:flex;gap:6px;flex-wrap:wrap;align-items:center;border:1px solid var(--line2);border-radius:6px;background:var(--panel2);padding:6px;min-height:40px}
+.chipbox>.chipadd{flex:1 1 240px;min-width:220px;max-width:100%;width:auto}
+.schedrow.kvrow{display:grid;grid-template-columns:minmax(120px,1fr) 14px minmax(120px,1fr) 28px;gap:6px}
+.schedrow.kvrow>.finput{width:100%;min-width:0}
 </style>
 </head>
 <body>
