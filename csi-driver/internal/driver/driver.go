@@ -38,6 +38,7 @@ import (
 	"k8s.io/klog"
 
 	"github.com/simplyblock/atlas/link"
+	"github.com/simplyblock/atlas/nfsexport/nfsexportrpc"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/storage"
 	"github.com/simplyblock/atlas/storage/storagerpc"
@@ -51,6 +52,8 @@ import (
 	"github.com/simplyblock/csi-driver/internal/csilink"
 	"github.com/simplyblock/csi-driver/internal/guardian"
 	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
+	csimount "github.com/simplyblock/csi-driver/internal/mount"
+	"github.com/simplyblock/csi-driver/internal/nfsexport"
 	"github.com/simplyblock/csi-driver/internal/reconnect"
 )
 
@@ -71,8 +74,12 @@ func Run(conf *config.Config) {
 			// csi.ControllerServiceCapability_RPC_LIST_VOLUMES,
 			csi.ControllerServiceCapability_RPC_VOLUME_CONDITION,
 		}
+		// A ReadWriteMany claim needs this advertised or it cannot bind. It is
+		// served by a pNFS export, and CreateVolume refuses it on any other
+		// fsType. The other multi-node modes are deliberately absent.
 		volumeModes = []csi.VolumeCapability_AccessMode_Mode{
 			csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+			csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
 		}
 	)
 
@@ -96,6 +103,7 @@ func Run(conf *config.Config) {
 	// non-fatal, and the features that need it degrade to no-ops.
 	var kubeClient kubernetes.Interface
 	var dynClient dynamic.Interface
+	var exports controller.ExportRegistry
 	if k8sConfig, err := rest.InClusterConfig(); err != nil {
 		klog.Warningf("no in-cluster config; Kubernetes API features disabled: %v", err)
 	} else if clientset, err := kubernetes.NewForConfig(k8sConfig); err != nil {
@@ -103,11 +111,13 @@ func Run(conf *config.Config) {
 	} else {
 		kubeClient = clientset
 		// The consistency-group watcher requests VolumeMigrations (the
-		// pre-join live migration) without importing the operator's types.
+		// pre-join live migration) and pNFS provisioning creates its export
+		// resource, both without importing the operator's types.
 		if d, err := dynamic.NewForConfig(k8sConfig); err != nil {
-			klog.Warningf("failed to create dynamic client; pre-join migrations disabled: %v", err)
+			klog.Warningf("failed to create dynamic client; pre-join migrations and pNFS volumes disabled: %v", err)
 		} else {
 			dynClient = d
+			exports = controller.NewExportRegistry(d)
 		}
 	}
 
@@ -121,7 +131,7 @@ func Run(conf *config.Config) {
 
 	if conf.IsControllerServer {
 		var err error
-		cs, err = controller.New(cd, kubeClient)
+		cs, err = controller.New(cd, kubeClient, exports)
 		if err != nil {
 			klog.Fatalf("failed to create controller server: %s", err)
 		}
@@ -140,7 +150,7 @@ func Run(conf *config.Config) {
 	if conf.LinkEnabled {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		if err := startLink(ctx, conf); err != nil {
+		if err := startLink(ctx, conf, kubeClient); err != nil {
 			klog.Fatalf("failed to start the operator link: %s", err)
 		}
 	}
@@ -177,7 +187,7 @@ func Run(conf *config.Config) {
 // linking it, and is identified by the node it runs on. A controller plugin
 // links as itself and currently serves nothing. It is registered so the
 // operator can see it, and so services can be added without new plumbing.
-func startLink(ctx context.Context, conf *config.Config) error {
+func startLink(ctx context.Context, conf *config.Config, kubeClient kubernetes.Interface) error {
 	cfg := csilink.Config{
 		HubAddress:  conf.LinkHubAddress,
 		CAFile:      conf.LinkCAFile,
@@ -194,13 +204,28 @@ func startLink(ctx context.Context, conf *config.Config) error {
 		// storage.Local reads this node through sysfs. It must be the local
 		// one: serving a remote accessor would make this node a proxy for
 		// another, which nothing wants and which doubles every round trip.
-		srv, err := storagerpc.NewServer(storage.Local(nvme.SysfsConfig{}))
+		local := storage.Local(nvme.SysfsConfig{})
+		srv, err := storagerpc.NewServer(local)
 		if err != nil {
 			return fmt.Errorf("node storage: %w", err)
 		}
+		// Separate from the storage service because it mutates the node, where
+		// storagerpc only reads.
+		assembler, err := nfsexport.NewAssembler(
+			local.DeviceResolver, csimount.New(), nfsexport.HostNQN(conf.NodeID, kubeClient))
+		if err != nil {
+			return fmt.Errorf("node exports: %w", err)
+		}
+		exportSrv, err := nfsexportrpc.NewServer(nfsexport.WithNFSD(assembler))
+		if err != nil {
+			return fmt.Errorf("node exports: %w", err)
+		}
 		cfg.ID = link.NodePeer(conf.NodeID)
-		cfg.Register = srv.Register
-		cfg.Capabilities = storagerpc.Capabilities()
+		cfg.Register = func(r grpc.ServiceRegistrar) {
+			srv.Register(r)
+			exportSrv.Register(r)
+		}
+		cfg.Capabilities = append(storagerpc.Capabilities(), nfsexportrpc.Capabilities()...)
 
 	case conf.IsControllerServer:
 		if conf.PodName == "" {
