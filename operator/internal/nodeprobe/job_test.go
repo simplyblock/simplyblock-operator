@@ -18,6 +18,8 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // testNode and testRun are the worker and the run every case below is about.
@@ -448,5 +450,18 @@ func TestJobReadsTheHostsOSReleaseAndNotTheProbeImagesOwn(t *testing.T) {
 	}
 	if _, whole := byPath[HostRootMount]; whole {
 		t.Errorf("the host's whole root filesystem is mounted at %s, where two directories would do", HostRootMount)
+	}
+}
+
+// The probe's pod is marked for the log collector, so a run's findings and its
+// failures reach Graylog before the Job's TTL removes the pod.
+//
+// Regression: 2026-10-06-graylog-receives-nothing — the probe pods were never
+// marked, so their logs were gone once the Job was collected.
+func TestTheProbeIsShippedToTheLogCollector(t *testing.T) {
+	job := probeJob(t)
+
+	if got := job.Spec.Template.Annotations[utils.AnnotationLogCollector]; got != "true" {
+		t.Errorf("probe pod template %s = %q, want \"true\"", utils.AnnotationLogCollector, got)
 	}
 }

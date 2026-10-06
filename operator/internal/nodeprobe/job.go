@@ -30,6 +30,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 const (
@@ -185,6 +187,7 @@ func Job(opts JobOptions) (*batchv1.Job, error) {
 						LabelRun:       labelValue(opts.Run),
 						LabelNode:      labelValue(opts.Node),
 					},
+					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy:      corev1.RestartPolicyNever,

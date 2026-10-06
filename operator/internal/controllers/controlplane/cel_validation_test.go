@@ -152,6 +152,87 @@ func TestControlPlaneCELAdmitsAnImageChangeWithinTheSameSource(t *testing.T) {
 	}
 }
 
+// Enabling monitoring without naming the Secret that holds its password is
+// refused at admission. The control plane fails the first cluster's creation on
+// that combination, which is far from the edit that caused it.
+func TestControlPlaneCELRequiresASecretForMonitoring(t *testing.T) {
+	apiClient := apiServer(t)
+
+	for _, tc := range []struct {
+		name          string
+		observability *simplyblockv1alpha2.ControlPlaneObservability
+		wantDenied    bool
+		wantReason    string
+	}{
+		{
+			name: "monitoring with its secret",
+			observability: &simplyblockv1alpha2.ControlPlaneObservability{
+				EnableMonitoring: true,
+				SecretRef:        &corev1.LocalObjectReference{Name: "simplyblock-grafana-secrets"},
+			},
+		},
+		{
+			name:          "monitoring off needs no secret",
+			observability: &simplyblockv1alpha2.ControlPlaneObservability{},
+		},
+		{
+			name:          "monitoring without its secret",
+			observability: &simplyblockv1alpha2.ControlPlaneObservability{EnableMonitoring: true},
+			wantDenied:    true,
+		},
+		{
+			name: "monitoring with a secret that names nothing",
+			observability: &simplyblockv1alpha2.ControlPlaneObservability{
+				EnableMonitoring: true,
+				SecretRef:        &corev1.LocalObjectReference{},
+			},
+			wantDenied: true,
+			wantReason: "secretRef.name must not be empty",
+		},
+		{
+			name: "a secret that names nothing is refused with monitoring off too",
+			observability: &simplyblockv1alpha2.ControlPlaneObservability{
+				SecretRef: &corev1.LocalObjectReference{Name: ""},
+			},
+			wantDenied: true,
+			wantReason: "secretRef.name must not be empty",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			namespace := freshNamespace(t, apiClient)
+
+			cp := &simplyblockv1alpha2.ControlPlane{
+				ObjectMeta: metav1.ObjectMeta{Name: SingletonName, Namespace: namespace},
+				Spec: simplyblockv1alpha2.ControlPlaneSpec{
+					Source: simplyblockv1alpha2.ControlPlaneSource{
+						Local: &simplyblockv1alpha2.LocalControlPlane{
+							Image:         testImage,
+							Observability: tc.observability,
+						},
+					},
+				},
+			}
+
+			err := apiClient.Create(context.Background(), cp)
+			switch {
+			case tc.wantDenied && err == nil:
+				t.Fatal("monitoring was enabled with no secret, and the control plane " +
+					"refuses that when the first cluster is created")
+			case tc.wantDenied:
+				reason := tc.wantReason
+				if reason == "" {
+					reason = "enableMonitoring requires secretRef"
+				}
+				if !strings.Contains(err.Error(), reason) {
+					t.Errorf("denied with %q, want %q", err, reason)
+				}
+			case err != nil:
+				t.Fatalf("a legal block was denied: %v", err)
+			}
+		})
+	}
+}
+
 // freshNamespace gives one test case a namespace of its own, so that the
 // singleton name can be reused across cases against one shared apiserver.
 func freshNamespace(t *testing.T, apiClient client.Client) string {

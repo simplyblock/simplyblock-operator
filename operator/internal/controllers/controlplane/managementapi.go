@@ -17,6 +17,8 @@
 package controlplane
 
 import (
+	"strconv"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -27,6 +29,7 @@ import (
 
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // fdbExporterImage turns FoundationDB's machine-readable status into Prometheus
@@ -262,7 +265,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 	env := []corev1.EnvVar{
 		logLevelEnv(),
 		{Name: "LVOL_NVMF_PORT_START", Value: lvolNVMfPortStart},
-		{Name: "ENABLE_MONITORING", Value: "false"},
+		{Name: "ENABLE_MONITORING", Value: strconv.FormatBool(managed.MonitoringEnabled())},
 		namespaceEnv(),
 		{Name: "FLASK_DEBUG", Value: "False"},
 		{Name: "FLASK_ENV", Value: "production"},
@@ -275,6 +278,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 			Value: "system:serviceaccount:" + cp.Namespace + ":simplyblock-prometheus"},
 	}
 	env = append(env, prometheusEnv()...)
+	env = append(env, monitoringSecretEnv(managed)...)
 	env = append(env, tlsEnv(managed)...)
 
 	spec := corev1.PodSpec{
@@ -314,7 +318,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels:      labels,
-					Annotations: map[string]string{"log-collector/enabled": "true"},
+					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
 				},
 				Spec: spec,
 			},
@@ -455,7 +459,7 @@ func servicePoolDeployment(
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels:      labels,
-					Annotations: map[string]string{"log-collector/enabled": "true"},
+					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
 				},
 				Spec: spec,
 			},
@@ -478,6 +482,7 @@ func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploy
 		logLevelEnv(),
 	}
 	env = append(env, prometheusEnv()...)
+	env = append(env, monitoringSecretEnv(managed)...)
 	env = append(env, tlsEnv(managed)...)
 
 	spec := corev1.PodSpec{
@@ -530,7 +535,7 @@ func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploy
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels:      labels,
-					Annotations: map[string]string{"log-collector/enabled": "true"},
+					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
 				},
 				Spec: spec,
 			},
@@ -621,8 +626,11 @@ func fdbExporterDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 			Replicas: ptr.To(int32(1)),
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
-				Spec:       spec,
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      labels,
+					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
+				},
+				Spec: spec,
 			},
 		},
 	}
