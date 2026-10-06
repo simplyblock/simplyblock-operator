@@ -321,6 +321,7 @@ name the cluster instead.
 | U-307 | Neither the cluster nor the `ControlPlane` states an image: the write is refused                          | Negative   | `TestAWorkloadWithNoImageAnywhereIsRefused`                      |
 | U-308 | The config generator mounts `/dev` and `/sys`, which the init container reads                             | Positive   | `TestBuildStorageNodeDaemonSetConfigGeneratorMountsDevAndSys`    |
 | U-309 | A conflict on the DaemonSet write is retried against a fresh read                                         | Regression | `TestTheDaemonSetWriteRetriesAConflict`                          |
+| U-515 | A node agent that stops answering is restarted, with and without (mutual) TLS (2026-10-06)                | Regression | `TestTheStorageNodeAgentIsRestartedWhenItStopsAnswering`         |
 
 ### Workload: Storage-Plane Labels (design §5.2)
 

@@ -301,3 +301,53 @@ func TestTheStorageNodeAgentIsShippedToTheLogCollector(t *testing.T) {
 		})
 	}
 }
+
+// Regression: 2026-10-06-snodeapi-tls-accept-wedge. A network cut left the
+// node agent's accept loop blocked forever on a half-open TLS handshake. The
+// pod stayed Running and failed its readiness probe 311 times without being
+// restarted, and the control plane, which reaches SPDK only through that
+// agent, kept the storage node unreachable until a human intervened.
+//
+// The probe has to need an answer from the agent: a TCP connect succeeds
+// against a listener nobody accepts on until its backlog fills.
+func TestTheStorageNodeAgentIsRestartedWhenItStopsAnswering(t *testing.T) {
+	sn := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
+	}
+
+	for _, tc := range []struct {
+		name                  string
+		tlsEnabled, mutualTLS bool
+		wantScheme            corev1.URIScheme
+	}{
+		{name: "without TLS", wantScheme: corev1.URISchemeHTTP},
+		{name: "with TLS", tlsEnabled: true, wantScheme: corev1.URISchemeHTTPS},
+		{name: "with mutual TLS", tlsEnabled: true, mutualTLS: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ds := BuildStorageNodeDaemonSet(sn, tc.tlsEnabled, tc.mutualTLS, "", "", "")
+			probe := ds.Spec.Template.Spec.Containers[0].LivenessProbe
+			if probe == nil {
+				t.Fatal("the node agent has no liveness probe, so nothing restarts it once it stops answering")
+			}
+			if probe.TCPSocket != nil {
+				t.Fatal("a TCP liveness probe passes against an agent that no longer accepts connections")
+			}
+			switch {
+			case tc.mutualTLS:
+				// The kubelet presents no client certificate, so an HTTPS
+				// probe is refused by an agent that demands one.
+				if probe.Exec == nil {
+					t.Fatalf("under mutual TLS the probe must run in the container, got %#v", probe.ProbeHandler)
+				}
+			default:
+				if probe.HTTPGet == nil {
+					t.Fatalf("expected an HTTP probe, got %#v", probe.ProbeHandler)
+				}
+				if got := probe.HTTPGet.Scheme; got != tc.wantScheme && (got != "" || tc.wantScheme != corev1.URISchemeHTTP) {
+					t.Errorf("probe scheme %q, want %q", got, tc.wantScheme)
+				}
+			}
+		})
+	}
+}
