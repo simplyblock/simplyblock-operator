@@ -55,6 +55,14 @@ func testDriver(name string) *simplyblockv1alpha2.SimplyblockDriver {
 	}
 }
 
+// withCSIAddons turns on the csi-addons sidecar, which a driver leaves off
+// unless it asks for it.
+func withCSIAddons(d *simplyblockv1alpha2.SimplyblockDriver) *simplyblockv1alpha2.SimplyblockDriver {
+	enable := true
+	d.Spec.EnableCSIAddons = &enable
+	return d
+}
+
 func derivedNames(d *simplyblockv1alpha2.SimplyblockDriver) map[string]string {
 	n := names(d)
 	out := map[string]string{

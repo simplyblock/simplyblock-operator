@@ -101,7 +101,7 @@ func TestSnapshotterSidecarIsAppliedRegardlessOfTheToggle(t *testing.T) {
 // SecurityContext, containers[4]'s Ports) only stay pointed at the snapshotter
 // and health-monitor if nothing ahead of them shifts.
 func TestCSIAddonsSidecarIsAppliedAfterThePlugin(t *testing.T) {
-	d := testDriver("simplyblock")
+	d := withCSIAddons(testDriver("simplyblock"))
 	containers := controllerStatefulSet(d, testImage).Spec.Template.Spec.Containers
 
 	if len(containers) != 7 {
@@ -126,7 +126,7 @@ func TestCSIAddonsSidecarIsAppliedAfterThePlugin(t *testing.T) {
 // that the controller-manager could never parse, so it kept failing every
 // connection attempt and deleting the CSIAddonsNode in a tight loop.
 func TestCSIAddonsSidecarAdvertisesItsOwnPod(t *testing.T) {
-	d := testDriver("simplyblock")
+	d := withCSIAddons(testDriver("simplyblock"))
 	c := containerNamed(controllerStatefulSet(d, testImage).Spec.Template.Spec.Containers, "csi-addons")
 	if c == nil {
 		t.Fatal("csi-addons is not applied")

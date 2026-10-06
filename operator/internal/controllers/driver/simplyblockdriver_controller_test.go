@@ -45,7 +45,9 @@ func requestFor(d *simplyblockv1alpha2.SimplyblockDriver) ctrl.Request {
 
 // The object set is complete: every kind the design lists, and nothing else.
 func TestDesiredCoversTheWholeObjectSet(t *testing.T) {
-	d := testDriver("simplyblock")
+	// With csi-addons on, which is the largest set. TestCSIAddonsIsDeployedOnlyWhenEnabled
+	// has the set without it.
+	d := withCSIAddons(testDriver("simplyblock"))
 	r := &SimplyblockDriverReconciler{Scheme: reconcilerScheme(t), Snapshots: servingCluster}
 
 	counts := map[string]int{}
@@ -115,6 +117,53 @@ func TestSnapshotClassFollowsTheToggle(t *testing.T) {
 
 	if got := len(desiredSet(t, r, enabled)) - len(desiredSet(t, r, disabled)); got != 1 {
 		t.Errorf("the toggle changed the object set by %d, want exactly the snapshot class", got)
+	}
+}
+
+// Regression: 2026-10-06-csi-addons-sidecar-without-crds. The controller pod
+// always carried the csi-addons sidecar, which publishes a CSIAddonsNode. On a
+// cluster that serves no csiaddons.openshift.io CRDs, which is what the chart
+// leaves it with unless csiaddons.create is set, the sidecar failed to create
+// that object and restarted in a loop (18 restarts in two hours on a test
+// cluster), with a Role and two bindings granted for nothing.
+func TestCSIAddonsIsDeployedOnlyWhenEnabled(t *testing.T) {
+	r := &SimplyblockDriverReconciler{Scheme: reconcilerScheme(t), Snapshots: servingCluster}
+
+	off := testDriver("simplyblock")
+	on := testDriver("simplyblock")
+	enable := true
+	on.Spec.EnableCSIAddons = &enable
+
+	for _, tc := range []struct {
+		name string
+		d    *simplyblockv1alpha2.SimplyblockDriver
+		want bool
+	}{
+		{"unset", off, false},
+		{"enabled", on, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			objects := desiredSet(t, r, tc.d)
+			n := names(tc.d)
+
+			var role, binding, delegator, sidecar bool
+			for _, obj := range objects {
+				switch o := obj.(type) {
+				case *rbacv1.Role:
+					role = role || o.Name == n.role(csiAddonsComponent)
+				case *rbacv1.RoleBinding:
+					binding = binding || o.Name == n.roleBinding(csiAddonsComponent)
+				case *rbacv1.ClusterRoleBinding:
+					delegator = delegator || o.Name == n.clusterRoleBinding("csi-addons-auth-delegator")
+				case *appsv1.StatefulSet:
+					sidecar = containerNamed(o.Spec.Template.Spec.Containers, "csi-addons") != nil
+				}
+			}
+			if role != tc.want || binding != tc.want || delegator != tc.want || sidecar != tc.want {
+				t.Errorf("csi-addons role=%t binding=%t auth-delegator=%t sidecar=%t, want all %t",
+					role, binding, delegator, sidecar, tc.want)
+			}
+		})
 	}
 }
 

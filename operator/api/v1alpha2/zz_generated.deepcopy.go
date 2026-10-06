@@ -2153,6 +2153,11 @@ func (in *SimplyblockDriverSpec) DeepCopyInto(out *SimplyblockDriverSpec) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.EnableCSIAddons != nil {
+		in, out := &in.EnableCSIAddons, &out.EnableCSIAddons
+		*out = new(bool)
+		**out = **in
+	}
 	in.TLS.DeepCopyInto(&out.TLS)
 	in.PNFS.DeepCopyInto(&out.PNFS)
 }

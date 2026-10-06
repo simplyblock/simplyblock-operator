@@ -141,6 +141,8 @@ carrying the Helm labels and annotations a live release writes.
 | U-103    | Running is plaintext, `spec.tls` asks for TLS: refused                                  | Negative     | `TestAdoptionRefusesOnATLSModeMismatch`                 |
 | U-104    | Running is TLS anonymous, `spec.tls` asks for mutual: refused                           | Negative     | `TestAdoptionRefusesOnATLSModeMismatch`                 |
 | U-105    | Both agree on mutual TLS: adopted                                                       | Positive     | `TestAdoptionRefusesOnATLSModeMismatch`                 |
+| U-106    | `enableCSIAddons` unset: no sidecar (2026-10-06-csi-addons-sidecar-without-crds)        | Regression   | `TestCSIAddonsIsDeployedOnlyWhenEnabled`                |
+| U-107    | `enableCSIAddons` true: the sidecar, its Role, and both bindings are applied            | Positive     | `TestCSIAddonsIsDeployedOnlyWhenEnabled`                |
 
 `U-55` is the row that holds design §4.3's in-place claim. An object with a new
 UID is an object that was deleted and reapplied, which for the node `DaemonSet`
