@@ -257,6 +257,15 @@ type SimplyblockDriverSpec struct {
 	// +optional
 	EnableVolumeSnapshots *bool `json:"enableVolumeSnapshots,omitempty"`
 
+	// EnableCSIAddons adds the kubernetes-csi-addons sidecar to the controller
+	// plugin, with the Role and bindings it needs. The sidecar publishes a
+	// CSIAddonsNode object, so it only works on a cluster that serves the
+	// csiaddons.openshift.io CRDs. Without them it restarts in a loop, so leave
+	// it false unless those CRDs are installed.
+	// +kubebuilder:default=false
+	// +optional
+	EnableCSIAddons *bool `json:"enableCSIAddons,omitempty"`
+
 	// TLS configures whether both plugins reach the control plane over TLS.
 	// Unset is plaintext, the shape every deployment ran before this field
 	// existed. Adopting a deployment that already runs TLS requires this to

@@ -260,7 +260,13 @@ func controllerStatefulSet(d *simplyblockv1alpha2.SimplyblockDriver, image strin
 			"--leader-election=false",
 		}),
 		controllerPluginContainer(d, image),
-		csiAddonsSidecarContainer(d, s.csiAddons, sidecarMount),
+	}
+	// Last, so the positional tweaks below stay pointed at the snapshotter and
+	// the health monitor. Present only when the deployment asks for it: the
+	// sidecar publishes a CSIAddonsNode and restarts in a loop on a cluster that
+	// serves no csiaddons.openshift.io CRDs.
+	if csiAddonsEnabled(d) {
+		containers = append(containers, csiAddonsSidecarContainer(d, s.csiAddons, sidecarMount))
 	}
 	// The snapshotter runs privileged in the chart, and the health monitor
 	// exposes a port. Both are properties of the container rather than of the

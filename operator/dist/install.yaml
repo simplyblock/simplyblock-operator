@@ -4678,6 +4678,15 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              enableCSIAddons:
+                default: false
+                description: |-
+                  EnableCSIAddons adds the kubernetes-csi-addons sidecar to the controller
+                  plugin, with the Role and bindings it needs. The sidecar publishes a
+                  CSIAddonsNode object, so it only works on a cluster that serves the
+                  csiaddons.openshift.io CRDs. Without them it restarts in a loop, so leave
+                  it false unless those CRDs are installed.
+                type: boolean
               enableServiceAccountAuth:
                 default: false
                 description: |-

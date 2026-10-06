@@ -141,3 +141,12 @@ func (r *SimplyblockDriverReconciler) snapshotAPIServed(ctx context.Context) (bo
 func snapshotsEnabled(d *simplyblockv1alpha2.SimplyblockDriver) bool {
 	return d.Spec.EnableVolumeSnapshots == nil || *d.Spec.EnableVolumeSnapshots
 }
+
+// csiAddonsEnabled reports whether the controller plugin runs the csi-addons
+// sidecar, with the Role and bindings it needs. The field defaults to false, so
+// an object that does not state it reads as disabled: the sidecar is useless
+// without the csiaddons.openshift.io CRDs, which the chart installs only on
+// request.
+func csiAddonsEnabled(d *simplyblockv1alpha2.SimplyblockDriver) bool {
+	return d.Spec.EnableCSIAddons != nil && *d.Spec.EnableCSIAddons
+}
