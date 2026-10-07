@@ -124,6 +124,7 @@ Regression id for the rows marked so: `2026-10-05-drain-target-memory`.
 | U-61 | A 400 saying the volume is already on the target ends the operation as `Succeeded`                                           | Regression | `TestARefusalSayingTheVolumeIsAlreadyThereSucceeds`              |
 | U-73 | A 400 reporting an active migration of the subsystem is waited on like a 409 (2026-10-06-pvops-400-conflict-read-as-final)   | Regression | `TestAConflictAnsweredWithA400IsWaitedOn`                        |
 | U-74 | A refusal's message is the control plane's reason and names no target of its own (2026-10-06-pvops-refusal-names-the-target) | Regression | `TestARefusalKeepsTheControlPlanesWordsAndNamesNoTargetOfItsOwn` |
+| U-75 | Every pin spelling, canonical keys included, reaches the validator (2026-10-06-pinned-volume-matchcondition-canonical-key)   | Regression | `TestPinnedVolumeMatchConditionCoversEverySpelling`              |
 
 ### The Namespace Scan (design §5)
 
