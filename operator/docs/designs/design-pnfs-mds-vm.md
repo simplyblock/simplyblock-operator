@@ -213,7 +213,7 @@ A pod that cannot schedule leaves its exports in `Pending`, and the reconciler r
 
 ### 5.5 Resources
 
-`spec.pnfs.mds.resources` sets the pod's requests and limits. The guest's memory and vCPU count are derived from them and passed on the QEMU command line, so one setting controls both. The limits reach the runner through the downward API (`limits.cpu` with divisor `1m`, `limits.memory` with divisor `1Mi`). The guest gets the whole cores the CPU limit covers, and at least one, and the memory limit less a 256 MiB allowance for QEMU and the runner. A guest needs at least 256 MiB, so the smallest memory limit is 512 Mi, and a limit below it fails the runner with that reason. The allowance is an estimate until boots are measured.
+`spec.pnfs.mds.resources` sets the pod's requests and limits. The guest's memory and vCPU count are derived from them and passed on the QEMU command line, so one setting controls both. The limits reach the runner through the downward API (`limits.cpu` with divisor `1m`, `limits.memory` with divisor `1Mi`). The guest gets the whole cores the CPU limit covers, and at least one, and the memory limit less a 256 MiB allowance for QEMU and the runner. A guest needs at least 256 MiB, so the smallest memory limit is 512 Mi, and a limit below it fails the runner with that reason. A CPU or memory limit the spec leaves unset defaults to 2 CPUs and 2 Gi, because without a limit the downward API reports the node's whole allocatable capacity and the guest would take the node. The allowance is an estimate until boots are measured.
 
 ### 5.6 Image
 

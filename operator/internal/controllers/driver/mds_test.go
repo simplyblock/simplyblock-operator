@@ -277,3 +277,29 @@ func TestMDSRunnerDialsTheOperatorLikeThePlugins(t *testing.T) {
 		}
 	}
 }
+
+// Without limits the downward API reports the node's whole allocatable
+// capacity, and the runner would size the guest to the entire node. A spec
+// that states none gets a guest of a bounded size instead.
+func TestMDSPodWithoutLimitsGetsDefaultOnes(t *testing.T) {
+	d := withMDS(testDriver("simplyblock"))
+	d.Spec.PNFS.MDS.Resources = corev1.ResourceRequirements{}
+	_, sts := mdsObjects(t, d)
+	limits := runnerContainer(t, sts).Resources.Limits
+	if !limits.Cpu().Equal(resource.MustParse("2")) || !limits.Memory().Equal(resource.MustParse("2Gi")) {
+		t.Errorf("limits = %v, want 2 CPUs and 2Gi", limits)
+	}
+}
+
+// A limit the spec states is kept, and only the missing one is defaulted.
+func TestMDSPodKeepsTheLimitsItIsGiven(t *testing.T) {
+	d := withMDS(testDriver("simplyblock"))
+	d.Spec.PNFS.MDS.Resources = corev1.ResourceRequirements{Limits: corev1.ResourceList{
+		corev1.ResourceMemory: resource.MustParse("4Gi"),
+	}}
+	_, sts := mdsObjects(t, d)
+	limits := runnerContainer(t, sts).Resources.Limits
+	if !limits.Memory().Equal(resource.MustParse("4Gi")) || !limits.Cpu().Equal(resource.MustParse("2")) {
+		t.Errorf("limits = %v, want the spec's 4Gi and a default 2 CPUs", limits)
+	}
+}

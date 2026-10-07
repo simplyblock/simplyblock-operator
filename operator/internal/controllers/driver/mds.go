@@ -63,6 +63,13 @@ const (
 	// The CRD's default for spec.pnfs.mds.stateSize, for an object admission
 	// did not default.
 	mdsDefaultStateSize = "1Gi"
+
+	// The limits a metadata server pod gets when the spec states none. The
+	// guest is sized from the pod's limits, and without one the downward API
+	// reports the node's whole allocatable capacity, so the guest would take
+	// the node.
+	mdsDefaultCPULimit    = "2"
+	mdsDefaultMemoryLimit = "2Gi"
 )
 
 // MDSStatefulSetName is the StatefulSet serving a storage cluster's exports.
@@ -187,7 +194,7 @@ func mdsRunnerContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string) 
 			resourceEnv("MDS_CPU_LIMIT_MILLI", "limits.cpu", "1m"),
 			resourceEnv("MDS_MEMORY_LIMIT_MIB", "limits.memory", "1Mi"),
 		}, tlsEnv(d)),
-		Resources: spec.Resources,
+		Resources: mdsResources(spec.Resources),
 		Ports: []corev1.ContainerPort{
 			{Name: "nfs", ContainerPort: mdsNFSPort, Protocol: corev1.ProtocolTCP},
 			{Name: "probes", ContainerPort: mdsProbePort, Protocol: corev1.ProtocolTCP},
@@ -214,6 +221,22 @@ func mdsRunnerContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string) 
 		}, tlsVolumeMount(d), linkVolumeMounts()),
 		VolumeDevices: []corev1.VolumeDevice{{Name: mdsStateClaim, DevicePath: mdsStateDevicePath}},
 	}
+}
+
+// mdsResources is the spec's requirements with a CPU and a memory limit
+// defaulted where the spec states none.
+func mdsResources(r corev1.ResourceRequirements) corev1.ResourceRequirements {
+	out := *r.DeepCopy()
+	if out.Limits == nil {
+		out.Limits = corev1.ResourceList{}
+	}
+	if _, ok := out.Limits[corev1.ResourceCPU]; !ok {
+		out.Limits[corev1.ResourceCPU] = resource.MustParse(mdsDefaultCPULimit)
+	}
+	if _, ok := out.Limits[corev1.ResourceMemory]; !ok {
+		out.Limits[corev1.ResourceMemory] = resource.MustParse(mdsDefaultMemoryLimit)
+	}
+	return out
 }
 
 // resourceEnv hands the container one of its own resource values, in the unit
