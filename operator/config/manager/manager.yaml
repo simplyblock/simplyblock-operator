@@ -63,6 +63,11 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
+          - --csi-link
+        ports:
+        - containerPort: 9500
+          name: csi-link
+          protocol: TCP
         image: controller:latest
         name: manager
         securityContext:
