@@ -120,12 +120,48 @@ func anaLine(state string) string {
 // `uuid`, when set, becomes the namespace's `device_uuid`, which is what the host
 // publishes as the namespace UUID and what a device selector matches on.
 func (t *Target) AddNamespace(ctx context.Context, nsid, sizeMB int, uuid string) error {
+	return t.AddNamespaceWith(ctx, nsid, sizeMB, NamespaceOptions{UUID: uuid})
+}
+
+// NamespaceOptions are the identity and capabilities a namespace is created
+// with. nvmet reads all of them when the namespace is enabled, so none can be
+// changed on a live one.
+type NamespaceOptions struct {
+	// UUID becomes `device_uuid`; see AddNamespace.
+	UUID string
+
+	// NGUID becomes `device_nguid`, 32 hex digits. nfsd names an NVMe device in
+	// a pNFS SCSI layout by the identifier nvme_get_unique_id returns, which is
+	// the NGUID or the EUI-64 and never the UUID; nvmet sets neither by default.
+	NGUID string
+
+	// Reservations enables NVMe persistent reservations (`resv_enable`). nfsd
+	// fences a pNFS client through them and offers no SCSI layout for a device
+	// without them.
+	Reservations bool
+}
+
+// AddNamespaceWith is AddNamespace with the namespace's identity and
+// capabilities spelled out.
+func (t *Target) AddNamespaceWith(ctx context.Context, nsid, sizeMB int, opts NamespaceOptions) error {
 	img := fmt.Sprintf("/var/tmp/nvmet/%s-ns%d.img", sanitize(t.spec.NQN), nsid)
 	nsDir := fmt.Sprintf("%s/namespaces/%d", t.subsysDir(), nsid)
 
 	uuidLine := ":"
-	if uuid != "" {
-		uuidLine = fmt.Sprintf("printf %%s %s > \"$N\"/device_uuid", quote(uuid))
+	if opts.UUID != "" {
+		uuidLine = fmt.Sprintf("printf %%s %s > \"$N\"/device_uuid", quote(opts.UUID))
+	}
+	nguidLine := ":"
+	if opts.NGUID != "" {
+		nguidLine = fmt.Sprintf("printf %%s %s > \"$N\"/device_nguid", quote(opts.NGUID))
+	}
+	resvLine := ":"
+	if opts.Reservations {
+		// Checked rather than written blind: a kernel without reservation
+		// support has no such attribute, and the redirect would fail as a
+		// permission error on a file that does not exist.
+		resvLine = "[ -f \"$N\"/resv_enable ] || { echo 'nvmet lacks resv_enable' >&2; exit 1; }; " +
+			"echo 1 > \"$N\"/resv_enable"
 	}
 
 	script := strings.Join([]string{
@@ -145,6 +181,8 @@ func (t *Target) AddNamespace(ctx context.Context, nsid, sizeMB int, uuid string
 		"mkdir -p \"$N\"",
 		"printf %s \"$DEV\" > \"$N\"/device_path",
 		uuidLine,
+		nguidLine,
+		resvLine,
 		"echo 1 > \"$N\"/enable",
 		"echo \"$DEV\"",
 	}, "\n")

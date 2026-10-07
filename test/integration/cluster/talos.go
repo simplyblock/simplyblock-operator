@@ -55,8 +55,25 @@ type Config struct {
 	ControlplaneMemoryMB int
 	WorkerMemoryMB       int
 
+	// ExtraModules are kernel modules loaded at boot beyond the target's own.
+	// Talos lets only the machine config load a module. A privileged pod's
+	// modprobe is refused as an operation not permitted, even for a module the
+	// image carries. A module that is not in the image fails the boot.
+	ExtraModules []string
+
 	// TalosctlPath overrides the binary; empty means $PATH.
 	TalosctlPath string
+
+	// DiskImagePath boots the nodes from a disk image built locally instead of
+	// the Image Factory's, which is the only way to run a kernel the factory does
+	// not ship: its images can add extensions but never replace the kernel.
+	// Empty keeps the factory image.
+	//
+	// The image is the imager's compressed `metal` disk image
+	// (metal-<arch>.raw.zst) for the same Talos version as TalosctlPath, since
+	// talosctl generates the machine config the image boots with. See
+	// serveDiskImage for how it reaches talosctl.
+	DiskImagePath string
 
 	// Sudo elevates talosctl. Nil auto-detects: false when already root, true
 	// otherwise.
@@ -149,6 +166,17 @@ const nvmetPatch = `machine:
       - name: nvmet_tcp
 `
 
+// extraModulesPatch lists more modules under nvmetPatch's, which it must
+// directly follow: it continues that patch's module list rather than starting
+// a document of its own.
+func extraModulesPatch(modules []string) string {
+	var b strings.Builder
+	for _, m := range modules {
+		fmt.Fprintf(&b, "      - name: %s\n", m)
+	}
+	return b.String()
+}
+
 // schedulablePatch lets pods run on the control plane, which a single-node
 // cluster needs since there is no worker to put them on.
 const schedulablePatch = `cluster:
@@ -235,7 +263,7 @@ func Create(ctx context.Context, cfg Config) (*Cluster, error) {
 		return nil, fmt.Errorf("clear a previous %s: %w\n%s", cfg.Name, err, out)
 	}
 
-	patches := nvmetPatch
+	patches := nvmetPatch + extraModulesPatch(cfg.ExtraModules)
 	if cfg.Workers == 0 {
 		patches += schedulablePatch
 	}
@@ -244,30 +272,19 @@ func Create(ctx context.Context, cfg Config) (*Cluster, error) {
 		return nil, err
 	}
 
-	args := []string{
-		"cluster", "create", "qemu",
-		"--name", cfg.Name,
-		"--controlplanes", fmt.Sprint(cfg.Controlplanes),
-		"--workers", fmt.Sprint(cfg.Workers),
-		"--cidr", cfg.CIDR,
-		"--memory-controlplanes", fmt.Sprintf("%dmb", cfg.ControlplaneMemoryMB),
-		"--memory-workers", fmt.Sprintf("%dmb", cfg.WorkerMemoryMB),
-		// disk-image boots from an Image Factory disk image; the default preset
-		// is iso, which needs more host plumbing.
-		"--presets", "disk-image",
-		"--config-patch", "@" + patch,
-		// The talosconfig is redirected because it disturbs the developer's own.
-		// The kubeconfig is redirected too, by KUBECONFIG in the environment and
-		// by merge=false on the fetch, because this command takes no flag for
-		// it. Cluster state deliberately is not redirected. It stays where
-		// talosctl looks for it by default, so `talosctl cluster destroy --name`
-		// can find and clean a cluster left behind by an interrupted run. State
-		// in a per-run temp directory makes that impossible, which turns a
-		// killed test into root-owned processes nobody can reach.
-		"--talosconfig-destination", c.talosconfig,
+	var factory *localFactory
+	if cfg.DiskImagePath != "" {
+		f, err := serveDiskImage(cfg.DiskImagePath)
+		if err != nil {
+			return nil, err
+		}
+		// Only for the create: talosctl downloads the image once, into its cache,
+		// before any node boots.
+		defer f.Close()
+		factory = f
 	}
 
-	if out, err := c.run(ctx, 20*time.Minute, args...); err != nil {
+	if out, err := c.run(ctx, 20*time.Minute, createArgs(cfg, patch, c.talosconfig, factory)...); err != nil {
 		// Capture what the cluster looked like before tearing it down: destroy
 		// removes the only evidence of why create failed.
 		diag := c.diagnose(context.WithoutCancel(ctx))
@@ -308,6 +325,37 @@ func Create(ctx context.Context, cfg Config) (*Cluster, error) {
 		return nil, withTeardown(err, down)
 	}
 	return c, nil
+}
+
+// createArgs is the `cluster create` command line for cfg. factory, when set,
+// replaces the Image Factory the disk image is downloaded from.
+func createArgs(cfg Config, patch, talosconfig string, factory *localFactory) []string {
+	args := []string{
+		"cluster", "create", "qemu",
+		"--name", cfg.Name,
+		"--controlplanes", fmt.Sprint(cfg.Controlplanes),
+		"--workers", fmt.Sprint(cfg.Workers),
+		"--cidr", cfg.CIDR,
+		"--memory-controlplanes", fmt.Sprintf("%dmb", cfg.ControlplaneMemoryMB),
+		"--memory-workers", fmt.Sprintf("%dmb", cfg.WorkerMemoryMB),
+		// disk-image boots from an Image Factory disk image; the default preset
+		// is iso, which needs more host plumbing.
+		"--presets", "disk-image",
+		"--config-patch", "@" + patch,
+		// The talosconfig is redirected because it disturbs the developer's own.
+		// The kubeconfig is redirected too, by KUBECONFIG in the environment and
+		// by merge=false on the fetch, because this command takes no flag for
+		// it. Cluster state deliberately is not redirected. It stays where
+		// talosctl looks for it by default, so `talosctl cluster destroy --name`
+		// can find and clean a cluster left behind by an interrupted run. State
+		// in a per-run temp directory makes that impossible, which turns a
+		// killed test into root-owned processes nobody can reach.
+		"--talosconfig-destination", talosconfig,
+	}
+	if factory != nil {
+		args = append(args, "--image-factory-url", factory.URL, "--schematic-id", factory.Schematic)
+	}
+	return args
 }
 
 // Destroy tears the cluster down. Safe to call twice, and on a cluster that

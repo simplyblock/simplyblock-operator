@@ -10,6 +10,7 @@ require (
 	github.com/oapi-codegen/oapi-codegen/v2 v2.8.0
 	github.com/oapi-codegen/runtime v1.6.0
 	github.com/simplyblock/atlas v0.0.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -36,7 +37,6 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/tools v0.48.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 // The harness tests atlas's detection against a real kernel, so it must build

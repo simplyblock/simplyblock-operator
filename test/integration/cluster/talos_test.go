@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestCheckNameFits(t *testing.T) {
@@ -165,5 +167,58 @@ func TestDefaultConfigNarrates(t *testing.T) {
 
 	if cfg.Logf == nil {
 		t.Error("a defaulted Config discards talosctl's output, so a create is silent until it returns")
+	}
+}
+
+func TestCreateArgs(t *testing.T) {
+	base := Config{
+		Name: "sbi-1", Controlplanes: 1, Workers: 1, CIDR: "10.5.0.0/24",
+		ControlplaneMemoryMB: 2048, WorkerMemoryMB: 3072,
+	}
+	const factoryBoot = "cluster create qemu --name sbi-1 --controlplanes 1 --workers 1 --cidr 10.5.0.0/24 " +
+		"--memory-controlplanes 2048mb --memory-workers 3072mb --presets disk-image " +
+		"--config-patch @/w/patch.yaml --talosconfig-destination /w/talosconfig"
+
+	t.Run("without a local image, the factory's is booted as before", func(t *testing.T) {
+		if got := strings.Join(createArgs(base, "/w/patch.yaml", "/w/talosconfig", nil), " "); got != factoryBoot {
+			t.Fatalf("createArgs =\n  %s\nwant\n  %s", got, factoryBoot)
+		}
+	})
+
+	t.Run("a local image goes through the same preset, from the local factory", func(t *testing.T) {
+		f := &localFactory{URL: "http://127.0.0.1:4711", Schematic: "local-0123456789abcdef"}
+		got := strings.Join(createArgs(base, "/w/patch.yaml", "/w/talosconfig", f), " ")
+		want := factoryBoot + " --image-factory-url http://127.0.0.1:4711 --schematic-id local-0123456789abcdef"
+		if got != want {
+			t.Fatalf("createArgs =\n  %s\nwant\n  %s", got, want)
+		}
+	})
+}
+
+// TestModulesPatch checks the extra modules land in the one module list the
+// machine config reads, not in a second list a later key would replace.
+func TestModulesPatch(t *testing.T) {
+	var patch struct {
+		Machine struct {
+			Kernel struct {
+				Modules []struct {
+					Name string `yaml:"name"`
+				} `yaml:"modules"`
+			} `yaml:"kernel"`
+		} `yaml:"machine"`
+	}
+	doc := nvmetPatch + extraModulesPatch([]string{"nfsd"}) + schedulablePatch
+	if err := yaml.Unmarshal([]byte(doc), &patch); err != nil {
+		t.Fatalf("the patch is not YAML: %v\n%s", err, doc)
+	}
+	var names []string
+	for _, m := range patch.Machine.Kernel.Modules {
+		names = append(names, m.Name)
+	}
+	if got := strings.Join(names, ","); got != "nvmet,nvmet_tcp,nfsd" {
+		t.Fatalf("modules = %s, want nvmet,nvmet_tcp,nfsd\n%s", got, doc)
+	}
+	if extraModulesPatch(nil) != "" {
+		t.Fatal("no extra modules must add nothing to the patch")
 	}
 }

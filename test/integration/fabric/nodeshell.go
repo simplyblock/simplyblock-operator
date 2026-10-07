@@ -40,6 +40,10 @@ type Shell struct {
 	node    string
 	pod     string
 	image   string
+
+	// sharedDir is a host directory mounted with bidirectional propagation, or
+	// empty for none.
+	sharedDir string
 }
 
 // defaultShellImage is the image a Shell runs unless a test overrides it. It
@@ -57,6 +61,18 @@ type ShellOption func(*Shell)
 // have a /bin/sh, and it must still install nothing at test time.
 func WithImage(image string) ShellOption {
 	return func(s *Shell) { s.image = image }
+}
+
+// WithSharedHostDir mounts the host directory path at the same path in the pod,
+// with bidirectional propagation, so a filesystem the shell mounts under it is
+// mounted on the host too.
+//
+// Kernel services resolve paths in the host's mount namespace, not the pod's.
+// nfsd is the case in point: an export of a filesystem mounted only inside the
+// pod publishes the empty host directory underneath it, which a client mounts
+// without complaint.
+func WithSharedHostDir(path string) ShellOption {
+	return func(s *Shell) { s.sharedDir = path }
 }
 
 // Cluster is the part of *cluster.Cluster this package needs, as an interface so
@@ -110,14 +126,14 @@ spec:
           mountPath: /lib/modules
           readOnly: true
         - name: dev
-          mountPath: /dev
+          mountPath: /dev%[4]s
   volumes:
     - name: sys
       hostPath: {path: /sys}
     - name: modules
       hostPath: {path: /lib/modules}
     - name: dev
-      hostPath: {path: /dev}
+      hostPath: {path: /dev}%[5]s
 `
 
 // NewShell starts a privileged pod on node and waits for it to be ready.
@@ -142,7 +158,17 @@ func NewShell(ctx context.Context, c Cluster, node string, opts ...ShellOption) 
 }
 
 func (s *Shell) manifest() string {
-	return fmt.Sprintf(shellPodManifest, s.pod, s.node, s.image)
+	mount, volume := "", ""
+	if s.sharedDir != "" {
+		mount = fmt.Sprintf(`
+        - name: shared
+          mountPath: %s
+          mountPropagation: Bidirectional`, s.sharedDir)
+		volume = fmt.Sprintf(`
+    - name: shared
+      hostPath: {path: %s, type: DirectoryOrCreate}`, s.sharedDir)
+	}
+	return fmt.Sprintf(shellPodManifest, s.pod, s.node, s.image, mount, volume)
 }
 
 // Close removes the pod, leaving the namespace since other shells may share it.

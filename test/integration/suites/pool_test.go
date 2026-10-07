@@ -67,6 +67,13 @@ func (p *nodePool) ensure(ctx context.Context) (*cluster.Cluster, error) {
 		Name: clusterName(),
 		// One controlplane comes for free; the rest are workers.
 		Workers: clusterNodes - 1,
+		// A run on a kernel the Image Factory does not ship names its own
+		// boot image, and the talosctl of the same Talos version.
+		TalosctlPath:  os.Getenv("SB_TALOSCTL"),
+		DiskImagePath: os.Getenv("SB_TALOS_DISK_IMAGE"),
+		// Comma-separated, nfsd for the pNFS spec. Only the machine config
+		// can load a module on Talos.
+		ExtraModules: splitList(os.Getenv("SB_TALOS_MODULES")),
 	})
 	if err != nil {
 		p.bootErr = fmt.Errorf("create cluster: %w", err)
@@ -274,4 +281,15 @@ func leaseShell(ctx context.Context, t *testing.T, node, image string) *fabric.S
 		t.Fatalf("start a shell on %s: %v", node, err)
 	}
 	return sh
+}
+
+// splitList reads a comma-separated environment value, ignoring empty items.
+func splitList(v string) []string {
+	var out []string
+	for _, item := range strings.Split(v, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
