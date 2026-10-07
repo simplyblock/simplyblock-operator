@@ -392,6 +392,7 @@ func main() {
 			Audiences:                []string{csiLinkAudience},
 			NodeServiceAccount:       "simplyblock-csi-node-sa",
 			ControllerServiceAccount: "simplyblock-csi-controller-sa",
+			MDSServiceAccount:        "simplyblock-csi-mds-sa",
 		})
 		if err != nil {
 			setupLog.Error(err, "unable to set up the CSI link")
@@ -481,9 +482,10 @@ func main() {
 	// way: with the link off an export binds a host and then waits, visibly,
 	// rather than the kind disappearing.
 	nfsExportReconciler := &controller.NFSExportReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("nfsexport-controller"),
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		Recorder:          mgr.GetEventRecorder("nfsexport-controller"),
+		OperatorNamespace: operatorNamespace,
 	}
 	if csiPeers != nil {
 		nfsExportReconciler.Assembler = controller.NewLinkAssembler(csiPeers)

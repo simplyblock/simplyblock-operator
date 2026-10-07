@@ -58,6 +58,10 @@ type Config struct {
 	// ServiceAccounts, unqualified. Each may register only as its own kind.
 	NodeServiceAccount       string
 	ControllerServiceAccount string
+
+	// MDSServiceAccount names the pNFS metadata server pod's ServiceAccount,
+	// unqualified. Empty closes the MDS kind to every peer.
+	MDSServiceAccount string
 }
 
 // The hub needs to verify peer tokens, and — on clusters whose API server does
@@ -66,6 +70,20 @@ type Config struct {
 //
 // +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get
+
+// serviceAccounts maps each peer kind to the one ServiceAccount that may link
+// as it. A kind with no entry is refused, so the metadata server's kind stays
+// closed until its ServiceAccount is configured.
+func serviceAccounts(cfg Config) map[link.PeerKind][]string {
+	accounts := map[link.PeerKind][]string{
+		link.PeerKindNode:       {cfg.Namespace + "/" + cfg.NodeServiceAccount},
+		link.PeerKindController: {cfg.Namespace + "/" + cfg.ControllerServiceAccount},
+	}
+	if cfg.MDSServiceAccount != "" {
+		accounts[link.PeerKindMDS] = []string{cfg.Namespace + "/" + cfg.MDSServiceAccount}
+	}
+	return accounts
+}
 
 // Setup starts the hub under mgr and returns the registry of linked peers.
 //
@@ -87,12 +105,9 @@ func Setup(mgr ctrl.Manager, cfg Config) (*link.Registry, error) {
 	hub, err := link.NewHub(link.HubConfig{
 		Listener: listener,
 		Auth: &link.KubeAuthenticator{
-			Client:    clientset,
-			Audiences: cfg.Audiences,
-			ServiceAccounts: map[link.PeerKind][]string{
-				link.PeerKindNode:       {cfg.Namespace + "/" + cfg.NodeServiceAccount},
-				link.PeerKindController: {cfg.Namespace + "/" + cfg.ControllerServiceAccount},
-			},
+			Client:          clientset,
+			Audiences:       cfg.Audiences,
+			ServiceAccounts: serviceAccounts(cfg),
 		},
 		// Only the replica doing the reconciling may hold peers. A follower
 		// answers Unavailable, which the agent retries — landing, via the

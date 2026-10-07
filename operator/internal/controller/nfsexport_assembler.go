@@ -1,4 +1,4 @@
-// linkAssembler turns a bound node name into a connection and issues the export
+// linkAssembler turns a bound host into a connection and issues the export
 // calls down it.
 //
 // It lives beside the reconciler rather than in atlas because it joins two
@@ -37,22 +37,22 @@ func NewLinkAssembler(registry PeerRegistry) ExportAssembler {
 	return &linkAssembler{registry: registry}
 }
 
-// HasSession reports whether the node is attached right now.
+// HasSession reports whether the host is attached right now.
 //
 // A separate question from whether a call fails, and the reconciler treats the
 // two differently: collapsing them turns every rollout into a retry storm.
-func (a *linkAssembler) HasSession(nodeName string) bool {
-	_, err := a.registry.Conn(link.NodePeer(nodeName))
+func (a *linkAssembler) HasSession(host link.PeerID) bool {
+	_, err := a.registry.Conn(host)
 	return err == nil
 }
 
-// CreateExport assembles the export on the bound node.
+// CreateExport assembles the export on the bound host.
 func (a *linkAssembler) CreateExport(
 	ctx context.Context,
-	nodeName string,
+	host link.PeerID,
 	nfsExport *simplyblockv1alpha2.NFSExport,
 ) error {
-	conn, err := a.conn(nodeName)
+	conn, err := a.conn(host)
 	if err != nil {
 		return err
 	}
@@ -63,13 +63,13 @@ func (a *linkAssembler) CreateExport(
 	return nfsexportrpc.Remote(conn).Create(ctx, spec)
 }
 
-// DeleteExport tears the export down on the bound node.
+// DeleteExport tears the export down on the bound host.
 func (a *linkAssembler) DeleteExport(
 	ctx context.Context,
-	nodeName string,
+	host link.PeerID,
 	nfsExport *simplyblockv1alpha2.NFSExport,
 ) error {
-	conn, err := a.conn(nodeName)
+	conn, err := a.conn(host)
 	if err != nil {
 		return err
 	}
@@ -80,14 +80,14 @@ func (a *linkAssembler) DeleteExport(
 	return nfsexportrpc.Remote(conn).Delete(ctx, spec)
 }
 
-// CheckExport asks the bound node whether the export is actually being
+// CheckExport asks the bound host whether the export is actually being
 // served.
 func (a *linkAssembler) CheckExport(
 	ctx context.Context,
-	nodeName string,
+	host link.PeerID,
 	nfsExport *simplyblockv1alpha2.NFSExport,
 ) error {
-	conn, err := a.conn(nodeName)
+	conn, err := a.conn(host)
 	if err != nil {
 		return err
 	}
@@ -98,16 +98,16 @@ func (a *linkAssembler) CheckExport(
 	return nfsexportrpc.Remote(conn).Check(ctx, spec)
 }
 
-// conn is the link connection to one node.
-func (a *linkAssembler) conn(nodeName string) (grpc.ClientConnInterface, error) {
-	conn, err := a.registry.Conn(link.NodePeer(nodeName))
+// conn is the link connection to one host.
+func (a *linkAssembler) conn(host link.PeerID) (grpc.ClientConnInterface, error) {
+	conn, err := a.registry.Conn(host)
 	if err != nil {
 		if errors.Is(err, link.ErrNoSession) {
 			// HasSession was asked first, so the session dropped between the
 			// two. Saying so keeps the log honest about a race.
-			return nil, fmt.Errorf("node %s went away mid-reconcile: %w", nodeName, err)
+			return nil, fmt.Errorf("%s went away mid-reconcile: %w", host, err)
 		}
-		return nil, fmt.Errorf("reaching node %s: %w", nodeName, err)
+		return nil, fmt.Errorf("reaching %s: %w", host, err)
 	}
 	return conn, nil
 }

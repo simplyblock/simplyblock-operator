@@ -46,11 +46,14 @@ type objectNames struct {
 	controllerStatefulSet    string
 	nodeServiceAccount       string
 	controllerServiceAccount string
-	configMap                string
-	nodeServerConfigMap      string
-	secret                   string
-	secretV2                 string
-	snapshotClass            string
+	// mdsServiceAccount is the pNFS metadata server pod's, the only one the
+	// operator lets link as the MDS kind.
+	mdsServiceAccount   string
+	configMap           string
+	nodeServerConfigMap string
+	secret              string
+	secretV2            string
+	snapshotClass       string
 
 	// controllerClientSecret and nodeClientSecret name each plugin's TLS
 	// client certificate, mounted by tls.go's tlsVolume and never applied by
@@ -74,6 +77,7 @@ func names(d *simplyblockv1alpha2.SimplyblockDriver) objectNames {
 		controllerStatefulSet:    p + "controller",
 		nodeServiceAccount:       p + "node-sa",
 		controllerServiceAccount: p + "controller-sa",
+		mdsServiceAccount:        p + "mds-sa",
 		configMap:                p + "cm",
 		nodeServerConfigMap:      p + "nodeservercm",
 		secret:                   p + "secret",
