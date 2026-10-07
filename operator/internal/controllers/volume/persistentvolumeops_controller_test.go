@@ -210,8 +210,8 @@ func TestEveryConsumingHostIsCheckedBeforeTheCutover(t *testing.T) {
 	// found through the claim the volume names.
 	r := testReconciler(t, api,
 		testOperation(), testClusterObject(), testNodeObject(),
-		claimedVolume(testPVName, "app", "data-0"),
-		claimedVolume("pvc-"+siblingVolume, "app", "data-1"),
+		claimedVolume(testPVName, "data-0"),
+		claimedVolume("pvc-"+siblingVolume, "data-1"),
 		runningPodOn("worker-1", "app", "data-0"),
 		runningPodOn("worker-2", "app", "data-1"),
 	)
@@ -559,16 +559,19 @@ func atStep(r *PersistentVolumeOpsReconciler, at step) error {
 	return r.Status().Update(ctx, &ops)
 }
 
+// consumerNamespace is where the claims and their consuming pods live.
+const consumerNamespace = "app"
+
 // claimedVolume is a PersistentVolume of this driver bound to a claim, which is
 // how a consumer is found: the volume names the claim and a pod mounts it.
-func claimedVolume(name, namespace, claim string) *corev1.PersistentVolume {
+func claimedVolume(name, claim string) *corev1.PersistentVolume {
 	pv := testVolumeObject()
 	pv.Name = name
 	if name != testPVName {
 		pv.Spec.CSI.VolumeHandle = string(lvol.NewVolumeHandle(
 			testClusterID, testPoolID, name[len("pvc-"):]))
 	}
-	pv.Spec.ClaimRef = &corev1.ObjectReference{Namespace: namespace, Name: claim}
+	pv.Spec.ClaimRef = &corev1.ObjectReference{Namespace: consumerNamespace, Name: claim}
 	return pv
 }
 

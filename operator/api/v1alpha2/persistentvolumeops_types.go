@@ -45,6 +45,17 @@ import (
 // or the volume's own controllers.
 const PersistentVolumeOpsLock = "storage.simplyblock.io/active-ops"
 
+// StorageClusterMigrationSlot is the annotation on a StorageCluster naming the
+// one PersistentVolumeOps allowed to migrate a volume of that cluster, and
+// absent when none is. The control plane runs one data migration per cluster
+// and refuses the rest, so every other operation waits at Pending until the
+// holder reaches a terminal phase and releases it.
+//
+// It follows PersistentVolumeOpsLock: taken with an optimistic-lock patch,
+// released only while it still names the releaser, and broken when the named
+// operation is terminal or gone.
+const StorageClusterMigrationSlot = "storage.simplyblock.io/active-volume-migration"
+
 // PersistentVolumeOpsManagedByLabel carries the kind of the controller that
 // created an operation, which is what a watch mapping and a List select on: a
 // reference in the spec cannot be selected on, and a label value admits no
@@ -60,6 +71,17 @@ const PersistentVolumeOpsManagedByLabel = "storage.simplyblock.io/managed-by"
 // by and what it reads back when the operation fails: a retry that does not
 // know where the failed move was headed sends the volume back there.
 const PersistentVolumeOpsTargetNodeLabel = "storage.simplyblock.io/target-node"
+
+// PinnedVolumeLabel marks a move the pinned-volume controller raised because a
+// claim's storage-node pin changed. Its value is a hash of the volume's name,
+// because a PersistentVolume name can exceed the 63 characters a label value
+// allows.
+//
+// A pinned volume is moved by its pin and by nothing else, and this label is
+// how a move tells which of the two it is: a labeled move runs only while the
+// pin still names its target, so a pin removed or changed again before the move
+// started leaves the volume where it is.
+const PinnedVolumeLabel = "storage.simplyblock.io/pinned-volume-pv"
 
 // PersistentVolumeOpsAction is the operation a PersistentVolumeOps performs.
 // The kind is named for its target rather than for the action so that carrying

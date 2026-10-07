@@ -47,6 +47,11 @@ const (
 	ReasonTargetNodeNotReady = "TargetNodeNotReady"
 	ReasonTargetNodeIsSource = "TargetNodeIsSource"
 
+	// ReasonVolumePinned is a move refused because the volume, or a sibling on
+	// its subsystem, is pinned to another storage node. A pinned volume moves
+	// only when its pin changes.
+	ReasonVolumePinned = "VolumePinned"
+
 	ReasonMigrationCreated = "MigrationCreated"
 	ReasonMigrationStarted = "MigrationStarted"
 

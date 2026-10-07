@@ -49,7 +49,7 @@ func TestTheLockIsTakenWhenTheVolumeIsFree(t *testing.T) {
 	ops := testOperation()
 	r := testReconciler(t, &fakeControlPlane{}, ops, testVolumeObject())
 
-	lock, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r))
+	lock, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r), testTargetID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestTheHolderReadoptsItsOwnLock(t *testing.T) {
 	}
 	r := testReconciler(t, &fakeControlPlane{}, ops, pv)
 
-	lock, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r))
+	lock, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r), testTargetID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestALockHeldByALiveOperationIsWaitedOn(t *testing.T) {
 	}
 	r := testReconciler(t, &fakeControlPlane{}, holder, ops, pv)
 
-	lock, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r))
+	lock, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r), testTargetID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestALockHeldByATerminalOperationIsBroken(t *testing.T) {
 			}
 			r := testReconciler(t, &fakeControlPlane{}, holder, ops, pv)
 
-			lock, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r))
+			lock, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r), testTargetID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -155,7 +155,7 @@ func TestALockHeldByNobodyIsBroken(t *testing.T) {
 	}
 	r := testReconciler(t, &fakeControlPlane{}, ops, pv)
 
-	lock, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r))
+	lock, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r), testTargetID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestTakingTheLockLeavesTheVolumeOtherwiseUntouched(t *testing.T) {
 	pv.Labels = map[string]string{"kept": "yes"}
 	r := testReconciler(t, &fakeControlPlane{}, ops, pv)
 
-	if _, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r)); err != nil {
+	if _, err := r.acquireLock(context.Background(), ops, volumeFrom(t, r), testTargetID); err != nil {
 		t.Fatal(err)
 	}
 

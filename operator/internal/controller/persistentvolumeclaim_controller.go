@@ -37,7 +37,8 @@ const (
 	// a PV can be found without knowing the (target-dependent) object name. The
 	// value is hashed because PV names can exceed the 63-char label-value limit;
 	// the full PV name is preserved in VolumeMigration.spec.pvName.
-	labelPinnedVolumePV = "storage.simplyblock.io/pinned-volume-pv"
+	// A PersistentVolumeOps carrying it is held to the pin it was raised for.
+	labelPinnedVolumePV = simplyblockv1alpha2.PinnedVolumeLabel
 
 	// pvcPinRequeueUnbound is how long to wait before rechecking a PVC whose
 	// backing PV is not provisioned yet.
