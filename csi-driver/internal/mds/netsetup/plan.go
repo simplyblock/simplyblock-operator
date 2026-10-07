@@ -27,6 +27,10 @@ import (
 // portmapper, and mountd and statd serve only earlier protocol versions.
 const NFSPort = 2049
 
+// AgentPort is where the guest agent serves the export service and its health.
+// It is not forwarded: only the runner reaches it, across the bridge.
+const AgentPort = 7070
+
 const (
 	bridgeName = "mds-br0"
 	tapName    = "mds-tap0"

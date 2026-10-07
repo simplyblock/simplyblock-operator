@@ -54,6 +54,12 @@ mds-runner:
 	@mkdir -p $(BUILD_DIR)
 	@CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -buildvcs=false -o $(BUILD_DIR)/mds-runner ./cmd/mds-runner/
 
+.PHONY: mds-agent
+mds-agent:
+	@echo === building mds-agent binary
+	@mkdir -p $(BUILD_DIR)
+	@CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -buildvcs=false -o $(BUILD_DIR)/mds-agent ./cmd/mds-agent/
+
 # static code check, text lint
 # lint: golangci yamllint shellcheck mdl codespell
 lint: golangci
@@ -185,5 +191,5 @@ mds-image:
 
 .PHONY: clean
 clean:
-	rm -f $(BUILD_DIR)/spdkcsi $(BUILD_DIR)/mds-runner
+	rm -f $(BUILD_DIR)/spdkcsi $(BUILD_DIR)/mds-runner $(BUILD_DIR)/mds-agent
 	go clean -testcache

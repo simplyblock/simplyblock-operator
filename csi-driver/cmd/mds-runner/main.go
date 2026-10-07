@@ -5,7 +5,9 @@
 //
 // It checks /dev/kvm, sizes the guest from the pod's limits, builds the
 // private network between the pod and the guest, starts QEMU, and serves the
-// pod's readiness from the guest's health. When the pod is stopped it shuts
+// pod's readiness from the guest agent's health. Once the guest is healthy it
+// dials the operator over csi-link and relays the export calls to the agent,
+// resolving each namespace's connection with the pod's own credentials. When the pod is stopped it shuts
 // the guest down through its power button. Whatever ends the guest otherwise
 // ends this process with an error, and kubelet restarts the pod
 // (design-pnfs-mds-vm.md §5.2).
@@ -26,13 +28,20 @@ import (
 	"syscall"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"k8s.io/klog"
 
 	"github.com/simplyblock/atlas/errs/deferrers"
+	"github.com/simplyblock/atlas/link"
+	"github.com/simplyblock/atlas/nfsexport/nfsexportrpc"
+	"github.com/simplyblock/csi-driver/internal/csilink"
 	"github.com/simplyblock/csi-driver/internal/mds/netsetup"
 	"github.com/simplyblock/csi-driver/internal/mds/qemu"
 	"github.com/simplyblock/csi-driver/internal/mds/qmp"
+	"github.com/simplyblock/csi-driver/internal/mds/relay"
 	"github.com/simplyblock/csi-driver/internal/mds/runner"
+	"github.com/simplyblock/csi-driver/internal/nfsexport"
 )
 
 type config struct {
@@ -45,6 +54,15 @@ type config struct {
 	vhostNet               bool
 	bootDeadline           time.Duration
 	shutdownGrace          time.Duration
+
+	// The operator's link endpoint, under the node plugin's flag names, so
+	// the driver passes both the same arguments.
+	link           bool
+	linkHubAddress string
+	linkServerName string
+	linkCAFile     string
+	linkTokenFile  string
+	podUID         string
 }
 
 func parseFlags() config {
@@ -72,6 +90,16 @@ func parseFlags() config {
 		"Time the guest has to turn healthy before the pod restarts")
 	flag.DurationVar(&c.shutdownGrace, "shutdown-grace", 20*time.Second,
 		"Time a powered-down guest has to exit; keep below the pod's termination grace period")
+	flag.BoolVar(&c.link, "link", false, "Dial the operator once the guest is healthy and relay its export calls")
+	flag.StringVar(&c.linkHubAddress, "link-hub-address", "", "The operator's link endpoint, host:port")
+	flag.StringVar(&c.linkServerName, "link-server-name", "",
+		"Name to verify against the operator's link certificate, when it differs from the address dialed")
+	flag.StringVar(&c.linkCAFile, "link-ca-file", "",
+		"CA bundle signing the operator's link certificate; empty or absent dials plaintext")
+	flag.StringVar(&c.linkTokenFile, "link-token-file", "/var/run/secrets/simplyblock.io/link/token",
+		"Projected ServiceAccount token presented to the operator")
+	flag.StringVar(&c.podUID, "pod-uid", os.Getenv("POD_UID"),
+		"This pod's UID (downward API), so a restart supersedes the previous link session")
 
 	klog.InitFlags(nil)
 	if err := flag.Set("logtostderr", "true"); err != nil {
@@ -146,6 +174,7 @@ func run(ctx context.Context, c config) error {
 		Hostname:      c.hostname,
 		QMPSocket:     qmpSocket,
 	}
+	agentAddress := net.JoinHostPort(plan.Guest.String(), strconv.Itoa(netsetup.AgentPort))
 	binary, err := guest.Binary()
 	if err != nil {
 		return err
@@ -159,9 +188,7 @@ func run(ctx context.Context, c config) error {
 
 	sup := &runner.Supervisor{
 		Start: runner.StartProcess(binary, args, os.Stdout, os.Stderr),
-		// Until the guest agent answers its health call, nfsd accepting
-		// connections is the closest signal that the guest can serve.
-		Probe: runner.TCPProbe(net.JoinHostPort(plan.Guest.String(), strconv.Itoa(netsetup.NFSPort))),
+		Probe: runner.GRPCHealthProbe(agentAddress),
 		Powerdown: func(ctx context.Context) error {
 			client, err := qmp.Dial(ctx, qmpSocket)
 			if err != nil {
@@ -177,7 +204,53 @@ func run(ctx context.Context, c config) error {
 
 	probes := serveProbes(c.probeAddress, sup)
 	defer deferrers.Close(probes)
+	if c.link {
+		go linkWhenReady(ctx, c, sup, agentAddress)
+	}
 	return sup.Run(ctx)
+}
+
+// linkWhenReady dials the operator once the guest first turns healthy, and
+// from then on relays its export calls to the guest agent. Linking earlier
+// would advertise an export service the guest cannot answer yet. The session
+// outlives later unhealthy spells: the operator reads readiness from the pod,
+// not from the link.
+func linkWhenReady(ctx context.Context, c config, sup *runner.Supervisor, agentAddress string) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for !sup.Ready() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+
+	guest, err := grpc.NewClient(agentAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		klog.Errorf("guest agent client for %s: %v", agentAddress, err)
+		return
+	}
+	exports, err := nfsexportrpc.NewServer(relay.Relay{
+		Guest:   nfsexportrpc.Remote(guest),
+		Resolve: nfsexport.PublishedConnection,
+	})
+	if err != nil {
+		klog.Errorf("export relay: %v", err)
+		return
+	}
+	if _, err := csilink.Start(ctx, csilink.Config{
+		HubAddress:   c.linkHubAddress,
+		CAFile:       c.linkCAFile,
+		ServerName:   c.linkServerName,
+		TokenFile:    c.linkTokenFile,
+		ID:           link.MDSPeer(c.hostname),
+		InstanceUID:  c.podUID,
+		Register:     exports.Register,
+		Capabilities: nfsexportrpc.Capabilities(),
+	}); err != nil {
+		klog.Errorf("csi link: %v", err)
+	}
 }
 
 // serveProbes serves the pod's probes: /healthz while the runner is alive,

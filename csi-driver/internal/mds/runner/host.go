@@ -1,6 +1,6 @@
-// What the runner needs from its pod before a guest can start, and how it
-// starts QEMU: /dev/kvm, the QEMU process, and the health probe the pod's
-// readiness follows until the guest agent answers its own health call.
+// What the runner needs from its pod before a guest can start, how it starts
+// QEMU, and how it asks the guest agent whether the guest is healthy: /dev/kvm,
+// the QEMU process, and the probe the pod's readiness follows.
 
 package runner
 
@@ -8,9 +8,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
+	"sync"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/simplyblock/atlas/errs/deferrers"
 )
@@ -52,15 +56,37 @@ type execProcess struct{ cmd *exec.Cmd }
 func (p execProcess) Wait() error { return p.cmd.Wait() }
 func (p execProcess) Kill() error { return p.cmd.Process.Kill() }
 
-// TCPProbe returns a probe that passes while addr accepts TCP connections.
-func TCPProbe(addr string) func(context.Context) error {
+// GRPCHealthProbe returns a probe that passes while the guest agent at addr
+// reports SERVING through gRPC's health service. The connection is plaintext:
+// the agent is reachable only across the pod's private bridge.
+//
+// One client serves every probe. grpc.NewClient connects lazily and
+// reconnects on its own, so a guest that restarts its agent is found again
+// without a new client.
+func GRPCHealthProbe(addr string) func(context.Context) error {
+	var (
+		once   sync.Once
+		client healthpb.HealthClient
+		err    error
+	)
 	return func(ctx context.Context) error {
-		var d net.Dialer
-		conn, err := d.DialContext(ctx, "tcp", addr)
+		once.Do(func() {
+			var conn *grpc.ClientConn
+			conn, err = grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err == nil {
+				client = healthpb.NewHealthClient(conn)
+			}
+		})
 		if err != nil {
-			return err
+			return fmt.Errorf("guest agent client for %s: %w", addr, err)
 		}
-		deferrers.Close(conn)
+		resp, callErr := client.Check(ctx, &healthpb.HealthCheckRequest{})
+		if callErr != nil {
+			return fmt.Errorf("guest agent at %s: %w", addr, callErr)
+		}
+		if status := resp.GetStatus(); status != healthpb.HealthCheckResponse_SERVING {
+			return fmt.Errorf("guest agent at %s reports %s", addr, status)
+		}
 		return nil
 	}
 }

@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/simplyblock/atlas/errs/deferrers"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
 func TestCheckKVMNeedsAReadWriteDevice(t *testing.T) {
@@ -73,20 +75,33 @@ func TestStartProcessFailsForAMissingBinary(t *testing.T) {
 	}
 }
 
-func TestTCPProbeFollowsTheListener(t *testing.T) {
+// The pod is Ready only while the guest agent says the guest can serve, not
+// merely while something listens.
+func TestGRPCHealthProbeFollowsTheAgent(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	probe := TCPProbe(ln.Addr().String())
+	srv := grpc.NewServer()
+	hs := health.NewServer()
+	healthpb.RegisterHealthServer(srv, hs)
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(srv.Stop)
+
+	probe := GRPCHealthProbe(ln.Addr().String())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := probe(ctx); err != nil {
-		t.Errorf("probe with a listener = %v, want nil", err)
-	}
-	deferrers.Close(ln)
+	hs.SetServingStatus("", healthpb.HealthCheckResponse_NOT_SERVING)
 	if err := probe(ctx); err == nil {
-		t.Error("probe passed after the listener closed")
+		t.Error("probe passed while the agent reports NOT_SERVING")
+	}
+	hs.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
+	if err := probe(ctx); err != nil {
+		t.Errorf("probe = %v while the agent reports SERVING", err)
+	}
+	srv.Stop()
+	if err := probe(ctx); err == nil {
+		t.Error("probe passed with no agent answering")
 	}
 }
