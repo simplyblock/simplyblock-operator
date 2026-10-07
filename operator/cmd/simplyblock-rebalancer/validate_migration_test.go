@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -422,7 +425,7 @@ func TestValidationRun_SkippedNodeIsNotTouched(t *testing.T) {
 }
 
 // Neither cleanup may change the outcome. A reap that fails still lets the validation
-// decide, and a release that fails must not mask why the migration was cancelled.
+// decide, and a release that fails must not mask why the migration was canceled.
 func TestValidationRun_CleanupFailuresDoNotChangeTheOutcome(t *testing.T) {
 	t.Run("a failed reap still validates", func(t *testing.T) {
 		rec := &recorder{present: true, reapErr: errors.New("delete_controller: device busy")}
@@ -502,5 +505,31 @@ func TestValidationRun_AWaitThatRunsOutLeavesTheVerdictToTheVerification(t *test
 	}
 	if outcome != outcomeValidated || rec.validates != 1 {
 		t.Errorf("outcome = %v after %d verification(s), want validated on the first", outcome, rec.validates)
+	}
+}
+
+// The operator passes a host only on a validated result read from the Job's
+// termination message, so the mode has to write what it concluded, and a skip
+// has to say skipped: exiting zero is the same for both.
+func TestTheValidateModeReportsWhatItConcluded(t *testing.T) {
+	for outcome, want := range map[validationOutcome]volumemigration.ValidationOutcome{
+		outcomeValidated: volumemigration.ValidationValidated,
+		outcomeSkipped:   volumemigration.ValidationSkipped,
+	} {
+		path := filepath.Join(t.TempDir(), "result")
+		if err := reportOutcome(path, outcome, "nqn.test"); err != nil {
+			t.Fatalf("report %v: %v", want, err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read the result: %v", err)
+		}
+		var got volumemigration.ValidationResult
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatalf("the result %q does not parse: %v", data, err)
+		}
+		if got.Outcome != want {
+			t.Errorf("outcome = %q, want %q", got.Outcome, want)
+		}
 	}
 }

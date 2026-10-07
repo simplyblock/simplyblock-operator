@@ -289,6 +289,19 @@ func (r *PersistentVolumeOpsReconciler) validationJobsPassed(
 				"the target's paths could not be established on node %s, so the cutover would "+
 					"strand it; the migration is being taken back", record.Node)
 		case jobSucceeded:
+			// Complete says the process exited zero, which it also does for a
+			// host it skipped. Only a validated result passes, and anything
+			// else fails the operation rather than running the check again.
+			result, err := vmigration.ReadValidationResult(ctx, r.Reader, &job, containerFor(modeValidate))
+			if err != nil {
+				return false, fatalf("the validation on node %s did not report a result, so the "+
+					"target's paths there are not known to be ready: %v", record.Node, err)
+			}
+			if !result.Passed() {
+				return false, fatalf("the validation on node %s ended %s rather than validated%s, so the "+
+					"target's paths there are not known to be ready", record.Node, result.Outcome,
+					detailOf(result))
+			}
 			record.Succeeded = true
 			passed = true
 		default:
@@ -323,6 +336,14 @@ func (r *PersistentVolumeOpsReconciler) validationJobsPassed(
 		return false, err
 	}
 	return started == 0, nil
+}
+
+// detailOf renders a result's detail as a trailing clause.
+func detailOf(result vmigration.ValidationResult) string {
+	if result.Detail == "" {
+		return ""
+	}
+	return " (" + result.Detail + ")"
 }
 
 // jobOutcome reads a Job's terminal condition, which the Job controller sets.
@@ -521,6 +542,20 @@ func (r *PersistentVolumeOpsReconciler) modeJob(
 	migration := ops.Status.Migration
 	connections, _ := json.Marshal(hostConnections(migration.Connections))
 
+	env := []corev1.EnvVar{
+		{Name: "VMIG_CONNECTIONS", Value: string(connections)},
+		// Which subsystem this node is expected to be connected to.
+		{Name: "VMIG_SUBSYSTEM_NQN", Value: migration.SubsystemNQN},
+		// The host's sysfs, mounted into the Job: the container's own /sys
+		// is not the host's.
+		{Name: "VMIG_SYS_ROOT", Value: "/host/sys"},
+	}
+	resultPath := ""
+	if mode == modeValidate {
+		resultPath = vmigration.ValidationResultPath
+		env = append(env, corev1.EnvVar{Name: vmigration.ValidationResultPathEnv, Value: resultPath})
+	}
+
 	return vmigration.BuildJob(vmigration.JobParams{
 		Name:          jobName(mode, ops.Name, node),
 		Namespace:     namespace,
@@ -529,17 +564,12 @@ func (r *PersistentVolumeOpsReconciler) modeJob(
 		Tolerations:   placement.Tolerations,
 		ContainerName: containerFor(mode),
 		Mode:          mode,
-		Env: []corev1.EnvVar{
-			{Name: "VMIG_CONNECTIONS", Value: string(connections)},
-			// Which subsystem this node is expected to be connected to.
-			{Name: "VMIG_SUBSYSTEM_NQN", Value: migration.SubsystemNQN},
-			// The host's sysfs, mounted into the Job: the container's own /sys
-			// is not the host's.
-			{Name: "VMIG_SYS_ROOT", Value: "/host/sys"},
-		},
-		BackoffLimit: backoffLimit,
-		TTL:          jobTTL,
-		Deadline:     int64(validationJobDeadline.Seconds()),
+		Env:           env,
+
+		TerminationMessagePath: resultPath,
+		BackoffLimit:           backoffLimit,
+		TTL:                    jobTTL,
+		Deadline:               int64(validationJobDeadline.Seconds()),
 	})
 }
 
