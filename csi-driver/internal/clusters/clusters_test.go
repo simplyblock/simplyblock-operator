@@ -175,7 +175,9 @@ func TestReplicationClientReachesTLSControlPlane(t *testing.T) {
 		Type:  "CERTIFICATE",
 		Bytes: srv.Certificate().Raw,
 	})))
-	secret := writeTempFile(t, `{"clusters":[{"cluster_id":"test-cluster","cluster_endpoint":"`+srv.URL+`","cluster_secret":"s"}]}`)
+	secret := writeTempFile(t,
+		`{"clusters":[{"cluster_id":"test-cluster","cluster_endpoint":"`+
+			srv.URL+`","cluster_secret":"s"}]}`)
 
 	t.Setenv("SPDKCSI_SECRET", secret)
 	t.Setenv("SPDKCSI_API_TOKEN_PATH", "")
