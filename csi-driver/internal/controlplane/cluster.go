@@ -120,43 +120,61 @@ func (c *ClusterClient) poolForVolume(ctx context.Context, lvolID string) (strin
 // The returned Connection may be shared across multiple APIClients that
 // all reach the same webappapi service.
 func NewConnection(endpoint string) (*Connection, error) {
-	mode, err := parseTLSMode(os.Getenv(envTLSConnect))
+	endpoint, transport, err := TLSConnect(endpoint)
 	if err != nil {
 		return nil, err
-	}
-
-	transport := http.DefaultTransport
-	if mode != tlsDisabled {
-		caFile := envOr(envTLSCAFile, defaultTLSCAFile)
-		caData, err := os.ReadFile(caFile)
-		if err != nil {
-			return nil, fmt.Errorf("read TLS CA %s: %w", caFile, err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(caData) {
-			return nil, fmt.Errorf("no certificates parsed from TLS CA %s", caFile)
-		}
-
-		endpoint = strings.Replace(endpoint, "http://", "https://", 1)
-		tlsCfg := &tls.Config{RootCAs: pool, ServerName: tlsServerName(endpoint)}
-
-		if mode == tlsAuthenticated {
-			certFile := envOr(envTLSCert, defaultTLSCert)
-			keyFile := envOr(envTLSKey, defaultTLSKey)
-			cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-			if err != nil {
-				return nil, fmt.Errorf("load TLS client keypair (%s, %s): %w", certFile, keyFile, err)
-			}
-			tlsCfg.Certificates = []tls.Certificate{cert}
-		}
-
-		transport = &http.Transport{TLSClientConfig: tlsCfg}
 	}
 
 	return &Connection{
 		Endpoint: endpoint,
 		HTTP:     &http.Client{Timeout: cfgRPCTimeoutSeconds * time.Second, Transport: transport},
 	}, nil
+}
+
+// TLSConnect resolves the TLS mode from the environment (SB_TLS_CONNECT, the CA
+// bundle, and the client keypair for authenticated mode) and returns the
+// endpoint to dial and the transport to dial it with. On "disabled" it returns
+// the endpoint unchanged and http.DefaultTransport. Otherwise, it upgrades the
+// scheme to HTTPS and builds a transport carrying the CA pool, the server name,
+// and (in authenticated mode) the client keypair.
+//
+// Every control-plane client the driver builds goes through it, so the
+// hand-rolled client (NewConnection) and the generated replication client
+// (clusters.ReplicationClient) reach a TLS control plane the same way. A client
+// that set the transport but not the scheme, or the reverse, would still fail.
+func TLSConnect(endpoint string) (string, http.RoundTripper, error) {
+	mode, err := parseTLSMode(os.Getenv(envTLSConnect))
+	if err != nil {
+		return "", nil, err
+	}
+	if mode == tlsDisabled {
+		return endpoint, http.DefaultTransport, nil
+	}
+
+	caFile := envOr(envTLSCAFile, defaultTLSCAFile)
+	caData, err := os.ReadFile(caFile)
+	if err != nil {
+		return "", nil, fmt.Errorf("read TLS CA %s: %w", caFile, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caData) {
+		return "", nil, fmt.Errorf("no certificates parsed from TLS CA %s", caFile)
+	}
+
+	endpoint = strings.Replace(endpoint, "http://", "https://", 1)
+	tlsCfg := &tls.Config{RootCAs: pool, ServerName: tlsServerName(endpoint)}
+
+	if mode == tlsAuthenticated {
+		certFile := envOr(envTLSCert, defaultTLSCert)
+		keyFile := envOr(envTLSKey, defaultTLSKey)
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return "", nil, fmt.Errorf("load TLS client keypair (%s, %s): %w", certFile, keyFile, err)
+		}
+		tlsCfg.Certificates = []tls.Certificate{cert}
+	}
+
+	return endpoint, &http.Transport{TLSClientConfig: tlsCfg}, nil
 }
 
 // NewClusterClient creates a cluster-scoped API client.
@@ -215,7 +233,7 @@ type CreateLVolData struct {
 	// which names nothing.
 	//
 	// None of it was reachable until recently. Every class the operator
-	// generated carried all four ceilings as "0" and the fabric as tcp, because
+	// generated carried all four ceilings as "0" and the fabric as `tcp`, because
 	// v1alpha1's StorageClassParameters defaulted them on a block that was
 	// always materialized. v1alpha2 made them optional, which is the first time
 	// a class could state nothing and mean it.
