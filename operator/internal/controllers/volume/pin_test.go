@@ -8,11 +8,13 @@
 package volume
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/lvol"
@@ -39,6 +41,9 @@ func pinDrivenOperation() *simplyblockv1alpha2.PersistentVolumeOps {
 	return ops
 }
 
+// Regression: 2026-10-07-pvops-pinned-volume-moved — an operation moved a
+// volume pinned to another node. It fails at Pending, takes no lock, and
+// creates no migration.
 func TestAPinnedVolumeIsNotMovedToAnotherNode(t *testing.T) {
 	api := idleSubsystem()
 	r := testReconciler(t, api,
@@ -66,6 +71,8 @@ func TestAPinnedVolumeIsNotMovedToAnotherNode(t *testing.T) {
 	}
 }
 
+// The move the pinned-volume controller raises after a repin targets the new
+// pin, and runs.
 func TestAMoveToThePinnedNodeRuns(t *testing.T) {
 	r := testReconciler(t, idleSubsystem(),
 		pinDrivenOperation(), testClusterObject(), testNodeObject(),
@@ -80,6 +87,9 @@ func TestAMoveToThePinnedNodeRuns(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-07-pvops-pinned-volume-moved — a pin-driven move whose
+// pin was removed before it started still moved the volume. An unpin leaves the
+// volume where it is.
 func TestAPinDrivenMoveWhosePinWasRemovedLeavesTheVolume(t *testing.T) {
 	api := idleSubsystem()
 	r := testReconciler(t, api,
@@ -101,6 +111,8 @@ func TestAPinDrivenMoveWhosePinWasRemovedLeavesTheVolume(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-07-pvops-pinned-volume-moved — a pin-driven move whose
+// pin changed again before it started moved the volume toward the old pin.
 func TestAPinDrivenMoveSupersededByARepinLeavesTheVolume(t *testing.T) {
 	api := idleSubsystem()
 	r := testReconciler(t, api,
@@ -122,6 +134,9 @@ func TestAPinDrivenMoveSupersededByARepinLeavesTheVolume(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-07-pvops-pinned-volume-moved — the control plane moves
+// the whole subsystem, so a sibling pinned to another node moved with the
+// named volume.
 func TestAPinnedSiblingBlocksTheSubsystemsMove(t *testing.T) {
 	const siblingVolume = "77777777-7777-7777-7777-777777777777"
 
@@ -154,6 +169,7 @@ func TestAPinnedSiblingBlocksTheSubsystemsMove(t *testing.T) {
 	}
 }
 
+// A volume whose claim carries no pin moves as before.
 func TestAnUnpinnedVolumeMovesAsBefore(t *testing.T) {
 	r := testReconciler(t, idleSubsystem(),
 		testOperation(), testClusterObject(), testNodeObject(),
@@ -164,5 +180,90 @@ func TestAnUnpinnedVolumeMovesAsBefore(t *testing.T) {
 
 	if ops := operationFrom(t, r); ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseRunning {
 		t.Errorf("phase = %q (%s), want Running", ops.Status.Phase, ops.Status.Message)
+	}
+}
+
+// Regression: 2026-10-07-pvops-late-member-pin — the pins were read only while
+// the operation was Pending, but the control plane lets a volume join the
+// subsystem until the migration is activated, so a sibling that joined later
+// pinned to another node moved with the subsystem at cutover.
+func TestASiblingPinnedElsewhereThatJoinedLateFailsTheOperationBeforeTheCopy(t *testing.T) {
+	const siblingVolume = "77777777-7777-7777-7777-777777777777"
+
+	api := idleSubsystem()
+	r := testReconciler(t, api,
+		testOperation(), testClusterObject(), testNodeObject(),
+		claimedVolume(testPVName, "data-0"), pinnedClaim("data-0", ""),
+		claimedVolume("pvc-"+siblingVolume, "data-1"), pinnedClaim("data-1", testSourceID))
+
+	runPass(t, r)
+	api.members = []lvol.Volume{
+		{ID: lvol.NewVolumeHandle(testClusterID, testPoolID, testVolumeID), NQN: testNQN},
+		{ID: lvol.NewVolumeHandle(testClusterID, testPoolID, siblingVolume), NQN: testNQN},
+	}
+	for range 4 {
+		runPass(t, r)
+	}
+
+	ops := operationFrom(t, r)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed {
+		t.Fatalf("phase = %q, step = %q (%s), want Failed: a member pinned elsewhere joined the subsystem",
+			ops.Status.Phase, ops.Status.Step.State, ops.Status.Message)
+	}
+	if api.continues != 0 {
+		t.Errorf("the copy was started %d times for a subsystem with a member pinned elsewhere", api.continues)
+	}
+	if api.cancels == 0 {
+		t.Error("the migration was not taken back")
+	}
+}
+
+// Regression: 2026-10-07-pvops-pin-from-reused-claim-name — a retained
+// volume's claimRef can name a claim that was deleted, and a new, unrelated
+// claim can reuse the name. That claim's pin is not this volume's.
+func TestAPinOnAClaimThatOnlySharesTheNameDoesNotHoldTheVolume(t *testing.T) {
+	pv := claimedVolume(testPVName, "data-0")
+	pv.Spec.ClaimRef.UID = "uid-deleted-claim"
+	claim := pinnedClaim("data-0", testSourceID)
+	claim.UID = "uid-new-claim"
+	r := testReconciler(t, idleSubsystem(), testOperation(), testClusterObject(), testNodeObject(), pv, claim)
+
+	runPass(t, r)
+
+	if ops := operationFrom(t, r); ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseRunning {
+		t.Errorf("phase = %q (%s), want Running: the pinned claim is not the one the volume was bound to",
+			ops.Status.Phase, ops.Status.Message)
+	}
+}
+
+// A pin removed while the pin-driven move validates withdraws the move: the
+// migration is taken back before the copy, and the volume stays where it is.
+func TestAPinRemovedWhileTheMoveValidatesWithdrawsIt(t *testing.T) {
+	api := idleSubsystem()
+	r := testReconciler(t, api,
+		pinDrivenOperation(), testClusterObject(), testNodeObject(),
+		claimedVolume(testPVName, "data-0"), pinnedClaim("data-0", testTargetID))
+
+	runPass(t, r)
+	var claim corev1.PersistentVolumeClaim
+	if err := r.Get(context.Background(),
+		types.NamespacedName{Namespace: consumerNamespace, Name: "data-0"}, &claim); err != nil {
+		t.Fatalf("read the claim: %v", err)
+	}
+	claim.Annotations = nil
+	if err := r.Update(context.Background(), &claim); err != nil {
+		t.Fatalf("remove the pin: %v", err)
+	}
+	for range 4 {
+		runPass(t, r)
+	}
+
+	ops := operationFrom(t, r)
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseAborted {
+		t.Fatalf("phase = %q, step = %q (%s), want Aborted: the pin was removed before the copy",
+			ops.Status.Phase, ops.Status.Step.State, ops.Status.Message)
+	}
+	if api.continues != 0 {
+		t.Errorf("the copy was started %d times after the pin was removed", api.continues)
 	}
 }

@@ -81,6 +81,10 @@ func twoOperations(t *testing.T) *PersistentVolumeOpsReconciler {
 		testClusterObject(), testNodeObject())
 }
 
+// Regression: 2026-10-07-pvops-concurrent-migrations — every operation of a
+// drain left Pending at once and reported Running while the control plane
+// refused all but one migration. One holds the cluster's slot, and the others
+// stay Pending, naming it.
 func TestOnlyOneOperationPerClusterLeavesPending(t *testing.T) {
 	r := twoOperations(t)
 
@@ -108,6 +112,7 @@ func TestOnlyOneOperationPerClusterLeavesPending(t *testing.T) {
 	}
 }
 
+// A finished operation releases the slot, and the next one takes it.
 func TestTheSlotPassesOnWhenItsHolderFinishes(t *testing.T) {
 	r := twoOperations(t)
 	runPassOn(t, r, testOpsName)
@@ -131,6 +136,8 @@ func TestTheSlotPassesOnWhenItsHolderFinishes(t *testing.T) {
 	}
 }
 
+// A slot naming an operation that no longer exists is broken rather than
+// waited on forever.
 func TestASlotHeldByAnOperationThatIsGoneIsBroken(t *testing.T) {
 	cluster := testClusterObject()
 	cluster.Annotations = map[string]string{simplyblockv1alpha2.StorageClusterMigrationSlot: "deleted-long-ago"}
@@ -144,6 +151,7 @@ func TestASlotHeldByAnOperationThatIsGoneIsBroken(t *testing.T) {
 	}
 }
 
+// A slot naming a terminal operation, whose release did not run, is broken.
 func TestASlotHeldByATerminalOperationIsBroken(t *testing.T) {
 	holder := secondOperation()
 	holder.Status.Phase = simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed
@@ -160,6 +168,8 @@ func TestASlotHeldByATerminalOperationIsBroken(t *testing.T) {
 	}
 }
 
+// An operation queued on its volume's lock gives the slot back, so it does not
+// hold up the rest of the cluster while it waits.
 func TestAnOperationWaitingOnItsVolumeHoldsNoSlot(t *testing.T) {
 	holder := secondOperation()
 	holder.Status.Phase = simplyblockv1alpha2.PersistentVolumeOpsPhaseRunning

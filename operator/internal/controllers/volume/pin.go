@@ -84,7 +84,8 @@ func (r *PersistentVolumeOpsReconciler) pinConflictOf(
 }
 
 // pinOf is the storage node the volume's claim pins it to, or the empty string
-// for a volume with no claim or an unpinned one.
+// for a volume with no claim, an unpinned one, or one whose claim was replaced
+// by another of the same name.
 func (r *PersistentVolumeOpsReconciler) pinOf(
 	ctx context.Context, pv *corev1.PersistentVolume,
 ) (string, error) {
@@ -99,6 +100,10 @@ func (r *PersistentVolumeOpsReconciler) pinOf(
 		return "", nil
 	case err != nil:
 		return "", fmt.Errorf("read claim %s/%s to check its pin: %w", ref.Namespace, ref.Name, err)
+	case ref.UID != "" && claim.UID != ref.UID:
+		// A retained volume's claim was deleted and a new, unrelated claim
+		// took its name. That claim's pin is not this volume's.
+		return "", nil
 	}
 	return kube.PinnedNode(claim.Annotations), nil
 }
@@ -115,4 +120,37 @@ func (r *PersistentVolumeOpsReconciler) refuseForPin(
 	r.event(ops, corev1.EventTypeWarning, ReasonVolumePinned, "%s", conflict.message)
 	_, err := r.finish(ctx, ops, simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed, conflict.message)
 	return err
+}
+
+// errPinSuperseded is a pin-driven move whose pin was removed or changed while
+// it validated. It ends the operation as Aborted once the migration is taken
+// back, because the request it carried was withdrawn rather than refused.
+type errPinSuperseded struct{ message string }
+
+func (e *errPinSuperseded) Error() string { return e.message }
+
+// pinsStillAllow reads the subsystem's membership and pins again at the end of
+// Validating, the last point before the migration is activated.
+//
+// The check at Pending saw the members of that moment, and the control plane
+// lets a volume join the subsystem until activation. A member that joined
+// pinned to another node would move with the subsystem at cutover.
+func (r *PersistentVolumeOpsReconciler) pinsStillAllow(
+	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject,
+) error {
+	volumes, err := r.subsystemVolumes(ctx, subject.pv)
+	if err != nil {
+		return err
+	}
+	conflict, err := r.pinConflictOf(ctx, ops, subject.targetUUID, volumes)
+	switch {
+	case err != nil:
+		return err
+	case conflict == nil:
+		return nil
+	case conflict.superseded:
+		return &errPinSuperseded{message: conflict.message}
+	default:
+		return fatalf("%s", conflict.message)
+	}
 }

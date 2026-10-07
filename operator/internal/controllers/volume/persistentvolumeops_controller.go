@@ -372,6 +372,10 @@ func (r *PersistentVolumeOpsReconciler) advance(
 			fmt.Sprintf("the volume is already on node %s; nothing was migrated", subject.targetNodeName()))
 	}
 	if err != nil {
+		var superseded *errPinSuperseded
+		if errors.As(err, &superseded) {
+			return r.withdraw(ctx, ops, subject, superseded.Error())
+		}
 		var fatal *terminalStepError
 		if errors.As(err, &fatal) {
 			return r.fail(ctx, ops, subject, fatal.Error())
@@ -492,6 +496,24 @@ func (r *PersistentVolumeOpsReconciler) fail(
 	}
 	r.event(ops, corev1.EventTypeWarning, ReasonOperationFailed, "%s", message)
 	return r.finish(ctx, ops, simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed, message)
+}
+
+// withdraw ends an operation whose request was withdrawn while it ran, the pin
+// it was raised for having been removed or changed. The migration is taken back
+// first, and the operation is Aborted rather than Failed, because nothing went
+// wrong.
+func (r *PersistentVolumeOpsReconciler) withdraw(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.PersistentVolumeOps,
+	subject *subject,
+	message string,
+) (ctrl.Result, error) {
+	if err := r.discardMigration(ctx, ops, subject); err != nil {
+		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops,
+			fmt.Sprintf("%s; the migration is being taken back: %v", message, err))
+	}
+	r.event(ops, corev1.EventTypeNormal, ReasonOperationAborted, "%s", message)
+	return r.finish(ctx, ops, simplyblockv1alpha2.PersistentVolumeOpsPhaseAborted, message)
 }
 
 // abandon ends an operation whose volume went away, which is a stop rather than

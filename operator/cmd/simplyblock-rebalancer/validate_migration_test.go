@@ -508,9 +508,10 @@ func TestValidationRun_AWaitThatRunsOutLeavesTheVerdictToTheVerification(t *test
 	}
 }
 
-// The operator passes a host only on a validated result read from the Job's
-// termination message, so the mode has to write what it concluded, and a skip
-// has to say skipped: exiting zero is the same for both.
+// Regression: 2026-10-07-pvops-complete-job-read-as-pass — the operator passes
+// a host only on a validated result read from the Job's termination message,
+// so the mode has to write what it concluded, and a skip has to say skipped:
+// exiting zero is the same for both.
 func TestTheValidateModeReportsWhatItConcluded(t *testing.T) {
 	for outcome, want := range map[validationOutcome]volumemigration.ValidationOutcome{
 		outcomeValidated: volumemigration.ValidationValidated,

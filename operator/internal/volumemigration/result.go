@@ -21,6 +21,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -75,7 +76,7 @@ func WriteValidationResult(path string, result ValidationResult) error {
 // ReadValidationResult reads the result a finished validation Job reported
 // through its pod's termination message.
 //
-// A Job with no pod, a container that has not terminated, and a message that
+// A Job with no pod it controls, a container that has not terminated, and a message that
 // is empty or does not parse are each an error: a Job that reports nothing
 // validated nothing, and reading it as a pass is the defect this exists for.
 func ReadValidationResult(
@@ -89,6 +90,13 @@ func ReadValidationResult(
 	}
 
 	for i := range pods.Items {
+		// The label is matched by name, and Job names here are stable, so a pod
+		// of an earlier Job of the same name can still exist. Only the pod this
+		// Job controls reports this Job's result.
+		owner := metav1.GetControllerOf(&pods.Items[i])
+		if owner == nil || job.UID == "" || owner.UID != job.UID {
+			continue
+		}
 		for _, status := range pods.Items[i].Status.ContainerStatuses {
 			terminated := status.State.Terminated
 			if status.Name != container || terminated == nil || terminated.ExitCode != 0 {
