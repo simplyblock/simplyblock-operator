@@ -29,6 +29,10 @@ const (
 	// Exists only once the nfsd filesystem is mounted, which is the test.
 	nfsdControl = export.NFSDProcDir + "/threads"
 
+	// Where nfsdcld and rpc.idmapd look for the RPC pipe filesystem, which a host
+	// with nfs-utils mounts at boot.
+	rpcPipefsDir = NFSStateDir + "/rpc_pipefs"
+
 	// selfCheckTimeout bounds the check on top of the mount's own
 	// soft/timeo/retrans -- belt and suspenders, not the actual guarantee.
 	// That is the mount options below, which the kernel enforces regardless
@@ -60,11 +64,18 @@ func EnsureNFSD(ctx context.Context, run runner) error {
 	if err := ensureNFSDFilesystem(ctx, run); err != nil {
 		return err
 	}
+	// Before nfsdcld, which exits at once without it.
+	if err := ensureRPCPipefs(ctx, run); err != nil {
+		return err
+	}
 	if err := ensureNfsdcld(ctx, run); err != nil {
 		return err
 	}
 	startedThreads, err := ensureNFSDThreads(ctx, run)
 	if err != nil {
+		return err
+	}
+	if err := ensureMountd(ctx, run); err != nil {
 		return err
 	}
 	if err := ensureIdmapd(ctx, run); err != nil {
@@ -133,9 +144,9 @@ func ensureNFSDThreads(ctx context.Context, run runner) (started bool, err error
 			return false, nil
 		}
 	}
-	// NFSv4 only, so the kernel never registers with a portmapper and the host
-	// needs no rpcbind.
-	out, code, err := run(ctx, "rpc.nfsd", "-N", "2", "-N", "3", strconv.Itoa(nfsdThreads))
+	// Without NFSv3 the kernel never registers with a portmapper, so the host
+	// needs no rpcbind. (rpc.nfsd refuses -N 2 on a kernel with no NFSv2.)
+	out, code, err := run(ctx, "rpc.nfsd", "-N", "3", strconv.Itoa(nfsdThreads))
 	if err != nil {
 		return false, fmt.Errorf("nfsd: running rpc.nfsd: %w", err)
 	}
@@ -180,6 +191,10 @@ func selfCheckNFSD(ctx context.Context, run runner) error {
 		return fmt.Errorf("self-check: running mount: %w", err)
 	}
 	if code != 0 {
+		// A refusal is an answer: 127.0.0.1 is not a client of the root export.
+		if strings.Contains(string(out), "access denied") {
+			return nil
+		}
 		return fmt.Errorf("self-check: nfsd did not answer its own pseudo-root within %s: %s",
 			selfCheckTimeout, strings.TrimSpace(string(out)))
 	}
@@ -228,6 +243,59 @@ func ensureNfsdcld(ctx context.Context, run runner) error {
 		return fmt.Errorf("nfsd: nfsdcld exited %d: %s", code, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// ensureRPCPipefs mounts the RPC pipe filesystem. Without it nfsdcld and
+// rpc.idmapd exit at once, the latter with nothing on stderr.
+func ensureRPCPipefs(ctx context.Context, run runner) error {
+	if mounts, err := os.ReadFile("/proc/mounts"); err == nil &&
+		strings.Contains(string(mounts), " "+rpcPipefsDir+" rpc_pipefs ") {
+		return nil
+	}
+	if err := os.MkdirAll(rpcPipefsDir, 0o755); err != nil {
+		return fmt.Errorf("nfsd: creating %s: %w", rpcPipefsDir, err)
+	}
+	out, code, err := run(ctx, "mount", "-t", "rpc_pipefs", "rpc_pipefs", rpcPipefsDir)
+	if err != nil {
+		return fmt.Errorf("nfsd: mounting rpc_pipefs: %w", err)
+	}
+	if code != 0 {
+		return fmt.Errorf("nfsd: mounting rpc_pipefs exited %d: %s", code, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// ensureMountd starts rpc.mountd, which fills the kernel's export cache. Without
+// it the first client request waits forever and the mount hangs.
+func ensureMountd(ctx context.Context, run runner) error {
+	running, err := processRunning("rpc.mountd")
+	if err != nil {
+		return fmt.Errorf("nfsd: checking for a running rpc.mountd: %w", err)
+	}
+	if running {
+		return nil
+	}
+	// mountd exits at once without the export table, which exportfs creates.
+	if err := ensureFile(filepath.Join(NFSStateDir, "etab")); err != nil {
+		return fmt.Errorf("nfsd: creating the export table: %w", err)
+	}
+	out, code, err := run(ctx, "rpc.mountd", "-N", "2", "-N", "3")
+	if err != nil {
+		return fmt.Errorf("nfsd: running rpc.mountd: %w", err)
+	}
+	if code != 0 {
+		return fmt.Errorf("nfsd: rpc.mountd exited %d: %s", code, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// ensureFile creates an empty file if there is none, leaving one that exists.
+func ensureFile(path string) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 // ensureIdmapd starts rpc.idmapd if it is not already running.
