@@ -64,36 +64,60 @@ func advertiseVDOCapability(
 	ctx context.Context, kubeClient kubernetes.Interface, nodeName string, run commandRunner,
 ) error {
 	capable := probeVDO(ctx, nodeName, run)
+	return publishCapability(ctx, kubeClient, nodeName, capabilityLabel{
+		probe:        "vdo",
+		label:        kube.LabelVDOCapable,
+		managedBy:    kube.AnnoVDOCapableManagedBy,
+		managedValue: kube.AnnoVDOCapableManagedByAutoDetect,
+	}, capable)
+}
 
+// capabilityLabel is a node label a probe publishes, and the annotation that
+// marks a value as the probe's own.
+type capabilityLabel struct {
+	probe        string
+	label        string
+	managedBy    string
+	managedValue string
+}
+
+// publishCapability sets the label to capable, unless an operator set it by
+// hand: a label carrying no managed-by annotation is the override a
+// golden-image node depends on, and is left alone. The probe has already run
+// and reported either way, because an override that disagrees with the node
+// underneath it is worth being able to see.
+func publishCapability(
+	ctx context.Context, kubeClient kubernetes.Interface, nodeName string, c capabilityLabel, capable bool,
+) error {
 	node, err := kubeClient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("get node %s: %w", nodeName, err)
 	}
 
-	existing, hasLabel := node.Labels[kube.LabelVDOCapable]
-	if _, managed := node.Annotations[kube.AnnoVDOCapableManagedBy]; hasLabel && !managed {
-		klog.Infof("vdo probe: node %s carries a hand-set %s=%s, which this probe leaves alone "+
-			"(it would have set %t)", nodeName, kube.LabelVDOCapable, existing, capable)
+	existing, hasLabel := node.Labels[c.label]
+	if _, managed := node.Annotations[c.managedBy]; hasLabel && !managed {
+		klog.Infof("%s probe: node %s carries a hand-set %s=%s, which this probe leaves alone "+
+			"(it would have set %t)", c.probe, nodeName, c.label, existing, capable)
 		return nil
 	}
 
 	patch, err := json.Marshal(map[string]any{
 		"metadata": map[string]any{
-			"labels":      map[string]string{kube.LabelVDOCapable: strconv.FormatBool(capable)},
-			"annotations": map[string]string{kube.AnnoVDOCapableManagedBy: kube.AnnoVDOCapableManagedByAutoDetect},
+			"labels":      map[string]string{c.label: strconv.FormatBool(capable)},
+			"annotations": map[string]string{c.managedBy: c.managedValue},
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("build vdo-capable label patch: %w", err)
+		return fmt.Errorf("build %s label patch: %w", c.label, err)
 	}
 
 	if _, err := kubeClient.CoreV1().Nodes().Patch(
 		ctx, nodeName, types.MergePatchType, patch, metav1.PatchOptions{},
 	); err != nil {
-		return fmt.Errorf("patch node %s with vdo-capable=%t: %w", nodeName, capable, err)
+		return fmt.Errorf("patch node %s with %s=%t: %w", nodeName, c.label, capable, err)
 	}
 
-	klog.Infof("vdo probe: node %s labeled %s=%t", nodeName, kube.LabelVDOCapable, capable)
+	klog.Infof("%s probe: node %s labeled %s=%t", c.probe, nodeName, c.label, capable)
 	return nil
 }
 

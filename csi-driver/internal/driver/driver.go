@@ -277,6 +277,7 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 	go reconnect.MonitorConnection(markBroken(podGuardian), manager, cd.GetName(), nodeName)
 
 	go advertiseVDOCapability(kubeClient, nodeName)
+	go advertiseKVMCapability(kubeClient, nodeName)
 
 	return ns, nil
 }
@@ -288,6 +289,15 @@ func advertiseVDOCapability(kubeClient kubernetes.Interface, nodeName string) {
 	err := node.AdvertiseVDOCapability(context.Background(), kubeClient, nodeName)
 	if err != nil {
 		klog.Errorf("failed to advertise vdo-capable for node %s: %v", nodeName, err)
+	}
+}
+
+// advertiseKVMCapability publishes whether this node can host the pNFS metadata
+// server's guest, in the background for the same reason as the VDO probe.
+func advertiseKVMCapability(kubeClient kubernetes.Interface, nodeName string) {
+	err := node.AdvertiseKVMCapability(context.Background(), kubeClient, nodeName)
+	if err != nil {
+		klog.Errorf("failed to advertise kvm-capable for node %s: %v", nodeName, err)
 	}
 }
 
