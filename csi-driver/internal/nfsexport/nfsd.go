@@ -351,7 +351,7 @@ func (a nfsdAssembler) Delete(ctx context.Context, spec export.Spec) error {
 // sitting on it: an export cannot be well served by a kernel NFS server with
 // no threads running, whatever its own mount and export-table state says.
 func (a nfsdAssembler) Check(ctx context.Context, spec export.Spec) error {
-	if err := checkNFSDThreads(); err != nil {
+	if err := CheckNFSDThreads(); err != nil {
 		return err
 	}
 	return a.inner.Check(ctx, spec)
@@ -361,7 +361,7 @@ func (a nfsdAssembler) Check(ctx context.Context, spec export.Spec) error {
 // having brought nfsd up once: the threads outlive this pod (see the package
 // comment), but a kernel that dropped the module or another actor that reset
 // them does not.
-func checkNFSDThreads() error {
+func CheckNFSDThreads() error {
 	data, err := os.ReadFile(nfsdControl)
 	if err != nil {
 		return fmt.Errorf("nfsd: reading its thread count: %w", err)

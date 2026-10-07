@@ -61,13 +61,18 @@ func (p planner) Plan(ctx context.Context, spec export.Spec) (volstack.Plan, err
 
 // connection is where the namespace is published, and the identity to present.
 //
-// The control plane is asked first, because it is the only party that resolves
-// a host's DHCHAP secret and the only one that knows where the volume moved
-// after a failover.
+// A connection supplied with the spec wins: the metadata server pod resolves
+// one for its guest, which cannot reach the control plane, and has already
+// asked it. Otherwise, the control plane is asked first, because it is the only
+// party that resolves a host's DHCHAP secret and the only one that knows where
+// the volume moved after a failover.
 func (p planner) connection(ctx context.Context, spec export.Spec) (lvol.Connection, string, error) {
 	if spec.ClusterID == "" || spec.VolumeUUID == "" {
 		return lvol.Connection{}, "", fmt.Errorf(
 			"export %s: a stack cannot be planned without a cluster and a volume id", spec.Path)
+	}
+	if spec.Connection != nil {
+		return *spec.Connection, spec.HostNQN, nil
 	}
 
 	var identity string
@@ -100,20 +105,38 @@ func (p planner) connection(ctx context.Context, spec export.Spec) (lvol.Connect
 func (p planner) published(
 	ctx context.Context, spec export.Spec, identity string,
 ) (lvol.Connection, string, bool) {
+	connection, named, err := PublishedConnection(ctx, spec, identity)
+	if err != nil {
+		klog.Warningf("%v", err)
+		return lvol.Connection{}, "", false
+	}
+	return connection, named, true
+}
+
+// PublishedConnection asks the control plane where the export's namespace is
+// served and how the host named identity attaches it, and returns the identity
+// the control plane named, which may differ when it resolved one. The metadata
+// server pod uses it to resolve a connection for its guest, which cannot reach
+// the control plane, the same way a node plugin resolves its own.
+func PublishedConnection(
+	ctx context.Context, spec export.Spec, identity string,
+) (lvol.Connection, string, error) {
 	client, err := clusters.Client(ctx, spec.ClusterID, spec.PoolID)
 	if err != nil {
-		klog.Warningf("export %s: no control-plane client for cluster %s: %v",
+		return lvol.Connection{}, "", fmt.Errorf("export %s: no control-plane client for cluster %s: %w",
 			spec.Path, spec.ClusterID, err)
-		return lvol.Connection{}, "", false
 	}
 	responses, err := client.LvolConnections(ctx, spec.VolumeUUID, identity)
-	if err != nil || len(responses) == 0 {
-		klog.Warningf("export %s: the control plane published no endpoint for volume %s: %v",
+	if err != nil {
+		return lvol.Connection{}, "", fmt.Errorf("export %s: the control plane published no endpoint for volume %s: %w",
 			spec.Path, spec.VolumeUUID, err)
-		return lvol.Connection{}, "", false
+	}
+	if len(responses) == 0 {
+		return lvol.Connection{}, "", fmt.Errorf("export %s: the control plane published no endpoint for volume %s",
+			spec.Path, spec.VolumeUUID)
 	}
 	connection, named := initiator.ConnectionFrom(responses, spec.VolumeUUID)
-	return connection, named, true
+	return connection, named, nil
 }
 
 // recorded is the namespace as the stack record names it.
