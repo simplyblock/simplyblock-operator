@@ -352,6 +352,23 @@ for deploy in $deployments; do
 done
 
 # ---------------------------------------------------------------------------
+# 4c. Remove the StorageClasses the operator wrote for this namespace
+# ---------------------------------------------------------------------------
+section "Removing StorageClasses written by the operator for '$NAMESPACE'"
+
+# Step 2 wipes finalizers, which skips the pool's own deletion of these classes.
+# One left behind keeps the old cluster_id, which a StorageClass cannot change.
+operator_classes=$($KUBECTL get storageclass --ignore-not-found \
+    -l "storage.simplyblock.io/managed-by=storagecluster,storage.simplyblock.io/namespace=${NAMESPACE}" \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+for class in $operator_classes; do
+    info "Deleting StorageClass $class..."
+    if ! delete_error=$($KUBECTL delete storageclass "$class" --ignore-not-found --timeout=30s 2>&1); then
+        warn "  Could not delete StorageClass $class: $delete_error"
+    fi
+done
+
+# ---------------------------------------------------------------------------
 # 5. Remove CRDs
 # ---------------------------------------------------------------------------
 section "Removing CRDs"
