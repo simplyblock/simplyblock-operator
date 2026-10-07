@@ -235,8 +235,8 @@ func TestCreateIsIdempotent(t *testing.T) {
 	if got := strings.Join(h.runner.calls, ","); got != "Up,Grow,exportfs,Up,Grow,exportfs" {
 		t.Errorf("order = %q: a reconciler runs this on every pass", got)
 	}
-	if entries, err := os.ReadDir(h.exportsDir); err != nil || len(entries) != 1 {
-		t.Errorf("exports directory holds %v (err %v), want one entry", entries, err)
+	if entries, err := os.ReadDir(h.exportsDir); err != nil || len(entries) != 2 {
+		t.Errorf("exports directory holds %v (err %v), want the export and the root", entries, err)
 	}
 }
 

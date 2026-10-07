@@ -119,10 +119,10 @@ func TestStageRefusesAnUnusableNGUID(t *testing.T) {
 	}
 }
 
-// The source is address:path, which is what an NFS mount takes.
+// The source is address:path, with the path below the NFSv4 root.
 func TestNFSSourceIsAddressAndPath(t *testing.T) {
 	const path = "/var/lib/simplyblock/exports/pnfs-a"
-	if got := nfsSource("10.43.199.218", path); got != "10.43.199.218:"+path {
+	if got := nfsSource("10.43.199.218", path); got != "10.43.199.218:/pnfs-a" {
 		t.Errorf("nfsSource = %q", got)
 	}
 }

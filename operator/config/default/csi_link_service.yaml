@@ -1,0 +1,29 @@
+# The endpoint the CSI node and controller plugins dial to reach the operator.
+#
+# The plugins open the connection and the operator issues its calls back down
+# it, so nothing listens on a node. The Service selects every operator replica.
+# A follower accepts the connection and answers the handshake with Unavailable,
+# and the plugin redials until it reaches the replica that is leading.
+#
+# The name is fixed by the driver controller (linkServiceName), so the
+# kustomization writes the label below over the namePrefixed name.
+apiVersion: v1
+kind: Service
+metadata:
+  name: csi-link
+  namespace: system
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: kustomize
+    simplyblock.io/service-name: simplyblock-csi-link
+spec:
+  type: ClusterIP
+  selector:
+    control-plane: controller-manager
+    app.kubernetes.io/name: simplyblock-operator
+  ports:
+  - name: csi-link
+    port: 9500
+    protocol: TCP
+    targetPort: csi-link

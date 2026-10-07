@@ -14830,6 +14830,27 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: simplyblock-operator
     control-plane: controller-manager
+    simplyblock.io/service-name: simplyblock-csi-link
+  name: simplyblock-csi-link
+  namespace: simplyblock-operator-system
+spec:
+  ports:
+  - name: csi-link
+    port: 9500
+    protocol: TCP
+    targetPort: csi-link
+  selector:
+    app.kubernetes.io/name: simplyblock-operator
+    control-plane: controller-manager
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-operator
+    control-plane: controller-manager
   name: simplyblock-operator-controller-manager-metrics-service
   namespace: simplyblock-operator-system
 spec:
@@ -14898,6 +14919,7 @@ spec:
         - --metrics-bind-address=:8443
         - --leader-elect
         - --health-probe-bind-address=:8081
+        - --csi-link
         command:
         - /manager
         image: quay.io/simplyblock-io/simplyblock-operator:0.1.0
@@ -14911,6 +14933,9 @@ spec:
         ports:
         - containerPort: 6443
           name: metrics-api
+          protocol: TCP
+        - containerPort: 9500
+          name: csi-link
           protocol: TCP
         readinessProbe:
           httpGet:

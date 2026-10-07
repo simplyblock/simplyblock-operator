@@ -112,10 +112,10 @@ func removeDeviceAlias(nguid string) error {
 	return nil
 }
 
-// nfsSource is what gets mounted: the export's address and the path the MDS
-// exports it at.
+// nfsSource is what gets mounted: the export's address and its path relative to
+// the NFSv4 root, which is the directory the MDS mounts every export under.
 func nfsSource(serviceAddress, exportPath string) string {
-	return serviceAddress + ":" + exportPath
+	return serviceAddress + ":/" + filepath.Base(exportPath)
 }
 
 // nfsMounter is the mounting a pNFS client does, which is the driver's own
