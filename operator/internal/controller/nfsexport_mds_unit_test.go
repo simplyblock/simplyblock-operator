@@ -226,3 +226,41 @@ func TestPendingWithoutTheMDSSpecStaysNodeHosted(t *testing.T) {
 		t.Errorf("mdsNodeName = %q, want the labeled node", got.Status.MDSNodeName)
 	}
 }
+
+// nodeWithPodCIDR is a node whose pod network is 10.244.2.0/24.
+func nodeWithPodCIDR() *corev1.Node {
+	n := kubeNode("worker-3", "192.168.10.144")
+	n.Spec.PodCIDR = "10.244.2.0/24"
+	n.Spec.PodCIDRs = []string{"10.244.2.0/24"}
+	return n
+}
+
+// A node reaches the metadata server pod across the pod network, and the CNI
+// rewrites its source to the node's address in its pod CIDR, which is what the
+// guest's nfsd sees. Only the InternalIP in the client set refuses every mount.
+func TestPendingPodHostedAllowsTheNodesPodCIDRs(t *testing.T) {
+	r, cl, _ := newPodHostedReconciler(t, testExport(nil), mdsDriver(), boundMDSPod(readyPod), nodeWithPodCIDR())
+
+	reconcileExport(t, r)
+
+	got := loadExport(t, cl).Status.AllowedClients
+	for _, want := range []string{"192.168.10.144", "10.244.2.0/24"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("allowedClients = %v, want %s in it", got, want)
+		}
+	}
+}
+
+// A node-hosted metadata server sees clients from their InternalIPs, so the
+// pod network stays out of its client set.
+func TestNodeHostedClientSetLeavesThePodNetworkOut(t *testing.T) {
+	node := nodeWithPodCIDR()
+	node.Labels[MDSCapableLabel] = "true"
+	r, cl := newExportReconciler(t, &fakeAssembler{}, testExport(nil), node)
+
+	reconcileExport(t, r)
+
+	if got := loadExport(t, cl).Status.AllowedClients; slices.Contains(got, "10.244.2.0/24") {
+		t.Errorf("allowedClients = %v, want no pod CIDR", got)
+	}
+}

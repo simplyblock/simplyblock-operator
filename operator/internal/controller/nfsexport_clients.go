@@ -25,7 +25,15 @@ import (
 // narrower than everything. Narrowing to actual placement means rewriting the
 // entry as pods move, and an entry rewritten under a live mount is a client
 // that loses its export mid-write.
-func (r *NFSExportReconciler) clusterNodeAddresses(ctx context.Context) ([]string, error) {
+//
+// A pod-hosted metadata server also admits each node's pod CIDR. A node
+// reaches the metadata server pod across the pod network, and the CNI rewrites
+// the source to the node's own address in its pod CIDR (a tunnel or bridge
+// address, which depends on the CNI and on whether the two share a node), so
+// the guest never sees the InternalIP (design-pnfs-mds-vm.md §8.3). The CIDR
+// also admits the node's pods, which is why which client may move data
+// through the metadata server is enforced on the client, not here.
+func (r *NFSExportReconciler) clusterNodeAddresses(ctx context.Context, podHosted bool) ([]string, error) {
 	var nodes corev1.NodeList
 	if err := r.List(ctx, &nodes); err != nil {
 		return nil, fmt.Errorf("listing cluster nodes for the export's client set: %w", err)
@@ -35,8 +43,22 @@ func (r *NFSExportReconciler) clusterNodeAddresses(ctx context.Context) ([]strin
 		if addr := internalAddress(&nodes.Items[i]); addr != "" {
 			clients = append(clients, addr)
 		}
+		if podHosted {
+			clients = append(clients, podCIDRs(&nodes.Items[i])...)
+		}
 	}
 	return clients, nil
+}
+
+// podCIDRs is the node's pod network, both families when it has two.
+func podCIDRs(node *corev1.Node) []string {
+	if len(node.Spec.PodCIDRs) > 0 {
+		return node.Spec.PodCIDRs
+	}
+	if node.Spec.PodCIDR != "" {
+		return []string{node.Spec.PodCIDR}
+	}
+	return nil
 }
 
 // nodeAddress is the bound MDS host's own address: what the export's Service

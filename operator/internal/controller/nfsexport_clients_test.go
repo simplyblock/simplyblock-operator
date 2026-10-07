@@ -50,7 +50,7 @@ func TestClientSetIsClusterNodesAndNothingElse(t *testing.T) {
 	r, _ := newExportReconciler(t, &fakeAssembler{}, readyExport(),
 		kubeNode("vm01", testNodeIP), kubeNode("vm02", "192.168.10.82"))
 
-	got, err := r.clusterNodeAddresses(context.Background())
+	got, err := r.clusterNodeAddresses(context.Background(), false)
 	if err != nil {
 		t.Fatalf("clusterNodeAddresses: %v", err)
 	}

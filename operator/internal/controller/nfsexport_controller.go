@@ -250,7 +250,7 @@ func (r *NFSExportReconciler) bindExport(
 ) (ctrl.Result, error) {
 	// Before the transition: an export bound with no client set is one the
 	// host refuses, and refusing here names the cause.
-	clients, err := r.clusterNodeAddresses(ctx)
+	clients, err := r.clusterNodeAddresses(ctx, host.pod != "")
 	if err != nil {
 		return ctrl.Result{}, err
 	}

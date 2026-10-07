@@ -309,7 +309,7 @@ When `spec.pnfs.mds` is set, `reconcilePending` replaces `selectMDS` with these 
 3. If the pod is not Ready, requeue.
 4. Bind: write `mdsPodName`, `mdsNodeIP` (the pod IP), the Service address, and the client set, then transition to `Assembling`, in the same write-ahead order as today.
 
-The client set is still every cluster node's InternalIP (`clusterNodeAddresses`). Whether that is the address the guest sees is Open Question 3.
+The client set is every cluster node's InternalIP and, for a pod-hosted export, every node's pod CIDR (`clusterNodeAddresses`), because that is the address the guest sees (§8.3).
 
 ### 7.4 Assembly
 
@@ -360,7 +360,9 @@ Only port 2049 is forwarded. NFSv4.1 needs no portmapper, and `rpc.mountd` and `
 
 ### 8.3 Allow-list
 
-The exports entry lists client addresses, as today. DNAT preserves the source address of a connection, so the guest sees whatever address the pod network delivers. That address is the client node's InternalIP only when the cluster's network does not rewrite node-originated traffic to a pod. Several overlays do rewrite it, to a tunnel or bridge address of the sending node (Open Question 3).
+The exports entry lists client addresses. DNAT preserves the source address of a connection, so the guest sees whatever address the pod network delivers, and a node's traffic to a pod is rewritten by the CNI to the node's own address in its pod CIDR: a tunnel address across nodes and a bridge address on the same node, both depending on the CNI. Seen on the lab cluster, every node reached the MDS pod from its pod-network address and never from its InternalIP, so an entry of InternalIPs alone refused every mount with `access denied`.
+
+A pod-hosted export therefore lists each node's pod CIDR (`spec.podCIDRs`) beside its InternalIP. The CIDR covers both of the node's source addresses whichever the CNI uses, and it also admits the node's own pods. Which client moves data through the metadata server is therefore not decided by this entry: the node plugin verifies after mounting that the client holds a layout and refuses a mount whose I/O would route through the MDS. A node-hosted export keeps the InternalIPs only, since its server sees the nodes directly.
 
 ---
 
@@ -452,7 +454,6 @@ The pod-hosted MDS is selected by `spec.pnfs.mds` and is off while that field is
 | #   | Question                                                                                                                                                                                                                                                                                      | Owner             |
 |-----|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------|
 | 1   | **One MDS pod per storage cluster or per Kubernetes cluster.** A storage cluster per pod keeps the guest's reach to one cluster and breaks the "one MDS" simplification for a multi-cluster deployment. The choice sets the StatefulSet's name and the unit of the secret mounted in the pod  | Operator team     |
-| 3   | **The source address the guest sees from clients.** If the cluster's network rewrites node-to-pod traffic, the allow-list of node InternalIPs does not match and the options are the node and pod CIDRs, a per-network address set, or restricting by NetworkPolicy and exporting to the CIDR | Operator team     |
 | 4   | **Reconnecting after a restart with the same host NQN.** Whether the target refuses a connect while its old controller for that NQN is alive, and how long the keep-alive takes to expire it relative to the five-minute assembly deadline                                                    | SPDK/Backend team |
 | 5   | **Whether NFSv4.1-only serving needs `rpc.mountd` and `rpc.statd`.** `design-pnfs-rwx.md` requires them and no code starts them                                                                                                                                                               | Operator team     |
 | 6   | **Warm standby.** A second guest cannot mount the same filesystem, so a standby could only be a guest that has booted and not assembled. Whether the measured boot time (`simplyblock_pnfs_mds_boot_seconds`) justifies it                                                                    | Operator team     |
