@@ -159,6 +159,50 @@ the volumes an operation does not name. Regression id for the rows marked so:
 | U-71 | A subsystem only partly on the target is waited on, not reported moved (2026-10-06-pvops-noop-on-a-split-subsystem)                      | Regression | `TestASubsystemOnlyPartlyOnTheTargetIsWaitedOn`             |
 | U-72 | A pass reading a superseded copy cannot finish the operation through the already-there shortcut (2026-10-06-pvops-noop-bypasses-claim)   | Regression | `TestAStalePassCannotFinishTheOperationThroughTheShortcut`  |
 
+### Pins (design §6)
+
+A pinned volume is moved by its pin and by nothing else. Regression id for the rows
+marked so without one of their own: `2026-10-07-pvops-pinned-volume-moved`.
+
+| #    | Scenario                                                                                                                                              | Type       | Test                                                                      |
+|------|-------------------------------------------------------------------------------------------------------------------------------------------------------|------------|---------------------------------------------------------------------------|
+| U-75 | The named volume is pinned to another node: `Failed` at `Pending`, no lock taken, no migration created                                                | Regression | `TestAPinnedVolumeIsNotMovedToAnotherNode`                                |
+| U-76 | The pin-driven move targets the node the volume is pinned to: it runs                                                                                 | Positive   | `TestAMoveToThePinnedNodeRuns`                                            |
+| U-77 | The pin of a pin-driven move is removed before it starts: `Aborted`, the volume stays                                                                 | Regression | `TestAPinDrivenMoveWhosePinWasRemovedLeavesTheVolume`                     |
+| U-78 | The volume is repinned before the pin-driven move starts: `Aborted`, no migration created                                                             | Regression | `TestAPinDrivenMoveSupersededByARepinLeavesTheVolume`                     |
+| U-79 | A sibling on the subsystem is pinned to another node: `Failed`, the sibling named                                                                     | Regression | `TestAPinnedSiblingBlocksTheSubsystemsMove`                               |
+| U-80 | A volume whose claim carries no pin moves as before                                                                                                   | Positive   | `TestAnUnpinnedVolumeMovesAsBefore`                                       |
+| U-81 | A sibling pinned elsewhere joins the subsystem after `Pending`: `Failed` before the copy, the migration taken back (2026-10-07-pvops-late-member-pin) | Regression | `TestASiblingPinnedElsewhereThatJoinedLateFailsTheOperationBeforeTheCopy` |
+| U-82 | The volume's claim was replaced by another of the same name: its pin does not hold the volume (2026-10-07-pvops-pin-from-reused-claim-name)           | Regression | `TestAPinOnAClaimThatOnlySharesTheNameDoesNotHoldTheVolume`               |
+| U-83 | The pin is removed while the pin-driven move validates: `Aborted`, the migration taken back, no copy                                                  | Negative   | `TestAPinRemovedWhileTheMoveValidatesWithdrawsIt`                         |
+
+### The Cluster Migration Slot (design §6)
+
+The control plane runs one data migration per cluster. Regression id:
+`2026-10-07-pvops-concurrent-migrations`.
+
+| #    | Scenario                                                                                           | Type       | Test                                           |
+|------|----------------------------------------------------------------------------------------------------|------------|------------------------------------------------|
+| U-84 | Two operations of one cluster: one holds the slot and runs, the other stays `Pending` and names it | Regression | `TestOnlyOneOperationPerClusterLeavesPending`  |
+| U-85 | The holder finishes: the slot is released and the next operation takes it                          | Positive   | `TestTheSlotPassesOnWhenItsHolderFinishes`     |
+| U-86 | The slot names an operation that no longer exists: it is broken                                    | Boundary   | `TestASlotHeldByAnOperationThatIsGoneIsBroken` |
+| U-87 | The slot names a terminal operation: it is broken                                                  | Boundary   | `TestASlotHeldByATerminalOperationIsBroken`    |
+| U-88 | An operation queued on its volume's lock gives the slot back                                       | Negative   | `TestAnOperationWaitingOnItsVolumeHoldsNoSlot` |
+
+### The Validation Result (design §5)
+
+A completed validation Job is not a pass; only a `validated` result is. Regression id for
+the rows marked so without one of their own: `2026-10-07-pvops-complete-job-read-as-pass`.
+
+| #    | Scenario                                                                                                       | Type       | Test                                                           |
+|------|----------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------------|
+| U-89 | The Job completed and reported `validated`: the host passes                                                    | Positive   | `TestAValidatedHostPassesTheCheck`                             |
+| U-90 | The Job completed and reported `skipped`: `Failed`, the migration taken back                                   | Regression | `TestACompletedJobThatSkippedTheHostFailsTheOperation`         |
+| U-91 | The Job completed and reported no result: `Failed`                                                             | Regression | `TestACompletedJobWithNoResultFailsTheOperation`               |
+| U-92 | The only result comes from a pod another Job controls: not accepted (2026-10-07-pvops-result-from-a-stale-pod) | Regression | `TestAResultFromAPodOfAnotherJobIsNotAccepted`                 |
+| U-93 | The validate mode writes `validated` or `skipped` as its result                                                | Regression | `TestTheValidateModeReportsWhatItConcluded`                    |
+| U-94 | The Job names one path for the binary's `VMIG_RESULT_PATH` and the container's `terminationMessagePath`        | Boundary   | `TestTheValidationJobReadsTheResultFromWhereTheBinaryWritesIt` |
+
 ---
 
 ## 2. Integration Tests
@@ -293,14 +337,16 @@ question is whether the operation holds legibly or fails.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 74        | 22      | 52          |
+| Unit        | 94        | 42      | 52          |
 | Integration | 14        | 0       | 14          |
 | E2E         | 15        | 0       | 15          |
 | Manual      | 4         | 0       | 4           |
-| **Total**   | **107**   | **22**  | **85**      |
+| **Total**   | **127**   | **42**  | **85**      |
 
 Only the subsystem rows `U-52` to `U-56` and `U-67` to `U-72`, the create refusals
-`U-59` to `U-61` and `U-73` to `U-74`, the namespace-scan rows `U-62` to `U-66`, and `U-13` are covered against the target model. `VolumeMigration` has the most test
+`U-59` to `U-61` and `U-73` to `U-74`, the namespace-scan rows `U-62` to `U-66`, the pin,
+slot, and validation-result rows `U-75` to `U-94`, and `U-13` are covered against the
+target model. `VolumeMigration` has the most test
 files of any kind in this repository, five of them, and none can be cited here:
 they assert the merged phase enum, the `pvName` spelling, and a lifecycle with no
 `Verifying` step.

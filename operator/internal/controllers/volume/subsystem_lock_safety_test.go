@@ -53,7 +53,7 @@ func TestARunningOperationReadingAStaleCopyKeepsItsLocks(t *testing.T) {
 
 	stale := testVolumeObject()
 	stale.ResourceVersion = "1"
-	lock, err := r.acquireLock(context.Background(), ops, stale)
+	lock, err := r.acquireLock(context.Background(), ops, stale, testTargetID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestAnAcquisitionThatFailsHalfwayHoldsNothing(t *testing.T) {
 	if err := r.Get(context.Background(), types.NamespacedName{Name: testPVName}, &pv); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.acquireLock(context.Background(), ops, &pv); err == nil {
+	if _, err := r.acquireLock(context.Background(), ops, &pv, testTargetID); err == nil {
 		t.Fatal("an acquisition whose patch failed reported no error")
 	}
 	for _, name := range []string{testPVName, testSiblingPVName} {

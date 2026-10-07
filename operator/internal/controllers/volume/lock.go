@@ -48,6 +48,11 @@ type lockOutcome struct {
 	acquired bool
 	holder   string
 	volume   string
+
+	// pinned is a pin on a volume of the subsystem that the operation may not
+	// move past. The acquisition reads the pins because it is where the
+	// subsystem's membership is read, and it took nothing.
+	pinned *pinConflict
 }
 
 // acquireLock takes the lock on every volume of the named volume's subsystem
@@ -85,6 +90,7 @@ func (r *PersistentVolumeOpsReconciler) acquireLock(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.PersistentVolumeOps,
 	pv *corev1.PersistentVolume,
+	targetUUID string,
 ) (lockOutcome, error) {
 	if ops.Status.Step.State != "" {
 		held, err := r.holdsNamedVolume(ctx, ops, pv)
@@ -96,6 +102,15 @@ func (r *PersistentVolumeOpsReconciler) acquireLock(
 	volumes, err := r.subsystemVolumes(ctx, pv)
 	if err != nil {
 		return lockOutcome{}, err
+	}
+
+	// A sibling's pin is checked before anything is taken, and only before the
+	// operation starts: one admitted is moving the subsystem already.
+	if ops.Status.Step.State == "" {
+		conflict, err := r.pinConflictOf(ctx, ops, targetUUID, volumes)
+		if err != nil || conflict != nil {
+			return lockOutcome{pinned: conflict}, err
+		}
 	}
 
 	for _, volume := range volumes {
@@ -274,6 +289,8 @@ func (r *PersistentVolumeOpsReconciler) lockIsStale(ctx context.Context, held st
 // conflict is not a release: the volume is read again, its ownership checked
 // again, and the patch retried.
 //
+// The cluster's migration slot is released with them (slot.go).
+//
 // A volume that is gone is not an error. It took its lock with it, which is the
 // state being asked for, and this runs on the deletion path where a failure
 // would hold the operation open forever.
@@ -305,5 +322,8 @@ func (r *PersistentVolumeOpsReconciler) releaseLock(
 			return fmt.Errorf("release the lock on volume %s: %w", name, err)
 		}
 	}
-	return nil
+	// The cluster's migration slot goes with the volumes: every path that gives
+	// the volumes back is one where the operation is not, or is no longer,
+	// migrating.
+	return r.releaseSlot(ctx, ops)
 }
