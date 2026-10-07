@@ -18,6 +18,7 @@ import (
 
 	"slices"
 
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -26,12 +27,17 @@ import (
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/simplyblock/atlas/link"
 	exportpkg "github.com/simplyblock/atlas/nfsexport"
+	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
@@ -75,15 +81,15 @@ const (
 type ExportAssembler interface {
 	// CreateExport attaches, formats, mounts, and publishes on the host.
 	// Idempotent: a reconcile that died mid-assembly calls it again.
-	CreateExport(ctx context.Context, host link.PeerID, export *simplyblockv1alpha2.NFSExport) error
+	CreateExport(ctx context.Context, host ExportHost, export *simplyblockv1alpha2.NFSExport) error
 	// DeleteExport tears it down in reverse. Idempotent, and an already-absent
 	// export is success: the finalizer path has to converge.
-	DeleteExport(ctx context.Context, host link.PeerID, export *simplyblockv1alpha2.NFSExport) error
+	DeleteExport(ctx context.Context, host ExportHost, export *simplyblockv1alpha2.NFSExport) error
 	// CheckExport reports the export unhealthy as an error naming why, or nil
 	// when the host says it is actually being served. Detection only: nothing
 	// here acts on a failure yet, because there is nowhere to move an export
 	// to until §13's failover lands.
-	CheckExport(ctx context.Context, host link.PeerID, export *simplyblockv1alpha2.NFSExport) error
+	CheckExport(ctx context.Context, host ExportHost, export *simplyblockv1alpha2.NFSExport) error
 	// HasSession separates "not connected right now," which is a requeue, from
 	// a call that failed, which is not.
 	HasSession(host link.PeerID) bool
@@ -309,7 +315,7 @@ func (r *NFSExportReconciler) reconcileAssembling(
 		return ctrl.Result{RequeueAfter: nfsExportNoSessionRequeue}, nil
 	}
 
-	if err := r.Assembler.CreateExport(ctx, host, export); err != nil {
+	if err := r.Assembler.CreateExport(ctx, r.exportHost(ctx, export, host), export); err != nil {
 		// Assembly is idempotent and will be retried with backoff.
 		return ctrl.Result{}, fmt.Errorf("assembling export on %s: %w", host, err)
 	}
@@ -318,10 +324,12 @@ func (r *NFSExportReconciler) reconcileAssembling(
 	if err := machine.TransitionTo(ctx, phaseReady); err != nil {
 		return ctrl.Result{}, fmt.Errorf("transition to Ready: %w", err)
 	}
+	assembledBy := r.assemblingPodUID(ctx, export)
 	if err := r.writeStatus(ctx, export, func(s *simplyblockv1alpha2.NFSExportStatus) {
 		s.Phase = phaseReady
 		s.Message = ""
 		s.PhaseDeadline = nil
+		s.AssembledBy = assembledBy
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -340,6 +348,10 @@ func (r *NFSExportReconciler) reconcileReady(
 	ctx context.Context,
 	export *simplyblockv1alpha2.NFSExport,
 ) (ctrl.Result, error) {
+	if result, handled, err := r.resyncPodHosted(ctx, export); handled || err != nil {
+		return result, err
+	}
+
 	host := mdsHost(export)
 
 	if export.Status.ObservedGeneration != export.Generation {
@@ -348,7 +360,7 @@ func (r *NFSExportReconciler) reconcileReady(
 				fmt.Sprintf("waiting for %s to become reachable to grow the export", host))
 			return ctrl.Result{RequeueAfter: nfsExportNoSessionRequeue}, nil
 		}
-		if err := r.Assembler.CreateExport(ctx, host, export); err != nil {
+		if err := r.Assembler.CreateExport(ctx, r.exportHost(ctx, export, host), export); err != nil {
 			return ctrl.Result{}, fmt.Errorf("re-assembling export on %s: %w", host, err)
 		}
 		if err := r.writeStatus(ctx, export, func(s *simplyblockv1alpha2.NFSExportStatus) {}); err != nil {
@@ -377,7 +389,7 @@ func (r *NFSExportReconciler) reconcileHealth(
 	if host.Zero() || r.Assembler == nil || !r.Assembler.HasSession(host) {
 		return ctrl.Result{RequeueAfter: nfsExportNoSessionRequeue}, nil
 	}
-	if err := r.Assembler.CheckExport(ctx, host, export); err != nil {
+	if err := r.Assembler.CheckExport(ctx, r.exportHost(ctx, export, host), export); err != nil {
 		r.event(export, corev1.EventTypeWarning, "MDSUnhealthy",
 			fmt.Sprintf("export on %s failed its health check: %v", host, err))
 		return ctrl.Result{RequeueAfter: nfsExportUnhealthyRequeue}, nil
@@ -413,7 +425,7 @@ func (r *NFSExportReconciler) reconcileDelete(
 				fmt.Sprintf("waiting for %s to become reachable to tear the export down", host))
 			return ctrl.Result{RequeueAfter: nfsExportNoSessionRequeue}, nil
 		}
-		switch err := r.Assembler.DeleteExport(ctx, host, export); {
+		switch err := r.Assembler.DeleteExport(ctx, r.exportHost(ctx, export, host), export); {
 		case err == nil:
 		case errors.Is(err, exportpkg.ErrInvalidSpec):
 			// The record cannot describe an export, so it never became one and
@@ -441,6 +453,40 @@ func (r *NFSExportReconciler) releaseFinalizer(ctx context.Context, export *simp
 		controllerutil.RemoveFinalizer(&fresh, simplyblockv1alpha2.NFSExportFinalizer)
 		return r.Update(ctx, &fresh)
 	})
+}
+
+// ExportHost is where an export call goes, and the NVMe host identity the host
+// attaches the namespace as when the operator decides it.
+type ExportHost struct {
+	Peer link.PeerID
+	// HostNQN is set for a pod-hosted export: the guest is one host across
+	// pod restarts, which it cannot know itself (design-pnfs-mds-vm.md §6.5).
+	// Empty lets a node plugin derive its own from its node.
+	HostNQN string
+}
+
+// exportHost adds the host identity to the peer. A pod-hosted export attaches
+// as its StatefulSet, whose UID survives the pod and changes only when the
+// StatefulSet is recreated, which is when an old authorization should not
+// carry over. A pod that cannot be read leaves the identity empty: the call
+// then fails at the control plane with its own message, or, for a teardown,
+// needs none.
+func (r *NFSExportReconciler) exportHost(
+	ctx context.Context, export *simplyblockv1alpha2.NFSExport, peer link.PeerID,
+) ExportHost {
+	host := ExportHost{Peer: peer}
+	name := export.Status.MDSPodName
+	if name == "" {
+		return host
+	}
+	var pod corev1.Pod
+	if err := r.Get(ctx, client.ObjectKey{Namespace: r.OperatorNamespace, Name: name}, &pod); err != nil {
+		return host
+	}
+	if owner := metav1.GetControllerOf(&pod); owner != nil && owner.Kind == "StatefulSet" {
+		host.HostNQN = nqn.Host(string(owner.UID))
+	}
+	return host
 }
 
 // mdsHost is the peer serving the export: its metadata server pod when the
@@ -676,6 +722,20 @@ func (r *NFSExportReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&simplyblockv1alpha2.NFSExport{}).
 		Owns(&corev1.Service{}).
 		Owns(&discoveryv1.EndpointSlice{}).
+		// A metadata server pod that restarts or turns Ready wakes the exports
+		// bound to it: the ones waiting to bind, and the ones to resync.
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(
+			func(ctx context.Context, obj client.Object) []reconcile.Request {
+				pod, ok := obj.(*corev1.Pod)
+				if !ok {
+					return nil
+				}
+				return r.exportsBoundToPod(ctx, pod)
+			}),
+			builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
+				_, ok := obj.GetLabels()[driver.MDSClusterLabel]
+				return ok
+			}))).
 		Named("nfsexport").
 		Complete(r)
 }

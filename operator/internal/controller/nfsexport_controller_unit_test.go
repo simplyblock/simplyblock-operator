@@ -25,6 +25,8 @@ import (
 
 	"github.com/simplyblock/atlas/link"
 	exportpkg "github.com/simplyblock/atlas/nfsexport"
+	"github.com/simplyblock/atlas/nqn"
+	"github.com/simplyblock/atlas/ptr"
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -50,6 +52,7 @@ const (
 	// the operator's namespace.
 	testMDSPod     = "simplyblock-pnfs-mds-0f2ac1d3-0"
 	testMDSPodIP   = "10.244.3.17"
+	testMDSPodUID  = "mds-uid-1"
 	testOperatorNS = "simplyblock"
 )
 
@@ -59,6 +62,7 @@ type fakeAssembler struct {
 	created    []link.PeerID
 	deleted    []link.PeerID
 	checked    []link.PeerID
+	hostNQNs   []string
 	createErr  error
 	deleteErr  error
 	checkErr   error
@@ -66,25 +70,28 @@ type fakeAssembler struct {
 }
 
 func (f *fakeAssembler) CreateExport(
-	_ context.Context, host link.PeerID, _ *simplyblockv1alpha2.NFSExport,
+	_ context.Context, host ExportHost, _ *simplyblockv1alpha2.NFSExport,
 ) error {
 	if f.createErr != nil {
 		return f.createErr
 	}
-	f.created = append(f.created, host)
+	f.created = append(f.created, host.Peer)
+	f.hostNQNs = append(f.hostNQNs, host.HostNQN)
 	return nil
 }
 
-func (f *fakeAssembler) DeleteExport(_ context.Context, host link.PeerID, _ *simplyblockv1alpha2.NFSExport) error {
+func (f *fakeAssembler) DeleteExport(_ context.Context, host ExportHost, _ *simplyblockv1alpha2.NFSExport) error {
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}
-	f.deleted = append(f.deleted, host)
+	f.deleted = append(f.deleted, host.Peer)
+	f.hostNQNs = append(f.hostNQNs, host.HostNQN)
 	return nil
 }
 
-func (f *fakeAssembler) CheckExport(_ context.Context, host link.PeerID, _ *simplyblockv1alpha2.NFSExport) error {
-	f.checked = append(f.checked, host)
+func (f *fakeAssembler) CheckExport(_ context.Context, host ExportHost, _ *simplyblockv1alpha2.NFSExport) error {
+	f.checked = append(f.checked, host.Peer)
+	f.hostNQNs = append(f.hostNQNs, host.HostNQN)
 	return f.checkErr
 }
 
@@ -748,11 +755,22 @@ func podHosted(phase simplyblockv1alpha2.NFSExportPhase) func(*simplyblockv1alph
 		e.Status.MDSPodName = testMDSPod
 		e.Status.MDSNodeIP = testMDSPodIP
 		e.Status.AllowedClients = []string{testNodeIP}
+		e.Status.AssembledBy = testMDSPodUID
 	}
 }
 
+// testMDSStatefulSetUID is the StatefulSet owning the metadata server pod,
+// whose UID is the guest's NVMe host identity.
+const testMDSStatefulSetUID = "5e1d7a0c-0f3b-4c1e-9a77-2b8d1f6e4c10"
+
 func mdsPod() *corev1.Pod {
-	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: testMDSPod, Namespace: testOperatorNS, UID: "mds-uid-1"}}
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: testMDSPod, Namespace: testOperatorNS, UID: testMDSPodUID,
+		OwnerReferences: []metav1.OwnerReference{{
+			APIVersion: "apps/v1", Kind: "StatefulSet", Name: "simplyblock-pnfs-mds-0f2ac1d3",
+			UID: testMDSStatefulSetUID, Controller: ptr.To(true),
+		}},
+	}}
 }
 
 // A pod-hosted export is assembled by the guest, reached through the
@@ -847,5 +865,39 @@ func TestPodHostedDeleteWaitsForAPodThatStillExists(t *testing.T) {
 	}
 	if got := loadExport(t, cl); len(got.Finalizers) == 0 {
 		t.Error("finalizer released while the metadata server pod still exists")
+	}
+}
+
+// The guest attaches the namespace as the StatefulSet's identity, which holds
+// across pod restarts and is what the control plane authorizes and the
+// persistent reservation is keyed by (design §6.5). The pod cannot learn it
+// itself, so the operator sends it with every call.
+func TestPodHostedCallsCarryTheStatefulSetsHostNQN(t *testing.T) {
+	asm := &fakeAssembler{}
+	r, _ := newExportReconciler(t, asm, testExport(podHosted(simplyblockv1alpha2.NFSExportPhaseAssembling)), mdsPod())
+
+	reconcileExport(t, r)
+
+	want := nqn.Host(testMDSStatefulSetUID)
+	if len(asm.hostNQNs) != 1 || asm.hostNQNs[0] != want {
+		t.Errorf("host NQNs = %v, want [%s]", asm.hostNQNs, want)
+	}
+}
+
+// A node-hosted export leaves the identity to the node plugin, which derives
+// it from its own node.
+func TestNodeHostedCallsLeaveTheHostNQNToTheNode(t *testing.T) {
+	asm := &fakeAssembler{}
+	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
+		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseAssembling
+		e.Status.MDSNodeName = testMDSHost
+		e.Status.AllowedClients = []string{testNodeIP}
+	})
+	r, _ := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
+
+	reconcileExport(t, r)
+
+	if len(asm.hostNQNs) != 1 || asm.hostNQNs[0] != "" {
+		t.Errorf("host NQNs = %v, want one empty", asm.hostNQNs)
 	}
 }

@@ -264,3 +264,16 @@ func TestMDSObjectsNeedTheMDSSpec(t *testing.T) {
 		t.Error("MDSObjects rendered a metadata server for a driver without spec.pnfs.mds")
 	}
 }
+
+// The runner dials the operator the way both plugins do, so the guest's
+// export calls reach it over the same link.
+func TestMDSRunnerDialsTheOperatorLikeThePlugins(t *testing.T) {
+	d := withMDS(testDriver("simplyblock"))
+	_, sts := mdsObjects(t, d)
+	c := runnerContainer(t, sts)
+	for _, want := range linkArgs(d) {
+		if !slices.Contains(c.Args, want) {
+			t.Errorf("args %v lack %q", c.Args, want)
+		}
+	}
+}

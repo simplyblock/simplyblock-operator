@@ -24,14 +24,16 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // KVMCapableLabel marks a node whose /dev/kvm the metadata server pod can
-// open. The pod is only scheduled onto nodes carrying it.
-const KVMCapableLabel = "storage.simplyblock.io/kvm-capable"
+// open, published by the CSI node plugin's probe. The pod is only scheduled
+// onto nodes carrying it.
+const KVMCapableLabel = kube.LabelKVMCapable
 
 // KVMCapableValue is the value KVMCapableLabel carries on a capable node.
 const KVMCapableValue = "true"
@@ -180,6 +182,7 @@ func mdsRunnerContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string) 
 		Image:           image,
 		ImagePullPolicy: pullPolicy(d),
 		SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true)},
+		Args:            linkArgs(d),
 		Env: slices.Concat(linkEnv(), []corev1.EnvVar{
 			resourceEnv("MDS_CPU_LIMIT_MILLI", "limits.cpu", "1m"),
 			resourceEnv("MDS_MEMORY_LIMIT_MIB", "limits.memory", "1Mi"),

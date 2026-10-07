@@ -207,7 +207,7 @@ A RWO PVC of `stateSize` is attached to QEMU as a raw block device, so the guest
 
 The pod is privileged. The container needs `/dev/kvm` and `/dev/net/tun`, and without a device plugin the only way to open them is the host device nodes through a privileged container. The pod has no `hostNetwork` and no `hostPID`, and it mounts no host directory other than the two device nodes.
 
-Scheduling uses `storage.simplyblock.io/kvm-capable=true`, a node label published by the csi-node plugin from a probe that checks `/dev/kvm` can be opened. It follows the VDO probe: it runs once at plugin start, and a hand-set label (one without the managing annotation) is left alone, so a golden-image node can assert capability. The pod's `nodeSelector` is that label merged with `spec.pnfs.mds.nodeSelector`, and its tolerations come from `spec.pnfs.mds.tolerations`.
+Scheduling uses `storage.simplyblock.io/kvm-capable=true`, a node label published by the csi-node plugin from a probe that opens `/dev/kvm` for reading and writing (`AdvertiseKVMCapability`). It follows the VDO probe and shares its publishing step: it runs once at plugin start, stamps its value with `storage.simplyblock.io/kvm-capable-managed-by: auto-detect`, and leaves a hand-set label (one without that annotation) alone, so a golden-image node can assert capability. The pod's `nodeSelector` is that label merged with `spec.pnfs.mds.nodeSelector`, and its tolerations come from `spec.pnfs.mds.tolerations`.
 
 A pod that cannot schedule leaves its exports in `Pending`, and the reconciler reads the pod's `PodScheduled` condition to emit the `NoKVMCapableNode` event rather than waiting silently.
 
@@ -224,7 +224,7 @@ Two images, each built for `linux/amd64` and `linux/arm64`:
 | `spdkcsi:pnfsos`         | pnfs-os (vela-os, buildroot), `prototype/boards/pnfs-common` | `/vmlinuz` and `/disk.qcow2`, from `scratch`. Never run                                   |
 | `spdkcsi:pnfs-mds-<tag>` | `csi-driver/deploy/image/Dockerfile.mds`                     | the target's QEMU, the ARM64 UEFI firmware (`aavmf`), iptables, the guest, and the runner |
 
-The guest image carries the kernel built with the configuration fragment of §6.1 and the root filesystem of §6.2, and is published by the pnfs-os workflow as `pnfsos-amd64`, `pnfsos-arm64`, and the multi-architecture `pnfsos`. The MDS image copies both files out of it (`/mds/kernel/vmlinuz`, `/mds/disk.qcow2`), so a guest change rebuilds no Go and a runner change rebuilds no buildroot. It is tagged and released with the operator and CSI images, and `spec.pnfs.mds.image` defaults to the operator's own registry and tag in the `spdkcsi` repository with the tag prefixed `pnfs-mds-`. Both binaries (the runner and the guest agent) are built from the `csi-driver` Go module, which is where the assembler package lives, as `cmd/mds-runner` and `cmd/mds-agent`.
+The guest image carries the kernel built with the configuration fragment of §6.1 and the root filesystem of §6.2, and is published by the pnfs-os workflow as `pnfsos-amd64`, `pnfsos-arm64`, and the multi-architecture `pnfsos`. The MDS image copies the kernel out of it (`/mds/kernel/vmlinuz`) and writes `mds-agent` into the root filesystem (`/usr/bin/mds-agent`) before copying the disk (`/mds/disk.qcow2`), using `debugfs` on the ext4 image, which needs no mount and no privilege. The agent is therefore always the runner's version, a guest change rebuilds no Go, and a runner change rebuilds no buildroot. It is tagged and released with the operator and CSI images, and `spec.pnfs.mds.image` defaults to the operator's own registry and tag in the `spdkcsi` repository with the tag prefixed `pnfs-mds-`. Both binaries (the runner and the guest agent) are built from the `csi-driver` Go module, which is where the assembler package lives, as `cmd/mds-runner` and `cmd/mds-agent`.
 
 ---
 
@@ -266,19 +266,21 @@ The root filesystem is read-only and carries `nfs-utils` (`rpc.nfsd`, `exportfs`
 
 The guest agent serves the `ExportService` (`CreateExport`, `DeleteExport`, `CheckExport`) with `nfsexport.NewAssembler` and `WithNFSD`, the same construction `csi-driver/internal/driver/driver.go` registers on the node plugin's link agent. On a guest, `EnsureNFSD` needs no host cooperation: the control filesystem, the threads, `nfsdcld`, and `rpc.idmapd` all run in the guest's own namespaces, and the loopback self-check mounts the guest's own nfsd.
 
-The agent adds two things the node plugin does not have: a health call (the nfsd threads are running, the state disk is mounted, and the agent can reach the runner) and a connection source that takes its input from the request (§6.4).
+The agent adds two things the node plugin does not have: a health call and a connection source that takes its input from the request (§6.4). It serves both the export service and gRPC's standard health service on TCP 7070 of the guest's address, which only the runner reaches across the bridge (§8.2). The health is `SERVING` while the state disk is mounted at `/var/lib/nfs` and nfsd has threads running, and `NOT_SERVING` from start until the first check passes, so a booting guest is never reported ready. The agent holds no credential and derives no host identity: both arrive with each call.
 
 ### 6.4 Connection details
 
 The node plugin's assembler resolves a volume's NVMe-oF connections by calling the control plane (`csi-driver/internal/nfsexport/attach.go`). The guest does not do this. It boots from a shared image that holds no credential, so the cluster secret and the control plane's TLS material stay with the pod.
 
-The runner resolves them instead. For each `CreateExport` it calls the control plane with the guest's host NQN, using a client built through `controlplane.NewConnection` so that the TLS settings (`SB_TLS_CONNECT`, `SB_TLS_CERTIFICATE_AUTHORITY`, and the client certificate) apply, and passes the result on with the spec. The assembler's connection step becomes an interface with two implementations: the control-plane one the node plugin keeps, and one that reads the connections from the request. `ExportSpec` in `atlas-lib/nfsexport/nfsexportrpc/nfsexportv1/export.proto` gains the resolved connections and the host NQN.
+The runner resolves them instead, with the same control-plane client the node plugin uses (`nfsexport.PublishedConnection`), so the TLS settings (`SB_TLS_CONNECT`, `SB_TLS_CERTIFICATE_AUTHORITY`, and the client certificate) apply. Its relay (`csi-driver/internal/mds/relay`) resolves the connection for the host NQN of §6.5 and passes it on with the spec. `CreateExport` requires the connection, because a guest without one reports a missing device, which names the wrong problem. `DeleteExport` carries one when the control plane answers and goes ahead without it otherwise, since the guest then releases the namespace its stack record names and a teardown has to work without the control plane. `CheckExport` attaches nothing and carries none. A connection arriving with the operator's call is dropped, so DHCHAP secrets reach the guest only from the pod's own resolution.
+
+`ExportSpec` in `atlas-lib/nfsexport/nfsexportrpc/nfsexportv1/export.proto` carries the two as `host_nqn` and `connection`, mirroring `lvol.Connection`, with the two connect timeouts optional so that zero and unset stay apart. The assembler's planner takes a supplied connection before asking the control plane or reading the stack record.
 
 The runner mounts the same cluster secret the CSI driver uses, so a storage cluster the driver can reach is one the MDS can reach.
 
 ### 6.5 Host NQN
 
-The guest's host NQN is `nqn.Host(<StatefulSet UID>)`. The StatefulSet's UID is stable across pod restarts and changes only when the StatefulSet is recreated, which is when the old authorization should not carry over. A stable NQN gives the guest the same persistent-reservation key after every restart, which is what `attach.go` requires of a host: one key per host.
+The guest's host NQN is `nqn.Host(<StatefulSet UID>)`. The operator computes it from the controller owner reference of the MDS pod and sends it with every call as `host_nqn`, since the pod's ServiceAccount has no permission to read its StatefulSet. The StatefulSet's UID is stable across pod restarts and changes only when the StatefulSet is recreated, which is when the old authorization should not carry over. A stable NQN gives the guest the same persistent-reservation key after every restart, which is what `attach.go` requires of a host: one key per host.
 
 ### 6.6 Boot sequence
 
@@ -317,7 +319,7 @@ The client set is still every cluster node's InternalIP (`clusterNodeAddresses`)
 
 A guest that has rebooted has lost its mounts, its exports table, and its nfsd threads, and the state disk holds only the client-recovery database. The reconciler detects this without polling the guest. `reconcileReady` compares `status.assembledBy` with the UID of the MDS pod currently bound. A mismatch means the exports on this pod were assembled by a previous boot, and `CreateExport` is called again (the call is idempotent) and `assembledBy` rewritten. The StatefulSet's pod is watched, and a pod event enqueues every export bound to that storage cluster.
 
-The same pass repoints the export's EndpointSlice when the pod IP changed (§8.1), and does so before reassembly so a client's retry reaches the new guest.
+The same pass repoints the export's EndpointSlice when the pod IP changed (§8.1), and does so before reassembly so a client's retry reaches the new guest. A pod that is gone, or whose guest has not linked yet, is waited for, and `assembledBy` is rewritten only after the reassembly succeeded. The pod watch matches pods carrying `storage.simplyblock.io/cluster-id` and maps them to the exports whose `mdsPodName` names them, which also wakes an export waiting in `Pending` for its pod to turn Ready.
 
 ### 7.6 Health
 
@@ -354,7 +356,7 @@ The per-export Service and EndpointSlice are unchanged in shape. The EndpointSli
 
 The runner creates a bridge with a tap device for the guest and gives the guest a link-local address on it: the bridge is `169.254.100.1/30` and the guest `169.254.100.2`, a subnet that cannot collide with a pod, Service, or node CIDR and stays clear of the cloud metadata address `169.254.169.254`. The pod's own interface is the one carrying the default route, whatever the CNI names it. Inbound traffic to the pod's port 2049 is DNATed to the guest, so nfsd is reachable at the pod IP, and the guest agent's gRPC port is reachable only from the runner on the bridge. Outbound traffic from the guest (NVMe/TCP to the storage cluster) is masqueraded behind the pod IP. The masquerade rule matches only the guest's source address leaving through the pod's interface, so replies to DNATed clients keep their addresses. The runner enables IPv4 forwarding in the pod's network namespace and installs each rule only when it is absent, since a restarted runner container finds the previous one's bridge, tap, and rules in the namespace the pod kept. The technique is `neonvm-runner/cmd/net.go`, without dnsmasq, because the guest's address is static.
 
-Only port 2049 is forwarded. NFSv4.1 needs no portmapper, and `rpc.mountd` and `rpc.statd` serve only earlier protocol versions (Open Question 5).
+Only port 2049 is forwarded. NFSv4.1 needs no portmapper, and `rpc.mountd` and `rpc.statd` serve only earlier protocol versions (Open Question 5). The guest agent's port, TCP 7070, is not forwarded and is reached only by the runner.
 
 ### 8.3 Allow-list
 

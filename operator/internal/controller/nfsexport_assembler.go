@@ -49,14 +49,14 @@ func (a *linkAssembler) HasSession(host link.PeerID) bool {
 // CreateExport assembles the export on the bound host.
 func (a *linkAssembler) CreateExport(
 	ctx context.Context,
-	host link.PeerID,
+	host ExportHost,
 	nfsExport *simplyblockv1alpha2.NFSExport,
 ) error {
-	conn, err := a.conn(host)
+	conn, err := a.conn(host.Peer)
 	if err != nil {
 		return err
 	}
-	spec, err := specFor(nfsExport)
+	spec, err := specFor(nfsExport, host.HostNQN)
 	if err != nil {
 		return err
 	}
@@ -66,14 +66,14 @@ func (a *linkAssembler) CreateExport(
 // DeleteExport tears the export down on the bound host.
 func (a *linkAssembler) DeleteExport(
 	ctx context.Context,
-	host link.PeerID,
+	host ExportHost,
 	nfsExport *simplyblockv1alpha2.NFSExport,
 ) error {
-	conn, err := a.conn(host)
+	conn, err := a.conn(host.Peer)
 	if err != nil {
 		return err
 	}
-	spec, err := specFor(nfsExport)
+	spec, err := specFor(nfsExport, host.HostNQN)
 	if err != nil {
 		return err
 	}
@@ -84,14 +84,14 @@ func (a *linkAssembler) DeleteExport(
 // served.
 func (a *linkAssembler) CheckExport(
 	ctx context.Context,
-	host link.PeerID,
+	host ExportHost,
 	nfsExport *simplyblockv1alpha2.NFSExport,
 ) error {
-	conn, err := a.conn(host)
+	conn, err := a.conn(host.Peer)
 	if err != nil {
 		return err
 	}
-	spec, err := specFor(nfsExport)
+	spec, err := specFor(nfsExport, host.HostNQN)
 	if err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func (a *linkAssembler) conn(host link.PeerID) (grpc.ClientConnInterface, error)
 // specFor derives the host-side spec from the record. Everything it needs is
 // on the spec, so nothing reaches the control plane and nothing waits on a
 // status field provisioning might not have written yet.
-func specFor(nfsExport *simplyblockv1alpha2.NFSExport) (export.Spec, error) {
+func specFor(nfsExport *simplyblockv1alpha2.NFSExport, hostNQN string) (export.Spec, error) {
 	clients := nfsExport.Status.AllowedClients
 	if len(clients) == 0 {
 		// An export with no clients publishes to nobody: a wait, not a reason
@@ -144,5 +144,6 @@ func specFor(nfsExport *simplyblockv1alpha2.NFSExport) (export.Spec, error) {
 		FSID:       handle.VolumeID,
 		Encrypted:  nfsExport.Spec.Encrypted,
 		Clients:    clients,
+		HostNQN:    hostNQN,
 	}, nil
 }
