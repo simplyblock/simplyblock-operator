@@ -41,6 +41,45 @@ entries:
     - https://install.simplyblock.io/helm/26.4.0-beta1/simplyblock-operator-26.4.0-beta1.tgz
     version: 26.4.0-beta1
   - apiVersion: v2
+    appVersion: 26.3.2
+    created: "2026-10-07T09:46:01.43626+02:00"
+    dependencies:
+    - alias: mongodb-kubernetes
+      condition: controlplane.observability.enabled
+      name: mongodb-kubernetes
+      repository: https://mongodb.github.io/helm-charts
+      version: 1.4.0
+    - condition: controlplane.observability.enabled
+      name: opensearch
+      repository: https://opensearch-project.github.io/helm-charts
+      version: 2.9.0
+    - condition: operator.enabled
+      name: prometheus
+      repository: https://prometheus-community.github.io/helm-charts
+      version: 25.18.0
+    - alias: reloader
+      condition: operator.enabled
+      name: reloader
+      repository: https://stakater.github.io/stakater-charts
+      version: 1.3.0
+    description: Simplyblock Operator for Kubernetes
+    digest: fee1b70d939cd4e2600843762bf6be223364fe87873f3438cc4f2d23d8b3ecf3
+    home: https://github.com/simplyblock/helm-charts
+    keywords:
+    - spdk
+    - csi
+    - spdk-csi
+    - simplyblock
+    - controller
+    - mgmt
+    - sbcli
+    name: simplyblock-operator
+    sources:
+    - https://github.com/simplyblock/helm-charts/tree/master/charts/simplyblock-operator
+    urls:
+    - https://install.simplyblock.io/helm/26.3.2/simplyblock-operator-26.3.2.tgz
+    version: 26.3.2
+  - apiVersion: v2
     appVersion: latest
     created: "2026-10-06T16:02:34.611053+02:00"
     dependencies:
@@ -430,4 +469,4 @@ entries:
     urls:
     - https://simplyblock.github.io/helm-charts/charts/26.2.5/simplyblock-operator-26.2.5.tgz
     version: 26.2.5
-generated: "2026-10-06T16:06:28.005145+02:00"
+generated: "2026-10-07T09:46:01.420911+02:00"
