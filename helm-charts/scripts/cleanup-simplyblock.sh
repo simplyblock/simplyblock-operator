@@ -159,7 +159,9 @@ fi
 # ---------------------------------------------------------------------------
 section "Removing CRs and finalizers"
 
-CRDS=$($KUBECTL get crd -o name 2>/dev/null | grep "$CRD_GROUP" | sed 's|customresourcedefinition.apiextensions.k8s.io/||')
+# grep exits 1 when no CRD matches, which pipefail turns into the end of the script.
+# A cluster with none is the case a rerun starts from, so it must carry on.
+CRDS=$($KUBECTL get crd -o name 2>/dev/null | grep "$CRD_GROUP" | sed 's|customresourcedefinition.apiextensions.k8s.io/||' || true)
 
 for crd in $CRDS; do
     resources=$($KUBECTL get "$crd" -n "$NAMESPACE" --ignore-not-found -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)
@@ -352,6 +354,40 @@ for deploy in $deployments; do
 done
 
 # ---------------------------------------------------------------------------
+# 4c. Remove the StorageClasses the operator wrote for this namespace
+# ---------------------------------------------------------------------------
+section "Removing StorageClasses written by the operator for '$NAMESPACE'"
+
+# The operator labels every class it writes and deletes them when their pool goes.
+# Step 2 wipes finalizers, which skips that, so the class stays behind with the old
+# cluster's cluster_id. A StorageClass cannot change its parameters, so a cluster
+# recreated under the same name then provisions nothing. The selector asks for the
+# operator's marker and this namespace, so a class somebody wrote, or another
+# namespace's, is not matched.
+operator_classes=$($KUBECTL get storageclass --ignore-not-found \
+    -l "storage.simplyblock.io/managed-by=storagecluster,storage.simplyblock.io/namespace=${NAMESPACE}" \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+for class in $operator_classes; do
+    info "Deleting StorageClass $class..."
+    if ! delete_error=$($KUBECTL delete storageclass "$class" --ignore-not-found --timeout=30s 2>&1); then
+        warn "  Could not delete StorageClass $class: $delete_error"
+    fi
+done
+
+# A class of the same driver that the operator did not write is left in place, and
+# named, since it may point at a cluster that no longer exists.
+authored_classes=$($KUBECTL get storageclass --ignore-not-found \
+    -o jsonpath="{range .items[?(@.provisioner==\"${CSI_DRIVER}\")]}{.metadata.name}{\" \"}{.metadata.labels.storage\\.simplyblock\\.io/managed-by}{\"\n\"}{end}" \
+    2>/dev/null | awk 'NF == 1 { print $1 }' || true)
+if [[ -n "$authored_classes" ]]; then
+    warn "StorageClasses of driver '$CSI_DRIVER' that the operator did not write were left in place:"
+    for class in $authored_classes; do
+        warn "  $class"
+    done
+    warn "Delete the ones that point at a removed cluster: $KUBECTL delete storageclass <name>"
+fi
+
+# ---------------------------------------------------------------------------
 # 5. Remove CRDs
 # ---------------------------------------------------------------------------
 section "Removing CRDs"
@@ -383,7 +419,7 @@ done
 
 # Confirm CRDs removed
 section "Confirming CRD removal"
-remaining_crds=$($KUBECTL get crd -o name 2>/dev/null | grep "$CRD_GROUP" | wc -l | tr -d ' ')
+remaining_crds=$($KUBECTL get crd -o name 2>/dev/null | grep "$CRD_GROUP" | wc -l | tr -d ' ' || true)
 if [[ "$remaining_crds" -eq 0 ]]; then
     info "All CRDs removed successfully."
 elif [[ "${#blocked_crds[@]}" -gt 0 ]]; then
