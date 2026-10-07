@@ -53,7 +53,7 @@ func serveDiskImage(path string) (*localFactory, error) {
 	}
 	schematic := "local-" + sum[:16]
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := listenForImage(sum)
 	if err != nil {
 		return nil, fmt.Errorf("listen for the local image factory: %w", err)
 	}
@@ -74,6 +74,43 @@ func serveDiskImage(path string) (*localFactory, error) {
 	}
 	go func() { _ = f.server.Serve(listener) }()
 	return f, nil
+}
+
+// listenForImage listens on a loopback port derived from the image digest.
+//
+// talosctl names its cache entry after the whole URL, port included, and
+// keeps it as root. A port that changed every run left another copy of the
+// same image behind each time, about a hundred megabytes that nothing reads
+// again and the harness cannot delete. With the port fixed by the image, a
+// second run of the same image finds its download. A busy port falls back to
+// any free one: that run caches a copy, and the next run is back on the
+// derived port.
+func listenForImage(digest string) (net.Listener, error) {
+	port := imagePort(digest)
+	if l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port)); err == nil {
+		return l, nil
+	}
+	return net.Listen("tcp", "127.0.0.1:0")
+}
+
+// imagePort maps a digest into 40000-59999, clear of the ephemeral range
+// macOS and Linux both hand out from.
+func imagePort(digest string) int {
+	var n uint32
+	for _, c := range digest[:8] {
+		n = n<<4 | uint32(hexValue(c))
+	}
+	return 40000 + int(n%20000)
+}
+
+func hexValue(c rune) byte {
+	switch {
+	case c >= '0' && c <= '9':
+		return byte(c - '0')
+	case c >= 'a' && c <= 'f':
+		return byte(c - 'a' + 10)
+	}
+	return 0
 }
 
 // Close stops the server.

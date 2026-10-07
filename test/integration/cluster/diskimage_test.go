@@ -54,6 +54,18 @@ func TestServeDiskImage(t *testing.T) {
 		}
 	})
 
+	t.Run("the same image is served at the same URL, so talosctl's cache entry is reused", func(t *testing.T) {
+		f.Close()
+		again, err := serveDiskImage(img)
+		if err != nil {
+			t.Fatalf("serveDiskImage: %v", err)
+		}
+		defer again.Close()
+		if again.URL != f.URL || again.Schematic != f.Schematic {
+			t.Fatalf("second serve at %s/%s, first at %s/%s", again.URL, again.Schematic, f.URL, f.Schematic)
+		}
+	})
+
 	t.Run("a rebuilt image is a new schematic, so talosctl's cache cannot serve the old one", func(t *testing.T) {
 		if err := os.WriteFile(img, []byte("second image"), 0o600); err != nil {
 			t.Fatal(err)
