@@ -288,9 +288,9 @@ func TestPVCReconcile_ValidChangeCreatesMigration(t *testing.T) {
 		t.Fatalf("the move's target is %+v, want the StorageNode reporting %s",
 			raised.Spec.Migrate, pinNodeB)
 	}
-	if raised.Labels[labelPinnedVolumePV] != pinPVLabelValue(pinPVName) {
+	if raised.Labels[simplyblockv1alpha2.PinnedVolumeLabel] != pinPVLabelValue(pinPVName) {
 		t.Fatalf("expected PV label %q, got %q",
-			pinPVLabelValue(pinPVName), raised.Labels[labelPinnedVolumePV])
+			pinPVLabelValue(pinPVName), raised.Labels[simplyblockv1alpha2.PinnedVolumeLabel])
 	}
 	if raised.Spec.CreatorRef == nil || raised.Spec.CreatorRef.Name != pinClusterName {
 		t.Fatalf("expected the cluster as the creator, got %+v", raised.Spec.CreatorRef)
@@ -325,7 +325,7 @@ func TestPVCReconcile_ActiveMigrationWaits(t *testing.T) {
 	existing := &simplyblockv1alpha2.PersistentVolumeOps{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   "existing-move",
-			Labels: map[string]string{labelPinnedVolumePV: pinPVLabelValue(pinPVName)},
+			Labels: map[string]string{simplyblockv1alpha2.PinnedVolumeLabel: pinPVLabelValue(pinPVName)},
 		},
 		Spec: simplyblockv1alpha2.PersistentVolumeOpsSpec{
 			PersistentVolumeName: pinPVName,

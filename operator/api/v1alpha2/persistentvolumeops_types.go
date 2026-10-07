@@ -75,7 +75,8 @@ const PersistentVolumeOpsTargetNodeLabel = "storage.simplyblock.io/target-node"
 // PinnedVolumeLabel marks a move the pinned-volume controller raised because a
 // claim's storage-node pin changed. Its value is a hash of the volume's name,
 // because a PersistentVolume name can exceed the 63 characters a label value
-// allows.
+// allows, and it is how the controller finds a volume's pin-driven moves
+// without knowing their names, which depend on the target.
 //
 // A pinned volume is moved by its pin and by nothing else, and this label is
 // how a move tells which of the two it is: a labeled move runs only while the
