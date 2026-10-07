@@ -133,7 +133,9 @@ func ensureNFSDThreads(ctx context.Context, run runner) (started bool, err error
 			return false, nil
 		}
 	}
-	out, code, err := run(ctx, "rpc.nfsd", strconv.Itoa(nfsdThreads))
+	// NFSv4 only, so the kernel never registers with a portmapper and the host
+	// needs no rpcbind.
+	out, code, err := run(ctx, "rpc.nfsd", "-N", "2", "-N", "3", strconv.Itoa(nfsdThreads))
 	if err != nil {
 		return false, fmt.Errorf("nfsd: running rpc.nfsd: %w", err)
 	}

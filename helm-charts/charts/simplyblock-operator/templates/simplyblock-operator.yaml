@@ -50,6 +50,7 @@ spec:
           args:
             - --leader-elect
             - --health-probe-bind-address=:8081
+            - --csi-link
             - --csi-link-bind-address=:{{ .Values.csiLink.port }}
             - --csi-link-audience={{ .Values.csiLink.audience }}
             {{- if .Values.csiLink.certSecret }}
