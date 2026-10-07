@@ -75,11 +75,10 @@ type Workload struct {
 	// no cache to be stale.
 	Uncached client.Reader
 
-	// TLSEnabled and TLSMutualEnabled decide how the worker's storage-node API is
-	// probed, because a deployment serving TLS refuses a plaintext request and a
-	// refused request is not the same answer as an unreachable host.
-	TLSEnabled       bool
-	TLSMutualEnabled bool
+	// TLS decides how the worker's storage-node API is probed, because a
+	// deployment serving TLS refuses a plaintext request and a refused request is
+	// not the same answer as an unreachable host. Nil is plaintext.
+	TLS controlplane.TLSResolver
 
 	// ManagerNode is the Kubernetes node the operator itself runs on, which the
 	// chart sets from spec.nodeName. It decides one question and no other:
@@ -469,8 +468,9 @@ func (w *Workload) PublishedInDNS(
 // the one read in this package with no streamed counterpart: it is a Kubernetes-
 // side check against a pod rather than a control-plane object (§4.4).
 func (w *Workload) HostAnswers(ctx context.Context, namespace, worker string) (bool, error) {
+	tls := w.TLS.Settings(ctx)
 	if err := utils.StorageNodeAPIReachable(
-		ctx, worker, namespace, w.TLSEnabled, w.TLSMutualEnabled,
+		ctx, worker, namespace, tls.Enabled, tls.Mutual,
 	); err != nil {
 		logf.FromContext(ctx).V(1).Info("the worker's storage-node API does not answer yet",
 			"worker", worker, "err", err.Error())

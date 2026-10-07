@@ -3,7 +3,7 @@
 //
 // It lives in this package because resolving the endpoint is what this package
 // already does: the URL comes from an environment variable or a default, the
-// scheme follows SB_TLS_SERVE, and getting either wrong in a second place would
+// scheme follows the ControlPlane, and getting either wrong in a second place would
 // point half the operator at a control plane the other half is not talking to.
 // The client it configures is atlas-lib's, which is where the typed calls are
 // and where this package's own hand-rolled requests are headed.
