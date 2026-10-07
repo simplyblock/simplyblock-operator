@@ -30,6 +30,13 @@ ifeq ($(origin CSI_IMAGE_TAG), undefined)
   CSI_IMAGE_TAG := latest
 endif
 CSI_IMAGE := $(CSI_IMAGE_REGISTRY)/spdkcsi:$(CSI_IMAGE_TAG)
+# pNFS MDS image, assembled from the pnfs-os guest image (spdkcsi:pnfsos) with QEMU
+# and mds-runner, released with the CSI image under the same registry and tag.
+MDS_IMAGE ?= $(CSI_IMAGE_REGISTRY)/spdkcsi:pnfs-mds-$(CSI_IMAGE_TAG)
+GUEST_IMAGE ?= $(CSI_IMAGE_REGISTRY)/spdkcsi:pnfsos
+MDS_PLATFORMS ?= linux/amd64,linux/arm64
+# --push to publish; a multi-platform build cannot --load into a classic image store.
+MDS_BUILDX_FLAGS ?=
 
 # default target
 all: spdkcsi lint test
@@ -40,6 +47,12 @@ spdkcsi:
 	@echo === building spdkcsi binary
 	@mkdir -p $(BUILD_DIR)
 	@CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -buildvcs=false -o $(BUILD_DIR)/spdkcsi ./cmd/
+
+.PHONY: mds-runner
+mds-runner:
+	@echo === building mds-runner binary
+	@mkdir -p $(BUILD_DIR)
+	@CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -buildvcs=false -o $(BUILD_DIR)/mds-runner ./cmd/mds-runner/
 
 # static code check, text lint
 # lint: golangci yamllint shellcheck mdl codespell
@@ -162,7 +175,15 @@ image:
 	sudo docker buildx build --platform linux/arm64 -t $(CSI_IMAGE)-arm64 $$proxy_opt \
 	-f deploy/image/Dockerfile ..; \
 
+# The MDS image needs GUEST_IMAGE for every platform it is built for, which
+# pnfs-os publishes as a multi-architecture image.
+.PHONY: mds-image
+mds-image:
+	@echo === building $(MDS_IMAGE) for $(MDS_PLATFORMS) from $(GUEST_IMAGE)
+	docker buildx build --platform $(MDS_PLATFORMS) --build-arg GUEST_IMAGE=$(GUEST_IMAGE) \
+		-t $(MDS_IMAGE) $(MDS_BUILDX_FLAGS) -f deploy/image/Dockerfile.mds ..
+
 .PHONY: clean
 clean:
-	rm -f $(BUILD_DIR)/spdkcsi
+	rm -f $(BUILD_DIR)/spdkcsi $(BUILD_DIR)/mds-runner
 	go clean -testcache

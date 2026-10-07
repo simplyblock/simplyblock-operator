@@ -9,6 +9,8 @@ require (
 	github.com/kubernetes-csi/csi-test/v5 v5.5.0
 	github.com/onsi/gomega v1.42.1
 	github.com/simplyblock/atlas v0.0.0-00010101000000-000000000000
+	github.com/vishvananda/netlink v1.3.1
+	github.com/vishvananda/netns v0.0.5
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
 	k8s.io/api v0.36.2
