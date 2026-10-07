@@ -843,7 +843,7 @@ prometheus:
     podAnnotations:
       log-collector/enabled: "true"
       reloader.stakater.com/auto: "true"
-      reloader.stakater.com/configmap: "simplyblock-prometheus-config"
+      reloader.stakater.com/configmap: "simplyblock-prometheus-config,simplyblock-spdk-proxy-scrape-config"
     nodeSelector: {}
     tolerations: []
     affinity:
@@ -913,6 +913,16 @@ prometheus:
       - name: simplyblock-prometheus-config
         configMap:
           name: simplyblock-prometheus-config
+      # Operator-owned: one scrape_config per storage node's SPDK proxy, kept in
+      # sync with which pods are running it. Optional because the operator only
+      # creates it once a StorageCluster exists. Kubernetes re-syncs an optional
+      # ConfigMap volume into the pod once it appears, no restart needed for that
+      # first appearance (a later content change still goes through the
+      # reloader.stakater.com annotation above, which does restart the pod).
+      - name: simplyblock-spdk-proxy-scrape-config
+        configMap:
+          name: simplyblock-spdk-proxy-scrape-config
+          optional: true
       - name: objstore-config
         configMap:
           name: simplyblock-objstore-config
@@ -931,6 +941,8 @@ prometheus:
     extraVolumeMounts:
       - name: simplyblock-prometheus-config
         mountPath: /etc/simplyblock-config
+      - name: simplyblock-spdk-proxy-scrape-config
+        mountPath: /etc/simplyblock-config-dynamic
       - name: prometheus-client-tls
         mountPath: /etc/prometheus/certs
         readOnly: true

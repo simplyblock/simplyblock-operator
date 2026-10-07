@@ -226,6 +226,7 @@ func (r *StorageNodeWorkloadReconciler) workloadSteps(
 		{"the headless service", r.reconcileService},
 		{"the endpoint slice", r.reconcileEndpointSlice},
 		{"the spdk-proxy endpoints", r.reconcileSpdkProxyEndpoints},
+		{"the spdk-proxy scrape config", r.reconcileSpdkProxyScrapeConfig},
 		{"the worker enrollment", func(
 			ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 		) error {

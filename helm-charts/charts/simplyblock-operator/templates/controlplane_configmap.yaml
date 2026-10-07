@@ -122,6 +122,15 @@ data:
       external_labels:
         monitor: 'codelab-monitor'
 
+    # Every storage node's SPDK proxy, kept current by the operator in
+    # simplyblock-spdk-proxy-scrape-config (one scrape_config per node, mounted
+    # at /etc/simplyblock-config-dynamic) rather than listed here, because each
+    # node's proxy carries its own Basic-auth credential and a single job below
+    # can only carry one. An existing install's prometheus.yml predates this key
+    # (see the lookup above) and needs it added once, by hand, to pick this up.
+    scrape_config_files:
+      - /etc/simplyblock-config-dynamic/*.yml
+
     scrape_configs:
 
       - job_name: 'simplyblock_metrics'
