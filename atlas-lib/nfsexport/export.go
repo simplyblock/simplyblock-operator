@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/volstack"
@@ -33,6 +35,10 @@ const FSType = "xfs"
 // pnfs is what makes nfsd offer a layout at all. sync is deliberate: a shared
 // filesystem cannot acknowledge writes before they land.
 var exportOptions = []string{"rw", "sync", "no_subtree_check", "no_root_squash", "pnfs"}
+
+// rootOptions export the directory the exports sit in as the NFSv4 root. mountd
+// would offer the container's own root, which is overlayfs and cannot be exported.
+var rootOptions = []string{"ro", "no_subtree_check", "fsid=0", "crossmnt"}
 
 // Spec is one export to assemble: which device, where it goes, and who may
 // mount it.
@@ -91,12 +97,21 @@ func (s Spec) StackHandle() string { return "pnfs-" + s.FSID }
 // line is the exports(5) entry for this export.
 func (s Spec) line() string {
 	opts := append(append([]string{}, exportOptions...), "fsid="+s.FSID)
-	clients := make([]string, 0, len(s.Clients))
-	for _, c := range s.Clients {
-		clients = append(clients, c+"("+strings.Join(opts, ",")+")")
-	}
-	return s.Path + " " + strings.Join(clients, " ") + "\n"
+	return entry(s.Path, s.Clients, opts)
 }
+
+// entry is one exports(5) line giving every client the same options.
+func entry(path string, clients, opts []string) string {
+	hosts := make([]string, 0, len(clients))
+	for _, c := range clients {
+		hosts = append(hosts, c+"("+strings.Join(opts, ",")+")")
+	}
+	return path + " " + strings.Join(hosts, " ") + "\n"
+}
+
+// rootDropInName is the one file carrying the NFSv4 root, because exportfs
+// refuses the same path and client listed in two files.
+const rootDropInName = "pnfs-root.exports"
 
 // Runner is the subset of volstack.Runner an export walks its stack with.
 type Runner interface {
@@ -129,6 +144,9 @@ type Config struct {
 // Assembler builds and removes exports on the host it runs on.
 type Assembler struct {
 	cfg Config
+
+	// root serializes updates to the shared root file.
+	root sync.Mutex
 }
 
 // New returns an Assembler, or an error when the configuration cannot work.
@@ -171,6 +189,9 @@ func (a *Assembler) Create(ctx context.Context, spec Spec) error {
 	// Published last, which is what makes a half-assembled export invisible to
 	// clients rather than briefly broken for them.
 	if err := a.writeDropIn(spec); err != nil {
+		return err
+	}
+	if err := a.addToRoot(spec); err != nil {
 		return err
 	}
 	return a.reexport(ctx, spec.Path)
@@ -273,6 +294,33 @@ func (a *Assembler) writeDropIn(spec Spec) error {
 	final := filepath.Join(a.cfg.ExportsDir, spec.dropInName())
 	tmp := final + ".tmp"
 	if err := os.WriteFile(tmp, []byte(spec.line()), 0o644); err != nil {
+		return fmt.Errorf("export %s: writing %s: %w", spec.Path, tmp, err)
+	}
+	if err := os.Rename(tmp, final); err != nil {
+		return fmt.Errorf("export %s: renaming %s: %w", spec.Path, tmp, err)
+	}
+	return nil
+}
+
+// addToRoot adds this export's clients to the shared root file. Clients are not
+// removed with their exports: the root is read-only and holds no data.
+func (a *Assembler) addToRoot(spec Spec) error {
+	a.root.Lock()
+	defer a.root.Unlock()
+
+	final := filepath.Join(a.cfg.ExportsDir, rootDropInName)
+	clients := slices.Clone(spec.Clients)
+	if old, err := os.ReadFile(final); err == nil {
+		for _, field := range strings.Fields(string(old))[1:] {
+			host, _, _ := strings.Cut(field, "(")
+			clients = append(clients, host)
+		}
+	}
+	slices.Sort(clients)
+	clients = slices.Compact(clients)
+
+	tmp := final + ".tmp"
+	if err := os.WriteFile(tmp, []byte(entry(filepath.Dir(spec.Path), clients, rootOptions)), 0o644); err != nil {
 		return fmt.Errorf("export %s: writing %s: %w", spec.Path, tmp, err)
 	}
 	if err := os.Rename(tmp, final); err != nil {
