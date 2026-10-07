@@ -153,7 +153,7 @@ atlas/
 │   ├── bounded.go          Call/Do: a sysfs read, ioctl, or open under a deadline + the stuck-key guard
 │   └── command.go          CombinedOutput/Output: a child process that returns even when it cannot be reaped
 ├── errs/                   Sentinel errors (errors.Is across packages)
-│   └── deferrers/          defer-friendly Close/Run that log instead of dropping errors
+│   └── deferrers/          defer-friendly Close/Run (and CloseFn/RunFn) that log instead of dropping errors
 │
 ├── internal/               Private — not importable by consumers
 │   ├── cpapi/              oapi-codegen client for the control-plane v2 API (generated)
@@ -1443,6 +1443,14 @@ size := ptr.ClampToInt(sizeBytes, false)           // saturates, never wraps
 ```go
 defer deferrers.Close(resp.Body)
 defer deferrers.Run(cancelWatch)
+```
+
+Where an API takes a `func()` instead of a call, such as `t.Cleanup`, `CloseFn`
+and `RunFn` return the cleanup and log the site that registered it:
+
+```go
+t.Cleanup(deferrers.CloseFn(conn))
+t.Cleanup(deferrers.RunFn(func() error { return os.RemoveAll(dir) }))
 ```
 
 #### Bound a call that blocks in the kernel
