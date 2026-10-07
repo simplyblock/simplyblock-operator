@@ -19,6 +19,7 @@ package v1alpha2
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -170,6 +171,55 @@ type DriverPNFS struct {
 	// +kubebuilder:default=false
 	// +optional
 	EnablePNFS *bool `json:"enablePNFS,omitempty"`
+
+	// MDS runs the metadata server in a pod of its own instead of on a node:
+	// one pod per storage cluster, whose QEMU guest runs the NFS server with
+	// its own kernel, so no node runs nfsd, mounts an export, or needs
+	// nfs-utils. The pod needs a node with /dev/kvm. Unset keeps the
+	// metadata server on the nodes labeled
+	// storage.simplyblock.io/pnfs-mds=true.
+	// +optional
+	MDS *DriverPNFSMDS `json:"mds,omitempty"`
+}
+
+// DriverPNFSMDS is the pod that hosts the metadata server's guest.
+type DriverPNFSMDS struct {
+	// Image is the metadata server image: QEMU, the guest kernel, the guest
+	// root filesystem, and the runner. Unset takes the operator's own registry
+	// in the spdkcsi repository, tagged with the operator's tag prefixed
+	// pnfs-mds-, so a deployment that states nothing runs the image belonging
+	// to the operator reconciling it.
+	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// Resources are the pod's requests and limits. The guest's vCPUs are the
+	// whole cores the CPU limit covers, at least one, and its memory is the
+	// memory limit less 256Mi for QEMU, so the memory limit has to be at
+	// least 512Mi.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// NodeSelector is merged with the kvm-capable label the pod always
+	// requires.
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Tolerations let the pod schedule onto tainted KVM nodes.
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// StateSize is the size of the guest's state disk, which holds the NFS
+	// client-recovery database that lets clients reclaim their state after
+	// the pod restarts.
+	// +kubebuilder:default="1Gi"
+	// +optional
+	StateSize resource.Quantity `json:"stateSize,omitempty"`
+
+	// StateStorageClassName is the storage class of the state disk. Unset
+	// takes the cluster default.
+	// +optional
+	StateStorageClassName *string `json:"stateStorageClassName,omitempty"`
 }
 
 // SimplyblockDriverSpec is the CSI driver deployment: the node plugin, the

@@ -112,11 +112,25 @@ type NFSExportStatus struct {
 	// +optional
 	MDSNodeName string `json:"mdsNodeName,omitempty"`
 
-	// MDSNodeIP is the bound MDS host's own address. Not what a client mounts:
-	// it is what the export's Service's EndpointSlice points at, so a client's
-	// mount address (ServiceAddress) does not have to change when this does.
+	// MDSPodName is the metadata server pod serving this export when the
+	// metadata server runs in a pod of its own. Empty when it runs on a node,
+	// in which case MDSNodeName names the host.
+	// +optional
+	MDSPodName string `json:"mdsPodName,omitempty"`
+
+	// MDSNodeIP is the bound MDS host's own address, or the metadata server
+	// pod's IP when MDSPodName is set. Not what a client mounts: it is what
+	// the export's Service's EndpointSlice points at, so a client's mount
+	// address (ServiceAddress) does not have to change when this does.
 	// +optional
 	MDSNodeIP string `json:"mdsNodeIP,omitempty"`
+
+	// AssembledBy is the metadata server pod instance (its UID) that last
+	// assembled this export. A pod that restarted has lost its mounts and
+	// exports, so a mismatch with the running pod means the export is
+	// assembled again.
+	// +optional
+	AssembledBy string `json:"assembledBy,omitempty"`
 
 	// ServiceAddress is the ClusterIP of the Service fronting this export,
 	// which is the address a client mounts. It outlives any one MDSNodeIP: the
@@ -145,6 +159,7 @@ type NFSExportStatus struct {
 // +kubebuilder:resource:scope=Namespaced,shortName=nfsexp
 // +kubebuilder:printcolumn:name="Volume",type=string,JSONPath=".spec.volumeRef"
 // +kubebuilder:printcolumn:name="MDS",type=string,JSONPath=".status.mdsNodeName"
+// +kubebuilder:printcolumn:name="MDSPod",type=string,JSONPath=".status.mdsPodName"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 

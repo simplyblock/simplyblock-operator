@@ -23,6 +23,9 @@ spec:
     - jsonPath: .status.mdsNodeName
       name: MDS
       type: string
+    - jsonPath: .status.mdsPodName
+      name: MDSPod
+      type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
@@ -135,11 +138,19 @@ spec:
                 items:
                   type: string
                 type: array
+              assembledBy:
+                description: |-
+                  AssembledBy is the metadata server pod instance (its UID) that last
+                  assembled this export. A pod that restarted has lost its mounts and
+                  exports, so a mismatch with the running pod means the export is
+                  assembled again.
+                type: string
               mdsNodeIP:
                 description: |-
-                  MDSNodeIP is the bound MDS host's own address. Not what a client mounts:
-                  it is what the export's Service's EndpointSlice points at, so a client's
-                  mount address (ServiceAddress) does not have to change when this does.
+                  MDSNodeIP is the bound MDS host's own address, or the metadata server
+                  pod's IP when MDSPodName is set. Not what a client mounts: it is what
+                  the export's Service's EndpointSlice points at, so a client's mount
+                  address (ServiceAddress) does not have to change when this does.
                 type: string
               mdsNodeName:
                 description: |-
@@ -150,6 +161,12 @@ spec:
 
                   The serialization point for one-MDS-per-export: no second host is a
                   candidate until this field is rewritten.
+                type: string
+              mdsPodName:
+                description: |-
+                  MDSPodName is the metadata server pod serving this export when the
+                  metadata server runs in a pod of its own. Empty when it runs on a node,
+                  in which case MDSNodeName names the host.
                 type: string
               message:
                 description: Message is a human-readable note on the current phase.
