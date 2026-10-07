@@ -2,9 +2,14 @@ package clusters
 
 import (
 	"context"
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/simplyblock/atlas/lvol"
 )
 
 // writeTempFile creates a temp file with the given content and registers cleanup.
@@ -145,5 +150,53 @@ func TestCredentialAPITokenFileEmptyFallsBackToClusterSecret(t *testing.T) {
 	}
 	if node.API.Credential != testStaticSecret {
 		t.Errorf("expected fallback to cluster_secret %q, got %q", testStaticSecret, node.API.Credential)
+	}
+}
+
+// TestReplicationClientReachesTLSControlPlane pins that the replication client
+// honors SB_TLS_CONNECT, so the delete-time replica-chain cleanup can reach a
+// control plane served over TLS.
+//
+// Regression: 2026-10-07-repl-client-ignores-tls. deleteRetiredReplicaChain,
+// added with the csi-addons work in #548, builds its client via
+// ReplicationClient, which set no TLS transport and did not upgrade the endpoint
+// scheme. Against a TLS control plane the handshake never completed, so the
+// relationship lookup failed and every DeleteVolume failed with it, plain RWO
+// volumes included.
+func TestReplicationClientReachesTLSControlPlane(t *testing.T) {
+	var reached bool
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	caFile := writeTempFile(t, string(pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: srv.Certificate().Raw,
+	})))
+	secret := writeTempFile(t, `{"clusters":[{"cluster_id":"test-cluster","cluster_endpoint":"`+srv.URL+`","cluster_secret":"s"}]}`)
+
+	t.Setenv("SPDKCSI_SECRET", secret)
+	t.Setenv("SPDKCSI_API_TOKEN_PATH", "")
+	t.Setenv("SB_TLS_CONNECT", "anonymous")
+	t.Setenv("SB_TLS_CERTIFICATE_AUTHORITY", caFile)
+
+	client, err := ReplicationClient(context.Background(), "test-cluster")
+	if err != nil {
+		t.Fatalf("ReplicationClient: %v", err)
+	}
+	// The response itself does not matter: a 404 maps to not-found. What the bug
+	// broke is reaching the server at all over TLS. The handle must be
+	// well-formed (clusterID:poolID:volumeID, each a UUID), because the client
+	// validates it before dialing.
+	handle := lvol.VolumeHandle(
+		"11111111-1111-1111-1111-111111111111:" +
+			"22222222-2222-2222-2222-222222222222:" +
+			"33333333-3333-3333-3333-333333333333")
+	_, _ = client.GetVolumeReplicationRelationship(context.Background(), handle)
+
+	if !reached {
+		t.Fatal("replication client never reached the TLS control plane: its transport was not TLS-configured")
 	}
 }
