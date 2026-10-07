@@ -18,62 +18,46 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/tlsutil"
 )
 
-func TestNewClientDefaultsToHTTP(t *testing.T) {
-	t.Setenv("SB_TLS_SERVE", "")
+// The environment no longer says anything about TLS. A deployment that still
+// sets the retired variables gets the same client as one that does not.
+func TestNewClientIgnoresTheRetiredTLSVariables(t *testing.T) {
+	t.Setenv("SB_TLS_SERVE", "1")
+	t.Setenv("SB_TLS_CONNECT", "authenticated")
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "")
+	resetTLSClientCacheForTest(t)
 
 	c := NewClient()
 	if c.BaseURL != "http://simplyblock-webappapi:5000" {
-		t.Fatalf("BaseURL = %q, want http://simplyblock-webappapi:5000", c.BaseURL)
-	}
-	if c.HttpClient == nil {
-		t.Fatalf("HttpClient unset")
+		t.Fatalf("BaseURL = %q, want the plain default whatever the environment says", c.BaseURL)
 	}
 	if c.initErr != nil {
 		t.Fatalf("unexpected initErr: %v", c.initErr)
 	}
+	if c.HttpClient == nil {
+		t.Fatal("HttpClient unset")
+	}
 }
 
-func TestNewClientTLSEnabledFlipsScheme(t *testing.T) {
-	t.Setenv("SB_TLS_SERVE", "1")
-	t.Setenv("SB_TLS_CONNECT", "")
+// An HTTPS address is a request for TLS, and the CA is read when the client is
+// built, so a pod without one reports it rather than dialing unverified.
+func TestNewClientForAnHTTPSAddressNeedsTheCA(t *testing.T) {
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "")
 	resetTLSClientCacheForTest(t)
 
-	c := NewClient()
-	if !strings.HasPrefix(c.BaseURL, "https://") {
-		t.Fatalf("BaseURL = %q, want https:// scheme when TLS enabled", c.BaseURL)
-	}
-	// CA bundle won't exist in unit tests — initErr should be set so callers
-	// surface a real error rather than silently using a misconfigured client.
+	c := NewClient("https://simplyblock-webappapi.simplyblock.svc.cluster.local:5000")
+	// The CA bundle won't exist in unit tests, so initErr is how the caller
+	// finds out rather than the client silently dropping back to plaintext.
 	if c.initErr == nil {
 		t.Fatalf("expected initErr when CA bundle is unavailable in unit tests")
 	}
-}
-
-func TestNewClientInitErrSurfacesFromDo(t *testing.T) {
-	t.Setenv("SB_TLS_SERVE", "1")
-	t.Setenv("SB_TLS_CONNECT", "")
-	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "")
-	resetTLSClientCacheForTest(t)
-
-	c := NewClient()
-	if c.initErr == nil {
-		t.Skip("CA bundle unexpectedly present in test environment")
-	}
 
 	_, _, err := c.Do(context.Background(), http.MethodGet, "/api/v2/anything", nil)
-	if err == nil {
-		t.Fatalf("expected init error from Do")
-	}
-	if !strings.Contains(err.Error(), "webapi client init") {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "webapi client init") {
+		t.Fatalf("unexpected error from Do: %v", err)
 	}
 }
 
 func TestNewClientExplicitURLBypassesEnv(t *testing.T) {
-	t.Setenv("SB_TLS_SERVE", "1")
-	t.Setenv("SB_TLS_CONNECT", "")
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "https://override.example/")
 	resetTLSClientCacheForTest(t)
 
@@ -83,12 +67,74 @@ func TestNewClientExplicitURLBypassesEnv(t *testing.T) {
 	}
 }
 
-func TestNewClientTLSMutualEnabledUsesClientCertificate(t *testing.T) {
-	t.Setenv("SB_TLS_SERVE", "1")
-	t.Setenv("SB_TLS_CONNECT", "authenticated")
+// The client certificate is presented where the pod mounts one. Mutual TLS is
+// decided by the ControlPlane, and the chart mounts the pair exactly when it asks
+// for it, so the files are the pod's evidence of what to present.
+func TestTheTLSClientPresentsTheMountedCertificate(t *testing.T) {
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "")
 	resetTLSClientCacheForTest(t)
+	nsPath, caPath, certPath, keyPath := writeNamespaceAndCertPair(t)
+	pointTLSPaths(t, nsPath, caPath, certPath, keyPath)
 
+	c := NewClient("https://simplyblock-webappapi.simplyblock.svc.cluster.local:5000")
+	if c.initErr != nil {
+		t.Fatalf("unexpected initErr: %v", c.initErr)
+	}
+	tr, ok := c.HttpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type %T, want *http.Transport", c.HttpClient.Transport)
+	}
+	if len(tr.TLSClientConfig.Certificates) != 1 {
+		t.Fatalf("Certificates len = %d, want 1", len(tr.TLSClientConfig.Certificates))
+	}
+}
+
+// Without the pair the connection is TLS and anonymous, which is a
+// deployment that serves TLS without asking for client certificates.
+func TestTheTLSClientPresentsNothingWhereNoneIsMounted(t *testing.T) {
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "")
+	resetTLSClientCacheForTest(t)
+	nsPath, caPath, certPath, keyPath := writeNamespaceAndCertPair(t)
+	if err := os.Remove(certPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	pointTLSPaths(t, nsPath, caPath, certPath, keyPath)
+
+	c := NewClient("https://simplyblock-webappapi.simplyblock.svc.cluster.local:5000")
+	if c.initErr != nil {
+		t.Fatalf("unexpected initErr: %v", c.initErr)
+	}
+	tr := c.HttpClient.Transport.(*http.Transport)
+	if len(tr.TLSClientConfig.Certificates) != 0 {
+		t.Fatalf("presented %d certificates with none mounted", len(tr.TLSClientConfig.Certificates))
+	}
+}
+
+// A failed build is not remembered. The material arrives with the pod's
+// volumes, and an operator that asked before it was there would otherwise stay
+// unable to reach a control plane that has been answering for hours.
+func TestAFailedTLSBuildIsRetried(t *testing.T) {
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "")
+	resetTLSClientCacheForTest(t)
+	nsPath, caPath, certPath, keyPath := writeNamespaceAndCertPair(t)
+	pointTLSPaths(t, nsPath, "/does/not/exist.crt", certPath, keyPath)
+
+	if _, err := cachedTLSClient(); err == nil {
+		t.Fatal("expected an error with no CA bundle")
+	}
+
+	tlsutil.ServiceCABundlePath = caPath
+	if _, err := cachedTLSClient(); err != nil {
+		t.Fatalf("the build was not retried once the CA appeared: %v", err)
+	}
+}
+
+// pointTLSPaths aims the mounted-material paths at a test's files.
+func pointTLSPaths(t *testing.T, ns, ca, cert, key string) {
+	t.Helper()
 	origNamespacePath := tlsutil.OperatorNamespacePath
 	origCAPath := tlsutil.ServiceCABundlePath
 	origCertPath := tlsutil.ServiceClientCertificatePath
@@ -99,28 +145,10 @@ func TestNewClientTLSMutualEnabledUsesClientCertificate(t *testing.T) {
 		tlsutil.ServiceClientCertificatePath = origCertPath
 		tlsutil.ServiceClientKeyPath = origKeyPath
 	})
-
-	nsPath, caPath, certPath, keyPath := writeNamespaceAndCertPair(t)
-	tlsutil.OperatorNamespacePath = nsPath
-	tlsutil.ServiceCABundlePath = caPath
-	tlsutil.ServiceClientCertificatePath = certPath
-	tlsutil.ServiceClientKeyPath = keyPath
-
-	c := NewClient()
-	if c.initErr != nil {
-		t.Fatalf("unexpected initErr: %v", c.initErr)
-	}
-	if !strings.HasPrefix(c.BaseURL, "https://") {
-		t.Fatalf("BaseURL = %q, want https:// scheme when TLS enabled", c.BaseURL)
-	}
-
-	tr, ok := c.HttpClient.Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("transport type %T, want *http.Transport", c.HttpClient.Transport)
-	}
-	if len(tr.TLSClientConfig.Certificates) != 1 {
-		t.Fatalf("Certificates len = %d, want 1", len(tr.TLSClientConfig.Certificates))
-	}
+	tlsutil.OperatorNamespacePath = ns
+	tlsutil.ServiceCABundlePath = ca
+	tlsutil.ServiceClientCertificatePath = cert
+	tlsutil.ServiceClientKeyPath = key
 }
 
 // resetTLSClientCacheForTest forces the next NewClient call to rebuild its
@@ -130,8 +158,6 @@ func resetTLSClientCacheForTest(t *testing.T) {
 	tlsClientCacheMu.Lock()
 	defer tlsClientCacheMu.Unlock()
 	tlsClient = nil
-	tlsClientErr = nil
-	resetTLSClientOnce()
 }
 
 func writeNamespaceAndCertPair(t *testing.T) (string, string, string, string) {
@@ -184,7 +210,6 @@ func writeNamespaceAndCertPair(t *testing.T) (string, string, string, string) {
 }
 
 func TestNewStreamClientHasNoTimeout(t *testing.T) {
-	t.Setenv("SB_TLS_SERVE", "")
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://example:1234")
 
 	sc, err := NewStreamClient()

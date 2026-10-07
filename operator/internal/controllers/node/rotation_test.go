@@ -22,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -54,7 +55,7 @@ func templateRevision(t *testing.T, apiClient client.Client) string {
 func TestARotatedCertificateRollsTheStoragePods(t *testing.T) {
 	secret := aServingSecret()
 	r := aWorkloadReconciler(t, aSizedCluster(), secret)
-	r.TLSEnabled = true
+	r.TLS = servingTLS(controlplane.TLSSettings{Enabled: true, Provider: "cert-manager"})
 
 	if err := r.reconcileDaemonSet(context.Background(), aSizedCluster()); err != nil {
 		t.Fatalf("writing the workload: %v", err)
@@ -111,5 +112,49 @@ func TestAWorkloadWithNoImageAnywhereIsRefused(t *testing.T) {
 
 	if err == nil {
 		t.Error("a workload was written with no image for its containers")
+	}
+}
+
+// servingTLS is a resolver answering a fixed setting, which is what the
+// ControlPlane would say.
+func servingTLS(settings controlplane.TLSSettings) controlplane.TLSResolver {
+	return func(context.Context) controlplane.TLSSettings { return settings }
+}
+
+// The workload follows the ControlPlane as it changes. Nothing is read once at
+// startup, so a ControlPlane created after the operator started, with TLS on,
+// gets TLS on its storage nodes on the next pass.
+func TestTheWorkloadFollowsTheControlPlaneAsItChanges(t *testing.T) {
+	r := aWorkloadReconciler(t, aSizedCluster(), aServingSecret())
+	current := controlplane.TLSSettings{}
+	r.TLS = func(context.Context) controlplane.TLSSettings { return current }
+
+	if err := r.reconcileDaemonSet(context.Background(), aSizedCluster()); err != nil {
+		t.Fatalf("writing the workload: %v", err)
+	}
+	if revision := templateRevision(t, r.Client); revision != "" {
+		t.Fatalf("the template records certificate revision %q before TLS was asked for", revision)
+	}
+
+	current = controlplane.TLSSettings{Enabled: true, Provider: "cert-manager"}
+	if err := r.reconcileDaemonSet(context.Background(), aSizedCluster()); err != nil {
+		t.Fatalf("writing the workload: %v", err)
+	}
+	if revision := templateRevision(t, r.Client); revision == "" {
+		t.Error("the template still records no certificate revision after the ControlPlane turned TLS on")
+	}
+}
+
+// With no resolver the installation is plaintext, which is every test that does
+// not care and any process that never reads a ControlPlane.
+func TestAWorkloadWithNoResolverIsPlaintext(t *testing.T) {
+	r := aWorkloadReconciler(t, aSizedCluster(), aServingSecret())
+	r.TLS = nil
+
+	if err := r.reconcileDaemonSet(context.Background(), aSizedCluster()); err != nil {
+		t.Fatalf("writing the workload: %v", err)
+	}
+	if revision := templateRevision(t, r.Client); revision != "" {
+		t.Errorf("the template records certificate revision %q with no TLS stated", revision)
 	}
 }

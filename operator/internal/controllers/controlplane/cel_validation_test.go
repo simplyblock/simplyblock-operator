@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -323,5 +324,51 @@ func TestControlPlaneOpsCELFreezesTheRestartScope(t *testing.T) {
 	if err := apiClient.Update(ctx, ops); err == nil {
 		t.Error("an essential component was added to the scope after admission, which " +
 			"would recycle the management API without the drain that scope requires")
+	}
+}
+
+// newLiveControlPlane creates the singleton with the given tls block.
+func newLiveControlPlane(t *testing.T, tls simplyblockv1alpha2.ControlPlaneTLS) (client.Client, *simplyblockv1alpha2.ControlPlane) {
+	t.Helper()
+	apiClient := apiServer(t)
+	cp := &simplyblockv1alpha2.ControlPlane{
+		ObjectMeta: metav1.ObjectMeta{Name: SingletonName, Namespace: freshNamespace(t, apiClient)},
+		Spec: simplyblockv1alpha2.ControlPlaneSpec{
+			Source: simplyblockv1alpha2.ControlPlaneSource{
+				Local: &simplyblockv1alpha2.LocalControlPlane{Image: testImage, TLS: tls},
+			},
+		},
+	}
+	if err := apiClient.Create(context.Background(), cp); err != nil {
+		t.Fatalf("create the control plane: %v", err)
+	}
+	return apiClient, cp
+}
+
+// spec.source.local.tls is immutable: the database and every storage node are
+// built with it, so changing it is recreating the control plane.
+func TestControlPlaneCELRefusesToChangeTLS(t *testing.T) {
+	apiClient, cp := newLiveControlPlane(t, simplyblockv1alpha2.ControlPlaneTLS{})
+
+	cp.Spec.Source.Local.TLS.EnableTLS = ptr.To(false)
+	err := apiClient.Update(context.Background(), cp)
+	if err == nil {
+		t.Fatal("TLS was turned off on a live control plane")
+	}
+	if !strings.Contains(err.Error(), "tls is immutable") {
+		t.Errorf("denied with %q, want the tls immutability rule", err)
+	}
+}
+
+// Restating the block as it already is admits, which is what a Helm upgrade does.
+func TestControlPlaneCELAdmitsTheSameTLSAgain(t *testing.T) {
+	apiClient, cp := newLiveControlPlane(t, simplyblockv1alpha2.ControlPlaneTLS{
+		EnableTLS: ptr.To(true), EnableMutualTLS: ptr.To(false),
+		Provider: simplyblockv1alpha2.ControlPlaneTLSCertManager,
+	})
+
+	cp.Spec.Source.Local.Replicas = ptr.To(int32(2))
+	if err := apiClient.Update(context.Background(), cp); err != nil {
+		t.Fatalf("an edit that leaves tls alone was denied: %v", err)
 	}
 }

@@ -149,8 +149,8 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
-func validateTLSConfiguration(discoveryClient serverGroupsGetter, tlsEnabled bool, tlsProvider string) error {
-	if !tlsEnabled {
+func validateTLSConfiguration(discoveryClient serverGroupsGetter, providerSet bool, tlsProvider string) error {
+	if !providerSet {
 		return nil
 	}
 	if !utils.TLSProviderSupported(tlsProvider) {
@@ -174,7 +174,7 @@ func validateTLSConfiguration(discoveryClient serverGroupsGetter, tlsEnabled boo
 			return nil
 		}
 	}
-	return fmt.Errorf("SB_TLS_SERVE=1 with SB_TLS_PROVIDER=%q requires API group %q", tlsProvider, requiredGroup)
+	return fmt.Errorf("SB_TLS_PROVIDER=%q requires API group %q", tlsProvider, requiredGroup)
 }
 
 // nolint:gocyclo
@@ -331,16 +331,19 @@ func main() {
 	}
 
 	cfg := ctrl.GetConfigOrDie()
-	tlsEnabled := os.Getenv("SB_TLS_SERVE") == "1"
+	// SB_TLS_PROVIDER selects where the admission webhooks' serving certificate
+	// comes from, and nothing else. The installation's own TLS is stated by the
+	// ControlPlane and read from it, because the webhook certificate has to exist
+	// before the manager starts and a ControlPlane cannot be read until it has.
+	webhookProviderSet := os.Getenv("SB_TLS_PROVIDER") != ""
 	tlsProvider := utils.NormalizeTLSProvider(os.Getenv("SB_TLS_PROVIDER"))
-	tlsMutualEnabled := os.Getenv("SB_TLS_CONNECT") == "authenticated"
-	if tlsEnabled {
+	if webhookProviderSet {
 		discoveryClient, err := discovery.NewDiscoveryClientForConfig(cfg)
 		if err != nil {
 			setupLog.Error(err, "unable to initialize cluster discovery client for TLS validation")
 			os.Exit(1)
 		}
-		if err := validateTLSConfiguration(discoveryClient, tlsEnabled, tlsProvider); err != nil {
+		if err := validateTLSConfiguration(discoveryClient, webhookProviderSet, tlsProvider); err != nil {
 			setupLog.Error(err, "invalid TLS configuration")
 			os.Exit(1)
 		}
@@ -409,6 +412,13 @@ func main() {
 		setupLog.Error(err, "unable to resolve control-plane stream config")
 		os.Exit(1)
 	}
+	// What TLS the installation uses is read from the ControlPlane on every use.
+	// Nothing is decided at startup: the operator is installed before its
+	// ControlPlane exists, and the control plane is reached over whichever scheme
+	// that object states once it does.
+	controlPlaneTLS := controlplanecontroller.NewTLSResolver(mgr.GetClient(), operatorNamespace)
+	webapi.SetTLSPolicy(func(ctx context.Context) bool { return controlPlaneTLS(ctx).Enabled })
+
 	// LeaderOnly: these subscriptions feed reconcilers that write StorageDevice
 	// and StorageNode objects, and two replicas writing the same object would
 	// fight over it.
@@ -418,10 +428,9 @@ func main() {
 	// migration would then wait on DNS forever while the name has in fact resolved
 	// for minutes (design-storagenode.md §5.4).
 	storageNodeWorkload := &nodecontroller.Workload{
-		Client:           mgr.GetClient(),
-		Uncached:         mgr.GetAPIReader(),
-		TLSEnabled:       tlsEnabled,
-		TLSMutualEnabled: tlsMutualEnabled,
+		Client:   mgr.GetClient(),
+		Uncached: mgr.GetAPIReader(),
+		TLS:      controlPlaneTLS,
 		// Which node the manager itself runs on, which the chart sets from
 		// spec.nodeName. It decides one question: whether a maintenance window
 		// is draining the manager's own host, in which case the manager holds
@@ -627,14 +636,12 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&nodecontroller.StorageNodeWorkloadReconciler{
-		Client:           mgr.GetClient(),
-		Scheme:           mgr.GetScheme(),
-		Recorder:         mgr.GetEventRecorder("storagenode-workload-controller"),
-		Namespace:        operatorNamespace,
-		TLSEnabled:       tlsEnabled,
-		TLSProvider:      tlsProvider,
-		TLSMutualEnabled: tlsMutualEnabled,
-		Workload:         storageNodeWorkload,
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorder("storagenode-workload-controller"),
+		Namespace: operatorNamespace,
+		TLS:       controlPlaneTLS,
+		Workload:  storageNodeWorkload,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeWorkload")
 		os.Exit(1)

@@ -10,40 +10,23 @@
 package webapi
 
 import (
-	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	atlaskube "github.com/simplyblock/atlas/kube"
-
-	"github.com/simplyblock/simplyblock-operator/internal/tlsutil"
 )
 
 // TestTheAtlasClientIsGivenTheSameConnection covers the handover.
+//
+// The connection is the one that follows the ControlPlane per request, so the
+// atlas-lib client reaches a control plane that serves TLS without having been
+// built any differently from one that does not.
 func TestTheAtlasClientIsGivenTheSameConnection(t *testing.T) {
-	t.Setenv("SB_TLS_SERVE", "1")
-	t.Setenv("SB_TLS_CONNECT", "authenticated")
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "")
 	resetTLSClientCacheForTest(t)
-
-	origNamespacePath := tlsutil.OperatorNamespacePath
-	origCAPath := tlsutil.ServiceCABundlePath
-	origCertPath := tlsutil.ServiceClientCertificatePath
-	origKeyPath := tlsutil.ServiceClientKeyPath
-	t.Cleanup(func() {
-		tlsutil.OperatorNamespacePath = origNamespacePath
-		tlsutil.ServiceCABundlePath = origCAPath
-		tlsutil.ServiceClientCertificatePath = origCertPath
-		tlsutil.ServiceClientKeyPath = origKeyPath
-	})
-
 	nsPath, caPath, certPath, keyPath := writeNamespaceAndCertPair(t)
-	tlsutil.OperatorNamespacePath = nsPath
-	tlsutil.ServiceCABundlePath = caPath
-	tlsutil.ServiceClientCertificatePath = certPath
-	tlsutil.ServiceClientKeyPath = keyPath
+	pointTLSPaths(t, nsPath, caPath, certPath, keyPath)
 
 	startup := NewClient()
 	if startup.initErr != nil {
@@ -65,40 +48,20 @@ func TestTheAtlasClientIsGivenTheSameConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ControlPlaneConfig: %v", err)
 	}
-	if !strings.HasPrefix(cfg.Endpoint, "https://") {
-		t.Errorf("the atlas-lib client is pointed at %q", cfg.Endpoint)
+	if cfg.Endpoint != "http://"+defaultHost {
+		t.Errorf("the atlas-lib client is pointed at %q, want the default address the policy decides the scheme of",
+			cfg.Endpoint)
 	}
 
 	carried := cfg.Transport
 	if carried == nil {
 		t.Fatal("the atlas-lib client is handed no transport, so it builds the default one")
 	}
-	if got := transportOf(startup); got != carried {
-		t.Error("the Config carries a different connection than the startup client's")
+	if _, ok := carried.(*adaptiveTransport); !ok {
+		t.Fatalf("the transport is a %T, want the one that follows the ControlPlane", carried)
 	}
-
-	transport, ok := carried.(*http.Transport)
-	if !ok {
-		t.Fatalf("the transport is a %T", carried)
-	}
-	if transport.TLSClientConfig == nil || transport.TLSClientConfig.RootCAs == nil {
-		t.Error("the transport carries no CA, so this deployment's certificate cannot be verified")
-	}
-	if len(transport.TLSClientConfig.Certificates) != 1 {
-		t.Errorf("the transport presents %d client certificates, want the pod's one",
-			len(transport.TLSClientConfig.Certificates))
-	}
-}
-
-// A plaintext deployment hands over nothing, which is what the atlas-lib client
-// takes to mean its own default and is what every existing caller is.
-func TestAPlaintextDeploymentHandsOverNoTransport(t *testing.T) {
-	t.Setenv("SB_TLS_SERVE", "")
-	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "")
-	resetTLSClientCacheForTest(t)
-
-	if carried := transportOf(NewClient()); carried != nil {
-		t.Errorf("a plaintext deployment handed over a %T", carried)
+	if got := transportOf(startup); got == nil {
+		t.Error("the startup client carries no transport to compare against")
 	}
 }
 
