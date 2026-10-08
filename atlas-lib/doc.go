@@ -37,6 +37,9 @@
 //	                what order: one constructor per plan the design names.
 //	kube            Map a logical volume to the Kubernetes objects representing it.
 //	controlplane    Client for the simplyblock control-plane API.
+//	nfsexport       Publish a pNFS export on its metadata-server host.
+//	nfsclient       What the kernel's NFS client says about its mounts:
+//	                per-operation counts, layout types, and reconnects.
 //	link            gRPC between the operator and the CSI driver, over
 //	                connections the CSI driver opens.
 //	storage         One node's storage as one value (Accessor);

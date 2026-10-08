@@ -40,6 +40,8 @@ atlas/
 │   ├── detach.go           DetachDevice: disconnect unless the subsystem is shared
 │   └── multipath.go        the halves: ConnectPaths (ordered per-path connect) + PathResult
 ├── nqn/                    Build & parse simplyblock lvol NQNs
+├── nfsclient/              The kernel NFS client's own view of its mounts
+│   └── mountstats.go       Mount, ParseMountstats, ReadMountstats: op counts, layout types, reconnects
 ├── blockdev/               What a Linux block device is, and what it carries
 │   ├── device.go           Device: path, kernel name, device numbers, block sizes, size, read-only
 │   ├── content.go          Content, Reading, Reader/Opener seam, Prober.Read
