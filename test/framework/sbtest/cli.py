@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from collections.abc import Iterable
 
 from . import __version__
 from .adapters import ArchiveEvidence
@@ -134,6 +135,14 @@ def cmd_collect(args: argparse.Namespace) -> int:
     return 0
 
 
+def load_drivers(enabled: Iterable[str]) -> list[str]:
+    """The enabled components that create load: the ones marked `required`, because a
+    component that is the run is the one whose absence leaves nothing to judge. Read from
+    the flag rather than the name, so a workload counts as much as a migration driver."""
+    known = known_components()
+    return [n for n in enabled if n in known and known[n].required]
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """A driven run: components create the load, then the same detectors judge it.
 
@@ -154,8 +163,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     if not cfg.components.enabled:
         raise SystemExit("run: no components enabled — pass --enable-component or a suite")
-    drivers = [n for n in cfg.components.enabled if n.endswith(".driver")]
-    if not drivers:
+    if not load_drivers(cfg.components.enabled):
         log.warn("no driver component is enabled, so nothing will create load — this run "
                  "will only observe. Use `sbtest collect` if that is what you meant")
 

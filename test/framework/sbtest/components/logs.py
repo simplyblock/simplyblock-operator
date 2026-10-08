@@ -473,7 +473,14 @@ class Dmesg(Component):
                 "container": "spdk-container"}
 
     def collect(self, ctx: RunContext) -> None:
-        for p in kube.list_pods(self.opt("namespace"), self.opt("pods_matching")):
+        pods = kube.list_pods(self.opt("namespace"), self.opt("pods_matching"))
+        if not pods:
+            # Said, because the detectors reading dmesg can only report themselves skipped,
+            # which does not say that this component was pointed at the wrong pods.
+            ctx.log.warn(f"{self.name}: no pods matching {self.opt('pods_matching')} in "
+                         f"{self.opt('namespace')}, so no dmesg was collected; point namespace, "
+                         "pods_matching and container at a privileged pod on each node")
+        for p in pods:
             if not p.node:
                 continue
             data = kube.run_bytes(

@@ -386,6 +386,26 @@ if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 
+class LoadDrivers(unittest.TestCase):
+    """A run with no component creating load only observes, and says so. Which components
+    create load is what `required` already marks, not a naming convention: a workload is
+    the run as much as a migration driver is."""
+
+    def test_a_workload_counts_as_load(self):
+        from sbtest.cli import load_drivers
+        self.assertEqual(load_drivers(["workload.pnfs", "nvme.iostat", "host.dmesg"]),
+                         ["workload.pnfs"])
+
+    def test_the_migration_run_counts_both_of_its_drivers(self):
+        from sbtest.cli import load_drivers
+        self.assertEqual(sorted(load_drivers(["workload.fio", "migration.driver", "ana.sample"])),
+                         ["migration.driver", "workload.fio"])
+
+    def test_collectors_alone_are_no_load(self):
+        from sbtest.cli import load_drivers
+        self.assertEqual(load_drivers(["logs.collect", "nvme.iostat"]), [])
+
+
 class RunWindowRecording(unittest.TestCase):
     """A live run must record its own window.
 

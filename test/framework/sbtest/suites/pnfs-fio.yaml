@@ -39,7 +39,12 @@ components:
     interval_s: 5.0
 
   logs.collect: true
-  host.dmesg: true
+  # The clients' kernels are the ones a pNFS run is about: layouts, NVMe-oF paths,
+  # blocklayout errors. The CSI node plugin runs privileged on every node, so it reads them.
+  host.dmesg:
+    namespace: simplyblock
+    pods_matching: [simplyblock-csi-node]
+    container: csi-node
 
 detectors:
   pnfs.device-io:

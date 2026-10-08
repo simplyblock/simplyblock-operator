@@ -632,6 +632,60 @@ class WorkloadPnfs(unittest.TestCase):
                 self.assertEqual(ev.nfs_ops(inst.evidence)["LAYOUTGET"], 3)
 
 
+class WorkloadStop(unittest.TestCase):
+    """fio writes its summary, its exit code and its time series when it exits, so a run
+    collected while fio is still going has none of them: no checksum or job-error verdict,
+    and a PASS that judged no I/O. Stopping fio first is what makes them exist."""
+
+    def _workload(self) -> pnfs_rwx.PnfsRwxWorkload:
+        w = pnfs_rwx.PnfsRwxWorkload(shared_volumes=0, solo_pods=1, containers_per_pod=2,
+                                     stop_timeout_s=5)
+        with _Ctx() as ctx:
+            w._documents(ctx, "sc")
+        return w
+
+    def test_every_instance_is_interrupted_and_waited_for(self):
+        calls: list[tuple[str, str | None, str]] = []
+
+        def exec_sh(ns: str, pod: str, script: str, container: str | None = None,
+                    timeout: int = 300) -> str:
+            calls.append((pod, container, script))
+            return "0" if "fio.rc" in script else ""
+
+        w = self._workload()
+        with _Ctx() as ctx, _patch(kube, "exec_sh", exec_sh):
+            w.stop(ctx)
+        for inst in w._instances:
+            mine = [s for p, c, s in calls if p == inst.pod and c == inst.container]
+            self.assertTrue(any("pkill -INT" in s and "fio" in s for s in mine),
+                            f"{inst.container} was not interrupted: {mine}")
+            self.assertTrue(any(f"{inst.logdir}/fio.rc" in s for s in mine),
+                            f"{inst.container} was not waited for: {mine}")
+
+    def test_an_instance_that_never_exits_does_not_hang_the_run(self):
+        def exec_sh(ns: str, pod: str, script: str, container: str | None = None,
+                    timeout: int = 300) -> str:
+            return ""
+
+        w = self._workload()
+        w.options["stop_timeout_s"] = 0
+        with _Ctx() as ctx, _patch(kube, "exec_sh", exec_sh):
+            w.stop(ctx)   # returns rather than waiting forever
+
+
+class HostDmesg(unittest.TestCase):
+    def test_no_matching_pod_is_said_rather_than_collecting_nothing(self):
+        from sbtest.components.logs import Dmesg
+        with tempfile.TemporaryDirectory() as d:
+            ctx = RunContext(run_id="run1", outdir=d, log=Logger(os.path.join(d, "test.log")))
+            with _patch(kube, "list_pods", lambda ns, matching: []):
+                Dmesg(namespace="simplyblock", pods_matching=["absent"]).collect(ctx)
+            with open(os.path.join(d, "test.log")) as fh:
+                log = fh.read()
+        self.assertIn("no pods", log)
+        self.assertIn("absent", log)
+
+
 class _patch:
     """Minimal attribute patcher — the stdlib one needs a dotted target string."""
 
