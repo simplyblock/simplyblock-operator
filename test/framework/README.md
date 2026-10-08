@@ -483,6 +483,14 @@ corruption work used:
 make run SUITE=migration-full DURATION=7200 KEEP=1
 ```
 
+`DURATION` is also fio's runtime. A workload waits for every fio instance to finish laying
+out its file and enter the timed run before the clock starts, since fio's runtime does not
+count the layout, and at the end it waits for fio to finish that runtime on its own, plus 180
+seconds of grace, before collecting. That is when fio writes its summary and runs its final
+verification, and what `operator/test/fio_migration_test.py` did. Only an instance still running
+after the grace is interrupted, and named. A suite sets `runtime_s` only to make fio run for
+a different time than the run.
+
 Both declare `required = True`, so a failure in their setup aborts the run instead of being
 recorded as a warning. That distinction is the whole reason the flag exists: a run whose
 workload never came up would otherwise sail through every detector — nothing to find, nothing

@@ -681,6 +681,28 @@ class WorkloadStop(unittest.TestCase):
                                 for p, c, s in calls), f"{inst.container} was not interrupted")
 
 
+class FioRuntime(unittest.TestCase):
+    """A run waits for fio to finish its runtime, so fio's runtime is the run's length. The
+    CLI's duration is therefore what sets it, and a suite overrides it only on purpose."""
+
+    def _resolved(self, duration: float | None, **opts: object) -> object:
+        w = pnfs_rwx.PnfsRwxWorkload(**opts)
+        with _Ctx() as ctx:
+            if duration is not None:
+                ctx.shared["run.duration_s"] = duration
+            w._resolve_runtime(ctx)
+        return w.opt("runtime_s")
+
+    def test_the_run_duration_sets_fios_runtime(self):
+        self.assertEqual(self._resolved(1800.0), 1800)
+
+    def test_a_suite_that_sets_it_wins(self):
+        self.assertEqual(self._resolved(1800.0, runtime_s=900), 900)
+
+    def test_neither_falls_back_to_an_hour(self):
+        self.assertEqual(self._resolved(None), 3600)
+
+
 class WaitIOFlowing(unittest.TestCase):
     """fio's runtime counts the timed run, not the file layout before it, so the run's clock
     starts when every instance is in the timed run, as operator/test/fio_migration_test.py

@@ -37,7 +37,9 @@ FIO_IMAGE = "alpine:3.20"
 # The options every fio-driving workload exposes, with the defaults they share. A workload
 # merges these into its own `defaults()` so the knobs are spelled the same everywhere.
 FIO_DEFAULTS: dict[str, Any] = {
-    "runtime_s": 3600,
+    # fio's --runtime. 0 takes the run's --duration (see FioWorkload._resolve_runtime): the
+    # run waits for fio to finish, so the two are one setting unless a suite says otherwise.
+    "runtime_s": 0,
     "iodepth": 8,
     "bs": "4k",
     "rwmixread": 70,

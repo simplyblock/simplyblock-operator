@@ -160,6 +160,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     # Read by the components that create cluster objects. A kept run leaves the volumes and
     # the CRs behind for inspection — the reason most post-mortems are possible at all.
     ctx.shared["keep"] = bool(args.keep)
+    # Read by the workloads, whose fio runtime is the run's duration unless a suite sets one.
+    ctx.shared["run.duration_s"] = float(args.duration or 0)
 
     if not cfg.components.enabled:
         raise SystemExit("run: no components enabled — pass --enable-component or a suite")

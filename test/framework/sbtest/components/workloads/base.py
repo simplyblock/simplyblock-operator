@@ -32,6 +32,9 @@ class FioWorkload(Component):
     #: summary and exit.
     INTERRUPT_GRACE_S = 30
 
+    #: fio's runtime when neither the suite nor the run's duration sets one.
+    DEFAULT_RUNTIME_S = 3600
+
     def defaults(self) -> dict[str, Any]:
         return {
             "namespace": "default",
@@ -76,7 +79,23 @@ class FioWorkload(Component):
 
     # ── the lifecycle ───────────────────────────────────────────────────────────────
 
+    def _resolve_runtime(self, ctx: RunContext) -> None:
+        """Settle fio's runtime before anything is built from it.
+
+        The run waits for fio to finish its runtime (see stop), so fio's runtime is the
+        run's length, and the run's --duration is what sets it. A suite's runtime_s
+        overrides it only when set, and an hour stands in when neither is, as for a
+        collect without a duration.
+        """
+        explicit = int(self.opt("runtime_s") or 0)
+        duration = int(float(ctx.shared.get("run.duration_s") or 0))
+        runtime = explicit or duration or self.DEFAULT_RUNTIME_S
+        self.options["runtime_s"] = runtime
+        source = "runtime_s" if explicit else "the run's duration" if duration else "the default"
+        ctx.log.info(f"{self.name}: fio runtime {runtime}s, from {source}")
+
     def setup(self, ctx: RunContext) -> None:
+        self._resolve_runtime(ctx)
         docs = self.documents(ctx)
         kube.run(["-n", self.opt("namespace"), "apply", "-f", "-"],
                  stdin="\n---\n".join(json.dumps(d) for d in docs))

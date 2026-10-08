@@ -25,9 +25,6 @@ components:
     # Small on purpose: fio always lays out a file-backed target before random I/O and
     # cannot be told to skip it. The point is continuous I/O, not capacity.
     file_size_gb: 1
-    # Longer than the run's DURATION so fio never exits first and leaves the last migrations
-    # measuring an idle volume.
-    runtime_s: 7500
     iodepth: 8
     # 1, and it must stay 1 for an integrity run: numjobs > 1 cannot serialize overlapping
     # writes without io_submit_mode=offload, so verify would report corruption that never
