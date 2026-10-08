@@ -133,6 +133,57 @@ func volumeSyncPath(cluster, pool, volume, verb string) string {
 		cluster, pool, volume, verb)
 }
 
+// SyncGroupPromoteResult is the per-member connection entries a group promote
+// returns once every member is served on the target site (design §13).
+type SyncGroupPromoteResult struct {
+	Members []SyncPromoteResult `json:"members"`
+}
+
+// SyncDemoteGroup fences every member of the group on site, in order. A 204 is
+// success, including an empty group. A 409 is a gate refusal, carried as a
+// SyncStatusError (design §13). The backend drives the group as one unit, so
+// this is one call for all members, not one per member.
+func (c *Client) SyncDemoteGroup(ctx context.Context, gh lvol.GroupHandle, site string) error {
+	code, body, err := c.syncDo(ctx, http.MethodPost,
+		groupSyncPath(gh.ClusterID, gh.GroupID, "demote"), url.Values{"site": {site}})
+	if err != nil {
+		return fmt.Errorf("sync demote group %s: %w", gh.Handle(), err)
+	}
+	if code == http.StatusNoContent {
+		return nil
+	}
+	return &SyncStatusError{
+		Op: "sync demote group " + string(gh.Handle()), Status: code, Message: syncMessage(body)}
+}
+
+// SyncPromoteGroup serves every member of the group on site as one unit.
+// planned=false is a forced disaster fail-over. A 200 carries the per-member
+// connection entries; 409 (in progress or refused), 412 (peer offline), and 400
+// (bad site) map exactly as the volume route (design §13).
+func (c *Client) SyncPromoteGroup(
+	ctx context.Context, gh lvol.GroupHandle, site string, planned bool,
+) (SyncGroupPromoteResult, error) {
+	query := url.Values{"site": {site}, "planned": {strconv.FormatBool(planned)}}
+	code, body, err := c.syncDo(ctx, http.MethodPost,
+		groupSyncPath(gh.ClusterID, gh.GroupID, "failover"), query)
+	if err != nil {
+		return SyncGroupPromoteResult{}, fmt.Errorf("sync promote group %s: %w", gh.Handle(), err)
+	}
+	if code == http.StatusOK {
+		var result SyncGroupPromoteResult
+		_ = json.Unmarshal(body, &result)
+		return result, nil
+	}
+	return SyncGroupPromoteResult{}, &SyncStatusError{
+		Op: "sync promote group " + string(gh.Handle()), Status: code, Message: syncMessage(body)}
+}
+
+func groupSyncPath(cluster, group, verb string) string {
+	return fmt.Sprintf(
+		"/api/v2/clusters/%s/consistency-groups/%s/replication/%s",
+		cluster, group, verb)
+}
+
 // syncMessage pulls the backend's detail.message out of a FastAPI error envelope
 // where present, falling back to the raw body (design §10, error envelope).
 func syncMessage(body []byte) string {

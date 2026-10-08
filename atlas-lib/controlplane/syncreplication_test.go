@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/simplyblock/atlas/lvol"
@@ -101,6 +102,69 @@ func TestSyncPromote(t *testing.T) {
 			_, _ = w.Write([]byte(`{"detail":{"message":"in progress","task_id":"t1"}}`))
 		})
 		_, err := c.SyncPromote(context.Background(), lvol.VolumeHandle(testSyncHandle), "site-b", true)
+		var se *SyncStatusError
+		if !errors.As(err, &se) || se.Status != http.StatusConflict {
+			t.Fatalf("err = %v, want SyncStatusError{409}", err)
+		}
+	})
+}
+
+var testSyncGroup = lvol.GroupHandle{
+	ClusterID: "11111111-1111-1111-1111-111111111111",
+	GroupID:   "44444444-4444-4444-4444-444444444444",
+}
+
+func TestSyncPromoteGroup(t *testing.T) {
+	t.Run("200 returns members and hits the group route with site/planned", func(t *testing.T) {
+		var gotPath, gotSite, gotPlanned string
+		c, _ := syncClient(t, func(w http.ResponseWriter, r *http.Request) {
+			gotPath, gotSite = r.URL.Path, r.URL.Query().Get("site")
+			gotPlanned = r.URL.Query().Get("planned")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"members":[{"lvol_id":"m1","connection_strings":["nvme://1"]}]}`))
+		})
+		res, err := c.SyncPromoteGroup(context.Background(), testSyncGroup, "site-b", false)
+		if err != nil {
+			t.Fatalf("SyncPromoteGroup: %v", err)
+		}
+		if !strings.Contains(gotPath, "/consistency-groups/"+testSyncGroup.GroupID+"/replication/failover") {
+			t.Errorf("path = %q, want the group failover route", gotPath)
+		}
+		if gotSite != "site-b" || gotPlanned != "false" {
+			t.Errorf("query site=%q planned=%q, want site-b/false", gotSite, gotPlanned)
+		}
+		if len(res.Members) != 1 || res.Members[0].LvolID != "m1" {
+			t.Errorf("members = %+v, want one member m1", res.Members)
+		}
+	})
+
+	t.Run("412 is the escalation trigger", func(t *testing.T) {
+		c, _ := syncClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusPreconditionFailed)
+		})
+		_, err := c.SyncPromoteGroup(context.Background(), testSyncGroup, "site-b", false)
+		var se *SyncStatusError
+		if !errors.As(err, &se) || se.Status != http.StatusPreconditionFailed {
+			t.Fatalf("err = %v, want SyncStatusError{412}", err)
+		}
+	})
+}
+
+func TestSyncDemoteGroup(t *testing.T) {
+	t.Run("204 is success", func(t *testing.T) {
+		c, _ := syncClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		if err := c.SyncDemoteGroup(context.Background(), testSyncGroup, "site-a"); err != nil {
+			t.Fatalf("SyncDemoteGroup: %v", err)
+		}
+	})
+
+	t.Run("409 gate refusal is carried", func(t *testing.T) {
+		c, _ := syncClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusConflict)
+		})
+		err := c.SyncDemoteGroup(context.Background(), testSyncGroup, "site-a")
 		var se *SyncStatusError
 		if !errors.As(err, &se) || se.Status != http.StatusConflict {
 			t.Fatalf("err = %v, want SyncStatusError{409}", err)

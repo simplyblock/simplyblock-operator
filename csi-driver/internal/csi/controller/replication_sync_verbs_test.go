@@ -150,3 +150,28 @@ func TestSyncNoOpVerbs(t *testing.T) {
 		t.Errorf("a sync Enable must attach no policy, got %q", got)
 	}
 }
+
+// Phase 2: a sync class on a consistency-group handle drives the whole group as
+// one unit through the group routes (design §13).
+func TestSyncGroupDispatch(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	mock.seedGroup(vgGroupID, vgMember1, vgMember2)
+	cs := newReplicationTestServer(t, mock)
+	ctx := context.Background()
+
+	if _, err := cs.PromoteVolume(ctx, &replication.PromoteVolumeRequest{
+		VolumeId: vgGroupHandle, Force: false, Parameters: syncParams("site-b"),
+	}); err != nil {
+		t.Fatalf("group PromoteVolume: %v", err)
+	}
+	if !mock.groups[vgGroupID].Promoted {
+		t.Error("the group was not promoted on this site")
+	}
+
+	if _, err := cs.DemoteVolume(ctx, &replication.DemoteVolumeRequest{
+		VolumeId: vgGroupHandle, Parameters: syncParams("site-a"),
+	}); err != nil {
+		t.Fatalf("group DemoteVolume: %v", err)
+	}
+}

@@ -458,9 +458,16 @@ func (cs *Server) PromoteVolume(
 		return nil, err
 	}
 	if method == methodSync {
-		if _, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
-			return nil, status.Error(codes.Unimplemented,
-				"sync group replication is not yet supported (design §13, Phase 2)")
+		if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
+			// The whole consistency group promotes as one unit (design §13).
+			client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
+			if err != nil {
+				return nil, status.Error(codes.Unavailable, err.Error())
+			}
+			if _, err := client.SyncPromoteGroup(ctx, gh, site, !req.GetForce()); err != nil {
+				return nil, classifySyncError(err)
+			}
+			return &replication.PromoteVolumeResponse{}, nil
 		}
 		h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
 		if err != nil {
@@ -553,9 +560,16 @@ func (cs *Server) DemoteVolume(
 		return nil, err
 	}
 	if method == methodSync {
-		if _, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
-			return nil, status.Error(codes.Unimplemented,
-				"sync group replication is not yet supported (design §13, Phase 2)")
+		if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
+			// The whole consistency group fences as one unit (design §13).
+			client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
+			if err != nil {
+				return nil, status.Error(codes.Unavailable, err.Error())
+			}
+			if err := client.SyncDemoteGroup(ctx, gh, site); err != nil {
+				return nil, classifySyncError(err)
+			}
+			return &replication.DemoteVolumeResponse{}, nil
 		}
 		h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
 		if err != nil {
