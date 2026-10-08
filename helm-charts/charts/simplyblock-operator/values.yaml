@@ -1001,6 +1001,9 @@ controlCenter:
   # Ramen's ops namespace on the DR hub: where discovered ProtectedApplications
   # live and where the console asks the API server what it may do.
   drNamespace: ramen-ops
+  # dr-hub's own namespace (dr-simplyblock-hub release): the discovery graph's
+  # data shards (ConfigMaps dr-graph-<site>-<n>) are read there
+  drHubNamespace: dr-simplyblock
 
   # serviceaccount | passthrough
   #

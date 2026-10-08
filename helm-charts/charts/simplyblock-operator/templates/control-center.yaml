@@ -87,6 +87,8 @@ spec:
               value: {{ $cc.mode | default "full" | quote }}
             - name: SB_DR_NAMESPACE
               value: {{ $cc.drNamespace | default "ramen-ops" | quote }}
+            - name: SB_DR_HUB_NAMESPACE
+              value: {{ $cc.drHubNamespace | default "dr-simplyblock" | quote }}
             - name: SB_AUTH_MODE
               value: {{ $cc.authMode | quote }}
             {{- /* With the mock enabled every upstream is the sb-mock service:
