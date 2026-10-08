@@ -142,26 +142,26 @@ The runner is the csi-link peer. It dials the operator with the pod's bound Serv
 
 ## 4. API Changes
 
-Two existing types change, both additively. No kind is added.
+Two existing types change. No kind is added.
 
 ### 4.1 `NFSExportStatus` (existing kind)
 
-The bound host is described by three fields that were written for a node. Two of them (`mdsNodeName`, `mdsNodeIP`) keep their names and their node-hosted meaning, and the pod-hosted binding is carried by two additions.
+The bound MDS is named by `mdsPodName`, and `mdsNodeIP` is the pod's IP, which the export's EndpointSlice points at. `assembledBy` records the guest instance that assembled the export.
 
 ```go
-// MDSPodName is the MDS pod serving this export when the MDS is pod-hosted.
-// Empty when it is node-hosted, in which case MDSNodeName names the host.
+// MDSPodName is the MDS pod serving this export. Empty until the export is
+// bound, and the serialization point for one MDS per export.
 // +optional
 MDSPodName string `json:"mdsPodName,omitempty"`
 
 // AssembledBy is the MDS instance that last assembled this export: the pod
-// UID and runner container ID when pod-hosted. A mismatch with the live
-// instance means the guest has rebooted and the export must be reassembled.
+// UID and runner container ID. A mismatch with the live instance means the
+// guest has rebooted and the export must be reassembled.
 // +optional
 AssembledBy string `json:"assembledBy,omitempty"`
 ```
 
-`mdsNodeIP` is the address the export's EndpointSlice points at, which is the pod IP when the MDS is pod-hosted. The type's full text is in Appendix A. The printcolumn set gains `MDSPod`.
+The type's full text is in Appendix A. The `MDS` printcolumn shows `mdsPodName`.
 
 ### 4.2 `DriverPNFS` (existing type, on `SimplyblockDriver`)
 
@@ -518,27 +518,19 @@ type NFSExportStatus struct {
 	// +optional
 	PhaseDeadline *metav1.Time `json:"phaseDeadline,omitempty"`
 
-	// MDSNodeName is the Kubernetes node serving this export when the MDS is
-	// node-hosted. Empty when it is pod-hosted, in which case MDSPodName names
-	// the host.
-	// +optional
-	MDSNodeName string `json:"mdsNodeName,omitempty"`
-
-	// MDSPodName is the MDS pod serving this export when the MDS is pod-hosted.
-	// Empty when it is node-hosted.
+	// MDSPodName is the MDS pod serving this export. Empty until the export is
+	// bound.
 	// +optional
 	MDSPodName string `json:"mdsPodName,omitempty"`
 
-	// MDSNodeIP is the address the export's EndpointSlice points at: the
-	// bound node's InternalIP, or the MDS pod's IP when it is pod-hosted. It is
-	// not what a client mounts.
+	// MDSNodeIP is the MDS pod's IP, which the export's EndpointSlice points
+	// at. It is not what a client mounts.
 	// +optional
 	MDSNodeIP string `json:"mdsNodeIP,omitempty"`
 
 	// AssembledBy is the MDS instance that last assembled this export, the pod
-	// UID and runner container ID when pod-hosted. A mismatch with the live
-	// instance means the guest has rebooted and the export must be
-	// reassembled.
+	// UID and runner container ID. A mismatch with the live instance means the
+	// guest has rebooted and the export must be reassembled.
 	// +optional
 	AssembledBy string `json:"assembledBy,omitempty"`
 
@@ -564,8 +556,7 @@ type NFSExportStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=nfsexp
 // +kubebuilder:printcolumn:name="Volume",type=string,JSONPath=".spec.volumeRef"
-// +kubebuilder:printcolumn:name="MDS",type=string,JSONPath=".status.mdsNodeName"
-// +kubebuilder:printcolumn:name="MDSPod",type=string,JSONPath=".status.mdsPodName"
+// +kubebuilder:printcolumn:name="MDS",type=string,JSONPath=".status.mdsPodName"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
