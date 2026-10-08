@@ -35,6 +35,10 @@ components:
   nvme.iostat:
     interval_s: 5.0
 
+  # Every node's NVMe controllers at setup and at the end: whether the run started on a
+  # clean fabric, and whether it left one. dmesg can only infer the first from old lines.
+  nvme.snapshot: true
+
   logs.collect: true
   # The clients' kernels are the ones a pNFS run is about: layouts, NVMe-oF paths,
   # blocklayout errors. The CSI node plugin runs privileged on every node, so it reads them.

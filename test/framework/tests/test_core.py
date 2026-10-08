@@ -334,6 +334,17 @@ class Archive(unittest.TestCase):
             self.assertEqual(list(ev.fio_log("nope")), [])
             self.assertEqual(ev.nvme_controllers(), [])
 
+    def test_a_pnfs_run_knows_its_cluster_from_its_volumes(self):
+        # No migration, so no NQN is recorded. The pNFS volume map carries the cluster out of
+        # each volume's handle, and without it nvme.dirty-start and nvme.foreign-cluster skip.
+        cluster = "06075ebb-8c40-4857-a5f1-40b13bca10a7"
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "state.json"), "w") as fh:
+                json.dump({"run_id": "r", "migrations": []}, fh)
+            with open(os.path.join(d, "pnfs.json"), "w") as fh:
+                json.dump({"volumes": [{"claim": "c", "lvol": "l", "cluster": cluster}]}, fh)
+            self.assertEqual(ArchiveEvidence(d).cluster_uuid(), cluster)
+
     def test_falls_back_to_test_log_when_state_is_absent(self):
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "test.log"), "w") as fh:

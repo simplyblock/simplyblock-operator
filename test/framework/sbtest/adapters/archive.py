@@ -460,11 +460,20 @@ class ArchiveEvidence:
         return spans
 
     def cluster_uuid(self) -> str:
-        """The run's cluster, from the NQNs it recorded, else from the event log."""
+        """The run's cluster, from the NQNs it recorded, else from its pNFS volumes' handles,
+        else from the event log."""
         for nqn in (self._state.get("nqn_of") or {}).values():
             m = re.search(r"simplyblock:([0-9a-f-]{36}):", str(nqn))
             if m:
                 return m.group(1)
+        try:
+            with open(os.path.join(self.outdir, "pnfs.json")) as fh:
+                volumes = json.load(fh).get("volumes", [])
+        except (OSError, json.JSONDecodeError, AttributeError):
+            volumes = []
+        for v in volumes:
+            if isinstance(v, dict) and v.get("cluster"):
+                return str(v["cluster"])
         p = os.path.join(self.outdir, "test.log")
         if os.path.exists(p):
             try:

@@ -68,6 +68,7 @@ class PnfsRwxWorkload(FioWorkload):
         self._claim_of: dict[str, str] = {}     # pod -> claim
         self._shared: set[str] = set()          # claims several pods mount
         self._lvol_of: dict[str, str] = {}      # claim -> lvol UUID
+        self._cluster_of: dict[str, str] = {}   # claim -> cluster UUID
 
     # ── the layout ──────────────────────────────────────────────────────────────────
 
@@ -79,7 +80,7 @@ class PnfsRwxWorkload(FioWorkload):
         return docs
 
     def after_running(self, ctx: RunContext) -> None:
-        self._lvol_of = self._resolve_lvols()
+        self._cluster_of, self._lvol_of = self._resolve_lvols()
         nodes = self._nodes()
         self._write_volume_map(ctx, nodes)
         self._report_spread(ctx, nodes)
@@ -202,8 +203,10 @@ class PnfsRwxWorkload(FioWorkload):
 
     # ── what the cluster decided ────────────────────────────────────────────────────
 
-    def _resolve_lvols(self) -> dict[str, str]:
-        """claim -> lvol UUID, from the PV's CSI handle <cluster>:<pool>:<volume>."""
+    def _resolve_lvols(self) -> tuple[dict[str, str], dict[str, str]]:
+        """claim -> cluster UUID and claim -> lvol UUID, from the PV's CSI handle
+        <cluster>:<pool>:<volume>."""
+        clusters: dict[str, str] = {}
         out: dict[str, str] = {}
         ns = self.opt("namespace")
         for claim in sorted(set(self._claim_of.values())):
@@ -216,8 +219,8 @@ class PnfsRwxWorkload(FioWorkload):
                 "volumeHandle", "")
             parts = handle.split(":")
             if len(parts) == 3 and parts[2]:
-                out[claim] = parts[2]
-        return out
+                clusters[claim], out[claim] = parts[0], parts[2]
+        return clusters, out
 
     def _nodes(self) -> dict[str, str]:
         """pod -> node, as the scheduler placed them."""
@@ -236,6 +239,8 @@ class PnfsRwxWorkload(FioWorkload):
             pods = sorted(p for p, c in self._claim_of.items() if c == claim)
             volumes.append({
                 "claim": claim, "lvol": self._lvol_of.get(claim, ""),
+                # The run's cluster, which nothing else in a run without migrations records.
+                "cluster": self._cluster_of.get(claim, ""),
                 "shared": claim in self._shared,
                 "pods": pods,
                 "nodes": sorted({nodes[p] for p in pods if nodes.get(p)}),
