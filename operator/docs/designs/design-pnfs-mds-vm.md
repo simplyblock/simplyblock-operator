@@ -203,6 +203,8 @@ The guest's architecture is the node's. On x86-64 the runner starts `qemu-system
 
 A RWO PVC of `stateSize` is attached to QEMU as a raw block device, so the guest sees a virtio-blk disk with the serial `pnfs-state`. The guest's fstab mounts `/dev/disk/by-id/virtio-pnfs-state` at `/var/lib/nfs` with `x-systemd.makefs`, so systemd formats it (ext4) on first boot, and `nfsdcld` keeps its client-recovery database there (`storagedir=/var/lib/nfs/nfsdcld`). The root disk is attached read-only from the image, so the state disk is the only state the guest keeps. A guest without its state disk never reaches `local-fs.target`, never turns healthy, and is restarted by the boot deadline.
 
+The state disk is always a simplyblock volume. A node-local disk pins the pod to the node it first ran on, and the client-recovery database is what lets NFS clients reclaim their state when the pod restarts on another worker. When `stateStorageClassName` is unset, the reconciler takes a class of the storage cluster the pod serves: a class this driver provisions, whose `cluster_id` is that cluster's, and which is not a pNFS class. It prefers a class the operator wrote for one of the cluster's pools and otherwise takes the first by name. Keeping the state on the same cluster adds no failure the exports do not already have, since the pod serves exports of that cluster only. A named class must also be one this driver provisions and not a pNFS class. When no class qualifies, the StatefulSet is not created, the export stays `Pending`, and an `MDSStateUnavailable` event names the reason. The class is chosen once, when the StatefulSet is created, because a claim template cannot change afterward.
+
 ### 5.4 Scheduling and privilege
 
 The pod is privileged. The container needs `/dev/kvm` and `/dev/net/tun`, and without a device plugin the only way to open them is the host device nodes through a privileged container. The pod has no `hostNetwork` and no `hostPID`, and it mounts no host directory other than the two device nodes.
@@ -457,7 +459,6 @@ The pod-hosted MDS is selected by `spec.pnfs.mds` and is off while that field is
 | 4   | **Reconnecting after a restart with the same host NQN.** Whether the target refuses a connect while its old controller for that NQN is alive, and how long the keep-alive takes to expire it relative to the five-minute assembly deadline                                                   | SPDK/Backend team |
 | 5   | **Whether NFSv4.1-only serving needs `rpc.mountd` and `rpc.statd`.** `design-pnfs-rwx.md` requires them and no code starts them                                                                                                                                                              | Operator team     |
 | 6   | **Warm standby.** A second guest cannot mount the same filesystem, so a standby could only be a guest that has booted and not assembled. Whether the measured boot time (`simplyblock_pnfs_mds_boot_seconds`) justifies it                                                                   | Operator team     |
-| 7   | **The state disk's storage class.** The cluster default can be a volume of the same storage cluster the MDS exports for. Whether that is acceptable, or the class must be named                                                                                                              | Operator team     |
 | 8   | **Whether the StatefulSet is removed when its last export is deleted.** Retaining it keeps an idle guest per storage cluster, removing it adds a boot to the next export's provisioning                                                                                                      | Operator team     |
 | 9   | **How the hub exposes the live instance of a peer.** §7.5 needs the pod UID of the current session, and `Registry.Peer` returns the peer that carries it, which has to be confirmed                                                                                                          | Operator team     |
 | 10  | **Pod Security and OpenShift.** Whether the operator's namespace admits a privileged pod, and which SCC the MDS ServiceAccount needs                                                                                                                                                         | Operator team     |
@@ -636,8 +637,9 @@ type DriverPNFSMDS struct {
 	// +optional
 	StateSize resource.Quantity `json:"stateSize,omitempty"`
 
-	// StateStorageClassName is the storage class of the state disk. Unset takes
-	// the cluster default.
+	// StateStorageClassName is the storage class of the state disk, which is
+	// always a simplyblock volume (§5.3). Unset takes the storage cluster's own
+	// simplyblock class.
 	// +optional
 	StateStorageClassName *string `json:"stateStorageClassName,omitempty"`
 }

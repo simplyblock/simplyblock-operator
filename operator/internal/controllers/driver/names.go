@@ -117,6 +117,12 @@ func driverName(d *simplyblockv1alpha2.SimplyblockDriver) string {
 	return DefaultDriverName
 }
 
+// DriverName is the CSI driver name d registers, with the CRD's default
+// applied: the provisioner of every StorageClass this driver serves.
+func DriverName(d *simplyblockv1alpha2.SimplyblockDriver) string {
+	return driverName(d)
+}
+
 // DefaultDriverName is the CRD's default for spec.driverName, and the name the
 // chart registers under.
 const DefaultDriverName = "csi.simplyblock.io"

@@ -12,21 +12,26 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
+	"github.com/simplyblock/atlas/kube"
 	atlaslvol "github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
 )
 
 // nfsExportMDSBootRequeue is how often a waiting export looks at a metadata
@@ -38,6 +43,7 @@ const nfsExportMDSBootRequeue = 10 * time.Second
 // The metadata server's workload, applied on a storage cluster's first export,
 // and the driver that configures it.
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;create
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=simplyblockdrivers,verbs=get;list;watch
 
@@ -82,6 +88,14 @@ func (r *NFSExportReconciler) reconcilePendingPodHosted(
 	}
 
 	if err := r.ensureMDS(ctx, d, handle.ClusterID); err != nil {
+		var noClass *stateClassError
+		if errors.As(err, &noClass) {
+			// Not retried hot: nothing changes until somebody creates or
+			// names a class, so the export waits and looks again later.
+			r.event(export, corev1.EventTypeWarning, "MDSStateUnavailable",
+				fmt.Sprintf("cannot create the metadata server for storage cluster %s: %v", handle.ClusterID, err))
+			return r.waitForMDS(ctx, export, err.Error(), nfsExportNoHostRequeue)
+		}
 		r.event(export, corev1.EventTypeWarning, "MDSUnavailable",
 			fmt.Sprintf("cannot create the metadata server for storage cluster %s: %v", handle.ClusterID, err))
 		return ctrl.Result{}, err
@@ -118,10 +132,25 @@ func (r *NFSExportReconciler) reconcilePendingPodHosted(
 // StatefulSet when they are absent, owned by the driver so that removing it
 // removes them. An existing one is left alone: changing the StatefulSet
 // restarts the guest, which costs every export of the cluster an outage.
+// That includes its state disk's class, which is chosen only here, before the
+// StatefulSet exists, because a claim template cannot be changed afterward.
 func (r *NFSExportReconciler) ensureMDS(
 	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver, clusterID string,
 ) error {
-	sa, sts, err := driver.MDSObjects(d, clusterID)
+	var existing appsv1.StatefulSet
+	key := client.ObjectKey{Namespace: r.OperatorNamespace, Name: driver.MDSStatefulSetName(d, clusterID)}
+	switch err := r.Get(ctx, key, &existing); {
+	case err == nil:
+		return nil
+	case !apierrors.IsNotFound(err):
+		return fmt.Errorf("reading the metadata server StatefulSet %s: %w", key.Name, err)
+	}
+
+	stateClass, err := r.mdsStateClass(ctx, d, clusterID)
+	if err != nil {
+		return err
+	}
+	sa, sts, err := driver.MDSObjects(d, clusterID, stateClass)
 	if err != nil {
 		return err
 	}
@@ -134,6 +163,83 @@ func (r *NFSExportReconciler) ensureMDS(
 		}
 	}
 	return nil
+}
+
+// stateClassError is a state disk class that cannot be used: the export waits
+// for one rather than failing, since creating or naming a class is all it
+// takes to proceed.
+type stateClassError struct{ reason string }
+
+func (e *stateClassError) Error() string { return e.reason }
+
+// mdsStateClass is the StorageClass of the metadata server's state disk, which
+// is always a simplyblock volume. A node-local disk would pin the pod to the
+// node it first ran on, and the client-recovery database on it is what lets
+// NFS clients reclaim their state when the pod comes back somewhere else.
+//
+// A class named in spec.pnfs.mds.stateStorageClassName is used when this
+// driver provisions it. Otherwise, the storage cluster's own class is used:
+// the metadata server serves exports of that cluster only, so keeping its
+// state there adds no failure the exports do not already have. A class the
+// operator wrote for one of the cluster's pools is preferred, and the first
+// by name otherwise, so the choice is stable.
+//
+// pNFS classes are never chosen: they provision an export, not a block device.
+func (r *NFSExportReconciler) mdsStateClass(
+	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver, clusterID string,
+) (string, error) {
+	provisioner := driver.DriverName(d)
+
+	if named := d.Spec.PNFS.MDS.StateStorageClassName; named != nil && *named != "" {
+		var sc storagev1.StorageClass
+		switch err := r.Get(ctx, client.ObjectKey{Name: *named}, &sc); {
+		case apierrors.IsNotFound(err):
+			return "", &stateClassError{fmt.Sprintf(
+				"the state disk's storage class %q does not exist", *named)}
+		case err != nil:
+			return "", fmt.Errorf("reading storage class %s: %w", *named, err)
+		}
+		if !isSimplyblockBlockClass(&sc, provisioner) {
+			return "", &stateClassError{fmt.Sprintf(
+				"the state disk's storage class %q is not a simplyblock block volume class "+
+					"(provisioner %q, fstype %q); name a class of %s", *named, sc.Provisioner,
+				sc.Parameters[kube.ParamFSType], provisioner)}
+		}
+		return *named, nil
+	}
+
+	var classes storagev1.StorageClassList
+	if err := r.List(ctx, &classes); err != nil {
+		return "", fmt.Errorf("listing storage classes: %w", err)
+	}
+	var candidates []*storagev1.StorageClass
+	for i := range classes.Items {
+		sc := &classes.Items[i]
+		if isSimplyblockBlockClass(sc, provisioner) && sc.Parameters[kube.ParamClusterID] == clusterID {
+			candidates = append(candidates, sc)
+		}
+	}
+	if len(candidates) == 0 {
+		return "", &stateClassError{fmt.Sprintf(
+			"no storage class of %s provisions block volumes on storage cluster %s for the state disk; "+
+				"create one, or name one in spec.pnfs.mds.stateStorageClassName", provisioner, clusterID)}
+	}
+	slices.SortFunc(candidates, func(a, b *storagev1.StorageClass) int {
+		if am, bm := pool.IsOperatorManaged(a), pool.IsOperatorManaged(b); am != bm {
+			if am {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+	return candidates[0].Name, nil
+}
+
+// isSimplyblockBlockClass reports whether sc provisions a simplyblock block
+// volume: this driver is its provisioner, and it is not a pNFS class.
+func isSimplyblockBlockClass(sc *storagev1.StorageClass, provisioner string) bool {
+	return sc.Provisioner == provisioner && sc.Parameters[kube.ParamFSType] != kube.FSTypePNFS
 }
 
 // waitForMDS records why the export is not bound yet and comes back later.

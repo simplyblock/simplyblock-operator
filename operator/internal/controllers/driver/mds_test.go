@@ -35,7 +35,7 @@ func withMDS(d *simplyblockv1alpha2.SimplyblockDriver) *simplyblockv1alpha2.Simp
 
 func mdsObjects(t *testing.T, d *simplyblockv1alpha2.SimplyblockDriver) (*corev1.ServiceAccount, *appsv1.StatefulSet) {
 	t.Helper()
-	sa, sts, err := MDSObjects(d, testClusterID)
+	sa, sts, err := MDSObjects(d, testClusterID, "simplyblock-state")
 	if err != nil {
 		t.Fatalf("MDSObjects: %v", err)
 	}
@@ -195,11 +195,10 @@ func TestMDSGuestIsSizedAndNamedFromThePod(t *testing.T) {
 }
 
 // The state disk is a raw block device the guest formats itself, at the path
-// the runner attaches it from.
+// the runner attaches it from, in the class the caller chose for it.
 func TestMDSStateDiskIsABlockClaimAtTheRunnersPath(t *testing.T) {
-	class := "simplyblock-replicated"
+	const class = "simplyblock-state" // what mdsObjects passes as the caller's choice
 	d := withMDS(testDriver("simplyblock"))
-	d.Spec.PNFS.MDS.StateStorageClassName = &class
 	_, sts := mdsObjects(t, d)
 
 	if len(sts.Spec.VolumeClaimTemplates) != 1 {
@@ -260,7 +259,7 @@ func TestMDSPodReadinessAndShutdownFollowTheGuest(t *testing.T) {
 }
 
 func TestMDSObjectsNeedTheMDSSpec(t *testing.T) {
-	if _, _, err := MDSObjects(testDriver("simplyblock"), testClusterID); err == nil {
+	if _, _, err := MDSObjects(testDriver("simplyblock"), testClusterID, "simplyblock-state"); err == nil {
 		t.Error("MDSObjects rendered a metadata server for a driver without spec.pnfs.mds")
 	}
 }

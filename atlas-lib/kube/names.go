@@ -65,6 +65,15 @@ const (
 	ParamMaxNamespacePerSubsys = "max_namespace_per_subsys"
 	ParamEncryption            = "encryption"
 
+	// ParamFSType is Kubernetes' own well-known key for the filesystem an
+	// external provisioner formats a volume with, which is why it is not
+	// spelled the way the keys above are.
+	ParamFSType = "csi.storage.k8s.io/fstype"
+	// FSTypePNFS under ParamFSType selects a pNFS export instead of a block
+	// device with a filesystem: a class carrying it provisions something only
+	// NFS clients can use.
+	FSTypePNFS = "pnfs"
+
 	// The three a StoragePool's volume defaults reach the class under and that
 	// nothing consumes yet. They are written because the pool's contract is that
 	// its defaults appear in the class's parameters, and a class's parameters

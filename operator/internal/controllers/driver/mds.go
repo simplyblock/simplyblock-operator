@@ -88,9 +88,11 @@ func MDSPodName(d *simplyblockv1alpha2.SimplyblockDriver, clusterID string) stri
 
 // MDSObjects renders the metadata server for one storage cluster: its
 // ServiceAccount, which carries no permissions and exists for the token
-// csi-link authenticates, and its StatefulSet. The caller sets ownership.
+// csi-link authenticates, and its StatefulSet. The caller sets ownership, and
+// chooses stateClass, the StorageClass of the state disk: choosing one takes a
+// read of the cluster, which this package does not do.
 func MDSObjects(
-	d *simplyblockv1alpha2.SimplyblockDriver, clusterID string,
+	d *simplyblockv1alpha2.SimplyblockDriver, clusterID, stateClass string,
 ) (*corev1.ServiceAccount, *appsv1.StatefulSet, error) {
 	spec := d.Spec.PNFS.MDS
 	if spec == nil {
@@ -167,7 +169,7 @@ func MDSObjects(
 				Spec: corev1.PersistentVolumeClaimSpec{
 					AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 					VolumeMode:       ptr.To(corev1.PersistentVolumeBlock),
-					StorageClassName: spec.StateStorageClassName,
+					StorageClassName: ptr.To(stateClass),
 					Resources: corev1.VolumeResourceRequirements{
 						Requests: corev1.ResourceList{corev1.ResourceStorage: stateSize},
 					},

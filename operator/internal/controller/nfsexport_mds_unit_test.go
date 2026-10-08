@@ -8,14 +8,19 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+
+	"github.com/simplyblock/atlas/kube"
 )
 
 // reasonRecorder keeps the reason of every event, so a test can assert that
@@ -76,10 +81,11 @@ func newPodHostedReconciler(
 	t *testing.T, objects ...client.Object,
 ) (*NFSExportReconciler, client.Client, *reasonRecorder) {
 	t.Helper()
-	scheme := newTestScheme(t, corev1.AddToScheme, discoveryv1.AddToScheme, appsv1.AddToScheme)
+	scheme := newTestScheme(t, corev1.AddToScheme, discoveryv1.AddToScheme, appsv1.AddToScheme,
+		storagev1.AddToScheme)
 	cl := newTestClient(t, scheme,
 		[]client.Object{&simplyblockv1alpha2.NFSExport{}},
-		withBaselineKubeNode(objects)...,
+		withBaselineStateClass(withBaselineKubeNode(objects))...,
 	)
 	recorder := &reasonRecorder{}
 	return &NFSExportReconciler{
@@ -89,6 +95,155 @@ func newPodHostedReconciler(
 		Assembler:         &fakeAssembler{},
 		OperatorNamespace: testOperatorNS,
 	}, cl, recorder
+}
+
+// testStateClass is the simplyblock class of testExport's storage cluster.
+const testStateClass = "simplyblock-cluster-a"
+
+// storageClass is a StorageClass of provisioner for clusterID, formatting with
+// fsType.
+func storageClass(name, provisioner, clusterID, fsType string) *storagev1.StorageClass {
+	params := map[string]string{}
+	if clusterID != "" {
+		params[kube.ParamClusterID] = clusterID
+	}
+	if fsType != "" {
+		params[kube.ParamFSType] = fsType
+	}
+	return &storagev1.StorageClass{
+		ObjectMeta:  metav1.ObjectMeta{Name: name},
+		Provisioner: provisioner,
+		Parameters:  params,
+	}
+}
+
+// withBaselineStateClass gives a test that names no StorageClass the one its
+// metadata server's state disk needs, so only the tests about that choice
+// have to think about it.
+func withBaselineStateClass(objects []client.Object) []client.Object {
+	for _, o := range objects {
+		if _, ok := o.(*storagev1.StorageClass); ok {
+			return objects
+		}
+	}
+	return append(objects,
+		storageClass(testStateClass, driver.DefaultDriverName, testExportClusterID, "xfs"))
+}
+
+// stateClassOf is the class the StatefulSet's state disk claims from, or ""
+// when the StatefulSet was not created.
+func stateClassOf(t *testing.T, cl client.Client, d *simplyblockv1alpha2.SimplyblockDriver) string {
+	t.Helper()
+	var sts appsv1.StatefulSet
+	key := client.ObjectKey{Namespace: testOperatorNS, Name: driver.MDSStatefulSetName(d, testExportClusterID)}
+	if err := cl.Get(context.Background(), key, &sts); err != nil {
+		return ""
+	}
+	if len(sts.Spec.VolumeClaimTemplates) != 1 || sts.Spec.VolumeClaimTemplates[0].Spec.StorageClassName == nil {
+		t.Fatalf("the state disk claim names no class: %+v", sts.Spec.VolumeClaimTemplates)
+	}
+	return *sts.Spec.VolumeClaimTemplates[0].Spec.StorageClassName
+}
+
+// The state disk is a simplyblock volume of the storage cluster the metadata
+// server serves, so the pod restarts on any worker with its client-recovery
+// database. Left to the cluster's default class it would be wherever that
+// points, typically a node-local path that pins the pod to one node for good.
+func TestPodHostedStateDiskDefaultsToTheClustersSimplyblockClass(t *testing.T) {
+	d := mdsDriver()
+	local := storageClass("local-path", "rancher.io/local-path", "", "")
+	local.Annotations = map[string]string{"storageclass.kubernetes.io/is-default-class": "true"}
+	r, cl, _ := newPodHostedReconciler(t, testExport(nil), d,
+		local,
+		// A pNFS class provisions an export, not a block device.
+		storageClass("a-pnfs", driver.DefaultDriverName, testExportClusterID, kube.FSTypePNFS),
+		// Simplyblock, but another storage cluster's.
+		storageClass("another-cluster", driver.DefaultDriverName, "7d1e0c55-3a2b-4f6e-9c8d-1b2a3c4d5e6f", "xfs"),
+		storageClass(testStateClass, driver.DefaultDriverName, testExportClusterID, "xfs"),
+	)
+
+	reconcileExport(t, r)
+
+	if got := stateClassOf(t, cl, d); got != testStateClass {
+		t.Fatalf("state disk class = %q, want the storage cluster's own simplyblock class %q", got, testStateClass)
+	}
+}
+
+// A named class is used as named, provided simplyblock provisions it.
+func TestPodHostedStateDiskTakesANamedSimplyblockClass(t *testing.T) {
+	d := mdsDriver()
+	d.Spec.PNFS.MDS.StateStorageClassName = ptr.To("chosen")
+	r, cl, _ := newPodHostedReconciler(t, testExport(nil), d,
+		storageClass(testStateClass, driver.DefaultDriverName, testExportClusterID, "xfs"),
+		storageClass("chosen", driver.DefaultDriverName, testExportClusterID, "ext4"),
+	)
+
+	reconcileExport(t, r)
+
+	if got := stateClassOf(t, cl, d); got != "chosen" {
+		t.Fatalf("state disk class = %q, want the named %q", got, "chosen")
+	}
+}
+
+// Nothing other than a simplyblock volume is accepted for the state disk,
+// named or not. The export waits, the StatefulSet is not created, since its
+// claim template could not be corrected afterward, and an event says why.
+func TestPodHostedStateDiskRefusesAClassThatIsNotSimplyblock(t *testing.T) {
+	cases := map[string]struct {
+		named   string
+		classes []client.Object
+	}{
+		"a named class another provisioner serves": {
+			named: "local-path",
+			classes: []client.Object{
+				storageClass("local-path", "rancher.io/local-path", "", ""),
+				storageClass(testStateClass, driver.DefaultDriverName, testExportClusterID, "xfs"),
+			},
+		},
+		"a named class that does not exist": {
+			named:   "missing",
+			classes: []client.Object{storageClass(testStateClass, driver.DefaultDriverName, testExportClusterID, "xfs")},
+		},
+		"a named pNFS class": {
+			named:   "a-pnfs",
+			classes: []client.Object{storageClass("a-pnfs", driver.DefaultDriverName, testExportClusterID, kube.FSTypePNFS)},
+		},
+		"no simplyblock class of this storage cluster": {
+			classes: []client.Object{
+				storageClass("local-path", "rancher.io/local-path", "", ""),
+				storageClass("another-cluster", driver.DefaultDriverName, "7d1e0c55-3a2b-4f6e-9c8d-1b2a3c4d5e6f", "xfs"),
+			},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			d := mdsDriver()
+			if tc.named != "" {
+				d.Spec.PNFS.MDS.StateStorageClassName = ptr.To(tc.named)
+			}
+			r, cl, recorder := newPodHostedReconciler(t, append([]client.Object{testExport(nil), d}, tc.classes...)...)
+
+			res, err := r.Reconcile(context.Background(), reconcile.Request{
+				NamespacedName: client.ObjectKey{Name: testExportName, Namespace: testExportNS},
+			})
+			if err != nil {
+				t.Fatalf("Reconcile: %v; a class that cannot be used is a wait, not an error to retry hot", err)
+			}
+
+			if got := stateClassOf(t, cl, d); got != "" {
+				t.Fatalf("the StatefulSet was created with state disk class %q", got)
+			}
+			if !slices.Contains(recorder.reasons, "MDSStateUnavailable") {
+				t.Errorf("event reasons = %v, want MDSStateUnavailable", recorder.reasons)
+			}
+			if got := loadExport(t, cl); got.Status.Phase != simplyblockv1alpha2.NFSExportPhasePending {
+				t.Errorf("phase = %q, want Pending", got.Status.Phase)
+			}
+			if res.RequeueAfter == 0 {
+				t.Error("no requeue: a class created later would never be noticed")
+			}
+		})
+	}
 }
 
 // The first export of a storage cluster brings its metadata server up: the

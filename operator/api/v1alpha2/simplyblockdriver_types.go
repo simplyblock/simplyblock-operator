@@ -216,8 +216,13 @@ type DriverPNFSMDS struct {
 	// +optional
 	StateSize resource.Quantity `json:"stateSize,omitempty"`
 
-	// StateStorageClassName is the storage class of the state disk. Unset
-	// takes the cluster default.
+	// StateStorageClassName is the storage class of the state disk, which is
+	// always a simplyblock volume so the pod can restart on any worker with
+	// its client-recovery database. A named class must be provisioned by this
+	// driver and must not be a pNFS class. Unset takes the storage cluster's
+	// own simplyblock class, preferring one the operator wrote for its pools.
+	// Read only when the metadata server is first created: a StatefulSet's
+	// claim template cannot change afterward.
 	// +optional
 	StateStorageClassName *string `json:"stateStorageClassName,omitempty"`
 }
