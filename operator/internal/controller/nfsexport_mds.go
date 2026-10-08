@@ -43,7 +43,8 @@ const nfsExportMDSBootRequeue = 10 * time.Second
 // The metadata server's workload, applied on a storage cluster's first export,
 // and the driver that configures it.
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create
-// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=validatingadmissionpolicies;validatingadmissionpolicybindings,verbs=get;create
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;create
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=simplyblockdrivers,verbs=get;list;watch
 
@@ -178,11 +179,14 @@ func (e *stateClassError) Error() string { return e.reason }
 // NFS clients reclaim their state when the pod comes back somewhere else.
 //
 // A class named in spec.pnfs.mds.stateStorageClassName is used when this
-// driver provisions it. Otherwise, the storage cluster's own class is used:
-// the metadata server serves exports of that cluster only, so keeping its
-// state there adds no failure the exports do not already have. A class the
-// operator wrote for one of the cluster's pools is preferred, and the first
-// by name otherwise, so the choice is stable.
+// driver provisions it. Otherwise, the storage cluster gets a class of its
+// own (driver.MDSStateClass), reserved for the state disk by an admission
+// policy: one known class rather than whichever user class happens to exist,
+// and none of the caps a user class carries. It is derived from the cluster's
+// own class, since the metadata server serves exports of that cluster only
+// and keeping its state there adds no failure the exports do not already
+// have. Among the cluster's classes one the operator wrote for a pool is
+// preferred, and the first by name otherwise, so the choice is stable.
 //
 // pNFS classes are never chosen: they provision an export, not a block device.
 func (r *NFSExportReconciler) mdsStateClass(
@@ -208,21 +212,52 @@ func (r *NFSExportReconciler) mdsStateClass(
 		return *named, nil
 	}
 
+	// The policy goes first, so the class never exists unreserved.
+	if err := r.ensureStatePolicy(ctx, d); err != nil {
+		return "", err
+	}
+	name := driver.MDSStateClassName(d, clusterID)
+	var existing storagev1.StorageClass
+	switch err := r.Get(ctx, client.ObjectKey{Name: name}, &existing); {
+	case err == nil:
+		return name, nil
+	case !apierrors.IsNotFound(err):
+		return "", fmt.Errorf("reading storage class %s: %w", name, err)
+	}
+
+	source, err := r.clusterBlockClass(ctx, provisioner, clusterID)
+	if err != nil {
+		return "", err
+	}
+	if err := r.Create(ctx, driver.MDSStateClass(d, clusterID, source)); err != nil &&
+		!apierrors.IsAlreadyExists(err) {
+		return "", fmt.Errorf("creating storage class %s: %w", name, err)
+	}
+	return name, nil
+}
+
+// clusterBlockClass is the simplyblock block class of a storage cluster the
+// state disk's class is derived from.
+func (r *NFSExportReconciler) clusterBlockClass(
+	ctx context.Context, provisioner, clusterID string,
+) (*storagev1.StorageClass, error) {
 	var classes storagev1.StorageClassList
 	if err := r.List(ctx, &classes); err != nil {
-		return "", fmt.Errorf("listing storage classes: %w", err)
+		return nil, fmt.Errorf("listing storage classes: %w", err)
 	}
 	var candidates []*storagev1.StorageClass
 	for i := range classes.Items {
 		sc := &classes.Items[i]
-		if isSimplyblockBlockClass(sc, provisioner) && sc.Parameters[kube.ParamClusterID] == clusterID {
+		if isSimplyblockBlockClass(sc, provisioner) && sc.Parameters[kube.ParamClusterID] == clusterID &&
+			!strings.HasSuffix(sc.Name, driver.MDSStateClassSuffix) {
 			candidates = append(candidates, sc)
 		}
 	}
 	if len(candidates) == 0 {
-		return "", &stateClassError{fmt.Sprintf(
-			"no storage class of %s provisions block volumes on storage cluster %s for the state disk; "+
-				"create one, or name one in spec.pnfs.mds.stateStorageClassName", provisioner, clusterID)}
+		return nil, &stateClassError{fmt.Sprintf(
+			"no storage class of %s provisions block volumes on storage cluster %s to derive the "+
+				"state disk's class from; create one, or name one in spec.pnfs.mds.stateStorageClassName",
+			provisioner, clusterID)}
 	}
 	slices.SortFunc(candidates, func(a, b *storagev1.StorageClass) int {
 		if am, bm := pool.IsOperatorManaged(a), pool.IsOperatorManaged(b); am != bm {
@@ -233,7 +268,22 @@ func (r *NFSExportReconciler) mdsStateClass(
 		}
 		return strings.Compare(a.Name, b.Name)
 	})
-	return candidates[0].Name, nil
+	return candidates[0], nil
+}
+
+// ensureStatePolicy creates the admission policy reserving the state disk
+// classes, and its binding, when they are absent. Existing ones are left as
+// they are: an administrator who changed them meant to.
+func (r *NFSExportReconciler) ensureStatePolicy(
+	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
+) error {
+	policy, binding := driver.MDSStatePolicy(d, r.OperatorNamespace)
+	for _, obj := range []client.Object{policy, binding} {
+		if err := r.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("creating %T %s: %w", obj, obj.GetName(), err)
+		}
+	}
+	return nil
 }
 
 // isSimplyblockBlockClass reports whether sc provisions a simplyblock block

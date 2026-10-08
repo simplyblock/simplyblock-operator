@@ -203,7 +203,9 @@ The guest's architecture is the node's. On x86-64 the runner starts `qemu-system
 
 A RWO PVC of `stateSize` is attached to QEMU as a raw block device, so the guest sees a virtio-blk disk with the serial `pnfs-state`. The guest's fstab mounts `/dev/disk/by-id/virtio-pnfs-state` at `/var/lib/nfs` with `x-systemd.makefs`, so systemd formats it (ext4) on first boot, and `nfsdcld` keeps its client-recovery database there (`storagedir=/var/lib/nfs/nfsdcld`). The root disk is attached read-only from the image, so the state disk is the only state the guest keeps. A guest without its state disk never reaches `local-fs.target`, never turns healthy, and is restarted by the boot deadline.
 
-The state disk is always a simplyblock volume. A node-local disk pins the pod to the node it first ran on, and the client-recovery database is what lets NFS clients reclaim their state when the pod restarts on another worker. When `stateStorageClassName` is unset, the reconciler takes a class of the storage cluster the pod serves: a class this driver provisions, whose `cluster_id` is that cluster's, and which is not a pNFS class. It prefers a class the operator wrote for one of the cluster's pools and otherwise takes the first by name. Keeping the state on the same cluster adds no failure the exports do not already have, since the pod serves exports of that cluster only. A named class must also be one this driver provisions and not a pNFS class. When no class qualifies, the StatefulSet is not created, the export stays `Pending`, and an `MDSStateUnavailable` event names the reason. The class is chosen once, when the StatefulSet is created, because a claim template cannot change afterward.
+The state disk is always a simplyblock volume. A node-local disk pins the pod to the node it first ran on, and the client-recovery database is what lets NFS clients reclaim their state when the pod restarts on another worker. When `stateStorageClassName` is unset, each storage cluster gets a class of its own, `<driver>-<cluster>-pnfs-mds-state`, which the reconciler writes before it creates the StatefulSet. It is derived from a class of that cluster: one this driver provisions, whose `cluster_id` is that cluster's, and which is not a pNFS class, preferring one the operator wrote for a pool. It takes only the cluster, pool, fabric and encryption parameters, so none of the QoS caps meant for user volumes reach the state disk, and keeping it on the same cluster adds no failure the exports do not already have. The class carries a managed-by label of its own and no pool label: a pool label would assign it to the pool, whose deletion waits on its classes. A named class must be one this driver provisions and not a pNFS class. When no class qualifies, the StatefulSet is not created, the export stays `Pending`, and an `MDSStateUnavailable` event names the reason. The class is chosen once, when the StatefulSet is created, because a claim template cannot change afterward.
+
+Kubernetes has no permission for using a StorageClass, so the class is reserved by a `ValidatingAdmissionPolicy` the reconciler creates before the class. It refuses a new claim whose class name ends in `-pnfs-mds-state`, and its binding applies it to every namespace but the operator's, where the StatefulSet controller creates the state disk's claim. A policy evaluated in the API server, rather than a webhook, costs nothing to serve and cannot make every claim in the cluster wait on the operator. It needs Kubernetes 1.30, the supported minimum.
 
 ### 5.4 Scheduling and privilege
 
@@ -638,8 +640,8 @@ type DriverPNFSMDS struct {
 	StateSize resource.Quantity `json:"stateSize,omitempty"`
 
 	// StateStorageClassName is the storage class of the state disk, which is
-	// always a simplyblock volume (§5.3). Unset takes the storage cluster's own
-	// simplyblock class.
+	// always a simplyblock volume (§5.3). Unset gives the storage cluster a
+	// class of its own, reserved for the state disk.
 	// +optional
 	StateStorageClassName *string `json:"stateStorageClassName,omitempty"`
 }

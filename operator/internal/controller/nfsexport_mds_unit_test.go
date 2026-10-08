@@ -2,9 +2,13 @@ package controller
 
 import (
 	"context"
+	"maps"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -18,6 +22,7 @@ import (
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 
 	"github.com/simplyblock/atlas/kube"
@@ -82,7 +87,7 @@ func newPodHostedReconciler(
 ) (*NFSExportReconciler, client.Client, *reasonRecorder) {
 	t.Helper()
 	scheme := newTestScheme(t, corev1.AddToScheme, discoveryv1.AddToScheme, appsv1.AddToScheme,
-		storagev1.AddToScheme)
+		storagev1.AddToScheme, admissionregistrationv1.AddToScheme)
 	cl := newTestClient(t, scheme,
 		[]client.Object{&simplyblockv1alpha2.NFSExport{}},
 		withBaselineStateClass(withBaselineKubeNode(objects))...,
@@ -145,27 +150,118 @@ func stateClassOf(t *testing.T, cl client.Client, d *simplyblockv1alpha2.Simplyb
 	return *sts.Spec.VolumeClaimTemplates[0].Spec.StorageClassName
 }
 
+// testDedicatedClass is the class the operator writes for testExport's
+// storage cluster. Spelled out rather than derived, because the admission
+// policy that reserves it matches on the name.
+const testDedicatedClass = "simplyblock-0f2ac1d3-pnfs-mds-state"
+
 // The state disk is a simplyblock volume of the storage cluster the metadata
 // server serves, so the pod restarts on any worker with its client-recovery
-// database. Left to the cluster's default class it would be wherever that
-// points, typically a node-local path that pins the pod to one node for good.
-func TestPodHostedStateDiskDefaultsToTheClustersSimplyblockClass(t *testing.T) {
+// database, and it is a class of its own: the cluster's volume parameters,
+// none of the class-level caps a user class carries. Left to the cluster's
+// default class it would be wherever that points, typically a node-local path
+// that pins the pod to one node for good.
+func TestPodHostedStateDiskGetsAClassOfItsOwn(t *testing.T) {
 	d := mdsDriver()
 	local := storageClass("local-path", "rancher.io/local-path", "", "")
-	local.Annotations = map[string]string{"storageclass.kubernetes.io/is-default-class": "true"}
+	local.Annotations = map[string]string{"storageclass.kubernetes.io/is-default-class": strconv.FormatBool(true)}
+	source := storageClass(testStateClass, driver.DefaultDriverName, testExportClusterID, "xfs")
+	source.Parameters[kube.ParamPool] = "pool-a"
+	source.Parameters[kube.ParamFabric] = "tcp"
+	source.Parameters[kube.ParamEncryption] = strconv.FormatBool(true)
+	source.Parameters[kube.ParamQoSRWIOPS] = "1000"
 	r, cl, _ := newPodHostedReconciler(t, testExport(nil), d,
 		local,
 		// A pNFS class provisions an export, not a block device.
 		storageClass("a-pnfs", driver.DefaultDriverName, testExportClusterID, kube.FSTypePNFS),
 		// Simplyblock, but another storage cluster's.
 		storageClass("another-cluster", driver.DefaultDriverName, "7d1e0c55-3a2b-4f6e-9c8d-1b2a3c4d5e6f", "xfs"),
-		storageClass(testStateClass, driver.DefaultDriverName, testExportClusterID, "xfs"),
+		source,
 	)
 
 	reconcileExport(t, r)
 
-	if got := stateClassOf(t, cl, d); got != testStateClass {
-		t.Fatalf("state disk class = %q, want the storage cluster's own simplyblock class %q", got, testStateClass)
+	if got := stateClassOf(t, cl, d); got != testDedicatedClass {
+		t.Fatalf("state disk class = %q, want the class of its own %q", got, testDedicatedClass)
+	}
+	var sc storagev1.StorageClass
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: testDedicatedClass}, &sc); err != nil {
+		t.Fatalf("the state disk's class was not written: %v", err)
+	}
+	if sc.Provisioner != driver.DefaultDriverName {
+		t.Errorf("provisioner = %q, want %q", sc.Provisioner, driver.DefaultDriverName)
+	}
+	want := map[string]string{
+		kube.ParamClusterID: testExportClusterID, kube.ParamPool: "pool-a",
+		kube.ParamFabric: "tcp", kube.ParamEncryption: strconv.FormatBool(true),
+	}
+	if !maps.Equal(sc.Parameters, want) {
+		t.Errorf("parameters = %v, want the cluster's own without caps or fstype: %v", sc.Parameters, want)
+	}
+	if sc.Labels[pool.LabelManagedBy] != driver.MDSStateClassManagedBy {
+		t.Errorf("labels = %v, want %s=%s", sc.Labels, pool.LabelManagedBy, driver.MDSStateClassManagedBy)
+	}
+	// A pool label would assign the class to the pool, whose deletion then
+	// waits on a class nothing removes.
+	if _, ok := sc.Labels[pool.LabelPool]; ok {
+		t.Errorf("labels = %v: the state disk's class must not be assigned to a pool", sc.Labels)
+	}
+}
+
+// Kubernetes has no permission for using a StorageClass, so without a policy
+// any namespace could claim a volume of the state disk's class. The policy
+// refuses that everywhere but the operator's own namespace, where the
+// StatefulSet controller creates the state disk's claim.
+func TestPodHostedStateClassIsReservedByAnAdmissionPolicy(t *testing.T) {
+	d := mdsDriver()
+	r, cl, _ := newPodHostedReconciler(t, testExport(nil), d)
+
+	reconcileExport(t, r)
+
+	var policy admissionregistrationv1.ValidatingAdmissionPolicy
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: driver.MDSStatePolicyName(d)}, &policy); err != nil {
+		t.Fatalf("the admission policy was not written: %v", err)
+	}
+	rules := policy.Spec.MatchConstraints.ResourceRules
+	if len(rules) != 1 || !slices.Equal(rules[0].Resources, []string{"persistentvolumeclaims"}) ||
+		!slices.Equal(rules[0].Operations, []admissionregistrationv1.OperationType{admissionregistrationv1.Create}) {
+		t.Errorf("rules = %+v, want CREATE of persistentvolumeclaims", rules)
+	}
+	if len(policy.Spec.Validations) != 1 ||
+		!strings.Contains(policy.Spec.Validations[0].Expression, driver.MDSStateClassSuffix) {
+		t.Errorf("validations = %+v, want one on the %s suffix", policy.Spec.Validations, driver.MDSStateClassSuffix)
+	}
+
+	var binding admissionregistrationv1.ValidatingAdmissionPolicyBinding
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: driver.MDSStatePolicyName(d)}, &binding); err != nil {
+		t.Fatalf("the admission policy binding was not written: %v", err)
+	}
+	if binding.Spec.PolicyName != policy.Name ||
+		!slices.Equal(binding.Spec.ValidationActions, []admissionregistrationv1.ValidationAction{admissionregistrationv1.Deny}) {
+		t.Errorf("binding = %+v, want policy %s with Deny", binding.Spec, policy.Name)
+	}
+	sel := binding.Spec.MatchResources.NamespaceSelector
+	if sel == nil || len(sel.MatchExpressions) != 1 ||
+		sel.MatchExpressions[0].Key != corev1.LabelMetadataName ||
+		sel.MatchExpressions[0].Operator != metav1.LabelSelectorOpNotIn ||
+		!slices.Equal(sel.MatchExpressions[0].Values, []string{testOperatorNS}) {
+		t.Errorf("namespaceSelector = %+v, want every namespace but %s", sel, testOperatorNS)
+	}
+}
+
+// A class written for an earlier metadata server of the same cluster is used
+// again, even when the class it was derived from is gone.
+func TestPodHostedStateDiskReusesItsClass(t *testing.T) {
+	d := mdsDriver()
+	r, cl, recorder := newPodHostedReconciler(t, testExport(nil), d,
+		storageClass("local-path", "rancher.io/local-path", "", ""),
+		storageClass(testDedicatedClass, driver.DefaultDriverName, testExportClusterID, ""),
+	)
+
+	reconcileExport(t, r)
+
+	if got := stateClassOf(t, cl, d); got != testDedicatedClass {
+		t.Fatalf("state disk class = %q, want the existing %q (events %v)", got, testDedicatedClass, recorder.reasons)
 	}
 }
 

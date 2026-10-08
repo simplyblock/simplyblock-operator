@@ -219,10 +219,11 @@ type DriverPNFSMDS struct {
 	// StateStorageClassName is the storage class of the state disk, which is
 	// always a simplyblock volume so the pod can restart on any worker with
 	// its client-recovery database. A named class must be provisioned by this
-	// driver and must not be a pNFS class. Unset takes the storage cluster's
-	// own simplyblock class, preferring one the operator wrote for its pools.
-	// Read only when the metadata server is first created: a StatefulSet's
-	// claim template cannot change afterward.
+	// driver and must not be a pNFS class. Unset gives each storage cluster a
+	// class of its own, <driver>-<cluster>-pnfs-mds-state, derived from the
+	// cluster's simplyblock class without its QoS caps and reserved for the
+	// state disk by an admission policy. Read only when the metadata server is
+	// first created: a StatefulSet's claim template cannot change afterward.
 	// +optional
 	StateStorageClassName *string `json:"stateStorageClassName,omitempty"`
 }
