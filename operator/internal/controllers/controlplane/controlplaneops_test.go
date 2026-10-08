@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -416,54 +417,50 @@ func TestAnUpgradeWritesTheImageOntoTheEntity(t *testing.T) {
 	}
 }
 
-// Verifying fails the operation when the reported version disagrees with what
-// was asked for, which is what separates an upgrade that completed from a
-// rollout that failed back.
-func TestVerifyingFailsOnAVersionThatDisagrees(t *testing.T) {
-	mountedCA(t)
-	cp := localControlPlane()
-	cp.Status.Endpoint = "http://simplyblock-webappapi.simplyblock.svc.cluster.local:5000"
-
-	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionUpgrade)
-	ops.Spec.Upgrade = &simplyblockv1alpha2.UpgradeSpec{
-		Image: "quay.io/simplyblock-io/simplyblock:26.3.0",
+// webAPIAt builds the management API's Deployment as the rollout controller
+// would report it: the image its pod template carries, and how far the roll has
+// got.
+func webAPIAt(image string, replicas, updated, ready int32, mutate ...func(*appsv1.Deployment)) *appsv1.Deployment {
+	d := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: ComponentWebAPI, Namespace: testNamespace, Generation: 2},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{Name: "webappapi", Image: image}},
+			}},
+		},
+		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: 2,
+			Replicas:           replicas,
+			UpdatedReplicas:    updated,
+			ReadyReplicas:      ready,
+		},
 	}
-
-	recorder := &recordingRecorder{}
-	r := &ControlPlaneOpsReconciler{
-		Client:   newClient(t, cp, ops),
-		Scheme:   testScheme(t),
-		Recorder: recorder,
-		Prober:   &stubProber{ready: true, version: "26.2.8"},
+	for _, m := range mutate {
+		m(d)
 	}
-
-	_, _, err := r.verify(context.Background(), ops, cp)
-	var fatal *terminalStepError
-	if !errors.As(err, &fatal) {
-		t.Fatalf("verify returned %v, want a terminal failure", err)
-	}
-	if !strings.Contains(fatal.Error(), "26.2.8") {
-		t.Errorf("the failure is %q, want it to name what the control plane reported",
-			fatal.Error())
-	}
-	if recorder.count(VersionMismatch) == 0 {
-		t.Error("no VersionMismatch event on a rollout that failed back")
-	}
+	return d
 }
 
-// Verifying passes when the reported version is the one asked for.
-func TestVerifyingPassesOnTheVersionThatWasAskedFor(t *testing.T) {
-	mountedCA(t)
-	cp := localControlPlane()
+// upgradeTo builds an Upgrade operation naming image.
+func upgradeTo(image string) *simplyblockv1alpha2.ControlPlaneOps {
 	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionUpgrade)
-	ops.Spec.Upgrade = &simplyblockv1alpha2.UpgradeSpec{
-		Image: "quay.io/simplyblock-io/simplyblock:26.3.0",
-	}
+	ops.Spec.Upgrade = &simplyblockv1alpha2.UpgradeSpec{Image: image}
+	return ops
+}
+
+// Verifying passes once the management API's Deployment carries the requested
+// image on every replica and all of them are ready.
+func TestVerifyingPassesOnACompletedRollout(t *testing.T) {
+	mountedCA(t)
+	const next = "quay.io/simplyblock-io/simplyblock:26.3.0"
+	cp := localControlPlane()
+	ops := upgradeTo(next)
 
 	r := &ControlPlaneOpsReconciler{
-		Client: newClient(t, cp, ops),
+		Client: newClient(t, cp, ops, webAPIAt(next, 2, 2, 2)),
 		Scheme: testScheme(t),
-		Prober: &stubProber{ready: true, version: "26.3.0"},
+		Prober: &stubProber{ready: true},
 	}
 
 	done, held, err := r.verify(context.Background(), ops, cp)
@@ -471,63 +468,123 @@ func TestVerifyingPassesOnTheVersionThatWasAskedFor(t *testing.T) {
 		t.Fatalf("verify: %v", err)
 	}
 	if !done {
-		t.Errorf("verify held on %q against the version it asked for", held)
+		t.Errorf("verify held on %q after the rollout completed", held)
 	}
 }
 
-// A control plane that serves no version endpoint passes verification rather
-// than failing it, and says so: failing every upgrade on a deployment that
-// cannot answer would make the action unusable, and the record of the operation
-// has to carry what was and was not verified.
-func TestVerifyingPassesAndSaysSoWhenNoVersionIsServed(t *testing.T) {
+// Verifying holds, and does not pass, while the Deployment still carries the old
+// image. The entity re-applies its workloads asynchronously after Applying, so
+// a Deployment that is fully ready on the old image is the state Verifying is
+// most likely to meet first, and treating it as a finished rollout would report
+// an upgrade that has not started.
+func TestVerifyingHoldsWhileTheDeploymentStillCarriesTheOldImage(t *testing.T) {
 	mountedCA(t)
-	ctx := context.Background()
 	cp := localControlPlane()
-	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionUpgrade)
-	ops.Spec.Upgrade = &simplyblockv1alpha2.UpgradeSpec{
-		Image: "quay.io/simplyblock-io/simplyblock:26.3.0",
-	}
+	ops := upgradeTo("quay.io/simplyblock-io/simplyblock:26.3.0")
 
-	c := newClient(t, cp, ops)
 	r := &ControlPlaneOpsReconciler{
-		Client: c, Scheme: testScheme(t),
-		Prober: &stubProber{ready: true, version: ""},
+		Client: newClient(t, cp, ops, webAPIAt(testImage, 2, 2, 2)),
+		Scheme: testScheme(t),
+		Prober: &stubProber{ready: true},
 	}
 
-	done, _, err := r.verify(ctx, ops, cp)
+	done, held, err := r.verify(context.Background(), ops, cp)
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	if !done {
-		t.Fatal("verify held on a control plane that serves no version endpoint")
+	if done {
+		t.Fatal("verify passed against a Deployment still on the old image")
 	}
-
-	var after simplyblockv1alpha2.ControlPlaneOps
-	if err := c.Get(ctx, client.ObjectKeyFromObject(ops), &after); err != nil {
-		t.Fatalf("read the operation back: %v", err)
-	}
-	if !strings.Contains(after.Status.Message, "not verified") {
-		t.Errorf("status.message = %q, want it to record that the version was not verified",
-			after.Status.Message)
+	if !strings.Contains(held, testImage) {
+		t.Errorf("held on %q, want it to name the image the Deployment still carries", held)
 	}
 }
 
-// A digest-pinned image carries no version to compare against, so the comparison
-// is skipped rather than failed: what is pinned by digest is not claimed to be
-// any particular version.
-func TestADigestPinnedImageIsNotComparedAgainstAVersion(t *testing.T) {
-	for _, tc := range []struct {
-		image   string
-		version string
-		want    bool
-	}{
-		{"quay.io/simplyblock-io/simplyblock:26.3.0", "26.3.0", true},
-		{"quay.io/simplyblock-io/simplyblock:26.3.0", "26.2.8", false},
-		{"quay.io/simplyblock-io/simplyblock:26.3.0@sha256:" + strings.Repeat("a", 64), "26.2.8", true},
+// Verifying holds while replicas are still being replaced, however many already
+// run the new image.
+func TestVerifyingHoldsWhileReplicasAreStillBeingReplaced(t *testing.T) {
+	mountedCA(t)
+	const next = "quay.io/simplyblock-io/simplyblock:26.3.0"
+	cp := localControlPlane()
+	ops := upgradeTo(next)
+
+	for name, d := range map[string]*appsv1.Deployment{
+		"one of two updated":      webAPIAt(next, 2, 1, 1),
+		"updated but not ready":   webAPIAt(next, 2, 2, 1),
+		"generation not observed": webAPIAt(next, 2, 2, 2, func(d *appsv1.Deployment) { d.Status.ObservedGeneration = 1 }),
 	} {
-		if got := imageStates(tc.image, tc.version); got != tc.want {
-			t.Errorf("imageStates(%q, %q) = %v, want %v", tc.image, tc.version, got, tc.want)
+		r := &ControlPlaneOpsReconciler{
+			Client: newClient(t, cp, ops, d),
+			Scheme: testScheme(t),
+			Prober: &stubProber{ready: true},
 		}
+		done, _, err := r.verify(context.Background(), ops, cp)
+		if err != nil {
+			t.Fatalf("%s: verify: %v", name, err)
+		}
+		if done {
+			t.Errorf("%s: verify passed before the rollout finished", name)
+		}
+	}
+}
+
+// A rollout whose Deployment reports ProgressDeadlineExceeded fails the
+// operation, and says which image could not roll.
+func TestAStalledRolloutFailsTheOperation(t *testing.T) {
+	const next = "quay.io/simplyblock-io/simplyblock:does-not-exist"
+	cp := localControlPlane()
+	ops := upgradeTo(next)
+	stalled := webAPIAt(next, 2, 1, 1, func(d *appsv1.Deployment) {
+		d.Status.Conditions = []appsv1.DeploymentCondition{{
+			Type:   appsv1.DeploymentProgressing,
+			Status: corev1.ConditionFalse,
+			Reason: "ProgressDeadlineExceeded",
+		}}
+	})
+
+	r := &ControlPlaneOpsReconciler{
+		Client: newClient(t, cp, ops, stalled),
+		Scheme: testScheme(t),
+		Prober: &stubProber{ready: true},
+	}
+
+	// Awaiting is where a bad image sits, so it is where the failure is raised, and
+	// Verifying must agree should it ever meet the same Deployment.
+	for name, step := range map[string]func(context.Context, *simplyblockv1alpha2.ControlPlaneOps, *simplyblockv1alpha2.ControlPlane) (bool, string, error){
+		"await":  r.await,
+		"verify": r.verify,
+	} {
+		_, _, err := step(context.Background(), ops, cp)
+		var fatal *terminalStepError
+		if !errors.As(err, &fatal) {
+			t.Fatalf("%s returned %v, want a terminal failure", name, err)
+		}
+		if !strings.Contains(fatal.Error(), next) {
+			t.Errorf("%s: the failure is %q, want it to name the image", name, fatal.Error())
+		}
+	}
+}
+
+// A Deployment that is slow but still progressing is not a failure.
+func TestARolloutStillProgressingIsNotAFailure(t *testing.T) {
+	const next = "quay.io/simplyblock-io/simplyblock:26.3.0"
+	cp := localControlPlane()
+	ops := upgradeTo(next)
+	rolling := webAPIAt(next, 2, 1, 1, func(d *appsv1.Deployment) {
+		d.Status.Conditions = []appsv1.DeploymentCondition{{
+			Type:   appsv1.DeploymentProgressing,
+			Status: corev1.ConditionTrue,
+			Reason: "ReplicaSetUpdated",
+		}}
+	})
+
+	r := &ControlPlaneOpsReconciler{
+		Client: newClient(t, cp, ops, rolling),
+		Scheme: testScheme(t),
+		Prober: &stubProber{ready: true},
+	}
+	if _, _, err := r.await(context.Background(), ops, cp); err != nil {
+		t.Errorf("await failed a rollout that is still progressing: %v", err)
 	}
 }
 
@@ -604,4 +661,35 @@ func restarted(t *testing.T, c client.Client, name string) bool {
 	}
 	_, stamped := d.Spec.Template.Annotations[restartedAtAnnotation]
 	return stamped
+}
+
+// A Restart is not finished while the recycled Deployment is still rolling. Right
+// after the restart stamp is written the old pod is still Ready, so the ready
+// count alone reports success before a single replacement has started.
+func TestARestartAwaitsTheRolloutItStarted(t *testing.T) {
+	cp := localControlPlane()
+	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionRestart)
+	ops.Spec.Restart = &simplyblockv1alpha2.RestartSpec{Components: []string{ComponentWebAPI}}
+
+	for name, tc := range map[string]struct {
+		deploy *appsv1.Deployment
+		done   bool
+	}{
+		"stamp written, old pod still ready": {
+			webAPIAt(testImage, 2, 0, 2, func(d *appsv1.Deployment) { d.Status.ObservedGeneration = 1 }), false},
+		"replacement rolling": {webAPIAt(testImage, 2, 1, 1), false},
+		"rolled and ready":    {webAPIAt(testImage, 2, 2, 2), true},
+	} {
+		r := &ControlPlaneOpsReconciler{
+			Client: newClient(t, cp, ops, tc.deploy),
+			Scheme: testScheme(t),
+		}
+		done, held, err := r.await(context.Background(), ops, cp)
+		if err != nil {
+			t.Fatalf("%s: await: %v", name, err)
+		}
+		if done != tc.done {
+			t.Errorf("%s: await done = %v (held on %q), want %v", name, done, held, tc.done)
+		}
+	}
 }

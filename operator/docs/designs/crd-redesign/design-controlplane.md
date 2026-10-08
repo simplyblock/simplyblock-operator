@@ -909,7 +909,6 @@ Events land on the object an administrator has open. For this kind that is the
 | The operation finished successfully                                    | `Normal`  | `OperationSucceeded`   | `ControlPlaneOps` |
 | The operation failed                                                   | `Warning` | `OperationFailed`      | `ControlPlaneOps` |
 | The operation was aborted and its unwind finished                      | `Normal`  | `OperationAborted`     | `ControlPlaneOps` |
-| The reported version disagrees with the requested one                  | `Warning` | `VersionMismatch`      | `ControlPlaneOps` |
 
 **`ControlPlaneNotReady` is the load-bearing one**, because every controller in
 the operator holds when it fires and none of them says why. A cluster that will
