@@ -22,6 +22,15 @@ from typing import Protocol, runtime_checkable
 # ── the value types detectors reason about ──────────────────────────────────────────
 
 
+#: What host.dmesg writes into a node's kernel log, followed by `wall=<ISO time>`, just before
+#: reading it back. dmesg renders a line's time from the boot time and the kernel's own clock,
+#: which is not NTP-disciplined and drifts: nodes up for weeks run minutes behind. The marker
+#: carries the wall time it was written at and comes back with the time dmesg renders for it,
+#: and the difference is what every other line of that log is corrected by. It stays in the
+#: collected file, so an archived run carries its own correction.
+KERNEL_CLOCK_PROBE = "sbtest-clock-probe"
+
+
 @dataclass(frozen=True)
 class AnaSample:
     """One controller's state on one consuming host at one instant."""

@@ -3,6 +3,7 @@
 from .config import Config, Selection, apply_cli_toggles, load, suite_path
 from .context import Event, Logger, RunContext, Timeline, iso, now_utc
 from .evidence import (
+    KERNEL_CLOCK_PROBE,
     AnaSample,
     BlockSample,
     ControlEvent,
@@ -33,7 +34,7 @@ from .runner import Runner, findings_by_subject_table
 
 __all__ = [
     "AnaSample", "Attribution", "BlockSample", "Component", "Config", "Detector", "Event",
-    "Evidence", "PnfsVolume",
+    "Evidence", "KERNEL_CLOCK_PROBE", "PnfsVolume",
     "ControlEvent", "Finding", "LogSpan",
     "FioJob", "IopsSample", "Logger", "Migration", "NvmeController", "Report",
     "RunContext", "Runner", "Selection", "Severity", "SkipDetector", "Timeline",

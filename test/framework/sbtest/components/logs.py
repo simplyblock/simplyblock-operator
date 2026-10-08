@@ -20,7 +20,7 @@ import os
 import subprocess
 from typing import Any
 
-from ..core import Component, RunContext, component
+from ..core import KERNEL_CLOCK_PROBE, Component, RunContext, component
 from . import kube
 
 #: Where the host keeps CRI container logs. Mounted read-only into the grabber.
@@ -449,6 +449,15 @@ class LogCollect(_GrabberBase):
         self._own = {}
 
 
+#: Write the clock marker (see KERNEL_CLOCK_PROBE), then read the log back. A marker that
+#: cannot be written leaves the log uncorrected rather than failing the read.
+_READ_DMESG = (
+    f'echo "{KERNEL_CLOCK_PROBE} wall=$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" '
+    "> /dev/kmsg 2>/dev/null; "
+    "dmesg --time-format=iso 2>/dev/null || dmesg -T"
+)
+
+
 @component
 class Dmesg(Component):
     """Kernel ring buffer from each storage worker.
@@ -463,6 +472,11 @@ class Dmesg(Component):
     *local* time with no offset, so an event cannot be placed against a run window recorded
     in UTC without assuming the two agree. `--time-format=iso` emits an offset, which makes
     the comparison sound; it is preferred, with `-T` kept as a fallback for older util-linux.
+
+    An offset is not enough on its own: the kernel's clock drifts from wall time, by 61s to
+    182s on lab-talos nodes up for 43 to 129 days, which moves a run's first minutes to before
+    it. So a marker carrying the wall time is written into the log before it is read, and the
+    kernel detectors correct every line by the gap between the two (see KERNEL_CLOCK_PROBE).
     """
 
     name = "host.dmesg"
@@ -485,9 +499,13 @@ class Dmesg(Component):
                 continue
             data = kube.run_bytes(
                 ["-n", p.namespace, "exec", p.name, "-c", self.opt("container"), "--",
-                 "sh", "-c", "dmesg --time-format=iso 2>/dev/null || dmesg -T"],
+                 "sh", "-c", _READ_DMESG],
                 timeout=120)
             if not data:
                 ctx.log.warn(f"{self.name}: empty dmesg from {kube.short(p.node)}")
+            elif KERNEL_CLOCK_PROBE.encode() not in data:
+                ctx.log.warn(f"{self.name}: no clock marker in {kube.short(p.node)}'s dmesg, so "
+                             "its times are taken as the kernel renders them; the container "
+                             "needs to write /dev/kmsg for the correction")
             with open(ctx.path(f"dmesg-{kube.short(p.node)}.txt"), "wb") as fh:
                 fh.write(data)

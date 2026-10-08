@@ -23,6 +23,7 @@ from sbtest.core import (  # noqa: E402
     Attribution,
     BlockSample,
     ControlEvent,
+    Finding,
     FioJob,
     IopsSample,
     LogSpan,
@@ -597,6 +598,45 @@ def dmesg(*msgs: str, day: int = 20, start: int = 0) -> list[str]:
     """dmesg -T lines. Local time, which is why these detectors do not attribute to migrations."""
     return [f"[Thu Aug {day} 05:{46 + (start + i) // 60:02d}:{(start + i) % 60:02d} 2026] {m}\n"
             for i, m in enumerate(msgs)]
+
+
+def iso_dmesg(*lines: tuple[str, str]) -> list[str]:
+    """dmesg --time-format=iso lines, each given as (HH:MM:SS on Aug 20, message)."""
+    return [f"2026-08-20T{t},000000+00:00 {m}\n" for t, m in lines]
+
+
+class KernelClockOffset(unittest.TestCase):
+    """The kernel's timestamps drift from wall time, and the collector's marker corrects them.
+
+    dmesg renders a line's time from the boot time and the kernel's own clock, which is not
+    NTP-disciplined: lab-talos nodes up for 43 to 129 days measured 61s to 182s behind. Placed
+    against the run window uncorrected, the first minutes of a run read as before it, and
+    what the run broke is reported as inherited.
+    """
+
+    RUN = (datetime(2026, 8, 20, 5, 50, 0, tzinfo=UTC), datetime(2026, 8, 20, 6, 0, 0, tzinfo=UTC))
+    FAILING = "block nvme0n1: no available path - failing I/O"
+    #: Written at wall 05:55:00, rendered at 05:53:00: the kernel is two minutes behind.
+    MARKER = ("05:53:00", "sbtest-clock-probe wall=2026-08-20T05:55:00+00:00")
+
+    def failing(self, log: list[str]) -> Finding:
+        ev = FakeEvidence(window=self.RUN, logs={"dmesg-vm03": log})
+        found = [f for f in build_detector("kernel.path-loss").detect(ev)
+                 if f.evidence.get("failing_io")]
+        self.assertEqual(len(found), 1)
+        return found[0]
+
+    def test_an_event_rendered_before_the_run_but_inside_it_by_wall_time_is_the_runs(self):
+        found = self.failing(iso_dmesg(("05:48:30", self.FAILING), self.MARKER))
+        self.assertIs(found.attribution, Attribution.RUN)
+
+    def test_an_event_before_the_run_by_wall_time_stays_inherited(self):
+        found = self.failing(iso_dmesg(("05:45:00", self.FAILING), self.MARKER))
+        self.assertIs(found.attribution, Attribution.PRE_EXISTING)
+
+    def test_without_a_marker_the_rendered_time_is_taken_as_it_is(self):
+        found = self.failing(iso_dmesg(("05:48:30", self.FAILING)))
+        self.assertIs(found.attribution, Attribution.PRE_EXISTING)
 
 
 class KernelPathLoss(unittest.TestCase):
