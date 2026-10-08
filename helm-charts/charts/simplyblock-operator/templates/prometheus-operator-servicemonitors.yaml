@@ -111,4 +111,34 @@ spec:
       # Storage node pods that have no rebalancer sidecar simply have no port
       # of this name. prometheus-operator drops them from the target list
       # rather than scraping nothing.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: simplyblock-spdk-proxy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml .Values.prometheusOperator.additionalLabels | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    # Same label as the rebalancer PodMonitor above, sbcli-applied and
+    # independently matched here.
+    matchLabels:
+      role: simplyblock-storage-node
+  podMetricsEndpoints:
+    - port: proxy-http
+      path: /_meta/metrics
+      interval: {{ .Values.prometheusOperator.interval }}
+      # proxy-http is the same port the JSON-RPC proxy answers RPCs on, named
+      # rather than numbered because each pod binds its own RPC_PORT on the
+      # host network. No basicAuth here: unlike the RPC path, /_meta/metrics
+      # on this port is unauthenticated.
+      #
+      # The name itself has no Go constant behind it at all: sbcli's
+      # storage_deploy_spdk.yaml.j2 is the sole place it is declared
+      # (spdk-proxy-container's containerPort), and this is the only other
+      # copy. Keep them in sync by hand.
 {{- end }}
