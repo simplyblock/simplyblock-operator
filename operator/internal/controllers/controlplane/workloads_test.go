@@ -649,3 +649,36 @@ func TestNoExtraAdminServiceAccountsMeansTheOperatorAlone(t *testing.T) {
 		t.Errorf("SB_K8S_ADMIN_SERVICE_ACCOUNTS = %q, want %q", env.Value, want)
 	}
 }
+
+// A bring-your-own prometheus-operator's Prometheus pod scrapes as its own
+// ServiceAccount, never simplyblock-prometheus's. Without naming that account
+// here, webappapi's TokenReview rejects every one of its scrapes with a 401.
+func TestExtraMetricsServiceAccountsReachTheManagementAPI(t *testing.T) {
+	t.Setenv(extraMetricsAccountsEnv,
+		" system:serviceaccount:monitoring:kube-prometheus-stack-prometheus , not-an-account,"+
+			"system:serviceaccount:a:b:c,system:serviceaccount:monitoring:kube-prometheus-stack-prometheus")
+	cp := localControlPlane()
+
+	api := findDeployment(t, managementAPIObjects(cp), ComponentWebAPI)
+	env := findEnvVar(t, api, "SB_K8S_METRICS_SERVICE_ACCOUNTS")
+
+	want := "system:serviceaccount:" + cp.Namespace + ":simplyblock-prometheus," +
+		"system:serviceaccount:monitoring:kube-prometheus-stack-prometheus"
+	if env.Value != want {
+		t.Errorf("SB_K8S_METRICS_SERVICE_ACCOUNTS = %q, want %q", env.Value, want)
+	}
+}
+
+// Without the operator's variable the management API trusts only the bundled
+// `prometheus` subchart's own account, as before.
+func TestNoExtraMetricsServiceAccountsMeansTheBundledPrometheusAlone(t *testing.T) {
+	t.Setenv(extraMetricsAccountsEnv, "")
+	cp := localControlPlane()
+
+	api := findDeployment(t, managementAPIObjects(cp), ComponentWebAPI)
+	env := findEnvVar(t, api, "SB_K8S_METRICS_SERVICE_ACCOUNTS")
+
+	if want := "system:serviceaccount:" + cp.Namespace + ":simplyblock-prometheus"; env.Value != want {
+		t.Errorf("SB_K8S_METRICS_SERVICE_ACCOUNTS = %q, want %q", env.Value, want)
+	}
+}

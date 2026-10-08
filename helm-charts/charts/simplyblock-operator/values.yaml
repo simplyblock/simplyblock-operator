@@ -1233,6 +1233,17 @@ prometheusOperator:
   # selector actually matches, or nothing here is ever scraped or evaluated.
   additionalLabels: {}
   interval: 30s
+  # The ServiceAccount the customer's Prometheus pod itself runs as (not the
+  # selector above): webappapi does a TokenReview on every scrape's bearer
+  # token and otherwise trusts only the bundled `prometheus` subchart's own
+  # account, so every scrape from this Prometheus gets a 401 until its
+  # identity is named here. kube-prometheus-stack's default is name
+  # "<release>-kube-prometheus-stack-prometheus" in the "monitoring" namespace;
+  # check `kubectl get prometheus -A -o jsonpath='{.items[0].spec.serviceAccountName}'`
+  # against the actual release rather than assuming it.
+  serviceAccount:
+    name: ""
+    namespace: ""
 
 tls:
   # On by default. Everything this chart deploys reaches the control plane over
