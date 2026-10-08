@@ -1,0 +1,277 @@
+# PrometheusRule and AlertmanagerConfig objects for a prometheus-operator the
+# customer already runs: the Alertmanager-routed equivalent of the Grafana
+# alerting rules and contact points in controlplane_configmap.yaml
+# (simplyblock-grafana-alerting). The eleven rules below are a hand
+# translation of that ConfigMap's eleven, from Grafana's threshold-evaluator
+# shape into plain PromQL comparisons. Nothing checks the two stay in step,
+# so a new rule needs adding in both places until that ConfigMap is retired.
+# Separate from prometheus-operator-servicemonitors.yaml because a customer
+# may want these rules evaluated without taking an opinion on routing, or may
+# already have their own routing in place. Both still require
+# `prometheusOperator.enabled`.
+#
+# AlertmanagerConfig's schema has moved between prometheus-operator releases
+# (v1alpha1 promoted toward v1beta1). What follows targets v1alpha1, the
+# longest-supported version. Check it against the cluster's installed CRD
+# before relying on it, the msteamsConfigs block in particular.
+{{- if .Values.prometheusOperator.enabled }}
+{{- if not (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PrometheusRule") }}
+{{ fail "prometheusOperator.enabled is true, but this cluster has no monitoring.coreos.com/v1 PrometheusRule CRD. Install prometheus-operator (or kube-prometheus-stack) first, or set prometheusOperator.enabled to false." }}
+{{- end }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: simplyblock
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml .Values.prometheusOperator.additionalLabels | nindent 4 }}
+spec:
+  groups:
+    - name: simplyblock
+      rules:
+        - alert: Device_status_online_to_unavailable
+          expr: simplyblock_device_status{status="unavailable"} > 0
+          for: 1m
+          labels:
+            app: simplyblock
+          annotations:
+            description: The rule checks for device unavailability.
+            summary: >-
+              Device {{ "{{" }} $labels.device {{ "}}" }} in storage node
+              {{ "{{" }} $labels.snode {{ "}}" }} is unavailable.
+        - alert: Device_status_online_to_read_only
+          expr: simplyblock_device_status{status="read_only"} > 0
+          for: 1m
+          labels:
+            app: simplyblock
+          annotations:
+            description: The rule checks for devices read-only state.
+            summary: >-
+              Device {{ "{{" }} $labels.device {{ "}}" }} on snode
+              {{ "{{" }} $labels.snode {{ "}}" }} is now read-only.
+        - alert: Cluster_status_online_to_degraded
+          expr: simplyblock_cluster_status{status="degraded"} > 0
+          for: 1m
+          labels:
+            app: simplyblock
+          annotations:
+            description: The rule alerts on cluster degraded state.
+            summary: Cluster {{ "{{" }} $labels.cluster {{ "}}" }} is in degraded state.
+        - alert: Cluster_status_online_to_suspended
+          expr: simplyblock_cluster_status{status="suspended"} > 0
+          for: 1m
+          labels:
+            app: simplyblock
+          annotations:
+            description: The rule alerts for cluster suspended state.
+            summary: Cluster {{ "{{" }} $labels.cluster {{ "}}" }} is in suspended state.
+        - alert: StorageNode_status_online_to_unreachable
+          expr: simplyblock_snode_status{status="unreachable"} > 0
+          for: 1m
+          labels:
+            app: simplyblock
+          annotations:
+            description: The rule alerts for unreachable storage nodes.
+            summary: >-
+              Storage node {{ "{{" }} $labels.snode {{ "}}" }} in cluster
+              {{ "{{" }} $labels.cluster {{ "}}" }} is unreachable.
+        - alert: StorageNode_status_online_to_down
+          expr: simplyblock_snode_status{status="down"} > 0
+          for: 1m
+          labels:
+            app: simplyblock
+          annotations:
+            description: The rule alerts for down storage nodes.
+            summary: >-
+              Storage node {{ "{{" }} $labels.snode {{ "}}" }} in cluster
+              {{ "{{" }} $labels.cluster {{ "}}" }} is down.
+        - alert: StorageNode_health_check_false
+          expr: simplyblock_snode_health_check < 1
+          for: 2m
+          labels:
+            app: simplyblock
+          annotations:
+            description: The rule alerts for unhealthy storage nodes.
+            summary: >-
+              Storage node {{ "{{" }} $labels.snode {{ "}}" }} in cluster
+              {{ "{{" }} $labels.cluster {{ "}}" }} is unhealthy.
+        - alert: Cluster_provisioned_capacity_reached
+          expr: >-
+            (simplyblock_cluster_size_provisioned_bytes / simplyblock_cluster_size_total_bytes)
+            / simplyblock_cluster_provisioned_capacity_critical_threshold_ratio > 1
+          for: 1m
+          labels:
+            app: simplyblock
+          annotations:
+            description: The rule alerts about cluster provisioned capacity reached.
+            summary: Cluster {{ "{{" }} $labels.cluster {{ "}}" }} provisioned capacity reached.
+        - alert: Cluster_absolute_capacity_reached
+          expr: >-
+            (simplyblock_cluster_size_used_bytes / simplyblock_cluster_size_total_bytes)
+            / simplyblock_cluster_capacity_critical_threshold_ratio > 1
+          for: 1m
+          labels:
+            app: simplyblock
+          annotations:
+            description: The rule alerts about cluster absolute capacity reached.
+            summary: Cluster {{ "{{" }} $labels.cluster {{ "}}" }} absolute capacity reached.
+        - alert: Lvol_status_online_to_offline
+          expr: simplyblock_lvol_status{status="offline"} > 0
+          for: 2m
+          labels:
+            app: simplyblock
+          annotations:
+            description: The rule alerts for offline lvols.
+            summary: >-
+              Lvol {{ "{{" }} $labels.lvol {{ "}}" }} in cluster
+              {{ "{{" }} $labels.cluster {{ "}}" }} is offline.
+        - alert: RootFilesystemLowSpace
+          expr: >-
+            (node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}
+             / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}) * 100 < 20
+          for: 1m
+          labels:
+            app: simplyblock
+          annotations:
+            description: The rule alerts when root filesystem space is critically low (below 20%).
+            summary: Root filesystem space is critically low on {{ "{{" }} $labels.instance {{ "}}" }}.
+{{- $grafana := .Values.controlplane.observability.grafana }}
+{{- $notifications := $grafana.notifications | default dict }}
+{{- $slack := $notifications.slack | default dict }}
+{{- $teams := $notifications.teams | default dict }}
+{{- $pagerduty := $notifications.pagerduty | default dict }}
+{{- $opsgenie := $notifications.opsgenie | default dict }}
+{{- $webhook := $notifications.webhook | default dict }}
+{{- $anyReceiver := or $slack.enabled $teams.enabled $pagerduty.enabled $opsgenie.enabled $webhook.enabled }}
+{{- if $anyReceiver }}
+{{- if not (or (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1alpha1/AlertmanagerConfig") (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1beta1/AlertmanagerConfig")) }}
+{{ fail "A notifications.* receiver is enabled under controlplane.observability.grafana, but this cluster has no AlertmanagerConfig CRD. Install prometheus-operator first, or disable every notifications.*.enabled to render only the PrometheusRule above." }}
+{{- end }}
+---
+# The credentials AlertmanagerConfig needs as secretKeyRefs rather than inline
+# strings. Same plaintext source as the Grafana contact points above. This
+# does not make it more secret, only shaped the way the CRD requires.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: simplyblock-alertmanager-notifications
+  namespace: {{ .Release.Namespace }}
+type: Opaque
+stringData:
+  {{- if $slack.enabled }}
+  slack-api-url: {{ $slack.url | quote }}
+  {{- end }}
+  {{- if $teams.enabled }}
+  teams-webhook-url: {{ $teams.url | quote }}
+  {{- end }}
+  {{- if $pagerduty.enabled }}
+  pagerduty-integration-key: {{ $pagerduty.integrationKey | quote }}
+  {{- end }}
+  {{- if $opsgenie.enabled }}
+  opsgenie-api-key: {{ $opsgenie.apiKey | quote }}
+  {{- end }}
+  {{- if $webhook.enabled }}
+  webhook-url: {{ $webhook.url | quote }}
+  {{- if and $webhook.username $webhook.password }}
+  webhook-password: {{ $webhook.password | quote }}
+  {{- end }}
+  {{- if and $webhook.authorizationScheme $webhook.authorizationCredentials }}
+  webhook-authorization-credentials: {{ $webhook.authorizationCredentials | quote }}
+  {{- end }}
+  {{- end }}
+---
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: simplyblock
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml .Values.prometheusOperator.additionalLabels | nindent 4 }}
+spec:
+  route:
+    receiver: simplyblock-alerts
+    groupBy: ["alertname"]
+    matchers:
+      - name: app
+        value: simplyblock
+        matchType: "="
+  receivers:
+    - name: simplyblock-alerts
+      {{- if $slack.enabled }}
+      slackConfigs:
+        - apiURL:
+            name: simplyblock-alertmanager-notifications
+            key: slack-api-url
+          username: grafana_bot
+          title: "[ALERT] Simplyblock Alerting Notification"
+          text: >-
+            *Alert*: {{ "{{" }} .CommonLabels.alertname {{ "}}" }}
+            *Summary*: {{ "{{" }} .CommonAnnotations.summary {{ "}}" }}
+            *Description*: {{ "{{" }} .CommonAnnotations.description {{ "}}" }}
+      {{- end }}
+      {{- if $teams.enabled }}
+      # msteamsConfigs needs prometheus-operator >= v0.70 and Alertmanager >= v0.26.
+      # Verify the field name against the installed CRD before relying on this block.
+      msteamsConfigs:
+        - webhookURL:
+            name: simplyblock-alertmanager-notifications
+            key: teams-webhook-url
+          title: "[ALERT] Simplyblock Alerting Notification"
+          text: >-
+            *Alert*: {{ "{{" }} .CommonLabels.alertname {{ "}}" }}
+            *Summary*: {{ "{{" }} .CommonAnnotations.summary {{ "}}" }}
+            *Description*: {{ "{{" }} .CommonAnnotations.description {{ "}}" }}
+      {{- end }}
+      {{- if $pagerduty.enabled }}
+      pagerdutyConfigs:
+        - routingKey:
+            name: simplyblock-alertmanager-notifications
+            key: pagerduty-integration-key
+          severity: {{ $pagerduty.severity | default "critical" | quote }}
+          description: "[ALERT] Simplyblock Alerting Notification"
+          {{- with $pagerduty.class }}
+          class: {{ . | quote }}
+          {{- end }}
+          {{- with $pagerduty.component }}
+          component: {{ . | quote }}
+          {{- end }}
+          {{- with $pagerduty.group }}
+          group: {{ . | quote }}
+          {{- end }}
+      {{- end }}
+      {{- if $opsgenie.enabled }}
+      opsgenieConfigs:
+        - apiKey:
+            name: simplyblock-alertmanager-notifications
+            key: opsgenie-api-key
+          apiURL: {{ $opsgenie.apiUrl | default "https://api.opsgenie.com/v2/alerts" | quote }}
+          message: "[ALERT] Simplyblock Alerting Notification"
+          description: >-
+            {{ "{{" }} .CommonAnnotations.summary {{ "}}" }}
+            {{ "{{" }} .CommonAnnotations.description {{ "}}" }}
+      {{- end }}
+      {{- if $webhook.enabled }}
+      webhookConfigs:
+        - urlSecret:
+            name: simplyblock-alertmanager-notifications
+            key: webhook-url
+          maxAlerts: {{ $webhook.maxAlerts | default 0 }}
+          {{- if and $webhook.username $webhook.password }}
+          httpConfig:
+            basicAuth:
+              username: {{ $webhook.username | quote }}
+              password:
+                name: simplyblock-alertmanager-notifications
+                key: webhook-password
+          {{- else if and $webhook.authorizationScheme $webhook.authorizationCredentials }}
+          httpConfig:
+            authorization:
+              type: {{ $webhook.authorizationScheme | quote }}
+              credentials:
+                name: simplyblock-alertmanager-notifications
+                key: webhook-authorization-credentials
+          {{- end }}
+      {{- end }}
+{{- end }}
+{{- end }}
