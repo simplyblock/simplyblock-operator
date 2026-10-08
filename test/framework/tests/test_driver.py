@@ -17,7 +17,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -633,44 +635,50 @@ class WorkloadPnfs(unittest.TestCase):
 
 
 class WorkloadStop(unittest.TestCase):
-    """fio writes its summary, its exit code and its time series when it exits, so a run
-    collected while fio is still going has none of them: no checksum or job-error verdict,
-    and a PASS that judged no I/O. Stopping fio first is what makes them exist."""
+    """fio writes its summary, its exit code and its time series when it exits, and verifies
+    what is outstanding when its runtime ends. So a run waits for fio to finish on its own,
+    as operator/test/fio_migration_test.py did, and interrupts only an instance still going
+    long after its runtime, so a stuck fio cannot hang the run."""
 
-    def _workload(self) -> pnfs_rwx.PnfsRwxWorkload:
+    def _workload(self, **opts: object) -> pnfs_rwx.PnfsRwxWorkload:
         w = pnfs_rwx.PnfsRwxWorkload(shared_volumes=0, solo_pods=1, containers_per_pod=2,
-                                     stop_timeout_s=5)
+                                     **opts)
         with _Ctx() as ctx:
             w._documents(ctx, "sc")
         return w
 
-    def test_every_instance_is_interrupted_and_waited_for(self):
-        calls: list[tuple[str, str | None, str]] = []
-
+    @staticmethod
+    def _exec(calls: list[tuple[str, str | None, str]],
+              rc: str) -> Callable[..., str]:
         def exec_sh(ns: str, pod: str, script: str, container: str | None = None,
                     timeout: int = 300) -> str:
             calls.append((pod, container, script))
-            return "0" if "fio.rc" in script else ""
+            return rc if "fio.rc" in script else ""
+        return exec_sh
 
-        w = self._workload()
-        with _Ctx() as ctx, _patch(kube, "exec_sh", exec_sh):
+    def test_fio_that_finishes_on_its_own_is_not_interrupted(self):
+        calls: list[tuple[str, str | None, str]] = []
+        w = self._workload(runtime_s=0, stop_timeout_s=5)
+        w._io_started = time.time()
+        with _Ctx() as ctx, _patch(kube, "exec_sh", self._exec(calls, "0")):
             w.stop(ctx)
+        self.assertFalse([s for _p, _c, s in calls if "pkill" in s],
+                         "a fio that exited on its own was interrupted")
         for inst in w._instances:
-            mine = [s for p, c, s in calls if p == inst.pod and c == inst.container]
-            self.assertTrue(any("pkill -INT" in s and "fio" in s for s in mine),
-                            f"{inst.container} was not interrupted: {mine}")
-            self.assertTrue(any(f"{inst.logdir}/fio.rc" in s for s in mine),
-                            f"{inst.container} was not waited for: {mine}")
+            self.assertTrue(any(p == inst.pod and c == inst.container and
+                                f"{inst.logdir}/fio.rc" in s for p, c, s in calls),
+                            f"{inst.container} was not waited for")
 
-    def test_an_instance_that_never_exits_does_not_hang_the_run(self):
-        def exec_sh(ns: str, pod: str, script: str, container: str | None = None,
-                    timeout: int = 300) -> str:
-            return ""
-
-        w = self._workload()
-        w.options["stop_timeout_s"] = 0
-        with _Ctx() as ctx, _patch(kube, "exec_sh", exec_sh):
+    def test_only_fio_still_running_past_its_runtime_and_grace_is_interrupted(self):
+        calls: list[tuple[str, str | None, str]] = []
+        w = self._workload(runtime_s=0, stop_timeout_s=0)
+        w._io_started = time.time() - 10
+        with _Ctx() as ctx, _patch(kube, "exec_sh", self._exec(calls, "")), \
+                _patch(pnfs_rwx.FioWorkload, "INTERRUPT_GRACE_S", 0):
             w.stop(ctx)   # returns rather than waiting forever
+        for inst in w._instances:
+            self.assertTrue(any(p == inst.pod and c == inst.container and "pkill -INT" in s
+                                for p, c, s in calls), f"{inst.container} was not interrupted")
 
 
 class HostDmesg(unittest.TestCase):

@@ -28,12 +28,18 @@ class FioWorkload(Component):
 
     required = True
 
+    #: How long an instance interrupted after its runtime and grace gets to write its
+    #: summary and exit.
+    INTERRUPT_GRACE_S = 30
+
     def defaults(self) -> dict[str, Any]:
         return {
             "namespace": "default",
             "ready_timeout_s": 420,
-            # How long stop() waits for every fio instance to exit after interrupting it.
-            "stop_timeout_s": 120,
+            # How long past fio's runtime stop() waits for every instance to exit on its own
+            # before interrupting it. 180s, the wait operator/test/fio_migration_test.py gave
+            # its pods.
+            "stop_timeout_s": 180,
             **fio.FIO_DEFAULTS,
             **self.workload_defaults(),
         }
@@ -47,6 +53,7 @@ class FioWorkload(Component):
         self._pods: list[str] = []
         self._instances: list[fio.FioInstance] = []
         self._created_scs: list[str] = []
+        self._io_started: float | None = None   # when every fio pod was Running
 
     # ── what a subclass writes ──────────────────────────────────────────────────────
 
@@ -72,37 +79,56 @@ class FioWorkload(Component):
                  stdin="\n---\n".join(json.dumps(d) for d in docs))
         fio.wait_running(ctx, self.name, self.opt("namespace"), self._pods,
                          float(self.opt("ready_timeout_s")))
+        self._io_started = time.time()
         self.after_running(ctx)
 
     def stop(self, ctx: RunContext) -> None:
-        """Interrupt every fio instance and wait for each to exit.
+        """Wait for every fio instance to finish its runtime, and interrupt only stragglers.
 
         fio writes its JSON summary, its time series and, through the container script,
-        its exit code when it exits, and not before. A run whose duration is shorter than
-        fio's runtime, which is how suites are written so fio never goes idle first, would
-        otherwise be collected with none of them: no checksum or job-error verdict, and a
-        result that judged no I/O. SIGINT ends fio the way its own runtime would, with the
-        summary written and verification of what was read so far reported.
+        its exit code when it exits, and verifies what is outstanding when its runtime ends.
+        Suites set fio's runtime past the run's duration so fio never goes idle first, so a
+        run collected when its duration ends would have none of that: no checksum or
+        job-error verdict, and a result that judged no I/O. So the run waits out fio's
+        remaining runtime, as operator/test/fio_migration_test.py did, plus stop_timeout_s
+        of grace. An instance still running after that is interrupted, so a stuck fio
+        cannot hang the run, and said to be, since its verification ended early.
         """
         ns = self.opt("namespace")
-        for inst in self._instances:
-            kube.exec_sh(ns, inst.pod, "pkill -INT -x fio 2>/dev/null; true",
-                         container=inst.container, timeout=30)
-        waiting = list(self._instances)
-        deadline = time.time() + float(self.opt("stop_timeout_s"))
+        started = self._io_started or time.time()
+        deadline = started + float(self.opt("runtime_s")) + float(self.opt("stop_timeout_s"))
+        remaining = deadline - time.time()
+        if remaining > 0:
+            ctx.log.info(f"{self.name}: waiting up to {remaining:.0f}s for fio to finish its "
+                         "runtime in every instance")
+        pending = self._wait_exited(ns, list(self._instances), deadline)
+        if pending:
+            ctx.log.warn(f"{self.name}: {len(pending)} fio instance(s) still running past "
+                         "their runtime and grace; interrupting them, so their verification "
+                         "ends early: " + ", ".join(f"{i.pod}/{i.container}" for i in pending))
+            for inst in pending:
+                kube.exec_sh(ns, inst.pod, "pkill -INT -x fio 2>/dev/null; true",
+                             container=inst.container, timeout=30)
+            pending = self._wait_exited(ns, pending, time.time() + self.INTERRUPT_GRACE_S)
+        if pending:
+            ctx.log.warn(f"{self.name}: {len(pending)} fio instance(s) did not exit even when "
+                         "interrupted, so their summaries are missing: "
+                         + ", ".join(f"{i.pod}/{i.container}" for i in pending))
+        else:
+            ctx.log.info(f"{self.name}: every fio instance has exited")
+
+    def _wait_exited(self, ns: str, instances: list[fio.FioInstance],
+                     deadline: float) -> list[fio.FioInstance]:
+        """The instances that had not written their exit code by deadline. Checked at
+        least once, so a deadline already past still reports what has exited."""
+        pending = list(instances)
         while True:
-            waiting = [i for i in waiting if not kube.exec_sh(
+            pending = [i for i in pending if not kube.exec_sh(
                 ns, i.pod, f"cat {i.logdir}/fio.rc 2>/dev/null",
                 container=i.container, timeout=30).strip()]
-            if not waiting or time.time() >= deadline:
-                break
+            if not pending or time.time() >= deadline:
+                return pending
             time.sleep(2)
-        if waiting:
-            ctx.log.warn(f"{self.name}: {len(waiting)} fio instance(s) had not exited "
-                         f"{self.opt('stop_timeout_s')}s after SIGINT, so their summaries may "
-                         "be missing: " + ", ".join(f"{i.pod}/{i.container}" for i in waiting))
-        else:
-            ctx.log.info(f"{self.name}: stopped {len(self._instances)} fio instance(s)")
 
     def collect(self, ctx: RunContext) -> None:
         ns = self.opt("namespace")
