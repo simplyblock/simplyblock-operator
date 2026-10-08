@@ -617,6 +617,19 @@ class WorkloadPnfs(unittest.TestCase):
         self.assertEqual(len(shared.nodes), 2)
         self.assertEqual(shared.lvol, f"lvol-{shared.claim}")
 
+    def test_the_volume_map_names_every_instance_and_its_node(self):
+        """The device check judges a node only while that node's fio instances ran, so it
+        needs which instances ran where."""
+        from sbtest.adapters import ArchiveEvidence
+        w, _ = self._plan(shared_volumes=1, pods_per_shared=2, solo_pods=0,
+                          containers_per_pod=2)
+        nodes = {p: f"node-{i}" for i, p in enumerate(sorted(w._claim_of))}
+        with _Ctx() as ctx:
+            w._write_volume_map(ctx, nodes)
+            vol = ArchiveEvidence(ctx.outdir).pnfs_volumes()[0]
+        want = {i.evidence: nodes[i.pod] for i in w._instances}
+        self.assertEqual(vol.instances, want)
+
     def test_collect_records_the_mounts_nfs_ops_for_every_instance(self):
         """One mount per pod, so every instance in the pod carries that mount's counts."""
         from sbtest.adapters import ArchiveEvidence
@@ -679,6 +692,26 @@ class WorkloadStop(unittest.TestCase):
         for inst in w._instances:
             self.assertTrue(any(p == inst.pod and c == inst.container and "pkill -INT" in s
                                 for p, c, s in calls), f"{inst.container} was not interrupted")
+
+
+class FioIopsLog(unittest.TestCase):
+    def test_the_time_series_reads_the_file_fio_writes(self):
+        """fio names its IOPS log <prefix>_iops.<job>.log. Reading <prefix>.*log matched
+        nothing, so no live run ever had a time series and fio.outage always skipped."""
+        import fnmatch
+        scripts: list[str] = []
+
+        def exec_sh(ns: str, pod: str, script: str, container: str | None = None,
+                    timeout: int = 300) -> str:
+            scripts.append(script)
+            return ""
+
+        with _Ctx() as ctx, _patch(kube, "exec_sh", exec_sh):
+            fio.write_timeseries(ctx, "default", "p", ctx.dir("p"), [], logdir="/logs/c0",
+                                 container="fio-0")
+        globs = [w for s in scripts for w in s.split() if "iops" in w]
+        self.assertTrue(globs, scripts)
+        self.assertTrue(fnmatch.fnmatch("/logs/c0/iops_iops.1.log", globs[0]), globs)
 
 
 class FioRuntime(unittest.TestCase):

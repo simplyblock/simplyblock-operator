@@ -239,6 +239,9 @@ class PnfsRwxWorkload(FioWorkload):
                 "shared": claim in self._shared,
                 "pods": pods,
                 "nodes": sorted({nodes[p] for p in pods if nodes.get(p)}),
+                # Which instance ran where, so a node is judged while its own fio ran.
+                "instances": {i.evidence: nodes[i.pod] for i in self._instances
+                              if i.pod in pods and nodes.get(i.pod)},
             })
         ctx.save_json("pnfs.json", {"volumes": volumes})
 

@@ -94,6 +94,8 @@ class FioJob:
     total_iops: float = 0.0
     read_iops: float = 0.0
     write_iops: float = 0.0
+    start: datetime | None = None   # when fio's timed run began, from job_start
+    runtime_s: float = 0.0          # how long it ran, from job_runtime
 
 
 @dataclass(frozen=True)
@@ -122,6 +124,8 @@ class PnfsVolume:
     lvol: str
     shared: bool
     nodes: list[str] = field(default_factory=list)
+    # fio instance (its evidence directory) -> the node it ran on
+    instances: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

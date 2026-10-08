@@ -386,6 +386,20 @@ if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 
+class FioJobTiming(unittest.TestCase):
+    def test_a_jobs_start_and_runtime_come_from_its_result(self):
+        """When an instance ran is what attributes a quiet device to it having finished
+        rather than to a stall."""
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "r-fio-0-c0"))
+            with open(os.path.join(d, "r-fio-0-c0", "result.json"), "w") as fh:
+                json.dump({"jobs": [{"job_start": 1791458653564, "job_runtime": 600001,
+                                     "error": 0}]}, fh)
+            job = ArchiveEvidence(d).fio_jobs()[0]
+        self.assertEqual(job.start, datetime(2026, 10, 8, 11, 24, 13, 564000, tzinfo=UTC))
+        self.assertAlmostEqual(job.runtime_s, 600.001)
+
+
 class LoadDrivers(unittest.TestCase):
     """A run with no component creating load only observes, and says so. Which components
     create load is what `required` already marks, not a naming convention: a workload is

@@ -1001,8 +1001,9 @@ class PnfsDeviceIO(unittest.TestCase):
 
     VOL = PnfsVolume(claim="c1", lvol="lv1", shared=True, nodes=["w1", "w2"])
 
-    def _found(self, blocks: list[BlockSample], **opts: object) -> list:
-        ev = FakeEvidence(blocks=blocks, pnfs=[self.VOL])
+    def _found(self, blocks: list[BlockSample], jobs: list[FioJob] | None = None,
+               vol: PnfsVolume | None = None, **opts: object) -> list:
+        ev = FakeEvidence(blocks=blocks, pnfs=[vol or self.VOL], jobs=jobs)
         return list(build_detector("pnfs.device-io", **opts).detect(ev))
 
     def test_growing_reads_and_writes_on_every_client_node_is_clean(self):
@@ -1037,4 +1038,23 @@ class PnfsDeviceIO(unittest.TestCase):
     def test_a_run_without_samples_is_skipped_not_clean(self):
         with self.assertRaises(SkipDetector):
             self._found([])
+
+    def test_a_quiet_device_after_its_instances_finished_is_not_a_stall(self):
+        """Each fio counts its runtime from its own start, so on a node whose instances began
+        early the device goes quiet before the run ends. That is fio being done."""
+        vol = PnfsVolume(claim="c1", lvol="lv1", shared=True, nodes=["w1"],
+                         instances={"r-fio-0-c0": "w1"})
+        offs = (0, 10, 20, 30, 110)
+        blocks = [blk("w1", o, o * 10 + 1, min(o, 30) * 5 + 1) for o in offs]
+        jobs = [FioJob(pod="r-fio-0-c0", start=ts(0), runtime_s=30)]
+        self.assertEqual(self._found(blocks, jobs=jobs, vol=vol, max_stall_s=60), [])
+
+    def test_a_stall_while_its_instances_ran_is_still_one(self):
+        vol = PnfsVolume(claim="c1", lvol="lv1", shared=True, nodes=["w1"],
+                         instances={"r-fio-0-c0": "w1"})
+        offs = (0, 10, 100, 110, 200)
+        blocks = [blk("w1", o, o * 10 + 1, (5 if o <= 100 else o) * 5) for o in offs]
+        jobs = [FioJob(pod="r-fio-0-c0", start=ts(0), runtime_s=200)]
+        found = self._found(blocks, jobs=jobs, vol=vol, max_stall_s=60)
+        self.assertEqual([f.severity for f in found], [Severity.WARNING])
 

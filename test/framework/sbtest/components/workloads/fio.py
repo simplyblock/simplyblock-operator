@@ -233,7 +233,8 @@ def write_timeseries(ctx: RunContext, namespace: str, pod: str, d: str, migs: li
     Column names match the older harness's CSVs (`second`, `wall_clock`) so a single reader
     serves both.
     """
-    raw = kube.exec_sh(namespace, pod, f"cat {logdir}/iops.*log 2>/dev/null",
+    # fio names the log <prefix>_iops.<job>.log, and the prefix here is fio_args' `iops`.
+    raw = kube.exec_sh(namespace, pod, f"cat {logdir}/iops_iops.*.log 2>/dev/null",
                        container=container, timeout=180)
     if not raw.strip():
         return

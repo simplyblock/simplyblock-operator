@@ -17,6 +17,7 @@ evidence that can, from both ends of the data path:
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import timedelta
 from typing import Any
 
 from ..core import (
@@ -24,6 +25,8 @@ from ..core import (
     Detector,
     Evidence,
     Finding,
+    FioJob,
+    PnfsVolume,
     SkipDetector,
     critical,
     detector,
@@ -96,6 +99,7 @@ class DeviceIO(Detector):
         series: dict[tuple[str, str], list[BlockSample]] = {}
         for s in samples:
             series.setdefault((s.node, s.uuid), []).append(s)
+        jobs = {j.pod: j for j in ev.fio_jobs()}
 
         for vol in volumes:
             if not vol.lvol:
@@ -103,6 +107,7 @@ class DeviceIO(Detector):
             for node in vol.nodes:
                 subject = f"{vol.claim}@{node}"
                 got = sorted(series.get((node, vol.lvol), []), key=lambda b: b.ts)
+                got = _while_running(got, vol, node, jobs)
                 if len(got) < 2:
                     yield critical(
                         self.name, title="namespace not attached on a client node",
@@ -155,3 +160,25 @@ def _longest_stall(got: list[BlockSample]) -> float:
             continue
         longest = max(longest, (cur.ts - since.ts).total_seconds())
     return longest
+
+
+def _while_running(got: list[BlockSample], vol: PnfsVolume, node: str,
+                   jobs: dict[str, FioJob]) -> list[BlockSample]:
+    """The samples taken while the volume's fio instances on node were running.
+
+    Every instance counts its runtime from its own start, and those starts spread over the
+    time layout took, so a node whose instances began early goes quiet before the run ends.
+    That is fio being done, not a stall. Judged from the first instance's start to the last
+    one's end; the whole series when the run recorded no timing, as older runs did not.
+    """
+    windows = []
+    for evidence, where in vol.instances.items():
+        job = jobs.get(evidence)
+        if where == node and job and job.start and job.runtime_s > 0:
+            windows.append((job.start, job.start + timedelta(seconds=job.runtime_s)))
+    if not windows:
+        return got
+    start, end = min(w[0] for w in windows), max(w[1] for w in windows)
+    inside = [s for s in got if start <= s.ts <= end]
+    return inside if len(inside) >= 2 else got
+

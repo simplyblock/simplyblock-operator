@@ -261,11 +261,15 @@ class ArchiveEvidence:
                 continue
             for job in res.get("jobs", []):
                 rd, wr = job.get("read", {}), job.get("write", {})
+                start_ms = job.get("job_start")
                 out.append(FioJob(
                     pod=pod, error=int(job.get("error", 0) or 0),
                     read_iops=float(rd.get("iops", 0) or 0),
                     write_iops=float(wr.get("iops", 0) or 0),
-                    total_iops=float(rd.get("iops", 0) or 0) + float(wr.get("iops", 0) or 0)))
+                    total_iops=float(rd.get("iops", 0) or 0) + float(wr.get("iops", 0) or 0),
+                    start=(datetime.fromtimestamp(start_ms / 1000.0, tz=UTC)
+                           if isinstance(start_ms, int | float) and start_ms > 0 else None),
+                    runtime_s=float(job.get("job_runtime", 0) or 0) / 1000.0))
         return out
 
     def fio_timeseries(self, pod: str) -> list[IopsSample]:
@@ -342,7 +346,8 @@ class ArchiveEvidence:
         except (OSError, json.JSONDecodeError):
             return []
         return [PnfsVolume(claim=v.get("claim", ""), lvol=v.get("lvol", ""),
-                           shared=bool(v.get("shared")), nodes=list(v.get("nodes") or []))
+                           shared=bool(v.get("shared")), nodes=list(v.get("nodes") or []),
+                           instances=dict(v.get("instances") or {}))
                 for v in raw.get("volumes", []) if isinstance(v, dict)]
 
     def fio_log(self, pod: str) -> Iterator[str]:
