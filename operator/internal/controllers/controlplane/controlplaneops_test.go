@@ -421,7 +421,7 @@ func TestAnUpgradeWritesTheImageOntoTheEntity(t *testing.T) {
 // would report it: the image its pod template carries, and how far the roll has
 // got.
 func webAPIAt(image string, updated, ready int32, mutate ...func(*appsv1.Deployment)) *appsv1.Deployment {
-	const replicas int32 = 2
+	replicas := int32(2)
 	d := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: ComponentWebAPI, Namespace: testNamespace, Generation: 2},
 		Spec: appsv1.DeploymentSpec{
