@@ -403,6 +403,25 @@ func TestEveryWorkloadThatReachesTheDatabaseMountsTheClusterFile(t *testing.T) {
 	}
 }
 
+// A ServiceMonitor selects a Service by the labels on the Service object
+// itself, not by the selector it carries toward its Pods. The two Services a
+// customer's own Prometheus needs to discover carry no labels otherwise, so
+// without this nothing external can ever find them.
+func TestTheExternallyReachableServicesCarryTheirComponentLabel(t *testing.T) {
+	cp := localControlPlane()
+	objects := managementAPIObjects(cp)
+
+	webAPI := findService(t, objects, ComponentWebAPI)
+	if got := webAPI.Labels[appLabel]; got != ComponentWebAPI {
+		t.Errorf("webAPIService labels[%q] = %q, want %q", appLabel, got, ComponentWebAPI)
+	}
+
+	exporter := findService(t, objects, ComponentFDBExporter)
+	if got := exporter.Labels[appLabel]; got != ComponentFDBExporter {
+		t.Errorf("fdbExporterService labels[%q] = %q, want %q", appLabel, got, ComponentFDBExporter)
+	}
+}
+
 // The monitoring pool and the task runner are the same pod with a different
 // service list, and both lists are non-empty. A pool built with no services is a
 // pod that starts and does nothing, which no count would notice.
