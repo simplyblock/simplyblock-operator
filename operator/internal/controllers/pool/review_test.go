@@ -138,6 +138,74 @@ func TestTheOperatorsOwnClassIsAdoptedOnRetry(t *testing.T) {
 	}
 }
 
+// The class an earlier cluster of the same name left behind provisions on a
+// cluster that no longer exists, and a StorageClass's parameters are immutable.
+// The pool replaces it with one for the live cluster.
+//
+// Regression: 2026-10-08-default-class-adopted-from-destroyed-cluster — the
+// operator adopted a same-named class by its labels alone, recorded it as the
+// pool's default, and never wrote the one the live cluster needed, so every
+// volume provisioned through it targeted the destroyed cluster.
+func TestADefaultClassOfADestroyedClusterIsReplaced(t *testing.T) {
+	cp, rec := newControlPlane(t), &recorder{}
+	name := DefaultPoolName(testCluster)
+	defaultPool := newPool(name, func(p *simplyblockv1alpha2.StoragePool) {
+		p.Status.UUID = testPoolUUID
+	})
+	className := DefaultStorageClassName(testNamespace, testCluster)
+	stale := newClass(className, map[string]string{
+		LabelNamespace: testNamespace,
+		LabelCluster:   testCluster,
+		LabelPool:      name,
+		LabelManagedBy: ManagedByStorageCluster,
+	}, map[string]string{kube.ParamClusterID: "the-destroyed-cluster"})
+	r := newReconciler(t, cp, rec, newCluster(testClusterUUID), defaultPool, stale)
+
+	p, _ := reconcileSettled(t, r, name)
+
+	var class storagev1.StorageClass
+	if err := r.Get(context.Background(), client.ObjectKey{Name: className}, &class); err != nil {
+		t.Fatalf("read the class back: %v", err)
+	}
+	if got := class.Parameters[kube.ParamClusterID]; got != testClusterUUID {
+		t.Errorf("the default class provisions on cluster %q, want the live cluster %q", got, testClusterUUID)
+	}
+	if p.Status.DefaultStorageClassName != className {
+		t.Errorf("status.defaultStorageClassName = %q, want %q", p.Status.DefaultStorageClassName, className)
+	}
+}
+
+// A class on that name that the operator did not write is not replaced, whatever
+// cluster it points at: it is somebody's, and the name stays taken.
+func TestAForeignClassOfAnotherClusterIsLeftAlone(t *testing.T) {
+	cp, rec := newControlPlane(t), &recorder{}
+	name := DefaultPoolName(testCluster)
+	defaultPool := newPool(name, func(p *simplyblockv1alpha2.StoragePool) {
+		p.Status.UUID = testPoolUUID
+	})
+	className := DefaultStorageClassName(testNamespace, testCluster)
+	theirs := newClass(className, map[string]string{
+		LabelNamespace: testNamespace,
+		LabelCluster:   testCluster,
+		LabelPool:      name,
+	}, map[string]string{kube.ParamClusterID: "the-destroyed-cluster"})
+	r := newReconciler(t, cp, rec, newCluster(testClusterUUID), defaultPool, theirs)
+
+	p, _ := reconcileSettled(t, r, name)
+
+	var class storagev1.StorageClass
+	if err := r.Get(context.Background(), client.ObjectKey{Name: className}, &class); err != nil {
+		t.Fatalf("read the class back: %v", err)
+	}
+	if class.Parameters[kube.ParamClusterID] != "the-destroyed-cluster" {
+		t.Error("the operator rewrote a class it does not manage")
+	}
+	if p.Status.DefaultStorageClassName != "" || !rec.has(StorageClassNameTaken) {
+		t.Errorf("default = %q, events = %+v; want no default and a %s event",
+			p.Status.DefaultStorageClassName, rec.events, StorageClassNameTaken)
+	}
+}
+
 // spec.limits is mutable, and an edit that never reaches the control plane is
 // worse than one that fails: the generation is reported as observed while the
 // old ceilings are still enforced, which is indistinguishable from success.

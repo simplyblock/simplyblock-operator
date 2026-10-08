@@ -484,7 +484,18 @@ func (r *StoragePoolReconciler) ensureDefaultClass(
 		if getErr := r.Get(ctx, client.ObjectKey{Name: name}, existing); getErr != nil {
 			return fmt.Errorf("read the storage class %q that already exists: %w", name, getErr)
 		}
-		if !r.isOurDefaultClass(existing, p) {
+		if r.isOurDefaultClass(existing, p) && classTargetsAnotherCluster(existing, clusterUUID) {
+			// The operator wrote it for a cluster that has since been destroyed
+			// and recreated under the same name. Its parameters are immutable and
+			// it provisions on a cluster that no longer exists, so it is replaced
+			// and never adopted.
+			if err := r.Delete(ctx, existing); client.IgnoreNotFound(err) != nil {
+				return fmt.Errorf("delete the default storage class %q of a destroyed cluster: %w", name, err)
+			}
+			if err := r.Create(ctx, class); err != nil {
+				return fmt.Errorf("recreate the default storage class %q: %w", name, err)
+			}
+		} else if !r.isOurDefaultClass(existing, p) {
 			r.event(p, corev1.EventTypeWarning, StorageClassNameTaken,
 				"storage class %q already exists and is not this pool's, so the default pool has "+
 					"none; assign a class to it by label, or delete the class occupying the name",
@@ -525,6 +536,15 @@ func (r *StoragePoolReconciler) isOurDefaultClass(
 		}
 	}
 	return true
+}
+
+// classTargetsAnotherCluster reports whether a class names a cluster other than
+// the live one. A class naming no cluster is not stale: the operator has always
+// written the parameter, so its absence says nothing about which cluster it was
+// for.
+func classTargetsAnotherCluster(class *storagev1.StorageClass, clusterUUID string) bool {
+	id := class.Parameters[kube.ParamClusterID]
+	return id != "" && id != clusterUUID
 }
 
 // resolveAllowedNodes turns the authored list into the one the world can honor.
