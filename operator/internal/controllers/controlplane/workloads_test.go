@@ -476,6 +476,33 @@ func TestTheBackupMergeRunnerNamesItsRealModule(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-08 — the sync-replication promote and resync runners must
+// be in the tasks pod naming the modules the control-plane image ships, or a
+// sync promote polls "in progress" forever and no resync ever starts (design
+// sync-replication §8.4). As with backup-merge, a wrong module name crash-loops
+// the whole tasks pod, so pin both names.
+func TestTheSyncReplicationRunnersAreRegistered(t *testing.T) {
+	cp := localControlPlane()
+	d := findDeployment(t, managementAPIObjects(cp), ComponentTasks)
+	want := map[string]string{
+		"tasks-runner-sync-promote": "simplyblock_core/services/tasks_runner_sync_promote.py",
+		"tasks-runner-sync-resync":  "simplyblock_core/services/tasks_runner_sync_resync.py",
+	}
+	for _, container := range d.Spec.Template.Spec.Containers {
+		module, tracked := want[container.Name]
+		if !tracked {
+			continue
+		}
+		if len(container.Command) != 2 || container.Command[1] != module {
+			t.Errorf("%s runs %v, want python3 %q", container.Name, container.Command, module)
+		}
+		delete(want, container.Name)
+	}
+	for name := range want {
+		t.Errorf("no %s container in the tasks deployment", name)
+	}
+}
+
 // The control plane's account is granted exec on pods, which is the strongest
 // thing in its role and the one an audit has to be able to find. Losing it would
 // stop the control plane driving the storage nodes' processes, which is not a
