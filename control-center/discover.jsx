@@ -522,13 +522,14 @@ function DRPropDetail({o: p, nav}) {
   const byName = n => all.find(x => x.name === n && x.namespace === p.namespace) || null;
   const may = op => acc.can(op, "drhub", {kind: "drprop", namespace: p.namespace});
   const why = op => acc.why(op, "drhub", {kind: "drprop", namespace: p.namespace});
+  const mayRun = acc.can("create", "drhub", {kind: "drun", namespace: DR_NS()});
   const btn = (cls, label, icon, ok, reason, dialog) => <button className={"btn " + cls} disabled={!ok} title={ok ? "" : reason} onClick={() => window.__ui.dialog(dialog, p)}><Icon n={icon} s={12} />{label}</button>;
   const pending = p.request && !p.final;
   const notApplyable = p.dryBlocking ? `${p.dryBlocking} blocking dry-run check(s) fail` : p.openBlocking ? `${p.openBlocking} blocking question(s) open` : "";
   const actions = <div style={{display: "flex", gap: 6, flexWrap: "wrap"}}>
     {gitOps && p.phase === "Proposed" && !(p.gitOps && p.gitOps.pr) && btn("openpr", "Open pull request", "link", may("patch") && !pending, pending ? `${p.request} requested` : why("patch"), requestDialog(p, "open-pr"))}
-    {!p.final && btn("refine", "Refine with AI", "camera", cfg.providers.length > 0 && may("create") && !p.final,
-      !cfg.providers.length ? "Phase 2: no model provider is configured (DRConfig spec.discovery.providers)" : p.final ? "the bundle is final" : why("create"),
+    {!p.final && btn("refine", "Refine with AI", "camera", cfg.providers.length > 0 && mayRun && !p.final,
+      !cfg.providers.length ? "Phase 2: no model provider is configured (DRConfig spec.discovery.providers)" : p.final ? "the bundle is final" : acc.why("create", "drhub", {kind: "drun", namespace: DR_NS()}),
       runDiscoveryDialog([{name: p.site, built: graph && graph.built, namespaces: []}], cfg, {site: p.site, proposal: p.name, mode: "AI"}))}
     {!gitOps && ["Proposed", "Stale"].includes(p.phase) && btn("primary approve", "Approve", "check", may("approve") && !notApplyable && !pending,
       pending ? `${p.request} requested` : notApplyable || why("approve"), requestDialog(p, "approve"))}

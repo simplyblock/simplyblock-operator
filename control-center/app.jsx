@@ -33,6 +33,9 @@ const LAYER_META = {
   siteprofiles: {label: "Site profiles", icon: "k8s"}, siteprofile: {icon: "k8s"},
   dhcpservers: {label: "DHCP servers", icon: "link"}, dhcpserver: {icon: "link"},
   sitedeploys: {label: "Site storage", icon: "cluster"}, sitedeploy: {icon: "cluster"},
+  // AI-assisted discovery (discover.jsx): the per-site graph and the bundles
+  aidisc: {label: "Discovery", icon: "k8s"}, dgraph: {icon: "k8s"},
+  proposals: {label: "Proposals", icon: "list"}, drprop: {icon: "list"},
   logs: {label: "Logs", icon: "list"},
   drconfig: {label: "DR configuration", icon: "gauge"},
   slots: {label: "Replication slots", icon: "volume"}, slot: {icon: "volume"},
@@ -71,6 +74,8 @@ const pSProf = id => [{t: "dr"}, {t: "siteprofiles"}, {t: "siteprofile", id}];
 const pDhcp = id => [{t: "dr"}, {t: "dhcpservers"}, {t: "dhcpserver", id}];
 // a managed site's storage deployment belongs to the clusters, not to DR
 const pSiteDeploy = id => [{t: "clusters"}, {t: "sitedeploys"}, {t: "sitedeploy", id}];
+const pDGraph = id => [{t: "dr"}, {t: "aidisc"}, {t: "dgraph", id}];
+const pDRProp = id => [{t: "dr"}, {t: "proposals"}, {t: "drprop", id}];
 const pPair = id => [{t: "dr"}, {t: "pairs"}, {t: "pair", id}];
 const pSlot = id => [{t: "dr"}, {t: "slots"}, {t: "slot", id}];
 const pReplOp = id => [{t: "dr"}, {t: "replops"}, {t: "replop", id}];
@@ -103,6 +108,8 @@ const detailPath = o => o.kind === "cluster" ? pC(o.id)
   : o.kind === "siteprofile" ? pSProf(o.id)
   : o.kind === "dhcpserver" ? pDhcp(o.id)
   : o.kind === "sitedeploy" ? pSiteDeploy(o.id)
+  : o.kind === "dgraph" ? pDGraph(o.id)
+  : o.kind === "drprop" ? pDRProp(o.id)
   : o.kind === "pair" ? pPair(o.id)
   : o.kind === "slot" ? pSlot(o.id)
   : o.kind === "replops" ? pReplOp(o.id)
@@ -283,6 +290,7 @@ const DETAIL_API = {
   tsched: drcrd("testschedules/{name}", true), restore: drcrd("restoreactions/{name}", true), siteprofile: "GET /apis/sitemap.simplyblock.io/v1alpha1/siteprofiles/{name}",
   dhcpserver: "GET /apis/sitemap.simplyblock.io/v1alpha1/dhcpservers/{name}",
   sitedeploy: "GET /apis/storage.simplyblock.io/v1alpha2/namespaces/{ns}/storagesitedeployments/{name}",
+  dgraph: drcrd("discoverygraphs/{name}"), drprop: drcrd("drproposals/{name}", true),
   pair: crd1("replicationpairs"), rpolicy: crd1("replicationpolicies"),
   slot: crd1("replicationslots"), replops: crd1("replicationops"),
   zone: prop("zones/{uuid}"), cgroup: prop("consistency-groups/{uuid}"),
@@ -821,7 +829,9 @@ function App() {
 
   const ctxCluster = useMemo(() => { const s = path.find(x => x.t === "cluster"); return s ? REG[s.id] : null; }, [viewKey, clusters.length]);
   const parentSeg = path[path.length - 2];
-  const apiHint = cur.id ? DETAIL_API[cur.t] : VIEWS[cur.t] ? VIEWS[cur.t].api(parentSeg || {}) : "—";
+  const apiHint = cur.id ? DETAIL_API[cur.t] : VIEWS[cur.t] ? VIEWS[cur.t].api(parentSeg || {})
+    : cur.t === "aidisc" ? drcrd("discoverygraphs") + " · " + drcrd("discoveryruns", true)
+    : cur.t === "proposals" ? drcrd("drproposals", true) : "—";
   const s0 = path[0] && path[0].t;
   const section = s0 === "dr" ? "dr" : s0 === "k8s" ? "k8s" : s0 === "cp" ? "cp" : s0 === "logs" ? "logs" : "clusters";
   const drVisible = DR_ONLY || acc.canAnywhere("read", "drhub") || acc.canAnywhere("read", "drpolicy") || acc.canAnywhere("read", "replicationpolicy") || acc.canAnywhere("read", "application");
@@ -903,6 +913,10 @@ function App() {
         ? <DetailView key={viewKey} seg={cur} nav={nav} rev={rev} up={upOne} upLabel={upLabel} />
         : cur.t === "dr"
         ? <DrHubHome key={viewKey} nav={nav} />
+        : cur.t === "aidisc"
+        ? <DiscoveryHome key={viewKey} nav={nav} />
+        : cur.t === "proposals"
+        ? <ProposalsView key={viewKey} nav={nav} />
         : cur.t === "drconfig"
         ? <DRConfigView key={viewKey} nav={nav} />
         : cur.t === "cp"
