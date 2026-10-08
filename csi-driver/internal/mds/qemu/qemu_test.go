@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	export "github.com/simplyblock/atlas/nfsexport"
 )
 
 func validGuest(arch Arch) Guest {
@@ -166,6 +168,7 @@ func TestKernelCmdlineCarriesTheStaticAddress(t *testing.T) {
 	want := []string{
 		"root=/dev/vda", "ro", "console=hvc0", "panic=-1",
 		"ip=169.254.100.2::169.254.100.1:255.255.255.252:pnfs-mds-0:eth0:off",
+		"nfsd.pnfs_probe_name=" + export.LayoutProbeName, "nfsd.pnfs_layout_hold=60",
 	}
 	cmdline := strings.Fields(validGuest(ArchAMD64).KernelCmdline())
 	if !slices.Equal(cmdline, want) {

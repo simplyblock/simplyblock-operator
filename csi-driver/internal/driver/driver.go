@@ -241,10 +241,12 @@ func startLink(ctx context.Context, conf *config.Config, kubeClient kubernetes.I
 	return err
 }
 
-// startNodeServer builds the node service and starts the two background loops
-// that belong to a node plugin rather than to a request: the connection
-// monitor, which reconnects NVMe-oF paths the control plane still publishes,
-// and the guardian, which restarts the pods whose volumes lost every path.
+// startNodeServer builds the node service and starts the background loops that
+// belong to a node plugin rather than to a request: the connection monitor,
+// which reconnects NVMe-oF paths the control plane still publishes, the
+// guardian, which restarts the pods whose volumes lost every path, and the pNFS
+// layout primer, which takes the first layout after an MDS restart before a pod
+// can.
 //
 // They start here rather than inside the service's constructor because
 // constructing a service should not launch a daemon: a test wanting a node
@@ -275,6 +277,7 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 	}
 
 	go reconnect.MonitorConnection(markBroken(podGuardian), manager, cd.GetName(), nodeName)
+	go node.KeepLayoutsPrimed(context.Background(), cd.GetName())
 
 	go advertiseVDOCapability(kubeClient, nodeName)
 	go advertiseKVMCapability(kubeClient, nodeName)

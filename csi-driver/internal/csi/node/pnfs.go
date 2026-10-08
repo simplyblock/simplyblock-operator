@@ -166,48 +166,6 @@ func stagePNFS(
 	return nil
 }
 
-// primeLayoutFile is removed immediately; the name is for a crash that leaves
-// one behind.
-const primeLayoutFile = ".simplyblock-pnfs-layout-probe"
-
-// primeLayout triggers the first LAYOUTGET, from this process rather than a pod.
-//
-// The client resolves a layout's device in the mount namespace of whatever
-// caused the I/O, and a pod's /dev is kubelet's minimal one with no disk/, so a
-// layout the application asks for first can never resolve. It also sticks: the
-// device is marked unavailable for two minutes, and everything after it routes
-// through the MDS. This container has the host's /dev, and one resolution here
-// fills the per-client cache for every file a pod later opens.
-func primeLayout(ctx context.Context, stagingPath string) error {
-	// Checked before rather than during: the syscalls below are not
-	// cancellable, and a stage that gave up should not add I/O.
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("pnfs: not taking the layout for %s: %w", stagingPath, err)
-	}
-
-	probe := filepath.Join(stagingPath, primeLayoutFile)
-	f, err := os.OpenFile(probe, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return fmt.Errorf("pnfs: opening the layout probe at %s: %w", probe, err)
-	}
-	// Removed whatever happens: this is the user's filesystem.
-	defer func() {
-		_ = f.Close()
-		_ = os.Remove(probe)
-	}()
-
-	// One block, enough to ask for a read-write layout.
-	if _, err := f.Write(make([]byte, 4096)); err != nil {
-		return fmt.Errorf("pnfs: writing the layout probe: %w", err)
-	}
-	// Synced: the layout is taken on write-back, not on entering the page
-	// cache, and the ordering against pod I/O depends on it.
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("pnfs: syncing the layout probe: %w", err)
-	}
-	return nil
-}
-
 // unstagePNFS detaches the export and drops the alias.
 func unstagePNFS(
 	mounter nfsMounter, stagingPath, nguid string,

@@ -23,6 +23,8 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/util/validation"
+
+	export "github.com/simplyblock/atlas/nfsexport"
 )
 
 // Arch is a guest architecture, named as Go names it, so a runner passes
@@ -144,17 +146,28 @@ func (g Guest) Args() ([]string, error) {
 	return args, nil
 }
 
+// layoutHoldSeconds is how long the guest's nfsd holds a client's layouts past
+// its grace period until the client's CSI node has taken one on the layout
+// probe (nfsexport.LayoutProbeName). The node checks for a reconnect every two
+// seconds, and its probe is already waiting when grace ends, so this only
+// bounds the wait for a client whose node never probes: one with no CSI node,
+// or with an older one.
+const layoutHoldSeconds = 60
+
 // KernelCmdline returns the guest kernel's command line.
 //
 // The address is configured by the kernel itself (`ip=`, `CONFIG_IP_PNP`) before
 // init runs, on eth0, which the guest keeps by not renaming interfaces. panic=-1
 // turns a guest panic into an immediate reboot, which -no-reboot turns into
-// QEMU exiting.
+// QEMU exiting. The nfsd parameters turn on the guest kernel's layout hold
+// (see layoutHoldSeconds).
 func (g Guest) KernelCmdline() string {
 	parts := []string{
 		"root=/dev/vda", "ro", "console=hvc0", "panic=-1",
 		fmt.Sprintf("ip=%s::%s:%s:%s:eth0:off",
 			g.Address.Addr(), g.Gateway, netmask(g.Address), g.Hostname),
+		"nfsd.pnfs_probe_name=" + export.LayoutProbeName,
+		fmt.Sprintf("nfsd.pnfs_layout_hold=%d", layoutHoldSeconds),
 	}
 	if g.Arch == ArchARM64 {
 		parts = append(parts, "acpi=on")
