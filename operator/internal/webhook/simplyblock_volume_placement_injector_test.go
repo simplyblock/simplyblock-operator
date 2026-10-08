@@ -17,11 +17,11 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/simplyblock/atlas/kube"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -352,29 +352,31 @@ func TestSimplyblockVolumePlacementInjector_Handle_SelectsCoolestEligibleNode(t 
 	sc := makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID})
 	pvc := makePlacementPVC(ptr.To(placementStorageClassName), nil)
 
-	baseline := func(uuid string) simplyblockv1alpha1.NodeLatencyMetrics {
-		return simplyblockv1alpha1.NodeLatencyMetrics{NodeUUID: uuid, BaselineP50NS: baselineNS}
-	}
-	nodeSet := &simplyblockv1alpha1.StorageNodeSet{
-		ObjectMeta: metav1.ObjectMeta{Name: "nodeset1", Namespace: namespace},
-	}
-	nodeSet.Status.LatencyMetrics = []simplyblockv1alpha1.NodeLatencyMetrics{
-		baseline("hot"), baseline("cool"), baseline("offline"), baseline("atcapacity"),
+	var nodes []client.Object
+	for _, uuid := range []string{"hot", "cool", "offline", "atcapacity"} {
+		nodes = append(nodes, &simplyblockv1alpha2.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-" + uuid, Namespace: namespace},
+			Status: simplyblockv1alpha2.StorageNodeStatus{
+				LatencyMetrics: &simplyblockv1alpha2.NodeLatencyMetrics{NodeUUID: uuid, BaselineP50NS: baselineNS},
+			},
+		})
 	}
 
 	scheme := newScheme(t)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(sc, cluster, nodeSet).
-		WithStatusSubresource(cluster, nodeSet).
+		WithObjects(append(nodes, sc, cluster)...).
+		WithStatusSubresource(append(nodes, cluster)...).
 		Build()
 
 	cluster.Status.UUID = testClusterUUID
 	if err := c.Status().Update(context.Background(), cluster); err != nil {
 		t.Fatalf("set cluster status: %v", err)
 	}
-	if err := c.Status().Update(context.Background(), nodeSet); err != nil {
-		t.Fatalf("set nodeset status: %v", err)
+	for _, n := range nodes {
+		if err := c.Status().Update(context.Background(), n); err != nil {
+			t.Fatalf("set node status: %v", err)
+		}
 	}
 
 	h := &SimplyblockVolumePlacementInjector{
