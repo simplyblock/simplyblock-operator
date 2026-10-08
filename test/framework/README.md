@@ -426,6 +426,29 @@ Write artifacts through `ctx.path(...)` so they land in the run directory in the
 `ctx.timeline.record("kind", subject=..., **data)` so detectors can read them back without
 knowing which component produced them.
 
+## Adding a workload
+
+A workload is a subclass of `workloads/base.py::FioWorkload` in its own module under
+`components/workloads/`, imported from that package's `__init__.py`. It writes only what makes
+it specific: `documents()` returns the claims and pods, recording every fio instance it plans
+in `self._instances` (one per container, each with its own data file and evidence directory),
+and `after_running()` / `after_collect()` read back what the cluster decided and anything
+beyond fio's own evidence. Applying, waiting, collecting each instance and cleaning up are the
+base's, so every workload leaves evidence the fio detectors already read.
+
+```python
+@component
+class MyWorkload(FioWorkload):
+    name = "workload.mine"
+    summary = "one line for `sbtest components`"
+
+    def workload_defaults(self) -> dict:
+        return {"pods": 3}
+
+    def documents(self, ctx):
+        ...   # claims and pods; append a FioInstance per container to self._instances
+```
+
 ## Layout
 
 ```
@@ -433,8 +456,9 @@ test/framework/
   sbtest/
     core/        evidence, findings, plugin registry, config, context, runner
     components/  logs (stream + collect), nvme (ANA and I/O samplers + snapshot), events,
-                 workload and pnfs (the fio workloads), and the pieces they share: fio
-                 (command line, script, per-instance evidence), nfs (mountstats), kube
+                 nfs (mountstats), kube
+      workloads/ base (the FioWorkload every workload extends), fio (command line,
+                 script, per-instance evidence), volumemigration, pnfs_rwx
     detectors/   ana, control, fio, kernel, logs, meta, migration, nvme, pnfs, security
     adapters/    archive (finished run dir), live (run in progress)
     suites/      migration-full, migration-soak, corruption-hunt, analyze-only, pnfs-fio

@@ -1,4 +1,4 @@
-"""The fio workload: volumes with continuous, verified I/O on them.
+"""The migration workload: volumes with continuous, verified I/O on them, to migrate.
 
 A migration test needs I/O in flight to be a test at all — a volume nobody is writing to
 migrates cleanly whatever the code does, because nothing is there to lose. So this component
@@ -20,28 +20,28 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ..core import Component, RunContext, component
-from . import fio, kube
-from .sbctl import Sbctl, SbctlError
+from ...core import RunContext, component
+from .. import kube
+from ..sbctl import Sbctl, SbctlError
+from . import fio
+from .base import FioWorkload
 
 PARAM_MAX_NS = "max_namespace_per_subsys"
 
 
 @component
-class FioWorkload(Component):
-    """Provision volumes, run verified fio on them, collect what fio saw.
+class VolumeMigrationWorkload(FioWorkload):
+    """Volumes for the migration runs: single-namespace and packed, one fio pod each.
 
-    `required`, because a run whose workload never came up is not a passing run — it is no run
-    at all, and the detectors have nothing to judge.
+    Registered as `workload.fio`, the name every migration suite and archived run config
+    already uses.
     """
 
     name = "workload.fio"
     summary = "provision volumes and drive continuous verified fio I/O against them"
-    required = True
 
-    def defaults(self) -> dict[str, Any]:
+    def workload_defaults(self) -> dict[str, Any]:
         return {
-            "namespace": "default",
             # The operator's own pool SC, named simplyblock-<ns>-<cluster>-<pool>. Cloned
             # rather than hand-written so the run inherits whatever the pool really uses.
             "source_storageclass": "simplyblock-default-simplyblock-cluster-pool1",
@@ -52,14 +52,11 @@ class FioWorkload(Component):
             "file_size_gb": 1,
             "fstype": "xfs",
             "numjobs": 1,           # >1 disables verification; see fio.py
-            "ready_timeout_s": 420,
-            **fio.FIO_DEFAULTS,
         }
 
     def __init__(self, **options: Any) -> None:
         super().__init__(**options)
         self._sb = Sbctl()
-        self._pods: list[str] = []
         self._pvcs: list[str] = []
         self._pvc_of: dict[str, str] = {}
         self._kind_of: dict[str, str] = {}
@@ -75,14 +72,20 @@ class FioWorkload(Component):
 
     # ── setup: classes, volumes, pods, then read back what really happened ─────────
 
-    def setup(self, ctx: RunContext) -> None:
+    def documents(self, ctx: RunContext) -> list[dict]:
         self._node_host = self._storage_node_hosts()
         self._ensure_storageclasses(ctx)
-        self._create(ctx)
-        self._wait_running(ctx)
+        return self._documents(ctx)
+
+    def after_running(self, ctx: RunContext) -> None:
         self._resolve_pvs(ctx)
         self._resolve_subsystems(ctx)
         self._publish(ctx)
+
+    def selector(self, ctx: RunContext) -> str:
+        # Every run's leftovers, not only this run's: a migration run assumes a clean
+        # namespace, and a pod left by an earlier one would be migrated along with it.
+        return "sbtest-run=true"
 
     def _storage_node_hosts(self) -> dict[str, str]:
         cp = kube.run(["get", "storagenodes", "-A", "-o", "json"], check=False)
@@ -134,12 +137,12 @@ class FioWorkload(Component):
         base.pop(PARAM_MAX_NS, None)
 
         self._sc_single = f"sbtest-{ctx.run_id}-single"
-        self._apply_sc(src, self._sc_single, dict(base, **{PARAM_MAX_NS: "1"}))
+        self.apply_storageclass(src, self._sc_single, dict(base, **{PARAM_MAX_NS: "1"}))
         ctx.log.info(f"{self.name}: StorageClass {self._sc_single} "
                      f"(fstype={self.opt('fstype')}, {PARAM_MAX_NS}=1, cluster_id={cluster})")
         if int(self.opt("ns_pods")) > 0:
             self._sc_ns = f"sbtest-{ctx.run_id}-ns"
-            self._apply_sc(src, self._sc_ns,
+            self.apply_storageclass(src, self._sc_ns,
                            dict(base, **{PARAM_MAX_NS: str(self.opt("ns_per_subsys"))}))
             ctx.log.info(f"{self.name}: StorageClass {self._sc_ns} "
                          f"({PARAM_MAX_NS}={self.opt('ns_per_subsys')})")
@@ -163,21 +166,7 @@ class FioWorkload(Component):
             if it.get("provisioner") == "csi.simplyblock.io"
             and "sbtest-" not in it["metadata"]["name"])
 
-    @staticmethod
-    def _apply_sc(src: dict, name: str, params: dict) -> None:
-        kube.run(["delete", "sc", name, "--ignore-not-found"], check=False)
-        kube.run(["apply", "-f", "-"], stdin=json.dumps({
-            "apiVersion": "storage.k8s.io/v1",
-            "kind": "StorageClass",
-            "metadata": {"name": name, "labels": {"sbtest-run": "true"}},
-            "provisioner": src.get("provisioner", "csi.simplyblock.io"),
-            "parameters": params,
-            "reclaimPolicy": src.get("reclaimPolicy", "Delete"),
-            "volumeBindingMode": src.get("volumeBindingMode", "WaitForFirstConsumer"),
-            "allowVolumeExpansion": src.get("allowVolumeExpansion", True),
-        }))
-
-    def _create(self, ctx: RunContext) -> None:
+    def _documents(self, ctx: RunContext) -> list[dict]:
         script = self._fio_script(ctx)
         affinity = self._affinity(ctx)
         docs: list[dict] = []
@@ -194,7 +183,11 @@ class FioWorkload(Component):
             self._pods.append(pod)
             self._pvc_of[pod] = pvc
             self._kind_of[pod] = kind
+            inst = fio.FioInstance(pod=pod, container="fio", filename="/data/fiotest",
+                                   logdir="/logs", evidence=pod)
+            self._instances.append(inst)
             labels = {"sbtest": ctx.run_id, "sbtest-run": "true", "volume-kind": kind}
+            container = self.fio_container(inst, script, "/data")
             docs.append({
                 "apiVersion": "v1", "kind": "PersistentVolumeClaim",
                 "metadata": {"name": pvc, "labels": labels},
@@ -209,27 +202,13 @@ class FioWorkload(Component):
                     "restartPolicy": "Never",
                     "terminationGracePeriodSeconds": 5,
                     "affinity": affinity,
-                    "containers": [{
-                        "name": "fio", "image": str(self.opt("image")),
-                        "imagePullPolicy": "IfNotPresent",
-                        "command": ["sh", "-c", script],
-                        "volumeMounts": [{"name": "data", "mountPath": "/data"},
-                                         {"name": "logs", "mountPath": "/logs"}],
-                        "resources": {"requests": {"cpu": "250m", "memory": "256Mi"}},
-                    }],
-                    "volumes": [
-                        {"name": "data", "persistentVolumeClaim": {"claimName": pvc}},
-                        # fio's own logs live on an emptyDir, never on the volume under test:
-                        # collecting the evidence must not depend on the health of the thing
-                        # the evidence is about.
-                        {"name": "logs", "emptyDir": {}},
-                    ],
+                    "containers": [container],
+                    "volumes": self.pod_volumes(pvc),
                 },
             })
-        kube.run(["-n", self.opt("namespace"), "apply", "-f", "-"],
-                 stdin="\n---\n".join(json.dumps(d) for d in docs))
-        ctx.log.info(f"{self.name}: created {len(plan)} PVC(s) + fio pod(s): "
+        ctx.log.info(f"{self.name}: {len(plan)} PVC(s) + fio pod(s): "
                      f"{self.opt('pods')} single-namespace + {self.opt('ns_pods')} namespaced")
+        return docs
 
     def _affinity(self, ctx: RunContext) -> dict:
         """Pin fio pods to the storage worker nodes and off the control plane.
@@ -263,10 +242,6 @@ class FioWorkload(Component):
         args = fio.fio_args(self.options, filename="/data/fiotest", size_gb=file_gb,
                             logdir="/logs", numjobs=numjobs)
         return fio.container_script(args, "/logs")
-
-    def _wait_running(self, ctx: RunContext) -> None:
-        fio.wait_running(ctx, self.name, self.opt("namespace"), self._pods,
-                         float(self.opt("ready_timeout_s")))
 
     def _resolve_pvs(self, ctx: RunContext) -> None:
         ns = self.opt("namespace")
@@ -363,33 +338,8 @@ class FioWorkload(Component):
         except SbctlError:
             return {}
 
-    # ── collection ─────────────────────────────────────────────────────────────────
-
-    def collect(self, ctx: RunContext) -> None:
-        """Pull fio's own account out of each pod, into the layout the analyser reads."""
-        ns = self.opt("namespace")
-        migs = ctx.shared.get("migrations") or []
-        for pod in self._pods:
-            fio.collect_instance(ctx, ns, fio.FioInstance(
-                pod=pod, container="fio", filename="/data/fiotest", logdir="/logs",
-                evidence=pod), migs)
-        ctx.log.info(f"{self.name}: collected fio output for {len(self._pods)} pod(s)")
+    # ── collection: the base collects every instance ─────────────────────────────
 
     def _write_timeseries(self, ctx: RunContext, ns: str, pod: str, d: str,
                           migs: list) -> None:
         fio.write_timeseries(ctx, ns, pod, d, migs)
-
-    def teardown(self, ctx: RunContext) -> None:
-        if ctx.shared.get("keep"):
-            ctx.log.info(f"{self.name}: keep set; leaving {len(self._pods)} pod(s), "
-                         f"{len(self._pvcs)} PVC(s) and the StorageClasses in place")
-            return
-        ns = self.opt("namespace")
-        kube.run(["-n", ns, "delete", "pod", "-l", "sbtest-run=true",
-                  "--ignore-not-found", "--grace-period=5"], check=False, timeout=300)
-        kube.run(["-n", ns, "delete", "pvc", "-l", "sbtest-run=true",
-                  "--ignore-not-found"], check=False, timeout=300)
-        for sc in (self._sc_single, self._sc_ns):
-            if sc:
-                kube.run(["delete", "sc", sc, "--ignore-not-found"], check=False)
-        ctx.log.info(f"{self.name}: removed pods, PVCs and StorageClasses")

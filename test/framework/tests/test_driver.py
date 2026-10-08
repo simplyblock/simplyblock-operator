@@ -23,7 +23,8 @@ from datetime import UTC, datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import sbtest  # noqa: E402,F401
-from sbtest.components import kube, migration, nfs, nvme, pnfs, workload  # noqa: E402
+from sbtest.components import kube, migration, nfs, nvme  # noqa: E402
+from sbtest.components.workloads import pnfs_rwx, volumemigration  # noqa: E402
 from sbtest.core import Logger, Migration, RunContext  # noqa: E402
 
 
@@ -298,26 +299,26 @@ class WorkloadFio(unittest.TestCase):
         """numjobs>1 cannot serialize overlapping writes, so verify would report corruption
         that never happened. A throughput run must not look like an integrity run."""
         with _Ctx() as ctx:
-            single = workload.FioWorkload(numjobs=1, iodepth=8)._fio_script(ctx)
-            multi = workload.FioWorkload(numjobs=4, iodepth=8)._fio_script(ctx)
+            single = volumemigration.VolumeMigrationWorkload(numjobs=1, iodepth=8)._fio_script(ctx)
+            multi = volumemigration.VolumeMigrationWorkload(numjobs=4, iodepth=8)._fio_script(ctx)
         self.assertIn("--verify=md5", single)
         self.assertIn("--serialize_overlap=1", single)
         self.assertNotIn("--verify=md5", multi)
 
     def test_verify_is_not_fatal_by_default_so_every_bad_block_is_counted(self):
         with _Ctx() as ctx:
-            s = workload.FioWorkload(numjobs=1)._fio_script(ctx)
+            s = volumemigration.VolumeMigrationWorkload(numjobs=1)._fio_script(ctx)
         self.assertIn("--verify_fatal=0", s)
 
     def test_the_file_stays_inside_the_volume(self):
         with _Ctx() as ctx:
-            s = workload.FioWorkload(volume_size_gb=10, file_size_gb=50)._fio_script(ctx)
+            s = volumemigration.VolumeMigrationWorkload(volume_size_gb=10, file_size_gb=50)._fio_script(ctx)
         self.assertIn("--size=8G", s)   # 10 - 2 of filesystem headroom
 
     def test_logs_live_off_the_volume_under_test(self):
         """Collecting the evidence must not depend on the health of what it is about."""
         with _Ctx() as ctx:
-            s = workload.FioWorkload()._fio_script(ctx)
+            s = volumemigration.VolumeMigrationWorkload()._fio_script(ctx)
         self.assertIn("--output=/logs/result.json", s)
         self.assertIn("--filename=/data/fiotest", s)
 
@@ -332,7 +333,7 @@ class WorkloadFio(unittest.TestCase):
                           end=start + timedelta(seconds=1), pv="pv1")]
         with _Ctx() as ctx, _patch(kube, "exec_sh", lambda *a, **k: raw):
             ctx.mark_window(start=start)
-            w = workload.FioWorkload()
+            w = volumemigration.VolumeMigrationWorkload()
             d = ctx.dir("fio-0")
             w._write_timeseries(ctx, "default", "fio-0", d, migs)
             with open(os.path.join(d, "timeseries.csv")) as fh:
@@ -352,7 +353,7 @@ class WorkloadFio(unittest.TestCase):
         raw = "1000, 500, 0, 4096\n2000, 400, 0, 4096"
         with _Ctx() as ctx, _patch(kube, "exec_sh", lambda *a, **k: raw):
             ctx.mark_window(start=datetime(2026, 8, 20, 9, 0, 0, tzinfo=UTC))
-            workload.FioWorkload()._write_timeseries(
+            volumemigration.VolumeMigrationWorkload()._write_timeseries(
                 ctx, "default", "run1-fio-0", ctx.dir("run1-fio-0"), [])
             series = ArchiveEvidence(ctx.outdir).fio_timeseries("run1-fio-0")
         self.assertEqual([s.offset_s for s in series], [1, 2])
@@ -373,7 +374,7 @@ class WorkloadFio(unittest.TestCase):
             d = ctx.dir("fio-0")
             with open(os.path.join(d, "result.json"), "w") as fh:
                 json.dump({"jobs": [{"job_start": int(fio_start.timestamp() * 1000)}]}, fh)
-            workload.FioWorkload()._write_timeseries(ctx, "default", "fio-0", d, migs)
+            volumemigration.VolumeMigrationWorkload()._write_timeseries(ctx, "default", "fio-0", d, migs)
             with open(os.path.join(d, "timeseries.csv")) as fh:
                 rows = list(__import__("csv").DictReader(fh))
         self.assertEqual(rows[0]["wall_clock"], "2026-08-20T09:03:01Z")
@@ -387,7 +388,7 @@ class WorkloadFio(unittest.TestCase):
             d = ctx.dir("fio-0")
             with open(os.path.join(d, "result.json"), "w") as fh:
                 json.dump({"jobs": [{}]}, fh)
-            workload.FioWorkload()._write_timeseries(ctx, "default", "fio-0", d, [])
+            volumemigration.VolumeMigrationWorkload()._write_timeseries(ctx, "default", "fio-0", d, [])
             with open(os.path.join(d, "timeseries.csv")) as fh:
                 rows = list(__import__("csv").DictReader(fh))
         self.assertEqual(rows[0]["wall_clock"], "2026-08-20T09:00:01Z")
@@ -419,7 +420,7 @@ class WorkloadFio(unittest.TestCase):
 
     def test_a_workload_with_no_pods_is_refused(self):
         with _Ctx() as ctx, self.assertRaises(RuntimeError) as e:
-            workload.FioWorkload(pods=0, ns_pods=0)._create(ctx)
+            volumemigration.VolumeMigrationWorkload(pods=0, ns_pods=0)._documents(ctx)
         self.assertIn("no I/O", str(e.exception))
 
 
@@ -488,8 +489,8 @@ class WorkloadPnfs(unittest.TestCase):
     its own fio. Multi-reader and multi-writer on one filesystem, without the writers
     corrupting each other's verification."""
 
-    def _plan(self, **opts: object) -> tuple[pnfs.PnfsWorkload, list[dict]]:
-        w = pnfs.PnfsWorkload(**opts)
+    def _plan(self, **opts: object) -> tuple[pnfs_rwx.PnfsRwxWorkload, list[dict]]:
+        w = pnfs_rwx.PnfsRwxWorkload(**opts)
         with _Ctx() as ctx:
             docs = w._documents(ctx, "sc-pnfs")
         return w, docs
@@ -552,13 +553,13 @@ class WorkloadPnfs(unittest.TestCase):
 
     def test_the_files_must_fit_the_volume(self):
         with _Ctx() as ctx, self.assertRaises(RuntimeError) as e:
-            pnfs.PnfsWorkload(shared_volumes=1, pods_per_shared=3, containers_per_pod=2,
+            pnfs_rwx.PnfsRwxWorkload(shared_volumes=1, pods_per_shared=3, containers_per_pod=2,
                               file_size_gb=4, volume_size_gb=20)._documents(ctx, "sc")
         self.assertIn("6 fio file(s) of 4G", str(e.exception))
 
     def test_a_workload_with_no_pods_is_refused(self):
         with _Ctx() as ctx, self.assertRaises(RuntimeError) as e:
-            pnfs.PnfsWorkload(shared_volumes=0, solo_pods=0)._documents(ctx, "sc")
+            pnfs_rwx.PnfsRwxWorkload(shared_volumes=0, solo_pods=0)._documents(ctx, "sc")
         self.assertIn("no I/O", str(e.exception))
 
     def test_every_instance_has_evidence_the_analyser_finds(self):
@@ -580,7 +581,7 @@ class WorkloadPnfs(unittest.TestCase):
             "parameters": {"csi.storage.k8s.io/fstype": "xfs"}})})
         with _Ctx() as ctx, _patch(kube, "run", fake.run), \
                 self.assertRaises(RuntimeError) as e:
-            pnfs.PnfsWorkload(storageclass="block")._storageclass(ctx)
+            pnfs_rwx.PnfsRwxWorkload(storageclass="block")._storageclass(ctx)
         self.assertIn("fstype", str(e.exception))
 
     def test_a_source_class_is_cloned_as_pnfs(self):
@@ -589,7 +590,7 @@ class WorkloadPnfs(unittest.TestCase):
                               "csi.storage.k8s.io/fstype": "xfs"}}
         fake = _FakeKube({"get sc pool-class": json.dumps(src)})
         with _Ctx() as ctx, _patch(kube, "run", fake.run):
-            name = pnfs.PnfsWorkload(source_storageclass="pool-class")._storageclass(ctx)
+            name = pnfs_rwx.PnfsRwxWorkload(source_storageclass="pool-class")._storageclass(ctx)
         applied = [json.loads(s) for s in fake.stdins if s]
         self.assertEqual(len(applied), 1)
         self.assertEqual(applied[0]["metadata"]["name"], name)

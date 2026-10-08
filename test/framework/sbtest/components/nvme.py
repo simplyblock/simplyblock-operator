@@ -257,7 +257,7 @@ class AnaSampler(_CsiNodeBase):
 
 
 #: Every NVMe head device's namespace UUID and its sysfs `stat` line, one per device:
-#: dev|uuid|stat. The per-path nvmeXcYnZ devices are listed too and dropped by the parser,
+#: device, UUID and stat line, separated by `|`. The per-path nvmeXcYnZ devices are listed too and dropped by the parser,
 #: which is where the rule lives that is worth a test.
 _IOSTAT_SH = r'''
 for b in /sys/block/nvme*n*; do

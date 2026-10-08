@@ -29,8 +29,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from ..core import RunContext
-from . import kube
+from ...core import RunContext
+from .. import kube
 
 FIO_IMAGE = "alpine:3.20"
 
@@ -124,7 +124,7 @@ def container_script(args: list[str], logdir: str) -> str:
 
 def wait_running(ctx: RunContext, who: str, namespace: str, pods: list[str],
                  timeout_s: float) -> None:
-    """Wait until every pod labelled with the run is Running, or say which are not."""
+    """Wait until every pod labeled with the run is Running, or say which are not."""
     deadline = time.time() + timeout_s
     phases: dict[str, str] = {}
     while time.time() < deadline and not ctx.stopping.is_set():
@@ -179,7 +179,7 @@ def collect_instance(ctx: RunContext, namespace: str, inst: FioInstance,
 
 def write_timeseries(ctx: RunContext, namespace: str, pod: str, d: str, migs: list,
                      logdir: str = "/logs", container: str | None = None) -> None:
-    """Per-second IOPS from fio's iops log, with the migration in flight that second.
+    """Per-second IOPS from fio's IOPS log, with the migration in flight that second.
 
     The migration column is the point: correlating a throughput dip with the migration that
     caused it is otherwise a manual join across two files, and the detectors need it to

@@ -15,8 +15,8 @@ def mount_ops(stats: str, mountpoint: str) -> dict[str, int] | None:
 
     mountstats lists every mount, each under a `device ... mounted on ... with fstype ...`
     header, and a count belongs to the header above it: reading the counts without the
-    header adds up every NFS mount on the node. None rather than an empty dict, so "not
-    mounted" cannot be read as "mounted and did nothing".
+    header adds up every NFS mount on the node. None rather than an empty dict, so a mount
+    that is not there cannot be read as one that did nothing.
     """
     ops: dict[str, int] = {}
     inside = per_op = found = False

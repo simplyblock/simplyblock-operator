@@ -27,8 +27,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ..core import Component, RunContext, component
-from . import fio, kube, nfs
+from ...core import RunContext, component
+from .. import kube, nfs
+from . import fio
+from .base import FioWorkload
 
 PARAM_FSTYPE = "csi.storage.k8s.io/fstype"
 FSTYPE_PNFS = "pnfs"
@@ -38,19 +40,14 @@ HEADROOM_GB = 2
 
 
 @component
-class PnfsWorkload(Component):
-    """Provision shared and private pNFS volumes and run verified fio in every container.
-
-    `required`, because a run whose workload never came up has nothing to judge.
-    """
+class PnfsRwxWorkload(FioWorkload):
+    """Shared and private pNFS volumes, a verified fio instance in every container."""
 
     name = "workload.pnfs"
     summary = "pNFS volumes shared by several pods, a verified fio instance per container"
-    required = True
 
-    def defaults(self) -> dict[str, Any]:
+    def workload_defaults(self) -> dict[str, Any]:
         return {
-            "namespace": "default",
             # A pNFS StorageClass to use as it is. Empty clones `source_storageclass` with
             # fstype pnfs instead, which inherits the pool's real parameters.
             "storageclass": "",
@@ -64,30 +61,24 @@ class PnfsWorkload(Component):
             "file_size_gb": 1,        # per fio instance
             "direct": True,
             "ready_timeout_s": 600,
-            **fio.FIO_DEFAULTS,
         }
 
     def __init__(self, **options: Any) -> None:
         super().__init__(**options)
-        self._pods: list[str] = []
-        self._instances: list[fio.FioInstance] = []
         self._claim_of: dict[str, str] = {}     # pod -> claim
         self._shared: set[str] = set()          # claims several pods mount
-        self._lvol_of: dict[str, str] = {}      # claim -> lvol uuid
-        self._created_sc = ""
+        self._lvol_of: dict[str, str] = {}      # claim -> lvol UUID
 
-    # ── setup ───────────────────────────────────────────────────────────────────────
+    # ── the layout ──────────────────────────────────────────────────────────────────
 
-    def setup(self, ctx: RunContext) -> None:
-        sc = self._storageclass(ctx)
-        docs = self._documents(ctx, sc)
-        kube.run(["-n", self.opt("namespace"), "apply", "-f", "-"],
-                 stdin="\n---\n".join(json.dumps(d) for d in docs))
+    def documents(self, ctx: RunContext) -> list[dict]:
+        docs = self._documents(ctx, self._storageclass(ctx))
         ctx.log.info(f"{self.name}: {len(self._claim_of)} pod(s) on "
                      f"{len(set(self._claim_of.values()))} pNFS volume(s), "
                      f"{len(self._instances)} fio instance(s)")
-        fio.wait_running(ctx, self.name, self.opt("namespace"), self._pods,
-                         float(self.opt("ready_timeout_s")))
+        return docs
+
+    def after_running(self, ctx: RunContext) -> None:
         self._lvol_of = self._resolve_lvols()
         nodes = self._nodes()
         self._write_volume_map(ctx, nodes)
@@ -102,7 +93,9 @@ class PnfsWorkload(Component):
         """
         named = str(self.opt("storageclass") or "")
         if named:
-            sc = self._get_sc(named)
+            sc = self.get_storageclass(named)
+            if sc is None:
+                raise RuntimeError(f"{self.name}: StorageClass {named} not found")
             fstype = sc.get("parameters", {}).get(PARAM_FSTYPE, "")
             if fstype != FSTYPE_PNFS:
                 raise RuntimeError(
@@ -115,32 +108,17 @@ class PnfsWorkload(Component):
         if not source:
             raise RuntimeError(f"{self.name}: set storageclass (a pNFS class) or "
                                "source_storageclass (a pool class to clone as pNFS)")
-        src = self._get_sc(source)
-        params = dict(src.get("parameters", {}), **{PARAM_FSTYPE: FSTYPE_PNFS})
+        src = self.get_storageclass(source)
+        if src is None:
+            raise RuntimeError(f"{self.name}: source StorageClass {source} not found")
         name = f"sbtest-{ctx.run_id}-pnfs"
-        kube.run(["delete", "sc", name, "--ignore-not-found"], check=False)
-        kube.run(["apply", "-f", "-"], stdin=json.dumps({
-            "apiVersion": "storage.k8s.io/v1",
-            "kind": "StorageClass",
-            "metadata": {"name": name, "labels": {"sbtest-run": "true"}},
-            "provisioner": src.get("provisioner", "csi.simplyblock.io"),
-            "parameters": params,
-            "reclaimPolicy": src.get("reclaimPolicy", "Delete"),
-            # Immediate: a shared claim is mounted by pods on several nodes, so there is no
-            # single first consumer whose topology the volume should follow.
-            "volumeBindingMode": "Immediate",
-            "allowVolumeExpansion": src.get("allowVolumeExpansion", True),
-        }))
-        self._created_sc = name
+        # Immediate: a shared claim is mounted by pods on several nodes, so there is no
+        # single first consumer whose topology the volume should follow.
+        self.apply_storageclass(src, name,
+                                dict(src.get("parameters", {}), **{PARAM_FSTYPE: FSTYPE_PNFS}),
+                                binding_mode="Immediate")
         ctx.log.info(f"{self.name}: StorageClass {name}, cloned from {source} as pNFS")
         return name
-
-    @staticmethod
-    def _get_sc(name: str) -> dict:
-        cp = kube.run(["get", "sc", name, "-o", "json"], check=False)
-        if cp.returncode != 0 or not cp.stdout:
-            raise RuntimeError(f"StorageClass {name} not found")
-        return dict(json.loads(cp.stdout))
 
     def _documents(self, ctx: RunContext, sc: str) -> list[dict]:
         """The claims and pods, with every fio instance and its own file planned."""
@@ -164,8 +142,9 @@ class PnfsWorkload(Component):
         plan += [(f"{ctx.run_id}-pnfs-solo-{i}", False) for i in range(solo)]
 
         docs: list[dict] = []
+        shared_claims = {c for c, is_shared in plan if is_shared}
         for claim in dict.fromkeys(c for c, _ in plan):
-            docs.append(self._claim(ctx, claim, sc, claim in {c for c, s in plan if s}))
+            docs.append(self._claim(ctx, claim, sc, claim in shared_claims))
         for i, (claim, is_shared) in enumerate(plan):
             pod = f"{ctx.run_id}-pnfs-{i}"
             self._pods.append(pod)
@@ -203,22 +182,13 @@ class PnfsWorkload(Component):
             self._instances.append(inst)
             args = fio.fio_args(self.options, filename=inst.filename, size_gb=file_gb,
                                 logdir=inst.logdir, direct=bool(self.opt("direct")))
-            spec_containers.append({
-                "name": inst.container, "image": str(self.opt("image")),
-                "imagePullPolicy": "IfNotPresent",
-                "command": ["sh", "-c", fio.container_script(args, inst.logdir)],
-                "volumeMounts": [{"name": "data", "mountPath": MOUNT},
-                                 {"name": "logs", "mountPath": "/logs"}],
-                "resources": {"requests": {"cpu": "250m", "memory": "256Mi"}},
-            })
+            spec_containers.append(
+                self.fio_container(inst, fio.container_script(args, inst.logdir), MOUNT))
         spec: dict[str, Any] = {
             "restartPolicy": "Never",
             "terminationGracePeriodSeconds": 5,
             "containers": spec_containers,
-            "volumes": [
-                {"name": "data", "persistentVolumeClaim": {"claimName": claim}},
-                {"name": "logs", "emptyDir": {}},
-            ],
+            "volumes": self.pod_volumes(claim),
         }
         if shared and self.opt("spread"):
             spec["affinity"] = {"podAntiAffinity": {
@@ -229,6 +199,8 @@ class PnfsWorkload(Component):
                         "topologyKey": "kubernetes.io/hostname"}}]}}
         return {"apiVersion": "v1", "kind": "Pod",
                 "metadata": {"name": pod, "labels": labels}, "spec": spec}
+
+    # ── what the cluster decided ────────────────────────────────────────────────────
 
     def _resolve_lvols(self) -> dict[str, str]:
         """claim -> lvol UUID, from the PV's CSI handle <cluster>:<pool>:<volume>."""
@@ -280,15 +252,12 @@ class PnfsWorkload(Component):
                 ctx.log.warn(f"{self.name}: every pod sharing {claim} landed on {on[0]}, so "
                              "this volume exercises one NFS client, not several")
 
-    # ── collection ──────────────────────────────────────────────────────────────────
+    # ── collection: the base collects every instance, this adds the mount ─────────
 
-    def collect(self, ctx: RunContext) -> None:
-        ns = self.opt("namespace")
-        migs = ctx.shared.get("migrations") or []
-        for inst in self._instances:
-            fio.collect_instance(ctx, ns, inst, migs)
+    def after_collect(self, ctx: RunContext) -> None:
         # One NFS mount per pod: every instance in the pod wrote through it, so every
         # instance's evidence carries the mount's counts.
+        ns = self.opt("namespace")
         for pod in self._pods:
             mine = [i for i in self._instances if i.pod == pod]
             stats = kube.exec_sh(ns, pod, "cat /proc/self/mountstats",
@@ -300,18 +269,3 @@ class PnfsWorkload(Component):
             for inst in mine:
                 with open(ctx.path(inst.evidence, "nfs-ops.json"), "w") as fh:
                     json.dump(ops, fh, indent=2, sort_keys=True)
-        ctx.log.info(f"{self.name}: collected {len(self._instances)} fio instance(s) "
-                     f"from {len(self._pods)} pod(s)")
-
-    def teardown(self, ctx: RunContext) -> None:
-        if ctx.shared.get("keep"):
-            ctx.log.info(f"{self.name}: keep set; leaving pods, claims and classes in place")
-            return
-        ns = self.opt("namespace")
-        kube.run(["-n", ns, "delete", "pod", "-l", f"sbtest={ctx.run_id}",
-                  "--ignore-not-found", "--grace-period=5"], check=False, timeout=300)
-        kube.run(["-n", ns, "delete", "pvc", "-l", f"sbtest={ctx.run_id}",
-                  "--ignore-not-found"], check=False, timeout=300)
-        if self._created_sc:
-            kube.run(["delete", "sc", self._created_sc, "--ignore-not-found"], check=False)
-        ctx.log.info(f"{self.name}: removed pods, claims and the run's StorageClass")
