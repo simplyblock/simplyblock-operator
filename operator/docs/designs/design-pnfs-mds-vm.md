@@ -18,7 +18,7 @@
 | P0-5 | The csi-link mutation gate open for `CreateExport` and `DeleteExport`, as `design-pnfs-rwx.md` P0-3 and P0-4 require         | Ecosystem (this repo)   | Assembly (§7.1)        | Built, unmerged, and read-only (P0-3), and not started (P0-4) per that design, which the code may have outpaced                            |
 | P0-6 | A way to build and publish the MDS image (§5.6) next to the operator and CSI images                                          | Ecosystem (release)     | Every phase            | In progress: the pnfs-os workflow publishes the guest image, the MDS image builds with `make -C csi-driver mds-image` and is not in CI yet |
 
-Without P0-1 the MDS pod stays Pending and every export waits in `Pending` with an event naming the cause. QEMU is never started without KVM, because the software-emulation fallback runs the guest too slowly to serve an export. Without P0-2 the guest's nfsd cannot name the device and every client falls back to metadata-server-routed I/O, the failure mode `design-pnfs-rwx.md` calls FM-2, so the design cannot ship on a kernel that fails the check. Without P0-3 the guest cannot connect the namespace and assembly times out into `Degraded`. P0-4 and P0-5 are the same dependencies the node-hosted MDS has.
+Without P0-1 the MDS pod stays Pending and every export waits in `Pending` with an event naming the cause. QEMU is never started without KVM, because the software-emulation fallback runs the guest too slowly to serve an export. Without P0-2 the guest's nfsd cannot name the device and every client falls back to metadata-server-routed I/O, the failure mode `design-pnfs-rwx.md` calls FM-2, so the design cannot ship on a kernel that fails the check. Without P0-3 the guest cannot connect the namespace and assembly times out into `Degraded`. P0-4 and P0-5 are the dependencies `design-pnfs-rwx.md` names for any pNFS export.
 
 ---
 
@@ -48,28 +48,24 @@ Appendices:
 
 ## Overview
 
-The pNFS metadata server (MDS) runs today on a Kubernetes node: the csi-node pod on a labeled node starts the host's kernel nfsd, mounts the export's XFS filesystem in the host's mount namespace, and writes the host's `/etc/exports.d`. The node's kernel is therefore the NFS server, and a customer's worker becomes a storage server for as long as an export exists.
+The pNFS metadata server (MDS) runs in a pod in the operator's namespace whose workload is a QEMU guest. The guest has its own Linux kernel with nfsd, the NFS client, and the NVMe/TCP initiator built in. It connects the volume's namespace itself, makes the XFS filesystem, and serves the export. The customer's node contributes `/dev/kvm` and nothing else: no nfs-utils, no nfsd, no mounts, no exports.
 
-This design moves the MDS into a pod in the operator's namespace whose workload is a QEMU guest. The guest has its own Linux kernel with nfsd, the NFS client, and the NVMe/TCP initiator built in. It connects the volume's namespace itself, makes the XFS filesystem, and serves the export. The customer's node contributes `/dev/kvm` and nothing else: no nfs-utils, no nfsd, no mounts, no exports.
+The export assembler (`csi-driver/internal/nfsexport`) runs in the guest as `mds-agent`. The `NFSExport` kind, the `ExportService` protocol, the per-export Service, the SCSI layout, and the client mount path are those of `design-pnfs-rwx.md`. Clients attach the namespace themselves and write to it directly, and the guest serves metadata only.
 
-Only the place the MDS runs changes. The export assembler is the same code (`csi-driver/internal/nfsexport`) hosted in the guest instead of the node plugin. The `NFSExport` kind, the `ExportService` protocol, the per-export Service, the SCSI layout, and the client mount path are unchanged. Clients still attach the namespace themselves and write to it directly, and the guest serves metadata only.
-
-One MDS pod serves every export of one storage cluster, for the reason a node-hosted MDS serves every export of a Kubernetes cluster: nfsd and its export table are global to the kernel they run in. The pod is created by the existing `NFSExport` reconciler when the first export of a storage cluster binds. No CRD, controller, or device plugin is added to the cluster, and nothing from NeonVM or KubeVirt is installed. The guest launch follows the technique NeonVM's runner uses (QEMU with a direct kernel boot and a tap bridge in a privileged pod) and uses none of its API.
+One MDS pod serves every export of one storage cluster, because nfsd and its export table are global to the kernel they run in. The pod is created by the `NFSExport` reconciler when the first export of a storage cluster binds. No CRD, controller, or device plugin is added to the cluster, and nothing from NeonVM or KubeVirt is installed. The guest launch follows the technique NeonVM's runner uses (QEMU with a direct kernel boot and a tap bridge in a privileged pod) and uses none of its API.
 
 ---
 
 ## 1. Background
 
-The `NFSExport` reconciler binds an export to a Kubernetes node (`status.mdsNodeName`), asks the csi-node plugin on that node to assemble the export over csi-link (`CreateExport`, `CheckExport`, `DeleteExport`), and publishes the node's InternalIP as the only endpoint of a per-export Service. Selection is `selectMDS` in `operator/internal/controller/nfsexport_controller.go`: the lexicographically first node that carries `storage.simplyblock.io/pnfs-mds=true`, is Ready, and is not cordoned. The label is set by an administrator, because nothing reports whether a node can serve.
+An NFS server is kernel state. nfsd's threads, its export table, and the mounts it serves belong to the kernel they run in, and pNFS SCSI layouts are a kernel nfsd feature, so no userspace server can stand in for it. Serving exports from a customer's Kubernetes node makes that node's kernel the server, which has four costs, and they are the reason the MDS has a kernel of its own.
 
-Four properties of that arrangement are the reason for this design.
+- **The node's kernel is the server.** nfsd, `nfsdcld`, and `rpc.idmapd` run against the host, and their threads outlive any pod. A node that served an export keeps an NFS server after the export is gone.
+- **The node plugin is privileged for the job.** It needs the host's `/etc/exports.d`, `/var/lib/nfs`, and an export root mounted with bidirectional propagation, and Talos, among others, mounts `/etc` read-only.
+- **Host prerequisites are invisible to the operator.** A node without nfsd fails only when an export is assembled on it.
+- **The export's mounts are host state.** A node that crashes mid-export leaves mounts and an export table entry on a machine the operator does not own, and nothing can move them to another host.
 
-- **The node's kernel is the server.** `EnsureNFSD` in `csi-driver/internal/nfsexport/nfsd.go` loads `nfsd`, mounts the nfsd control filesystem, and starts `rpc.nfsd`, `nfsdcld`, and `rpc.idmapd` against the host. The threads outlive the pod. A customer node that served an export keeps an NFS server after the export is gone.
-- **The node is privileged for the job.** The csi-node container runs privileged with `hostNetwork`, and the driver DaemonSet gains three host directories (`/etc/exports.d`, `/var/lib/nfs`, and the export root) when `spec.pnfs.enablePNFS` is set (`operator/internal/controllers/driver/pnfs.go`).
-- **Host prerequisites are invisible to the operator.** A node without nfsd fails in `Assembling` after the five-minute deadline, and a client without `blkmapd` degrades silently.
-- **The export's mounts are host state.** The XFS filesystem is mounted under `/var/lib/simplyblock/exports` through bidirectional propagation, so a node that crashes mid-export leaves mounts and an export table entry on a machine the operator does not own.
-
-The primitives reused unchanged are the `NFSExport` kind and its phases, the `ExportService` protocol in `atlas-lib/nfsexport/nfsexportrpc`, csi-link with its `Registry`, the per-export Service and EndpointSlice (`operator/internal/controller/nfsexport_service.go`), and the assembler package. The pattern reused for scheduling is the VDO capability probe, which publishes a node label from a probe in the node plugin (`atlas-lib/kube/names.go`, `LabelVDOCapable`).
+The primitives this design builds on are the `NFSExport` kind and its phases, the `ExportService` protocol in `atlas-lib/nfsexport/nfsexportrpc`, csi-link with its `Registry`, the per-export Service and EndpointSlice (`operator/internal/controller/nfsexport_service.go`), and the assembler package. The pattern reused for scheduling is the VDO capability probe, which publishes a node label from a probe in the node plugin (`atlas-lib/kube/names.go`, `LabelVDOCapable`).
 
 ---
 
@@ -83,13 +79,12 @@ The primitives reused unchanged are the `NFSExport` kind and its phases, the `Ex
 - The cluster secret never enters the guest. The pod resolves connection details and passes them in.
 - A restarted MDS pod converges: every `Ready` export bound to it is reassembled without operator action.
 - Observability covers the MDS pod's boot, address, and resync, and a refusal to start (no KVM, no state volume, no kernel) is an event rather than a stall.
-- The node-hosted MDS keeps working unchanged until the pod-hosted one replaces it (§13).
 
 ### Non-Goals
 
 - **Failover and live migration.** A restarted pod is a cold boot followed by a resync (§7.5). Moving an MDS without a restart, fencing a partitioned one, and unplanned failover remain `design-pnfs-rwx.md` §13, which this design does not implement.
-- **Several MDS pods per storage cluster.** One pod serves every export of a storage cluster, for the same reason a node-hosted MDS does.
-- **A change to the data path.** Layouts, `nvme-eui.` aliases, `blkmapd`, and client mounts are `design-pnfs-rwx.md` §10.
+- **Several MDS pods per storage cluster.** One pod serves every export of a storage cluster, because nfsd's export table is global to its kernel.
+- **A change to the data path.** Layouts, `nvme-eui.` aliases, and client mounts are `design-pnfs-rwx.md` §10.
 - **A general VM facility.** The runner starts one guest with one disk layout. Hotplug, resize, snapshots of the guest, and a guest API are not provided.
 - **Software emulation.** The runner refuses to start without `/dev/kvm`.
 - **Client addressing beyond a Service.** Clients mount the per-export ClusterIP exactly as they do today (§8).
@@ -136,7 +131,7 @@ The primitives reused unchanged are the `NFSExport` kind and its phases, the `Ex
 
 The runner is the csi-link peer. It dials the operator with the pod's bound ServiceAccount token, exactly as a node plugin does, and relays the `ExportService` calls to the guest agent over a private bridge. The guest agent is the assembler. The guest holds no Kubernetes credential and no control-plane credential.
 
-**Where the export logic runs.** `design-pnfs-rwx.md` §6.4 keeps the export logic in csi-node and permits a separate container only for the nfsd daemons. The assembler is the same package hosted in the guest, so there is one implementation of the export logic and two hosts for it: the node plugin for a node-hosted MDS and the guest agent for a pod-hosted one.
+**Where the export logic runs.** The assembler package runs in one place, the guest agent. The node plugin uses only its attach half, to connect a client's namespace.
 
 ---
 
@@ -301,18 +296,18 @@ A third peer kind, `PeerKindMDS`, is added to `atlas-lib/link/peer.go`, named by
 
 ### 7.2 Assembler addressing
 
-`ExportAssembler` takes a node name in every method. It takes a host in the pod-hosted case, so its methods address a `link.PeerID`: `link.NodePeer(name)` for a node-hosted export and `link.MDSPeer(podName)` for a pod-hosted one. The reconciler derives the peer from the export's status (`mdsPodName` set means pod-hosted). `HasSession` and the `no session is a requeue` rule are unchanged.
+`ExportAssembler`'s methods address a `link.PeerID`, the MDS pod's `link.MDSPeer(podName)`, which the reconciler derives from the export's `mdsPodName`. A missing session is a requeue, not a failure.
 
 ### 7.3 Selection
 
-When `spec.pnfs.mds` is set, `reconcilePending` replaces `selectMDS` with these steps:
+`reconcilePending` takes these steps, and waits in `Pending` with a `NoMetadataServer` event while no `SimplyblockDriver` sets `spec.pnfs.mds`:
 
 1. Ensure the StatefulSet for the export's storage cluster (§5.1).
 2. Read the pod. If it is not scheduled, emit `NoKVMCapableNode` or `MDSStateUnavailable` according to the pod's conditions and requeue.
 3. If the pod is not Ready, requeue.
-4. Bind: write `mdsPodName`, `mdsNodeIP` (the pod IP), the Service address, and the client set, then transition to `Assembling`, in the same write-ahead order as today.
+4. Bind: write `mdsPodName`, `mdsNodeIP` (the pod IP), the Service address, and the client set, then transition to `Assembling`. The binding is written before anything is asked of the guest, so a reconcile that dies mid-assembly finds it.
 
-The client set is every cluster node's InternalIP and, for a pod-hosted export, every node's pod CIDR (`clusterNodeAddresses`), because that is the address the guest sees (§8.3).
+The client set is every cluster node's InternalIP and pod CIDR (`clusterNodeAddresses`), because the pod CIDR is the address the guest sees (§8.3).
 
 ### 7.4 Assembly
 
@@ -330,7 +325,7 @@ The same pass repoints the export's EndpointSlice when the pod IP changed (§8.1
 
 ### 7.7 Deletion
 
-`reconcileDelete` calls `DeleteExport` on the MDS peer. When the MDS pod is gone, the guest's mounts and exports table are gone with it, so a deletion that finds no pod and no session for a pod-hosted export has nothing to tear down and releases the finalizer. This differs from the node-hosted case, where the mount outlives the plugin and the finalizer waits for the node.
+`reconcileDelete` calls `DeleteExport` on the MDS peer. When the MDS pod is gone, the guest's mounts and exports table are gone with it, so a deletion that finds no pod and no session has nothing to tear down and releases the finalizer. A pod that exists without a session may still hold the mount, and the finalizer waits for it.
 
 ### 7.8 RBAC
 
@@ -365,7 +360,7 @@ Only port 2049 is forwarded. NFSv4.1 needs no portmapper, and `rpc.mountd` and `
 
 The exports entry lists client addresses. DNAT preserves the source address of a connection, so the guest sees whatever address the pod network delivers, and a node's traffic to a pod is rewritten by the CNI to the node's own address in its pod CIDR: a tunnel address across nodes and a bridge address on the same node, both depending on the CNI. Seen on the lab cluster, every node reached the MDS pod from its pod-network address and never from its InternalIP, so an entry of InternalIPs alone refused every mount with `access denied`.
 
-A pod-hosted export therefore lists each node's pod CIDR (`spec.podCIDRs`) beside its InternalIP. The CIDR covers both of the node's source addresses whichever the CNI uses, and it also admits the node's own pods. Which client moves data through the metadata server is therefore not decided by this entry. The design requires the node plugin to verify after mounting that the client holds a layout, and to refuse a mount whose I/O would route through the MDS (not implemented yet). A node-hosted export keeps the InternalIPs only, since its server sees the nodes directly.
+An export therefore lists each node's pod CIDR (`spec.podCIDRs`) beside its InternalIP. The CIDR covers both of the node's source addresses whichever the CNI uses, and it also admits the node's own pods. Which client moves data through the metadata server is therefore not decided by this entry. The design requires the node plugin to verify after mounting that the client holds a layout, and to refuse a mount whose I/O would route through the MDS (not implemented yet).
 
 ---
 
@@ -391,7 +386,7 @@ A pod-hosted export therefore lists each node's pod CIDR (`spec.podCIDRs`) besid
 
 ## 10. Security
 
-The MDS pod is privileged, which the node-hosted csi-node already is, but its blast radius differs. The pod holds the host device nodes `/dev/kvm` and `/dev/net/tun` and runs QEMU, and an escape from the guest into the runner is an escape into a privileged container. Nothing in the pod mounts a host directory, uses `hostNetwork`, or uses `hostPID`, so a compromised guest reaches the node only through the runner. A compromised node-hosted MDS is the node.
+The MDS pod is privileged, as csi-node is, but its blast radius differs. The pod holds the host device nodes `/dev/kvm` and `/dev/net/tun` and runs QEMU, and an escape from the guest into the runner is an escape into a privileged container. Nothing in the pod mounts a host directory, uses `hostNetwork`, or uses `hostPID`, so a compromised guest reaches the node only through the runner.
 
 The guest holds no Kubernetes token and no control-plane secret (§6.4). It holds the connection details of the volumes it serves, which are the same details any client of those volumes holds, and the guest's host NQN, which the control plane authorizes per volume.
 
@@ -443,12 +438,7 @@ The scenario matrix belongs in a companion test plan, which does not exist yet. 
 
 ## 13. Migration Strategy
 
-The pod-hosted MDS is selected by `spec.pnfs.mds` and is off while that field is unset. Both hosts coexist.
-
-1. The kernel, image, runner, and guest agent land without being wired to anything.
-2. The reconciler gains the pod-hosted path behind `spec.pnfs.mds`, and CI sets it on the clusters that have KVM.
-3. When the pod-hosted path has run in CI, it becomes the documented default and the node label path is documented as the alternative for clusters without KVM.
-4. An export is bound for its lifetime, so an existing node-hosted export keeps its node until it is deleted. Switching a cluster over means draining its exports, which is `design-pnfs-rwx.md` §13.4 and is not built.
+The guest is the only MDS host, and no release served exports from a node, so there is nothing to migrate. A cluster turns pNFS on by setting `spec.pnfs.mds` on its `SimplyblockDriver`, and its first export brings the MDS pod up.
 
 ---
 
