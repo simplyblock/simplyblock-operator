@@ -32,7 +32,7 @@ func readyExport() *simplyblockv1alpha2.NFSExport {
 }
 
 func TestSpecCarriesTheVolumesClusterAndPool(t *testing.T) {
-	spec, err := specFor(readyExport())
+	spec, err := specFor(readyExport(), "")
 	if err != nil {
 		t.Fatalf("specFor: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestSpecRefusesAVolumeRefItCannotRead(t *testing.T) {
 	e := readyExport()
 	e.Spec.VolumeRef = "not-a-handle"
 
-	_, err := specFor(e)
+	_, err := specFor(e, "")
 	if err == nil {
 		t.Fatal("a malformed volumeRef produced a spec")
 	}
@@ -84,7 +84,7 @@ func TestSpecForDerivesIdentityFromTheHandle(t *testing.T) {
 		Status: simplyblockv1alpha2.NFSExportStatus{AllowedClients: []string{"10.0.0.1"}},
 	}
 
-	spec, err := specFor(record)
+	spec, err := specFor(record, "")
 	if err != nil {
 		t.Fatalf("specFor: %v", err)
 	}

@@ -1,9 +1,9 @@
 // Package nfsexport wires atlas/nfsexport to the pieces the CSI driver owns.
 //
-// Everything runs in this container. The mount reaches the host through the
-// bidirectional propagation on the export root, and exportfs reaches the host's
-// nfsd through the state directories mounted in. Neither needs the host's PID
-// namespace, and the plugin does not have it.
+// Its assembler runs in the metadata server's guest (cmd/mds-agent), the one
+// host that mounts an export's filesystem and publishes it through its own
+// nfsd. A client node uses only the attach half (Attach, HostNQN), to connect
+// the namespace the guest made the filesystem on.
 package nfsexport
 
 import (
@@ -26,18 +26,17 @@ const (
 	// /etc/exports, so one entry can be written without rewriting a shared file.
 	ExportsDir = "/etc/exports.d"
 
-	// Where nfs-utils keeps the export table. rpc.mountd on the host reads the
-	// same file, so it is mounted in: against this container's own copy the
-	// export would report success and be invisible to every client.
+	// Where nfs-utils keeps the export table and nfsdcld its client recovery
+	// database. In the guest it is the state disk, which outlives a restart.
 	NFSStateDir = "/var/lib/nfs"
 
-	// stackRecordDir is where an export's stack record is kept, which is the
-	// host directory the node plugin already records into. The handles cannot
-	// collide: an export's is prefixed (export.Spec.StackHandle).
+	// stackRecordDir is where an export's stack record is kept. The handles
+	// are prefixed (export.Spec.StackHandle), so they cannot collide with a
+	// block volume's.
 	stackRecordDir = "/var/run/simplyblock/stacks"
 )
 
-// NewAssembler returns the node's export assembler.
+// NewAssembler returns the metadata server's export assembler.
 func NewAssembler(
 	devices nvme.DeviceResolver, mounter *csimount.Mounter, hostNQN HostNQNFunc,
 ) (*export.Assembler, error) {

@@ -334,6 +334,17 @@ class Archive(unittest.TestCase):
             self.assertEqual(list(ev.fio_log("nope")), [])
             self.assertEqual(ev.nvme_controllers(), [])
 
+    def test_a_pnfs_run_knows_its_cluster_from_its_volumes(self):
+        # No migration, so no NQN is recorded. The pNFS volume map carries the cluster out of
+        # each volume's handle, and without it nvme.dirty-start and nvme.foreign-cluster skip.
+        cluster = "06075ebb-8c40-4857-a5f1-40b13bca10a7"
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "state.json"), "w") as fh:
+                json.dump({"run_id": "r", "migrations": []}, fh)
+            with open(os.path.join(d, "pnfs.json"), "w") as fh:
+                json.dump({"volumes": [{"claim": "c", "lvol": "l", "cluster": cluster}]}, fh)
+            self.assertEqual(ArchiveEvidence(d).cluster_uuid(), cluster)
+
     def test_falls_back_to_test_log_when_state_is_absent(self):
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "test.log"), "w") as fh:
@@ -384,6 +395,40 @@ class Registry(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class FioJobTiming(unittest.TestCase):
+    def test_a_jobs_start_and_runtime_come_from_its_result(self):
+        """When an instance ran is what attributes a quiet device to it having finished
+        rather than to a stall."""
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "r-fio-0-c0"))
+            with open(os.path.join(d, "r-fio-0-c0", "result.json"), "w") as fh:
+                json.dump({"jobs": [{"job_start": 1791458653564, "job_runtime": 600001,
+                                     "error": 0}]}, fh)
+            job = ArchiveEvidence(d).fio_jobs()[0]
+        self.assertEqual(job.start, datetime(2026, 10, 8, 11, 24, 13, 564000, tzinfo=UTC))
+        self.assertAlmostEqual(job.runtime_s, 600.001)
+
+
+class LoadDrivers(unittest.TestCase):
+    """A run with no component creating load only observes, and says so. Which components
+    create load is what `required` already marks, not a naming convention: a workload is
+    the run as much as a migration driver is."""
+
+    def test_a_workload_counts_as_load(self):
+        from sbtest.cli import load_drivers
+        self.assertEqual(load_drivers(["workload.pnfs", "nvme.iostat", "host.dmesg"]),
+                         ["workload.pnfs"])
+
+    def test_the_migration_run_counts_both_of_its_drivers(self):
+        from sbtest.cli import load_drivers
+        self.assertEqual(sorted(load_drivers(["workload.fio", "migration.driver", "ana.sample"])),
+                         ["migration.driver", "workload.fio"])
+
+    def test_collectors_alone_are_no_load(self):
+        from sbtest.cli import load_drivers
+        self.assertEqual(load_drivers(["logs.collect", "nvme.iostat"]), [])
 
 
 class RunWindowRecording(unittest.TestCase):

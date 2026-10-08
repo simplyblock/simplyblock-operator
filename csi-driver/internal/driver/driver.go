@@ -38,7 +38,6 @@ import (
 	"k8s.io/klog"
 
 	"github.com/simplyblock/atlas/link"
-	"github.com/simplyblock/atlas/nfsexport/nfsexportrpc"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/storage"
 	"github.com/simplyblock/atlas/storage/storagerpc"
@@ -52,8 +51,6 @@ import (
 	"github.com/simplyblock/csi-driver/internal/csilink"
 	"github.com/simplyblock/csi-driver/internal/guardian"
 	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
-	csimount "github.com/simplyblock/csi-driver/internal/mount"
-	"github.com/simplyblock/csi-driver/internal/nfsexport"
 	"github.com/simplyblock/csi-driver/internal/reconnect"
 )
 
@@ -150,7 +147,7 @@ func Run(conf *config.Config) {
 	if conf.LinkEnabled {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		if err := startLink(ctx, conf, kubeClient); err != nil {
+		if err := startLink(ctx, conf); err != nil {
 			klog.Fatalf("failed to start the operator link: %s", err)
 		}
 	}
@@ -187,7 +184,7 @@ func Run(conf *config.Config) {
 // linking it, and is identified by the node it runs on. A controller plugin
 // links as itself and currently serves nothing. It is registered so the
 // operator can see it, and so services can be added without new plumbing.
-func startLink(ctx context.Context, conf *config.Config, kubeClient kubernetes.Interface) error {
+func startLink(ctx context.Context, conf *config.Config) error {
 	cfg := csilink.Config{
 		HubAddress:  conf.LinkHubAddress,
 		CAFile:      conf.LinkCAFile,
@@ -209,23 +206,13 @@ func startLink(ctx context.Context, conf *config.Config, kubeClient kubernetes.I
 		if err != nil {
 			return fmt.Errorf("node storage: %w", err)
 		}
-		// Separate from the storage service because it mutates the node, where
-		// storagerpc only reads.
-		assembler, err := nfsexport.NewAssembler(
-			local.DeviceResolver, csimount.New(), nfsexport.HostNQN(conf.NodeID, kubeClient))
-		if err != nil {
-			return fmt.Errorf("node exports: %w", err)
-		}
-		exportSrv, err := nfsexportrpc.NewServer(nfsexport.WithNFSD(assembler))
-		if err != nil {
-			return fmt.Errorf("node exports: %w", err)
-		}
+		// No export service: exports are assembled in the metadata server's
+		// guest, never on a node.
 		cfg.ID = link.NodePeer(conf.NodeID)
 		cfg.Register = func(r grpc.ServiceRegistrar) {
 			srv.Register(r)
-			exportSrv.Register(r)
 		}
-		cfg.Capabilities = append(storagerpc.Capabilities(), nfsexportrpc.Capabilities()...)
+		cfg.Capabilities = storagerpc.Capabilities()
 
 	case conf.IsControllerServer:
 		if conf.PodName == "" {
@@ -241,10 +228,12 @@ func startLink(ctx context.Context, conf *config.Config, kubeClient kubernetes.I
 	return err
 }
 
-// startNodeServer builds the node service and starts the two background loops
-// that belong to a node plugin rather than to a request: the connection
-// monitor, which reconnects NVMe-oF paths the control plane still publishes,
-// and the guardian, which restarts the pods whose volumes lost every path.
+// startNodeServer builds the node service and starts the background loops that
+// belong to a node plugin rather than to a request: the connection monitor,
+// which reconnects NVMe-oF paths the control plane still publishes, the
+// guardian, which restarts the pods whose volumes lost every path, and the pNFS
+// layout primer, which takes the first layout after an MDS restart before a pod
+// can.
 //
 // They start here rather than inside the service's constructor because
 // constructing a service should not launch a daemon: a test wanting a node
@@ -275,8 +264,10 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 	}
 
 	go reconnect.MonitorConnection(markBroken(podGuardian), manager, cd.GetName(), nodeName)
+	go node.KeepLayoutsPrimed(context.Background(), cd.GetName())
 
 	go advertiseVDOCapability(kubeClient, nodeName)
+	go advertiseKVMCapability(kubeClient, nodeName)
 
 	return ns, nil
 }
@@ -288,6 +279,15 @@ func advertiseVDOCapability(kubeClient kubernetes.Interface, nodeName string) {
 	err := node.AdvertiseVDOCapability(context.Background(), kubeClient, nodeName)
 	if err != nil {
 		klog.Errorf("failed to advertise vdo-capable for node %s: %v", nodeName, err)
+	}
+}
+
+// advertiseKVMCapability publishes whether this node can host the pNFS metadata
+// server's guest, in the background for the same reason as the VDO probe.
+func advertiseKVMCapability(kubeClient kubernetes.Interface, nodeName string) {
+	err := node.AdvertiseKVMCapability(context.Background(), kubeClient, nodeName)
+	if err != nil {
+		klog.Errorf("failed to advertise kvm-capable for node %s: %v", nodeName, err)
 	}
 }
 

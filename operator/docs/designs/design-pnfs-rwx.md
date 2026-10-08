@@ -2,7 +2,7 @@
 
 **Status:** Draft  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-07-02 (last updated 2026-08-25)  
+**Date:** 2026-07-02 (last updated 2026-10-08)  
 **Issue:** https://github.com/simplyblock/simplyblock-operator/issues/278  
 **Target release:** 26.4  
 **Test Plan:** [`tests/test-plan-pnfs-rwx.md`](../tests/test-plan-pnfs-rwx.md)  
@@ -13,15 +13,15 @@ several lvols, consistency-group snapshots, and the user-facing `VolumeGroupSnap
 
 ## Phasing Overview
 
-| Phase | Delivers                                                                | Depends on                      | Status  |
-|-------|-------------------------------------------------------------------------|---------------------------------|---------|
-| 0     | External prerequisites (§Phase 0)                                       | Other repos, branches, spikes   | Blocked |
-| 1     | `NFSExport` CRD and reconciler, MDS selection, export create and delete | P0-1 through P0-4               | Planned |
-| 2     | Per-export Service and EndpointSlice, planned migration (§13.4)         | Phase 1                         | Planned |
-| 3     | MDS health probe, PR fencing, unplanned failover (§13.5)                | Phase 2, P0-1, P0-2, P0-7, P0-8 | Planned |
-| 4     | Snapshot with `xfs_freeze`, clone, restore, online resize               | Phase 1                         | Planned |
-| 5     | Export client restriction, host allow-listing, squash and tenancy       | Phase 1                         | Planned |
-| 6     | Load and soak, scale limits, docs, distro matrix                        | Phases 1 through 5              | Planned |
+| Phase | Delivers                                                              | Depends on                      | Status  |
+|-------|-----------------------------------------------------------------------|---------------------------------|---------|
+| 0     | External prerequisites (§Phase 0)                                     | Other repos, branches, spikes   | Blocked |
+| 1     | `NFSExport` CRD and reconciler, MDS binding, export create and delete | P0-1 through P0-4               | Planned |
+| 2     | Per-export Service and EndpointSlice, planned restart (§13.4)         | Phase 1                         | Planned |
+| 3     | MDS health probe, PR fencing, unplanned failover (§13.5)              | Phase 2, P0-1, P0-2, P0-7, P0-8 | Planned |
+| 4     | Snapshot with `xfs_freeze`, clone, restore, online resize             | Phase 1                         | Planned |
+| 5     | Export client restriction, host allow-listing, squash and tenancy     | Phase 1                         | Planned |
+| 6     | Load and soak, scale limits, docs, distro matrix                      | Phases 1 through 5              | Planned |
 
 Phases 2 and 4 are independent and can run in parallel. Phase 3 is the one that
 turns a working export into a survivable one, and it is the phase whose promises
@@ -32,8 +32,9 @@ depend on spikes rather than on code (§13.3).
 ## Overview
 
 **What this is.** RWX (`MULTI_NODE_MULTI_WRITER`) volumes for the Simplyblock CSI
-driver, built on the pNFS SCSI layout (RFC 8154). One storage node acts as the
-metadata server (MDS) for a volume and exports an XFS filesystem over NFS 4.1.
+driver, built on the pNFS SCSI layout (RFC 8154). A QEMU guest, one per storage
+cluster, acts as the metadata server (MDS) and exports an XFS filesystem per
+volume over NFS 4.1.
 Every client mounts that export for metadata, and then reads and writes the data
 **directly** over NVMe-oF to the same namespace the MDS made the filesystem on.
 Metadata goes through the MDS, data does not.
@@ -47,28 +48,30 @@ what makes this document shippable: it depends on the persistent-reservation
 flag alone, not on any of the group-snapshot work the control plane has not
 started.
 
-**The three moving parts.** An RWX volume is one ordinary lvol. csi-node on the
-MDS host connects it, makes an XFS filesystem on it, mounts it, and exports it
-(§8). The `NFSExport` CR records which MDS the volume is bound to, and at which
-`fsid` and generation (§7.1). csi-node on each client connects the same namespace
-and mounts the export, so `blkmapd` can map file layouts onto the local block
-device (§10).
+**The three moving parts.** An RWX volume is one ordinary lvol. The metadata
+server of its storage cluster, a QEMU guest in a pod of its own
+([`design-pnfs-mds-vm.md`](design-pnfs-mds-vm.md)), connects it, makes an XFS
+filesystem on it, mounts it, and exports it (§8). The `NFSExport` CR records which
+MDS the volume is bound to, and at which `fsid` and generation (§7.1). csi-node on
+each client connects the same namespace and mounts the export, and the client
+kernel maps file layouts onto the local block device itself (§10).
 
 **Why the layout matters.** Without the layout, every byte would cross the
 MDS and RWX throughput would be capped by one node. With it, the MDS carries
 metadata only, which is what makes the shared filesystem scale with the number of
 clients rather than against it (§3).
 
-**One MDS host, many exports.** `nfsd` is a kernel service and `/etc/exports` is
-host-global, so a host runs one `nfsd` serving every export bound to it. The unit
-of placement is therefore the export, not the server: each RWX volume is bound to
-one MDS host, and one MDS host carries many volumes. Per-host `fsid` uniqueness
-follows from this rather than being an edge case (§8.4).
+**One MDS per storage cluster, many exports.** `nfsd` is a kernel service and its
+export table is global to the kernel it runs in, so the guest runs one `nfsd`
+serving every export of its storage cluster. The unit of placement is therefore
+the export, not the server: each RWX volume is bound to the MDS of its storage
+cluster, and one MDS carries many volumes. Per-MDS `fsid` uniqueness follows from
+this rather than being an edge case (§8.4).
 
 **What is not decided or not available yet.** Fencing needs a persistent
-reservation the control plane does not expose, and the operator-to-csi-node
-control channel this design drives the export through is built but unmerged. Both
-live in [Phase 0 — External Prerequisites](#phase-0--external-prerequisites). The
+reservation on the backing namespace (P0-1, P0-2). That and every other external
+dependency live in
+[Phase 0 — External Prerequisites](#phase-0--external-prerequisites). The
 document is a Draft: it states what the design requires, not what exists.
 
 ---
@@ -83,35 +86,32 @@ because they are external. Nothing here is delivered by the pNFS work itself. Th
 is specified, so this table is only the index, and the answer to whether the work
 can start.
 
-| #     | Prerequisite                                                                                                                                                                      | Kind                             | Blocks                                                     | Status                      |
-|-------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------|------------------------------------------------------------|-----------------------------|
-| P0-1  | `ptpl_file` on the lvol's namespace, so it is PTPL-capable and `nfsd` can register its key (§6.2). Not a flag on `bdev_lvol_create`                                               | Control plane (`sbcli`)          | **Any layout being issued at all**, so every phase         | **Merged**                  |
-| P0-2  | Persistent-reservation support behind it, so a fenced client's writes are actually refused (§6.2, §15)                                                                            | Storage plane (SPDK)             | Fencing, and MDS failover safety (§13)                     | **Present**                 |
-| P0-3  | The csi-link mutation gate opened, so the operator may drive `CreateExport` and `DeleteExport` on a node rather than only read from it (§6.4)                                     | Platform (`atlas-lib`, unmerged) | Every export operation, so all of §8                       | Built, unmerged, read-only  |
-| P0-4  | csi-node moved off nvme-cli `initiator.go` onto atlas `nvmeof`, which is what the mutation gate waits on (§6.4, §10.1)                                                            | Platform (`csi-driver`)          | P0-3                                                       | Not started                 |
-| P0-5  | `nvme.DeviceSelector.NGUID` and a by-NGUID lookup in atlas-lib, plus an `nvme-eui.` alias helper, so the client stops shelling out to `nvme id-ns` (§10.1)                        | Platform (`atlas-lib`)           | Client device identity, though a shell-out works meanwhile | Not started                 |
-| P0-6  | Storage-node capability and inventory fields: `nfs_capable`, `nfsd_version`, `pnfs_available`, `kernel_version`, and the NFS data-network IP, surfaced on `StorageNodeDTO` (§6.6) | Control plane (`sbcli`)          | MDS selection without a per-node probe (§7.2)              | Not shipped, recommended    |
-| P0-7  | An answer on NFSv4.1 `server_owner` and `server_scope` across MDS hosts: can they be made to match, or must the client do full state recovery on failover (§13)                   | Node OS, and a spike here        | The freeze bound in NFR-2, and what §13 may promise        | Open, spike needed          |
-| P0-8  | Confirmation that a kernel sunrpc mount reaches a Service ClusterIP on the CNI dataplanes the product supports, including eBPF kube-proxy replacement (§13)                       | Environment, and a spike here    | The stable-address design in §13                           | Open, spike needed          |
-| P0-9  | Client and MDS kernels carrying `nvme_get_unique_id`, without which nfsd cannot identify an NVMe device (§5.3). Not a 6.11 floor: RHEL 9.8's 5.14.0-687 has it, RHEL 9.5's 5.14.0-503 does not | Node OS                          | Every phase: pNFS SCSI layout needs it                     | **Satisfied**               |
-| P0-10 | `nfs-utils` on MDS hosts (`nfsd`, `exportfs`) and `nfs-blkmap`/`blkmapd` on clients, plus `nfs-common` on Debian-family (§5.3)                                                    | Node OS                          | Export assembly and the client direct path                 | Environment requirement     |
-| P0-11 | A Debian and Ubuntu spike: `/dev/disk/by-id` naming and the `nfs-common` difference (§5.3)                                                                                        | Node OS                          | The distro matrix commitment                               | Not started (§18, Q4)       |
+| #     | Prerequisite                                                                                                                                                                                     | Kind                          | Blocks                                                     | Status                  |
+|-------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------|------------------------------------------------------------|-------------------------|
+| P0-1  | `ptpl_file` on the lvol's namespace, so it is PTPL-capable and `nfsd` can register its key (§6.2). Not a flag on `bdev_lvol_create`                                                              | Control plane (`sbcli`)       | **Any layout being issued at all**, so every phase         | **Merged**              |
+| P0-2  | Persistent-reservation support behind it, so a fenced client's writes are actually refused (§6.2, §15)                                                                                           | Storage plane (SPDK)          | Fencing, and MDS failover safety (§13)                     | **Present**             |
+| P0-3  | The csi-link export service on the MDS peer, so the operator can drive `CreateExport`, `CheckExport`, and `DeleteExport` in the guest (§6.4)                                                     | Platform (`atlas-lib`)        | Every export operation, so all of §8                       | **Present**             |
+| P0-4  | The client attach on atlas `nvmeof`, the connect path the guest's agent uses too, so the two cannot disagree about how or as which host (§6.4, §10.1)                                            | Platform (`csi-driver`)       | P0-3                                                       | **Present**             |
+| P0-5  | `nvme.DeviceSelector.NGUID` and a by-NGUID lookup in atlas-lib, plus an `nvme-eui.` alias helper, so the client stops shelling out to `nvme id-ns` (§10.1)                                       | Platform (`atlas-lib`)        | Client device identity, though a shell-out works meanwhile | Not started             |
+| P0-7  | NFSv4.1 `server_owner` and `server_scope` stable across MDS restarts, so a client reclaims its state rather than starting over (§13.3)                                                           | MDS guest                     | The freeze bound in NFR-2, and what §13 may promise        | **Answered**            |
+| P0-8  | Confirmation that a kernel sunrpc mount reaches a Service ClusterIP on the CNI dataplanes the product supports, including eBPF kube-proxy replacement (§13)                                      | Environment, and a spike here | The stable-address design in §13                           | Open, spike needed      |
+| P0-9  | Client and guest kernels carrying `nvme_get_unique_id`, without which nfsd cannot identify an NVMe device (§5.3). Not a 6.11 floor: RHEL 9.8's 5.14.0-687 has it, RHEL 9.5's 5.14.0-503 does not | Node OS                       | Every phase: pNFS SCSI layout needs it                     | **Satisfied**           |
+| P0-10 | The pNFS block layout client (`CONFIG_PNFS_BLOCK`) in client kernels, which serves the SCSI layout too (§5.3)                                                                                    | Node OS                       | The client direct path                                     | Environment requirement |
+| P0-11 | A Debian and Ubuntu spike: `/dev/disk/by-id` naming and the `nfs-common` difference (§5.3)                                                                                                       | Node OS                       | The distro matrix commitment                               | Not started (§18, Q4)   |
 
 **Without P0-1** no layout is issued at all: the feature does not degrade, it silently
 does not happen, and the fallback in FM-2 hides that completely. P0-2 turns out to be
 present already — SPDK implements reservations, and the target accepted every type once
 P0-1 was fixed — so fencing is reachable once the namespace is capable. **With P0-1 fixed the
 whole path works end to end**, with zero bytes through the MDS and `LAYOUTRETURN` staying at 0.
-**Without P0-3** the
-operator can read fabric state from a node but cannot ask it to assemble an
-export, which is the whole server side of this design. **Without P0-6** MDS
-selection falls back to a per-node capability probe (§7.2), which is slower and
-less precise but not blocking. **P0-7 and P0-8** do not block a first
-implementation, but they decide what §13 is allowed to promise, so they must be
-answered before the freeze bound in NFR-2 is treated as a commitment. **P0-9 and
-P0-10** are node-image requirements: a node that does not meet them must be
-excluded from MDS selection and from RWX scheduling, which is a behavior this
-repository owns and tests.
+**P0-3** is the
+channel every export operation travels: the operator reaches the agent in the MDS
+guest over csi-link, so without it the server side of this design does not exist.
+**P0-8** does not block a first implementation, but it decides what §13 is allowed
+to promise, so it must be answered before the freeze bound in NFR-2 is treated as
+a commitment. **P0-9 and P0-10** are node-image requirements: a node that does not
+meet them must be excluded from RWX scheduling, which is a behavior this
+repository owns and tests. The MDS guest brings its own kernel and meets both.
 
 The consistency-group prerequisites that earlier drafts carried here, the group
 snapshot API and the freeze it depends on, belong to
@@ -131,8 +131,8 @@ this document.
 4. [High-Level Architecture](#4-high-level-architecture)
 5. [Requirements](#5-requirements)
 6. [Backend / Control-Plane (sbcli) Changes](#6-backend--control-plane-sbcli-changes)
-7. [Export Registry and MDS Selection](#7-export-registry-and-mds-selection)
-8. [Server-Side Design (MDS host)](#8-server-side-design-mds-host)
+7. [Export Registry and MDS Binding](#7-export-registry-and-mds-binding)
+8. [Server-Side Design (MDS guest)](#8-server-side-design-mds-guest)
 9. [CSI Controller Design](#9-csi-controller-design)
 10. [CSI Node Design (pNFS client)](#10-csi-node-design-pnfs-client)
 11. [Volume Handle and Data Model](#11-volume-handle-and-data-model)
@@ -165,7 +165,7 @@ this document.
 - Cross-cluster / cross-region RWX volumes (an RWX volume lives in exactly one simplyblock cluster).
 - Automatic re-striping / re-balancing of an existing RWX volume across a changed set of storage nodes.
 - Raw-block (`volumeMode: Block`) PVCs, which pNFS is not involved in. A raw-block claim is plain multi-attach: one namespace, several initiators, and no filesystem between them, which the existing block path already serves and KubeVirt live migration needs. Such a claim never reaches this path, because it has no filesystem to ask for: a `volumeMode: Block` claim whose class nevertheless names `fsType: pnfs` is refused, since volumeMode and the StorageClass contradict each other and honoring either would pick a winner the user did not.
-- Windows / non-Linux clients (the pNFS SCSI layout and `blkmapd` are Linux-only here).
+- Windows / non-Linux clients (the pNFS SCSI layout client is Linux-only here).
 - NFSv3 or plain (non-parallel) NFSv4 as a supported fallback product feature. Non-pNFS NFSv4.1 MDS-routed I/O exists only as an automatic degraded fallback (see §16).
 
 ---
@@ -194,8 +194,8 @@ Today's RWO data path:
 
 Storage-node components already exist and are relevant to the server side of pNFS:
 
-- **SNodeAPI:** a privileged, `hostNetwork` DaemonSet (`charts/spdk-csi/latest/spdk-csi/templates/storage-node.yaml`) launched with `python simplyblock_web/node_webapp.py storage_node_k8s`, health endpoint `/snode/check` on the snode API port. It host-mounts `/dev`, `/sys`, `/mnt`, `/lib/modules`, `/var/simplyblock`. It is SPDK/device-management focused. For pNFS it only grows **capability reporting** (kernel/nfs eligibility), because the export assembly itself lives in csi-node (§6.4).
-- **`csi-node`** (`csi-driver/internal/csi/node`): the CSI node plugin DaemonSet. It already owns NVMe-oF connect/reconnect and mount/format on every node. For pNFS it also runs on MDS and storage hosts and performs the server-side export assembly (XFS, mount, and `exportfs`).
+- **SNodeAPI:** a privileged, `hostNetwork` DaemonSet (`charts/spdk-csi/latest/spdk-csi/templates/storage-node.yaml`) launched with `python simplyblock_web/node_webapp.py storage_node_k8s`, health endpoint `/snode/check` on the snode API port. It host-mounts `/dev`, `/sys`, `/mnt`, `/lib/modules`, `/var/simplyblock`. It is SPDK/device-management focused, and pNFS adds nothing to it: the export assembly runs in the MDS guest (§6.4).
+- **`csi-node`** (`csi-driver/internal/csi/node`): the CSI node plugin DaemonSet. It already owns NVMe-oF connect/reconnect and mount/format on every node. For pNFS it is the client: it attaches the namespace, mounts the export, and takes the first layout (§10). It serves no export.
 - **Operator and CRDs** under `helm-charts/charts/simplyblock-operator/crds/`: `StorageCluster`, `StorageNodeSet`, `StorageNode`, `StorageNodeOps`, `StoragePool`, `ControlPlane`, `Task`, `VolumeMigration`, and the replication and backup families. Node state (`online`, `offline`, `in_restart`, and the rest) lives in `internal/utils/constants.go`.
 - Per-node status query: `GET /api/v2/clusters/{clusterID}/storage-nodes/{nodeID}/` (`getStorageNodeStatus`, `internal/controlplane/client.go`).
 
@@ -215,7 +215,9 @@ This matches the PoC notes precisely:
   layout. **The name is `nvme-eui.${NGUID}`.** `bl_parse_scsi` builds the path itself and
   tries exactly three prefixes, in order — `dm-uuid-mpath-0x`, `wwn-0x`, then `nvme-eui.`.
   udev creates none of them for an NVMe-oF namespace (it makes `nvme-uuid.` and a model
-  alias), so csi-node must. The lookup is the client kernel's own, not `blkmapd`'s.
+  alias), so csi-node must. The lookup is the client kernel's own, and it resolves the
+  path in the mount namespace of the task that asked for the layout, which is why the
+  node plugin takes the first layout itself (§10.1).
 - The XFS filesystem is exported with the `pnfs` option. **XFS is the only Linux filesystem that can act as a pNFS SCSI-layout server**.
 - **Persistent Reservations are required before a layout is issued at all.** `nfsd`
   registers its own reservation key (`NFSD_MDS_PR_KEY`) on the exported device inside
@@ -249,16 +251,16 @@ If the client cannot establish the block path (device missing, fenced, reservati
                 │                                              │
    ┌────────────┴──────────────┐   NFSExport CR   ┌────────────┴────────────────┐
    │      CSI Controller       │◀────────────────▶│   Operator (leader)         │
-   │  creates the lvol         │                  │  - selects the MDS host     │
+   │  creates the lvol         │                  │  - binds the MDS pod        │
    │  creates the NFSExport CR │                  │  - Service + EndpointSlice  │
    └───────────────────────────┘                  │  - failover + PR fencing    │
                                                   └──────────┬──────────────────┘
                                                              │ csi-link
                                         ┌────────────────────▼─────────────────┐
-                                        │  MDS host                            │
-                                        │   csi-node: connect ns, mkfs.xfs,    │
-                                        │             mount, exportfs          │
-                                        │   nfsd + rpc.mountd + rpc.statd      │
+                                        │  MDS pod: QEMU guest, per cluster    │
+                                        │   mds-agent: connect ns, mkfs.xfs,   │
+                                        │              mount, exportfs         │
+                                        │   nfsd + rpc.mountd + nfsdcld        │
                                         └────────────▲─────────────────────────┘
                                                      │ NFSv4.1 metadata
                           Service ClusterIP ─────────┘ (stable across failover)
@@ -266,7 +268,7 @@ If the client cannot establish the block path (device missing, fenced, reservati
    ┌──────────── worker node (pNFS client) ──────────┴──┐
    │ csi-node                                           │
    │  - nvme connect the SAME namespace  ───────────────┼── direct NVMe-oF I/O ──▶ namespace
-   │  - nvme-eui. alias + blkmapd                       │
+   │  - nvme-eui. alias, first-layout probe             │
    │  - mount -t nfs -o v4.1 <clusterIP>:/mnt/{pvc} …   │
    │ Pods: RWX mount, many nodes                        │
    └────────────────────────────────────────────────────┘
@@ -274,9 +276,9 @@ If the client cannot establish the block path (device missing, fenced, reservati
 
 **Roles**:
 
-- **pNFS clients:** worker nodes that host pods with RWX mounts. Selected/gated by kernel ≥ 6.11 and (optionally) a node label/taint. Run the CSI Node plugin + `blkmapd`.
-- **MDS / export servers:** storage nodes (or dedicated export nodes) that run `nfsd`, own the exported XFS filesystem, and host `/etc/exports`. The co-located **csi-node** connects the backing namespace *and* drives the export lifecycle (XFS, mount, and `exportfs`). `nfsd`, `rpc.mountd`, and `rpc.statd` run as a co-located daemon (systemd or sidecar, §6.4(b)). One host serves every export bound to it. Gated by kernel ≥ 6.11 and eligibility recorded on the `StorageNode` CR.
-- **Operator:** owns the `NFSExport` CR, the authoritative mapping of `{RWX volume → MDS host → backing lvol → export path}` (§7.1). It enforces the "one MDS per export" invariant, reconciles the per-export Service, and drives failover.
+- **pNFS clients:** Worker nodes that host pods with RWX mounts, gated by a kernel carrying `nvme_get_unique_id` and the pNFS block layout client (P0-9, P0-10). They run the CSI node plugin, which takes the first layout itself (§10.1).
+- **MDS:** one pod per storage cluster, running a QEMU guest with its own kernel ([`design-pnfs-mds-vm.md`](design-pnfs-mds-vm.md)). The guest runs `nfsd`, owns every exported XFS filesystem of its storage cluster, and runs `mds-agent`, which connects the backing namespaces and assembles exports on the operator's request. No Kubernetes node runs `nfsd` or mounts an export.
+- **Operator:** owns the `NFSExport` CR, the authoritative mapping of `{RWX volume → MDS pod → backing lvol → export path}` (§7.1). It enforces the "one MDS per export" invariant, reconciles the per-export Service, and drives failover.
 
 **Hard invariant (from PoC):** each client export (PVC) is associated with **exactly one** MDS server. The server (and its attached NVMe-oF namespaces) may *migrate*, but the client never fails over to a *different* export. Migration causes a bounded I/O freeze until clients reconnect.
 
@@ -288,9 +290,9 @@ If the client cannot establish the block path (device missing, fenced, reservati
 
 - **FR-1** Provision an RWX PVC of size `S` as one lvol of size `S`, GiB-aligned per `util.AlignToGiBBytes`.
 - **FR-2** Each lvol is created with persistent reservations enabled (`-pr`).
-- **FR-3** Select exactly one eligible MDS server per volume and bind it durably. The binding must survive controller restarts.
-- **FR-4** On the MDS host: attach the lvol, `mkfs.xfs`, mount at `/mnt/{pvc-name}`, add a `pnfs` export, and run `exportfs -ra`.
-- **FR-5** On each client node: attach the same lvol, create the `nvme-eui.${NGUID}` alias under `/dev/disk/by-id/`, ensure `blkmapd` is running, and mount the export's Service address via NFSv4.1 into the pod.
+- **FR-3** Bind each volume to the MDS of its storage cluster, durably. The binding must survive controller restarts.
+- **FR-4** In the MDS guest: attach the lvol, `mkfs.xfs`, mount it, add a `pnfs` export, and publish it with `exportfs`.
+- **FR-5** On each client node: attach the same lvol, create the `nvme-eui.${NGUID}` alias under `/dev/disk/by-id/`, mount the export's Service address via NFSv4.1 into the pod, and take the first layout from the node plugin's own container (§10.1).
 - **FR-6** Support delete, online resize, snapshot (quiesced through `xfs_freeze` on the MDS), clone, and restore for RWX volumes.
 - **FR-7** Advertise the `MULTI_NODE_MULTI_WRITER` access mode, and select the pNFS path from `csi.storage.k8s.io/fstype: pnfs`, leaving every class that does not name it behaving exactly as before.
 - **FR-8** Handle planned and unplanned MDS migration with automatic client reconnect.
@@ -301,12 +303,12 @@ If the client cannot establish the block path (device missing, fenced, reservati
 - **NFR-2** MDS migration client-visible freeze ≤ configurable bound (target: ≤ 30 s, driven by NFS lease + NVMe `ctrl-loss-tmo` + reconnect-delay, mirroring existing initiator tunables).
 - **NFR-3** No data corruption under client death, layout recall, node partition, or MDS migration (PR fencing + XFS journaling must guarantee this).
 - **NFR-4** RWX provisioning must not regress RWO provisioning latency or reliability.
-- **NFR-5** All new host-side actions run through the CSI node plugin / storage-node agent (no direct SSH). Operations must be idempotent and safely retryable.
+- **NFR-5** All new host-side actions run through the CSI node plugin or the MDS guest's agent (no direct SSH). Operations must be idempotent and safely retryable.
 
 ### 5.3 Compatibility / Environment
 
-- Client and MDS kernels carrying `nvme_get_unique_id` (RHEL 9.8's 5.14.0-687 qualifies).
-- `nfs-utils` present on MDS hosts (`nfsd`, `exportfs`) and clients (`nfs-blkmap`/`blkmapd`).
+- Client kernels carrying `nvme_get_unique_id` (RHEL 9.8's 5.14.0-687 qualifies) and the pNFS block layout client (`CONFIG_PNFS_BLOCK`). The MDS guest brings its own kernel.
+- `mount.nfs` on clients, which the node plugin image ships in `nfs-utils`. No host runs an NFS server.
 - RHEL-family (RHEL, Rocky, Alma, Oracle, Amazon Linux) is the validated baseline. Debian/Ubuntu (`nfs-common`, differing `/dev/disk/by-id` naming) is **explicitly a testing risk** (see §18, §20).
 
 ---
@@ -323,10 +325,8 @@ backend-specific detail follows here. These must land in the simplyblock
 backend/API **before** the CSI work can be completed and validated:
 
 1. **`-pr` flag on lvol create.** Extend the v2 volume-create API and `util.CreateLVolData` with a persistent-reservations flag (e.g., `"pr": true` / `"persistent_reservation": true`). Without it, pNFS SCSI-layout fencing is impossible.
-2. **The csi-link mutation gate opened** (P0-3), so the operator may ask a node to assemble an export rather than only read fabric state from it. Consistency-group snapshots are *not* a precondition of this design, because a single-volume export snapshots per lvol (§6.3).
-3. **(Recommended) Eligible-node inventory (P0-6).** An endpoint returning storage nodes with role, data-network IP, kernel version, and health, so MDS selection does not need a per-node probe.
-4. **(Recommended) Eligible-server / node-inventory query.** An endpoint returning storage nodes with role, data-network IP, kernel version, and health so the controller can select an MDS without scraping `master-lvols`. If it is unavailable initially, the controller bootstraps from CRD status plus a per-node capability probe (§7.2).
-5. **(Recommended) Export/server association store**, or agreement that the CSI-owned Export Registry (§7.1) is authoritative.
+2. **The csi-link export service** (P0-3), so the operator can ask the MDS guest to assemble an export. Consistency-group snapshots are *not* a precondition of this design, because a single-volume export snapshots per lvol (§6.3).
+3. **(Recommended) Export/server association store**, or agreement that the CSI-owned Export Registry (§7.1) is authoritative.
 
 ### 6.2 Persistent reservations (`ptpl_file`) on the lvol's namespace
 
@@ -366,8 +366,8 @@ the backend for §12.2 to work.
 
 The one thing the driver must do is quiesce the filesystem before it asks. A
 snapshot of a mounted XFS that is still taking writes is crash-consistent at the
-block layer only, so recovery on restore depends on the XFS log. The MDS host
-holds the only mount, which is what makes this tractable: csi-node on the MDS can
+block layer only, so recovery on restore depends on the XFS log. The MDS guest
+holds the only mount, which is what makes this tractable: its agent can
 `xfs_freeze -f` the export, take the snapshot, and `xfs_freeze -u`, and no client
 holds a competing mount. Freeze duration lands in the client-visible latency
 budget and is bounded by the same control channel as every other export
@@ -379,45 +379,46 @@ consistency group that does not exist. That, and the user-facing
 `VolumeGroupSnapshot` built on the same primitive, is
 [`design-pnfs-striped.md`](design-pnfs-striped.md).
 
-### 6.4 NFS server (co-located) and where the export logic lives
+### 6.4 Where the NFS server and the export logic run
 
-Three **separate** concerns live on the MDS host, and conflating them is the usual mistake (full split in §8). Only **(b)** and the capability reporting below are genuinely sbcli / host-packaging changes. **(a)** and **(c)** are CSI-driver (**csi-node**) responsibilities in *this* repo:
+Three concerns live in the MDS guest (full split in §8), and none of them on a
+Kubernetes node. None is an sbcli change.
 
-**(a) NVMe-oF connection of the backing namespace: csi-node.** The MDS host is an NVMe-oF initiator for the volume's namespace just like a client, so the existing **csi-node** service (`csi-driver/internal/csi/node` and `csi-driver/internal/initiator/initiator.go`) connects it and owns reconnect, ANA, and the Guardian. This requires the CSI node DaemonSet to run on MDS/storage hosts (§14.1).
+**(a) NVMe-oF connection of the backing namespace.** The guest is an NVMe-oF
+initiator for the volume's namespace just like a client. `mds-agent` connects it
+through atlas-lib's `nvmeof`, the connect path the node plugin uses too, as the
+guest's own host NQN. That NQN derives from the MDS StatefulSet and survives pod
+restarts ([`design-pnfs-mds-vm.md`](design-pnfs-mds-vm.md) §6.5).
 
-**(b) The NFS server: a co-located system service.** The kernel `nfsd` threads plus the userspace daemons `rpc.mountd` and `rpc.statd`. Kernel `nfsd` and `/etc/exports` are host-global and must run where the XFS is actually mounted, which is also why one host serves every export bound to it. This is a **long-running daemon set started at node bring-up**, either a systemd unit on the host or a container in the storage-node DaemonSet with `hostNetwork` and access to `/proc/fs/nfsd`. Ship `nfs-utils` in the storage-node image (sbcli packaging). It is **not** an HTTP surface and nothing "serves" it on request. §8.1 and §14.1 cover provisioning. (`blkmapd`/`nfs-blkmap` is a **client-side** daemon (§10) and does *not* run on the MDS.)
+**(b) The NFS server.** The guest's kernel `nfsd` with `rpc.mountd` and `nfsdcld`,
+started by the guest's init at boot. The client recovery database `nfsdcld` keeps
+lives on the MDS state disk, a simplyblock volume, so clients reclaim their state
+when the pod restarts on any node.
 
-**(c) Export assembly and control: also csi-node.** Building an export on top of the connected device (`mkfs.xfs` → mount `/mnt/{pvc}` → write `/etc/exports.d/{pvc}` → `exportfs -ra`) is a natural extension of what csi-node already does for RWO (`SafeFormatAndMount`, mount lifecycle, device-wait). It lives in the **csi-node** service (§8), which runs `exportfs` against the co-located `nfsd`. This is **not** the SNodeAPI, which is SPDK/device-management focused and should not grow NFS responsibilities. (A dedicated NFS sidecar remains an option only for hosting the (b) daemon, never the export logic.)
+**(c) Export assembly and control.** `mkfs.xfs`, the mount, the `exports.d`
+entry, and `exportfs` run in `mds-agent` (`csi-driver/cmd/mds-agent`, with the
+assembler in `csi-driver/internal/nfsexport`). The SNodeAPI stays SPDK and
+device-management focused and carries none of it.
 
-**The control channel is csi-link.** Because no consuming pod runs on the MDS host,
-kubelet never issues `NodeStageVolume` for the export, so something else has to ask
-the MDS-host csi-node to assemble it. Earlier drafts left this open between an admin
-gRPC endpoint, a node-watched CR, and a synthetic stage call. It is settled: the
-operator drives export assembly over **csi-link**, the operator-to-CSI channel that
-lands in 26.4 (`atlas-lib/link` and `atlas-lib/node`, with `operator/internal/csilink`
-and `csi-driver/internal/csilink` as the two ends). Nothing new gets invented for pNFS.
+**The control channel is csi-link.** No pod consumes a volume on the MDS, so
+kubelet never issues `NodeStageVolume` for the export there, and the operator asks
+the guest to assemble it. It does so over **csi-link**, the operator-to-CSI
+channel (`atlas-lib/link` and `atlas-lib/node`, with `operator/internal/csilink`
+and `csi-driver/internal/csilink` as the two ends). Two properties of that channel
+shape this design:
 
-Three properties of that channel shape this design rather than merely enabling it:
-
-- **The node dials the operator, not the reverse.** csi-node opens a TLS session
+- **The MDS dials the operator.** The MDS pod opens a TLS session
   carrying its ServiceAccount token, the operator authenticates it by TokenReview
-  and derives the node identity from the token's pod claims, and both ends then
-  speak gRPC over a yamux mux. The operator has no ingress to nodes and does not
-  want any.
-- **"No session for this node" is a normal state, not an error.** A node is
-  legitimately disconnected during a rollout. An export operation aimed at a node
-  with no live session is a requeue, and §16 carries it as a failure mode rather
-  than an outage.
-- **The channel is read-only today.** Mutations stay gated until csi-node moves off
-  nvme-cli `initiator.go` onto atlas `nvmeof`, because two connect implementations
-  on one node is the thing that gate exists to prevent. `CreateExport` and
-  `DeleteExport` are mutations, so opening that gate is a prerequisite of this
-  design and not a detail (P0-3, P0-4).
+  and derives the peer's identity from the token's pod claims, and both ends then
+  speak gRPC over a yamux mux. Export calls reach the agent in the guest through
+  the pod. The operator has no ingress to nodes and does not want any.
+- **"No session for the MDS" is a normal state.** The MDS is
+  legitimately disconnected while its guest boots or restarts. An export operation
+  aimed at an MDS with no live session is a requeue, and §16 carries it as a
+  failure mode rather than an outage.
 
 Only the leader-elected operator replica accepts sessions, so export operations are
 driven from the same replica that owns every other reconcile.
-
-**Capability reporting (the one sbcli/SNodeAPI piece).** Extend the operator's existing `/snode/info` readiness poll (§14) so MDS eligibility (§7.2) can be evaluated: `nfs_capable`, `nfsd_version`, `kernel_version`, and `pnfs_available`. These four names are the wire schema, and P0-6, the endpoint table, and §6.6 all use them. Earlier drafts also spelled two of them `nfs_version` and `pnfs_enabled`, which is the same data under a second name and is not carried forward. This stays in `simplyblock_web` because it reports storage-node host state the operator already scrapes there.
 
 ### 6.5 v2 API additions (CSI-facing)
 
@@ -425,27 +426,19 @@ Route handlers live under `simplyblock_web/api/v2/` (`volume.py`, `snapshot.py`,
 
 The endpoints this design calls, and their state today:
 
-| Method | Endpoint                                                        | Notes                                                                                                                                           |
-|--------|-----------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------|
-| `POST` | `/api/v2/clusters/{id}/storage-pools/{id}/volumes/`             | Needs `enable_persistent_reservation` in the body (§6.2). Idempotent by volume name, as today. **Not shipped** (P0-1)                           |
-| `POST` | `/api/v2/clusters/{id}/storage-pools/{id}/snapshots/`           | Existing per-lvol snapshot. Used unchanged (§6.3)                                                                                               |
-| `GET`  | `/api/v2/clusters/{id}/storage-nodes/`                          | Must carry `nfs_capable`, `nfsd_version`, `pnfs_available`, `kernel_version`, and the NFS data-network IP (§6.6). **Fields not shipped** (P0-6) |
-| `POST` | `/api/v2/clusters/{id}/storage-pools/{id}/volumes/{id}/connect` | Existing. Returns the connection set for the backing namespace                                                                                  |
+| Method | Endpoint                                                        | Notes                                                                                                                 |
+|--------|-----------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------|
+| `POST` | `/api/v2/clusters/{id}/storage-pools/{id}/volumes/`             | Needs `enable_persistent_reservation` in the body (§6.2). Idempotent by volume name, as today. **Not shipped** (P0-1) |
+| `POST` | `/api/v2/clusters/{id}/storage-pools/{id}/snapshots/`           | Existing per-lvol snapshot. Used unchanged (§6.3)                                                                     |
+| `POST` | `/api/v2/clusters/{id}/storage-pools/{id}/volumes/{id}/connect` | Existing. Returns the connection set for the backing namespace                                                        |
 
 Every mutating call above is retried by a reconciler after an ambiguous timeout,
 so each one has to be idempotent by the name or id in the request: the operator
 cannot distinguish a call that never arrived from a response that was lost.
 
-### 6.6 Storage-node model, capability & inventory
-
-`simplyblock_core/models/storage_node.py` (`StorageNode`) is inventory-only today (`hostname`, `status`, `primary_ip`/`mgmt_ip`, `nvme_devices[]`, HA node ids, `nvmf_port`, …). Registration goes through `storage_node_ops.py` `add_storage_node()`, and listing through `GET /api/v2/clusters/{id}/storage-nodes`. Add capability fields so the controller can pick an MDS without scraping `master-lvols`:
-
-- `nfs_capable`, `nfsd_version`, `pnfs_available`, `kernel_version`, and a data-network IP for NFS, which may differ from `mgmt_ip`.
-- Surface these on `StorageNodeDTO` and optionally a `GET /storage-nodes/{id}/nfs-capability` endpoint → **this is the "eligible-node inventory query"** referenced in §6.1(4) and §7.2.
-
 ---
 
-## 7. Export Registry and MDS Selection
+## 7. Export Registry and MDS Binding
 
 ### 7.1 The `NFSExport` CRD
 
@@ -487,7 +480,7 @@ const (
 type NFSExportSubPhase string
 
 // NFSExportSpec is the desired state: which volume is exported, and under what policy.
-// The bound MDS host is NOT here. It is an observed binding the operator owns, so it
+// The bound MDS is NOT here. It is an observed binding the operator owns, so it
 // lives in status where a user edit cannot race the failover machine.
 type NFSExportSpec struct {
     // VolumeRef is the CSI volume handle this export serves. Immutable.
@@ -526,17 +519,17 @@ type NFSExportStatus struct {
     // +optional
     SubPhase NFSExportSubPhase `json:"subPhase,omitempty"`
 
-    // StorageNodeRef names the StorageNode CR currently acting as MDS. Operator-owned:
+    // MDSPodName names the metadata server pod serving this export. Operator-owned:
     // it is the serialization point for the one-MDS-per-export invariant (§13.2).
     // +optional
-    StorageNodeRef string `json:"storageNodeRef,omitempty"`
+    MDSPodName string `json:"mdsPodName,omitempty"`
 
     // ServiceName is the Service whose ClusterIP clients mount (§13.3). Stable for
     // the export's lifetime, which is the point of it.
     // +optional
     ServiceName string `json:"serviceName,omitempty"`
 
-    // MDSNodeIP is the node address currently behind that Service, recorded for
+    // MDSNodeIP is the MDS pod's IP currently behind that Service, recorded for
     // diagnosis rather than for clients to use.
     // +optional
     MDSNodeIP string `json:"mdsNodeIP,omitempty"`
@@ -552,7 +545,7 @@ type NFSExportStatus struct {
     // +optional
     NGUID string `json:"nguid,omitempty"`
 
-    // AllowedClients is the effective client set written into /etc/exports, derived
+    // AllowedClients is the effective client set written into the exports entry, derived
     // from ClientPolicy and current pod placement.
     // +optional
     AllowedClients []string `json:"allowedClients,omitempty"`
@@ -573,13 +566,13 @@ type NFSExportStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=nfsexp
 // +kubebuilder:printcolumn:name="Volume",type=string,JSONPath=".spec.volumeRef"
-// +kubebuilder:printcolumn:name="MDS",type=string,JSONPath=".status.storageNodeRef"
+// +kubebuilder:printcolumn:name="MDS",type=string,JSONPath=".status.mdsPodName"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="SubPhase",type=string,JSONPath=".status.subPhase"
 // +kubebuilder:printcolumn:name="Service",type=string,JSONPath=".status.serviceName"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
-// NFSExport is one pNFS export: a volume, the MDS host serving it, and the address
+// NFSExport is one pNFS export: a volume, the MDS serving it, and the address
 // clients mount. The operator owns the binding and the failover.
 type NFSExport struct {
     metav1.TypeMeta   `json:",inline"`
@@ -593,8 +586,8 @@ type NFSExport struct {
 The object is named by a DNS-safe encoding of the volume handle rather than the
 handle itself (§11), because the handle contains colons.
 
-**A finalizer is mandatory.** The CR is the only record of an external mount, an
-`/etc/exports` entry, a Service, and an attached namespace. Without
+**A finalizer is mandatory.** The CR is the only record of a mount and an exports
+entry in the guest, a Service, and an attached namespace. Without
 `storage.simplyblock.io/nfsexport` on it, a direct delete leaves every one of those
 orphaned with nothing left to describe them. Deletion order is unexport, unmount,
 release the namespace, delete the Service and EndpointSlice, then drop the
@@ -618,9 +611,9 @@ spec:
     mode: NodeScoped
 status:
   phase: Ready
-  storageNodeRef: sn-worker-3-0
+  mdsPodName: simplyblock-pnfs-mds-0f2ac1d3-0
   serviceName: nfsexp-7b41c0e2a9-mds
-  mdsNodeIP: 10.42.3.17
+  mdsNodeIP: 10.244.3.17
   failoverGeneration: 2
   lvolID: 3c81a0f4-1d2b-4e77-9a01-5f6c8b2d0e13
   nguid: eui.0025388501b8f3a2
@@ -637,60 +630,75 @@ status:
   observedGeneration: 4
 ```
 
-Requirements that fall out:Requirements that fall out:
+Requirements that fall out:
 
 - **Durable and idempotent.** `CreateVolume` is retried by the external-provisioner, so the CR is created-or-fetched by a name derived from the volume handle, and a retry leaks neither an lvol nor an export.
-- **Single-writer on `status.storageNodeRef`.** This is the "one MDS per export" invariant, and it is the invariant that keeps two hosts from mounting one XFS (§13). Failover is a phase transition that bumps `status.generation`.
+- **Single-writer on `status.mdsPodName`.** This is the "one MDS per export" invariant, and it is the invariant that keeps two MDS instances from mounting one XFS (§13). Failover is a phase transition that bumps `status.generation`.
 - **`NodeStageVolume` reads it** for the Service name, the backing lvol, and its NGUID, instead of re-deriving them.
 
-### 7.2 MDS Eligibility and Selection
+### 7.2 MDS Binding
 
-- **Eligibility gate** (evaluated by the operator, cached in `StorageNode.status`):
-  - A kernel carrying `nvme_get_unique_id` (a RHEL 9.8-class 5.14 qualifies; RHEL 9.5's does not). A version test alone is wrong.
-  - `nfs-utils` installed and `nfsd` loadable.
-  - Node marked as an eligible export host (label/taint, §14).
-  - `StorageNode.status.status` is `online`. Note the field is `status`, not `state`.
-- **Selection policy** for a new volume: round-robin across eligible MDS hosts (PoC default), with capacity/affinity as future refinement. Optionally, honor the existing zone/region cluster mapping so the MDS lands in the pod's topology.
-- **Volume placement:** the backing lvol and the MDS host are chosen independently. Co-locating them is not required, because the MDS reaches the namespace over NVMe-oF exactly as a client does, and forcing co-location would constrain failover to the node holding the data.
+- **One MDS per storage cluster.** The operator binds an export to the MDS of the
+  storage cluster its volume lives in, and creates that MDS on the cluster's first
+  export ([`design-pnfs-mds-vm.md`](design-pnfs-mds-vm.md) §7.3). An export waits
+  in `Pending` until the MDS pod's guest is healthy. With no `spec.pnfs.mds` on any
+  `SimplyblockDriver` there is no MDS to bind, and the export waits with a
+  `NoMetadataServer` event.
+- **Volume placement:** the backing lvol and the MDS are placed independently.
+  The MDS reaches the namespace over NVMe-oF exactly as a client does, so it need
+  not run near the data, and its pod can be rescheduled to any node offering KVM.
 
 ### 7.3 Kernel / Capability Enforcement
 
-At Helm install and continuously via the operator:
-- For each worker node that may host RWX pods: verify kernel ≥ 6.11. A node that does not qualify is marked **not compatible** (label + event) so scheduling can avoid it.
-- For each MDS-eligible node: verify kernel ≥ 6.11, `nfs-utils`, and start the NFS-server daemons (`nfsd`/`rpc.mountd`/`rpc.statd`) at launch (§8.1). (`blkmapd` is client-side only.)
+At Helm install and continuously via the operator, each worker node that may host
+RWX pods is checked for a kernel carrying `nvme_get_unique_id` and the pNFS block
+layout client. A node that does not qualify is marked **not compatible** (label +
+event) so scheduling can avoid it. No node is checked for server capabilities,
+because the MDS guest brings its own kernel and NFS server.
 
 ---
 
-## 8. Server-Side Design (MDS host)
+## 8. Server-Side Design (MDS guest)
 
-Two concerns on the MDS host are owned by the **csi-node** service (this repo), one by a co-located daemon (§6.4):
+Everything on the server side runs in the MDS guest
+([`design-pnfs-mds-vm.md`](design-pnfs-mds-vm.md)), split between the guest's own
+services and `mds-agent` (§6.4):
 
-- **NVMe-oF connection of the member namespaces** → **csi-node** (`internal/csi/node` + `internal/initiator/initiator.go`). The MDS host is an NVMe-oF *initiator* for the members exactly like a client, so it reuses the existing, battle-tested connect/`MonitorConnection`/ANA-reconnect/Guardian machinery rather than re-implementing `nvme connect`. Requires the CSI node DaemonSet to run on MDS/storage hosts (§14.1).
-- **Export assembly and control** (XFS, mount, and `exportfs`) → **csi-node**, extending its existing `SafeFormatAndMount` and mount lifecycle. It runs `exportfs` against the co-located `nfsd`.
-- **The NFS server:** a co-located long-running daemon set (kernel `nfsd` + `rpc.mountd` + `rpc.statd`), a systemd unit or sidecar (§6.4(b)). `blkmapd` is **not** here, because it is client-side only (§10).
+- **NVMe-oF connection of the backing namespace** → **`mds-agent`**, through
+  atlas-lib's `nvmeof`. The guest is an NVMe-oF *initiator* for the namespace
+  exactly like a client, as its own host NQN.
+- **Export assembly and control** (XFS, mount, and `exportfs`) → **`mds-agent`**,
+  with the same volume stack plan the block path stages a filesystem volume with.
+- **The NFS server:** the guest's kernel `nfsd` with `rpc.mountd` and `nfsdcld`,
+  started at the guest's boot.
 
-The `CreateExport` and `DeleteExport` operations below are csi-node routines. Each one is **idempotent**, safely re-runnable, and takes the `ExportRecord` (or its fields). The operator invokes them on the MDS-host csi-node over csi-link (§6.4). It is the sole caller, so export ownership does not straddle two components.
+The `CreateExport`, `CheckExport`, and `DeleteExport` operations below are agent
+routines. Each one is **idempotent**, safely re-runnable, and takes the export spec
+the operator derives from the `NFSExport` CR. The operator invokes them on the MDS
+over csi-link (§6.4). It is the sole caller, so export ownership does not straddle
+two components.
 
-### 8.1 Host prerequisites (the co-located NFS server, once per MDS host)
+### 8.1 Guest prerequisites
 
-- Ensure package `nfs-utils` is present (baked into the storage-node image or installed on the host).
-- Run the NFS-server daemons as a **system service** (systemd or sidecar): kernel `nfsd` (`rpc.nfsd`), `rpc.mountd`, `rpc.statd`. The MDS does **not** run `blkmapd` (client-side only, §10).
-- Ensure the pNFS/SCSI-layout sysctls/modules are loaded and `/proc/fs/nfsd` is mounted.
-- The MDS-host **csi-node** already has `/dev`/`/sys` access. It additionally needs `/mnt` and, **new**, `/etc/exports` (or an `/etc/exports.d/` drop-in dir) mounted so it can manage exports (§14.1).
+The guest image carries `nfs-utils`, and its kernel carries `nfsd` with the SCSI
+layout (`CONFIG_NFSD_SCSILAYOUT`) and the NVMe-oF/TCP initiator. The agent checks
+before each assembly that `nfsd` is running and its control filesystem mounted,
+and brings either up when it is not, so an assembly never publishes an export
+nothing serves.
 
 ### 8.2 `pnfs.CreateExport(record)` — assemble and export
 
 The export path cannot be `/mnt/{pvc-name}`: PVC names are unique only within a
 namespace, so two same-named PVCs in different namespaces would collide on one MDS
-host, both in the mount point and in `/etc/exports`. The path carries namespace and
+MDS, both in the mount point and in the exports table. The path carries namespace and
 UID information, and the same identifier names the `fsid` allocation below.
 
 Idempotent steps, each skipped when already satisfied:
 
-1. **Attach the namespace:** csi-node connects the backing namespace and owns its reconnect lifecycle (§8 intro, `initiator.Connect` and `MonitorConnection`). CreateExport waits for the device to appear, then proceeds.
+1. **Attach the namespace:** the agent connects the backing namespace as the guest's host NQN and waits for the device to appear, then proceeds.
 2. **Filesystem:** `mkfs.xfs` on the namespace, only if it is not already formatted, detected through `blkid`. XFS is not a choice here: it is the only filesystem a SCSI layout can be served from, which is why `fsType: pnfs` names the path rather than a format (§9.1).
 3. **Mount:** create `/mnt/{pvc-name}` and mount the device there.
-4. **Export:** write the `/etc/exports.d/{pvc}.exports` entry:
+4. **Export:** write the guest's `/etc/exports.d/{pvc}.exports` entry:
    ```
    /mnt/{pvc-name} {allowed-client-set}(rw,sync,no_subtree_check,no_root_squash,pnfs,fsid={fsid})
    ```
@@ -699,14 +707,13 @@ Idempotent steps, each skipped when already satisfied:
 
 There is no volume manager in this path. A single namespace is formatted directly,
 which removes `pvcreate`, `vgcreate`, `lvcreate`, and the deterministic VG and LV
-naming that a stripe would need to reproduce on another host. Striping puts all of
+naming a stripe depends on. Striping puts all of
 that back, which is one of the reasons it is a separate design.
 
-`fsid` comes from the CR and never changes, so a re-run on another host reproduces
-the same file handles (§13.2). That forces the allocation to be **cluster-wide
-unique, not merely per-host**: an export must be able to move to any eligible host
-without colliding with an export already there, and a per-host allocator cannot
-promise both stability and non-collision at once. Allocation is therefore the
+`fsid` comes from the CR and never changes, so a re-run after an MDS restart
+reproduces the same file handles (§13.2). That forces the allocation to be
+**cluster-wide unique**: one MDS serves every export of its storage cluster, and an
+allocator that could repeat a value would collide two exports on one server. Allocation is therefore the
 operator's, from a cluster-scoped range recorded on the CR (§18, Q1). Because the device is formatted rather than
 assembled, re-materializing an export elsewhere is a mount, not a rebuild.
 
@@ -714,20 +721,20 @@ assembled, re-materializing an export elsewhere is a mount, not a rebuild.
 
 1. `exportfs -u` and remove the drop-in file, then `exportfs -ra`.
 2. `umount /mnt/{pvc-name}`, then remove the directory.
-4. Release the member namespaces via csi-node's existing `initiator.Disconnect` path.
-5. Signal the controller to delete the lvols (control-plane owns lvol deletion).
+3. Release the backing namespace.
+4. Signal the controller to delete the lvols (control-plane owns lvol deletion).
 
 ### 8.4 The NFS root (`fsid=0`) export
 
-NFSv4 requires a pseudo-root. Establish **once per MDS host** a root export:
+NFSv4 requires a pseudo-root. Establish **once per MDS** a root export:
 ```
 mount -t nfs -o v4.1 {mds-ip}:/ /...    # requires an fsid=0 root on the server
 ```
-The MDS host exports a root with `fsid=0`, and each PVC export gets a **stable unique `fsid`** (stored in the `ExportRecord`) so remounts and migrations keep the same file handles. `fsid` allocation must be collision-free per MDS host (Open Question §18).
+The MDS exports a root with `fsid=0`, and each PVC export gets a **stable unique `fsid`** (stored in the `ExportRecord`) so remounts and restarts keep the same file handles. `fsid` allocation must be collision-free per MDS (Open Question §18).
 
-### 8.5 Migration support
+### 8.5 Restart support
 
-csi-node's `CreateExport` and `DeleteExport` routines are the primitives the failover flow uses (§13). Because the mount point and the export are derived deterministically from the volume identifier and the `fsid`, re-materializing the export on another host reproduces the same NFS file handles, so clients recover against handles they already hold rather than remounting from scratch. There is no volume manager in this path, so re-materializing is a mount rather than a rebuild.
+The agent's `CreateExport` is the primitive the restart flow uses (§13). Because the mount point and the export are derived deterministically from the volume identifier and the `fsid`, re-materializing the export in a restarted guest reproduces the same NFS file handles, so clients recover against handles they already hold rather than remounting from scratch. There is no volume manager in this path, so re-materializing is a mount rather than a rebuild.
 
 ---
 
@@ -746,12 +753,11 @@ Changes in `internal/csi/controller`, `internal/controlplane/cluster.go`, `inter
 
 ### 9.2 New StorageClass parameters
 
-| Parameter                                                                                                   | Meaning                                                 | Default |
-|-------------------------------------------------------------------------------------------------------------|---------------------------------------------------------|---------|
-| `pnfs` / `access_protocol: nfs`                                                                             | Opt into the pNFS path                                  | off     |
-| `mds_selector`                                                                                              | Optional label/affinity to constrain MDS host selection | none    |
-| `nfs_mount_options`                                                                                         | Extra NFS mount options appended to `v4.1`              | none    |
-| (reuse) `pool_name`, `cluster_id`/`zone_cluster_map`/`region_cluster_map`, QoS, `compression`, `encryption` | as today                                                | —       |
+| Parameter                                                                                                   | Meaning                                    | Default |
+|-------------------------------------------------------------------------------------------------------------|--------------------------------------------|---------|
+| `pnfs` / `access_protocol: nfs`                                                                             | Opt into the pNFS path                     | off     |
+| `nfs_mount_options`                                                                                         | Extra NFS mount options appended to `v4.1` | none    |
+| (reuse) `pool_name`, `cluster_id`/`zone_cluster_map`/`region_cluster_map`, QoS, `compression`, `encryption` | as today                                   | —       |
 
 Parsed alongside the existing keys in `prepareCreateVolumeReq` (`controllerserver.go`).
 
@@ -765,7 +771,7 @@ created, and everything the operator decides lands in `status` afterward.
 2. **Derive the identity:** the export UUID, the volume handle (§11), the object name, the export path, and the `fsid` from the cluster-wide allocator (§8.2). These are all `spec` fields and all immutable, so they are computed before anything is created.
 3. **Create the lvol** with persistent reservations at size `S`, GiB-aligned. `CreateLVolData` carries the flag under the **same name the backend uses**, `enable_persistent_reservation` (§6.2), rather than a shorter CSI-side spelling for a value that crosses the boundary.
 4. **Create the `NFSExport` CR** idempotently by that object name, with the lvol id and NGUID written to `status`. It enters `status.phase = Pending` with no MDS bound.
-5. **Hand off.** The operator's `NFSExportReconciler` selects the MDS host, records it in `status.storageNodeRef`, drives `CreateExport` over csi-link, reconciles the Service, and moves the CR to `Ready`. The CSI controller does not select the host and does not call the node, which is what keeps provisioning out of the failover path.
+5. **Hand off.** The operator's `NFSExportReconciler` binds the MDS pod, records it in `status.mdsPodName`, drives `CreateExport` over csi-link, reconciles the Service, and moves the CR to `Ready`. The CSI controller does not bind the MDS and does not call it, which is what keeps provisioning out of the failover path.
 6. **Wait for `Ready`**, then build the CSI `Volume`:
    - `VolumeId` is the pNFS handle (§11).
    - `VolumeContext` carries `access_protocol=nfs`, `export_service`, `export_path`, `fsid`, and the backing `lvolID:nguid` pair with its NVMe connect hints.
@@ -786,7 +792,7 @@ neither exists today, so this is work rather than an assumption.
 
 ### 9.4 Error handling / rollback
 
-- If MDS selection or `CreateExport` fails after lvols exist, the record stays in `Provisioning` and a retry resumes. A background reconciler (operator) garbage-collects orphaned lvols/exports for records stuck in `Provisioning`/`Deleting` past a timeout.
+- If binding or `CreateExport` fails after lvols exist, the record stays in `Provisioning` and a retry resumes. A background reconciler (operator) garbage-collects orphaned lvols/exports for records stuck in `Provisioning`/`Deleting` past a timeout.
 - Reuse existing error mapping (`ErrVolumeExists`, HTTP status → CSI codes).
 
 ### 9.5 Group Controller Service (out of scope)
@@ -808,9 +814,9 @@ Changes in `internal/csi/node` and initiator reuse in `internal/initiator/initia
 
 Detect the pNFS path from `VolumeContext` (`access_protocol=nfs`). Then:
 
-1. **Attach the namespace:** `initiator.Connect()`, which is the existing RWO connect path unchanged.
-2. **Device identity:** resolve the namespace's NGUID and publish the `eui64` alias
-   `blkmapd` looks for. This is a sysfs read, not a subprocess: `atlas-lib`'s
+1. **Attach the namespace:** through atlas-lib's `nvmeof` (`nfsexport.Attach`), the connect path the guest's agent uses too, as the node's host NQN.
+2. **Device identity:** resolve the namespace's NGUID and publish the `nvme-eui.`
+   alias the client kernel looks for. This is a sysfs read, not a subprocess: `atlas-lib`'s
    `nvme` package already surfaces it as `Namespace.NGUID` (`sysfs_scan.go`), and
    its scan covers every NVMe subsystem on the host rather than only simplyblock
    ones, so nothing about it is volume-vendor specific.
@@ -825,15 +831,21 @@ Detect the pNFS path from `VolumeContext` (`access_protocol=nfs`). Then:
    NGUID=$(nvme id-ns /dev/nvmeXnY | awk '/^nguid/{print $3}')
    ln -sf /dev/nvmeXnY /dev/disk/by-id/nvme-eui.${NGUID}
    ```
-   The symlink is what lets `blkmapd` match the device signature the MDS advertises
-   in the layout. **RHEL-family validated. Debian and Ubuntu device naming must be
+   The symlink is what lets the client kernel open the device the layout names
+   (§3). **RHEL-family validated. Debian and Ubuntu device naming must be
    tested** (P0-11).
-3. **Ensure `blkmapd`** (`nfs-blkmap`) is running on the client (started by the node plugin's init/host prerequisite, §14).
-4. **NFS mount** at the staging path:
+3. **NFS mount** at the staging path:
    ```
    mount -t nfs -o v4.1[,<extra opts>] {export_service}:/mnt/{export-path} <stagingPath>
    ```
    The server-side `fsid=0` root export makes the pseudo-root resolvable.
+4. **Take the first layout.** The node plugin writes and syncs a probe file
+   (`nfsexport.LayoutProbeName`) in the export from its own container, which has
+   the host's `/dev`, and removes it again (`primeLayout`,
+   `csi-driver/internal/csi/node/pnfs_prime.go`). A pod's `/dev` has no
+   `disk/by-id`, so a device lookup a pod triggers fails and marks the device
+   unavailable for two minutes. The device the probe resolves is cached for the
+   whole client, and every pod's later layout reuses it.
 5. **Stash the volume context:** the member list, `mds_ip`, and `fsid` go through `StashVolumeContext` for use at unstage and heal.
 
 The kernel automatically issues `LAYOUTGET` and performs direct block I/O over the attached namespaces. If the block path is unavailable it falls back to MDS-routed I/O.
@@ -850,12 +862,13 @@ Bind-mount the staging NFS mount into the pod target path (existing bind-mount l
 ### 10.4 Reconnect / heal for pNFS
 
 - The existing **`MonitorConnection`** / Guardian machinery watches the underlying NVMe-oF namespaces. On total path loss it can trigger reconnect just like RWO.
-- **Additional pNFS concern:** on **MDS migration** the NFS mount's server IP effectively moves. Because the export is re-created with the same `fsid`/file handles on the new MDS host at (ideally) the same or a re-pointed IP, the NFS client reconnects after its lease/`ctrl-loss-tmo` window. If the IP changes, the node plugin must detect the migration (via `ExportRecord.generation`) and remount/redirect (§13). This mirrors the existing "primary IP changes + monitor reconnects" behavior for RWO.
+- **An MDS restart keeps the mount address.** The client mounts the export's Service ClusterIP, and the operator repoints the Service's EndpointSlice at the restarted pod (§13.3), so the client reconnects and reclaims its state without a remount.
+- **A restart drops the client's cached devices,** because the restarted server is a new server instance. The node plugin watches `/proc/self/mountstats` and probes each pNFS staging mount again when its transport to the MDS reconnects (`KeepLayoutsPrimed`). The guest's `nfsd` holds the client's other layouts until that probe has taken one, so the probe is first again rather than racing the pods (§13.4).
 - Detect dead NFS mounts (`ESTALE`/`ENOTCONN`) using the same `stagingMountDead` approach adapted for NFS, and restage.
 
 ### 10.5 Node capabilities
 
-Keep `STAGE_UNSTAGE_VOLUME`. `NodeGetVolumeStats` uses `statfs` on the NFS mount (works unchanged for filesystem mode). `NodeExpandVolume` for pNFS is a **no-op on the client**, because the XFS grow happens on the MDS host (§12.3).
+Keep `STAGE_UNSTAGE_VOLUME`. `NodeGetVolumeStats` uses `statfs` on the NFS mount (works unchanged for filesystem mode). `NodeExpandVolume` for pNFS is a **no-op on the client**, because the XFS grow happens in the MDS guest (§12.3).
 
 ---
 
@@ -889,21 +902,21 @@ clusterID / topology keys as today
 Every operation acts on the single backing lvol and the export.
 
 ### 12.1 Delete
-`DeleteVolume`: set `status.phase = Deleting` → `pnfs.DeleteExport` (unexport and unmount, after which csi-node releases the namespace) → delete the lvol through the control plane → delete the CR. Idempotent, and tolerant of partial prior progress (`ErrVolumeNotFound` treated as success, as today).
+`DeleteVolume`: set `status.phase = Deleting` → `pnfs.DeleteExport` (unexport and unmount, after which the agent releases the namespace) → delete the lvol through the control plane → delete the CR. Idempotent, and tolerant of partial prior progress (`ErrVolumeNotFound` treated as success, as today).
 
 ### 12.2 Snapshot
 `CreateSnapshot` on an RWX volume is the ordinary per-lvol snapshot, with one
-addition: csi-node on the MDS host freezes the filesystem with `xfs_freeze -f`
+addition: the MDS guest's agent freezes the filesystem with `xfs_freeze -f`
 before the control-plane call and thaws it after, so the snapshot is taken against
 a quiesced log rather than mid-write (§6.3). The MDS holds the only mount, which is
 what makes the freeze safe to take. The CSI snapshot id keeps the existing
 `{clusterID}:{poolID}:{snapshotUUID}` form.
 
 ### 12.3 Resize
-`ControllerExpandVolume`: resize the lvol (GiB-aligned), then run **`xfs_growfs` on the MDS host** over csi-link, because an XFS grow needs the mounted path and the MDS holds it. `NodeExpandVolume` is a client-side no-op (§10.5), which differs from RWO where the client grows the filesystem.
+`ControllerExpandVolume`: resize the lvol (GiB-aligned), then run **`xfs_growfs` in the MDS guest** over csi-link, because an XFS grow needs the mounted path and the MDS holds it. `NodeExpandVolume` is a client-side no-op (§10.5), which differs from RWO where the client grows the filesystem.
 
 ### 12.4 Clone / Restore
-- **Clone from a volume or a snapshot, and restore:** the ordinary per-lvol clone the driver already performs, followed by the full §8.2 `CreateExport` flow on a newly selected MDS host. The clone is an independent RWX volume with its own `NFSExport` CR, its own Service, and its own `fsid`. No consistency group is involved, because there is one lvol to clone.
+- **Clone from a volume or a snapshot, and restore:** the ordinary per-lvol clone the driver already performs, followed by the full §8.2 `CreateExport` flow on the MDS of the clone's storage cluster. The clone is an independent RWX volume with its own `NFSExport` CR, its own Service, and its own `fsid`. No consistency group is involved, because there is one lvol to clone.
 
 ---
 
@@ -911,10 +924,11 @@ what makes the freeze safe to take. The CSI snapshot id keeps the existing
 
 ### 13.1 What tolerance is possible
 
-A single XFS filesystem can be mounted by exactly one node, so there is no
-active/active MDS and there never will be under this architecture. The only shape
-available is active/passive: one host owns the mount, and on loss another host
-re-materializes the same export.
+A single XFS filesystem can be mounted by exactly one host, so there is no
+active/active MDS and there never will be under this architecture. The shape is a
+single MDS that restarts: one guest owns the mount, and when its pod is lost the
+StatefulSet starts it again, on the same node or on any other node offering KVM,
+and the new guest re-materializes the same exports.
 
 That is less bad than it sounds, because of where the data path runs. Clients read
 and write **directly over NVMe-oF**, so losing the MDS stops metadata operations
@@ -925,51 +939,50 @@ recovery cannot corrupt.
 
 ### 13.2 The invariant that matters
 
-**Two MDS hosts must never have the export's XFS mounted at the same time.** This
+**Two MDS instances must never have the export's XFS mounted at the same time.** This
 is the one place in the design where getting it wrong destroys data rather than
 degrading service, and it is the reason persistent reservations are a hard
 prerequisite rather than a hardening step.
 
-Planned migration can rely on the old host cooperating: it unexports, unmounts, and
-releases the namespace before anything else touches it. Unplanned failover cannot,
-because the whole premise is that the old host stopped answering. An unreachable
-host is not a stopped host: it may be partitioned, paused, or about to resume with
-a stale mount and dirty page cache. So failover **fences before it assembles**,
-using the persistent reservation on the namespace to revoke the old host's write
-access, and only then mounts on the new one. Without P0-1 and P0-2 that step does
+A StatefulSet of one replica never runs two pods of the same name at once, and
+the old guest dies with its pod. A node that loses contact is the exception: its
+pod may still be running there, partitioned, paused, or about to resume with a
+stale mount and dirty page cache. So a restart **fences before it serves**: the
+restarted guest's `nfsd` preempts every reservation key that clients of an earlier
+instance left on the namespace before it hands out a layout, which revokes their
+write access and lets each client register its new key. Without P0-1 and P0-2 that step does
 not exist, which is why this design cannot ship past a single-writer MVP without
 them.
 
-`status.storageNodeRef` on the `NFSExport` CR is the serialization point. One writer,
-optimistic concurrency, and no second host is even a candidate until that field is
+`status.mdsPodName` on the `NFSExport` CR is the serialization point. One writer,
+optimistic concurrency, and no second MDS is even a candidate until that field is
 rewritten. It is status rather than spec precisely so a user edit cannot make a
-second host a candidate.
+second MDS a candidate.
 
 ### 13.3 A stable mount address
 
 **Clients mount a Kubernetes Service, not a node.** The operator gives each export a
 Service and manages its EndpointSlice directly, with exactly one endpoint: the
-current MDS node's address, port 2049. On failover the operator rewrites that
-endpoint. The ClusterIP does not change, so the client's mount address does not
-change, and the "the IP moved, so remount the staging mount" branch that earlier
-drafts carried disappears.
+MDS pod's IP, port 2049. When the pod restarts with a new IP the operator rewrites
+that endpoint. The ClusterIP does not change, so the client's mount address does
+not change, and no client remounts.
 
 This is not a new mechanism here. The operator already fronts node-local services
 this exact way: `BuildStorageNodeSetEndpointSlice` and `BuildSpdkProxyEndpointSlice`
 in `operator/internal/utils/storage_nodeset_ds.go` build EndpointSlices over node
 internal IPs, and `reconcileEndpointSlice` re-points them when a node moves.
 
-`nfsd` itself is unaware of any of this, which is worth stating plainly because it
-is the first question the design invites. A ClusterIP is not an address anything
-binds. It is a DNAT rule that kube-proxy programs on every node. `nfsd` binds
-`0.0.0.0:2049` in the host network namespace exactly as it always does; the client
-connects to the ClusterIP, the rule rewrites the destination to the MDS node's real
-address, and `nfsd` sees an ordinary connection. Host-originated traffic reaches
-those rules because `KUBE-SERVICES` is hooked into `OUTPUT` as well as
-`PREROUTING`, and the mount here is issued by the client node's host kernel. One
-ClusterIP per export, all targeting port 2049, composes correctly: many exports
-share the one host `nfsd`, and a failover rewrites only the moved export's
-endpoint.
+`nfsd` itself is unaware of any of this. A ClusterIP is not an address anything
+binds. It is a DNAT rule that kube-proxy programs on every node. The client
+connects to the ClusterIP, the rule rewrites the destination to the MDS pod's IP,
+and the pod passes the connection on to the guest, where `nfsd` sees an ordinary
+connection on port 2049 ([`design-pnfs-mds-vm.md`](design-pnfs-mds-vm.md)).
+Host-originated traffic reaches those rules because `KUBE-SERVICES` is hooked into
+`OUTPUT` as well as `PREROUTING`, and the mount here is issued by the client node's
+host kernel. One ClusterIP per export, all targeting port 2049, composes
+correctly: many exports share the guest's `nfsd`. A client reaches every export of
+one MDS over a single connection, because the NFSv4.1 client recognizes the same
+server behind each address and trunks the mounts onto one.
 
 Three caveats ride along, and none of them is settled:
 
@@ -984,58 +997,63 @@ Three caveats ride along, and none of them is settled:
   after the endpoint is rewritten a stale entry can keep steering reconnects at the
   dead host until it is flushed or expires. That cleanup time is inside the NFR-2
   budget, not outside it.
-- **A stable address is not a stable server identity.** An NFSv4.1 client identifies
-  a server by the `server_owner` and `server_scope` it gets from `EXCHANGE_ID`, not
-  by IP. Re-materializing the export on a different host yields different values, so
-  the client concludes it reached a different server and performs full state
-  recovery, re-establishing its clientid and reclaiming opens and locks, rather than
-  the plain reconnect a floating IP would give. Recovery is possible because the
-  file handles survive: the same `fsid` over the same on-disk XFS produces the same
-  handles. Whether it is transparent to an application, and whether the two values
-  can be made to match across hosts at all, is P0-7.
+- **A restart is a server reboot to the client.** An NFSv4.1 client identifies a
+  server by the `server_owner` and `server_scope` it gets from `EXCHANGE_ID`, not
+  by IP. The guest derives both from its hostname, which is the StatefulSet's pod
+  name and survives restarts, so the client recognizes the server it knew. It
+  reclaims its opens and locks during the server's grace period, which the client
+  recovery database on the state disk lets `nfsd` admit (P0-7). Reclaims succeed
+  because the file handles survive: the same `fsid` over the same on-disk XFS
+  produces the same handles.
 
-So the honest promise is narrower than a transparent reconnect. The mount
-address is stable, so no remount and no pod disruption. The client still performs
+So the promise is a stable mount address and a reclaim. There is no remount and
+no pod disruption. The client still performs
 NFSv4.1 state recovery, and the cost of that recovery is what NFR-2 has to bound.
 
-### 13.4 Planned migration
+### 13.4 Planned restart
 
-**Trigger:** an MDS host drained for an upgrade, or a `StorageNodeOps` CR with
-action `shutdown`, `restart`, `remove`, or `migrate` targeting the host.
+**Trigger:** the MDS pod is deleted or evicted, for a drain of its node or a new
+MDS image.
 
-1. The operator sets `status.phase = Failing Over` on the `NFSExport` and stops
-   admitting new exports to the old host.
-2. On the **old** host, over csi-link, csi-node quiesces: `exportfs -u`, `umount`,
-   then release the namespace.
-3. The operator selects a new eligible host (§7.2) and rewrites
-   `status.storageNodeRef`.
-4. On the **new** host, csi-node connects the namespace and runs `CreateExport`
-   with the **same** `fsid` and the same export path, reproducing the file handles.
-5. The operator rewrites the Service's EndpointSlice to the new node address.
-6. `status.phase = Ready`, and `status.generation` is bumped.
-7. Clients recover as described in §13.3. Node plugins watching the CR see the
-   generation bump, which is what tells them the export moved even though its
-   address did not.
+1. The StatefulSet starts the pod again, on any node offering KVM, and the guest
+   boots. `nfsd` starts its grace period.
+2. The operator sees a guest instance other than the one that assembled each
+   export (`status.assembledBy`) and runs `CreateExport` for every export of the
+   storage cluster in the new guest, with the **same** `fsid` and export path,
+   which reproduces the file handles
+   ([`design-pnfs-mds-vm.md`](design-pnfs-mds-vm.md) §7.5).
+3. The operator rewrites each export's EndpointSlice to the pod's new IP.
+4. Clients reconnect through the unchanged ClusterIP and reclaim their state
+   (§13.3). Each client's node plugin sees the reconnect and takes the first
+   layout again (§10.4).
+
+The restart is transparent to a running application because of three changes to
+the guest kernel's `nfsd` (pnfs-os `boards/pnfs-common/README.md`). It holds a
+client's layouts until the node plugin's probe has taken one, so a pod never makes
+the first device lookup. It fences reservation keys left by clients of an earlier
+instance, falling back to a plain Preempt where the target refuses Preempt and
+Abort, as SPDK's does. And during grace it answers a file handle of an export not
+yet exported again with `NFS4ERR_DELAY` rather than `NFS4ERR_STALE`, so a reclaim
+that arrives before its export waits instead of losing the open.
 
 ### 13.5 Unplanned failover
 
-Same flow with step 2 replaced, because the old host is not answering:
+Same flow, with the loss detected rather than requested:
 
-1. The operator observes the loss. `StorageNode.status` going non-`online` is the
-   coarse signal; an MDS health probe (`nfsd` responding, the mount present, the
-   export present) is the precise one and is worth having because a host can be
-   `online` with a dead `nfsd`.
-2. **Fence.** Revoke the old host's write access to the namespace through the
-   persistent reservation, and only proceed once that is confirmed. A failover that
-   cannot confirm the fence does not proceed: the export stays `Degraded` and the
-   operator emits an event, because a stalled export is recoverable and a
-   double-mounted one is not.
-3. Continue at step 3 of §13.4.
+1. The operator observes the loss. The MDS pod turning unready is the coarse
+   signal. `CheckExport` over csi-link, which asks the guest whether the export is
+   mounted and published, is the precise one, because a guest can run with a dead
+   `nfsd`.
+2. **Fence.** The restarted guest's `nfsd` preempts every key of an earlier
+   instance before it issues a layout (§13.2). Until the guest is back, the export
+   stays bound and its clients stall rather than fail.
+3. Continue at step 1 of §13.4.
 
-The freeze bound in NFR-2 is therefore fence confirmation, plus export assembly on
-the new host, plus EndpointSlice propagation and conntrack cleanup, plus client
-state recovery. Each term needs a measured number before NFR-2 is a commitment
-rather than an aspiration; the test plan carries them as `F-` scenarios.
+The freeze bound in NFR-2 is therefore pod rescheduling and guest boot, plus
+export assembly, plus EndpointSlice propagation and conntrack cleanup, plus the
+grace period and client state recovery. Each term needs a measured number before
+NFR-2 is a commitment rather than an aspiration. The test plan carries them as
+`F-` scenarios.
 
 ## 14. Deployment: Helm, Operator, and Packaging
 
@@ -1063,16 +1081,13 @@ those terms.
   certificate it serves. `spec.link` configures the plugins that dial it. Both
   halves have to be on, and they are separate objects, which is the one thing a
   reader of the old section would get wrong.
-- **`spec.pnfs.enablePNFS`**, which gives the node plugin `/etc/exports.d` and an
-  `/mnt` mounted with bidirectional propagation. The propagation is the load-bearing
-  part: nfsd serves the host's mounts, so a mount made only in the container's
-  namespace leaves `exportfs` publishing an empty directory, and a client mounts
-  something that looks like an empty volume rather than failing.
-- **pNFS requires the link**, enforced by a CEL rule on `SimplyblockDriverSpec`
-  rather than by the reconciler. The operator assembles an export by calling the
-  MDS host over the link, so with no link every RWX claim in the cluster parks in
-  `Pending` waiting on a call nothing will make. That is not recoverable by
-  reconciling, and admission can say it when the mistake is made.
+- **`spec.pnfs.mds`**, which runs the metadata server in a QEMU guest of its own
+  (`design-pnfs-mds-vm.md`). The node plugin gets no NFS server state from the
+  host: no node runs nfsd or mounts an export.
+- **pNFS needs the link.** The operator assembles every export by calling the MDS
+  over the link. With no link the MDS never has a session, so every export waits
+  in `Assembling` until its five-minute deadline and then turns `Degraded`, with an
+  `AssembleTimeout` event naming the MDS it could not reach.
 - **Adoption compares rather than refuses.** csi-link was in `adoption.go`'s
   `inexpressible` list, so a deployment running it could not be adopted at all.
   With `spec.link` it becomes `linkAdoptionMismatch`, on `tlsAdoptionMismatch`'s
@@ -1088,23 +1103,17 @@ those terms.
   that could write its own record could bind an export to itself.
 - **`NFSExport` CRD** shipped in `helm-charts/charts/simplyblock-operator/crds/`
   as `storage.simplyblock.io_nfsexports.yaml`, generated by `make manifests`.
-- **csi-node on MDS hosts** is `spec.nodeSelector` and `spec.tolerations`, which
-  the kind already carried: running the plugin on storage hosts is configuration
-  rather than new machinery.
 
-**What is deliberately not in the chart, because a pod cannot install it.** Every
-host that may serve an export needs `nfs-utils` with `nfsd` running, and every
-host that may run an RWX pod needs `blkmapd` and a kernel whose NVMe driver
-exports `nvme_get_unique_id` (P0-9, P0-10). These are node-OS prerequisites. A
-host missing them fails visibly in the export record's `Assembling` phase, which
-is the point of failing there rather than in a builder: the reason is on the
-object. The operator does not yet label nodes by capability, which is P0-6.
+**What a pod cannot provide.** Every host that may run an RWX pod needs a kernel
+whose NVMe driver exports `nvme_get_unique_id` and whose NFS client carries the
+pNFS block layout driver (P0-9, P0-10). These are node-OS prerequisites. The MDS
+needs a node with `/dev/kvm` and nothing else from it: the guest brings its own
+kernel and NFS server.
 
 **The second chart tree.** `csi-driver/charts/spdk-csi/latest/spdk-csi` still
 installs a node DaemonSet of its own, and this design does not extend it. That is
 a deliberate drop rather than an oversight: that chart installs no operator, and
-without one nothing selects an MDS host or drives assembly, so the host mounts
-alone would buy nothing.
+without one no MDS exists and nothing drives assembly.
 
 The `snapshot-controller`, `csi-snapshotter`, and `csi-provisioner` version floors
 that earlier drafts raised here belong to the striped design, because only the
@@ -1133,43 +1142,31 @@ Two corrections to earlier drafts, both from the three-tier model that landed in
 - **Per-node state lives on `StorageNode`, not on `StorageNodeSet.status.nodes[]`.**
   `StorageNode` is one CR per (worker, socket, node index), owned by a
   `StorageNodeSet`, with `spec.storageNodeSetRef` immutable and `spec.workerNode`
-  re-pointed by the operator only during a `migrate`. That is exactly the granularity
-  MDS eligibility and role need, so the NFS fields go there.
+  re-pointed by the operator only during a `migrate`.
 
 **CRD and API-model additions:**
 
-| CRD / type        | File                                    | Additions                                                                                                                                                                                                                                                                                                     |
-|-------------------|-----------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `NFSExport`       | `api/v1alpha1/nfsexport_types.go` (new) | The export registry itself (§7.1). One CR per RWX volume, owned by the operator, watched by csi-node.                                                                                                                                                                                                         |
-| `StorageNode`     | `api/v1alpha1/storagenode_types.go`     | spec: `nfsServerEnabled` only, since that is the one thing a user chooses. status: `kernelVersion`, `nfsCapable`, `nfsdVersion`, `pnfsAvailable`, `mdsEligible`, `exportedVolumes[]`. Eligibility is computed by the operator (§7.2), so a user-settable spec field would let an ineligible node be selected. |
-| `StorageNodeSet`  | `api/v1alpha1/storagenodeset_types.go`  | spec: `nfsServerEnabled` and `kernelVersionMin` as fleet defaults that a `StorageNode` may override, following the existing `nodeConfigs` precedence.                                                                                                                                                         |
-| `StorageCluster`  | `api/v1alpha1/storagecluster_types.go`  | spec: `nfsEnabled`, `nfsExportPolicy`, `nfsSecurityFlavor`. Reuse existing `snodeApiPort` and `clientDataIfname`.                                                                                                                                                                                             |
-| `StoragePool`     | `api/v1alpha1/storagepool_types.go`     | spec: `supportedAccessModes[]` (RWO, RWX), `nfsExportPolicy`. Renamed from `Pool` in #414.                                                                                                                                                                                                                    |
-| `StorageNodeOps`  | `api/v1alpha1/storagenodeops_types.go`  | A `Quiescing` sub-phase in the existing enum, entered before `Suspending` when the target node carries active exports.                                                                                                                                                                                        |
-| `VolumeMigration` | `api/v1alpha1/volumemigration_types.go` | status: an `ExportTransitioning` phase between `Running` and `Completed`.                                                                                                                                                                                                                                     |
-| `Task`            | `api/v1alpha1/task_types.go`            | No schema change. Existing polling surfaces any new backend task types.                                                                                                                                                                                                                                       |
-| API params        | `internal/utils/types.go`               | `ClusterAddParams` gains `nfs_enabled`; `PoolAddParams` gains `nfs_export_policy` and `access_modes`. Both structs keep their current names.                                                                                                                                                                  |
+| CRD / type       | File                                    | Additions                                                                                                                                    |
+|------------------|-----------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
+| `NFSExport`      | `api/v1alpha1/nfsexport_types.go` (new) | The export registry itself (§7.1). One CR per RWX volume, owned by the operator, watched by csi-node.                                        |
+| `StorageCluster` | `api/v1alpha1/storagecluster_types.go`  | spec: `nfsEnabled`, `nfsExportPolicy`, `nfsSecurityFlavor`. Reuse existing `snodeApiPort` and `clientDataIfname`.                            |
+| `StoragePool`    | `api/v1alpha1/storagepool_types.go`     | spec: `supportedAccessModes[]` (RWO, RWX), `nfsExportPolicy`. Renamed from `Pool` in #414.                                                   |
+| `Task`           | `api/v1alpha1/task_types.go`            | No schema change. Existing polling surfaces any new backend task types.                                                                      |
+| API params       | `internal/utils/types.go`               | `ClusterAddParams` gains `nfs_enabled`; `PoolAddParams` gains `nfs_export_policy` and `access_modes`. Both structs keep their current names. |
 
 **Reconciler changes:**
 
 - **`NFSExportReconciler`** (new, `internal/controller/nfsexport_controller.go`): owns
-  the export lifecycle. Drives `CreateExport` and `DeleteExport` on the bound node
-  over csi-link, reconciles the Service and EndpointSlice for §13.3, and runs the
-  failover state machine in §13.5. It is the only writer of `status.storageNodeRef`.
-- **`StorageNodeReconciler`:** evaluate MDS eligibility from `/snode/info` and record
-  it in status, so §7.2 selects without probing.
-- **`StorageNodeOpsReconciler`:** add the `Quiescing` sub-phase, which fails over
-  every export bound to the target before the node action proceeds.
-- **`NodeDrainCoordinatorReconciler`:** quiesce exports before `shutdown_called`,
-  tracked in `NodeDrainState`.
-- **`VolumeMigrationReconciler`:** the `ExportTransitioning` phase, re-creating the
-  export on the target with the same `fsid`.
+  the export lifecycle. Creates the MDS on a storage cluster's first export, drives
+  `CreateExport`, `CheckExport`, and `DeleteExport` on the bound MDS over csi-link,
+  reconciles the Service and EndpointSlice for §13.3, and reassembles every export
+  after an MDS restart (§13.4). It is the only writer of `status.mdsPodName`.
 - **`StorageClusterReconciler`** and **`StoragePoolReconciler`**: pass the new NFS
   fields through.
 
 > Division of labor: the **CSI controller** creates and deletes the `NFSExport` CR as
 > part of provisioning (§9). The **operator** owns everything that happens to an
-> export afterward, including placement, the Service, drain, and failover. The CR is
+> export afterward, including the MDS binding, the Service, and restarts. The CR is
 > the boundary, which is what keeps the CSI controller out of the failover path.
 
 ## 15. Security Design
@@ -1181,7 +1178,7 @@ The PoC exports are open to everyone (`*`). **This is the largest open security 
 **Controls (layered)**:
 
 1. **NVMe-oF host allow-listing (most important).** The direct data path is raw block. Restrict each namespace's `allowed_hosts` to the specific client NQNs + the MDS NQN (the driver already threads `host_nqn` through `getLvolConnections`/`VolumeInfo`). Only nodes whose NQN is allow-listed can attach the namespaces. PR fencing (`-pr`) complements this by revoking access on layout recall.
-2. **Export client restriction.** Replace `*` in `/etc/exports` with the concrete set of client node data IPs/subnets bound to the volume, maintained from the ExportRecord as pods schedule/deschedule. Consider `sec=krb5`/`krb5i`/`krb5p` for authenticated/encrypted metadata (Open Question, because Kerberos needs infrastructure).
+2. **Export client restriction.** Replace `*` in the exports entry with the concrete set of client node data IPs/subnets bound to the volume, maintained from the ExportRecord as pods schedule/deschedule. Consider `sec=krb5`/`krb5i`/`krb5p` for authenticated/encrypted metadata (Open Question, because Kerberos needs infrastructure).
 3. **Network isolation.** Keep NVMe-oF + NFS on the storage data network. NetworkPolicies and firewall rules prevent arbitrary pods or nodes from reaching MDS IPs and NVMe targets.
 4. **In-pod user restriction.** `no_root_squash` (PoC) is dangerous for multi-tenant clusters, because a container root can write as root on the shared FS. Evaluate `root_squash`/`all_squash` + `anonuid`/`anongid`, and per-PVC ownership/`fsGroup`. This is an Open Question tied to tenancy model.
 5. **Transport security.** Reuse existing TLS for control/SNodeAPI. NVMe/TCP TLS (if available) and Kerberos for NFS are stretch goals.
@@ -1194,17 +1191,17 @@ The PoC exports are open to everyone (`*`). **This is the largest open security 
 |-------|-------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | FM-1  | Client dies holding a layout                                            | MDS recalls the layout, PR fences the dead client, XFS integrity is preserved, and other clients continue.                                                                                                                             |
 | FM-2  | Block/direct path unavailable (namespace missing, reservation conflict) | NFSv4.1 falls back to MDS-routed I/O. Degraded throughput, no data loss. **Silent:** the mount succeeds, every byte is correct, and md5 matches across nodes. Only `LAYOUTGET` and the NFS read and write byte totals reveal it (§20). |
-| FM-3  | MDS host crash (unplanned)                                              | Migration flow (§13) re-materializes the export on a new host. Clients freeze, then reconnect within the NFR-2 bound.                                                                                                                  |
+| FM-3  | MDS pod or its node lost (unplanned)                                    | The StatefulSet restarts the pod and the operator reassembles every export in the new guest (§13). Clients freeze, then reclaim within the NFR-2 bound.                                                                                |
 | FM-4  | Partial provisioning failure (some lvols created, export not)           | Record stuck in `Provisioning`. A retry resumes, and the reconciler GCs after a timeout.                                                                                                                                               |
 | FM-5  | The backing namespace is lost                                           | XFS errors and the export goes `Degraded`. Redundancy is the backend's responsibility through per-lvol erasure coding or replication. This design adds no redundancy of its own.                                                       |
 | FM-6  | Snapshot requested on a volume whose filesystem cannot be frozen        | The freeze is attempted, and a failure aborts the snapshot rather than taking an unquiesced one. A single-volume snapshot needs no consistency group (§6.3), so it is never refused for that reason.                                   |
 | FM-7  | `fsType: pnfs` on a `volumeMode: Block` claim                           | Rejected by `CreateVolume`: the class asks for a filesystem and the claim for a raw device.                                                                                                                                            |
 | FM-8  | Two pods on different nodes writing same file                           | Handled by NFSv4 byte-range locking via the MDS. Correctness is NFS's responsibility.                                                                                                                                                  |
-| FM-9  | `blkmapd` not running on client                                         | No block layout is obtained, and I/O silently falls back to the MDS. Node plugin must detect and (re)start `blkmapd`, and log.                                                                                                         |
+| FM-9  | A pod triggers the first device lookup                                  | The lookup resolves `/dev/disk/by-id` in the pod's mount namespace, which has none, so the device is marked unavailable and I/O silently falls back to the MDS. The node plugin takes the first layout itself (§10.1, §10.4).          |
 | FM-10 | Debian/Ubuntu `/dev/disk/by-id` naming differs                          | The alias step may fail → no direct path, silently. Must be tested per-distro (§18).                                                                                                                                                   |
 | FM-11 | Provisioner double-`CreateVolume`                                       | Idempotent fetch-or-create by stable name, yielding at most one set of lvols and one export.                                                                                                                                           |
 | FM-12 | Node reboot with active RWX mounts                                      | Restage reconnects the namespaces and remounts NFS. Refcounted publish rebuilds the pod mounts.                                                                                                                                        |
-| FM-13 | `fsid` collision on an MDS host                                         | Provisioning fails cleanly. The allocator must guarantee per-host uniqueness.                                                                                                                                                          |
+| FM-13 | `fsid` collision on the MDS                                             | Provisioning fails cleanly. The allocator must guarantee per-MDS uniqueness.                                                                                                                                                           |
 
 ---
 
@@ -1215,6 +1212,7 @@ The PoC exports are open to everyone (`*`). **This is the largest open security 
 | Event                                                 | Type      | Reason                                         |
 |-------------------------------------------------------|-----------|------------------------------------------------|
 | Node kernel below the pNFS minimum                    | `Warning` | `NodeNotPNFSCapable`                           |
+| No driver configures the MDS                          | `Warning` | `NoMetadataServer`                             |
 | Export assembled and published                        | `Normal`  | `ExportReady`                                  |
 | Export teardown completed                             | `Normal`  | `ExportRemoved`                                |
 | Export state transition (`Provisioning`, `Migrating`) | `Normal`  | `ExportStateChanged`                           |
@@ -1224,22 +1222,21 @@ The PoC exports are open to everyone (`*`). **This is the largest open security 
 
 ### Prometheus Metrics
 
-| Metric                                        | Labels                          | Description                                                      |
-|-----------------------------------------------|---------------------------------|------------------------------------------------------------------|
-| `simplyblock_pnfs_provision_duration_seconds` | `cluster`, `result`             | RWX provisioning latency and success or failure                  |
-| `simplyblock_pnfs_mds_selections_total`       | `cluster`, `node_uuid`          | MDS selection distribution across eligible hosts                 |
-| `simplyblock_pnfs_migrations_total`           | `cluster`, `result`             | MDS migrations by outcome                                        |
-| `simplyblock_pnfs_migration_freeze_seconds`   | `cluster`                       | Client freeze window per migration, the NFR-2 bound              |
-| `simplyblock_pnfs_direct_io_ratio`            | `cluster`, `export`             | Direct block versus MDS I/O, read from the NFS layout statistics |
-| `simplyblock_pnfs_export_failovers_total`     | `cluster`, `export`, `outcome`  | Completed failovers, by outcome, including fence failures        |
-| `simplyblock_pnfs_exports`                    | `cluster`, `node_uuid`, `state` | Exports per MDS host by state                                    |
+| Metric                                        | Labels                         | Description                                                      |
+|-----------------------------------------------|--------------------------------|------------------------------------------------------------------|
+| `simplyblock_pnfs_provision_duration_seconds` | `cluster`, `result`            | RWX provisioning latency and success or failure                  |
+| `simplyblock_pnfs_migrations_total`           | `cluster`, `result`            | MDS migrations by outcome                                        |
+| `simplyblock_pnfs_migration_freeze_seconds`   | `cluster`                      | Client freeze window per migration, the NFR-2 bound              |
+| `simplyblock_pnfs_direct_io_ratio`            | `cluster`, `export`            | Direct block versus MDS I/O, read from the NFS layout statistics |
+| `simplyblock_pnfs_export_failovers_total`     | `cluster`, `export`, `outcome` | Completed failovers, by outcome, including fence failures        |
+| `simplyblock_pnfs_exports`                    | `cluster`, `state`             | Exports per MDS by state                                         |
 
 ### Logs and status
 
-Export actions on the MDS host are logged per command, including the
+Export actions in the MDS guest are logged per command, including the
 idempotency skips, so a partially assembled export is reconstructable from the
 log alone. Member connect and disconnect keep the existing initiator logging, and
-the client-side `blkmapd` status is logged on stage. The export record surfaces
+the client's layout probe is logged on stage and after each reconnect. The export record surfaces
 `state`, `generation`, the bound MDS, and member health, which is what a
 `kubectl describe` has to answer without reading a node log.
 
@@ -1250,15 +1247,13 @@ where they belong rather than left open: the export registry is a CRD (§7.1), t
 control channel is csi-link (§6.4), the mount address is a Service ClusterIP
 (§13.3), and the volume handle keeps the synthetic `nfs:` form (§11).
 
-| #   | Question                                                                                                                                                                                                                        | Owner               |
-|-----|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|
-| Q1  | **`fsid` allocation:** which component allocates collision-free `fsid`s per MDS host, and which one owns the pseudo-root (`fsid=0`)? Per-host uniqueness is structural here, because one host serves many exports (§8.4).       | Operator            |
-| Q2  | **NFSv4.1 server identity:** can `server_owner` and `server_scope` be made to match across MDS hosts, so failover is a reconnect rather than full state recovery? If not, what does state recovery cost an application (§13.3)? | Backend team, spike |
-| Q3  | **Service ClusterIP from a kernel mount:** does a sunrpc mount reach a ClusterIP on every supported CNI dataplane, specifically under eBPF kube-proxy replacement (§13.3)?                                                      | Spike               |
-| Q4  | **Debian and Ubuntu:** `/dev/disk/by-id` naming and the `nfs-common` difference, and therefore whether the distro matrix can include them (§5.3).                                                                               | Spike               |
-| Q5  | **Tenancy model:** `no_root_squash` lets a container root write as root on the shared filesystem. What squash and `fsGroup` model applies, and is Kerberos in scope for GA (§15)?                                               | Product             |
-| Q6  | **MDS health probe:** is `StorageNode.status` plus a `/snode/info` field enough to detect a dead `nfsd`, or does the export need its own probe over csi-link (§13.5)?                                                           | Operator            |
-| Q7  | **Guardian interaction:** does the existing `MonitorConnection` and Guardian machinery extend to an NFS mount, or does a pNFS mount need its own monitor (§10.4)?                                                               | CSI driver          |
+| #   | Question                                                                                                                                                                                                           | Owner      |
+|-----|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|
+| Q1  | **`fsid` allocation:** which component allocates collision-free `fsid`s per MDS, and which one owns the pseudo-root (`fsid=0`)? Per-MDS uniqueness is structural here, because one MDS serves many exports (§8.4). | Operator   |
+| Q3  | **Service ClusterIP from a kernel mount:** does a sunrpc mount reach a ClusterIP on every supported CNI dataplane, specifically under eBPF kube-proxy replacement (§13.3)?                                         | Spike      |
+| Q4  | **Debian and Ubuntu:** `/dev/disk/by-id` naming and the `nfs-common` difference, and therefore whether the distro matrix can include them (§5.3).                                                                  | Spike      |
+| Q5  | **Tenancy model:** `no_root_squash` lets a container root write as root on the shared filesystem. What squash and `fsGroup` model applies, and is Kerberos in scope for GA (§15)?                                  | Product    |
+| Q7  | **Guardian interaction:** does the existing `MonitorConnection` and Guardian machinery extend to an NFS mount, or does a pNFS mount need its own monitor (§10.4)?                                                  | CSI driver |
 
 ---
 
@@ -1269,17 +1264,17 @@ The phases below deliver this document. Striping and everything it forces is
 
 - **Phase 0 (external enablers):** everything in
   [Phase 0 — External Prerequisites](#phase-0--external-prerequisites). The `-pr`
-  flag and its SPDK support, the csi-link mutation gate and the `nvmeof` migration
-  it waits on, and the two spikes that decide what §13 may promise. None of it is
+  flag and its SPDK support, the csi-link export service, and the spike that
+  decides what §13 may promise. None of it is
   implementable in this repository.
-- **Phase 1 (export lifecycle):** the `NFSExport` CRD, its reconciler, MDS
-  eligibility and selection, and `CreateExport` and `DeleteExport` over csi-link.
+- **Phase 1 (export lifecycle):** the `NFSExport` CRD, its reconciler, the MDS
+  binding, and `CreateExport` and `DeleteExport` over csi-link.
   Access mode `MULTI_NODE_MULTI_WRITER`, the client NFS mount, and create and delete
   only. This is the end-to-end pNFS path with the fewest moving parts.
 - **Phase 2 (stable addressing):** the per-export Service and operator-managed
-  EndpointSlice, and planned migration on top of it (§13.4).
-- **Phase 3 (fault tolerance):** the MDS health probe, PR fencing, and unplanned
-  failover (§13.5), with the freeze bound measured rather than asserted.
+  EndpointSlice, and the planned restart on top of it (§13.4).
+- **Phase 3 (fault tolerance):** the MDS health probe, PR fencing, and the
+  unplanned restart (§13.5), with the freeze bound measured rather than asserted.
 - **Phase 4 (lifecycle completion):** snapshot with `xfs_freeze` on the MDS, clone,
   restore, and online resize.
 - **Phase 5 (security hardening):** export client restriction, NVMe host
@@ -1306,9 +1301,8 @@ What each class of test has to prove:
 - **CSI unit (`U-`):** StorageClass parsing and the `CreateVolume` plan, the
   volume handle round-trip, the node-stage plan, and the export record's state
   machine. Mock `ClusterAPI` and mock HTTP, with no cluster.
-- **Operator (`O-`):** NFS-server rollout and node eligibility, the
-  export-quiesce phase of a drain, and the export transition inside a volume
-  migration. Fake client and `envtest`.
+- **Operator (`O-`):** binding exports to the MDS, reassembly after an MDS
+  restart, and teardown. Fake client and `envtest`.
 - **Integration (`I-`):** the export assembly order and its idempotency, with
   host commands stubbed. The step sequence and the mid-way retry are what break.
 - **End-to-end (`E-`, `F-`, `SEC-`, `L-`):** shared read and write across pods,
@@ -1333,14 +1327,10 @@ as a gap.
 
 ## Appendix A — Reference Commands
 
-**MDS host (server side, with the `nfsd` daemon co-located and the rest run by the MDS-host csi-node):**
+**MDS guest (server side, run by `mds-agent`):**
 ```bash
-# prerequisites (once per host): NFS server daemon (systemd or sidecar), NOT blkmapd
-yum install -y nfs-utils                 # RHEL family
-systemctl enable --now nfs-server        # nfsd + rpc.mountd + rpc.statd
-
-# the namespace is connected by csi-node (initiator.Connect); NOT run here.
-# csi-node then assembles the export on the resulting device:
+# nfsd, rpc.mountd, and nfsdcld are started by the guest's init at boot.
+# the agent connects the namespace, then assembles the export on the device:
 mkfs.xfs <dev>                           # only when blkid shows it is unformatted
 mkdir -p /mnt/<pvc-name>
 mount <dev> /mnt/<pvc-name>
@@ -1362,12 +1352,14 @@ umount /mnt/<pvc-name> && rmdir /mnt/<pvc-name>
 
 **Client (node side):**
 ```bash
-systemctl start nfs-blkmap        # blkmapd for block-layout device mapping
 nvme connect ...                  # attach the SAME namespace the MDS formatted
 # NGUID and the nvme-eui. alias come from atlas-lib once P0-5 lands; until then:
 NGUID=$(nvme id-ns /dev/nvme0n1 | awk '/^nguid/{print $3}')
 ln -sf /dev/nvme0n1 /dev/disk/by-id/nvme-eui.${NGUID}
 mount -t nfs -o v4.1 <export-service-clusterip>:/mnt/<pvc-name> <staging-path>
+# take the first layout from a context with the host's /dev (the node plugin's):
+dd if=/dev/zero of=<staging-path>/.simplyblock-pnfs-layout-probe bs=4k count=1 conv=fsync
+rm <staging-path>/.simplyblock-pnfs-layout-probe
 # NFSv4 pseudo-root (server exports fsid=0):
 #   mount -t nfs -o v4.1 <export-service-clusterip>:/ <path>
 ```
@@ -1375,12 +1367,11 @@ mount -t nfs -o v4.1 <export-service-clusterip>:/mnt/<pvc-name> <staging-path>
 ## Appendix B — Glossary
 
 - **pNFS:** Parallel NFS (NFSv4.1+ extension) separating metadata from data.
-- **MDS:** Metadata Server: the `nfsd` host owning the namespace and issuing layouts.
+- **MDS:** Metadata Server: the `nfsd` owning the namespace and issuing layouts, here a QEMU guest per storage cluster.
 - **Layout / SCSI layout:** description of where a file's data blocks live. The SCSI layout (RFC 8154) points clients at block devices (here, NVMe-oF namespaces) for direct I/O.
-- **`blkmapd` / `nfs-blkmap`:** client daemon that maps block-layout device signatures to local block devices.
 - **PR:** Persistent Reservations (SCSI-3 / NVMe): used by pNFS SCSI layout to fence clients and protect shared devices.
 - **Consistency group:** a set of lvols snapshotted or cloned atomically so a striped filesystem stays crash-consistent. Out of scope here, and the subject of [`design-pnfs-striped.md`](design-pnfs-striped.md).
-- **SNodeAPI:** the simplyblock storage-node agent (`simplyblock_web/node_webapp.py`). For pNFS it only grows capability reporting for MDS eligibility, not the export logic.
-- **`csi-node`:** the CSI node plugin (`csi-driver/internal/csi/node`). It owns NVMe-oF connect and reconnect and, for pNFS, the server-side export assembly (XFS, mount, and `exportfs`) on the MDS host.
-- **csi-link:** the operator-to-CSI channel (`atlas-lib/link`, `atlas-lib/node`) that carries export operations to the MDS host (§6.4).
-- **Export agent:** earlier term for the export executor. In this design that role is filled by **csi-node**.
+- **SNodeAPI:** the simplyblock storage-node agent (`simplyblock_web/node_webapp.py`). pNFS adds nothing to it.
+- **`csi-node`:** the CSI node plugin (`csi-driver/internal/csi/node`). It owns NVMe-oF connect and reconnect and, for pNFS, the client side: the namespace attach, the mount, and the first-layout probe (§10).
+- **`mds-agent`:** the export assembler in the MDS guest (`csi-driver/cmd/mds-agent`): namespace attach, XFS, mount, and `exportfs` (§8).
+- **csi-link:** the operator-to-CSI channel (`atlas-lib/link`, `atlas-lib/node`) that carries export operations to the MDS (§6.4).

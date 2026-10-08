@@ -65,6 +65,15 @@ const (
 	ParamMaxNamespacePerSubsys = "max_namespace_per_subsys"
 	ParamEncryption            = "encryption"
 
+	// ParamFSType is Kubernetes' own well-known key for the filesystem an
+	// external provisioner formats a volume with, which is why it is not
+	// spelled the way the keys above are.
+	ParamFSType = "csi.storage.k8s.io/fstype"
+	// FSTypePNFS under ParamFSType selects a pNFS export instead of a block
+	// device with a filesystem: a class carrying it provisions something only
+	// NFS clients can use.
+	FSTypePNFS = "pnfs"
+
 	// The three a StoragePool's volume defaults reach the class under and that
 	// nothing consumes yet. They are written because the pool's contract is that
 	// its defaults appear in the class's parameters, and a class's parameters
@@ -159,6 +168,16 @@ const (
 	AnnoVDOCapableManagedBy = "storage.simplyblock.io/vdo-capable-managed-by"
 	// AnnoVDOCapableManagedByAutoDetect is AnnoVDOCapableManagedBy's one value.
 	AnnoVDOCapableManagedByAutoDetect = "auto-detect"
+	// LabelKVMCapable marks a node whose /dev/kvm the CSI node plugin could
+	// open, self-probed and self-applied the same way as LabelVDOCapable. The
+	// pNFS metadata server pod is scheduled only onto nodes carrying it.
+	LabelKVMCapable = "storage.simplyblock.io/kvm-capable"
+	// AnnoKVMCapableManagedBy stamps every LabelKVMCapable value the node
+	// plugin's own probe writes, with AnnoKVMCapableManagedByAutoDetect. A label
+	// without it is an operator's override, left alone.
+	AnnoKVMCapableManagedBy = "storage.simplyblock.io/kvm-capable-managed-by"
+	// AnnoKVMCapableManagedByAutoDetect is AnnoKVMCapableManagedBy's one value.
+	AnnoKVMCapableManagedByAutoDetect = "auto-detect"
 	// AnnoSelectedStorageNode pins a PVC's logical volume to a specific storage
 	// node. It is the canonical placement/pin annotation: the operator's pin
 	// controller, drain, and rebalancer key off it, and the CSI controller reads

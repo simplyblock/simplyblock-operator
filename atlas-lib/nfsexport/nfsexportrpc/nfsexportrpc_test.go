@@ -22,7 +22,9 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/simplyblock/atlas/errs"
+	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nfsexport"
+	"github.com/simplyblock/atlas/ptr"
 )
 
 // recordingAssembler captures what reached the node.
@@ -88,6 +90,43 @@ var fullSpec = nfsexport.Spec{
 	FSID:       "3c81a0f4-1d2b-4e77-9a01-5f6c8b2d0e13",
 	Clients:    []string{"192.168.10.21", "192.168.10.0/24"},
 	Encrypted:  true,
+	HostNQN:    "nqn.2023-02.io.simplyblock:host:5e1d7a0c-0f3b-4c1e-9a77-2b8d1f6e4c10",
+	// Two paths, so order survives too, and timeouts both unset and zero. Zero
+	// fails I/O at once and unset takes the connector's default, so a wire that
+	// folds one into the other changes how a path fails.
+	Connection: &lvol.Connection{
+		NQN:  "nqn.2023-02.io.simplyblock:f0bb9077:lvol:cb2f293c-6d6f-4687-ad13-eb81fbec7314",
+		NSID: 1,
+		UUID: "cb2f293c-6d6f-4687-ad13-eb81fbec7314",
+		Endpoints: []lvol.Endpoint{
+			{
+				Transport: "tcp", Address: "10.10.1.11", Port: 4420,
+				NrIOQueues: 4, ReconnectDelaySec: 2, KeepAliveTMOSec: 5,
+				CtrlLossTMOSec: ptr.To(60), FastIOFailTMOSec: ptr.To(0),
+				HostIface: "eth0", TLS: true,
+				DHCHAPSecret: "DHHC-1:00:host-secret:", DHCHAPCtrlSecret: "DHHC-1:00:ctrl-secret:",
+			},
+			{Transport: "tcp", Address: "10.10.1.12", Port: 4420},
+		},
+	},
+}
+
+// A spec without a resolved connection has to arrive without one, not with an
+// empty one: the host resolves the connection itself when none is supplied,
+// and an empty one would be taken as the answer.
+func TestASpecWithoutAConnectionArrivesWithoutOne(t *testing.T) {
+	assembler := &recordingAssembler{}
+	client := serve(t, assembler)
+	spec := fullSpec
+	spec.Connection = nil
+	spec.HostNQN = ""
+
+	if err := client.Create(context.Background(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got := assembler.created[0]; got.Connection != nil || got.HostNQN != "" {
+		t.Errorf("connection = %+v, hostNQN = %q, want none", got.Connection, got.HostNQN)
+	}
 }
 
 // Regression: 2026-09-23-pnfs-encryption-dropped -- every field crosses. A

@@ -19,6 +19,7 @@ package v1alpha2
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -155,21 +156,63 @@ type DriverTLS struct {
 	Provider DriverTLSProvider `json:"provider,omitempty"`
 }
 
-// DriverPNFS configures pNFS support, which makes the node plugin an NFS
-// metadata server as well as an NVMe-oF initiator: on the host an export binds
-// to, it makes a filesystem on the namespace, mounts it, and publishes it
-// through the host's nfsd.
-//
-// Turning it on is not sufficient. The host needs nfs-utils and a running
-// nfsd, and a client host needs blkmapd, neither of which a pod can install.
-// A host missing either fails visibly in the export's Assembling phase.
+// DriverPNFS configures pNFS support: ReadWriteMany volumes served by an NFS
+// metadata server, whose clients read and write the volume's NVMe-oF namespace
+// directly.
 type DriverPNFS struct {
-	// EnablePNFS gives the node plugin the four host directories an export is
-	// assembled through. It is gated because a plugin not serving exports has
-	// no use for them.
-	// +kubebuilder:default=false
+	// MDS runs the metadata server: one pod per storage cluster, whose QEMU
+	// guest runs the NFS server with its own kernel, so no node runs nfsd,
+	// mounts an export, or needs nfs-utils. The pod needs a node with
+	// /dev/kvm. Unset, no pNFS volume can be exported: its export waits in
+	// Pending until this is set.
 	// +optional
-	EnablePNFS *bool `json:"enablePNFS,omitempty"`
+	MDS *DriverPNFSMDS `json:"mds,omitempty"`
+}
+
+// DriverPNFSMDS is the pod that hosts the metadata server's guest.
+type DriverPNFSMDS struct {
+	// Image is the metadata server image: QEMU, the guest kernel, the guest
+	// root filesystem, and the runner. Unset takes the operator's own registry
+	// in the spdkcsi repository, tagged with the operator's tag prefixed
+	// pnfs-mds-, so a deployment that states nothing runs the image belonging
+	// to the operator reconciling it.
+	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// Resources are the pod's requests and limits. The guest's vCPUs are the
+	// whole cores the CPU limit covers, at least one, and its memory is the
+	// memory limit less 256Mi for QEMU, so the memory limit has to be at
+	// least 512Mi. A CPU or memory limit left unset defaults to 2 and 2Gi.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// NodeSelector is merged with the kvm-capable label the pod always
+	// requires.
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Tolerations let the pod schedule onto tainted KVM nodes.
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// StateSize is the size of the guest's state disk, which holds the NFS
+	// client-recovery database that lets clients reclaim their state after
+	// the pod restarts.
+	// +kubebuilder:default="1Gi"
+	// +optional
+	StateSize resource.Quantity `json:"stateSize,omitempty"`
+
+	// StateStorageClassName is the storage class of the state disk, which is
+	// always a simplyblock volume so the pod can restart on any worker with
+	// its client-recovery database. A named class must be provisioned by this
+	// driver and must not be a pNFS class. Unset gives each storage cluster a
+	// class of its own, <driver>-<cluster>-pnfs-mds-state, derived from the
+	// cluster's simplyblock class without its QoS caps and reserved for the
+	// state disk by an admission policy. Read only when the metadata server is
+	// first created: a StatefulSet's claim template cannot change afterward.
+	// +optional
+	StateStorageClassName *string `json:"stateStorageClassName,omitempty"`
 }
 
 // SimplyblockDriverSpec is the CSI driver deployment: the node plugin, the

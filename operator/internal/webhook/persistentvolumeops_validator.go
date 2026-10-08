@@ -141,6 +141,10 @@ func (v *PersistentVolumeOpsValidator) addressableVolume(
 				"%s.", name, pv.Spec.CSI.Driver, joined(ours))
 	}
 
+	if volume.IsPNFS(&pv) {
+		return lvol.Handle{}, denied("%s.", volume.PNFSRefusal(name))
+	}
+
 	handle, ok := lvol.ParseHandle(lvol.VolumeHandle(pv.Spec.CSI.VolumeHandle))
 	if !ok {
 		return lvol.Handle{}, denied(

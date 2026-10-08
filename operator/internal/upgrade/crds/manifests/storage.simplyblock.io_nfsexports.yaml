@@ -20,8 +20,11 @@ spec:
     - jsonPath: .spec.volumeRef
       name: Volume
       type: string
-    - jsonPath: .status.mdsNodeName
+    - jsonPath: .status.mdsPodName
       name: MDS
+      type: string
+    - jsonPath: .status.mdsPodName
+      name: MDSPod
       type: string
     - jsonPath: .status.phase
       name: Phase
@@ -135,21 +138,27 @@ spec:
                 items:
                   type: string
                 type: array
+              assembledBy:
+                description: |-
+                  AssembledBy is the metadata server instance that last assembled this
+                  export: the pod's UID and its runner container's ID. A guest that
+                  restarted, in a new pod or in the same one, has lost its mounts and
+                  exports, so a mismatch with the running instance means the export is
+                  assembled again.
+                type: string
               mdsNodeIP:
                 description: |-
-                  MDSNodeIP is the bound MDS host's own address. Not what a client mounts:
-                  it is what the export's Service's EndpointSlice points at, so a client's
+                  MDSNodeIP is the metadata server pod's IP. Not what a client mounts: it
+                  is what the export's Service's EndpointSlice points at, so a client's
                   mount address (ServiceAddress) does not have to change when this does.
                 type: string
-              mdsNodeName:
+              mdsPodName:
                 description: |-
-                  MDSNodeName is the Kubernetes node serving this export, which is the one
-                  running the csi-node pod that assembled it. It is not a StorageNode: an
-                  MDS reaches the volume over NVMe-oF exactly as a client does, so it need
-                  not hold any storage itself.
+                  MDSPodName is the metadata server pod serving this export, in the
+                  operator's namespace. Empty until the export is bound.
 
-                  The serialization point for one-MDS-per-export: no second host is a
-                  candidate until this field is rewritten.
+                  One metadata server per export: no second one is a candidate until this
+                  field is rewritten.
                 type: string
               message:
                 description: Message is a human-readable note on the current phase.

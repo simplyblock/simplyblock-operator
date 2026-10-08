@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/simplyblock/atlas/errs/class"
+	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nfsexport"
 	"github.com/simplyblock/atlas/nfsexport/nfsexportrpc/nfsexportv1"
 )
@@ -153,7 +154,75 @@ func specToProto(s nfsexport.Spec) *nfsexportv1.ExportSpec {
 		Fsid:       s.FSID,
 		Clients:    s.Clients,
 		Encrypted:  s.Encrypted,
+		HostNqn:    s.HostNQN,
+		Connection: connectionToProto(s.Connection),
 	}
+}
+
+func connectionToProto(c *lvol.Connection) *nfsexportv1.Connection {
+	if c == nil {
+		return nil
+	}
+	out := &nfsexportv1.Connection{Nqn: c.NQN, Nsid: c.NSID, Uuid: c.UUID}
+	for _, e := range c.Endpoints {
+		out.Endpoints = append(out.Endpoints, &nfsexportv1.Endpoint{
+			Transport:         e.Transport,
+			Address:           e.Address,
+			Port:              int32(e.Port),
+			NrIoQueues:        int32(e.NrIOQueues),
+			ReconnectDelaySec: int32(e.ReconnectDelaySec),
+			KeepAliveTmoSec:   int32(e.KeepAliveTMOSec),
+			CtrlLossTmoSec:    int32Ptr(e.CtrlLossTMOSec),
+			FastIoFailTmoSec:  int32Ptr(e.FastIOFailTMOSec),
+			HostIface:         e.HostIface,
+			Tls:               e.TLS,
+			DhchapSecret:      e.DHCHAPSecret,
+			DhchapCtrlSecret:  e.DHCHAPCtrlSecret,
+		})
+	}
+	return out
+}
+
+func connectionFromProto(c *nfsexportv1.Connection) *lvol.Connection {
+	if c == nil {
+		return nil
+	}
+	out := &lvol.Connection{NQN: c.GetNqn(), NSID: c.GetNsid(), UUID: c.GetUuid()}
+	for _, e := range c.GetEndpoints() {
+		out.Endpoints = append(out.Endpoints, lvol.Endpoint{
+			Transport:         e.GetTransport(),
+			Address:           e.GetAddress(),
+			Port:              int(e.GetPort()),
+			NrIOQueues:        int(e.GetNrIoQueues()),
+			ReconnectDelaySec: int(e.GetReconnectDelaySec()),
+			KeepAliveTMOSec:   int(e.GetKeepAliveTmoSec()),
+			CtrlLossTMOSec:    intPtr(e.CtrlLossTmoSec),
+			FastIOFailTMOSec:  intPtr(e.FastIoFailTmoSec),
+			HostIface:         e.GetHostIface(),
+			TLS:               e.GetTls(),
+			DHCHAPSecret:      e.GetDhchapSecret(),
+			DHCHAPCtrlSecret:  e.GetDhchapCtrlSecret(),
+		})
+	}
+	return out
+}
+
+// int32Ptr and intPtr carry an optional timeout across, keeping unset apart
+// from zero. The values are seconds, far inside both ranges.
+func int32Ptr(v *int) *int32 {
+	if v == nil {
+		return nil
+	}
+	out := int32(*v)
+	return &out
+}
+
+func intPtr(v *int32) *int {
+	if v == nil {
+		return nil
+	}
+	out := int(*v)
+	return &out
 }
 
 func specFromProto(s *nfsexportv1.ExportSpec) nfsexport.Spec {
@@ -168,5 +237,7 @@ func specFromProto(s *nfsexportv1.ExportSpec) nfsexport.Spec {
 		FSID:       s.GetFsid(),
 		Clients:    s.GetClients(),
 		Encrypted:  s.GetEncrypted(),
+		HostNQN:    s.GetHostNqn(),
+		Connection: connectionFromProto(s.GetConnection()),
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -190,6 +191,20 @@ func TestPersistentVolumeOpsRefusesWhatNoReconcileCouldFix(t *testing.T) {
 			},
 			ops:  pvopsOperation,
 			says: "volume handle",
+		},
+		{
+			// The handle is the backing logical volume's own, so the operation
+			// is well formed. What it cannot move is the export in front of it:
+			// the metadata server and every client hold their own paths to the
+			// namespace, and no step of a migration knows of either.
+			name: "a pNFS volume",
+			world: func() []client.Object {
+				pv := simplyblockVolume()
+				pv.Spec.CSI.FSType = kube.FSTypePNFS
+				return []client.Object{pv, pvopsClusterObject(), pvopsNodeObject()}
+			},
+			ops:  pvopsOperation,
+			says: "pNFS",
 		},
 		{
 			name: "a target node that does not exist",

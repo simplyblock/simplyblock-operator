@@ -15,11 +15,10 @@ import (
 )
 
 // Binding an export creates a Service and a matching EndpointSlice pointing
-// at the bound host, and records the Service's address as ServiceAddress --
-// separately from MDSNodeIP, which is the host's own address.
+// at the metadata server pod, and records the Service's address as
+// ServiceAddress, separately from MDSNodeIP, which is the pod's own address.
 func TestBindingCreatesAStableAddress(t *testing.T) {
-	asm := &fakeAssembler{}
-	r, cl := newExportReconciler(t, asm, testExport(nil), testNode(testMDSHost, nil))
+	r, cl, _ := newPodHostedReconciler(t, testExport(nil), mdsDriver(), boundMDSPod(readyPod))
 
 	reconcileExport(t, r)
 
@@ -62,8 +61,7 @@ func TestBindingKeepsAnAlreadyAllocatedClusterIP(t *testing.T) {
 	existing.Spec.ClusterIP = "10.96.5.5"
 	existing.ResourceVersion = "1"
 
-	asm := &fakeAssembler{}
-	r, cl := newExportReconciler(t, asm, testExport(nil), testNode(testMDSHost, nil), existing)
+	r, cl, _ := newPodHostedReconciler(t, testExport(nil), mdsDriver(), boundMDSPod(readyPod), existing)
 
 	reconcileExport(t, r)
 

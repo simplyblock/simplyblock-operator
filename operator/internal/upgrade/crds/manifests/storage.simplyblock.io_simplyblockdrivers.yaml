@@ -309,13 +309,157 @@ spec:
               pnfs:
                 description: PNFS configures pNFS support on the node plugin.
                 properties:
-                  enablePNFS:
-                    default: false
+                  mds:
                     description: |-
-                      EnablePNFS gives the node plugin the four host directories an export is
-                      assembled through. It is gated because a plugin not serving exports has
-                      no use for them.
-                    type: boolean
+                      MDS runs the metadata server: one pod per storage cluster, whose QEMU
+                      guest runs the NFS server with its own kernel, so no node runs nfsd,
+                      mounts an export, or needs nfs-utils. The pod needs a node with
+                      /dev/kvm. Unset, no pNFS volume can be exported: its export waits in
+                      Pending until this is set.
+                    properties:
+                      image:
+                        description: |-
+                          Image is the metadata server image: QEMU, the guest kernel, the guest
+                          root filesystem, and the runner. Unset takes the operator's own registry
+                          in the spdkcsi repository, tagged with the operator's tag prefixed
+                          pnfs-mds-, so a deployment that states nothing runs the image belonging
+                          to the operator reconciling it.
+                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                        type: string
+                      nodeSelector:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          NodeSelector is merged with the kvm-capable label the pod always
+                          requires.
+                        type: object
+                      resources:
+                        description: |-
+                          Resources are the pod's requests and limits. The guest's vCPUs are the
+                          whole cores the CPU limit covers, at least one, and its memory is the
+                          memory limit less 256Mi for QEMU, so the memory limit has to be at
+                          least 512Mi. A CPU or memory limit left unset defaults to 2 and 2Gi.
+                        properties:
+                          claims:
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This field depends on the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
+                            items:
+                              description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                              properties:
+                                name:
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
+                                    inside a container.
+                                  type: string
+                                request:
+                                  description: |-
+                                    Request is the name chosen for a request in the referenced claim.
+                                    If empty, everything from the claim is made available, otherwise
+                                    only the result of this request.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          limits:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                          requests:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                        type: object
+                      stateSize:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        default: 1Gi
+                        description: |-
+                          StateSize is the size of the guest's state disk, which holds the NFS
+                          client-recovery database that lets clients reclaim their state after
+                          the pod restarts.
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      stateStorageClassName:
+                        description: |-
+                          StateStorageClassName is the storage class of the state disk, which is
+                          always a simplyblock volume so the pod can restart on any worker with
+                          its client-recovery database. A named class must be provisioned by this
+                          driver and must not be a pNFS class. Unset gives each storage cluster a
+                          class of its own, <driver>-<cluster>-pnfs-mds-state, derived from the
+                          cluster's simplyblock class without its QoS caps and reserved for the
+                          state disk by an admission policy. Read only when the metadata server is
+                          first created: a StatefulSet's claim template cannot change afterward.
+                        type: string
+                      tolerations:
+                        description: Tolerations let the pod schedule onto tainted
+                          KVM nodes.
+                        items:
+                          description: |-
+                            The pod this Toleration is attached to tolerates any taint that matches
+                            the triple <key,value,effect> using the matching operator <operator>.
+                          properties:
+                            effect:
+                              description: |-
+                                Effect indicates the taint effect to match. Empty means match all taint effects.
+                                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                              type: string
+                            key:
+                              description: |-
+                                Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                                If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                              type: string
+                            operator:
+                              description: |-
+                                Operator represents a key's relationship to the value.
+                                Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                                Exists is equivalent to wildcard for value, so that a pod can
+                                tolerate all taints of a particular category.
+                                Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                              type: string
+                            tolerationSeconds:
+                              description: |-
+                                TolerationSeconds represents the period of time the toleration (which must be
+                                of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                                it is not set, which means tolerate the taint forever (do not evict). Zero and
+                                negative values will be treated as 0 (evict immediately) by the system.
+                              format: int64
+                              type: integer
+                            value:
+                              description: |-
+                                Value is the taint value the toleration matches to.
+                                If the operator is Exists, the value should be empty, otherwise just a regular string.
+                              type: string
+                          type: object
+                        type: array
+                    type: object
                 type: object
               sidecarImages:
                 description: |-

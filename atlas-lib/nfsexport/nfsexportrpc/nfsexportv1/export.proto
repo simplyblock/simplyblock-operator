@@ -72,6 +72,45 @@ message ExportSpec {
   // encrypted tells the assembler to open the backing namespace before
   // inspecting or formatting its filesystem.
   bool encrypted = 7;
+
+  // host_nqn is the NVMe host identity to attach the namespace as, when the
+  // caller decides it: a pNFS metadata server pod is one host across
+  // restarts, which its own kernel cannot know. Empty lets the host derive
+  // its own.
+  string host_nqn = 8;
+
+  // connection is where the namespace is served from, resolved by the caller
+  // for a host that cannot reach the control plane itself. Absent leaves
+  // resolving it to the host. It carries DHCHAP secrets, so it is sent only
+  // from the metadata server pod to its own guest, never by the operator.
+  Connection connection = 9;
+}
+
+// Connection mirrors lvol.Connection: the subsystem and the paths to it, in the
+// control plane's priority order.
+message Connection {
+  string nqn = 1;
+  uint32 nsid = 2;
+  string uuid = 3;
+  repeated Endpoint endpoints = 4;
+}
+
+// Endpoint mirrors lvol.Endpoint, one path to the subsystem. The two timeouts
+// are optional because zero ("fail at once") and unset ("the connector's
+// default") behave differently.
+message Endpoint {
+  string transport = 1;
+  string address = 2;
+  int32 port = 3;
+  int32 nr_io_queues = 4;
+  int32 reconnect_delay_sec = 5;
+  int32 keep_alive_tmo_sec = 6;
+  optional int32 ctrl_loss_tmo_sec = 7;
+  optional int32 fast_io_fail_tmo_sec = 8;
+  string host_iface = 9;
+  bool tls = 10;
+  string dhchap_secret = 11;
+  string dhchap_ctrl_secret = 12;
 }
 
 message CreateExportRequest {

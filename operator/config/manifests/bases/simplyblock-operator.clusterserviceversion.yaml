@@ -653,7 +653,7 @@ spec:
   - email: info@simplyblock.io
     name: Simplyblock
   maturity: alpha
-  minKubeVersion: 1.28.0
+  minKubeVersion: 1.30.0
   provider:
     name: Simplyblock GmbH
     url: https://simplyblock.io/

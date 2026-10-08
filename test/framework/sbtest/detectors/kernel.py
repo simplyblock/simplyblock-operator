@@ -45,9 +45,10 @@ from __future__ import annotations
 import fnmatch
 import re
 from collections.abc import Callable, Iterable, Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from ..core import (
+    KERNEL_CLOCK_PROBE,
     Attribution,
     Detector,
     Evidence,
@@ -125,12 +126,36 @@ class _Window:
 
 
 def _dmesg_lines(ev: Evidence, globs: list[str]) -> Iterator[tuple[str, datetime | None, str]]:
-    """(log name, timestamp or None, message) for every dmesg line available."""
+    """(log name, timestamp, message) for every dmesg line, the timestamp in wall time."""
     names = [n for n in ev.container_logs() if any(fnmatch.fnmatch(n, g) for g in globs)]
     for name in names:
-        for raw in ev.container_log(name):
-            ts, msg = _parse_line(raw)
-            yield name, ts, msg
+        parsed = [_parse_line(raw) for raw in ev.container_log(name)]
+        offset = _clock_offset(parsed)
+        for ts, msg in parsed:
+            yield name, (ts + offset if ts else None), msg
+
+
+#: The marker's message: the probe name and the wall time it was written at.
+_CLOCK_PROBE = re.compile(re.escape(KERNEL_CLOCK_PROBE) + r" wall=(\S+)")
+
+
+def _clock_offset(parsed: list[tuple[datetime | None, str]]) -> timedelta:
+    """How far behind wall time this log's kernel clock renders, from the collector's marker.
+
+    The last marker, since it was written closest to the read and the drift grows. Zero when
+    the log has none, which is a log collected before the marker existed or from a node whose
+    kernel log could not be written: its times are taken as rendered, as they always were.
+    """
+    for ts, msg in reversed(parsed):
+        m = _CLOCK_PROBE.search(msg)
+        if not (ts and m):
+            continue
+        try:
+            wall = datetime.fromisoformat(m.group(1))
+        except ValueError:
+            continue
+        return wall - ts
+    return timedelta(0)
 
 
 def _span(times: list[datetime]) -> str:

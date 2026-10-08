@@ -102,21 +102,27 @@ type NFSExportStatus struct {
 	// +optional
 	PhaseDeadline *metav1.Time `json:"phaseDeadline,omitempty"`
 
-	// MDSNodeName is the Kubernetes node serving this export, which is the one
-	// running the csi-node pod that assembled it. It is not a StorageNode: an
-	// MDS reaches the volume over NVMe-oF exactly as a client does, so it need
-	// not hold any storage itself.
+	// MDSPodName is the metadata server pod serving this export, in the
+	// operator's namespace. Empty until the export is bound.
 	//
-	// The serialization point for one-MDS-per-export: no second host is a
-	// candidate until this field is rewritten.
+	// One metadata server per export: no second one is a candidate until this
+	// field is rewritten.
 	// +optional
-	MDSNodeName string `json:"mdsNodeName,omitempty"`
+	MDSPodName string `json:"mdsPodName,omitempty"`
 
-	// MDSNodeIP is the bound MDS host's own address. Not what a client mounts:
-	// it is what the export's Service's EndpointSlice points at, so a client's
+	// MDSNodeIP is the metadata server pod's IP. Not what a client mounts: it
+	// is what the export's Service's EndpointSlice points at, so a client's
 	// mount address (ServiceAddress) does not have to change when this does.
 	// +optional
 	MDSNodeIP string `json:"mdsNodeIP,omitempty"`
+
+	// AssembledBy is the metadata server instance that last assembled this
+	// export: the pod's UID and its runner container's ID. A guest that
+	// restarted, in a new pod or in the same one, has lost its mounts and
+	// exports, so a mismatch with the running instance means the export is
+	// assembled again.
+	// +optional
+	AssembledBy string `json:"assembledBy,omitempty"`
 
 	// ServiceAddress is the ClusterIP of the Service fronting this export,
 	// which is the address a client mounts. It outlives any one MDSNodeIP: the
@@ -144,7 +150,8 @@ type NFSExportStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=nfsexp
 // +kubebuilder:printcolumn:name="Volume",type=string,JSONPath=".spec.volumeRef"
-// +kubebuilder:printcolumn:name="MDS",type=string,JSONPath=".status.mdsNodeName"
+// +kubebuilder:printcolumn:name="MDS",type=string,JSONPath=".status.mdsPodName"
+// +kubebuilder:printcolumn:name="MDSPod",type=string,JSONPath=".status.mdsPodName"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 

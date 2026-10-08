@@ -1,0 +1,63 @@
+# pNFS under concurrent load: shared and private ReadWriteMany volumes, a verified fio in
+# every container, and proof from both ends that the data bypassed the metadata server.
+#
+#   make run SUITE=pnfs-fio DURATION=1800 KEEP=1
+description: >-
+  pNFS multi-reader / multi-writer: volumes shared by pods on several nodes plus private
+  ones, every fio instance with a file of its own so verification stays meaningful, and
+  checks that each client's I/O reached its own NVMe-oF namespace rather than the server.
+
+run:
+  id_prefix: pnfs
+  outdir: ./runs
+
+components:
+  workload.pnfs:
+    # The pool's own class, cloned with fstype pnfs. Name a pNFS class in `storageclass`
+    # instead to use one as it is. The name differs per install: kubectl get sc.
+    source_storageclass: simplyblock-simplyblock-discovered-initial-discovery-d33c047a-cluster
+    # Two volumes with three writers each, and two private ones for comparison: a private
+    # volume that passes beside a shared one that fails points at concurrency, not pNFS.
+    shared_volumes: 2
+    pods_per_shared: 3
+    solo_pods: 2
+    containers_per_pod: 2
+    spread: true
+    # Three pods x two containers x 1G per shared volume, plus headroom.
+    volume_size_gb: 20
+    file_size_gb: 1
+    iodepth: 8
+    # Direct I/O, so reads come from the device rather than the page cache and the
+    # namespace's read counters measure the workload.
+    direct: true
+
+  # The client side of the check: every node's NVMe namespace counters over the run.
+  nvme.iostat:
+    interval_s: 5.0
+
+  # Every node's NVMe controllers at setup and at the end: whether the run started on a
+  # clean fabric, and whether it left one. dmesg can only infer the first from old lines.
+  nvme.snapshot: true
+
+  logs.collect: true
+  # The clients' kernels are the ones a pNFS run is about: layouts, NVMe-oF paths,
+  # blocklayout errors. The CSI node plugin runs privileged on every node, so it reads them.
+  host.dmesg:
+    namespace: simplyblock
+    pods_matching: [simplyblock-csi-node]
+    container: csi-node
+
+detectors:
+  pnfs.device-io:
+    # A layout recall and re-fetch costs seconds; a minute without a written sector while
+    # six writers are running is not that.
+    max_stall_s: 60
+  # Nothing here migrates, so the migration and ANA detectors would only report skips.
+  migration.outcomes: false
+  migration.errors: false
+  ana.freeze-count: false
+  ana.cutover-pause: false
+  ana.split-brain: false
+  ana.unserved-after-cutover: false
+  ana.path-churn: false
+  evidence.blind-spot: false

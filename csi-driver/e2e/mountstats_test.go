@@ -3,6 +3,8 @@ package e2e
 import (
 	"strings"
 	"testing"
+
+	"github.com/simplyblock/atlas/nfsclient"
 )
 
 // sample is /proc/self/mountstats as a pNFS client prints it: one NFS mount
@@ -84,8 +86,7 @@ func TestParseNFSOpCountsReportsAFileWithNoNFSMount(t *testing.T) {
 func TestParseNFSOpCountsIgnoresTheNonNFSMountsAround(t *testing.T) {
 	// The rows above and below the NFS block are other filesystems, and a parser
 	// that counted them would attribute their lines to the volume.
-	blocks := nfsBlocks(sample)
-	if len(blocks) != 1 {
-		t.Fatalf("found %d NFS mounts, want 1: %v", len(blocks), blocks)
+	if mounts := nfsclient.ParseMountstats(sample); len(mounts) != 1 {
+		t.Fatalf("found %d NFS mounts, want 1: %v", len(mounts), mounts)
 	}
 }

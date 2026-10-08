@@ -3,8 +3,11 @@ package nfsexport
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/simplyblock/atlas/lvol"
 
 	export "github.com/simplyblock/atlas/nfsexport"
 	"github.com/simplyblock/atlas/volstack"
@@ -141,5 +144,55 @@ func TestStackHandleCannotCollideWithAStagedVolume(t *testing.T) {
 	// under the CSI volume handle.
 	if spec.StackHandle() == spec.VolumeUUID || spec.StackHandle() == spec.FSID {
 		t.Errorf("handle %q is one a staged volume could also be keyed by", spec.StackHandle())
+	}
+}
+
+// suppliedConnection is a connection resolved by the caller, the way the
+// metadata server pod hands one to its guest.
+func suppliedConnection() *lvol.Connection {
+	return &lvol.Connection{
+		NQN:  "nqn.2023-02.io.simplyblock:cluster-1:lvol:11111111-2222-3333-4444-555555555555",
+		NSID: 1,
+		UUID: "11111111-2222-3333-4444-555555555555",
+		Endpoints: []lvol.Endpoint{
+			{Transport: "tcp", Address: "10.10.1.11", Port: 4420, DHCHAPSecret: "DHHC-1:00:host:"},
+		},
+	}
+}
+
+// The guest of a metadata server pod cannot reach the control plane, which is
+// why the pod resolves the connection for it. A supplied connection is the
+// answer, with the identity it was resolved for, and nothing else is asked.
+func TestPlanUsesASuppliedConnectionAndIdentity(t *testing.T) {
+	spec := exportSpec()
+	spec.Connection = suppliedConnection()
+	spec.HostNQN = "nqn.2023-02.io.simplyblock:host:sts-uid"
+	p := planner{seams: plans.NodeConfig{}, store: volstack.NewStore(t.TempDir())}
+
+	connection, hostNQN, err := p.connection(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("connection: %v", err)
+	}
+	if !reflect.DeepEqual(connection, *spec.Connection) {
+		t.Errorf("connection = %+v, want the supplied one", connection)
+	}
+	if hostNQN != spec.HostNQN {
+		t.Errorf("hostNQN = %q, want the supplied %q", hostNQN, spec.HostNQN)
+	}
+}
+
+// A stack record names where the namespace was attached last time. A supplied
+// connection names where it is served now, which differs after a failover.
+func TestASuppliedConnectionWinsOverTheStackRecord(t *testing.T) {
+	spec := exportSpec()
+	p := recordedPlanner(t, spec, layers.FabricParams{NQN: "nqn.recorded", NSID: 7})
+	spec.Connection = suppliedConnection()
+
+	connection, _, err := p.connection(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("connection: %v", err)
+	}
+	if connection.NQN != spec.Connection.NQN {
+		t.Errorf("NQN = %q, want the supplied %q over the record", connection.NQN, spec.Connection.NQN)
 	}
 }

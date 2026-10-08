@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"github.com/simplyblock/atlas/blockdev"
+	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/volstack"
 )
 
@@ -31,6 +32,15 @@ const NFSDProcDir = "/proc/fs/nfsd"
 // default: no other Linux filesystem implements the export operations nfsd
 // needs to hand out block layouts.
 const FSType = "xfs"
+
+// LayoutProbeName is the file a pNFS client's node agent writes in an export to
+// take the first layout itself. The client resolves a layout's device in the
+// mount namespace of the task that asked for it, and only the agent has the
+// host's /dev. The device it resolves is cached for every later layout. The
+// metadata server's nfsd holds a client's other layouts until it has taken one
+// on this file (nfsd.pnfs_probe_name), so the agent is first again after a
+// server restart. Both sides read the name from here.
+const LayoutProbeName = ".simplyblock-pnfs-layout-probe"
 
 // pnfs is what makes nfsd offer a layout at all. sync is deliberate: a shared
 // filesystem cannot acknowledge writes before they land.
@@ -68,6 +78,18 @@ type Spec struct {
 	// Clients is the set allowed to mount, as exports(5) spells it. Empty is
 	// refused rather than widened, because the widening is to everyone.
 	Clients []string
+
+	// HostNQN is the NVMe host identity to attach the namespace as, when the
+	// caller decides it rather than the host: a pNFS metadata server pod is
+	// one host across restarts, which its own kernel cannot know. Empty lets
+	// the host derive its own.
+	HostNQN string
+
+	// Connection is where the namespace is served from, resolved by the
+	// caller, for a host that cannot reach the control plane itself. Nil
+	// leaves resolving it to the host. It carries DHCHAP secrets, so it
+	// travels only between the metadata server pod and its own guest.
+	Connection *lvol.Connection
 }
 
 // Validate reports whether the spec can be assembled at all.

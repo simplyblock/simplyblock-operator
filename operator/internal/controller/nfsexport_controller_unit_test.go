@@ -23,7 +23,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/simplyblock/atlas/link"
 	exportpkg "github.com/simplyblock/atlas/nfsexport"
+	"github.com/simplyblock/atlas/nqn"
+	"github.com/simplyblock/atlas/ptr"
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -37,21 +40,24 @@ const (
 	testExportName = "nfsexp-7b41c0e2a9"
 )
 
-// testMDSHost and testOtherHost are the two Kubernetes nodes these tests bind
-// exports to. They are constants because the binding is the thing under test:
-// a typo in one of eleven literals would assert against a node that does not
-// exist, and the assertion would pass.
+// The metadata server pod exports bind to, in the operator's namespace.
+// Constants because the binding is the thing under test: a typo in one of a
+// dozen literals would assert against a pod that does not exist, and the
+// assertion would pass.
 const (
-	testMDSHost   = "kube-worker-1.example.internal"
-	testOtherHost = "kube-worker-2.example.internal"
+	testMDSPod     = "simplyblock-pnfs-mds-0f2ac1d3-0"
+	testMDSPodIP   = "10.244.3.17"
+	testMDSPodUID  = "mds-uid-1"
+	testOperatorNS = "simplyblock"
 )
 
 // fakeAssembler records what it was asked to do and can be made to fail or to
-// report a node unreachable.
+// report the metadata server unreachable.
 type fakeAssembler struct {
-	created    []string
-	deleted    []string
-	checked    []string
+	created    []link.PeerID
+	deleted    []link.PeerID
+	checked    []link.PeerID
+	hostNQNs   []string
 	createErr  error
 	deleteErr  error
 	checkErr   error
@@ -59,29 +65,32 @@ type fakeAssembler struct {
 }
 
 func (f *fakeAssembler) CreateExport(
-	_ context.Context, node string, _ *simplyblockv1alpha2.NFSExport,
+	_ context.Context, host ExportHost, _ *simplyblockv1alpha2.NFSExport,
 ) error {
 	if f.createErr != nil {
 		return f.createErr
 	}
-	f.created = append(f.created, node)
+	f.created = append(f.created, host.Peer)
+	f.hostNQNs = append(f.hostNQNs, host.HostNQN)
 	return nil
 }
 
-func (f *fakeAssembler) DeleteExport(_ context.Context, node string, _ *simplyblockv1alpha2.NFSExport) error {
+func (f *fakeAssembler) DeleteExport(_ context.Context, host ExportHost, _ *simplyblockv1alpha2.NFSExport) error {
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}
-	f.deleted = append(f.deleted, node)
+	f.deleted = append(f.deleted, host.Peer)
+	f.hostNQNs = append(f.hostNQNs, host.HostNQN)
 	return nil
 }
 
-func (f *fakeAssembler) CheckExport(_ context.Context, node string, _ *simplyblockv1alpha2.NFSExport) error {
-	f.checked = append(f.checked, node)
+func (f *fakeAssembler) CheckExport(_ context.Context, host ExportHost, _ *simplyblockv1alpha2.NFSExport) error {
+	f.checked = append(f.checked, host.Peer)
+	f.hostNQNs = append(f.hostNQNs, host.HostNQN)
 	return f.checkErr
 }
 
-func (f *fakeAssembler) HasSession(string) bool { return !f.noSessions }
+func (f *fakeAssembler) HasSession(link.PeerID) bool { return !f.noSessions }
 
 func testExport(mutate func(*simplyblockv1alpha2.NFSExport)) *simplyblockv1alpha2.NFSExport {
 	e := &simplyblockv1alpha2.NFSExport{
@@ -101,14 +110,6 @@ func testExport(mutate func(*simplyblockv1alpha2.NFSExport)) *simplyblockv1alpha
 	return e
 }
 
-func testNode(name string, mutate func(*corev1.Node)) *corev1.Node {
-	n := kubeNode(name, "192.168.10.83")
-	if mutate != nil {
-		mutate(n)
-	}
-	return n
-}
-
 func newExportReconciler(
 	t *testing.T,
 	asm ExportAssembler,
@@ -126,10 +127,11 @@ func newExportReconciler(
 		objects...,
 	)
 	return &NFSExportReconciler{
-		Client:    cl,
-		Scheme:    scheme,
-		Recorder:  &fakeRecorder{},
-		Assembler: asm,
+		Client:            cl,
+		Scheme:            scheme,
+		Recorder:          &fakeRecorder{},
+		Assembler:         asm,
+		OperatorNamespace: testOperatorNS,
 	}, cl
 }
 
@@ -169,98 +171,11 @@ func loadExport(t *testing.T, cl client.Client) *simplyblockv1alpha2.NFSExport {
 	return &e
 }
 
-// A new export with an eligible host binds to it and moves to Assembling. The
-// binding must be written before the host is asked for anything, so that a
-// reconcile dying mid-assembly finds it rather than picking a second host.
-func TestPendingBindsAnEligibleHost(t *testing.T) {
-	asm := &fakeAssembler{}
-	r, cl := newExportReconciler(t, asm, testExport(nil), testNode(testMDSHost, nil))
-
-	reconcileExport(t, r)
-
-	got := loadExport(t, cl)
-	if got.Status.Phase != simplyblockv1alpha2.NFSExportPhaseAssembling {
-		t.Errorf("phase = %q, want Assembling", got.Status.Phase)
-	}
-	if got.Status.MDSNodeName != testMDSHost {
-		t.Errorf("mdsNodeName = %q, want the bound node", got.Status.MDSNodeName)
-	}
-	if len(asm.created) != 0 {
-		t.Errorf("assembler was called before the binding was persisted: %v", asm.created)
-	}
-	if got.Status.ObservedGeneration != got.Generation {
-		t.Errorf("observedGeneration = %d, want %d", got.Status.ObservedGeneration, got.Generation)
-	}
-}
-
-// One cluster, one MDS: with two eligible hosts, a new export binds to the
-// lower-sorting name rather than one chosen per export, and a second export
-// binds to the same host rather than spreading onto the other one.
-func TestPendingBindsEveryExportToTheSameNode(t *testing.T) {
-	asm := &fakeAssembler{}
-	second := testExport(func(e *simplyblockv1alpha2.NFSExport) {
-		e.Name = "nfsexp-second"
-	})
-	r, cl := newExportReconciler(t, asm, testExport(nil), second,
-		testNode(testOtherHost, nil), testNode(testMDSHost, nil))
-
-	reconcileExport(t, r)
-	if got := loadExport(t, cl).Status.MDSNodeName; got != testMDSHost {
-		t.Fatalf("mdsNodeName = %q, want the lower-sorting %q", got, testMDSHost)
-	}
-
-	if _, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: client.ObjectKey{Name: "nfsexp-second", Namespace: testExportNS},
-	}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	var gotSecond simplyblockv1alpha2.NFSExport
-	if err := cl.Get(context.Background(),
-		client.ObjectKey{Name: "nfsexp-second", Namespace: testExportNS}, &gotSecond); err != nil {
-		t.Fatalf("reading back the second export: %v", err)
-	}
-	if gotSecond.Status.MDSNodeName != testMDSHost {
-		t.Errorf("second export bound to %q, want the same host %q as the first",
-			gotSecond.Status.MDSNodeName, testMDSHost)
-	}
-}
-
-// With no eligible host the export waits rather than failing, and says so. A
-// refusal that emits nothing is indistinguishable from a reconcile that never
-// ran.
-func TestPendingWaitsWhenNoHostIsEligible(t *testing.T) {
-	notReady := testNode(testMDSHost, func(n *corev1.Node) {
-		n.Status.Conditions = []corev1.NodeCondition{
-			{Type: corev1.NodeReady, Status: corev1.ConditionFalse},
-		}
-	})
-	cordoned := testNode(testOtherHost, func(n *corev1.Node) {
-		n.Spec.Unschedulable = true
-	})
-	r, cl := newExportReconciler(t, &fakeAssembler{}, testExport(nil), notReady, cordoned)
-
-	res := reconcileExport(t, r)
-
-	if res.RequeueAfter != nfsExportNoHostRequeue {
-		t.Errorf("requeue = %v, want %v", res.RequeueAfter, nfsExportNoHostRequeue)
-	}
-	got := loadExport(t, cl)
-	if got.Status.Phase != simplyblockv1alpha2.NFSExportPhasePending {
-		t.Errorf("phase = %q, want Pending", got.Status.Phase)
-	}
-	if got.Status.MDSNodeName != "" {
-		t.Errorf("bound %q with nothing eligible", got.Status.MDSNodeName)
-	}
-}
-
 // Assembling calls the host and moves to Ready.
 func TestAssemblingReachesReady(t *testing.T) {
 	asm := &fakeAssembler{}
-	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
-		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseAssembling
-		e.Status.MDSNodeName = testMDSHost
-	})
-	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
+	export := testExport(bound(simplyblockv1alpha2.NFSExportPhaseAssembling))
+	r, cl := newExportReconciler(t, asm, export, mdsPod())
 
 	reconcileExport(t, r)
 
@@ -268,7 +183,7 @@ func TestAssemblingReachesReady(t *testing.T) {
 	if got.Status.Phase != simplyblockv1alpha2.NFSExportPhaseReady {
 		t.Errorf("phase = %q, want Ready", got.Status.Phase)
 	}
-	if want := testMDSHost; len(asm.created) != 1 || asm.created[0] != want {
+	if want := link.MDSPeer(testMDSPod); len(asm.created) != 1 || asm.created[0] != want {
 		t.Errorf("CreateExport calls = %v, want one for %s", asm.created, want)
 	}
 	if got.Status.PhaseDeadline != nil {
@@ -276,15 +191,12 @@ func TestAssemblingReachesReady(t *testing.T) {
 	}
 }
 
-// A node that is merely disconnected is a wait, not a failure: it is the normal
+// A metadata server that is merely disconnected is a wait, not a failure: it is the normal
 // state during a rollout.
-func TestAssemblingWaitsForAnUnreachableNode(t *testing.T) {
+func TestAssemblingWaitsForAnUnreachableMDS(t *testing.T) {
 	asm := &fakeAssembler{noSessions: true}
-	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
-		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseAssembling
-		e.Status.MDSNodeName = testMDSHost
-	})
-	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
+	export := testExport(bound(simplyblockv1alpha2.NFSExportPhaseAssembling))
+	r, cl := newExportReconciler(t, asm, export, mdsPod())
 
 	res := reconcileExport(t, r)
 
@@ -295,7 +207,7 @@ func TestAssemblingWaitsForAnUnreachableNode(t *testing.T) {
 		t.Errorf("phase = %q, want it to stay Assembling", got.Status.Phase)
 	}
 	if len(asm.created) != 0 {
-		t.Errorf("called an unreachable node: %v", asm.created)
+		t.Errorf("called an unreachable metadata server: %v", asm.created)
 	}
 }
 
@@ -304,11 +216,10 @@ func TestAssemblingWaitsForAnUnreachableNode(t *testing.T) {
 func TestAssemblingGivesUpAtTheDeadline(t *testing.T) {
 	past := metav1.NewTime(time.Now().Add(-time.Minute))
 	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
-		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseAssembling
-		e.Status.MDSNodeName = testMDSHost
+		bound(simplyblockv1alpha2.NFSExportPhaseAssembling)(e)
 		e.Status.PhaseDeadline = &past
 	})
-	r, cl := newExportReconciler(t, &fakeAssembler{}, export, testNode(testMDSHost, nil))
+	r, cl := newExportReconciler(t, &fakeAssembler{}, export, mdsPod())
 
 	reconcileExport(t, r)
 
@@ -326,22 +237,19 @@ func TestAssemblingGivesUpAtTheDeadline(t *testing.T) {
 // that already has one, which is the one mistake that destroys data.
 func TestPhaseSurvivesARestart(t *testing.T) {
 	asm := &fakeAssembler{}
-	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
-		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseAssembling
-		e.Status.MDSNodeName = testOtherHost
-	})
-	// A different node is eligible. If the machine restarted at Pending it would
-	// select from the whole set and could pick this one instead.
-	r, cl := newExportReconciler(t, asm, export,
-		testNode(testMDSHost, nil), testNode(testOtherHost, nil))
+	export := testExport(bound(simplyblockv1alpha2.NFSExportPhaseAssembling))
+	// No driver configures a metadata server. Restarted at Pending, the export
+	// would wait for one instead of assembling on the pod it is bound to.
+	r, cl := newExportReconciler(t, asm, export, mdsPod())
 
 	reconcileExport(t, r)
 
 	got := loadExport(t, cl)
-	if got.Status.MDSNodeName != testOtherHost {
-		t.Errorf("binding moved to %q on restart; it must not", got.Status.MDSNodeName)
+	if got.Status.Phase != simplyblockv1alpha2.NFSExportPhaseReady || got.Status.MDSPodName != testMDSPod {
+		t.Errorf("phase = %q, mdsPodName = %q, want Ready on the already-bound pod",
+			got.Status.Phase, got.Status.MDSPodName)
 	}
-	if want := testOtherHost; len(asm.created) != 1 || asm.created[0] != want {
+	if want := link.MDSPeer(testMDSPod); len(asm.created) != 1 || asm.created[0] != want {
 		t.Errorf("assembled on %v, want the already-bound %s", asm.created, want)
 	}
 }
@@ -354,7 +262,7 @@ func TestDegradedIsTerminal(t *testing.T) {
 		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseDegraded
 		e.Status.Message = "assembly timed out"
 	})
-	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
+	r, cl := newExportReconciler(t, asm, export, mdsPod())
 
 	res := reconcileExport(t, r)
 
@@ -377,14 +285,13 @@ func TestDeleteTearsDownThenReleases(t *testing.T) {
 	asm := &fakeAssembler{}
 	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
 		e.DeletionTimestamp = &now
-		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseReady
-		e.Status.MDSNodeName = testMDSHost
+		bound(simplyblockv1alpha2.NFSExportPhaseReady)(e)
 	})
-	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
+	r, cl := newExportReconciler(t, asm, export, mdsPod())
 
 	reconcileExport(t, r)
 
-	if want := testMDSHost; len(asm.deleted) != 1 || asm.deleted[0] != want {
+	if want := link.MDSPeer(testMDSPod); len(asm.deleted) != 1 || asm.deleted[0] != want {
 		t.Errorf("DeleteExport calls = %v, want one for %s", asm.deleted, want)
 	}
 	var e simplyblockv1alpha2.NFSExport
@@ -397,42 +304,12 @@ func TestDeleteTearsDownThenReleases(t *testing.T) {
 	}
 }
 
-// A teardown that cannot reach the host waits instead of dropping the
-// finalizer, because releasing it would orphan the mount and the export entry
-// with nothing left to name them.
-func TestDeleteWaitsForAnUnreachableNode(t *testing.T) {
-	now := metav1.Now()
-	asm := &fakeAssembler{noSessions: true}
-	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
-		e.DeletionTimestamp = &now
-		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseReady
-		e.Status.MDSNodeName = testMDSHost
-	})
-	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
-
-	res := reconcileExport(t, r)
-
-	if res.RequeueAfter != nfsExportNoSessionRequeue {
-		t.Errorf("requeue = %v, want %v", res.RequeueAfter, nfsExportNoSessionRequeue)
-	}
-	if len(asm.deleted) != 0 {
-		t.Errorf("tore down through an unreachable node: %v", asm.deleted)
-	}
-	got := loadExport(t, cl)
-	if len(got.Finalizers) == 0 {
-		t.Error("finalizer released while the host was unreachable")
-	}
-}
-
 // An assembly error is returned so controller-runtime backs off, rather than
 // being swallowed into a phase that looks settled.
 func TestAssemblyErrorIsRetried(t *testing.T) {
 	asm := &fakeAssembler{createErr: errors.New("mount: device busy")}
-	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
-		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseAssembling
-		e.Status.MDSNodeName = testMDSHost
-	})
-	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
+	export := testExport(bound(simplyblockv1alpha2.NFSExportPhaseAssembling))
+	r, cl := newExportReconciler(t, asm, export, mdsPod())
 
 	_, err := r.Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: client.ObjectKey{Name: testExportName, Namespace: testExportNS},
@@ -469,64 +346,6 @@ func newExportMachineAt(at simplyblockv1alpha2.NFSExportPhase) (*statemachine.Ma
 		statemachine.Snapshot[phase]{State: at})
 }
 
-// An export binds a node whatever namespace the export itself is in.
-//
-// An NFSExport is namespaced to the claim it backs, because that is where the
-// CSI controller creates it and where a user looks for it. The nodes it binds
-// to are cluster-scoped, so there is no namespace to get wrong -- which is the
-// point: an earlier arrangement selected StorageNodes, which live in the
-// operator's namespace, and a list scoped to the export found nothing on every
-// real cluster.
-func TestSelectionIsClusterScoped(t *testing.T) {
-	asm := &fakeAssembler{}
-	export := testExport(nil)
-	node := testNode(testMDSHost, nil)
-	if export.Namespace == "" || node.Namespace != "" {
-		t.Fatalf("the fixtures no longer model the arrangement: export in %q, node in %q",
-			export.Namespace, node.Namespace)
-	}
-	r, cl := newExportReconciler(t, asm, export, node)
-
-	reconcileExport(t, r)
-
-	got := loadExport(t, cl)
-	if got.Status.MDSNodeName != testMDSHost {
-		t.Fatalf("bound to %q, want %q", got.Status.MDSNodeName, testMDSHost)
-	}
-	if got.Status.Phase != simplyblockv1alpha2.NFSExportPhaseAssembling {
-		t.Errorf("phase = %q, want Assembling", got.Status.Phase)
-	}
-}
-
-// The link addresses a Kubernetes node, and status.storageNodeRef names a
-// StorageNode. They are different names for different objects, and the mapping
-// between them is spec.workerNode.
-//
-// Getting this wrong is invisible until a cluster runs it: HasSession returns
-// false for a name no peer registered under, which the reconciler reads as a
-// host that is merely disconnected, so the export waits in Assembling until the
-// deadline and reports a timeout rather than a mismatch.
-func TestAssemblyReachesTheKubernetesNodeNotTheStorageNodeName(t *testing.T) {
-	asm := &fakeAssembler{}
-	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
-		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseAssembling
-		e.Status.MDSNodeName = testMDSHost
-	})
-	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
-
-	reconcileExport(t, r)
-
-	want := testMDSHost
-	if len(asm.created) != 1 || asm.created[0] != want {
-		t.Fatalf("CreateExport reached %v, want [%s]", asm.created, want)
-	}
-	// The record still names the StorageNode, because that is the object a
-	// reader goes looking for.
-	if got := loadExport(t, cl).Status.MDSNodeName; got != testMDSHost {
-		t.Errorf("mdsNodeName = %q, want the StorageNode %q", got, testMDSHost)
-	}
-}
-
 // Regression: 2026-09-23-pnfs-grow-disconnected-mds -- an expansion observed
 // while the MDS link was down was marked applied without ever reaching the MDS,
 // so the filesystem stayed at its old size permanently.
@@ -535,10 +354,9 @@ func TestReadyExportDoesNotObserveAGrowWhileTheMDSIsDisconnected(t *testing.T) {
 	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
 		e.Generation = 2
 		e.Status.ObservedGeneration = 1
-		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseReady
-		e.Status.MDSNodeName = testMDSHost
+		bound(simplyblockv1alpha2.NFSExportPhaseReady)(e)
 	})
-	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
+	r, cl := newExportReconciler(t, asm, export, mdsPod())
 
 	result := reconcileExport(t, r)
 
@@ -555,18 +373,15 @@ func TestReadyExportDoesNotObserveAGrowWhileTheMDSIsDisconnected(t *testing.T) {
 // fine is one an operator learns to ignore.
 func TestReadyExportPollsAHealthyHostAtTheSteadyStateInterval(t *testing.T) {
 	asm := &fakeAssembler{}
-	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
-		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseReady
-		e.Status.MDSNodeName = testMDSHost
-	})
-	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
+	export := testExport(bound(simplyblockv1alpha2.NFSExportPhaseReady))
+	r, cl := newExportReconciler(t, asm, export, mdsPod())
 
 	result := reconcileExport(t, r)
 
 	if result.RequeueAfter != nfsExportHealthCheckInterval {
 		t.Errorf("requeue after = %s, want %s", result.RequeueAfter, nfsExportHealthCheckInterval)
 	}
-	if want := testMDSHost; len(asm.checked) != 1 || asm.checked[0] != want {
+	if want := link.MDSPeer(testMDSPod); len(asm.checked) != 1 || asm.checked[0] != want {
 		t.Errorf("CheckExport reached %v, want [%s]", asm.checked, want)
 	}
 	if got := loadExport(t, cl).Status.Phase; got != simplyblockv1alpha2.NFSExportPhaseReady {
@@ -581,11 +396,8 @@ func TestReadyExportPollsAHealthyHostAtTheSteadyStateInterval(t *testing.T) {
 // to undo what a transient fault caused on its own.
 func TestReadyExportSurfacesAnUnhealthyHostWithoutDegradingIt(t *testing.T) {
 	asm := &fakeAssembler{checkErr: errors.New("export: not mounted: exit status 32")}
-	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
-		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseReady
-		e.Status.MDSNodeName = testMDSHost
-	})
-	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
+	export := testExport(bound(simplyblockv1alpha2.NFSExportPhaseReady))
+	r, cl := newExportReconciler(t, asm, export, mdsPod())
 
 	result := reconcileExport(t, r)
 
@@ -597,15 +409,12 @@ func TestReadyExportSurfacesAnUnhealthyHostWithoutDegradingIt(t *testing.T) {
 	}
 }
 
-// A Ready export whose bound node has no live link is a rollout, not a
+// A Ready export whose metadata server has no live link is a rollout, not a
 // finding: the check cannot run at all, so nothing here should claim it did.
 func TestReadyExportDoesNotCheckAnUnreachableHost(t *testing.T) {
 	asm := &fakeAssembler{noSessions: true}
-	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
-		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseReady
-		e.Status.MDSNodeName = testMDSHost
-	})
-	r, _ := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
+	export := testExport(bound(simplyblockv1alpha2.NFSExportPhaseReady))
+	r, _ := newExportReconciler(t, asm, export, mdsPod())
 
 	result := reconcileExport(t, r)
 
@@ -614,27 +423,6 @@ func TestReadyExportDoesNotCheckAnUnreachableHost(t *testing.T) {
 	}
 	if len(asm.checked) != 0 {
 		t.Errorf("CheckExport reached %v over an unreachable host", asm.checked)
-	}
-}
-
-// Tearing down has to reach the same host, or the export is dropped from the
-// record while its filesystem stays mounted and published on a host nothing
-// points at any more.
-func TestTeardownReachesTheKubernetesNode(t *testing.T) {
-	asm := &fakeAssembler{}
-	now := metav1.Now()
-	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
-		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseReady
-		e.Status.MDSNodeName = testMDSHost
-		e.DeletionTimestamp = &now
-	})
-	r, _ := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
-
-	reconcileExport(t, r)
-
-	want := testMDSHost
-	if len(asm.deleted) != 1 || asm.deleted[0] != want {
-		t.Fatalf("DeleteExport reached %v, want [%s]", asm.deleted, want)
 	}
 }
 
@@ -650,14 +438,13 @@ func TestDeletingAnExportThatNeverAssembledConverges(t *testing.T) {
 	asm := &fakeAssembler{deleteErr: exportpkg.ErrInvalidSpec}
 	now := metav1.Now()
 	e := testExport(func(x *simplyblockv1alpha2.NFSExport) {
-		x.Status.Phase = simplyblockv1alpha2.NFSExportPhaseDegraded
-		x.Status.MDSNodeName = testMDSHost
+		bound(simplyblockv1alpha2.NFSExportPhaseDegraded)(x)
 		// No client set was ever resolved, so there is nothing to build a
 		// spec from and nothing on the host to tear down.
 		x.Status.AllowedClients = nil
 		x.DeletionTimestamp = &now
 	})
-	r, cl := newExportReconciler(t, asm, e, testNode(testMDSHost, nil))
+	r, cl := newExportReconciler(t, asm, e, mdsPod())
 
 	reconcileExport(t, r)
 
@@ -676,12 +463,11 @@ func TestDeletingRetriesWhenTheHostRefuses(t *testing.T) {
 	asm := &fakeAssembler{deleteErr: errors.New("exportfs exited 1")}
 	now := metav1.Now()
 	e := testExport(func(x *simplyblockv1alpha2.NFSExport) {
-		x.Status.Phase = simplyblockv1alpha2.NFSExportPhaseReady
-		x.Status.MDSNodeName = testMDSHost
+		bound(simplyblockv1alpha2.NFSExportPhaseReady)(x)
 		x.Status.AllowedClients = []string{"192.168.10.0/24"}
 		x.DeletionTimestamp = &now
 	})
-	r, cl := newExportReconciler(t, asm, e, testNode(testMDSHost, nil))
+	r, cl := newExportReconciler(t, asm, e, mdsPod())
 
 	_, err := r.Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: client.ObjectKey{Name: testExportName, Namespace: testExportNS},
@@ -730,5 +516,94 @@ func TestTheKindDeclaresOnlyThePhasesTheControllerDrives(t *testing.T) {
 		if !implemented[p] {
 			t.Errorf("the kind declares %q, which the controller cannot drive", p)
 		}
+	}
+}
+
+// bound puts an export in phase, bound to the metadata server pod mdsPod
+// returns, assembled by that pod's instance.
+func bound(phase simplyblockv1alpha2.NFSExportPhase) func(*simplyblockv1alpha2.NFSExport) {
+	return func(e *simplyblockv1alpha2.NFSExport) {
+		e.Status.Phase = phase
+		e.Status.MDSPodName = testMDSPod
+		e.Status.MDSNodeIP = testMDSPodIP
+		e.Status.AllowedClients = []string{testNodeIP}
+		e.Status.AssembledBy = testMDSPodUID
+	}
+}
+
+// testMDSStatefulSetUID is the StatefulSet owning the metadata server pod,
+// whose UID is the guest's NVMe host identity.
+const testMDSStatefulSetUID = "5e1d7a0c-0f3b-4c1e-9a77-2b8d1f6e4c10"
+
+func mdsPod() *corev1.Pod {
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: testMDSPod, Namespace: testOperatorNS, UID: testMDSPodUID,
+		OwnerReferences: []metav1.OwnerReference{{
+			APIVersion: "apps/v1", Kind: "StatefulSet", Name: "simplyblock-pnfs-mds-0f2ac1d3",
+			UID: testMDSStatefulSetUID, Controller: ptr.To(true),
+		}},
+	}}
+}
+
+// The guest's mounts and exports table live and die with the pod. A deletion
+// that finds neither a pod nor a session has nothing left to orphan, so the
+// finalizer goes rather than waiting on a pod that may never return.
+func TestPodHostedDeleteWithThePodGoneReleasesTheFinalizer(t *testing.T) {
+	now := metav1.Now()
+	asm := &fakeAssembler{noSessions: true}
+	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
+		bound(simplyblockv1alpha2.NFSExportPhaseReady)(e)
+		e.DeletionTimestamp = &now
+	})
+	r, cl := newExportReconciler(t, asm, export)
+
+	reconcileExport(t, r)
+
+	if len(asm.deleted) != 0 {
+		t.Errorf("tore down through a pod that does not exist: %v", asm.deleted)
+	}
+	var e simplyblockv1alpha2.NFSExport
+	err := cl.Get(context.Background(), client.ObjectKey{Name: testExportName, Namespace: testExportNS}, &e)
+	if err == nil && len(e.Finalizers) != 0 {
+		t.Errorf("finalizer still held with the pod gone: %v", e.Finalizers)
+	} else if err != nil && !apierrors.IsNotFound(err) {
+		t.Fatalf("reading back: %v", err)
+	}
+}
+
+// A pod that still exists but has no session is restarting or not linked
+// yet, and its guest may still hold the mount. Releasing would orphan it.
+func TestPodHostedDeleteWaitsForAPodThatStillExists(t *testing.T) {
+	now := metav1.Now()
+	asm := &fakeAssembler{noSessions: true}
+	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
+		bound(simplyblockv1alpha2.NFSExportPhaseReady)(e)
+		e.DeletionTimestamp = &now
+	})
+	r, cl := newExportReconciler(t, asm, export, mdsPod())
+
+	res := reconcileExport(t, r)
+
+	if res.RequeueAfter != nfsExportNoSessionRequeue {
+		t.Errorf("requeue = %v, want %v", res.RequeueAfter, nfsExportNoSessionRequeue)
+	}
+	if got := loadExport(t, cl); len(got.Finalizers) == 0 {
+		t.Error("finalizer released while the metadata server pod still exists")
+	}
+}
+
+// The guest attaches the namespace as the StatefulSet's identity, which holds
+// across pod restarts and is what the control plane authorizes and the
+// persistent reservation is keyed by (design §6.5). The pod cannot learn it
+// itself, so the operator sends it with every call.
+func TestPodHostedCallsCarryTheStatefulSetsHostNQN(t *testing.T) {
+	asm := &fakeAssembler{}
+	r, _ := newExportReconciler(t, asm, testExport(bound(simplyblockv1alpha2.NFSExportPhaseAssembling)), mdsPod())
+
+	reconcileExport(t, r)
+
+	want := nqn.Host(testMDSStatefulSetUID)
+	if len(asm.hostNQNs) != 1 || asm.hostNQNs[0] != want {
+		t.Errorf("host NQNs = %v, want [%s]", asm.hostNQNs, want)
 	}
 }

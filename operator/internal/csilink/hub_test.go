@@ -1,7 +1,8 @@
-// Tests for the hub's certificate reloader, the part of this package with
-// behaviour worth pinning: it decides when a keypair on disk has been rotated,
-// and getting that decision wrong means a long-lived listener serves an expired
-// certificate until the operator happens to restart.
+// Tests for the two parts of the hub with behavior worth pinning: the
+// certificate reloader, which decides when a keypair on disk has been rotated
+// (getting that wrong means a long-lived listener serves an expired certificate
+// until the operator happens to restart), and which ServiceAccount may link as
+// which kind of peer.
 package csilink
 
 import (
@@ -12,11 +13,15 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"maps"
 	"math/big"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/simplyblock/atlas/link"
 )
 
 // writeKeyPair writes a fresh self-signed keypair over the two paths and
@@ -152,4 +157,37 @@ func statModTime(t *testing.T, path string) time.Time {
 		t.Fatalf("stat %s: %v", path, err)
 	}
 	return info.ModTime()
+}
+
+// Each kind is open to its own ServiceAccount only. The metadata server pod's
+// kind is the one export calls are relayed through, so a node or controller
+// token registering as it would receive export calls it never assembled.
+func TestEachPeerKindIsOpenOnlyToItsOwnServiceAccount(t *testing.T) {
+	accounts := serviceAccounts(Config{
+		Namespace:                "simplyblock",
+		NodeServiceAccount:       "simplyblock-csi-node-sa",
+		ControllerServiceAccount: "simplyblock-csi-controller-sa",
+		MDSServiceAccount:        "simplyblock-csi-mds-sa",
+	})
+	want := map[link.PeerKind][]string{
+		link.PeerKindNode:       {"simplyblock/simplyblock-csi-node-sa"},
+		link.PeerKindController: {"simplyblock/simplyblock-csi-controller-sa"},
+		link.PeerKindMDS:        {"simplyblock/simplyblock-csi-mds-sa"},
+	}
+	if !maps.EqualFunc(accounts, want, slices.Equal) {
+		t.Errorf("serviceAccounts = %v, want %v", accounts, want)
+	}
+}
+
+// Without a metadata server ServiceAccount the kind is closed: the map stays
+// non-empty, which makes every kind it does not name a refusal.
+func TestMDSKindIsClosedWithoutItsServiceAccount(t *testing.T) {
+	accounts := serviceAccounts(Config{
+		Namespace:                "simplyblock",
+		NodeServiceAccount:       "simplyblock-csi-node-sa",
+		ControllerServiceAccount: "simplyblock-csi-controller-sa",
+	})
+	if _, open := accounts[link.PeerKindMDS]; open {
+		t.Errorf("MDS kind open without a ServiceAccount: %v", accounts)
+	}
 }

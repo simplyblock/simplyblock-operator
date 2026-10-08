@@ -63,7 +63,17 @@ type ExportSpec struct {
 	PoolId    string `protobuf:"bytes,6,opt,name=pool_id,json=poolId,proto3" json:"pool_id,omitempty"`
 	// encrypted tells the assembler to open the backing namespace before
 	// inspecting or formatting its filesystem.
-	Encrypted     bool `protobuf:"varint,7,opt,name=encrypted,proto3" json:"encrypted,omitempty"`
+	Encrypted bool `protobuf:"varint,7,opt,name=encrypted,proto3" json:"encrypted,omitempty"`
+	// host_nqn is the NVMe host identity to attach the namespace as, when the
+	// caller decides it: a pNFS metadata server pod is one host across
+	// restarts, which its own kernel cannot know. Empty lets the host derive
+	// its own.
+	HostNqn string `protobuf:"bytes,8,opt,name=host_nqn,json=hostNqn,proto3" json:"host_nqn,omitempty"`
+	// connection is where the namespace is served from, resolved by the caller
+	// for a host that cannot reach the control plane itself. Absent leaves
+	// resolving it to the host. It carries DHCHAP secrets, so it is sent only
+	// from the metadata server pod to its own guest, never by the operator.
+	Connection    *Connection `protobuf:"bytes,9,opt,name=connection,proto3" json:"connection,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -147,6 +157,225 @@ func (x *ExportSpec) GetEncrypted() bool {
 	return false
 }
 
+func (x *ExportSpec) GetHostNqn() string {
+	if x != nil {
+		return x.HostNqn
+	}
+	return ""
+}
+
+func (x *ExportSpec) GetConnection() *Connection {
+	if x != nil {
+		return x.Connection
+	}
+	return nil
+}
+
+// Connection mirrors lvol.Connection: the subsystem and the paths to it, in the
+// control plane's priority order.
+type Connection struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Nqn           string                 `protobuf:"bytes,1,opt,name=nqn,proto3" json:"nqn,omitempty"`
+	Nsid          uint32                 `protobuf:"varint,2,opt,name=nsid,proto3" json:"nsid,omitempty"`
+	Uuid          string                 `protobuf:"bytes,3,opt,name=uuid,proto3" json:"uuid,omitempty"`
+	Endpoints     []*Endpoint            `protobuf:"bytes,4,rep,name=endpoints,proto3" json:"endpoints,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Connection) Reset() {
+	*x = Connection{}
+	mi := &file_export_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Connection) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Connection) ProtoMessage() {}
+
+func (x *Connection) ProtoReflect() protoreflect.Message {
+	mi := &file_export_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Connection.ProtoReflect.Descriptor instead.
+func (*Connection) Descriptor() ([]byte, []int) {
+	return file_export_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *Connection) GetNqn() string {
+	if x != nil {
+		return x.Nqn
+	}
+	return ""
+}
+
+func (x *Connection) GetNsid() uint32 {
+	if x != nil {
+		return x.Nsid
+	}
+	return 0
+}
+
+func (x *Connection) GetUuid() string {
+	if x != nil {
+		return x.Uuid
+	}
+	return ""
+}
+
+func (x *Connection) GetEndpoints() []*Endpoint {
+	if x != nil {
+		return x.Endpoints
+	}
+	return nil
+}
+
+// Endpoint mirrors lvol.Endpoint, one path to the subsystem. The two timeouts
+// are optional because zero ("fail at once") and unset ("the connector's
+// default") behave differently.
+type Endpoint struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Transport         string                 `protobuf:"bytes,1,opt,name=transport,proto3" json:"transport,omitempty"`
+	Address           string                 `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
+	Port              int32                  `protobuf:"varint,3,opt,name=port,proto3" json:"port,omitempty"`
+	NrIoQueues        int32                  `protobuf:"varint,4,opt,name=nr_io_queues,json=nrIoQueues,proto3" json:"nr_io_queues,omitempty"`
+	ReconnectDelaySec int32                  `protobuf:"varint,5,opt,name=reconnect_delay_sec,json=reconnectDelaySec,proto3" json:"reconnect_delay_sec,omitempty"`
+	KeepAliveTmoSec   int32                  `protobuf:"varint,6,opt,name=keep_alive_tmo_sec,json=keepAliveTmoSec,proto3" json:"keep_alive_tmo_sec,omitempty"`
+	CtrlLossTmoSec    *int32                 `protobuf:"varint,7,opt,name=ctrl_loss_tmo_sec,json=ctrlLossTmoSec,proto3,oneof" json:"ctrl_loss_tmo_sec,omitempty"`
+	FastIoFailTmoSec  *int32                 `protobuf:"varint,8,opt,name=fast_io_fail_tmo_sec,json=fastIoFailTmoSec,proto3,oneof" json:"fast_io_fail_tmo_sec,omitempty"`
+	HostIface         string                 `protobuf:"bytes,9,opt,name=host_iface,json=hostIface,proto3" json:"host_iface,omitempty"`
+	Tls               bool                   `protobuf:"varint,10,opt,name=tls,proto3" json:"tls,omitempty"`
+	DhchapSecret      string                 `protobuf:"bytes,11,opt,name=dhchap_secret,json=dhchapSecret,proto3" json:"dhchap_secret,omitempty"`
+	DhchapCtrlSecret  string                 `protobuf:"bytes,12,opt,name=dhchap_ctrl_secret,json=dhchapCtrlSecret,proto3" json:"dhchap_ctrl_secret,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *Endpoint) Reset() {
+	*x = Endpoint{}
+	mi := &file_export_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Endpoint) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Endpoint) ProtoMessage() {}
+
+func (x *Endpoint) ProtoReflect() protoreflect.Message {
+	mi := &file_export_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Endpoint.ProtoReflect.Descriptor instead.
+func (*Endpoint) Descriptor() ([]byte, []int) {
+	return file_export_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *Endpoint) GetTransport() string {
+	if x != nil {
+		return x.Transport
+	}
+	return ""
+}
+
+func (x *Endpoint) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
+}
+
+func (x *Endpoint) GetPort() int32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *Endpoint) GetNrIoQueues() int32 {
+	if x != nil {
+		return x.NrIoQueues
+	}
+	return 0
+}
+
+func (x *Endpoint) GetReconnectDelaySec() int32 {
+	if x != nil {
+		return x.ReconnectDelaySec
+	}
+	return 0
+}
+
+func (x *Endpoint) GetKeepAliveTmoSec() int32 {
+	if x != nil {
+		return x.KeepAliveTmoSec
+	}
+	return 0
+}
+
+func (x *Endpoint) GetCtrlLossTmoSec() int32 {
+	if x != nil && x.CtrlLossTmoSec != nil {
+		return *x.CtrlLossTmoSec
+	}
+	return 0
+}
+
+func (x *Endpoint) GetFastIoFailTmoSec() int32 {
+	if x != nil && x.FastIoFailTmoSec != nil {
+		return *x.FastIoFailTmoSec
+	}
+	return 0
+}
+
+func (x *Endpoint) GetHostIface() string {
+	if x != nil {
+		return x.HostIface
+	}
+	return ""
+}
+
+func (x *Endpoint) GetTls() bool {
+	if x != nil {
+		return x.Tls
+	}
+	return false
+}
+
+func (x *Endpoint) GetDhchapSecret() string {
+	if x != nil {
+		return x.DhchapSecret
+	}
+	return ""
+}
+
+func (x *Endpoint) GetDhchapCtrlSecret() string {
+	if x != nil {
+		return x.DhchapCtrlSecret
+	}
+	return ""
+}
+
 type CreateExportRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Spec          *ExportSpec            `protobuf:"bytes,1,opt,name=spec,proto3" json:"spec,omitempty"`
@@ -156,7 +385,7 @@ type CreateExportRequest struct {
 
 func (x *CreateExportRequest) Reset() {
 	*x = CreateExportRequest{}
-	mi := &file_export_proto_msgTypes[1]
+	mi := &file_export_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -168,7 +397,7 @@ func (x *CreateExportRequest) String() string {
 func (*CreateExportRequest) ProtoMessage() {}
 
 func (x *CreateExportRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_export_proto_msgTypes[1]
+	mi := &file_export_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -181,7 +410,7 @@ func (x *CreateExportRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateExportRequest.ProtoReflect.Descriptor instead.
 func (*CreateExportRequest) Descriptor() ([]byte, []int) {
-	return file_export_proto_rawDescGZIP(), []int{1}
+	return file_export_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *CreateExportRequest) GetSpec() *ExportSpec {
@@ -199,7 +428,7 @@ type CreateExportResponse struct {
 
 func (x *CreateExportResponse) Reset() {
 	*x = CreateExportResponse{}
-	mi := &file_export_proto_msgTypes[2]
+	mi := &file_export_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -211,7 +440,7 @@ func (x *CreateExportResponse) String() string {
 func (*CreateExportResponse) ProtoMessage() {}
 
 func (x *CreateExportResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_export_proto_msgTypes[2]
+	mi := &file_export_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -224,7 +453,7 @@ func (x *CreateExportResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateExportResponse.ProtoReflect.Descriptor instead.
 func (*CreateExportResponse) Descriptor() ([]byte, []int) {
-	return file_export_proto_rawDescGZIP(), []int{2}
+	return file_export_proto_rawDescGZIP(), []int{4}
 }
 
 type DeleteExportRequest struct {
@@ -236,7 +465,7 @@ type DeleteExportRequest struct {
 
 func (x *DeleteExportRequest) Reset() {
 	*x = DeleteExportRequest{}
-	mi := &file_export_proto_msgTypes[3]
+	mi := &file_export_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -248,7 +477,7 @@ func (x *DeleteExportRequest) String() string {
 func (*DeleteExportRequest) ProtoMessage() {}
 
 func (x *DeleteExportRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_export_proto_msgTypes[3]
+	mi := &file_export_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -261,7 +490,7 @@ func (x *DeleteExportRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteExportRequest.ProtoReflect.Descriptor instead.
 func (*DeleteExportRequest) Descriptor() ([]byte, []int) {
-	return file_export_proto_rawDescGZIP(), []int{3}
+	return file_export_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *DeleteExportRequest) GetSpec() *ExportSpec {
@@ -279,7 +508,7 @@ type DeleteExportResponse struct {
 
 func (x *DeleteExportResponse) Reset() {
 	*x = DeleteExportResponse{}
-	mi := &file_export_proto_msgTypes[4]
+	mi := &file_export_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -291,7 +520,7 @@ func (x *DeleteExportResponse) String() string {
 func (*DeleteExportResponse) ProtoMessage() {}
 
 func (x *DeleteExportResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_export_proto_msgTypes[4]
+	mi := &file_export_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -304,7 +533,7 @@ func (x *DeleteExportResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteExportResponse.ProtoReflect.Descriptor instead.
 func (*DeleteExportResponse) Descriptor() ([]byte, []int) {
-	return file_export_proto_rawDescGZIP(), []int{4}
+	return file_export_proto_rawDescGZIP(), []int{6}
 }
 
 type CheckExportRequest struct {
@@ -316,7 +545,7 @@ type CheckExportRequest struct {
 
 func (x *CheckExportRequest) Reset() {
 	*x = CheckExportRequest{}
-	mi := &file_export_proto_msgTypes[5]
+	mi := &file_export_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -328,7 +557,7 @@ func (x *CheckExportRequest) String() string {
 func (*CheckExportRequest) ProtoMessage() {}
 
 func (x *CheckExportRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_export_proto_msgTypes[5]
+	mi := &file_export_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -341,7 +570,7 @@ func (x *CheckExportRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckExportRequest.ProtoReflect.Descriptor instead.
 func (*CheckExportRequest) Descriptor() ([]byte, []int) {
-	return file_export_proto_rawDescGZIP(), []int{5}
+	return file_export_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *CheckExportRequest) GetSpec() *ExportSpec {
@@ -363,7 +592,7 @@ type CheckExportResponse struct {
 
 func (x *CheckExportResponse) Reset() {
 	*x = CheckExportResponse{}
-	mi := &file_export_proto_msgTypes[6]
+	mi := &file_export_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -375,7 +604,7 @@ func (x *CheckExportResponse) String() string {
 func (*CheckExportResponse) ProtoMessage() {}
 
 func (x *CheckExportResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_export_proto_msgTypes[6]
+	mi := &file_export_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -388,7 +617,7 @@ func (x *CheckExportResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckExportResponse.ProtoReflect.Descriptor instead.
 func (*CheckExportResponse) Descriptor() ([]byte, []int) {
-	return file_export_proto_rawDescGZIP(), []int{6}
+	return file_export_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *CheckExportResponse) GetHealthy() bool {
@@ -409,7 +638,7 @@ var File_export_proto protoreflect.FileDescriptor
 
 const file_export_proto_rawDesc = "" +
 	"\n" +
-	"\fexport.proto\x12\x12atlas.nfsexport.v1\"\xc5\x01\n" +
+	"\fexport.proto\x12\x12atlas.nfsexport.v1\"\xa0\x02\n" +
 	"\n" +
 	"ExportSpec\x12\x1f\n" +
 	"\vvolume_uuid\x18\x01 \x01(\tR\n" +
@@ -420,7 +649,35 @@ const file_export_proto_rawDesc = "" +
 	"\n" +
 	"cluster_id\x18\x05 \x01(\tR\tclusterId\x12\x17\n" +
 	"\apool_id\x18\x06 \x01(\tR\x06poolId\x12\x1c\n" +
-	"\tencrypted\x18\a \x01(\bR\tencrypted\"I\n" +
+	"\tencrypted\x18\a \x01(\bR\tencrypted\x12\x19\n" +
+	"\bhost_nqn\x18\b \x01(\tR\ahostNqn\x12>\n" +
+	"\n" +
+	"connection\x18\t \x01(\v2\x1e.atlas.nfsexport.v1.ConnectionR\n" +
+	"connection\"\x82\x01\n" +
+	"\n" +
+	"Connection\x12\x10\n" +
+	"\x03nqn\x18\x01 \x01(\tR\x03nqn\x12\x12\n" +
+	"\x04nsid\x18\x02 \x01(\rR\x04nsid\x12\x12\n" +
+	"\x04uuid\x18\x03 \x01(\tR\x04uuid\x12:\n" +
+	"\tendpoints\x18\x04 \x03(\v2\x1c.atlas.nfsexport.v1.EndpointR\tendpoints\"\xed\x03\n" +
+	"\bEndpoint\x12\x1c\n" +
+	"\ttransport\x18\x01 \x01(\tR\ttransport\x12\x18\n" +
+	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x12\n" +
+	"\x04port\x18\x03 \x01(\x05R\x04port\x12 \n" +
+	"\fnr_io_queues\x18\x04 \x01(\x05R\n" +
+	"nrIoQueues\x12.\n" +
+	"\x13reconnect_delay_sec\x18\x05 \x01(\x05R\x11reconnectDelaySec\x12+\n" +
+	"\x12keep_alive_tmo_sec\x18\x06 \x01(\x05R\x0fkeepAliveTmoSec\x12.\n" +
+	"\x11ctrl_loss_tmo_sec\x18\a \x01(\x05H\x00R\x0ectrlLossTmoSec\x88\x01\x01\x123\n" +
+	"\x14fast_io_fail_tmo_sec\x18\b \x01(\x05H\x01R\x10fastIoFailTmoSec\x88\x01\x01\x12\x1d\n" +
+	"\n" +
+	"host_iface\x18\t \x01(\tR\thostIface\x12\x10\n" +
+	"\x03tls\x18\n" +
+	" \x01(\bR\x03tls\x12#\n" +
+	"\rdhchap_secret\x18\v \x01(\tR\fdhchapSecret\x12,\n" +
+	"\x12dhchap_ctrl_secret\x18\f \x01(\tR\x10dhchapCtrlSecretB\x14\n" +
+	"\x12_ctrl_loss_tmo_secB\x17\n" +
+	"\x15_fast_io_fail_tmo_sec\"I\n" +
 	"\x13CreateExportRequest\x122\n" +
 	"\x04spec\x18\x01 \x01(\v2\x1e.atlas.nfsexport.v1.ExportSpecR\x04spec\"\x16\n" +
 	"\x14CreateExportResponse\"I\n" +
@@ -449,31 +706,35 @@ func file_export_proto_rawDescGZIP() []byte {
 	return file_export_proto_rawDescData
 }
 
-var file_export_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_export_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_export_proto_goTypes = []any{
 	(*ExportSpec)(nil),           // 0: atlas.nfsexport.v1.ExportSpec
-	(*CreateExportRequest)(nil),  // 1: atlas.nfsexport.v1.CreateExportRequest
-	(*CreateExportResponse)(nil), // 2: atlas.nfsexport.v1.CreateExportResponse
-	(*DeleteExportRequest)(nil),  // 3: atlas.nfsexport.v1.DeleteExportRequest
-	(*DeleteExportResponse)(nil), // 4: atlas.nfsexport.v1.DeleteExportResponse
-	(*CheckExportRequest)(nil),   // 5: atlas.nfsexport.v1.CheckExportRequest
-	(*CheckExportResponse)(nil),  // 6: atlas.nfsexport.v1.CheckExportResponse
+	(*Connection)(nil),           // 1: atlas.nfsexport.v1.Connection
+	(*Endpoint)(nil),             // 2: atlas.nfsexport.v1.Endpoint
+	(*CreateExportRequest)(nil),  // 3: atlas.nfsexport.v1.CreateExportRequest
+	(*CreateExportResponse)(nil), // 4: atlas.nfsexport.v1.CreateExportResponse
+	(*DeleteExportRequest)(nil),  // 5: atlas.nfsexport.v1.DeleteExportRequest
+	(*DeleteExportResponse)(nil), // 6: atlas.nfsexport.v1.DeleteExportResponse
+	(*CheckExportRequest)(nil),   // 7: atlas.nfsexport.v1.CheckExportRequest
+	(*CheckExportResponse)(nil),  // 8: atlas.nfsexport.v1.CheckExportResponse
 }
 var file_export_proto_depIdxs = []int32{
-	0, // 0: atlas.nfsexport.v1.CreateExportRequest.spec:type_name -> atlas.nfsexport.v1.ExportSpec
-	0, // 1: atlas.nfsexport.v1.DeleteExportRequest.spec:type_name -> atlas.nfsexport.v1.ExportSpec
-	0, // 2: atlas.nfsexport.v1.CheckExportRequest.spec:type_name -> atlas.nfsexport.v1.ExportSpec
-	1, // 3: atlas.nfsexport.v1.ExportService.CreateExport:input_type -> atlas.nfsexport.v1.CreateExportRequest
-	3, // 4: atlas.nfsexport.v1.ExportService.DeleteExport:input_type -> atlas.nfsexport.v1.DeleteExportRequest
-	5, // 5: atlas.nfsexport.v1.ExportService.CheckExport:input_type -> atlas.nfsexport.v1.CheckExportRequest
-	2, // 6: atlas.nfsexport.v1.ExportService.CreateExport:output_type -> atlas.nfsexport.v1.CreateExportResponse
-	4, // 7: atlas.nfsexport.v1.ExportService.DeleteExport:output_type -> atlas.nfsexport.v1.DeleteExportResponse
-	6, // 8: atlas.nfsexport.v1.ExportService.CheckExport:output_type -> atlas.nfsexport.v1.CheckExportResponse
-	6, // [6:9] is the sub-list for method output_type
-	3, // [3:6] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	1, // 0: atlas.nfsexport.v1.ExportSpec.connection:type_name -> atlas.nfsexport.v1.Connection
+	2, // 1: atlas.nfsexport.v1.Connection.endpoints:type_name -> atlas.nfsexport.v1.Endpoint
+	0, // 2: atlas.nfsexport.v1.CreateExportRequest.spec:type_name -> atlas.nfsexport.v1.ExportSpec
+	0, // 3: atlas.nfsexport.v1.DeleteExportRequest.spec:type_name -> atlas.nfsexport.v1.ExportSpec
+	0, // 4: atlas.nfsexport.v1.CheckExportRequest.spec:type_name -> atlas.nfsexport.v1.ExportSpec
+	3, // 5: atlas.nfsexport.v1.ExportService.CreateExport:input_type -> atlas.nfsexport.v1.CreateExportRequest
+	5, // 6: atlas.nfsexport.v1.ExportService.DeleteExport:input_type -> atlas.nfsexport.v1.DeleteExportRequest
+	7, // 7: atlas.nfsexport.v1.ExportService.CheckExport:input_type -> atlas.nfsexport.v1.CheckExportRequest
+	4, // 8: atlas.nfsexport.v1.ExportService.CreateExport:output_type -> atlas.nfsexport.v1.CreateExportResponse
+	6, // 9: atlas.nfsexport.v1.ExportService.DeleteExport:output_type -> atlas.nfsexport.v1.DeleteExportResponse
+	8, // 10: atlas.nfsexport.v1.ExportService.CheckExport:output_type -> atlas.nfsexport.v1.CheckExportResponse
+	8, // [8:11] is the sub-list for method output_type
+	5, // [5:8] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_export_proto_init() }
@@ -481,13 +742,14 @@ func file_export_proto_init() {
 	if File_export_proto != nil {
 		return
 	}
+	file_export_proto_msgTypes[2].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_export_proto_rawDesc), len(file_export_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

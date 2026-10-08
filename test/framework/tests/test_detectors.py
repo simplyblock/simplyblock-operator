@@ -21,12 +21,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sbtest.core import (  # noqa: E402
     AnaSample,
     Attribution,
+    BlockSample,
     ControlEvent,
+    Finding,
     FioJob,
     IopsSample,
     LogSpan,
     Migration,
     NvmeController,
+    PnfsVolume,
     Report,
     Severity,
     SkipDetector,
@@ -65,6 +68,9 @@ class FakeEvidence:
         window: tuple[datetime | None, datetime | None] = (None, None),
         events: list[ControlEvent] | None = None,
         spans: list[LogSpan] | None = None,
+        nfs: dict[str, dict[str, int]] | None = None,
+        blocks: list[BlockSample] | None = None,
+        pnfs: list[PnfsVolume] | None = None,
     ) -> None:
         self.run_id = run_id
         self.outdir = outdir
@@ -79,6 +85,9 @@ class FakeEvidence:
         self._window = window
         self._events = events or []
         self._spans = spans
+        self._nfs = nfs or {}
+        self._blocks = blocks or []
+        self._pnfs = pnfs or []
 
     def migrations(self) -> list[Migration]:
         return list(self._migrations)
@@ -105,7 +114,17 @@ class FakeEvidence:
         return list(self._ctrls)
 
     def pods(self) -> list[str]:
-        return sorted(set(self._fio_logs) | {j.pod for j in self._jobs} | set(self._series))
+        return sorted(set(self._fio_logs) | {j.pod for j in self._jobs} | set(self._series)
+                      | set(self._nfs))
+
+    def nfs_ops(self, pod: str) -> dict[str, int]:
+        return dict(self._nfs.get(pod, {}))
+
+    def block_samples(self) -> list[BlockSample]:
+        return list(self._blocks)
+
+    def pnfs_volumes(self) -> list[PnfsVolume]:
+        return list(self._pnfs)
 
     def cluster_uuid(self) -> str:
         return self._cluster
@@ -581,6 +600,45 @@ def dmesg(*msgs: str, day: int = 20, start: int = 0) -> list[str]:
             for i, m in enumerate(msgs)]
 
 
+def iso_dmesg(*lines: tuple[str, str]) -> list[str]:
+    """dmesg --time-format=iso lines, each given as (HH:MM:SS on Aug 20, message)."""
+    return [f"2026-08-20T{t},000000+00:00 {m}\n" for t, m in lines]
+
+
+class KernelClockOffset(unittest.TestCase):
+    """The kernel's timestamps drift from wall time, and the collector's marker corrects them.
+
+    dmesg renders a line's time from the boot time and the kernel's own clock, which is not
+    NTP-disciplined: lab-talos nodes up for 43 to 129 days measured 61s to 182s behind. Placed
+    against the run window uncorrected, the first minutes of a run read as before it, and
+    what the run broke is reported as inherited.
+    """
+
+    RUN = (datetime(2026, 8, 20, 5, 50, 0, tzinfo=UTC), datetime(2026, 8, 20, 6, 0, 0, tzinfo=UTC))
+    FAILING = "block nvme0n1: no available path - failing I/O"
+    #: Written at wall 05:55:00, rendered at 05:53:00: the kernel is two minutes behind.
+    MARKER = ("05:53:00", "sbtest-clock-probe wall=2026-08-20T05:55:00+00:00")
+
+    def failing(self, log: list[str]) -> Finding:
+        ev = FakeEvidence(window=self.RUN, logs={"dmesg-vm03": log})
+        found = [f for f in build_detector("kernel.path-loss").detect(ev)
+                 if f.evidence.get("failing_io")]
+        self.assertEqual(len(found), 1)
+        return found[0]
+
+    def test_an_event_rendered_before_the_run_but_inside_it_by_wall_time_is_the_runs(self):
+        found = self.failing(iso_dmesg(("05:48:30", self.FAILING), self.MARKER))
+        self.assertIs(found.attribution, Attribution.RUN)
+
+    def test_an_event_before_the_run_by_wall_time_stays_inherited(self):
+        found = self.failing(iso_dmesg(("05:45:00", self.FAILING), self.MARKER))
+        self.assertIs(found.attribution, Attribution.PRE_EXISTING)
+
+    def test_without_a_marker_the_rendered_time_is_taken_as_it_is(self):
+        found = self.failing(iso_dmesg(("05:48:30", self.FAILING)))
+        self.assertIs(found.attribution, Attribution.PRE_EXISTING)
+
+
 class KernelPathLoss(unittest.TestCase):
     """The ladder: requeue (absorbed) -> failfast -> failing I/O (application-visible)."""
 
@@ -944,3 +1002,111 @@ class SecuritySecretExposure(unittest.TestCase):
     def test_ordinary_logs_are_clean(self):
         ev = FakeEvidence(logs={"operator": ["migration started for volume abc\n"]})
         self.assertEqual(list(build_detector("security.secret-exposure").detect(ev)), [])
+
+
+class PnfsLayout(unittest.TestCase):
+    """pNFS that silently became plain NFS passes every fio check: the data is right, it
+    just went through the metadata server. The layout counters are the only witness."""
+
+    def _found(self, nfs: dict[str, dict[str, int]]) -> list:
+        return list(build_detector("pnfs.layout").detect(FakeEvidence(nfs=nfs)))
+
+    def test_a_mount_that_fetched_no_layout_fails_the_run(self):
+        found = self._found({"r-fio-0-c0": {"LAYOUTGET": 0, "WRITE": 4096, "READ": 900}})
+        self.assertEqual([(f.severity, f.subject) for f in found],
+                         [(Severity.CRITICAL, "r-fio-0-c0")])
+
+    def test_data_through_the_server_beside_layouts_is_a_warning(self):
+        found = self._found({"r-fio-0-c0": {"LAYOUTGET": 4, "WRITE": 12, "READ": 0}})
+        self.assertEqual([f.severity for f in found], [Severity.WARNING])
+        self.assertEqual(found[0].evidence["server_io_ops"], 12)
+
+    def test_layouts_and_no_server_io_is_clean(self):
+        self.assertEqual(self._found({"r-fio-0-c0": {"LAYOUTGET": 2, "WRITE": 0, "READ": 0}}),
+                         [])
+
+    def test_a_run_without_nfs_mounts_is_skipped_not_clean(self):
+        with self.assertRaises(SkipDetector):
+            list(build_detector("pnfs.layout").detect(FakeEvidence()))
+
+
+def blk(node: str, off: int, rd: int, wr: int, uuid: str = "lv1") -> BlockSample:
+    return BlockSample(ts=ts(off), node=node, device="nvme0n1", uuid=uuid,
+                       read_ios=rd, read_sectors=rd * 8, write_ios=wr, write_sectors=wr * 8)
+
+
+class PnfsDeviceIO(unittest.TestCase):
+    """With pNFS doing its job, the client writes to its own NVMe-oF namespace. A client
+    whose namespace stays flat while fio runs sent its data through the metadata server."""
+
+    VOL = PnfsVolume(claim="c1", lvol="lv1", shared=True, nodes=["w1", "w2"])
+
+    def _found(self, blocks: list[BlockSample], jobs: list[FioJob] | None = None,
+               vol: PnfsVolume | None = None, **opts: object) -> list:
+        ev = FakeEvidence(blocks=blocks, pnfs=[vol or self.VOL], jobs=jobs)
+        return list(build_detector("pnfs.device-io", **opts).detect(ev))
+
+    def test_growing_reads_and_writes_on_every_client_node_is_clean(self):
+        blocks = [blk(n, off, off * 10, off * 5) for n in ("w1", "w2") for off in (0, 10, 20)]
+        self.assertEqual(self._found(blocks), [])
+
+    def test_a_client_whose_namespace_stayed_flat_fails(self):
+        blocks = ([blk("w1", off, off * 10, off * 5) for off in (0, 10, 20)]
+                  + [blk("w2", off, 7, 3) for off in (0, 10, 20)])
+        found = self._found(blocks)
+        self.assertEqual([(f.severity, f.subject) for f in found],
+                         [(Severity.CRITICAL, "c1@w2")])
+
+    def test_a_client_without_the_namespace_attached_fails(self):
+        found = self._found([blk("w1", off, off * 10, off * 5) for off in (0, 10, 20)])
+        self.assertEqual([(f.severity, f.subject) for f in found],
+                         [(Severity.CRITICAL, "c1@w2")])
+        self.assertIn("not attached", found[0].title)
+
+    def test_writes_that_stalled_mid_run_are_a_warning(self):
+        offs = (0, 10, 20, 100, 110)
+        blocks = ([blk("w1", o, o * 10, o * 5) for o in offs]
+                  + [blk("w2", o, o * 10, 50 if o <= 100 else o * 5) for o in offs])
+        found = self._found(blocks, max_stall_s=60)
+        self.assertEqual([(f.severity, f.subject) for f in found],
+                         [(Severity.WARNING, "c1@w2")])
+
+    def test_writes_that_stopped_and_never_resumed_fail(self):
+        """The shape an MDS restart left: the client's writes stopped mid-run and its I/O
+        went through the server until fio ended. A pause that ends is a warning, one that
+        lasts to the end of the run is the direct path lost."""
+        offs = (0, 10, 20, 100, 200)
+        blocks = ([blk("w1", o, o * 10, o * 5) for o in offs]
+                  + [blk("w2", o, min(o, 20) * 10, min(o, 20) * 5) for o in offs])
+        found = self._found(blocks, max_stall_s=60)
+        self.assertEqual([(f.severity, f.subject) for f in found],
+                         [(Severity.CRITICAL, "c1@w2")])
+        self.assertIn("never resumed", found[0].title)
+
+    def test_reads_are_not_required_when_the_run_did_not_read(self):
+        blocks = [blk(n, off, 0, off * 5) for n in ("w1", "w2") for off in (0, 10, 20)]
+        self.assertEqual(self._found(blocks, require_reads=False), [])
+
+    def test_a_run_without_samples_is_skipped_not_clean(self):
+        with self.assertRaises(SkipDetector):
+            self._found([])
+
+    def test_a_quiet_device_after_its_instances_finished_is_not_a_stall(self):
+        """Each fio counts its runtime from its own start, so on a node whose instances began
+        early the device goes quiet before the run ends. That is fio being done."""
+        vol = PnfsVolume(claim="c1", lvol="lv1", shared=True, nodes=["w1"],
+                         instances={"r-fio-0-c0": "w1"})
+        offs = (0, 10, 20, 30, 110)
+        blocks = [blk("w1", o, o * 10 + 1, min(o, 30) * 5 + 1) for o in offs]
+        jobs = [FioJob(pod="r-fio-0-c0", start=ts(0), runtime_s=30)]
+        self.assertEqual(self._found(blocks, jobs=jobs, vol=vol, max_stall_s=60), [])
+
+    def test_a_stall_while_its_instances_ran_is_still_one(self):
+        vol = PnfsVolume(claim="c1", lvol="lv1", shared=True, nodes=["w1"],
+                         instances={"r-fio-0-c0": "w1"})
+        offs = (0, 10, 100, 110, 200)
+        blocks = [blk("w1", o, o * 10 + 1, (5 if o <= 100 else o) * 5) for o in offs]
+        jobs = [FioJob(pod="r-fio-0-c0", start=ts(0), runtime_s=200)]
+        found = self._found(blocks, jobs=jobs, vol=vol, max_stall_s=60)
+        self.assertEqual([f.severity for f in found], [Severity.WARNING])
+

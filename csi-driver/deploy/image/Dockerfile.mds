@@ -1,0 +1,72 @@
+# The pNFS metadata server image: QEMU, the guest with mds-agent in it, and
+# mds-runner, built per architecture (design-pnfs-mds-vm.md §5.6).
+#
+# The guest kernel and root filesystem are built by pnfs-os (vela-os,
+# boards/pnfs-common) and published as GUEST_IMAGE, spdkcsi:pnfsos: a
+# multi-architecture manifest of scratch images, each holding /vmlinuz and
+# /disk.qcow2 for one architecture. This image only assembles
+# them with QEMU and the runner, so a guest change does not rebuild Go and a
+# runner change does not rebuild buildroot. The build context is the repository
+# root, like the CSI image, because mds-runner needs the sibling atlas-lib
+# module.
+
+ARG GUEST_IMAGE=simplyblock/spdkcsi:pnfsos
+
+FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /workspace
+COPY atlas-lib/go.mod atlas-lib/go.sum /atlas-lib/
+COPY csi-driver/go.mod csi-driver/go.sum ./
+RUN go mod download
+COPY atlas-lib/ /atlas-lib/
+COPY csi-driver/cmd/ cmd/
+COPY csi-driver/internal/ internal/
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -o mds-runner ./cmd/mds-runner/ && \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -o mds-agent ./cmd/mds-agent/
+
+FROM ${GUEST_IMAGE} AS guest
+
+# The agent is written into the guest's root filesystem here rather than built
+# into the guest image, so it is always the runner's version and the guest
+# image does not follow operator releases. debugfs edits the ext4 image in
+# place, which needs no loop mount and no privileges. Nothing here depends on
+# the target architecture except the agent binary, which the builder made for
+# it, so this stage runs natively.
+FROM --platform=$BUILDPLATFORM alpine:3.23 AS disk
+RUN apk add --no-cache qemu-img e2fsprogs e2fsprogs-extra
+WORKDIR /work
+COPY --from=guest /disk.qcow2 /work/guest.qcow2
+COPY --from=builder /workspace/mds-agent /work/mds-agent
+RUN set -eu; \
+    qemu-img convert -f qcow2 -O raw guest.qcow2 disk.raw; \
+    debugfs -w -R "write /work/mds-agent /usr/bin/mds-agent" disk.raw; \
+    debugfs -w -R "sif /usr/bin/mds-agent mode 0100755" disk.raw; \
+    debugfs -R "stat /usr/bin/mds-agent" disk.raw | grep -q "Mode:  0755"; \
+    e2fsck -fn disk.raw; \
+    qemu-img convert -f raw -O qcow2 -o cluster_size=2M,lazy_refcounts=on disk.raw disk.qcow2
+
+FROM alpine:3.23
+ARG TARGETARCH
+LABEL name="simplyblock-pnfs-mds"
+LABEL vendor="Simplyblock"
+LABEL summary="simplyblock pNFS metadata server"
+LABEL description="Runs the pNFS metadata server guest under KVM"
+LABEL maintainer="developers@simplyblock.io"
+
+# Only the target's own emulator: KVM cannot run a foreign architecture.
+# aavmf is the UEFI firmware an arm64 guest needs for ACPI. iptables carries
+# the pod's DNAT and masquerade rules.
+RUN set -eu; \
+    case "${TARGETARCH}" in \
+        amd64) apk add --no-cache qemu-system-x86_64 ;; \
+        arm64) apk add --no-cache qemu-system-aarch64 aavmf ;; \
+        *) echo "unsupported architecture ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    apk add --no-cache iptables
+
+COPY --from=guest /vmlinuz /mds/kernel/vmlinuz
+COPY --from=disk /work/disk.qcow2 /mds/disk.qcow2
+COPY --from=builder --chmod=0755 /workspace/mds-runner /usr/bin/mds-runner
+
+ENTRYPOINT ["/usr/bin/mds-runner"]

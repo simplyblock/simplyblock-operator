@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/lvol"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -118,6 +119,10 @@ func (r *PersistentVolumeOpsReconciler) addressOf(
 			pv.Name, pv.Spec.CSI.Driver)
 	}
 
+	if IsPNFS(pv) {
+		return lvol.Handle{}, fatalf("%s", PNFSRefusal(pv.Name))
+	}
+
 	handle, ok := lvol.ParseHandle(lvol.VolumeHandle(pv.Spec.CSI.VolumeHandle))
 	if !ok {
 		return lvol.Handle{}, fatalf(
@@ -125,6 +130,29 @@ func (r *PersistentVolumeOpsReconciler) addressOf(
 			pv.Name, pv.Spec.CSI.VolumeHandle)
 	}
 	return handle, nil
+}
+
+// IsPNFS reports whether the volume is served by a pNFS export.
+//
+// Its handle is the backing logical volume's own, so nothing else about the
+// volume tells it apart. The fsType is what the driver decided pNFS on at
+// provisioning, and the provisioner copies it onto the volume, where it is
+// immutable.
+func IsPNFS(pv *corev1.PersistentVolume) bool {
+	return pv.Spec.CSI != nil && pv.Spec.CSI.FSType == kube.FSTypePNFS
+}
+
+// PNFSRefusal is why a pNFS volume is not migrated, in the words both the
+// admission webhook and the reconciler use.
+//
+// The backing logical volume can move. The export in front of it cannot
+// follow: the metadata server and every client node hold their own paths to
+// the namespace, and the validation and release Jobs only know a block
+// consumer's.
+func PNFSRefusal(name string) string {
+	return fmt.Sprintf("volume %s is a pNFS volume. The metadata server and every client "+
+		"node hold their own paths to its namespace, and a migration accounts for "+
+		"neither, so it is not moved", name)
 }
 
 // driverNames is the set of CSI drivers whose volumes this operator can move.
