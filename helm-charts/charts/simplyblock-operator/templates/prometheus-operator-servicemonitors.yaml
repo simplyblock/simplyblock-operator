@@ -132,10 +132,31 @@ spec:
     - port: proxy-http
       path: /_meta/metrics
       interval: {{ .Values.prometheusOperator.interval }}
+      {{- if .Values.tls.enabled }}
+      scheme: https
+      tlsConfig:
+        ca:
+          secret:
+            name: simplyblock-ca-bundle-tls
+            key: ca.crt
+        serverName: simplyblock-spdk-proxy
+        {{- if .Values.tls.mutual_enabled }}
+        cert:
+          secret:
+            name: simplyblock-prometheus-client-tls
+            key: tls.crt
+        keySecret:
+          name: simplyblock-prometheus-client-tls
+          key: tls.key
+        {{- end }}
+      {{- end }}
       # proxy-http is the same port the JSON-RPC proxy answers RPCs on, named
       # rather than numbered because each pod binds its own RPC_PORT on the
       # host network. No basicAuth here: unlike the RPC path, /_meta/metrics
-      # on this port is unauthenticated.
+      # on this port carries no HTTP-level credential of its own. It is not
+      # reachable without one, though: the mutual TLS above is what actually
+      # gates it, and a scrape that skips presenting the client certificate
+      # stalls at the handshake rather than getting an HTTP 401.
       #
       # The name itself has no Go constant behind it at all: sbcli's
       # storage_deploy_spdk.yaml.j2 is the sole place it is declared
