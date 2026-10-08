@@ -300,6 +300,54 @@ func TestPVCReconcile_ValidChangeCreatesMigration(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-07-pin-repin-to-previous-target. A move was named from its
+// volume and target alone, so a finished move to the same target was found by
+// name, taken for the new one, and nothing was raised.
+func TestPVCReconcile_RepinToAPreviousTargetRaisesANewMove(t *testing.T) {
+	for _, phase := range []simplyblockv1alpha2.PersistentVolumeOpsPhase{
+		simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded,
+		simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed,
+	} {
+		t.Run(string(phase), func(t *testing.T) {
+			// The volume drifted back to node-a, and is pinned to node-b again.
+			previous := &simplyblockv1alpha2.PersistentVolumeOps{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   pinMigrationName(pinPVName, pinNodeB),
+					Labels: map[string]string{simplyblockv1alpha2.PinnedVolumeLabel: pinPVLabelValue(pinPVName)},
+				},
+				Spec: simplyblockv1alpha2.PersistentVolumeOpsSpec{
+					PersistentVolumeName: pinPVName,
+					Action:               simplyblockv1alpha2.PersistentVolumeOpsActionMigrate,
+				},
+				Status: simplyblockv1alpha2.PersistentVolumeOpsStatus{Phase: phase},
+			}
+			api := pinAPIServer(t, []string{pinNodeA, pinNodeB}, pinNodeA)
+			r, cl := newPVCReconciler(t, api, pinPVC(pinNodeB, pinNodeA), pinPV(), pinClusterCR(),
+				pinStorageNode("node-a", pinNodeA), pinStorageNode("node-b", pinNodeB), previous)
+
+			if _, err := r.Reconcile(context.Background(), pinRequest()); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+
+			var raised, kept int
+			for _, move := range listPinMigrations(t, r) {
+				if move.Phase.Terminal() {
+					kept++
+				} else {
+					raised++
+				}
+			}
+			if raised != 1 || kept != 1 {
+				t.Fatalf("got %d new and %d finished moves, want 1 new and the earlier %s one kept as history",
+					raised, kept, phase)
+			}
+			if got := getPinPVC(t, cl).Annotations[kube.AnnoSelectedStorageNodeApplied]; got != pinNodeB {
+				t.Fatalf("applied = %q, want %q once the move is raised", got, pinNodeB)
+			}
+		})
+	}
+}
+
 func TestPVCReconcile_NoStorageCluster(t *testing.T) {
 	// Valid target and a volume that needs moving, but no StorageCluster CR
 	// manages the cluster → no migration, requeue, applied left unset.

@@ -173,10 +173,11 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(
 // createMigration raises the move of a pinned volume onto its requested node,
 // as whichever kind this deployment runs.
 //
-// The name is deterministic in (volume, target) so a retried reconcile is
-// idempotent, and the move is raised in the owning StorageCluster's namespace:
-// a claim may live in another namespace than its cluster, and a cross-namespace
-// owner reference is invalid.
+// Each call raises a move under a fresh name, so finished moves to the same
+// target stay as history. A retried reconcile does not raise a second one:
+// hasActiveMigration holds it back. The move is raised in the owning
+// StorageCluster's namespace: a claim may live in another namespace than its
+// cluster, and a cross-namespace owner reference is invalid.
 func (r *PersistentVolumeClaimReconciler) createMigration(
 	ctx context.Context,
 	cluster *simplyblockv1alpha2.StorageCluster,
@@ -324,13 +325,12 @@ func containsStorageNode(nodes []webapi.StorageNodeInfo, uuid string) bool {
 	return false
 }
 
-// pinMigrationName is a deterministic, DNS-label-safe VolumeMigration name for a
-// (PV, target) pair. Deterministic so a retried reconcile hits AlreadyExists
-// instead of creating duplicates; target-dependent so a new target yields a new
-// object rather than colliding with a finished migration to the old target.
+// pinMigrationName is a DNS-label-safe move name for a (PV, target) pair: a
+// prefix derived from the pair and a random suffix, so every move is a new object
+// and an earlier move to the same target is never found in its place.
 func pinMigrationName(pvName, target string) string {
 	sum := sha256.Sum256([]byte(pvName + "\x00" + target))
-	return "pvc-pin-" + hex.EncodeToString(sum[:])[:16]
+	return kube.NameWithID("pvc-pin-" + hex.EncodeToString(sum[:])[:16])
 }
 
 // pinPVLabelValue derives a label-safe value from a PV name for PinnedVolumeLabel.
