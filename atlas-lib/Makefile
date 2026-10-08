@@ -17,9 +17,10 @@ CPAPI_GEN := internal/cpapi/cpapi.gen.go internal/cpapi/validation.gen.go
 # generator this one is not a go.mod dependency but a pinned binary in .bin, so
 # the rules take `buf` as an order-only prerequisite: it installs the toolchain
 # when absent without a phony target forcing a regeneration on every make run.
-PROTO_DIRS := link/linkv1 storage/storagerpc/storagev1
+PROTO_DIRS := link/linkv1 storage/storagerpc/storagev1 nfsexport/nfsexportrpc/nfsexportv1
 PROTO_GEN := link/linkv1/link.pb.go link/linkv1/link_grpc.pb.go \
-	storage/storagerpc/storagev1/nvme.pb.go storage/storagerpc/storagev1/nvme_grpc.pb.go
+	storage/storagerpc/storagev1/nvme.pb.go storage/storagerpc/storagev1/nvme_grpc.pb.go \
+	nfsexport/nfsexportrpc/nfsexportv1/export.pb.go nfsexport/nfsexportrpc/nfsexportv1/export_grpc.pb.go
 
 GENERATED := $(CPAPI_GEN) $(PROTO_GEN)
 
@@ -50,6 +51,11 @@ storage/storagerpc/storagev1/nvme.pb.go: storage/storagerpc/storagev1/nvme.proto
 	cd storage/storagerpc/storagev1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
 
 storage/storagerpc/storagev1/nvme_grpc.pb.go: storage/storagerpc/storagev1/nvme.pb.go
+
+nfsexport/nfsexportrpc/nfsexportv1/export.pb.go: nfsexport/nfsexportrpc/nfsexportv1/export.proto nfsexport/nfsexportrpc/nfsexportv1/buf.gen.yaml nfsexport/nfsexportrpc/nfsexportv1/buf.yaml | buf
+	cd nfsexport/nfsexportrpc/nfsexportv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
+
+nfsexport/nfsexportrpc/nfsexportv1/export_grpc.pb.go: nfsexport/nfsexportrpc/nfsexportv1/export.pb.go
 
 build: $(GENERATED) ## Build all packages.
 	go build ./...

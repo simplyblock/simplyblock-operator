@@ -257,6 +257,8 @@ func BuildStorageNodeDaemonSet(
 		readinessProbe.HTTPGet.Scheme = corev1.URISchemeHTTPS
 	}
 
+	livenessProbe := buildStorageNodeAgentLivenessProbe(readinessProbe.HTTPGet, tlsMutualEnabled)
+
 	if tlsEnabled {
 		volumes = append(volumes, buildStorageNodeSetTLSVolume(tlsProvider))
 
@@ -375,6 +377,7 @@ exec python3 simplyblock_web/node_webapp.py storage_node_k8s`,
 							SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true), RunAsUser: ptr.To(int64(0))},
 							Resources:       effectiveResources(wl.ContainerResources, defaultContainerResources),
 							ReadinessProbe:  readinessProbe,
+							LivenessProbe:   livenessProbe,
 							Env:             mainEnv,
 							VolumeMounts:    mainMounts,
 						},
@@ -383,6 +386,53 @@ exec python3 simplyblock_web/node_webapp.py storage_node_k8s`,
 			},
 		},
 	}
+}
+
+// storageNodeAgentTLSAnswerCheck exits 0 when the node agent on port 5000
+// answers a TLS ClientHello within three seconds. A TLS alert counts as an
+// answer: under mutual TLS the agent rejects this certificate-less client,
+// and rejecting it proves its accept loop is running. A timeout or a refused
+// connection exits non-zero.
+const storageNodeAgentTLSAnswerCheck = `import socket, ssl
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+sock = socket.create_connection(("127.0.0.1", 5000), timeout=3)
+try:
+    ctx.wrap_socket(sock).close()
+except TimeoutError:
+    raise
+except ssl.SSLError:
+    pass
+`
+
+// buildStorageNodeAgentLivenessProbe returns the probe that restarts a node
+// agent which has stopped answering. The agent is the control plane's only way
+// to start, stop, and probe SPDK on the worker, so while it hangs the storage
+// node can neither be declared dead nor be restarted.
+//
+// The agent serves TLS from Werkzeug, which runs the handshake inside accept()
+// without a timeout, so one client that connects and goes silent (a network
+// cut between the TCP handshake and the ClientHello) blocks it for good. The
+// probe therefore needs an answer, not a TCP connect: the kernel completes
+// connects against a listener nobody accepts on until its backlog is full.
+//
+// Without mutual TLS the kubelet asks the readiness endpoint over HTTP(S).
+// With it the kubelet's request is refused for lacking a client certificate,
+// so the check runs inside the container and settles for any TLS answer.
+func buildStorageNodeAgentLivenessProbe(httpGet *corev1.HTTPGetAction, tlsMutualEnabled bool) *corev1.Probe {
+	probe := &corev1.Probe{
+		InitialDelaySeconds: 30,
+		PeriodSeconds:       10,
+		TimeoutSeconds:      5,
+		FailureThreshold:    3,
+	}
+	if tlsMutualEnabled {
+		probe.Exec = &corev1.ExecAction{Command: []string{"python3", "-c", storageNodeAgentTLSAnswerCheck}}
+	} else {
+		probe.HTTPGet = httpGet.DeepCopy()
+	}
+	return probe
 }
 
 // buildStorageNodeSetTLSVolume returns a Volume that exposes tls.crt, tls.key,

@@ -297,7 +297,9 @@ func (r *SimplyblockDriverReconciler) desired(
 	for _, crb := range clusterRoleBindings(d) {
 		objects = append(objects, crb)
 	}
-	objects = append(objects, csiAddonsRole(d), csiAddonsRoleBinding(d), csiAddonsAuthDelegatorBinding(d))
+	if csiAddonsEnabled(d) {
+		objects = append(objects, csiAddonsRole(d), csiAddonsRoleBinding(d), csiAddonsAuthDelegatorBinding(d))
+	}
 	objects = append(objects, nodeDaemonSet(d, image), controllerStatefulSet(d, image), csiDriver(d))
 
 	// The class is this deployment's and is applied wherever the kinds exist,

@@ -2,8 +2,8 @@
 namespace: simplyblock-operator-system
 
 # Value of this field is prepended to the
-# names of all resources, e.g. a deployment named
-# "wordpress" becomes "alices-wordpress".
+# names of all resources: a deployment named
+# "wordpress" becomes "alices-wordpress."
 # Note that it should also match with the prefix (text before '-') of the namespace
 # field above.
 namePrefix: simplyblock-operator-
@@ -24,10 +24,12 @@ resources:
 # The aggregated metrics API's APIService and Service. Remove both, and pass
 # --enable-metrics-api=false, to install without the metrics.simplyblock.io group
 - ../apiservice
-# [PROMETHEUS] To enable prometheus monitor, uncomment all sections with 'PROMETHEUS'.
+# To enable the Prometheus monitor, uncomment the Prometheus resources below.
 #- ../prometheus
 # [METRICS] Expose the controller manager metrics service.
 - metrics_service.yaml
+# The endpoint the CSI plugins dial to reach the operator.
+- csi_link_service.yaml
 # [NETWORK POLICY] Protect the /metrics endpoint and Webhook Server with NetworkPolicy.
 # Only Pod(s) running a namespace labeled with 'metrics: enabled' will be able to gather the metrics.
 # Only CR(s) which requires webhooks and are applied on namespaces labeled with 'webhooks: enabled' will
@@ -70,3 +72,19 @@ patches:
 # --conversion` can wire up CA injection for a future ConversionWebhook.
 # +kubebuilder:scaffold:crdkustomizecainjectionns
 # +kubebuilder:scaffold:crdkustomizecainjectionname
+
+# The driver controller points the plugins at a Service named exactly
+# simplyblock-csi-link, and the namePrefix would make it
+# simplyblock-operator-simplyblock-csi-link. Replacements run after the prefix
+# is applied, so this one writes the name from a label the Service carries.
+replacements:
+- source:
+    kind: Service
+    name: simplyblock-operator-csi-link
+    fieldPath: metadata.labels.[simplyblock.io/service-name]
+  targets:
+  - select:
+      kind: Service
+      name: simplyblock-operator-csi-link
+    fieldPaths:
+    - metadata.name

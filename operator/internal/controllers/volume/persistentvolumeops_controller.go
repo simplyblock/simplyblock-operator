@@ -135,6 +135,7 @@ type PersistentVolumeOpsReconciler struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=persistentvolumeops/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=persistentvolumeops/finalizers,verbs=update
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters;storagenodes;simplyblockdrivers,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=patch
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
@@ -177,6 +178,11 @@ func (r *PersistentVolumeOpsReconciler) SetupWithManager(mgr ctrl.Manager) error
 			// phase. What this watch is for is the lock changing hands and the
 			// volume being deleted, and both are visible in metadata.
 			builder.WithPredicates(volumeLockChanged{})).
+		// A released migration slot is what lets the next queued operation of
+		// the cluster start, and nothing else of the operation's own changes.
+		Watches(&simplyblockv1alpha2.StorageCluster{},
+			handler.EnqueueRequestsFromMapFunc(r.queuedOperations),
+			builder.WithPredicates(slotChanged{})).
 		Complete(r)
 }
 
@@ -194,6 +200,26 @@ func (r *PersistentVolumeOpsReconciler) operationsOn(
 		requests = append(requests, reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(&operations.Items[i]),
 		})
+	}
+	return requests
+}
+
+// queuedOperations enqueues every operation that has not started, which is
+// every operation a freed migration slot can let go.
+func (r *PersistentVolumeOpsReconciler) queuedOperations(
+	ctx context.Context, _ client.Object,
+) []reconcile.Request {
+	var operations simplyblockv1alpha2.PersistentVolumeOpsList
+	if err := r.List(ctx, &operations); err != nil {
+		return nil
+	}
+	var requests []reconcile.Request
+	for i := range operations.Items {
+		ops := &operations.Items[i]
+		if terminal(ops.Status.Phase) || ops.Status.Step.State != "" {
+			continue
+		}
+		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(ops)})
 	}
 	return requests
 }
@@ -240,9 +266,42 @@ func (r *PersistentVolumeOpsReconciler) Reconcile(
 		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, &ops, err.Error())
 	}
 
-	lock, err := r.acquireLock(ctx, &ops, subject.pv)
+	// The named volume's pin is read before anything else is waited on, so a
+	// refused operation says so at once rather than after queuing.
+	if ops.Status.Step.State == "" {
+		conflict, err := r.pinConflictOf(ctx, &ops, subject.targetUUID,
+			[]*corev1.PersistentVolume{subject.pv})
+		if err != nil {
+			return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, &ops, err.Error())
+		}
+		if conflict != nil {
+			return ctrl.Result{}, r.refuseForPin(ctx, &ops, conflict)
+		}
+	}
+
+	if ops.Status.Step.State == "" {
+		holder, err := r.acquireSlot(ctx, &ops, subject.cluster)
+		switch {
+		case errors.Is(err, errSlotContended):
+			return ctrl.Result{RequeueAfter: opsAdvance}, nil
+		case err != nil:
+			return ctrl.Result{}, err
+		case holder != "":
+			r.event(&ops, corev1.EventTypeNormal, ReasonOperationQueued,
+				"Cluster %s is migrating a volume for operation %s; this one is waiting",
+				subject.cluster.Name, holder)
+			return ctrl.Result{RequeueAfter: opsRetry}, r.hold(ctx, &ops, fmt.Sprintf(
+				"waiting for operation %s to finish: cluster %s migrates one volume at a time",
+				holder, subject.cluster.Name))
+		}
+	}
+
+	lock, err := r.acquireLock(ctx, &ops, subject.pv, subject.targetUUID)
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if lock.pinned != nil {
+		return ctrl.Result{}, r.refuseForPin(ctx, &ops, lock.pinned)
 	}
 	if !lock.acquired {
 		if lock.holder == "" {
@@ -313,6 +372,10 @@ func (r *PersistentVolumeOpsReconciler) advance(
 			fmt.Sprintf("the volume is already on node %s; nothing was migrated", subject.targetNodeName()))
 	}
 	if err != nil {
+		var superseded *errPinSuperseded
+		if errors.As(err, &superseded) {
+			return r.withdraw(ctx, ops, subject, superseded.Error())
+		}
 		var fatal *terminalStepError
 		if errors.As(err, &fatal) {
 			return r.fail(ctx, ops, subject, fatal.Error())
@@ -433,6 +496,24 @@ func (r *PersistentVolumeOpsReconciler) fail(
 	}
 	r.event(ops, corev1.EventTypeWarning, ReasonOperationFailed, "%s", message)
 	return r.finish(ctx, ops, simplyblockv1alpha2.PersistentVolumeOpsPhaseFailed, message)
+}
+
+// withdraw ends an operation whose request was withdrawn while it ran, the pin
+// it was raised for having been removed or changed. The migration is taken back
+// first, and the operation is Aborted rather than Failed, because nothing went
+// wrong.
+func (r *PersistentVolumeOpsReconciler) withdraw(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.PersistentVolumeOps,
+	subject *subject,
+	message string,
+) (ctrl.Result, error) {
+	if err := r.discardMigration(ctx, ops, subject); err != nil {
+		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops,
+			fmt.Sprintf("%s; the migration is being taken back: %v", message, err))
+	}
+	r.event(ops, corev1.EventTypeNormal, ReasonOperationAborted, "%s", message)
+	return r.finish(ctx, ops, simplyblockv1alpha2.PersistentVolumeOpsPhaseAborted, message)
 }
 
 // abandon ends an operation whose volume went away, which is a stop rather than
@@ -732,5 +813,25 @@ func (volumeLockChanged) Update(e event.TypedUpdateEvent[client.Object]) bool {
 	return e.ObjectOld.GetDeletionTimestamp().IsZero() != e.ObjectNew.GetDeletionTimestamp().IsZero()
 }
 
-// ensure the predicate satisfies the interface it is passed as.
-var _ predicate.TypedPredicate[client.Object] = volumeLockChanged{}
+// slotChanged narrows the cluster watch to the migration slot changing hands.
+type slotChanged struct{}
+
+func (slotChanged) Create(event.TypedCreateEvent[client.Object]) bool { return false }
+
+func (slotChanged) Delete(event.TypedDeleteEvent[client.Object]) bool { return false }
+
+func (slotChanged) Generic(event.TypedGenericEvent[client.Object]) bool { return false }
+
+func (slotChanged) Update(e event.TypedUpdateEvent[client.Object]) bool {
+	if e.ObjectOld == nil || e.ObjectNew == nil {
+		return false
+	}
+	return e.ObjectOld.GetAnnotations()[simplyblockv1alpha2.StorageClusterMigrationSlot] !=
+		e.ObjectNew.GetAnnotations()[simplyblockv1alpha2.StorageClusterMigrationSlot]
+}
+
+// ensure the predicates satisfy the interface they are passed as.
+var (
+	_ predicate.TypedPredicate[client.Object] = volumeLockChanged{}
+	_ predicate.TypedPredicate[client.Object] = slotChanged{}
+)

@@ -91,25 +91,30 @@ func aDraining(
 	return r, apiClient
 }
 
-// A pinned claim stops the drain where nothing has been done yet, and says which
-// annotation to remove from which volume. Blocking here rather than later is
-// what leaves the node fully operational while somebody decides.
-func TestAPinnedVolumeStopsTheDrainBeforeItTouchesTheNode(t *testing.T) {
-	api := aControlPlane().holding(onNode("volume-1", "pvc-abc"))
+// Regression: 2026-10-07-removal-with-pinned-volumes — a removal of a node
+// holding pinned volumes did not fail: Validating held it as blocked, Running,
+// until the step's deadline. A pinned volume cannot be moved, so the removal
+// cannot finish, and it fails at once, before anything touches the node, naming
+// every pinned volume.
+func TestPinnedVolumesFailTheRemovalBeforeItTouchesTheNode(t *testing.T) {
+	api := aControlPlane().holding(onNode("volume-1", "pvc-abc"), onNode("volume-2", "pvc-def"))
 	r, _ := aDraining(t, api, &scriptedMover{},
-		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", true))
+		aPersistentVolume("pv-1", "volume-1"), aClaim("pv-1", true),
+		aPersistentVolume("pv-2", "volume-2"), aClaim("pv-2", true))
 
 	_, err := performing(t, r, aDrain(), stepValidating)
 
-	var blocked *blockedStepError
-	if !errors.As(err, &blocked) {
-		t.Fatalf("err = %v, want the drain held by the pin", err)
+	var fatal *terminalStepError
+	if !errors.As(err, &fatal) {
+		t.Fatalf("err = %v, want the removal failed by the pins", err)
 	}
-	if blocked.reason != DrainBlocked {
-		t.Errorf("the hold is announced as %q, want %q", blocked.reason, DrainBlocked)
+	for _, volume := range []string{"volume-1", "volume-2"} {
+		if !strings.Contains(fatal.Error(), volume) {
+			t.Errorf("message = %q, want it to name pinned volume %s", fatal.Error(), volume)
+		}
 	}
-	if asked := api.asked("PrepareRemoval"); asked != 0 {
-		t.Errorf("prepare-removal was sent %d time(s) for a drain that cannot finish", asked)
+	if asked := api.asked("ShutdownNode") + api.asked("PrepareRemoval"); asked != 0 {
+		t.Errorf("the node was acted on %d time(s) for a removal that cannot finish", asked)
 	}
 }
 

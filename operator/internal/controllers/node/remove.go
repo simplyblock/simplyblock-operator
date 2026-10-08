@@ -129,9 +129,10 @@ func (r *StorageNodeOpsReconciler) nodeGone(
 	return !found, nil
 }
 
-// drainValidate classifies the node's volumes and refuses to go on while any of
-// them is pinned or unmanaged. It performs no side effect at all, which is what
-// makes an abort here an Aborted directly rather than an unwind.
+// drainValidate classifies the node's volumes, fails the removal when any of
+// them is pinned, and refuses to go on while any is unmanaged. It performs no
+// side effect at all, which is what makes an abort here an Aborted directly
+// rather than an unwind.
 //
 // It also writes status.drain.volumesTotal, once, at the end. That is the number
 // every later step's progress is reported against, and fixing it here is what
@@ -157,11 +158,16 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 	drainBlockedVolumesCount.WithLabelValues(cluster, blockedUnmanaged).
 		Set(float64(len(census.Unmanaged)))
 
+	// A pinned volume cannot be moved off the node, so the removal cannot
+	// finish. It fails here, before the shutdown, rather than holding at
+	// Validating until the step's deadline: a removal that reports Running
+	// for a quarter of an hour looks like one that is making progress.
 	if len(census.Pinned) > 0 {
-		return false, blockedf(DrainBlocked,
-			"blocked: %d pinned %s, remove the %s annotation from %s",
-			len(census.Pinned), plural(len(census.Pinned), "volume", "volumes"),
-			kube.AnnoSelectedStorageNode, strings.Join(census.Pinned, ", "))
+		return false, fatalf(
+			"node %s holds %d pinned %s (%s), and a pinned volume cannot be moved; "+
+				"remove or change the %s annotation on their claims, then remove the node again",
+			ops.Spec.NodeRef, len(census.Pinned), plural(len(census.Pinned), "volume", "volumes"),
+			strings.Join(census.Pinned, ", "), kube.AnnoSelectedStorageNode)
 	}
 	if len(census.Unmanaged) > 0 {
 		return false, blockedf(DrainBlocked,

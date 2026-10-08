@@ -195,6 +195,14 @@ deployment.** It defaults to true, and true is the `VolumeSnapshotClass` for
 neither (§4.1). False applies none of them, which is the chart's
 `snapshotclass.create` and `snapshotcontroller.create` as one field.
 
+**`enableCSIAddons` decides whether the controller plugin runs the csi-addons
+sidecar.** It defaults to false. The sidecar publishes a `CSIAddonsNode`, so it
+only works on a cluster that serves the `csiaddons.openshift.io` CRDs, which the
+chart installs only when `csiaddons.create` is set. With the CRDs absent, the
+sidecar restarts in a loop, so the sidecar and the namespaced Role, binding, and
+`system:auth-delegator` binding it needs are applied only when this is true. The
+chart sets it from `csiaddons.create`.
+
 **`tls` decides whether both plugins reach the control plane over TLS**, the
 `tls.enabled`, `tls.mutual_enabled`, and `tls.provider` Helm values as one
 nested struct: `enableTLS`, `enableMutualTLS`, and `provider`. Unset is a
@@ -1194,6 +1202,15 @@ type SimplyblockDriverSpec struct {
 	// +kubebuilder:default=true
 	// +optional
 	EnableVolumeSnapshots *bool `json:"enableVolumeSnapshots,omitempty"`
+
+	// EnableCSIAddons adds the kubernetes-csi-addons sidecar to the controller
+	// plugin, with the Role and bindings it needs. The sidecar publishes a
+	// CSIAddonsNode object, so it only works on a cluster that serves the
+	// csiaddons.openshift.io CRDs. Without them it restarts in a loop, so leave
+	// it false unless those CRDs are installed.
+	// +kubebuilder:default=false
+	// +optional
+	EnableCSIAddons *bool `json:"enableCSIAddons,omitempty"`
 
 	// TLS configures whether both plugins reach the control plane over TLS.
 	// Unset is plaintext, the shape every deployment ran before this field

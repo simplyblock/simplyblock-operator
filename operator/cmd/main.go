@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/link"
 	atlasprom "github.com/simplyblock/atlas/prometheus"
 
 	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
@@ -375,13 +376,15 @@ func main() {
 	//
 	// Off by default, on with --csi-link. TLS when a certificate is
 	// configured, plaintext when none is.
+	var csiPeers *link.Registry
 	if csiLinkEnabled {
 		var certFile, keyFile string
 		if csiLinkCertPath != "" {
 			certFile = filepath.Join(csiLinkCertPath, csiLinkCertName)
 			keyFile = filepath.Join(csiLinkCertPath, csiLinkCertKey)
 		}
-		csiPeers, err := csilink.Setup(mgr, csilink.Config{
+		var err error
+		csiPeers, err = csilink.Setup(mgr, csilink.Config{
 			BindAddress:              csiLinkAddr,
 			CertFile:                 certFile,
 			KeyFile:                  keyFile,
@@ -394,7 +397,6 @@ func main() {
 			setupLog.Error(err, "unable to set up the CSI link")
 			os.Exit(1)
 		}
-		_ = csiPeers // handed to reconcilers as they start using it
 	}
 
 	// Control-plane SSE push subscriptions: one leader-only manager, streams
@@ -474,6 +476,21 @@ func main() {
 		setupLog.Error(err, "storage-node capacity will be absent", "prometheusURL", prometheusURL)
 	} else {
 		nodeCapacity = provider
+	}
+	// The export controller reaches its host over csi-link. It runs either
+	// way: with the link off an export binds a host and then waits, visibly,
+	// rather than the kind disappearing.
+	nfsExportReconciler := &controller.NFSExportReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("nfsexport-controller"),
+	}
+	if csiPeers != nil {
+		nfsExportReconciler.Assembler = controller.NewLinkAssembler(csiPeers)
+	}
+	if err := nfsExportReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "NFSExport")
+		os.Exit(1)
 	}
 	if err := (&nodecontroller.StorageDeviceReconciler{
 		Client:   mgr.GetClient(),

@@ -32,13 +32,6 @@ import (
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=volumemigrations,verbs=get;list;watch;create
 
 const (
-	// labelPinnedVolumePV labels a controller-created VolumeMigration with a
-	// hash of the PV name (see pinPVLabelValue), so all pin-driven migrations for
-	// a PV can be found without knowing the (target-dependent) object name. The
-	// value is hashed because PV names can exceed the 63-char label-value limit;
-	// the full PV name is preserved in VolumeMigration.spec.pvName.
-	labelPinnedVolumePV = "storage.simplyblock.io/pinned-volume-pv"
-
 	// pvcPinRequeueUnbound is how long to wait before rechecking a PVC whose
 	// backing PV is not provisioned yet.
 	pvcPinRequeueUnbound = 15 * time.Second
@@ -180,10 +173,11 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(
 // createMigration raises the move of a pinned volume onto its requested node,
 // as whichever kind this deployment runs.
 //
-// The name is deterministic in (volume, target) so a retried reconcile is
-// idempotent, and the move is raised in the owning StorageCluster's namespace:
-// a claim may live in another namespace than its cluster, and a cross-namespace
-// owner reference is invalid.
+// Each call raises a move under a fresh name, so finished moves to the same
+// target stay as history. A retried reconcile does not raise a second one:
+// hasActiveMigration holds it back. The move is raised in the owning
+// StorageCluster's namespace: a claim may live in another namespace than its
+// cluster, and a cross-namespace owner reference is invalid.
 func (r *PersistentVolumeClaimReconciler) createMigration(
 	ctx context.Context,
 	cluster *simplyblockv1alpha2.StorageCluster,
@@ -194,7 +188,7 @@ func (r *PersistentVolumeClaimReconciler) createMigration(
 		Namespace:      cluster.Namespace,
 		PVName:         pvName,
 		TargetNodeUUID: target,
-		Labels:         map[string]string{labelPinnedVolumePV: pinPVLabelValue(pvName)},
+		Labels:         map[string]string{simplyblockv1alpha2.PinnedVolumeLabel: pinPVLabelValue(pvName)},
 		Owner:          cluster,
 		OwnerKind:      "StorageCluster",
 		Scheme:         r.Scheme,
@@ -217,7 +211,7 @@ func (r *PersistentVolumeClaimReconciler) hasActiveMigration(
 	namespace, pvName string,
 ) (bool, error) {
 	moves, err := r.mover().List(ctx, namespace,
-		map[string]string{labelPinnedVolumePV: pinPVLabelValue(pvName)})
+		map[string]string{simplyblockv1alpha2.PinnedVolumeLabel: pinPVLabelValue(pvName)})
 	if err != nil {
 		return false, fmt.Errorf("list the moves of PV %q: %w", pvName, err)
 	}
@@ -331,16 +325,15 @@ func containsStorageNode(nodes []webapi.StorageNodeInfo, uuid string) bool {
 	return false
 }
 
-// pinMigrationName is a deterministic, DNS-label-safe VolumeMigration name for a
-// (PV, target) pair. Deterministic so a retried reconcile hits AlreadyExists
-// instead of creating duplicates; target-dependent so a new target yields a new
-// object rather than colliding with a finished migration to the old target.
+// pinMigrationName is a DNS-label-safe move name for a (PV, target) pair: a
+// prefix derived from the pair and a random suffix, so every move is a new object
+// and an earlier move to the same target is never found in its place.
 func pinMigrationName(pvName, target string) string {
 	sum := sha256.Sum256([]byte(pvName + "\x00" + target))
-	return "pvc-pin-" + hex.EncodeToString(sum[:])[:16]
+	return kube.NameWithID("pvc-pin-" + hex.EncodeToString(sum[:])[:16])
 }
 
-// pinPVLabelValue derives a label-safe value from a PV name for labelPinnedVolumePV.
+// pinPVLabelValue derives a label-safe value from a PV name for PinnedVolumeLabel.
 // PV names can exceed the 63-character label-value limit, so the name is hashed to
 // a fixed-length hex string; the full PV name remains in VolumeMigration.spec.pvName.
 // createMigration and hasActiveMigration must use this same derivation.

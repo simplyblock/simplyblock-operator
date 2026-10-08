@@ -81,7 +81,7 @@ func parseConnections(data string) ([]volumemigration.Connection, error) {
 
 // run establishes and validates the migration's target paths on this host.
 //
-// When nqn is set it first asks whether this host is connected to that subsystem at
+// When the NQN is set it first asks whether this host is connected to that subsystem at
 // all. A migration moves a whole NVMe subsystem, so this job runs on every node that
 // consumes one of its volumes, and a node may no longer hold a connection by the time
 // the job starts (its consumer pod went away). Connecting target paths there would
@@ -128,7 +128,7 @@ func (v validationRun) run(
 		log.Printf("path %s to %s already present before connecting", addr, nqn)
 	}
 
-	// The freshly-connected target path can lag behind: nvme connect may return before
+	// The freshly connected target path can lag behind: `nvme connect` may return before
 	// its controller is live and the ANA log page settles, and the kernel attaches the
 	// subsystem's namespaces to a live controller one by one afterward. The settle step
 	// waits out the namespace scan before each verification, and the connect+verify
@@ -203,7 +203,7 @@ func (v validationRun) settle(ctx context.Context, sysRoot string, conns []volum
 	}
 }
 
-// reap clears the dead controllers of nqn, logging what went. Failures are logged and
+// reap clears the dead controllers of the NQN, logging what went. Failures are logged and
 // swallowed: this runs to improve the odds of a verification that is about to happen
 // anyway, and refusing to validate because a cleanup failed would turn a recoverable
 // state into the outcome it was meant to prevent.
@@ -223,7 +223,7 @@ func (v validationRun) reap(ctx context.Context, sysRoot, nqn string) {
 
 // release disconnects the migration's target paths, logging what went. Failures are
 // logged and swallowed: the run has already failed and the exit code must report that
-// failure rather than this one, which would only mask why the migration was cancelled.
+// failure rather than this one, which would only mask why the migration was canceled.
 func (v validationRun) release(
 	ctx context.Context,
 	sysRoot, nqn string,
@@ -253,17 +253,33 @@ func validateMigration() {
 		log.Fatal(err)
 	}
 	if outcome == outcomeSkipped {
-		// The operator collects this log per node, so say plainly that this node
-		// needed nothing rather than leaving an empty success.
 		log.Printf("no host connection to %s on this node: nothing to validate", nqn)
 	}
+	// The exit code is zero for a skip as well as for a validation, so the
+	// operator decides from this result rather than from the Job completing.
+	if err := reportOutcome(os.Getenv(volumemigration.ValidationResultPathEnv), outcome, nqn); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// reportOutcome writes what the run concluded as the container's termination
+// message.
+func reportOutcome(path string, outcome validationOutcome, nqn string) error {
+	result := volumemigration.ValidationResult{Outcome: volumemigration.ValidationValidated}
+	if outcome == outcomeSkipped {
+		result = volumemigration.ValidationResult{
+			Outcome: volumemigration.ValidationSkipped,
+			Detail:  "no host connection to " + nqn + " on this node",
+		}
+	}
+	return volumemigration.WriteValidationResult(path, result)
 }
 
 // releaseMigration gives back the migration target paths on this node without
 // validating anything.
 //
 // It is the mode the operator runs on nodes whose own validation passed. Those never
-// learn that the migration was cancelled — another node's Job failed, or the operator
+// learn that the migration was canceled — another node's Job failed, or the operator
 // gave up waiting — so their Job exited successfully with the target paths connected and
 // nothing on the node will ever release them. Every other failure path releases in the
 // Job that failed; this one exists because a success cannot.
@@ -317,7 +333,7 @@ func validateAttempts() int {
 }
 
 // validateRetryDelay returns the delay between attempts, overridable via
-// VMIG_VALIDATE_RETRY_DELAY (a Go duration, e.g. "2s"). Invalid values fall back
+// VMIG_VALIDATE_RETRY_DELAY (a Go duration, e.g., "2s"). Invalid values fall back
 // to the default.
 func validateRetryDelay() time.Duration {
 	if v := os.Getenv("VMIG_VALIDATE_RETRY_DELAY"); v != "" {

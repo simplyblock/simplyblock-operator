@@ -95,7 +95,11 @@ func (r *PersistentVolumeOpsReconciler) perform(
 ) (bool, error) {
 	switch current {
 	case stepValidating:
-		return r.validate(ctx, ops, subject)
+		done, err := r.validate(ctx, ops, subject)
+		if err != nil || !done {
+			return done, err
+		}
+		return true, r.pinsStillAllow(ctx, ops, subject)
 	case stepMigrating:
 		return r.copy(ctx, ops, subject)
 	case stepVerifying:
