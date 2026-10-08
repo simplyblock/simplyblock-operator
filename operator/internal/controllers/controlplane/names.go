@@ -5,8 +5,13 @@
 // that is deliberate: every one of them is the name the Helm chart already
 // rendered, and a running deployment refers to them from places this operator
 // does not control. The management API's Service name is in the CSI driver's
-// configuration and in the Prometheus scrape configuration. The
-// FoundationDBCluster's name is in the cluster file every workload mounts. The
+// configuration, in the Prometheus scrape configuration, and in the chart's
+// ServiceMonitor (helm-charts/.../prometheus-operator-servicemonitors.yaml).
+// `ComponentWebAPI` and `ComponentFDBExporter` below are what that
+// ServiceMonitor's two `matchLabels` hardcode, since Helm renders before this
+// binary exists to be asked. This file is the one to change first, and the
+// chart's copy has to follow by hand. The FoundationDBCluster's name is in
+// the cluster file every workload mounts. The
 // shared account's name is in the SB_K8S_ADMIN_SERVICE_ACCOUNTS list the control
 // plane checks tokens against. Deriving them would rename all of it on the first
 // install.

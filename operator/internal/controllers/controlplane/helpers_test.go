@@ -186,6 +186,21 @@ func findEnvVar(t *testing.T, d *appsv1.Deployment, name string) corev1.EnvVar {
 	return corev1.EnvVar{}
 }
 
+// findService searches by name and kind together, not name alone: the
+// Deployment and the Service in front of it share a name throughout this
+// package, and findObject's plain name match would return whichever of the
+// two happens to be built first.
+func findService(t *testing.T, objects []client.Object, name string) *corev1.Service {
+	t.Helper()
+	for _, obj := range objects {
+		if s, ok := obj.(*corev1.Service); ok && s.GetName() == name {
+			return s
+		}
+	}
+	t.Fatalf("no Service named %q among the built objects", name)
+	return nil
+}
+
 func findClusterRole(t *testing.T, objects []client.Object, name string) *rbacv1.ClusterRole {
 	t.Helper()
 	obj := findObject(objects, name)

@@ -376,6 +376,25 @@ func TestTheExporterDoesNotRunTheControlPlanesImage(t *testing.T) {
 	}
 }
 
+// A ServiceMonitor selects a Service by the labels on the Service object
+// itself, not by the selector it carries toward its Pods. The two Services a
+// customer's own Prometheus needs to discover carry no labels otherwise, so
+// without this nothing external can ever find them.
+func TestTheExternallyReachableServicesCarryTheirComponentLabel(t *testing.T) {
+	cp := localControlPlane()
+	objects := managementAPIObjects(cp)
+
+	webAPI := findService(t, objects, ComponentWebAPI)
+	if got := webAPI.Labels[appLabel]; got != ComponentWebAPI {
+		t.Errorf("webAPIService labels[%q] = %q, want %q", appLabel, got, ComponentWebAPI)
+	}
+
+	exporter := findService(t, objects, ComponentFDBExporter)
+	if got := exporter.Labels[appLabel]; got != ComponentFDBExporter {
+		t.Errorf("fdbExporterService labels[%q] = %q, want %q", appLabel, got, ComponentFDBExporter)
+	}
+}
+
 // Every service container reaches the database through the cluster file, and
 // every pod that mounts it is annotated for restart when it changes. A
 // coordinator change rewrites that ConfigMap, and a pod holding a connection to

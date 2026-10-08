@@ -368,7 +368,10 @@ func webAPIResources(managed *simplyblockv1alpha2.LocalControlPlane) corev1.Reso
 func webAPIService(cp *simplyblockv1alpha2.ControlPlane) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        ComponentWebAPI,
+			Name: ComponentWebAPI,
+			// Carried on the Service, not just its Pod selector, so a
+			// ServiceMonitor can match it by label.
+			Labels:      map[string]string{appLabel: ComponentWebAPI},
 			Namespace:   cp.Namespace,
 			Annotations: servingCertAnnotations(cp),
 		},

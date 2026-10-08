@@ -156,6 +156,14 @@ const (
 	// does not create: the control plane deploys one SPDK pod per backend node,
 	// owned by nothing, named after the node's RPC port, so the role is the only
 	// thing about it that is the same on every worker.
+	//
+	// This operator only reads the label. It is not the authoritative source:
+	// the sbcli repo's storage_deploy_spdk.yaml.j2 is what actually applies it
+	// to the pod, and the chart's PodMonitors (prometheus-operator-
+	// servicemonitors.yaml, one selector per PodMonitor) hardcode the same
+	// string a second time to match pods by it. Three independent copies across
+	// two repos, none of them generated from another: change the value in
+	// sbcli first, then here, then in the chart.
 	LabelRole          = "role"
 	LabelSpdkProxyRole = "simplyblock-storage-node"
 )
