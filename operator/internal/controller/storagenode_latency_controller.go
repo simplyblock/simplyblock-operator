@@ -354,9 +354,7 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
-					// The worker's Kubernetes hostname, not Status.Hostname: the
-					// control plane appends the RPC port to it, which labels no node.
-					NodeSelector: map[string]string{"kubernetes.io/hostname": node.Spec.WorkerNode},
+					NodeSelector:  map[string]string{"kubernetes.io/hostname": node.Spec.WorkerNode},
 					// The Job runs on the storage node it measures, so it has
 					// to tolerate what that node tolerates: pinning asks the
 					// scheduler for the machine rather than excusing the pod
