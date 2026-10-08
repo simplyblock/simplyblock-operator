@@ -155,7 +155,7 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 		node := &nodes.Items[i]
 		if node.Spec.ClusterRef != snode.Name || node.Status.UUID == "" ||
 			node.Status.Status != utils.NodeStatusOnline || !node.Status.Health ||
-			node.Status.Hostname == "" {
+			node.Spec.WorkerNode == "" {
 			continue
 		}
 		r.processNodeBaseline(ctx, snode, clusterCR, poolUUID, node, rebalancerImage, hostConfigs)
@@ -242,7 +242,7 @@ func (r *StorageNodeLatencyReconciler) processNodeBaseline(
 	// with the one-shot baseline Job — both would write to the same NVMe device
 	// and corrupt each other's measurements.
 	if measured != nil && measured.BaselineP99NS > 0 {
-		host := node.Status.Hostname
+		host := node.Spec.WorkerNode
 		hostConfigs[host] = append(hostConfigs[host], autoplacement.NodeConfig{
 			NQN:         conn.NQN,
 			Addr:        conn.Addr,
@@ -302,7 +302,7 @@ func (r *StorageNodeLatencyReconciler) reconcileBaselineJob(
 	}
 
 	// No job yet — create one if all connection info is available.
-	if node.Status.Hostname == "" || conn.Addr == "" || conn.NQN == "" {
+	if node.Spec.WorkerNode == "" || conn.Addr == "" || conn.NQN == "" {
 		return nil, false, nil
 	}
 	if createErr := r.createBaselineJob(ctx, snode, node, conn, image); createErr != nil {
@@ -354,7 +354,9 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
-					NodeSelector:  map[string]string{"kubernetes.io/hostname": node.Status.Hostname},
+					// The worker's Kubernetes hostname, not Status.Hostname: the
+					// control plane appends the RPC port to it, which labels no node.
+					NodeSelector: map[string]string{"kubernetes.io/hostname": node.Spec.WorkerNode},
 					// The Job runs on the storage node it measures, so it has
 					// to tolerate what that node tolerates: pinning asks the
 					// scheduler for the machine rather than excusing the pod
