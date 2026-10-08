@@ -36,6 +36,9 @@ class FioWorkload(Component):
         return {
             "namespace": "default",
             "ready_timeout_s": 420,
+            # How long setup() waits for every fio instance to finish laying out its file
+            # and enter the timed run. 420s, operator/test/fio_migration_test.py's wait.
+            "io_timeout_s": 420,
             # How long past fio's runtime stop() waits for every instance to exit on its own
             # before interrupting it. 180s, the wait operator/test/fio_migration_test.py gave
             # its pods.
@@ -53,7 +56,7 @@ class FioWorkload(Component):
         self._pods: list[str] = []
         self._instances: list[fio.FioInstance] = []
         self._created_scs: list[str] = []
-        self._io_started: float | None = None   # when every fio pod was Running
+        self._io_started: float | None = None   # when every instance was in the timed run
 
     # ── what a subclass writes ──────────────────────────────────────────────────────
 
@@ -79,6 +82,10 @@ class FioWorkload(Component):
                  stdin="\n---\n".join(json.dumps(d) for d in docs))
         fio.wait_running(ctx, self.name, self.opt("namespace"), self._pods,
                          float(self.opt("ready_timeout_s")))
+        # The runtime clock starts with the timed run, not with the pods: fio's runtime
+        # does not count the layout before it.
+        fio.wait_io_flowing(ctx, self.name, self.opt("namespace"), self._instances,
+                            float(self.opt("io_timeout_s")))
         self._io_started = time.time()
         self.after_running(ctx)
 
@@ -90,8 +97,8 @@ class FioWorkload(Component):
         Suites set fio's runtime past the run's duration so fio never goes idle first, so a
         run collected when its duration ends would have none of that: no checksum or
         job-error verdict, and a result that judged no I/O. So the run waits out fio's
-        remaining runtime, as operator/test/fio_migration_test.py did, plus stop_timeout_s
-        of grace. An instance still running after that is interrupted, so a stuck fio
+        remaining runtime, counted from when every instance entered the timed run, as
+        operator/test/fio_migration_test.py did, plus stop_timeout_s of grace. An instance still running after that is interrupted, so a stuck fio
         cannot hang the run, and said to be, since its verification ended early.
         """
         ns = self.opt("namespace")

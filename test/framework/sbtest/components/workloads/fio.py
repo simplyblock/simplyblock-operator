@@ -151,6 +151,49 @@ def wait_running(ctx: RunContext, who: str, namespace: str, pods: list[str],
         f"pod(s) reached Running within {timeout_s:.0f}s: {stuck}")
 
 
+def in_timed_run(log: str) -> bool:
+    """Whether fio is past laying out its file and in the timed run.
+
+    During layout fio prints "Laying out IO file" and an [f(N)] status. Only the timed run
+    prints a status line with an eta and a running job state, e.g.
+    "Jobs: 1 (f=1): [m(1)][0.2%][r=508KiB/s,w=196KiB/s][r=127,w=49 IOPS][eta 34m:57s]",
+    so the two together tell real I/O from layout. The test operator/test/
+    fio_migration_test.py applies, ported as it is.
+    """
+    return any("[eta " in line and ("[m(" in line or "[r(" in line or "[w(" in line)
+               for line in log.splitlines())
+
+
+def wait_io_flowing(ctx: RunContext, who: str, namespace: str,
+                    instances: list[FioInstance], timeout_s: float) -> list[FioInstance]:
+    """Wait until every instance's fio is in the timed run, and return those that are not.
+
+    fio's runtime counts the timed run only, not the layout before it, so this is where a
+    run's I/O begins. A slow layout would otherwise eat the window the run measures, and
+    the run would judge empty logs. Instances still laying out at timeout_s are named and
+    left to run, as operator/test/fio_migration_test.py did: the run continues, and its
+    evidence may be incomplete.
+    """
+    ctx.log.info(f"{who}: waiting for fio to finish layout and enter the timed run in "
+                 f"{len(instances)} instance(s)")
+    deadline = time.time() + timeout_s
+    pending = list(instances)
+    while True:
+        pending = [i for i in pending if not in_timed_run(kube.run(
+            ["-n", namespace, "logs", i.pod, "-c", i.container, "--tail=8"],
+            check=False, timeout=30).stdout or "")]
+        if not pending or time.time() >= deadline or ctx.stopping.is_set():
+            break
+        time.sleep(5)
+    if pending:
+        ctx.log.warn(f"{who}: timed run not confirmed in "
+                     + ", ".join(f"{i.pod}/{i.container}" for i in pending)
+                     + " (continuing; their evidence may be incomplete)")
+    else:
+        ctx.log.info(f"{who}: fio timed run active in every instance")
+    return pending
+
+
 def collect_instance(ctx: RunContext, namespace: str, inst: FioInstance,
                      migs: list) -> str:
     """Pull one instance's account out of its pod, into the layout the analyser reads.

@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import sbtest  # noqa: E402,F401
 from sbtest.components import kube, migration, nfs, nvme  # noqa: E402
-from sbtest.components.workloads import pnfs_rwx, volumemigration  # noqa: E402
+from sbtest.components.workloads import fio, pnfs_rwx, volumemigration  # noqa: E402
 from sbtest.core import Logger, Migration, RunContext  # noqa: E402
 
 
@@ -679,6 +679,50 @@ class WorkloadStop(unittest.TestCase):
         for inst in w._instances:
             self.assertTrue(any(p == inst.pod and c == inst.container and "pkill -INT" in s
                                 for p, c, s in calls), f"{inst.container} was not interrupted")
+
+
+class WaitIOFlowing(unittest.TestCase):
+    """fio's runtime counts the timed run, not the file layout before it, so the run's clock
+    starts when every instance is in the timed run, as operator/test/fio_migration_test.py
+    did. Counting from pods Running would end the wait early by however long layout took."""
+
+    def test_the_timed_run_is_told_apart_from_layout(self):
+        self.assertFalse(fio.in_timed_run("[pod] installing fio\nfiotest: Laying out IO file (1 file / 1024MiB)\n"))
+        self.assertFalse(fio.in_timed_run("Jobs: 1 (f=1): [f(1)][100.0%][eta 00m:00s]\n"))
+        self.assertTrue(fio.in_timed_run(
+            "Jobs: 1 (f=1): [m(1)][0.2%][r=508KiB/s,w=196KiB/s][r=127,w=49 IOPS][eta 34m:57s]\n"))
+
+    def test_every_instance_is_waited_for_in_its_own_container(self):
+        asked: list[tuple[str, str]] = []
+
+        def run(args: list[str], timeout: int = 60, check: bool = True,
+                stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+            if "logs" in args:
+                pod, container = args[args.index("logs") + 1], args[args.index("-c") + 1]
+                asked.append((pod, container))
+                return _cp("Jobs: 1 (f=1): [m(1)][1.0%][r=1,w=1 IOPS][eta 30m:00s]\n")
+            return _cp("")
+
+        w = pnfs_rwx.PnfsRwxWorkload(shared_volumes=1, pods_per_shared=2, solo_pods=0,
+                                     containers_per_pod=2)
+        with _Ctx() as ctx:
+            w._documents(ctx, "sc")
+            with _patch(kube, "run", run):
+                pending = fio.wait_io_flowing(ctx, "w", "default", w._instances, 5)
+        self.assertEqual(pending, [])
+        self.assertEqual(sorted(asked), sorted((i.pod, i.container) for i in w._instances))
+
+    def test_an_instance_still_laying_out_is_named_rather_than_waited_for_forever(self):
+        def run(args: list[str], timeout: int = 60, check: bool = True,
+                stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+            return _cp("fiotest: Laying out IO file (1 file / 1024MiB)\n")
+
+        w = pnfs_rwx.PnfsRwxWorkload(shared_volumes=0, solo_pods=1, containers_per_pod=1)
+        with _Ctx() as ctx:
+            w._documents(ctx, "sc")
+            with _patch(kube, "run", run):
+                pending = fio.wait_io_flowing(ctx, "w", "default", w._instances, 0)
+        self.assertEqual(pending, w._instances)
 
 
 class HostDmesg(unittest.TestCase):
