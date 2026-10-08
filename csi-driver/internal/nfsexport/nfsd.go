@@ -1,12 +1,9 @@
-// Bringing the host's NFS server up, rather than requiring somebody to have.
+// Bringing the guest's NFS server up before an assembly, rather than assuming
+// it is.
 //
-// This starts the host's nfsd, not a copy: it is a kernel service, and the
-// threads outlive this pod. That is not avoidable -- pNFS SCSI layouts are a
-// kernel nfsd feature -- but who is responsible is. A prerequisite in a runbook
-// is one a cluster silently fails to meet.
-//
-// Run before each assembly, not once at start-up, because a rebooted node comes
-// back with none of it. Every step is skipped when already satisfied.
+// The guest starts nfsd at boot, so on a healthy guest every step here is
+// skipped. Run before each assembly anyway, not once at start-up: an assembly
+// against an nfsd that stopped would publish an export nothing serves.
 
 package nfsexport
 
