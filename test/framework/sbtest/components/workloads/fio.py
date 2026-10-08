@@ -154,10 +154,10 @@ def wait_running(ctx: RunContext, who: str, namespace: str, pods: list[str],
 def in_timed_run(log: str) -> bool:
     """Whether fio is past laying out its file and in the timed run.
 
-    During layout fio prints "Laying out IO file" and an [f(N)] status. Only the timed run
-    prints a status line with an eta and a running job state, e.g.
-    "Jobs: 1 (f=1): [m(1)][0.2%][r=508KiB/s,w=196KiB/s][r=127,w=49 IOPS][eta 34m:57s]",
-    so the two together tell real I/O from layout. The test operator/test/
+    During layout fio prints its file-layout message and an [f(N)] status. Only the timed
+    run prints a status line with an eta and a running job state, such as
+    `Jobs: 1 (f=1): [m(1)][0.2%][r=508KiB/s,w=196KiB/s][r=127,w=49 IOPS][eta 34m:57s]`.
+    The two together tell real I/O from layout. The test operator/test/
     fio_migration_test.py applies, ported as it is.
     """
     return any("[eta " in line and ("[m(" in line or "[r(" in line or "[w(" in line)
