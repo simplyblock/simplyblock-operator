@@ -166,13 +166,12 @@ The type's full text is in Appendix A. The `MDS` printcolumn shows `mdsPodName`.
 ### 4.2 `DriverPNFS` (existing type, on `SimplyblockDriver`)
 
 ```go
-// MDS configures the pod-hosted metadata server. Unset keeps the node-hosted
-// one.
+// MDS configures the metadata server. Unset, no pNFS volume can be exported.
 // +optional
 MDS *DriverPNFSMDS `json:"mds,omitempty"`
 ```
 
-`DriverPNFSMDS` carries the image, resources, scheduling constraints, and the state volume's size and class. Its full text is in Appendix B. Setting it selects the pod-hosted MDS, and the node-hosted MDS (`enablePNFS` and the node label) remains available when it is absent.
+`DriverPNFSMDS` carries the image, resources, scheduling constraints, and the state volume's size and class. Its full text is in Appendix B. `MDS` is the only field of `DriverPNFS`. With it unset, an export waits in `Pending` with a `NoMetadataServer` event.
 
 ---
 
@@ -584,19 +583,13 @@ type NFSExportList struct {
 
 ## Appendix B: `simplyblockdriver_types.go`
 
-The block of `SimplyblockDriver` that §4.2 adds. `DriverPNFS` is a nested struct of the `SimplyblockDriver` kind and carries no root kind of its own.
+The block of `SimplyblockDriver` that §4.2 describes. `DriverPNFS` is a nested struct of the `SimplyblockDriver` kind and carries no root kind of its own.
 
 ```go
-// DriverPNFS configures pNFS support. EnablePNFS is unchanged, and MDS is new.
+// DriverPNFS configures pNFS support.
 type DriverPNFS struct {
-	// EnablePNFS gives the node plugin the four host directories an export is
-	// assembled through. Unchanged.
-	// +kubebuilder:default=false
-	// +optional
-	EnablePNFS *bool `json:"enablePNFS,omitempty"`
-
-	// MDS configures the pod-hosted metadata server. Unset keeps the node-hosted
-	// one, which is selected by the pnfs-mds node label.
+	// MDS configures the metadata server. Unset, no pNFS volume can be
+	// exported.
 	// +optional
 	MDS *DriverPNFSMDS `json:"mds,omitempty"`
 }

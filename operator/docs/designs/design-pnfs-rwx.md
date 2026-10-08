@@ -1063,11 +1063,9 @@ those terms.
   certificate it serves. `spec.link` configures the plugins that dial it. Both
   halves have to be on, and they are separate objects, which is the one thing a
   reader of the old section would get wrong.
-- **`spec.pnfs.enablePNFS`**, which gives the node plugin `/etc/exports.d` and an
-  `/mnt` mounted with bidirectional propagation. The propagation is the load-bearing
-  part: nfsd serves the host's mounts, so a mount made only in the container's
-  namespace leaves `exportfs` publishing an empty directory, and a client mounts
-  something that looks like an empty volume rather than failing.
+- **`spec.pnfs.mds`**, which runs the metadata server in a QEMU guest of its own
+  (`design-pnfs-mds-vm.md`). The node plugin gets no NFS server state from the
+  host: no node runs nfsd or mounts an export.
 - **pNFS requires the link**, enforced by a CEL rule on `SimplyblockDriverSpec`
   rather than by the reconciler. The operator assembles an export by calling the
   MDS host over the link, so with no link every RWX claim in the cluster parks in

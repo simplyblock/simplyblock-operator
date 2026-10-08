@@ -156,28 +156,15 @@ type DriverTLS struct {
 	Provider DriverTLSProvider `json:"provider,omitempty"`
 }
 
-// DriverPNFS configures pNFS support, which makes the node plugin an NFS
-// metadata server as well as an NVMe-oF initiator: on the host an export binds
-// to, it makes a filesystem on the namespace, mounts it, and publishes it
-// through the host's nfsd.
-//
-// Turning it on is not sufficient. The host needs nfs-utils and a running
-// nfsd, and a client host needs blkmapd, neither of which a pod can install.
-// A host missing either fails visibly in the export's Assembling phase.
+// DriverPNFS configures pNFS support: ReadWriteMany volumes served by an NFS
+// metadata server, whose clients read and write the volume's NVMe-oF namespace
+// directly.
 type DriverPNFS struct {
-	// EnablePNFS gives the node plugin the four host directories an export is
-	// assembled through. It is gated because a plugin not serving exports has
-	// no use for them.
-	// +kubebuilder:default=false
-	// +optional
-	EnablePNFS *bool `json:"enablePNFS,omitempty"`
-
-	// MDS runs the metadata server in a pod of its own instead of on a node:
-	// one pod per storage cluster, whose QEMU guest runs the NFS server with
-	// its own kernel, so no node runs nfsd, mounts an export, or needs
-	// nfs-utils. The pod needs a node with /dev/kvm. Unset keeps the
-	// metadata server on the nodes labeled
-	// storage.simplyblock.io/pnfs-mds=true.
+	// MDS runs the metadata server: one pod per storage cluster, whose QEMU
+	// guest runs the NFS server with its own kernel, so no node runs nfsd,
+	// mounts an export, or needs nfs-utils. The pod needs a node with
+	// /dev/kvm. Unset, no pNFS volume can be exported: its export waits in
+	// Pending until this is set.
 	// +optional
 	MDS *DriverPNFSMDS `json:"mds,omitempty"`
 }
