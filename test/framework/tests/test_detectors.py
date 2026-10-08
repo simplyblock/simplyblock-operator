@@ -1071,6 +1071,18 @@ class PnfsDeviceIO(unittest.TestCase):
         self.assertEqual([(f.severity, f.subject) for f in found],
                          [(Severity.WARNING, "c1@w2")])
 
+    def test_writes_that_stopped_and_never_resumed_fail(self):
+        """The shape an MDS restart left: the client's writes stopped mid-run and its I/O
+        went through the server until fio ended. A pause that ends is a warning, one that
+        lasts to the end of the run is the direct path lost."""
+        offs = (0, 10, 20, 100, 200)
+        blocks = ([blk("w1", o, o * 10, o * 5) for o in offs]
+                  + [blk("w2", o, min(o, 20) * 10, min(o, 20) * 5) for o in offs])
+        found = self._found(blocks, max_stall_s=60)
+        self.assertEqual([(f.severity, f.subject) for f in found],
+                         [(Severity.CRITICAL, "c1@w2")])
+        self.assertIn("never resumed", found[0].title)
+
     def test_reads_are_not_required_when_the_run_did_not_read(self):
         blocks = [blk(n, off, 0, off * 5) for n in ("w1", "w2") for off in (0, 10, 20)]
         self.assertEqual(self._found(blocks, require_reads=False), [])

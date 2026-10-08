@@ -139,6 +139,20 @@ class DeviceIO(Detector):
                      "NVMe-oF namespace")
             return
 
+        trailing = _trailing_stall(got)
+        if trailing > float(self.opt("max_stall_s")):
+            yield critical(
+                self.name, title=f"writes to the namespace stopped and never resumed "
+                                 f"({trailing:.0f}s before the run ended)",
+                subject=subject,
+                detail=f"{node}: no sector written from {last.ts - timedelta(seconds=trailing):%H:%M:%S} "
+                       f"to {last.ts:%H:%M:%S} while the run was going",
+                evidence={"lvol": lvol, "node": node, "stopped_s": trailing},
+                note="the client lost the direct path and did not get it back, so its I/O "
+                     "went through the metadata server from then on; after an MDS restart "
+                     "this is a device lookup made from the pod's mount namespace")
+            return
+
         stall = _longest_stall(got)
         if stall > float(self.opt("max_stall_s")):
             yield warning(
@@ -160,6 +174,15 @@ def _longest_stall(got: list[BlockSample]) -> float:
             continue
         longest = max(longest, (cur.ts - since.ts).total_seconds())
     return longest
+
+
+def _trailing_stall(got: list[BlockSample]) -> float:
+    """How long the written-sector counter had stood still when the series ended."""
+    last = got[-1]
+    for prev, cur in zip(reversed(got[:-1]), reversed(got), strict=False):
+        if cur.write_sectors > prev.write_sectors:
+            return (last.ts - cur.ts).total_seconds()
+    return (last.ts - got[0].ts).total_seconds()
 
 
 def _while_running(got: list[BlockSample], vol: PnfsVolume, node: str,
