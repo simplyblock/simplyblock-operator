@@ -285,6 +285,16 @@ type StorageNodeConfig struct {
 	// +k8s:immutable
 	FailureDomain string `json:"failureDomain,omitempty"`
 
+	// Site is the replication site this node belongs to, one of the cluster's two
+	// sites, copied from the ClusterDeploymentConfig node group that produced the
+	// node. Required when the cluster has enableSyncReplication=true. Immutable: a
+	// host sits entirely on one site for the cluster's life.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`
+	// +optional
+	// +k8s:immutable
+	Site string `json:"site,omitempty"`
+
 	// Expand marks this node as an addition to an already-active cluster, which
 	// the control plane reads as a request to rebalance onto it rather than to
 	// treat it as part of an initial layout. Immutable once set: it describes how

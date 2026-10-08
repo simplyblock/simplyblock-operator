@@ -415,6 +415,11 @@ func (in *ClusterTemplate) DeepCopyInto(out *ClusterTemplate) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.EnableSyncReplication != nil {
+		in, out := &in.EnableSyncReplication, &out.EnableSyncReplication
+		*out = new(bool)
+		**out = **in
+	}
 	if in.EnableNodeAffinity != nil {
 		in, out := &in.EnableNodeAffinity, &out.EnableNodeAffinity
 		*out = new(bool)
@@ -2582,6 +2587,11 @@ func (in *StorageClusterSpec) DeepCopyInto(out *StorageClusterSpec) {
 	}
 	if in.EnableFailureDomains != nil {
 		in, out := &in.EnableFailureDomains, &out.EnableFailureDomains
+		*out = new(bool)
+		**out = **in
+	}
+	if in.EnableSyncReplication != nil {
+		in, out := &in.EnableSyncReplication, &out.EnableSyncReplication
 		*out = new(bool)
 		**out = **in
 	}

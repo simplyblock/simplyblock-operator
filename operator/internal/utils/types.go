@@ -52,10 +52,14 @@ type ClusterAddParams struct {
 	HashicorpVaultSettings *HashicorpVaultConfig `json:"hashicorp_vault_settings,omitempty"`
 	// EnableFailureDomain opts the cluster into failure-domain mode.
 	// Wire key must match the /api/v2/clusters/ endpoint — verify against sbcli before release.
-	EnableFailureDomain bool  `json:"enable_failure_domain,omitempty"`
-	SpdkVcpuCount       int   `json:"spdk_vcpu_count,omitempty"`
-	HugepagesMem        int64 `json:"hugepages_mem,omitempty"`
-	MaxSubsys           uint  `json:"max_subsys,omitempty"`
+	EnableFailureDomain bool `json:"enable_failure_domain,omitempty"`
+	// SyncReplication opts the cluster into synchronous two-site replication.
+	// Deploy-time only (the backend accepts it only at cluster-create). Wire key
+	// must match the /api/v2/clusters/ endpoint (sbcli sync-replication branch).
+	SyncReplication bool  `json:"sync_replication,omitempty"`
+	SpdkVcpuCount   int   `json:"spdk_vcpu_count,omitempty"`
+	HugepagesMem    int64 `json:"hugepages_mem,omitempty"`
+	MaxSubsys       uint  `json:"max_subsys,omitempty"`
 	// InlineChecksum enables inline CRC checksum validation for silent-data-error protection.
 	// Wire key must match the /api/v2/clusters/ endpoint from sbcli.
 	InlineChecksum bool `json:"inline_checksum,omitempty"`
@@ -144,6 +148,10 @@ type StorageNodeSetAddParams struct {
 	// node never came online (2026-08-27 incident, found live redeploying
 	// with domains numbered from 0).
 	FailureDomain *int `json:"failure_domain,omitempty"`
+	// Site is the replication site this node is added to, required on a sync
+	// cluster and rejected otherwise. Wire key must match the add-node endpoint
+	// (sbcli sync-replication branch).
+	Site string `json:"site,omitempty"`
 	// Expand signals that this node is being added to expand an already-active cluster.
 	Expand bool `json:"expand,omitempty"`
 	// ForceFormat wipes partitioned lblk devices at add-node time; node_configure.py

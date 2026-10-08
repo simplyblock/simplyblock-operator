@@ -265,6 +265,16 @@ type NodeGroup struct {
 	// +optional
 	FailureDomain string `json:"failureDomain,omitempty"`
 
+	// Site is the replication site every worker in this group belongs to, one of
+	// the cluster's two sites. Discovery seeds it from topology.kubernetes.io/zone,
+	// as it does FailureDomain, since a sync cluster's two sites are its two zones.
+	// Required when the cluster has enableSyncReplication=true, rejected otherwise.
+	// It expands into StorageNode.spec.config.site, whose shape it shares.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`
+	// +optional
+	Site string `json:"site,omitempty"`
+
 	// SpdkSystemMemory is the memory the control plane starts SPDK with on these
 	// nodes.
 	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
@@ -531,6 +541,15 @@ type ClusterTemplate struct {
 	// every group must label the fault group its workers belong to.
 	// +optional
 	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
+
+	// EnableSyncReplication opts the cluster into synchronous two-site
+	// replication. The cluster then spans exactly two sites and every node group
+	// declares a site (see NodeGroup.Site). It is on the document because it is
+	// immutable on the cluster it lands on: the backend accepts it only at
+	// cluster-create, so a cluster created without it is one nobody can turn it
+	// on for.
+	// +optional
+	EnableSyncReplication *bool `json:"enableSyncReplication,omitempty"`
 
 	// EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
 	// from the local node's own devices where it can, before crossing the

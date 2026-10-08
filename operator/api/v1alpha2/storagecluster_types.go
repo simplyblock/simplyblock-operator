@@ -732,6 +732,15 @@ type StorageClusterSpec struct {
 	// +k8s:immutable
 	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
 
+	// EnableSyncReplication opts the cluster into synchronous two-site
+	// replication, where the cluster spans exactly two sites, every node
+	// declares a site, and each logical volume store is replicated to the other
+	// site. Immutable: the backend accepts it only at cluster-create, so a
+	// cluster created without it cannot be converted.
+	// +optional
+	// +k8s:immutable
+	EnableSyncReplication *bool `json:"enableSyncReplication,omitempty"`
+
 	// EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
 	// from the local node's own devices where it can, before crossing the
 	// network.
