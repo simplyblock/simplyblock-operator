@@ -426,7 +426,7 @@ func TestPendingPodHostedWaitsForTheGuest(t *testing.T) {
 }
 
 // A Ready pod is bound by name and addressed by its IP, which is what the
-// export's Service endpoints at. No node is named: the pod is the host.
+// export's Service endpoints at.
 func TestPendingPodHostedBindsTheReadyPod(t *testing.T) {
 	r, cl, _ := newPodHostedReconciler(t, testExport(nil), mdsDriver(), boundMDSPod(readyPod))
 
@@ -439,9 +439,8 @@ func TestPendingPodHostedBindsTheReadyPod(t *testing.T) {
 	if want := driver.MDSPodName(mdsDriver(), testExportClusterID); got.Status.MDSPodName != want {
 		t.Errorf("mdsPodName = %q, want %q", got.Status.MDSPodName, want)
 	}
-	if got.Status.MDSNodeIP != testMDSPodIP || got.Status.MDSNodeName != "" {
-		t.Errorf("mdsNodeIP = %q, mdsNodeName = %q, want the pod IP and no node",
-			got.Status.MDSNodeIP, got.Status.MDSNodeName)
+	if got.Status.MDSNodeIP != testMDSPodIP {
+		t.Errorf("mdsNodeIP = %q, want the pod IP", got.Status.MDSNodeIP)
 	}
 	if len(got.Status.AllowedClients) == 0 {
 		t.Error("bound with no client set, which the guest would refuse")
@@ -457,24 +456,33 @@ func TestPendingPodHostedBindsTheReadyPod(t *testing.T) {
 	}
 }
 
-// Without spec.pnfs.mds the metadata server stays on nodes, and no
-// StatefulSet appears.
-func TestPendingWithoutTheMDSSpecStaysNodeHosted(t *testing.T) {
+// Without spec.pnfs.mds there is no metadata server to bind, and an export
+// waits rather than falling back to a node's own nfsd, which could never fail
+// over. The status says what is missing, so the wait is not mistaken for a
+// reconcile that never ran.
+func TestPendingWithoutTheMDSSpecWaitsForIt(t *testing.T) {
 	d := mdsDriver()
 	d.Spec.PNFS.MDS = nil
-	r, cl, _ := newPodHostedReconciler(t, testExport(nil), d, testNode(testMDSHost, nil))
+	r, cl, _ := newPodHostedReconciler(t, testExport(nil), d, kubeNode("worker-1", testNodeIP))
 
-	reconcileExport(t, r)
+	res := reconcileExport(t, r)
 
 	var list appsv1.StatefulSetList
 	if err := cl.List(context.Background(), &list); err != nil {
 		t.Fatal(err)
 	}
 	if len(list.Items) != 0 {
-		t.Errorf("created %d StatefulSets for a node-hosted deployment", len(list.Items))
+		t.Errorf("created %d StatefulSets with no metadata server configured", len(list.Items))
 	}
-	if got := loadExport(t, cl); got.Status.MDSNodeName != testMDSHost {
-		t.Errorf("mdsNodeName = %q, want the labeled node", got.Status.MDSNodeName)
+	got := loadExport(t, cl)
+	if got.Status.Phase != simplyblockv1alpha2.NFSExportPhasePending || got.Status.MDSPodName != "" {
+		t.Errorf("phase = %q, mdsPodName = %q, want Pending and unbound", got.Status.Phase, got.Status.MDSPodName)
+	}
+	if !strings.Contains(got.Status.Message, "spec.pnfs.mds") {
+		t.Errorf("message = %q, want it to name spec.pnfs.mds", got.Status.Message)
+	}
+	if res.RequeueAfter != nfsExportNoHostRequeue {
+		t.Errorf("requeue = %v, want %v", res.RequeueAfter, nfsExportNoHostRequeue)
 	}
 }
 
@@ -499,20 +507,6 @@ func TestPendingPodHostedAllowsTheNodesPodCIDRs(t *testing.T) {
 		if !slices.Contains(got, want) {
 			t.Errorf("allowedClients = %v, want %s in it", got, want)
 		}
-	}
-}
-
-// A node-hosted metadata server sees clients from their InternalIPs, so the
-// pod network stays out of its client set.
-func TestNodeHostedClientSetLeavesThePodNetworkOut(t *testing.T) {
-	node := nodeWithPodCIDR()
-	node.Labels[MDSCapableLabel] = "true"
-	r, cl := newExportReconciler(t, &fakeAssembler{}, testExport(nil), node)
-
-	reconcileExport(t, r)
-
-	if got := loadExport(t, cl).Status.AllowedClients; slices.Contains(got, "10.244.2.0/24") {
-		t.Errorf("allowedClients = %v, want no pod CIDR", got)
 	}
 }
 

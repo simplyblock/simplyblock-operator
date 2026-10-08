@@ -1,4 +1,4 @@
-// Reassembling a pod-hosted export after its metadata server pod restarted
+// Reassembling an export after its metadata server pod restarted
 // (design-pnfs-mds-vm.md §7.5).
 //
 // A restarted guest is a cold boot: its mounts, exports table, and nfsd
@@ -26,10 +26,10 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 )
 
-// resyncPodHosted reassembles a Ready pod-hosted export whose metadata server
-// pod is not the instance that assembled it. handled is false when there is
-// nothing to resync, and the caller carries on with its health check.
-func (r *NFSExportReconciler) resyncPodHosted(
+// resyncAfterRestart reassembles a Ready export whose metadata server pod is
+// not the instance that assembled it. handled is false when there is nothing to
+// resync, and the caller carries on with its health check.
+func (r *NFSExportReconciler) resyncAfterRestart(
 	ctx context.Context, export *simplyblockv1alpha2.NFSExport,
 ) (result ctrl.Result, handled bool, err error) {
 	name := export.Status.MDSPodName

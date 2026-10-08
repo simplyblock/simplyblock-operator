@@ -1,9 +1,11 @@
 // NFSExportReconciler drives one pNFS export from creation to Ready and back.
 //
-// status.mdsNodeName is mutual exclusion, not a label: one XFS may be mounted
-// by exactly one node, so no second host is a candidate until this controller
-// rewrites the field under optimistic concurrency. Getting it wrong destroys
-// data rather than degrading service.
+// Every export is served by the metadata server of its storage cluster, a
+// QEMU guest in a pod of its own (design-pnfs-mds-vm.md). status.mdsPodName is
+// mutual exclusion, not a label: one XFS may be mounted by exactly one host, so
+// no second one is a candidate until this controller rewrites the field under
+// optimistic concurrency. Getting it wrong destroys data rather than degrading
+// service.
 //
 // The phases are a declared graph, so an illegal jump errors at the transition
 // and the position survives a restart.
@@ -15,8 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"slices"
 
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	corev1 "k8s.io/api/core/v1"
@@ -54,8 +54,8 @@ const (
 
 // The controller's cadence, in one place so it can be read and tuned.
 const (
-	// No host is eligible. Slower than the rest: usually a cluster still
-	// coming up, and polling it hard helps nothing.
+	// There is no metadata server to bind yet. Slower than the rest: usually a
+	// cluster still coming up, and polling it hard helps nothing.
 	nfsExportNoHostRequeue = 30 * time.Second
 	// The bound host has no live csi-link session, which is normal during a
 	// rollout rather than a failure.
@@ -76,8 +76,8 @@ const (
 	nfsExportUnhealthyRequeue = 15 * time.Second
 )
 
-// ExportAssembler is what this controller drives on the MDS host over
-// csi-link. An interface so the controller is testable without a node.
+// ExportAssembler is what this controller drives in the metadata server's guest
+// over csi-link. An interface so the controller is testable without a guest.
 type ExportAssembler interface {
 	// CreateExport attaches, formats, mounts, and publishes on the host.
 	// Idempotent: a reconcile that died mid-assembly calls it again.
@@ -120,8 +120,8 @@ type NFSExportReconciler struct {
 // EndpointSlice behind it (§13.3).
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch;create;update;patch
-// The metadata server pod a pod-hosted export is bound to: read to bind an
-// export to it, and to tell a restarting pod from a gone one at teardown.
+// The metadata server pod an export is bound to: read to bind an export to it,
+// and to tell a restarting pod from a gone one at teardown.
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 
 // Reconcile drives one export toward Ready, or tears it down.
@@ -175,68 +175,40 @@ func (r *NFSExportReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 }
 
-// reconcilePending picks an MDS host: the metadata server pod of the export's
-// storage cluster when the driver runs one, a labeled node otherwise.
+// reconcilePending binds the export to the metadata server of its storage
+// cluster, bringing the server up on the cluster's first export.
+//
+// With no driver configuring one there is nothing to bind, and the export waits:
+// a node's own nfsd could serve it, but never fail it over.
 func (r *NFSExportReconciler) reconcilePending(
 	ctx context.Context,
 	export *simplyblockv1alpha2.NFSExport,
 	machine *statemachine.Machine[phase],
 	logger interface{ Info(string, ...any) },
 ) (ctrl.Result, error) {
-	d, err := r.podHostedDriver(ctx)
+	d, err := r.mdsDriver(ctx)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if d != nil {
-		return r.reconcilePendingPodHosted(ctx, export, machine, logger, d)
-	}
-
-	node, err := r.selectMDS(ctx)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if node == "" {
+	if d == nil {
 		// A refusal owes an event, or it looks like a reconcile that never ran.
-		r.event(export, corev1.EventTypeWarning, "NoEligibleMDS",
-			fmt.Sprintf("no storage node is eligible to serve this export; "+
-				"label the nodes that may with %s=true", MDSCapableLabel))
-		if err := r.writeStatus(ctx, export, func(s *simplyblockv1alpha2.NFSExportStatus) {
-			s.Phase = phasePending
-			s.Message = "waiting for an eligible MDS host"
-		}); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: nfsExportNoHostRequeue}, nil
+		r.event(export, corev1.EventTypeWarning, "NoMetadataServer",
+			"no SimplyblockDriver configures a pNFS metadata server; set spec.pnfs.mds")
+		return r.waitForMDS(ctx, export,
+			"waiting for a SimplyblockDriver to configure spec.pnfs.mds", nfsExportNoHostRequeue)
 	}
-
-	// An export bound to an unreachable host fails at a client's mount,
-	// several steps from the cause.
-	address, err := r.nodeAddress(ctx, node)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if address == "" {
-		r.event(export, corev1.EventTypeWarning, "MDSUnaddressable",
-			fmt.Sprintf("node %s publishes no address for clients to mount", node))
-		return ctrl.Result{RequeueAfter: nfsExportNoHostRequeue}, nil
-	}
-
-	return r.bindExport(ctx, export, machine, logger, mdsBinding{node: node, address: address})
+	return r.bindMDS(ctx, export, machine, logger, d)
 }
 
-// mdsBinding is the host an export is bound to: a node, or the metadata server
-// pod, and the address the export's Service endpoints at.
+// mdsBinding is the metadata server pod an export is bound to, and the address
+// the export's Service endpoints at.
 type mdsBinding struct {
-	node    string
 	pod     string
 	address string
 }
 
 func (b mdsBinding) String() string {
-	if b.pod != "" {
-		return "metadata server pod " + b.pod
-	}
-	return "node " + b.node
+	return "metadata server pod " + b.pod
 }
 
 // bindExport writes the binding. The only place one is made, and it is written
@@ -250,7 +222,7 @@ func (r *NFSExportReconciler) bindExport(
 ) (ctrl.Result, error) {
 	// Before the transition: an export bound with no client set is one the
 	// host refuses, and refusing here names the cause.
-	clients, err := r.clusterNodeAddresses(ctx, host.pod != "")
+	clients, err := r.clusterNodeAddresses(ctx)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -277,7 +249,6 @@ func (r *NFSExportReconciler) bindExport(
 	// finds the binding rather than choosing a second host for one export.
 	if err := r.writeStatus(ctx, export, func(s *simplyblockv1alpha2.NFSExportStatus) {
 		s.Phase = phaseAssembling
-		s.MDSNodeName = host.node
 		s.MDSPodName = host.pod
 		s.MDSNodeIP = host.address
 		s.ServiceAddress = serviceAddress
@@ -348,7 +319,7 @@ func (r *NFSExportReconciler) reconcileReady(
 	ctx context.Context,
 	export *simplyblockv1alpha2.NFSExport,
 ) (ctrl.Result, error) {
-	if result, handled, err := r.resyncPodHosted(ctx, export); handled || err != nil {
+	if result, handled, err := r.resyncAfterRestart(ctx, export); handled || err != nil {
 		return result, err
 	}
 
@@ -356,7 +327,7 @@ func (r *NFSExportReconciler) reconcileReady(
 
 	if export.Status.ObservedGeneration != export.Generation {
 		if host.Zero() || r.Assembler == nil || !r.Assembler.HasSession(host) {
-			r.event(export, corev1.EventTypeNormal, "AwaitingNodeForGrow",
+			r.event(export, corev1.EventTypeNormal, "AwaitingMDSForGrow",
 				fmt.Sprintf("waiting for %s to become reachable to grow the export", host))
 			return ctrl.Result{RequeueAfter: nfsExportNoSessionRequeue}, nil
 		}
@@ -419,9 +390,10 @@ func (r *NFSExportReconciler) reconcileDelete(
 					fmt.Sprintf("metadata server pod %s is gone, and its mounts with it", export.Status.MDSPodName))
 				return ctrl.Result{}, r.releaseFinalizer(ctx, export)
 			}
-			// The mount and the exports entry exist only on the host, so
-			// tearing down without reaching it orphans both.
-			r.event(export, corev1.EventTypeNormal, "AwaitingNodeForTeardown",
+			// The pod still exists, so its guest may still hold the mount
+			// and the exports entry, and tearing down without reaching it
+			// orphans both.
+			r.event(export, corev1.EventTypeNormal, "AwaitingMDSForTeardown",
 				fmt.Sprintf("waiting for %s to become reachable to tear the export down", host))
 			return ctrl.Result{RequeueAfter: nfsExportNoSessionRequeue}, nil
 		}
@@ -455,18 +427,17 @@ func (r *NFSExportReconciler) releaseFinalizer(ctx context.Context, export *simp
 	})
 }
 
-// ExportHost is where an export call goes, and the NVMe host identity the host
-// attaches the namespace as when the operator decides it.
+// ExportHost is where an export call goes, and the NVMe host identity the
+// guest attaches the namespace as.
 type ExportHost struct {
 	Peer link.PeerID
-	// HostNQN is set for a pod-hosted export: the guest is one host across
-	// pod restarts, which it cannot know itself (design-pnfs-mds-vm.md §6.5).
-	// Empty lets a node plugin derive its own from its node.
+	// HostNQN is the guest's: it is one host across pod restarts, which it
+	// cannot know itself (design-pnfs-mds-vm.md §6.5).
 	HostNQN string
 }
 
-// exportHost adds the host identity to the peer. A pod-hosted export attaches
-// as its StatefulSet, whose UID survives the pod and changes only when the
+// exportHost adds the host identity to the peer. The guest attaches as its
+// StatefulSet, whose UID survives the pod and changes only when the
 // StatefulSet is recreated, which is when an old authorization should not
 // carry over. A pod that cannot be read leaves the identity empty: the call
 // then fails at the control plane with its own message, or, for a teardown,
@@ -489,21 +460,17 @@ func (r *NFSExportReconciler) exportHost(
 	return host
 }
 
-// mdsHost is the peer serving the export: its metadata server pod when the
-// export is pod-hosted, its node otherwise, and zero while it is unbound.
+// mdsHost is the peer serving the export, its metadata server pod, and zero
+// while it is unbound.
 func mdsHost(export *simplyblockv1alpha2.NFSExport) link.PeerID {
 	if pod := export.Status.MDSPodName; pod != "" {
 		return link.MDSPeer(pod)
 	}
-	if node := export.Status.MDSNodeName; node != "" {
-		return link.NodePeer(node)
-	}
 	return link.PeerID{}
 }
 
-// mdsPodGone reports whether a pod-hosted export's metadata server pod no
-// longer exists. A node-hosted export is never gone this way: its mount
-// outlives the plugin on the node, so its teardown waits for the node.
+// mdsPodGone reports whether the export's metadata server pod no longer
+// exists, which takes the guest's mounts and exports table with it.
 func (r *NFSExportReconciler) mdsPodGone(ctx context.Context, export *simplyblockv1alpha2.NFSExport) (bool, error) {
 	pod := export.Status.MDSPodName
 	if pod == "" {
@@ -518,75 +485,6 @@ func (r *NFSExportReconciler) mdsPodGone(ctx context.Context, export *simplybloc
 	default:
 		return false, fmt.Errorf("reading metadata server pod %s: %w", pod, err)
 	}
-}
-
-// MDSCapableLabel marks a Kubernetes node as able to serve a pNFS export.
-//
-// It gates selection rather than describing it: the operator cannot see from
-// here whether a node has nfs-utils and a kernel nfsd, so until a node agent
-// reports it, the label is how an administrator says which nodes are equipped.
-//
-// An unlabeled cluster therefore serves no exports, visibly: the export waits
-// in Pending with an event naming the label, rather than binding a host that
-// fails in Assembling for a reason nobody can guess.
-const MDSCapableLabel = "storage.simplyblock.io/pnfs-mds"
-
-// selectMDS picks the node to serve this export, or "" when none can.
-//
-// It asks Kubernetes, not the storage cluster. An MDS is whichever node runs
-// the csi-node pod that assembles the export; it reaches the volume over
-// NVMe-oF exactly as a client does, so it does not have to be, or be near, the
-// storage node holding the data. Requiring one would confine every export to
-// the storage nodes for no reason the code can state.
-//
-// One cluster, one MDS: every export resolves to the same node rather than
-// spreading across the eligible set. A second MDS host serving a fraction of
-// the exports is a second failure domain, and reconcileHealth can only detect
-// one going bad, not yet recover from it (§13's failover is not implemented),
-// so concentrating rather than spreading does not trade a bigger blast radius
-// for a smaller one: today there is no recovery either way, and one host is
-// simpler to reason about and to point the health probe at. The eligible set
-// stays a set, not a singleton requirement, so an administrator can label a
-// standby to fail over onto once §13 lands.
-func (r *NFSExportReconciler) selectMDS(ctx context.Context) (string, error) {
-	var nodes corev1.NodeList
-	if err := r.List(ctx, &nodes, client.MatchingLabels{MDSCapableLabel: "true"}); err != nil {
-		return "", fmt.Errorf("listing the nodes labeled %s: %w", MDSCapableLabel, err)
-	}
-
-	eligible := make([]string, 0, len(nodes.Items))
-	for i := range nodes.Items {
-		if mdsEligible(&nodes.Items[i]) {
-			eligible = append(eligible, nodes.Items[i].Name)
-		}
-	}
-	if len(eligible) == 0 {
-		return "", nil
-	}
-
-	// Sorted rather than picked in list order, which Kubernetes does not
-	// guarantee is stable across calls: every export must resolve to the same
-	// node on every reconcile, or two exports pending at once could each bind
-	// to a different "first" host.
-	slices.Sort(eligible)
-	return eligible[0], nil
-}
-
-// mdsEligible reports whether a labeled node may serve an export now.
-//
-// The label says the host is equipped; these say it is available. A node being
-// deleted or cordoned is one an administrator is taking away, and binding an
-// export to it would put the filesystem somewhere that is about to go.
-func mdsEligible(node *corev1.Node) bool {
-	if !node.DeletionTimestamp.IsZero() || node.Spec.Unschedulable {
-		return false
-	}
-	for _, c := range node.Status.Conditions {
-		if c.Type == corev1.NodeReady {
-			return c.Status == corev1.ConditionTrue
-		}
-	}
-	return false
 }
 
 // restore rebuilds the phase machine from status. No entry hooks run: the

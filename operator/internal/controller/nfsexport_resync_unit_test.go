@@ -21,7 +21,7 @@ const restartedPodUID = "mds-uid-2"
 // readyPodHosted is a Ready export assembled by the pod instance testMDSPodUID.
 func readyPodHosted() *simplyblockv1alpha2.NFSExport {
 	return testExport(func(e *simplyblockv1alpha2.NFSExport) {
-		podHosted(simplyblockv1alpha2.NFSExportPhaseReady)(e)
+		bound(simplyblockv1alpha2.NFSExportPhaseReady)(e)
 		e.Status.ObservedGeneration = e.Generation
 	})
 }
@@ -153,7 +153,7 @@ func TestAReadyExportIsReassembledAfterItsGuestRestartedInPlace(t *testing.T) {
 func TestAssemblyRecordsTheAssemblingPod(t *testing.T) {
 	asm := &fakeAssembler{}
 	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
-		podHosted(simplyblockv1alpha2.NFSExportPhaseAssembling)(e)
+		bound(simplyblockv1alpha2.NFSExportPhaseAssembling)(e)
 		e.Status.AssembledBy = ""
 	})
 	r, cl, _ := newResyncReconciler(t, asm, export, runningMDSPod(restartedPodUID, testMDSPodIP))
@@ -173,11 +173,10 @@ func TestAnMDSPodEventEnqueuesTheExportsBoundToIt(t *testing.T) {
 		e.Name = "nfsexp-other"
 		e.Status.MDSPodName = "simplyblock-pnfs-mds-7c3e9a10-0"
 	})
-	nodeHosted := testExport(func(e *simplyblockv1alpha2.NFSExport) {
-		e.Name = "nfsexp-node"
-		e.Status.MDSNodeName = testMDSHost
+	unbound := testExport(func(e *simplyblockv1alpha2.NFSExport) {
+		e.Name = "nfsexp-unbound"
 	})
-	r, _, _ := newResyncReconciler(t, &fakeAssembler{}, bound, other, nodeHosted)
+	r, _, _ := newResyncReconciler(t, &fakeAssembler{}, bound, other, unbound)
 
 	requests := r.exportsBoundToPod(context.Background(), mdsPod())
 

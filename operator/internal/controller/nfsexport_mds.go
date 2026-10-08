@@ -1,12 +1,10 @@
-// Binding an export to the metadata server pod of its storage cluster, when
-// the driver runs the metadata server in a pod instead of on labeled nodes
+// Binding an export to the metadata server pod of its storage cluster
 // (design-pnfs-mds-vm.md §7.3).
 //
 // It lives beside the reconciler rather than in it because it is the one part
 // of binding that creates workload objects: the StatefulSet the driver package
 // renders, which this reconciler applies on a storage cluster's first export
-// and then leaves alone. Everything after the host is chosen is the node-hosted
-// path's own bindExport.
+// and then leaves alone. Everything after the pod is chosen is bindExport's.
 
 package controller
 
@@ -48,11 +46,11 @@ const nfsExportMDSBootRequeue = 10 * time.Second
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;create
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=simplyblockdrivers,verbs=get;list;watch
 
-// podHostedDriver returns the driver that runs the metadata server in a pod, or
-// nil when none in the operator's namespace does. More than one such driver is
-// a misconfiguration this does not try to resolve: the first by name wins, so
+// mdsDriver returns the driver that configures the metadata server, or nil when
+// none in the operator's namespace does. More than one such driver is a
+// misconfiguration this does not try to resolve: the first by name wins, so
 // the choice is at least stable.
-func (r *NFSExportReconciler) podHostedDriver(ctx context.Context) (*simplyblockv1alpha2.SimplyblockDriver, error) {
+func (r *NFSExportReconciler) mdsDriver(ctx context.Context) (*simplyblockv1alpha2.SimplyblockDriver, error) {
 	if r.OperatorNamespace == "" {
 		return nil, nil
 	}
@@ -71,9 +69,9 @@ func (r *NFSExportReconciler) podHostedDriver(ctx context.Context) (*simplyblock
 	return nil, nil
 }
 
-// reconcilePendingPodHosted brings up the export's storage cluster's metadata
-// server and binds the export to it once its guest is healthy.
-func (r *NFSExportReconciler) reconcilePendingPodHosted(
+// bindMDS brings up the export's storage cluster's metadata server and binds
+// the export to it once its guest is healthy.
+func (r *NFSExportReconciler) bindMDS(
 	ctx context.Context,
 	export *simplyblockv1alpha2.NFSExport,
 	machine *statemachine.Machine[phase],

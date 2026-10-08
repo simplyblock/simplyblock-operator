@@ -1,4 +1,4 @@
-// Which hosts may mount an export, and the address they mount it at.
+// Which hosts may mount an export.
 //
 // The set goes verbatim into an exports(5) entry, so it is the only thing
 // between a shared filesystem and every host that can reach the metadata
@@ -15,8 +15,6 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // clusterNodeAddresses is every node that could run a pod using this volume.
@@ -26,14 +24,14 @@ import (
 // entry as pods move, and an entry rewritten under a live mount is a client
 // that loses its export mid-write.
 //
-// A pod-hosted metadata server also admits each node's pod CIDR. A node
-// reaches the metadata server pod across the pod network, and the CNI rewrites
-// the source to the node's own address in its pod CIDR (a tunnel or bridge
-// address, which depends on the CNI and on whether the two share a node), so
-// the guest never sees the InternalIP (design-pnfs-mds-vm.md §8.3). The CIDR
-// also admits the node's pods, which is why which client may move data
-// through the metadata server is enforced on the client, not here.
-func (r *NFSExportReconciler) clusterNodeAddresses(ctx context.Context, podHosted bool) ([]string, error) {
+// Each node's pod CIDR is admitted beside its InternalIP. A node reaches the
+// metadata server pod across the pod network, and the CNI rewrites the source
+// to the node's own address in its pod CIDR (a tunnel or bridge address, which
+// depends on the CNI and on whether the two share a node), so the guest may
+// never see the InternalIP (design-pnfs-mds-vm.md §8.3). The CIDR also admits
+// the node's pods, which is why which client may move data through the
+// metadata server is enforced on the client, not here.
+func (r *NFSExportReconciler) clusterNodeAddresses(ctx context.Context) ([]string, error) {
 	var nodes corev1.NodeList
 	if err := r.List(ctx, &nodes); err != nil {
 		return nil, fmt.Errorf("listing cluster nodes for the export's client set: %w", err)
@@ -43,9 +41,7 @@ func (r *NFSExportReconciler) clusterNodeAddresses(ctx context.Context, podHoste
 		if addr := internalAddress(&nodes.Items[i]); addr != "" {
 			clients = append(clients, addr)
 		}
-		if podHosted {
-			clients = append(clients, podCIDRs(&nodes.Items[i])...)
-		}
+		clients = append(clients, podCIDRs(&nodes.Items[i])...)
 	}
 	return clients, nil
 }
@@ -59,23 +55,6 @@ func podCIDRs(node *corev1.Node) []string {
 		return []string{node.Spec.PodCIDR}
 	}
 	return nil
-}
-
-// nodeAddress is the bound MDS host's own address: what the export's Service
-// EndpointSlice points at, not what a client mounts (see reconcileExportService
-// and ServiceAddress). "" when the node is gone or publishes none.
-func (r *NFSExportReconciler) nodeAddress(ctx context.Context, nodeName string) (string, error) {
-	if nodeName == "" {
-		return "", nil
-	}
-	var node corev1.Node
-	if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
-		if apierrors.IsNotFound(err) {
-			return "", nil
-		}
-		return "", fmt.Errorf("reading node %s for the export address: %w", nodeName, err)
-	}
-	return internalAddress(&node), nil
 }
 
 // internalAddress is the one address type a client can reach the node at.
