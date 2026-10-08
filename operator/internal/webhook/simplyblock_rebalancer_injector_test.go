@@ -23,7 +23,6 @@ import (
 const (
 	testContainerName = "simplyblock-rebalancer"
 	testVolumeName    = "simplyblock-rebalancer-config"
-	testScrapeValue   = "true"
 )
 
 func newScheme(t *testing.T) *runtime.Scheme {
@@ -255,9 +254,6 @@ func TestSimplyblockRebalancerInjector_Handle(t *testing.T) {
 			if patched.Annotations[injectedAnnotation] != annotationTrue {
 				t.Errorf("annotation %s = %q, want %q", injectedAnnotation, patched.Annotations[injectedAnnotation], annotationTrue)
 			}
-			if patched.Annotations["prometheus.simplyblock.io/scrape"] != testScrapeValue {
-				t.Error("prometheus.io/scrape annotation missing")
-			}
 		})
 	}
 }
@@ -273,9 +269,6 @@ func applyPatches(t *testing.T, pod *corev1.Pod, patches []jsonpatch.JsonPatchOp
 		result.Annotations = make(map[string]string)
 	}
 	result.Annotations[injectedAnnotation] = annotationTrue
-	result.Annotations["prometheus.simplyblock.io/scrape"] = testScrapeValue
-	result.Annotations["prometheus.simplyblock.io/port"] = "9199"
-	result.Annotations["prometheus.simplyblock.io/path"] = "/metrics"
 	return result
 }
 
