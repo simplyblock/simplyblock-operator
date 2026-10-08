@@ -420,7 +420,8 @@ func TestAnUpgradeWritesTheImageOntoTheEntity(t *testing.T) {
 // webAPIAt builds the management API's Deployment as the rollout controller
 // would report it: the image its pod template carries, and how far the roll has
 // got.
-func webAPIAt(image string, replicas, updated, ready int32, mutate ...func(*appsv1.Deployment)) *appsv1.Deployment {
+func webAPIAt(image string, updated, ready int32, mutate ...func(*appsv1.Deployment)) *appsv1.Deployment {
+	const replicas int32 = 2
 	d := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: ComponentWebAPI, Namespace: testNamespace, Generation: 2},
 		Spec: appsv1.DeploymentSpec{
@@ -458,7 +459,7 @@ func TestVerifyingPassesOnACompletedRollout(t *testing.T) {
 	ops := upgradeTo(next)
 
 	r := &ControlPlaneOpsReconciler{
-		Client: newClient(t, cp, ops, webAPIAt(next, 2, 2, 2)),
+		Client: newClient(t, cp, ops, webAPIAt(next, 2, 2)),
 		Scheme: testScheme(t),
 		Prober: &stubProber{ready: true},
 	}
@@ -483,7 +484,7 @@ func TestVerifyingHoldsWhileTheDeploymentStillCarriesTheOldImage(t *testing.T) {
 	ops := upgradeTo("quay.io/simplyblock-io/simplyblock:26.3.0")
 
 	r := &ControlPlaneOpsReconciler{
-		Client: newClient(t, cp, ops, webAPIAt(testImage, 2, 2, 2)),
+		Client: newClient(t, cp, ops, webAPIAt(testImage, 2, 2)),
 		Scheme: testScheme(t),
 		Prober: &stubProber{ready: true},
 	}
@@ -509,9 +510,9 @@ func TestVerifyingHoldsWhileReplicasAreStillBeingReplaced(t *testing.T) {
 	ops := upgradeTo(next)
 
 	for name, d := range map[string]*appsv1.Deployment{
-		"one of two updated":      webAPIAt(next, 2, 1, 1),
-		"updated but not ready":   webAPIAt(next, 2, 2, 1),
-		"generation not observed": webAPIAt(next, 2, 2, 2, func(d *appsv1.Deployment) { d.Status.ObservedGeneration = 1 }),
+		"one of two updated":      webAPIAt(next, 1, 1),
+		"updated but not ready":   webAPIAt(next, 2, 1),
+		"generation not observed": webAPIAt(next, 2, 2, func(d *appsv1.Deployment) { d.Status.ObservedGeneration = 1 }),
 	} {
 		r := &ControlPlaneOpsReconciler{
 			Client: newClient(t, cp, ops, d),
@@ -534,7 +535,7 @@ func TestAStalledRolloutFailsTheOperation(t *testing.T) {
 	const next = "quay.io/simplyblock-io/simplyblock:does-not-exist"
 	cp := localControlPlane()
 	ops := upgradeTo(next)
-	stalled := webAPIAt(next, 2, 1, 1, func(d *appsv1.Deployment) {
+	stalled := webAPIAt(next, 1, 1, func(d *appsv1.Deployment) {
 		d.Status.Conditions = []appsv1.DeploymentCondition{{
 			Type:   appsv1.DeploymentProgressing,
 			Status: corev1.ConditionFalse,
@@ -570,7 +571,7 @@ func TestARolloutStillProgressingIsNotAFailure(t *testing.T) {
 	const next = "quay.io/simplyblock-io/simplyblock:26.3.0"
 	cp := localControlPlane()
 	ops := upgradeTo(next)
-	rolling := webAPIAt(next, 2, 1, 1, func(d *appsv1.Deployment) {
+	rolling := webAPIAt(next, 1, 1, func(d *appsv1.Deployment) {
 		d.Status.Conditions = []appsv1.DeploymentCondition{{
 			Type:   appsv1.DeploymentProgressing,
 			Status: corev1.ConditionTrue,
@@ -676,9 +677,9 @@ func TestARestartAwaitsTheRolloutItStarted(t *testing.T) {
 		done   bool
 	}{
 		"stamp written, old pod still ready": {
-			webAPIAt(testImage, 2, 0, 2, func(d *appsv1.Deployment) { d.Status.ObservedGeneration = 1 }), false},
-		"replacement rolling": {webAPIAt(testImage, 2, 1, 1), false},
-		"rolled and ready":    {webAPIAt(testImage, 2, 2, 2), true},
+			webAPIAt(testImage, 0, 2, func(d *appsv1.Deployment) { d.Status.ObservedGeneration = 1 }), false},
+		"replacement rolling": {webAPIAt(testImage, 1, 1), false},
+		"rolled and ready":    {webAPIAt(testImage, 2, 2), true},
 	} {
 		r := &ControlPlaneOpsReconciler{
 			Client: newClient(t, cp, ops, tc.deploy),
