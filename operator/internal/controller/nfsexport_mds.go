@@ -89,11 +89,11 @@ func (r *NFSExportReconciler) reconcilePendingPodHosted(
 	}
 
 	if err := r.ensureMDS(ctx, d, handle.ClusterID); err != nil {
-		var noClass *stateClassError
-		if errors.As(err, &noClass) {
-			// Not retried hot: nothing changes until somebody creates or
-			// names a class, so the export waits and looks again later.
-			r.event(export, corev1.EventTypeWarning, "MDSStateUnavailable",
+		var wait *mdsWaitError
+		if errors.As(err, &wait) {
+			// Not retried hot: nothing changes until somebody acts on the
+			// reason, so the export waits and looks again later.
+			r.event(export, corev1.EventTypeWarning, wait.reason,
 				fmt.Sprintf("cannot create the metadata server for storage cluster %s: %v", handle.ClusterID, err))
 			return r.waitForMDS(ctx, export, err.Error(), nfsExportNoHostRequeue)
 		}
@@ -142,11 +142,22 @@ func (r *NFSExportReconciler) ensureMDS(
 	key := client.ObjectKey{Namespace: r.OperatorNamespace, Name: driver.MDSStatefulSetName(d, clusterID)}
 	switch err := r.Get(ctx, key, &existing); {
 	case err == nil:
+		// The name carries a digest of the cluster ID, so another cluster's
+		// StatefulSet here is all but impossible, and binding to it would
+		// serve this cluster's exports from the other cluster's guest.
+		if owner := existing.Labels[driver.MDSClusterLabel]; owner != clusterID {
+			return &mdsWaitError{reason: "MDSNameCollision", message: fmt.Sprintf(
+				"StatefulSet %s belongs to storage cluster %q, not %s", key.Name, owner, clusterID)}
+		}
 		return nil
 	case !apierrors.IsNotFound(err):
 		return fmt.Errorf("reading the metadata server StatefulSet %s: %w", key.Name, err)
 	}
 
+	// Enforced here as well as at admission, which ignores its own failures.
+	if problem := driver.MDSResourcesProblem(d.Spec.PNFS.MDS); problem != "" {
+		return &mdsWaitError{reason: "MDSResourcesInvalid", message: problem}
+	}
 	stateClass, err := r.mdsStateClass(ctx, d, clusterID)
 	if err != nil {
 		return err
@@ -166,12 +177,18 @@ func (r *NFSExportReconciler) ensureMDS(
 	return nil
 }
 
-// stateClassError is a state disk class that cannot be used: the export waits
-// for one rather than failing, since creating or naming a class is all it
-// takes to proceed.
-type stateClassError struct{ reason string }
+// mdsWaitError is a reason the metadata server cannot be created that no
+// retry fixes: the export waits, with reason as the event's, rather than
+// failing hot, since what it takes to proceed is somebody acting on it.
+type mdsWaitError struct{ reason, message string }
 
-func (e *stateClassError) Error() string { return e.reason }
+func (e *mdsWaitError) Error() string { return e.message }
+
+// stateUnavailable is the mdsWaitError of a state disk class that cannot be
+// used.
+func stateUnavailable(format string, args ...any) error {
+	return &mdsWaitError{reason: "MDSStateUnavailable", message: fmt.Sprintf(format, args...)}
+}
 
 // mdsStateClass is the StorageClass of the metadata server's state disk, which
 // is always a simplyblock volume. A node-local disk would pin the pod to the
@@ -198,16 +215,15 @@ func (r *NFSExportReconciler) mdsStateClass(
 		var sc storagev1.StorageClass
 		switch err := r.Get(ctx, client.ObjectKey{Name: *named}, &sc); {
 		case apierrors.IsNotFound(err):
-			return "", &stateClassError{fmt.Sprintf(
-				"the state disk's storage class %q does not exist", *named)}
+			return "", stateUnavailable("the state disk's storage class %q does not exist", *named)
 		case err != nil:
 			return "", fmt.Errorf("reading storage class %s: %w", *named, err)
 		}
 		if !isSimplyblockBlockClass(&sc, provisioner) {
-			return "", &stateClassError{fmt.Sprintf(
+			return "", stateUnavailable(
 				"the state disk's storage class %q is not a simplyblock block volume class "+
 					"(provisioner %q, fstype %q); name a class of %s", *named, sc.Provisioner,
-				sc.Parameters[kube.ParamFSType], provisioner)}
+				sc.Parameters[kube.ParamFSType], provisioner)
 		}
 		return *named, nil
 	}
@@ -254,10 +270,10 @@ func (r *NFSExportReconciler) clusterBlockClass(
 		}
 	}
 	if len(candidates) == 0 {
-		return nil, &stateClassError{fmt.Sprintf(
+		return nil, stateUnavailable(
 			"no storage class of %s provisions block volumes on storage cluster %s to derive the "+
 				"state disk's class from; create one, or name one in spec.pnfs.mds.stateStorageClassName",
-			provisioner, clusterID)}
+			provisioner, clusterID)
 	}
 	slices.SortFunc(candidates, func(a, b *storagev1.StorageClass) int {
 		if am, bm := pool.IsOperatorManaged(a), pool.IsOperatorManaged(b); am != bm {

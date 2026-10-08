@@ -324,7 +324,7 @@ func (r *NFSExportReconciler) reconcileAssembling(
 	if err := machine.TransitionTo(ctx, phaseReady); err != nil {
 		return ctrl.Result{}, fmt.Errorf("transition to Ready: %w", err)
 	}
-	assembledBy := r.assemblingPodUID(ctx, export)
+	assembledBy := r.assemblingInstance(ctx, export)
 	if err := r.writeStatus(ctx, export, func(s *simplyblockv1alpha2.NFSExportStatus) {
 		s.Phase = phaseReady
 		s.Message = ""

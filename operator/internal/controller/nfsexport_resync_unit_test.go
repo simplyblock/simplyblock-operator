@@ -124,6 +124,30 @@ func TestAResyncWaitsForTheRestartedPodsSession(t *testing.T) {
 	}
 }
 
+// A guest that crashed comes back in the same pod: kubelet restarts the
+// runner container and the pod keeps its UID. That guest booted cold all the
+// same, with no mounts and no exports, and the runner container's new ID is
+// what says so.
+func TestAReadyExportIsReassembledAfterItsGuestRestartedInPlace(t *testing.T) {
+	asm := &fakeAssembler{}
+	export := readyPodHosted()
+	export.Status.AssembledBy = testMDSPodUID + "/containerd://first"
+	pod := runningMDSPod(testMDSPodUID, testMDSPodIP)
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{
+		{Name: "mds-runner", ContainerID: "containerd://second", RestartCount: 1},
+	}
+	r, cl, _ := newResyncReconciler(t, asm, export, pod)
+
+	reconcileExport(t, r)
+
+	if len(asm.created) != 1 {
+		t.Fatalf("CreateExport calls = %v, want one: the guest restarted inside the same pod", asm.created)
+	}
+	if got := loadExport(t, cl).Status.AssembledBy; got != testMDSPodUID+"/containerd://second" {
+		t.Errorf("assembledBy = %q, want the pod and its running container", got)
+	}
+}
+
 // The first assembly records the pod instance that did it, which is what a
 // later restart is detected against.
 func TestAssemblyRecordsTheAssemblingPod(t *testing.T) {

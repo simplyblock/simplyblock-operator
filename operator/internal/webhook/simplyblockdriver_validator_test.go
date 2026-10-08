@@ -14,6 +14,8 @@ import (
 	"testing"
 
 	admissionv1 "k8s.io/api/admission/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -145,6 +147,45 @@ func TestSimplyblockDriverValidator(t *testing.T) {
 			}
 			if resp.Result == nil || !strings.Contains(resp.Result.Message, tc.namesHolder) {
 				t.Fatalf("denial does not name %q: %+v", tc.namesHolder, resp.Result)
+			}
+		})
+	}
+}
+
+// The metadata server's guest gets the pod's memory limit less 256Mi for QEMU,
+// so a limit under 512Mi leaves it too small to boot. Said at the moment it is
+// written, on a create or an edit alike, rather than once the pod crash-loops.
+func TestSimplyblockDriverValidatorRefusesAnMDSMemoryLimitUnder512Mi(t *testing.T) {
+	withMemory := func(limit string) *simplyblockv1alpha2.SimplyblockDriver {
+		d := testDriverObject("simplyblock", "simplyblock")
+		d.Spec.PNFS.MDS = &simplyblockv1alpha2.DriverPNFSMDS{}
+		if limit != "" {
+			d.Spec.PNFS.MDS.Resources.Limits = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse(limit)}
+		}
+		return d
+	}
+	for _, tc := range []struct {
+		name    string
+		op      admissionv1.Operation
+		limit   string
+		allowed bool
+	}{
+		{name: "an unset limit, which the operator defaults", op: admissionv1.Create, allowed: true},
+		{name: "exactly 512Mi", op: admissionv1.Create, limit: "512Mi", allowed: true},
+		{name: "256Mi on create", op: admissionv1.Create, limit: "256Mi"},
+		{name: "500M on create, under 512Mi", op: admissionv1.Create, limit: "500M"},
+		{name: "256Mi on an edit of the only driver", op: admissionv1.Update, limit: "256Mi"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := &SimplyblockDriverValidator{Client: fake.NewClientBuilder().WithScheme(newDriverScheme(t)).Build()}
+			resp := v.Handle(context.Background(), admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{Operation: tc.op, Object: driverRaw(t, withMemory(tc.limit))},
+			})
+			if resp.Allowed != tc.allowed {
+				t.Fatalf("Allowed = %v, want %v (%+v)", resp.Allowed, tc.allowed, resp.Result)
+			}
+			if !tc.allowed && (resp.Result == nil || !strings.Contains(resp.Result.Message, "512Mi")) {
+				t.Errorf("denial does not name the minimum: %+v", resp.Result)
 			}
 		})
 	}

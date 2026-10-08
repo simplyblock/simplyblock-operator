@@ -45,7 +45,10 @@ const KVMCapableValue = "true"
 const MDSClusterLabel = "storage.simplyblock.io/cluster-id"
 
 const (
-	mdsContainerName = "mds-runner"
+	// MDSContainerName is the runner container. Its ID changes every time
+	// kubelet restarts it, which is how a guest that crashed and came back in the
+	// same pod is told apart from the one that was running.
+	MDSContainerName = "mds-runner"
 	// mdsImageTagPrefix sets the metadata server apart from the driver in the
 	// repository both ship in.
 	mdsImageTagPrefix = "pnfs-mds-"
@@ -75,13 +78,47 @@ const (
 )
 
 // MDSStatefulSetName is the StatefulSet serving a storage cluster's exports.
-// It carries the first group of the cluster's UUID: the whole UUID would push
-// it past the 52 characters a StatefulSet name may have, and the label
-// carries the rest.
+//
+// Built by atlas-lib's kube.Formula rather than by hand, held to the 52
+// characters a StatefulSet name may have: its pods carry a
+// controller-revision-hash label of the name plus eleven characters, and a
+// label is 63. The whole cluster UUID does not fit beside the prefix, so the
+// formula keeps what does and appends a digest of the full ID. Cutting the ID
+// to its first group alone, as this once did, gave two clusters sharing that
+// group one StatefulSet, and the second cluster's exports bound to the first
+// one's pod. The label carries the full ID.
 func MDSStatefulSetName(d *simplyblockv1alpha2.SimplyblockDriver, clusterID string) string {
-	short, _, _ := strings.Cut(clusterID, "-")
-	return d.Name + "-pnfs-mds-" + short
+	return kube.Formula{Prefix: d.Name + "-pnfs-mds-", Limit: mdsStatefulSetNameLimit}.
+		Derive(clusterID).Value
 }
+
+// MDSMinMemoryLimit is the smallest memory limit the metadata server pod may
+// have. The runner gives the guest the limit less 256Mi for QEMU, and a guest
+// with less than 256Mi does not boot.
+const MDSMinMemoryLimit = "512Mi"
+
+// MDSResourcesProblem says why spec.pnfs.mds's resources cannot run the guest,
+// or returns "" when they can. Only an explicit memory limit is checked: an
+// unset one is defaulted to mdsDefaultMemoryLimit.
+//
+// It is not a CEL rule on the CRD because it cannot be one: limits is an
+// unbounded map of quantities, and the apiserver refuses to install a schema
+// whose rule over it has no bounded cost.
+func MDSResourcesProblem(spec *simplyblockv1alpha2.DriverPNFSMDS) string {
+	if spec == nil {
+		return ""
+	}
+	mem, ok := spec.Resources.Limits[corev1.ResourceMemory]
+	if !ok || mem.Cmp(resource.MustParse(MDSMinMemoryLimit)) >= 0 {
+		return ""
+	}
+	return fmt.Sprintf("spec.pnfs.mds.resources.limits.memory is %s, under the %s the metadata "+
+		"server needs: its guest gets the limit less 256Mi for QEMU", mem.String(), MDSMinMemoryLimit)
+}
+
+// mdsStatefulSetNameLimit is the longest a StatefulSet name may be; see
+// MDSStatefulSetName.
+const mdsStatefulSetNameLimit = 52
 
 // MDSStateClassSuffix ends the name of every storage cluster's state disk
 // class, and is what the admission policy reserving those classes matches on.
@@ -92,11 +129,11 @@ const MDSStateClassSuffix = "-pnfs-mds-state"
 // leaves it alone.
 const MDSStateClassManagedBy = "pnfs-mds"
 
-// MDSStateClassName is the StorageClass of one storage cluster's state disk.
-// Short like the StatefulSet's name, and ending in MDSStateClassSuffix.
+// MDSStateClassName is the StorageClass of one storage cluster's state disk,
+// ending in MDSStateClassSuffix. A StorageClass name may be 253 characters, so
+// the whole cluster ID fits and the name is unique without a digest.
 func MDSStateClassName(d *simplyblockv1alpha2.SimplyblockDriver, clusterID string) string {
-	short, _, _ := strings.Cut(clusterID, "-")
-	return d.Name + "-" + short + MDSStateClassSuffix
+	return kube.Formula{Prefix: d.Name + "-", Suffix: MDSStateClassSuffix}.Derive(clusterID).Value
 }
 
 // MDSStatePolicyName names the admission policy reserving the driver's state
@@ -306,7 +343,7 @@ func MDSObjects(
 func mdsRunnerContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string) corev1.Container {
 	spec := d.Spec.PNFS.MDS
 	return corev1.Container{
-		Name:            mdsContainerName,
+		Name:            MDSContainerName,
 		Image:           image,
 		ImagePullPolicy: pullPolicy(d),
 		SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true)},
@@ -367,7 +404,7 @@ func resourceEnv(name, resourceName, divisor string) corev1.EnvVar {
 		Name: name,
 		ValueFrom: &corev1.EnvVarSource{
 			ResourceFieldRef: &corev1.ResourceFieldSelector{
-				ContainerName: mdsContainerName,
+				ContainerName: MDSContainerName,
 				Resource:      resourceName,
 				Divisor:       resource.MustParse(divisor),
 			},

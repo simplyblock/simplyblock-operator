@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 )
 
 // resyncPodHosted reassembles a Ready pod-hosted export whose metadata server
@@ -43,7 +44,7 @@ func (r *NFSExportReconciler) resyncPodHosted(
 	case err != nil:
 		return ctrl.Result{}, true, fmt.Errorf("reading metadata server pod %s: %w", name, err)
 	}
-	if string(pod.UID) == export.Status.AssembledBy {
+	if mdsInstance(&pod) == export.Status.AssembledBy {
 		return ctrl.Result{}, false, nil
 	}
 
@@ -71,7 +72,7 @@ func (r *NFSExportReconciler) resyncPodHosted(
 		return ctrl.Result{}, true, fmt.Errorf("reassembling export on %s: %w", host, err)
 	}
 	if err := r.writeStatus(ctx, export, func(s *simplyblockv1alpha2.NFSExportStatus) {
-		s.AssembledBy = string(pod.UID)
+		s.AssembledBy = mdsInstance(&pod)
 	}); err != nil {
 		return ctrl.Result{}, true, err
 	}
@@ -80,10 +81,9 @@ func (r *NFSExportReconciler) resyncPodHosted(
 	return ctrl.Result{RequeueAfter: nfsExportHealthCheckInterval}, true, nil
 }
 
-// assemblingPodUID is the UID of the metadata server pod a pod-hosted export
-// is assembled by, or empty for a node-hosted export or a pod that cannot be
-// read. Recorded with the assembly, it is what a restart is detected against.
-func (r *NFSExportReconciler) assemblingPodUID(ctx context.Context, export *simplyblockv1alpha2.NFSExport) string {
+// assemblingInstance is the metadata server instance an export bound to a pod
+// is assembled by, or "" when there is no such pod.
+func (r *NFSExportReconciler) assemblingInstance(ctx context.Context, export *simplyblockv1alpha2.NFSExport) string {
 	name := export.Status.MDSPodName
 	if name == "" {
 		return ""
@@ -91,6 +91,22 @@ func (r *NFSExportReconciler) assemblingPodUID(ctx context.Context, export *simp
 	var pod corev1.Pod
 	if err := r.Get(ctx, client.ObjectKey{Namespace: r.OperatorNamespace, Name: name}, &pod); err != nil {
 		return ""
+	}
+	return mdsInstance(&pod)
+}
+
+// mdsInstance names one boot of a metadata server's guest: the pod's UID and
+// its runner container's ID. The UID alone misses the restart that matters
+// most. A guest that crashes takes the runner with it, kubelet restarts the
+// container inside the same pod, and the UID stays while the guest boots cold
+// with no mounts and no exports. The container's ID is new every time it
+// starts. A pod with no running runner yet is named by its UID alone, which
+// matches no assembled instance, so the export is reassembled once it runs.
+func mdsInstance(pod *corev1.Pod) string {
+	for _, c := range pod.Status.ContainerStatuses {
+		if c.Name == driver.MDSContainerName && c.ContainerID != "" {
+			return string(pod.UID) + "/" + c.ContainerID
+		}
 	}
 	return string(pod.UID)
 }

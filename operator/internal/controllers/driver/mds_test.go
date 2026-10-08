@@ -81,8 +81,8 @@ func TestMDSImageWithoutAnAnswerIsAnError(t *testing.T) {
 
 // A StatefulSet's name is limited to 52 characters: its pods carry a
 // controller-revision-hash label of the name plus a suffix, and a label is 63.
-// A cluster UUID alone is 36, so the name carries a prefix of it and the label
-// the whole.
+// A cluster UUID alone is 36, so the name carries a key derived from it and the
+// label the whole.
 func TestMDSStatefulSetNameFitsAndIdentifiesTheCluster(t *testing.T) {
 	d := withMDS(testDriver("simplyblock"))
 	_, sts := mdsObjects(t, d)
@@ -93,9 +93,6 @@ func TestMDSStatefulSetNameFitsAndIdentifiesTheCluster(t *testing.T) {
 	}
 	if len(name) > 52 || len(validation.IsDNS1123Label(name)) > 0 {
 		t.Errorf("name %q is not a valid StatefulSet name of at most 52 characters", name)
-	}
-	if !strings.Contains(name, testClusterID[:8]) {
-		t.Errorf("name %q does not carry the cluster ID's prefix", name)
 	}
 	if got := sts.Spec.Template.Labels[MDSClusterLabel]; got != testClusterID {
 		t.Errorf("pod label %s = %q, want the full cluster ID", MDSClusterLabel, got)
@@ -300,5 +297,28 @@ func TestMDSPodKeepsTheLimitsItIsGiven(t *testing.T) {
 	limits := runnerContainer(t, sts).Resources.Limits
 	if !limits.Memory().Equal(resource.MustParse("4Gi")) || !limits.Cpu().Equal(resource.MustParse("2")) {
 		t.Errorf("limits = %v, want the spec's 4Gi and a default 2 CPUs", limits)
+	}
+}
+
+// Two storage clusters whose IDs share their first segment get two metadata
+// servers. A name taken from that segment alone gave both the same
+// StatefulSet, and the second cluster bound its exports to the first one's
+// pod; the same held for the state disk's class.
+func TestMDSNamesKeepClustersSharingAPrefixApart(t *testing.T) {
+	d := testDriver("simplyblock")
+	a, b := "0f2ac1d3-9b7e-4c21-8a55-6d4e3f1b2c90", "0f2ac1d3-1111-4222-8333-444455556666"
+	if MDSStatefulSetName(d, a) == MDSStatefulSetName(d, b) {
+		t.Errorf("both clusters get StatefulSet %s", MDSStatefulSetName(d, a))
+	}
+	if MDSStateClassName(d, a) == MDSStateClassName(d, b) {
+		t.Errorf("both clusters get state disk class %s", MDSStateClassName(d, a))
+	}
+	// The pod's controller-revision-hash label is the StatefulSet's name plus
+	// eleven characters, and a label value is at most 63.
+	if n := len(MDSStatefulSetName(d, a)); n > 52 {
+		t.Errorf("StatefulSet name %s is %d characters, over 52", MDSStatefulSetName(d, a), n)
+	}
+	if !strings.HasSuffix(MDSStateClassName(d, a), MDSStateClassSuffix) {
+		t.Errorf("state disk class %s does not end in %s", MDSStateClassName(d, a), MDSStateClassSuffix)
 	}
 }

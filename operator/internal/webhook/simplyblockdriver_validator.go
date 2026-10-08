@@ -10,6 +10,7 @@ package webhook
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -21,7 +22,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 )
 
-// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-simplyblockdriver,mutating=false,failurePolicy=ignore,sideEffects=None,groups=storage.simplyblock.io,resources=simplyblockdrivers,verbs=create,versions=v1alpha2,name=vsimplyblockdriver.simplyblock.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-simplyblockdriver,mutating=false,failurePolicy=ignore,sideEffects=None,groups=storage.simplyblock.io,resources=simplyblockdrivers,verbs=create;update,versions=v1alpha2,name=vsimplyblockdriver.simplyblock.io,admissionReviewVersions=v1
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=simplyblockdrivers,verbs=get;list;watch
 
@@ -52,14 +53,30 @@ import (
 // emits DuplicateDriver (§3.4). What Fail bought was a clearer message at the
 // moment of typing, and it cost every first install.
 //
-// The rule is CREATE and not UPDATE, because an edit to the object that already
-// exists is not a second one, and a rule over every operation would lock the
-// running deployment's own spec.
+// The singleton rule is CREATE and not UPDATE, because an edit to the object
+// that already exists is not a second one, and a rule over every operation
+// would lock the running deployment's own spec.
+//
+// It also refuses a metadata server memory limit under 512Mi, on CREATE and
+// UPDATE alike, since an edit is how such a limit usually arrives. Here only
+// so it is refused when it is written: the NFSExport reconciler refuses it too,
+// before it creates the metadata server, for the same reason the singleton
+// rule has a controller half.
 type SimplyblockDriverValidator struct {
 	Client client.Client
 }
 
 func (v *SimplyblockDriverValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
+	if req.Operation != admissionv1.Create && req.Operation != admissionv1.Update {
+		return admission.Allowed("")
+	}
+	var incoming simplyblockv1alpha2.SimplyblockDriver
+	if err := json.Unmarshal(req.Object.Raw, &incoming); err != nil {
+		return admission.Errored(http.StatusBadRequest, err)
+	}
+	if problem := driver.MDSResourcesProblem(incoming.Spec.PNFS.MDS); problem != "" {
+		return admission.Denied(problem)
+	}
 	if req.Operation != admissionv1.Create {
 		return admission.Allowed("")
 	}

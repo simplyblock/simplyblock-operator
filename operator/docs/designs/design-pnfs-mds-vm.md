@@ -155,7 +155,7 @@ The bound host is described by three fields that were written for a node. Two of
 MDSPodName string `json:"mdsPodName,omitempty"`
 
 // AssembledBy is the MDS instance that last assembled this export: the pod
-// UID of the guest's host when pod-hosted. A mismatch with the live
+// UID and runner container ID when pod-hosted. A mismatch with the live
 // instance means the guest has rebooted and the export must be reassembled.
 // +optional
 AssembledBy string `json:"assembledBy,omitempty"`
@@ -180,7 +180,7 @@ MDS *DriverPNFSMDS `json:"mds,omitempty"`
 
 ### 5.1 Workload
 
-The `NFSExport` reconciler ensures one StatefulSet of one replica per storage cluster, named from the cluster ID, in the operator's namespace. The StatefulSet is rendered by the `SimplyblockDriver` controller's package (`operator/internal/controllers/driver`), beside the node plugin's DaemonSet and the controller plugin's Deployment, because its volumes (the cluster secret, the TLS client certificate, the link token) and its image default are the driver's. The `NFSExport` reconciler calls that builder when the first export of a storage cluster binds. A StatefulSet gives the pod a stable identity and a stable PVC for the state disk, and its UID is the seed of the guest's host NQN (§6.5), so the NQN survives pod restarts. The StatefulSet is owned by the `SimplyblockDriver` object, so disabling pNFS removes it.
+The `NFSExport` reconciler ensures one StatefulSet of one replica per storage cluster in the operator's namespace. It is named by atlas-lib's `kube.Formula` from the full cluster ID, held to the 52 characters a StatefulSet name may have: as much of the ID as fits and a digest of all of it, so two clusters whose IDs share a prefix never share a StatefulSet. An existing StatefulSet of that name labeled with another cluster's ID is not used: the export waits with an `MDSNameCollision` event. The StatefulSet is rendered by the `SimplyblockDriver` controller's package (`operator/internal/controllers/driver`), beside the node plugin's DaemonSet and the controller plugin's Deployment, because its volumes (the cluster secret, the TLS client certificate, the link token) and its image default are the driver's. The `NFSExport` reconciler calls that builder when the first export of a storage cluster binds. A StatefulSet gives the pod a stable identity and a stable PVC for the state disk, and its UID is the seed of the guest's host NQN (§6.5), so the NQN survives pod restarts. The StatefulSet is owned by the `SimplyblockDriver` object, so disabling pNFS removes it.
 
 The StatefulSet is created on first need and reconciled with the same create-or-leave discipline as the per-export Service. It is not deleted when its last export is.
 
@@ -317,11 +317,11 @@ The client set is every cluster node's InternalIP and, for a pod-hosted export, 
 
 ### 7.4 Assembly
 
-`reconcileAssembling` calls `CreateExport` on the MDS peer. The runner resolves the connections (§6.4), the guest agent assembles, and the reconciler records `assembledBy` with the pod UID in the same status write that moves the export to `Ready`.
+`reconcileAssembling` calls `CreateExport` on the MDS peer. The runner resolves the connections (§6.4), the guest agent assembles, and the reconciler records `assembledBy`, the pod UID and the runner container's ID, in the same status write that moves the export to `Ready`.
 
 ### 7.5 Resync
 
-A guest that has rebooted has lost its mounts, its exports table, and its nfsd threads, and the state disk holds only the client-recovery database. The reconciler detects this without polling the guest. `reconcileReady` compares `status.assembledBy` with the UID of the MDS pod currently bound. A mismatch means the exports on this pod were assembled by a previous boot, and `CreateExport` is called again (the call is idempotent) and `assembledBy` rewritten. The StatefulSet's pod is watched, and a pod event enqueues every export bound to that storage cluster.
+A guest that has rebooted has lost its mounts, its exports table, and its nfsd threads, and the state disk holds only the client-recovery database. The reconciler detects this without polling the guest. `reconcileReady` compares `status.assembledBy` with the MDS instance currently bound: the pod's UID and its runner container's ID. The UID alone misses a guest that crashed, since kubelet restarts the runner container inside the same pod; the container's ID is new on every start. A mismatch means the exports on this pod were assembled by a previous boot, and `CreateExport` is called again (the call is idempotent) and `assembledBy` rewritten. The StatefulSet's pod is watched, and a pod event enqueues every export bound to that storage cluster.
 
 The same pass repoints the export's EndpointSlice when the pod IP changed (§8.1), and does so before reassembly so a client's retry reaches the new guest. A pod that is gone, or whose guest has not linked yet, is waited for, and `assembledBy` is rewritten only after the reassembly succeeded. The pod watch matches pods carrying `storage.simplyblock.io/cluster-id` and maps them to the exports whose `mdsPodName` names them, which also wakes an export waiting in `Pending` for its pod to turn Ready.
 
@@ -378,7 +378,7 @@ A pod-hosted export therefore lists each node's pod CIDR (`spec.podCIDRs`) besid
 | `/dev/kvm` missing or unopenable at start                | Runner exits non-zero with the reason in its log           | Pod crash-loops. `MDSBootTimeout` after the boot deadline. QEMU never falls back to software emulation                                                        |
 | State PVC does not bind                                  | Pod `Pending` on its volume                                | Exports stay `Pending`. `MDSStateUnavailable` event                                                                                                           |
 | Guest does not answer within `mdsBootDeadline`           | Runner readiness never turns true                          | Runner kills the guest and exits, kubelet restarts the pod. `MDSBootTimeout` event                                                                            |
-| MDS pod restarts                                         | New pod UID, new link session                              | Cold boot. Every `Ready` export bound to it is reassembled (§7.5). Clients see the NFSv4.1 recovery path while the guest boots                                |
+| MDS pod or guest restarts                                | New pod UID or runner container ID, new link session       | Cold boot. Every `Ready` export bound to it is reassembled (§7.5). Clients see the NFSv4.1 recovery path while the guest boots                                |
 | MDS pod's node is lost                                   | Pod stuck `Terminating` until the API server force-deletes | A second pod is not started while the first is `Terminating`, because it is a StatefulSet. Exports are unserved until it is gone                              |
 | Control plane unreachable from the runner                | Connection resolution fails                                | `CreateExport` returns an error and is retried with backoff. A TLS failure is reported as the error, not retried silently                                     |
 | Control plane refuses the guest's host NQN               | Connect returns an authorization error                     | Assembly fails and times out into `Degraded` after five minutes                                                                                               |
@@ -536,8 +536,9 @@ type NFSExportStatus struct {
 	MDSNodeIP string `json:"mdsNodeIP,omitempty"`
 
 	// AssembledBy is the MDS instance that last assembled this export, the pod
-	// UID when pod-hosted. A mismatch with the live instance means the guest has
-	// rebooted and the export must be reassembled.
+	// UID and runner container ID when pod-hosted. A mismatch with the live
+	// instance means the guest has rebooted and the export must be
+	// reassembled.
 	// +optional
 	AssembledBy string `json:"assembledBy,omitempty"`
 

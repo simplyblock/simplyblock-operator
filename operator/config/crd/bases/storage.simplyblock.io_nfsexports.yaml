@@ -140,9 +140,10 @@ spec:
                 type: array
               assembledBy:
                 description: |-
-                  AssembledBy is the metadata server pod instance (its UID) that last
-                  assembled this export. A pod that restarted has lost its mounts and
-                  exports, so a mismatch with the running pod means the export is
+                  AssembledBy is the metadata server instance that last assembled this
+                  export: the pod's UID and its runner container's ID. A guest that
+                  restarted, in a new pod or in the same one, has lost its mounts and
+                  exports, so a mismatch with the running instance means the export is
                   assembled again.
                 type: string
               mdsNodeIP:

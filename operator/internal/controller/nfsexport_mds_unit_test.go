@@ -153,7 +153,7 @@ func stateClassOf(t *testing.T, cl client.Client, d *simplyblockv1alpha2.Simplyb
 // testDedicatedClass is the class the operator writes for testExport's
 // storage cluster. Spelled out rather than derived, because the admission
 // policy that reserves it matches on the name.
-const testDedicatedClass = "simplyblock-0f2ac1d3-pnfs-mds-state"
+const testDedicatedClass = "simplyblock-0f2ac1d3-9b7e-4c21-8a55-6d4e3f1b2c90-pnfs-mds-state"
 
 // The state disk is a simplyblock volume of the storage cluster the metadata
 // server serves, so the pod restarts on any worker with its client-recovery
@@ -513,5 +513,59 @@ func TestNodeHostedClientSetLeavesThePodNetworkOut(t *testing.T) {
 
 	if got := loadExport(t, cl).Status.AllowedClients; slices.Contains(got, "10.244.2.0/24") {
 		t.Errorf("allowedClients = %v, want no pod CIDR", got)
+	}
+}
+
+// A StatefulSet already carrying this cluster's metadata server name but
+// serving another storage cluster is not this cluster's metadata server. The
+// export waits and says why, rather than binding to the other cluster's pod.
+func TestPendingPodHostedRefusesAnotherClustersStatefulSet(t *testing.T) {
+	d := mdsDriver()
+	other := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{
+		Name: driver.MDSStatefulSetName(d, testExportClusterID), Namespace: testOperatorNS,
+		Labels: map[string]string{driver.MDSClusterLabel: "7d1e0c55-3a2b-4f6e-9c8d-1b2a3c4d5e6f"},
+	}}
+	r, cl, recorder := newPodHostedReconciler(t, testExport(nil), d, other)
+
+	res, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKey{Name: testExportName, Namespace: testExportNS},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v; a name taken by another cluster is a wait, not an error to retry hot", err)
+	}
+	if !slices.Contains(recorder.reasons, "MDSNameCollision") {
+		t.Errorf("event reasons = %v, want MDSNameCollision", recorder.reasons)
+	}
+	got := loadExport(t, cl)
+	if got.Status.Phase != simplyblockv1alpha2.NFSExportPhasePending || got.Status.MDSPodName != "" {
+		t.Errorf("phase = %q, mdsPodName = %q, want Pending and unbound", got.Status.Phase, got.Status.MDSPodName)
+	}
+	if res.RequeueAfter == 0 {
+		t.Error("no requeue")
+	}
+}
+
+// A memory limit the guest cannot boot in is refused before the StatefulSet is
+// created, in case it got past admission: the webhook ignores its own
+// failures. The export waits and says why.
+func TestPendingPodHostedRefusesAnMDSMemoryLimitUnder512Mi(t *testing.T) {
+	d := mdsDriver()
+	d.Spec.PNFS.MDS.Resources.Limits = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("256Mi")}
+	r, cl, recorder := newPodHostedReconciler(t, testExport(nil), d)
+
+	res, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKey{Name: testExportName, Namespace: testExportNS},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := stateClassOf(t, cl, d); got != "" {
+		t.Fatalf("the StatefulSet was created for a guest that cannot boot (state class %q)", got)
+	}
+	if !slices.Contains(recorder.reasons, "MDSResourcesInvalid") {
+		t.Errorf("event reasons = %v, want MDSResourcesInvalid", recorder.reasons)
+	}
+	if res.RequeueAfter == 0 {
+		t.Error("no requeue: a corrected limit would never be noticed")
 	}
 }
