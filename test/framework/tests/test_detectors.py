@@ -21,12 +21,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sbtest.core import (  # noqa: E402
     AnaSample,
     Attribution,
+    BlockSample,
     ControlEvent,
     FioJob,
     IopsSample,
     LogSpan,
     Migration,
     NvmeController,
+    PnfsVolume,
     Report,
     Severity,
     SkipDetector,
@@ -65,6 +67,9 @@ class FakeEvidence:
         window: tuple[datetime | None, datetime | None] = (None, None),
         events: list[ControlEvent] | None = None,
         spans: list[LogSpan] | None = None,
+        nfs: dict[str, dict[str, int]] | None = None,
+        blocks: list[BlockSample] | None = None,
+        pnfs: list[PnfsVolume] | None = None,
     ) -> None:
         self.run_id = run_id
         self.outdir = outdir
@@ -79,6 +84,9 @@ class FakeEvidence:
         self._window = window
         self._events = events or []
         self._spans = spans
+        self._nfs = nfs or {}
+        self._blocks = blocks or []
+        self._pnfs = pnfs or []
 
     def migrations(self) -> list[Migration]:
         return list(self._migrations)
@@ -105,7 +113,17 @@ class FakeEvidence:
         return list(self._ctrls)
 
     def pods(self) -> list[str]:
-        return sorted(set(self._fio_logs) | {j.pod for j in self._jobs} | set(self._series))
+        return sorted(set(self._fio_logs) | {j.pod for j in self._jobs} | set(self._series)
+                      | set(self._nfs))
+
+    def nfs_ops(self, pod: str) -> dict[str, int]:
+        return dict(self._nfs.get(pod, {}))
+
+    def block_samples(self) -> list[BlockSample]:
+        return list(self._blocks)
+
+    def pnfs_volumes(self) -> list[PnfsVolume]:
+        return list(self._pnfs)
 
     def cluster_uuid(self) -> str:
         return self._cluster
@@ -944,3 +962,79 @@ class SecuritySecretExposure(unittest.TestCase):
     def test_ordinary_logs_are_clean(self):
         ev = FakeEvidence(logs={"operator": ["migration started for volume abc\n"]})
         self.assertEqual(list(build_detector("security.secret-exposure").detect(ev)), [])
+
+
+class PnfsLayout(unittest.TestCase):
+    """pNFS that silently became plain NFS passes every fio check: the data is right, it
+    just went through the metadata server. The layout counters are the only witness."""
+
+    def _found(self, nfs: dict[str, dict[str, int]]) -> list:
+        return list(build_detector("pnfs.layout").detect(FakeEvidence(nfs=nfs)))
+
+    def test_a_mount_that_fetched_no_layout_fails_the_run(self):
+        found = self._found({"r-fio-0-c0": {"LAYOUTGET": 0, "WRITE": 4096, "READ": 900}})
+        self.assertEqual([(f.severity, f.subject) for f in found],
+                         [(Severity.CRITICAL, "r-fio-0-c0")])
+
+    def test_data_through_the_server_beside_layouts_is_a_warning(self):
+        found = self._found({"r-fio-0-c0": {"LAYOUTGET": 4, "WRITE": 12, "READ": 0}})
+        self.assertEqual([f.severity for f in found], [Severity.WARNING])
+        self.assertEqual(found[0].evidence["server_io_ops"], 12)
+
+    def test_layouts_and_no_server_io_is_clean(self):
+        self.assertEqual(self._found({"r-fio-0-c0": {"LAYOUTGET": 2, "WRITE": 0, "READ": 0}}),
+                         [])
+
+    def test_a_run_without_nfs_mounts_is_skipped_not_clean(self):
+        with self.assertRaises(SkipDetector):
+            list(build_detector("pnfs.layout").detect(FakeEvidence()))
+
+
+def blk(node: str, off: int, rd: int, wr: int, uuid: str = "lv1") -> BlockSample:
+    return BlockSample(ts=ts(off), node=node, device="nvme0n1", uuid=uuid,
+                       read_ios=rd, read_sectors=rd * 8, write_ios=wr, write_sectors=wr * 8)
+
+
+class PnfsDeviceIO(unittest.TestCase):
+    """With pNFS doing its job, the client writes to its own NVMe-oF namespace. A client
+    whose namespace stays flat while fio runs sent its data through the metadata server."""
+
+    VOL = PnfsVolume(claim="c1", lvol="lv1", shared=True, nodes=["w1", "w2"])
+
+    def _found(self, blocks: list[BlockSample], **opts: object) -> list:
+        ev = FakeEvidence(blocks=blocks, pnfs=[self.VOL])
+        return list(build_detector("pnfs.device-io", **opts).detect(ev))
+
+    def test_growing_reads_and_writes_on_every_client_node_is_clean(self):
+        blocks = [blk(n, off, off * 10, off * 5) for n in ("w1", "w2") for off in (0, 10, 20)]
+        self.assertEqual(self._found(blocks), [])
+
+    def test_a_client_whose_namespace_stayed_flat_fails(self):
+        blocks = ([blk("w1", off, off * 10, off * 5) for off in (0, 10, 20)]
+                  + [blk("w2", off, 7, 3) for off in (0, 10, 20)])
+        found = self._found(blocks)
+        self.assertEqual([(f.severity, f.subject) for f in found],
+                         [(Severity.CRITICAL, "c1@w2")])
+
+    def test_a_client_without_the_namespace_attached_fails(self):
+        found = self._found([blk("w1", off, off * 10, off * 5) for off in (0, 10, 20)])
+        self.assertEqual([(f.severity, f.subject) for f in found],
+                         [(Severity.CRITICAL, "c1@w2")])
+        self.assertIn("not attached", found[0].title)
+
+    def test_writes_that_stalled_mid_run_are_a_warning(self):
+        offs = (0, 10, 20, 100, 110)
+        blocks = ([blk("w1", o, o * 10, o * 5) for o in offs]
+                  + [blk("w2", o, o * 10, 50 if o <= 100 else o * 5) for o in offs])
+        found = self._found(blocks, max_stall_s=60)
+        self.assertEqual([(f.severity, f.subject) for f in found],
+                         [(Severity.WARNING, "c1@w2")])
+
+    def test_reads_are_not_required_when_the_run_did_not_read(self):
+        blocks = [blk(n, off, 0, off * 5) for n in ("w1", "w2") for off in (0, 10, 20)]
+        self.assertEqual(self._found(blocks, require_reads=False), [])
+
+    def test_a_run_without_samples_is_skipped_not_clean(self):
+        with self.assertRaises(SkipDetector):
+            self._found([])
+

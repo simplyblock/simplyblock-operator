@@ -11,6 +11,9 @@ becomes a fixture for the whole detector set:
       <run>-fio-N/result.json        fio's own summary
       <run>-fio-N/fio.log            the pod's container log (verify failures live here)
       <run>-fio-N/timeseries.csv     per-second IOPS
+      <run>-fio-N/nfs-ops.json       per-op counts of the NFS mount it wrote through (pNFS)
+      iostat.csv                     NVMe namespace I/O counters per node over the run
+      pnfs.json                      the run's pNFS volumes and their consuming nodes
       spdk-<port>[-proxy].txt        host-sourced container logs
       operator.txt / webappapi.txt   likewise
       dmesg-<vm>.txt                 kernel ring buffer per storage worker
@@ -33,12 +36,14 @@ from datetime import UTC, datetime, timedelta
 
 from ..core import (
     AnaSample,
+    BlockSample,
     ControlEvent,
     FioJob,
     IopsSample,
     LogSpan,
     Migration,
     NvmeController,
+    PnfsVolume,
 )
 
 
@@ -296,6 +301,49 @@ class ArchiveEvidence:
             return []
         out.sort(key=lambda s: s.offset_s)
         return out
+
+    def nfs_ops(self, pod: str) -> dict[str, int]:
+        p = os.path.join(self.outdir, pod, "nfs-ops.json")
+        try:
+            with open(p) as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return {str(k): int(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+
+    def block_samples(self) -> list[BlockSample]:
+        p = os.path.join(self.outdir, "iostat.csv")
+        out: list[BlockSample] = []
+        try:
+            with open(p, newline="") as fh:
+                for r in csv.DictReader(fh):
+                    t = _dt(r.get("ts"))
+                    if not t:
+                        continue
+                    try:
+                        out.append(BlockSample(
+                            ts=t, node=r.get("node", ""), device=r.get("device", ""),
+                            uuid=r.get("uuid", ""),
+                            read_ios=int(r["read_ios"]), read_sectors=int(r["read_sectors"]),
+                            write_ios=int(r["write_ios"]),
+                            write_sectors=int(r["write_sectors"])))
+                    except (KeyError, ValueError):
+                        continue
+        except OSError:
+            return []
+        out.sort(key=lambda b: (b.ts, b.node, b.device))
+        return out
+
+    def pnfs_volumes(self) -> list[PnfsVolume]:
+        p = os.path.join(self.outdir, "pnfs.json")
+        try:
+            with open(p) as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return []
+        return [PnfsVolume(claim=v.get("claim", ""), lvol=v.get("lvol", ""),
+                           shared=bool(v.get("shared")), nodes=list(v.get("nodes") or []))
+                for v in raw.get("volumes", []) if isinstance(v, dict)]
 
     def fio_log(self, pod: str) -> Iterator[str]:
         p = os.path.join(self.outdir, pod, "fio.log")

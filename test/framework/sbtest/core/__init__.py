@@ -4,6 +4,7 @@ from .config import Config, Selection, apply_cli_toggles, load, suite_path
 from .context import Event, Logger, RunContext, Timeline, iso, now_utc
 from .evidence import (
     AnaSample,
+    BlockSample,
     ControlEvent,
     Evidence,
     FioJob,
@@ -11,6 +12,7 @@ from .evidence import (
     LogSpan,
     Migration,
     NvmeController,
+    PnfsVolume,
     attribute,
     attribute_window,
     freeze_windows,
@@ -30,7 +32,8 @@ from .plugin import (
 from .runner import Runner, findings_by_subject_table
 
 __all__ = [
-    "AnaSample", "Attribution", "Component", "Config", "Detector", "Event", "Evidence",
+    "AnaSample", "Attribution", "BlockSample", "Component", "Config", "Detector", "Event",
+    "Evidence", "PnfsVolume",
     "ControlEvent", "Finding", "LogSpan",
     "FioJob", "IopsSample", "Logger", "Migration", "NvmeController", "Report",
     "RunContext", "Runner", "Selection", "Severity", "SkipDetector", "Timeline",

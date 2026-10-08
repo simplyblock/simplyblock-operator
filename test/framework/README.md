@@ -30,7 +30,7 @@ no separate setup step to remember.
 cd test/framework
 
 make                                    # help, with the parameters listed
-make gate                               # quality gate: ruff + mypy + 142 tests
+make gate                               # quality gate: ruff + mypy + the unit tests
 
 make detectors                          # what can judge a run, and with which knobs
 make components                         # what can run during a run
@@ -48,6 +48,9 @@ make collect OUT=./runs/my-run SUITE=migration-soak DURATION=600
 
 # drive a full migration run — volumes, fio, VolumeMigration CRs — then judge it
 make run SUITE=migration-full DURATION=7200 KEEP=1
+
+# pNFS under concurrent load: shared and private RWX volumes, fio in every container
+make run SUITE=pnfs-fio DURATION=1800 KEEP=1
 ```
 
 `collect` observes a cluster someone else is loading; `run` creates the load itself. The half
@@ -194,6 +197,9 @@ ev.fio_log(pod)              -> Iterator[str]        # where verify failures liv
 ev.container_logs()          -> list[str]            # "spdk-4420", "operator", ...
 ev.container_log(name)       -> Iterator[str]
 ev.nvme_controllers()        -> list[NvmeController] # fabric snapshot
+ev.nfs_ops(pod)              -> dict[str, int]       # the NFS mount's per-op counts (pNFS)
+ev.block_samples()           -> list[BlockSample]    # NVMe namespace I/O counters per node
+ev.pnfs_volumes()            -> list[PnfsVolume]     # pNFS volumes and their client nodes
 ```
 
 Two implementations, kept deliberately close so a check that passes live cannot fail on
@@ -261,7 +267,7 @@ Two rules make this predictable:
   looks set but is not is worse than one that is obviously missing.
 
 Bundled suites live in `sbtest/suites/` (`migration-full`, `migration-soak`,
-`corruption-hunt`, `analyze-only`; `make suites` lists them) and are selected with
+`corruption-hunt`, `analyze-only`, `pnfs-fio`; `make suites` lists them) and are selected with
 `--suite <name>`, which also takes a path to your own file. A `.json` suite still loads, for
 anything generating them programmatically. CLI `--enable-detector` / `--disable-component`
 layer on top, and disable wins over enable.
@@ -301,6 +307,8 @@ Every one of these came from a real defect. Defaults encode what the runs measur
 | `evidence.blind-spot` | A migration no log covers, so it cannot be post-mortemed whatever it did. |
 | `evidence.inventory` | What evidence the run produced (INFO). |
 | `security.secret-exposure` | Credential-shaped strings in collected logs. Reports the location, never the value. |
+| `pnfs.layout` | **A pNFS mount that got no layouts**: it ran as plain NFS, every byte through the metadata server, and fio's verification still passed. Warns when data went through the server beside layouts. Reads the NFS client's own per-operation counters. |
+| `pnfs.device-io` | **A pNFS client node whose NVMe-oF namespace did not see the data.** The other end of the same question: per volume and consuming node, the namespace must be attached and its read and write counters must grow, without standing still longer than `max_stall_s`. |
 
 Three things are load-bearing and worth knowing:
 
@@ -330,6 +338,8 @@ Three things are load-bearing and worth knowing:
 | `ana.sample` | Per-namespace ANA state on every consuming node, on an interval, written per migration in the layout `ArchiveEvidence` reads. Needs a driver to tell it which migration is in flight. |
 | `workload.fio` | Provisions volumes from two StorageClasses (single-namespace and packed) and drives continuous md5-verified fio against them. `required`. |
 | `migration.driver` | Creates `VolumeMigration` CRs in a loop, one at a time, and records what each one did. `required`. |
+| `workload.pnfs` | Provisions pNFS volumes some pods share and some own, and runs verified fio in every container, each instance with a data file of its own. Pods sharing a volume are spread across nodes. `required`. |
+| `nvme.iostat` | Samples every node's NVMe namespace I/O counters (sysfs `stat`, head devices only) on an interval, for `pnfs.device-io`. |
 
 ### What gets collected
 
@@ -422,10 +432,13 @@ knowing which component produced them.
 test/framework/
   sbtest/
     core/        evidence, findings, plugin registry, config, context, runner
-    components/  logs (stream + collect), nvme (sampler + snapshot), events, kube
-    detectors/   ana, control, fio, kernel, logs, meta, migration, nvme, security
+    components/  logs (stream + collect), nvme (ANA and I/O samplers + snapshot), events,
+                 workload and pnfs (the fio workloads), and the pieces they share: fio
+                 (command line, script, per-instance evidence), nfs (mountstats), kube
+    detectors/   ana, control, fio, kernel, logs, meta, migration, nvme, pnfs, security
     adapters/    archive (finished run dir), live (run in progress)
-    suites/      migration-full, migration-soak, corruption-hunt, analyze-only (YAML)
+    suites/      migration-full, migration-soak, corruption-hunt, analyze-only, pnfs-fio
+                 (YAML)
     cli.py
   tests/         detector and core tests — 108, no cluster required
   Makefile       bootstraps .venv; every target depends on it
@@ -505,6 +518,32 @@ Doing that for the first time found two bugs no amount of archive replay could h
 
 Both have regression tests. The lesson generalises: the detectors were verifiable offline, the
 components were not, and only the components had these bugs.
+
+## pNFS under concurrent load
+
+`workload.pnfs` runs fio against pNFS volumes the way a ReadWriteMany user does: several pods
+on several nodes reading and writing one filesystem, beside pods with a volume of their own.
+
+Every fio *instance* (one per container) writes and verifies a data file of its own, named
+after the run, pod and container. fio's md5 verification assumes nothing else writes the
+blocks it checks, so instances sharing a file would report each other's writes as corruption.
+With one file each, the instances on a shared volume meet only in the filesystem: concurrent
+allocation, layouts and commits through one metadata server. That is the multi-writer case
+pNFS has to get right, and every verify failure still means what it says. Each instance gets
+its own evidence directory (`<run>-fio-<pod>-c<k>`), so the fio detectors judge it like any
+other.
+
+A passing fio is not enough for pNFS, because plain NFS passes it too: the data is right
+whether or not it bypassed the server. Two detectors read the evidence that tells the
+difference, one from each end of the data path. `pnfs.layout` reads the client mount's own
+counters (were layouts issued, did data go through the server anyway), and `pnfs.device-io`
+reads the client node's NVMe counters (did the volume's namespace on that node see the reads
+and writes, all run long). A client whose namespace stayed flat while fio ran sent its data
+through the metadata server.
+
+Shared volumes prefer one pod per node rather than requiring it, so the suite runs on a small
+cluster too. The setup log says when every pod sharing a volume landed on one node, since such
+a volume exercises one NFS client rather than several.
 
 ## Not yet here
 

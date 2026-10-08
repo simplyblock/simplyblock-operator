@@ -97,6 +97,34 @@ class FioJob:
 
 
 @dataclass(frozen=True)
+class BlockSample:
+    """One reading of one NVMe namespace's I/O counters on one node, from sysfs `stat`.
+
+    Counters are cumulative since the device appeared, so a reading means nothing alone and
+    everything against the one before it.
+    """
+
+    ts: datetime
+    node: str
+    device: str        # the head device, nvmeXnY
+    uuid: str          # the namespace UUID, which for a simplyblock volume is the lvol's
+    read_ios: int
+    read_sectors: int
+    write_ios: int
+    write_sectors: int
+
+
+@dataclass(frozen=True)
+class PnfsVolume:
+    """A pNFS volume a run provisioned, and the client nodes that should write to it."""
+
+    claim: str
+    lvol: str
+    shared: bool
+    nodes: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class IopsSample:
     """One second of one pod's I/O, from the fio time series."""
 
@@ -191,6 +219,19 @@ class Evidence(Protocol):
     def nvme_controllers(self) -> list[NvmeController]: ...
 
     def pods(self) -> list[str]: ...
+
+    def nfs_ops(self, pod: str) -> dict[str, int]:
+        """The per-operation counts of the NFS mount a fio instance wrote through, e.g.
+        {"LAYOUTGET": 3, "WRITE": 0}. Empty when the instance used no NFS mount."""
+        ...
+
+    def block_samples(self) -> list[BlockSample]:
+        """NVMe namespace I/O counters per node over the run, oldest first."""
+        ...
+
+    def pnfs_volumes(self) -> list[PnfsVolume]:
+        """The pNFS volumes the run provisioned, with their consuming nodes."""
+        ...
 
     def run_window(self) -> tuple[datetime | None, datetime | None]:
         """When the run started and ended, or (None, None) if not known.

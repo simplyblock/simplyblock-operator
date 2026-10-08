@@ -1,4 +1,4 @@
-"""Host NVMe observation: periodic ANA sampling and an end-of-run fabric snapshot.
+"""Host NVMe observation: ANA and I/O sampling, and an end-of-run fabric snapshot.
 
 Both read the host's sysfs through a pod that already has it — the CSI node plugin — rather
 than starting anything, because they need to run on every consuming node and the plugin is
@@ -8,9 +8,18 @@ already there on all of them.
 from __future__ import annotations
 
 import threading
+from datetime import datetime
 from typing import Any
 
-from ..core import AnaSample, Component, NvmeController, RunContext, component, now_utc
+from ..core import (
+    AnaSample,
+    BlockSample,
+    Component,
+    NvmeController,
+    RunContext,
+    component,
+    now_utc,
+)
 from . import kube
 
 #: Read every lvol controller's state, its address and its per-namespace ANA states.
@@ -245,3 +254,127 @@ class AnaSampler(_CsiNodeBase):
         if self._thread:
             self._thread.join(timeout=15)
             self._thread = None
+
+
+#: Every NVMe head device's namespace UUID and its sysfs `stat` line, one per device:
+#: dev|uuid|stat. The per-path nvmeXcYnZ devices are listed too and dropped by the parser,
+#: which is where the rule lives that is worth a test.
+_IOSTAT_SH = r'''
+for b in /sys/block/nvme*n*; do
+  [ -f "$b/stat" ] || continue
+  printf '%s|%s|%s\n' "$(basename "$b")" "$(cat "$b/uuid" 2>/dev/null)" "$(cat "$b/stat")"
+done
+'''
+
+
+def parse_iostat(node: str, ts: datetime, out: str) -> list[BlockSample]:
+    """Readings from one node's _IOSTAT_SH output.
+
+    Head devices only. nvmeXcYnZ is one path of a multipath namespace and nvmeXnY carries
+    the namespace's total, so counting both would double every byte. A device without a
+    namespace UUID is not a simplyblock volume and is dropped too.
+    """
+    samples = []
+    for line in out.splitlines():
+        parts = line.split("|")
+        if len(parts) < 3:
+            continue
+        dev, uuid, stat = parts[0].strip(), parts[1].strip(), parts[2].split()
+        if not uuid or "c" in dev[len("nvme"):] or len(stat) < 7:
+            continue
+        try:
+            # sysfs block stat: reads completed, reads merged, sectors read, ms reading,
+            # writes completed, writes merged, sectors written, ...
+            samples.append(BlockSample(
+                ts=ts, node=node, device=dev, uuid=uuid,
+                read_ios=int(stat[0]), read_sectors=int(stat[2]),
+                write_ios=int(stat[4]), write_sectors=int(stat[6])))
+        except ValueError:
+            continue
+    return samples
+
+
+def write_iostat(path: str, samples: list[BlockSample]) -> None:
+    with open(path, "w") as fh:
+        fh.write("ts,node,device,uuid,read_ios,read_sectors,write_ios,write_sectors\n")
+        for b in sorted(samples, key=lambda x: (x.ts, x.node, x.device)):
+            fh.write(f"{b.ts.strftime('%Y-%m-%dT%H:%M:%SZ')},{b.node},{b.device},{b.uuid},"
+                     f"{b.read_ios},{b.read_sectors},{b.write_ios},{b.write_sectors}\n")
+
+
+@component
+class IostatSampler(_CsiNodeBase):
+    """Sample every node's NVMe namespace I/O counters on an interval.
+
+    What this shows that nothing above the block layer can: whether a node's I/O actually
+    reached its NVMe-oF namespace. For pNFS that is the property under test. A client with a
+    layout writes to its own namespace, and one without sends the same data through the
+    metadata server; the files read back correctly either way. Sampled rather than read once
+    at the end, so a stall in the middle of a run shows as one.
+
+    Every head device with a namespace UUID on every node is sampled, whatever volume it
+    belongs to. Which ones matter is the detectors' business, and a volume the run did not
+    expect to be attached somewhere is evidence too.
+    """
+
+    name = "nvme.iostat"
+    summary = "sample NVMe namespace I/O counters per node on an interval"
+
+    def defaults(self) -> dict[str, Any]:
+        return {"csi_namespace": "simplyblock", "csi_pod_prefix": "simplyblock-csi-node",
+                "container": "csi-node", "interval_s": 5.0}
+
+    def __init__(self, **options: Any) -> None:
+        super().__init__(**options)
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._samples: list[BlockSample] = []
+        self._lock = threading.Lock()
+        self._pods: dict[str, str] = {}
+
+    def setup(self, ctx: RunContext) -> None:
+        self._pods = self._csi_node_pods(ctx)
+
+    def _sample(self) -> None:
+        for node, pod in self._pods.items():
+            try:
+                out = kube.exec_sh(self.opt("csi_namespace"), pod, _IOSTAT_SH,
+                                   container=self.opt("container"), timeout=30)
+            except Exception:  # noqa: BLE001
+                continue
+            batch = parse_iostat(kube.short(node), now_utc(), out)
+            with self._lock:
+                self._samples.extend(batch)
+
+    def start(self, ctx: RunContext) -> None:
+        if not self._pods:
+            return
+        interval = float(self.opt("interval_s"))
+        if interval <= 0:
+            ctx.log.info(f"{self.name}: disabled (interval_s <= 0)")
+            return
+
+        def loop() -> None:
+            while not self._stop.is_set() and not ctx.stopping.is_set():
+                self._sample()
+                self._stop.wait(interval)
+
+        self._thread = threading.Thread(target=loop, name="iostat-sampler", daemon=True)
+        self._thread.start()
+        ctx.log.info(f"{self.name}: sampling every {interval}s on {len(self._pods)} node(s)")
+
+    def stop(self, ctx: RunContext) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=15)
+            self._thread = None
+        # One last reading after the workload stopped, so the final interval is measured.
+        if self._pods:
+            self._sample()
+
+    def collect(self, ctx: RunContext) -> None:
+        with self._lock:
+            samples = list(self._samples)
+        if samples:
+            write_iostat(ctx.path("iostat.csv"), samples)
+        ctx.log.info(f"{self.name}: {len(samples)} reading(s) from {len(self._pods)} node(s)")

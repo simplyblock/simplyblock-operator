@@ -23,7 +23,7 @@ from datetime import UTC, datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import sbtest  # noqa: E402,F401
-from sbtest.components import kube, migration, workload  # noqa: E402
+from sbtest.components import kube, migration, nfs, nvme, pnfs, workload  # noqa: E402
 from sbtest.core import Logger, Migration, RunContext  # noqa: E402
 
 
@@ -421,6 +421,214 @@ class WorkloadFio(unittest.TestCase):
         with _Ctx() as ctx, self.assertRaises(RuntimeError) as e:
             workload.FioWorkload(pods=0, ns_pods=0)._create(ctx)
         self.assertIn("no I/O", str(e.exception))
+
+
+MOUNTSTATS = """device rootfs mounted on / with fstype rootfs
+device 10.5.0.9:/other mounted on /other with fstype nfs4 statvers=1.1
+\topts:\trw,vers=4.1
+\tper-op statistics
+\t       WRITE: 900 900 0 1 2 3 4 5 0
+\t   LAYOUTGET: 0 0 0 0 0 0 0 0 0
+device 10.5.0.2:/ mounted on /data with fstype nfs4 statvers=1.1
+\topts:\trw,vers=4.1
+\tper-op statistics
+\t        READ: 2 2 0 1 2 3 4 5 0
+\t       WRITE: 0 0 0 0 0 0 0 0 0
+\t   LAYOUTGET: 3 3 0 600 400 1 2 3 0
+\tLAYOUTCOMMIT: 1 1 0 300 200 1 1 2 0
+"""
+
+
+class NfsMountstats(unittest.TestCase):
+    def test_counts_come_from_the_named_mount_only(self):
+        """A node can carry several NFS mounts; counts belong to the header above them."""
+        ops = nfs.mount_ops(MOUNTSTATS, "/data")
+        self.assertEqual(ops, {"READ": 2, "WRITE": 0, "LAYOUTGET": 3, "LAYOUTCOMMIT": 1})
+
+    def test_a_mountpoint_that_prefixes_another_does_not_match(self):
+        self.assertIsNone(nfs.mount_ops(MOUNTSTATS, "/dat"))
+
+    def test_a_missing_mount_is_none_not_zero_counts(self):
+        """Zero counts would read as "pNFS did no I/O" rather than "not measured"."""
+        self.assertIsNone(nfs.mount_ops(MOUNTSTATS, "/absent"))
+
+
+class NvmeIostat(unittest.TestCase):
+    """The client side of a pNFS write: the NVMe-oF namespace on the client worker itself."""
+
+    def test_head_devices_are_read_and_per_path_devices_skipped(self):
+        """nvmeXcYnZ is one path of a multipath namespace; the head nvmeXnY carries the
+        namespace's total, so counting both would double every byte."""
+        out = ("nvme0n1|0f2ac1d3-9b7e-4c21-8a55-6d4e3f1b2c90|"
+               "  100 0 800 5 40 0 320 9 0 0 0 0 0 0 0 0 0\n"
+               "nvme0c0n1|0f2ac1d3-9b7e-4c21-8a55-6d4e3f1b2c90|"
+               "  100 0 800 5 40 0 320 9 0 0 0 0 0 0 0 0 0\n"
+               "nvme1n1||  1 0 8 0 1 0 8 0 0 0 0 0 0 0 0 0 0\n")
+        ts = datetime(2026, 10, 8, 9, 0, 0, tzinfo=UTC)
+        got = nvme.parse_iostat("worker-1", ts, out)
+        self.assertEqual(len(got), 1)
+        s = got[0]
+        self.assertEqual((s.node, s.device, s.uuid), ("worker-1", "nvme0n1",
+                                                       "0f2ac1d3-9b7e-4c21-8a55-6d4e3f1b2c90"))
+        self.assertEqual((s.read_ios, s.read_sectors, s.write_ios, s.write_sectors),
+                         (100, 800, 40, 320))
+
+    def test_samples_round_trip_through_the_archive(self):
+        from sbtest.adapters import ArchiveEvidence
+        ts = datetime(2026, 10, 8, 9, 0, 0, tzinfo=UTC)
+        samples = nvme.parse_iostat("worker-1", ts, "nvme0n1|u1|1 0 8 0 2 0 16 0 0 0 0\n")
+        with _Ctx() as ctx:
+            nvme.write_iostat(ctx.path("iostat.csv"), samples)
+            back = ArchiveEvidence(ctx.outdir).block_samples()
+        self.assertEqual(back, samples)
+
+
+class WorkloadPnfs(unittest.TestCase):
+    """pNFS volumes, some shared by several pods and some private, every container running
+    its own fio. Multi-reader and multi-writer on one filesystem, without the writers
+    corrupting each other's verification."""
+
+    def _plan(self, **opts: object) -> tuple[pnfs.PnfsWorkload, list[dict]]:
+        w = pnfs.PnfsWorkload(**opts)
+        with _Ctx() as ctx:
+            docs = w._documents(ctx, "sc-pnfs")
+        return w, docs
+
+    @staticmethod
+    def _of(docs: list[dict], kind: str) -> list[dict]:
+        return [d for d in docs if d["kind"] == kind]
+
+    def test_every_fio_instance_writes_and_verifies_its_own_file(self):
+        """fio's md5 verify trusts that nothing else writes its blocks. Two instances on one
+        file would report each other's writes as corruption, so every instance, across
+        every pod sharing a volume, gets a file of its own and verifies only that."""
+        w, docs = self._plan(shared_volumes=2, pods_per_shared=3, solo_pods=2,
+                             containers_per_pod=2)
+        self.assertEqual(len(w._instances), (2 * 3 + 2) * 2)
+        files = [i.filename for i in w._instances]
+        self.assertEqual(len(set(files)), len(files), files)
+        for pod in self._of(docs, "Pod"):
+            for c in pod["spec"]["containers"]:
+                script = c["command"][-1]
+                mine = [i for i in w._instances
+                        if i.pod == pod["metadata"]["name"] and i.container == c["name"]]
+                self.assertEqual(len(mine), 1)
+                self.assertIn(f"--filename={mine[0].filename}", script)
+                self.assertEqual(script.count("--filename="), 1)
+                self.assertIn("--verify=md5", script)
+                self.assertIn("--serialize_overlap=1", script)
+
+    def test_pods_of_a_shared_volume_mount_one_rwx_claim(self):
+        w, docs = self._plan(shared_volumes=2, pods_per_shared=3, solo_pods=2,
+                             containers_per_pod=1)
+        claims = self._of(docs, "PersistentVolumeClaim")
+        self.assertEqual(len(claims), 2 + 2)
+        for c in claims:
+            self.assertEqual(c["spec"]["accessModes"], ["ReadWriteMany"])
+            self.assertEqual(c["spec"]["storageClassName"], "sc-pnfs")
+        users: dict[str, set[str]] = {}
+        for pod in self._of(docs, "Pod"):
+            for v in pod["spec"]["volumes"]:
+                if "persistentVolumeClaim" in v:
+                    users.setdefault(v["persistentVolumeClaim"]["claimName"], set()).add(
+                        pod["metadata"]["name"])
+        self.assertEqual(sorted(len(p) for p in users.values()), [1, 1, 3, 3])
+
+    def test_pods_sharing_a_volume_are_spread_across_nodes(self):
+        """Two writers on one node share one NFS client, so the multi-writer case is the
+        multi-node one."""
+        _, docs = self._plan(shared_volumes=1, pods_per_shared=2, solo_pods=1)
+        shared = [p for p in self._of(docs, "Pod") if "pnfs-shared" in p["metadata"]["labels"]]
+        self.assertEqual(len(shared), 2)
+        for p in shared:
+            terms = p["spec"]["affinity"]["podAntiAffinity"][
+                "preferredDuringSchedulingIgnoredDuringExecution"]
+            self.assertEqual(terms[0]["podAffinityTerm"]["topologyKey"], "kubernetes.io/hostname")
+            self.assertEqual(terms[0]["podAffinityTerm"]["labelSelector"]["matchLabels"],
+                             {"pnfs-shared": p["metadata"]["labels"]["pnfs-shared"]})
+        _, docs = self._plan(shared_volumes=1, pods_per_shared=2, spread=False)
+        for p in self._of(docs, "Pod"):
+            self.assertNotIn("podAntiAffinity", p["spec"].get("affinity", {}))
+
+    def test_the_files_must_fit_the_volume(self):
+        with _Ctx() as ctx, self.assertRaises(RuntimeError) as e:
+            pnfs.PnfsWorkload(shared_volumes=1, pods_per_shared=3, containers_per_pod=2,
+                              file_size_gb=4, volume_size_gb=20)._documents(ctx, "sc")
+        self.assertIn("6 fio file(s) of 4G", str(e.exception))
+
+    def test_a_workload_with_no_pods_is_refused(self):
+        with _Ctx() as ctx, self.assertRaises(RuntimeError) as e:
+            pnfs.PnfsWorkload(shared_volumes=0, solo_pods=0)._documents(ctx, "sc")
+        self.assertIn("no I/O", str(e.exception))
+
+    def test_every_instance_has_evidence_the_analyser_finds(self):
+        from sbtest.adapters import ArchiveEvidence
+        w, _ = self._plan(shared_volumes=1, pods_per_shared=2, solo_pods=1,
+                          containers_per_pod=2)
+        names = [i.evidence for i in w._instances]
+        self.assertEqual(len(set(names)), len(names))
+        with _Ctx() as ctx:
+            for n in names:
+                ctx.dir(n)
+            self.assertEqual(sorted(ArchiveEvidence(ctx.outdir).pods()), sorted(names))
+
+    def test_a_named_class_that_is_not_pnfs_is_refused(self):
+        """A block class would hand every pod its own ext4 or xfs device; the shared claims
+        would never bind ReadWriteMany, and a solo-only run would pass without pNFS."""
+        fake = _FakeKube({"get sc block": json.dumps({
+            "provisioner": "csi.simplyblock.io",
+            "parameters": {"csi.storage.k8s.io/fstype": "xfs"}})})
+        with _Ctx() as ctx, _patch(kube, "run", fake.run), \
+                self.assertRaises(RuntimeError) as e:
+            pnfs.PnfsWorkload(storageclass="block")._storageclass(ctx)
+        self.assertIn("fstype", str(e.exception))
+
+    def test_a_source_class_is_cloned_as_pnfs(self):
+        src = {"provisioner": "csi.simplyblock.io", "reclaimPolicy": "Delete",
+               "parameters": {"cluster_id": "c1", "pool_name": "p1",
+                              "csi.storage.k8s.io/fstype": "xfs"}}
+        fake = _FakeKube({"get sc pool-class": json.dumps(src)})
+        with _Ctx() as ctx, _patch(kube, "run", fake.run):
+            name = pnfs.PnfsWorkload(source_storageclass="pool-class")._storageclass(ctx)
+        applied = [json.loads(s) for s in fake.stdins if s]
+        self.assertEqual(len(applied), 1)
+        self.assertEqual(applied[0]["metadata"]["name"], name)
+        self.assertEqual(applied[0]["parameters"]["csi.storage.k8s.io/fstype"], "pnfs")
+        self.assertEqual(applied[0]["parameters"]["pool_name"], "p1")
+        self.assertEqual(applied[0]["volumeBindingMode"], "Immediate")
+
+    def test_the_volume_map_names_every_consumer_node(self):
+        """The device check needs to know, per volume, which client nodes should be writing
+        to its namespace; the scheduler decides the nodes, so they are read back."""
+        from sbtest.adapters import ArchiveEvidence
+        w, _ = self._plan(shared_volumes=1, pods_per_shared=2, solo_pods=1,
+                          containers_per_pod=1)
+        claims = sorted(set(w._claim_of.values()))
+        w._lvol_of = {c: f"lvol-{c}" for c in claims}
+        nodes = {p: f"node-{i}" for i, p in enumerate(sorted(w._claim_of))}
+        with _Ctx() as ctx:
+            w._write_volume_map(ctx, nodes)
+            vols = ArchiveEvidence(ctx.outdir).pnfs_volumes()
+        self.assertEqual(len(vols), 2)
+        shared = next(v for v in vols if v.shared)
+        self.assertEqual(len(shared.nodes), 2)
+        self.assertEqual(shared.lvol, f"lvol-{shared.claim}")
+
+    def test_collect_records_the_mounts_nfs_ops_for_every_instance(self):
+        """One mount per pod, so every instance in the pod carries that mount's counts."""
+        from sbtest.adapters import ArchiveEvidence
+
+        def exec_sh(ns: str, pod: str, script: str, container: str | None = None,
+                    timeout: int = 300) -> str:
+            return MOUNTSTATS if "mountstats" in script else ""
+
+        w, _ = self._plan(shared_volumes=0, solo_pods=1, containers_per_pod=2)
+        with _Ctx() as ctx, _patch(kube, "exec_sh", exec_sh), \
+                _patch(kube, "run", _FakeKube().run):
+            w.collect(ctx)
+            ev = ArchiveEvidence(ctx.outdir)
+            for inst in w._instances:
+                self.assertEqual(ev.nfs_ops(inst.evidence)["LAYOUTGET"], 3)
 
 
 class _patch:
