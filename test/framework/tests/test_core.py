@@ -1149,12 +1149,13 @@ class ConntrackSampling(unittest.TestCase):
         s = ConntrackSampler(namespace="sb-test", csi_namespace="sb-op")
         s._helpers = {node: f"r-ct-{node}" for node in outputs}
         by_pod = {f"r-ct-{node}": out for node, out in outputs.items()}
-        return s, lambda ns, pod, script, **k: by_pod[pod]
+        # The sampler execs through kube.run, and the pod follows "exec" in its arguments.
+        return s, lambda args, **k: _cp(by_pod[args[args.index("exec") + 1]])
 
     def test_a_node_with_no_nfs_flows_is_still_recorded_as_sampled(self):
         # Otherwise "nothing pinned" and "never looked" read the same.
         s, exec_sh = self._sampler({"w1": self.TOOLS, "w2": ""})
-        with mock.patch.object(kube, "exec_sh", exec_sh):
+        with mock.patch.object(kube, "run", exec_sh):
             s._sample(RunContext(run_id="r", outdir="/tmp", log=Logger(None)))
         self.assertEqual(sorted((x.node, x.state) for x in s._samples),
                          [("w1", "ESTABLISHED"), ("w2", "NONE")])
@@ -1162,19 +1163,46 @@ class ConntrackSampling(unittest.TestCase):
     def test_a_node_it_cannot_read_records_nothing(self):
         from sbtest.components.conntrack import UNAVAILABLE
         s, exec_sh = self._sampler({"w1": UNAVAILABLE + "\n"})
-        with mock.patch.object(kube, "exec_sh", exec_sh):
+        with mock.patch.object(kube, "run", exec_sh):
             s._sample(RunContext(run_id="r", outdir="/tmp", log=Logger(None)))
         self.assertEqual(s._samples, [])
 
     def test_the_samples_written_are_the_ones_the_archive_reads(self):
         s, exec_sh = self._sampler({"w1": self.TOOLS, "w2": ""})
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(kube, "exec_sh", exec_sh):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(kube, "run", exec_sh):
             ctx = RunContext(run_id="r", outdir=d, log=Logger(None))
             s._sample(ctx)
             s.collect(ctx)
             got = ArchiveEvidence(d).conntrack()
         self.assertEqual(sorted((x.node, x.state, x.reply_src) for x in got),
                          [("w1", "ESTABLISHED", "10.244.3.118"), ("w2", "NONE", "")])
+
+    # pnfs-1791554843: the helpers' apply failed, the sampler kept the helpers it had
+    # named, every exec into the missing pods came back empty, and 295 rows said "NONE"
+    # (no flows) for what was never read.
+    def test_an_exec_that_fails_records_nothing(self):
+        from sbtest.components.conntrack import ConntrackSampler
+        s = ConntrackSampler(namespace="sb-test", csi_namespace="sb-op")
+        s._helpers = {"w1": "r-ct-w1"}
+        with mock.patch.object(kube, "run", lambda *a, **k: _cp("", rc=1)):
+            s._sample(RunContext(run_id="r", outdir="/tmp", log=Logger(None)))
+        self.assertEqual(s._samples, [])
+
+    def test_a_failed_apply_leaves_no_helpers_to_sample(self):
+        from sbtest.components.conntrack import ConntrackSampler
+        pods = [kube.Pod(name="simplyblock-csi-node-w1", namespace="sb-op", node="w1",
+                         containers=("csi-node",), phase="Running")]
+
+        def run(args: list[str], stdin: str | None = None, **_: object) -> Any:
+            if stdin:
+                raise kube.KubectlError("kubectl apply: admission webhook denied the request")
+            return _cp()
+
+        s = ConntrackSampler(namespace="sb-test", csi_namespace="sb-op")
+        with mock.patch.object(kube, "list_pods", lambda *a, **k: pods), \
+                mock.patch.object(kube, "run", run), self.assertRaises(kube.KubectlError):
+            s.setup(RunContext(run_id="r", outdir="/tmp", log=Logger(None)))
+        self.assertEqual(s._helpers, {})
 
     def test_a_helper_goes_on_every_node_running_a_node_plugin(self):
         from sbtest.components.conntrack import ConntrackSampler
@@ -1196,3 +1224,36 @@ class ConntrackSampling(unittest.TestCase):
         self.assertTrue(all(d["spec"]["hostNetwork"] for d in docs))
         self.assertEqual(sorted(s._helpers), ["w1", "w2"])
 
+
+class KubectlSchemaRetry(unittest.TestCase):
+    """kubectl validates a manifest against the cluster's whole OpenAPI document. For a
+    minute or more after the operator restarts, its metrics API is published with a
+    dangling reference, and every apply fails before anything is sent (pnfs-1791554843,
+    nfs.conntrack setup). Such a failure is retried, and any other is not."""
+
+    SCHEMA = ('error: error validating "STDIN": error validating data: SchemaError(github.com/'
+              'x.LogicalVolumeMetrics.capacity): unknown model in reference')
+
+    def calls(self, results: list[tuple[int, str]]) -> tuple[Any, list[int]]:
+        seen: list[int] = []
+
+        def fake(cmd: list[str], **_: object) -> Any:
+            rc, err = results[min(len(seen), len(results) - 1)]
+            seen.append(rc)
+            return argparse.Namespace(stdout="", stderr=err, returncode=rc)
+        return fake, seen
+
+    def test_a_schema_error_is_retried_until_the_apply_succeeds(self):
+        fake, seen = self.calls([(1, self.SCHEMA), (1, self.SCHEMA), (0, "")])
+        with mock.patch.object(kube.subprocess, "run", fake), \
+                mock.patch.object(kube.time, "sleep", lambda s: None):
+            kube.run(["apply", "-f", "-"], stdin="{}")
+        self.assertEqual(seen, [1, 1, 0])
+
+    def test_another_error_is_not_retried(self):
+        fake, seen = self.calls([(1, "error: the server doesn't have a resource type")])
+        with mock.patch.object(kube.subprocess, "run", fake), \
+                mock.patch.object(kube.time, "sleep", lambda s: None), \
+                self.assertRaises(kube.KubectlError):
+            kube.run(["apply", "-f", "-"], stdin="{}")
+        self.assertEqual(seen, [1])

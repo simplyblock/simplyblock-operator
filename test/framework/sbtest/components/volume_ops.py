@@ -317,13 +317,14 @@ class VolumeOps(Component):
     def _df(self, ns: str, client: tuple[str, str]) -> int:
         """The size of the client's mount in bytes. Anything but a byte count fails: read as
         0, a failed read would make the next good one look like the client seeing growth."""
-        out = kube.exec_sh(ns, client[0],
-                           f"df -kP {self.opt('mount')} | awk 'NR==2{{printf \"%d\\n\", $2*1024}}'",
+        # The KiB field as df prints it, multiplied here: busybox awk formats %d as a 32-bit
+        # integer, which turned a 22.5 GB mount into -2147483648.
+        out = kube.exec_sh(ns, client[0], f"df -kP {self.opt('mount')} | awk 'NR==2{{print $2}}'",
                            container=client[1], timeout=60).strip()
         if not out.isdigit() or int(out) <= 0:
-            raise RuntimeError(f"df of {self.opt('mount')} in {client[0]} returned no byte "
-                               f"count: {out!r}")
-        return int(out)
+            raise RuntimeError(f"df of {self.opt('mount')} in {client[0]} returned no size: "
+                               f"{out!r}")
+        return int(out) * 1024
 
     # ── snapshot ─────────────────────────────────────────────────────────────────────
 
