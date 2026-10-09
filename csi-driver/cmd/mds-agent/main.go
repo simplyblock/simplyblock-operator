@@ -7,6 +7,7 @@
 // It listens on the guest's bridge address, which only the runner reaches,
 // and serves the export service and gRPC's health service there. The health
 // is what the pod's readiness follows: the state disk mounted and nfsd running.
+// It also watches nfsd and logs its state to the console (nfsd_watchdog.go).
 // It holds no credentials. The namespace's connection arrives with each call,
 // resolved by the runner.
 
@@ -45,6 +46,8 @@ const healthInterval = 2 * time.Second
 func main() {
 	listen := flag.String("listen", ":"+strconv.Itoa(netsetup.AgentPort), "Address serving the export and health services")
 	stateDir := flag.String("state-dir", nfsexport.NFSStateDir, "Where the state disk is mounted")
+	watchdog := flag.Duration("nfsd-watchdog-interval", agent.DefaultNFSDWatchdogInterval,
+		"How often nfsd's threads and pool counters are read and judged; 0 turns the watchdog off")
 	klog.InitFlags(nil)
 	if err := flag.Set("logtostderr", "true"); err != nil {
 		klog.Exitf("failed to set logtostderr flag: %v", err)
@@ -53,14 +56,14 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	if err := run(ctx, *listen, *stateDir); err != nil {
+	if err := run(ctx, *listen, *stateDir, *watchdog); err != nil {
 		klog.Errorf("mds-agent: %v", err)
 		klog.Flush()
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, listen, stateDir string) error {
+func run(ctx context.Context, listen, stateDir string, watchdog time.Duration) error {
 	// No host NQN function: the identity arrives with every call, decided by
 	// the operator and resolved by the runner.
 	assembler, err := nfsexport.NewAssembler(
@@ -84,6 +87,7 @@ func run(ctx context.Context, listen, stateDir string) error {
 		Mounted:  mounter.IsMountPoint,
 		NFSD:     nfsexport.CheckNFSDThreads,
 	}.Check, healthInterval)
+	go agent.RunNFSDWatchdog(ctx, &agent.NFSDWatchdog{Log: agent.KlogLogger{}}, watchdog)
 
 	lis, err := net.Listen("tcp", listen)
 	if err != nil {
