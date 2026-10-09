@@ -85,6 +85,32 @@ fixed and tried **immediately against the run that motivated it**, instead of ag
 next four-hour run. Not being able to do that was the single biggest gap in the harness this
 grew from.
 
+### Regression corpus
+
+`tests/fixtures/runs` holds archived runs that found or confirmed a bug, trimmed to the
+evidence the detectors read, and `tests/test_corpus.py` judges each one with the pnfs-fio
+suite's settings on every `make gate`. Each test asserts the verdict the run reached and its
+key findings by detector, severity, and count: an MDS restart whose clients never returned
+to their namespaces, one that lost a pod's open files, and two that recovered. A detector
+change that flips a corpus verdict therefore fails the gate, and has to be deliberate: either
+the detector now sees something the run hid, which the change should say, or it stopped
+seeing something it saw.
+
+To add a run, trim it, judge both the full run and the fixture, and write the fixture's
+expectations from what they agree on. The `--outdir` keeps the fixture free of a
+`findings.json`:
+
+    python3 tests/fixtures/trim_run.py runs/<run-id> tests/fixtures/runs/<run-id>
+    make analyze RUN=runs/<run-id> SUITE=pnfs-fio
+    .venv/bin/python -m sbtest analyze tests/fixtures/runs/<run-id> --suite pnfs-fio \
+        --outdir /tmp/<run-id>
+
+The trim keeps the run window, the pNFS volume map, the NVMe samples and snapshots, each fio
+instance's summary, time series, and NFS counters, and the dmesg within ten minutes of the
+run, so a trimmed run should reach the full run's critical and warning findings exactly.
+Compare the two before committing the fixture. Only informational findings that count
+collected logs may differ.
+
 ## It reproduces the findings it was built from
 
 Run against `operator/fio-mig-1787171993` (20 pods, 46 migrations, 4h08m), the detectors
