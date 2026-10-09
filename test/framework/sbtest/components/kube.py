@@ -26,6 +26,19 @@ def run(args: list[str], timeout: int = 60, check: bool = True,
     return cp
 
 
+def apply_each(namespace: str, docs: list[dict], timeout: int = 60) -> None:
+    """Apply each object with its own kubectl call.
+
+    Not as a v1 List: kubectl validates a List against every model the cluster publishes,
+    and the operator's metrics API publishes names with slashes in them, whose references
+    kubectl cannot resolve. Not as a stream of documents either: kubectl 1.33 panicked
+    decoding JSON documents between YAML separators (slice bounds out of range in
+    StreamReader.Consume). A single object needs neither.
+    """
+    for doc in docs:
+        run(["-n", namespace, "apply", "-f", "-"], stdin=json.dumps(doc), timeout=timeout)
+
+
 def run_bytes(args: list[str], timeout: int = 300) -> bytes:
     cp = subprocess.run(["kubectl", *args], capture_output=True, timeout=timeout, check=False)
     return cp.stdout

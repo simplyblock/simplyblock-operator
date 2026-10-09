@@ -131,7 +131,9 @@ class FakeCluster:
     def exec_sh(self, _ns: str, _pod: str, script: str, **_: object) -> str:
         self.calls.append("exec " + script)
         if "df " in script:
-            return str(self.df.pop(0) if len(self.df) > 1 else self.df[0])
+            size = self.df.pop(0) if len(self.df) > 1 else self.df[0]
+            # Sizes are kept in bytes and served as df -kP prints them, in KiB.
+            return str(size // 1024) if isinstance(size, int) else size
         if "head -c" in script:
             return self.marker
         if "md5sum" in script:
@@ -199,11 +201,30 @@ class Expand(unittest.TestCase):
             self.assertIn("df", rec["error"], bad)
             self.assertIsNone(rec["client_seen_at"], bad)
 
-    def test_df_prints_an_integer_byte_count(self):
+    # pnfs-1791556484: the MDS restart chaos scheduled 5 s after the patch made one df
+    # during the outage come back empty, and that one read failed the whole expansion.
+    def test_a_failed_read_while_polling_is_retried(self):
+        fake = FakeCluster()
+        fake.df = [20 * GI, "", 21 * GI]
+        rec = run_op(fake, "expand", grow_gb=1)
+        self.assertEqual(rec["error"], "")
+        self.assertIsNotNone(rec["client_seen_at"])
+
+    def test_reads_that_never_recover_name_the_last_failure(self):
+        fake = FakeCluster()
+        fake.df = [20 * GI, ""]
+        rec = run_op(fake, "expand", grow_gb=1, expand_timeout_s=1)
+        self.assertIsNone(rec["client_seen_at"])
+        self.assertIn("df", rec["error"])
+
+    def test_df_does_no_arithmetic_in_awk(self):
+        # busybox awk formats %d as 32 bits (pnfs-1791554843: -2147483648 for 22.5 GB),
+        # so the KiB field is printed as it is and multiplied in Python.
         fake = FakeCluster()
         run_op(fake, "expand", grow_gb=1)
         df = next(c for c in fake.calls if c.startswith("exec df"))
-        self.assertIn('printf "%d', df)
+        self.assertNotIn("printf", df)
+        self.assertNotIn("*1024", df)
 
     # Review on #704: an operation must finish while fio still runs.
     def test_an_operation_that_would_end_after_fio_is_skipped(self):
@@ -334,3 +355,22 @@ class VolumeOpsArchive(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClientSize(unittest.TestCase):
+    """busybox awk formats %d as a 32-bit integer: a 22.5 GB mount came back as
+    -2147483648 and failed the expansion (pnfs-1791554843). The byte count is computed
+    outside awk."""
+
+    def test_a_mount_larger_than_two_gib_is_read_whole(self):
+        from sbtest.components import kube
+        from sbtest.components.volume_ops import VolumeOps
+
+        def exec_sh(ns: str, pod: str, script: str, **_: object) -> str:
+            # What df -kP prints for the volume in that run, in KiB. The awk part of the
+            # command only selects the field.
+            assert "printf" not in script, script
+            return "22020096\n"
+        with mock.patch.object(kube, "exec_sh", exec_sh):
+            got = VolumeOps(namespace="default")._df("default", ("p", "c"))
+        self.assertEqual(got, 22020096 * 1024)

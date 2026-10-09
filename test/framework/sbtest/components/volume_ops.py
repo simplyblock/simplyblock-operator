@@ -286,16 +286,25 @@ class VolumeOps(Component):
             record.fail(f"patching {record.claim}: {cp.stderr.strip() or cp.returncode}")
             return
         deadline = self._deadline(record.timeout_s)
+        last_read_error = ""
         while record.capacity_at is None or record.client_seen_at is None:
             if record.capacity_at is None:
                 status = _get_json(ns, "pvc", record.claim).get("status", {})
                 if _bytes(status.get("capacity", {}).get("storage", "")) >= record.target_bytes:
                     record.capacity_at = datetime.now(UTC)
             if record.client_seen_at is None:
-                size = self._df(ns, client)
-                if size > record.client_before_b:
-                    record.client_after_b, record.client_seen_at = size, datetime.now(UTC)
+                # Only the read before the patch has to succeed. A read while polling can
+                # fail for a while, an MDS restart among the reasons, and is tried again.
+                try:
+                    size = self._df(ns, client)
+                except RuntimeError as e:
+                    last_read_error = str(e)
+                else:
+                    if size > record.client_before_b:
+                        record.client_after_b, record.client_seen_at = size, datetime.now(UTC)
             if time.monotonic() >= deadline:
+                if record.client_seen_at is None and last_read_error:
+                    record.fail(last_read_error)
                 return
             time.sleep(float(self.opt("poll_s")))
 
@@ -317,13 +326,14 @@ class VolumeOps(Component):
     def _df(self, ns: str, client: tuple[str, str]) -> int:
         """The size of the client's mount in bytes. Anything but a byte count fails: read as
         0, a failed read would make the next good one look like the client seeing growth."""
-        out = kube.exec_sh(ns, client[0],
-                           f"df -kP {self.opt('mount')} | awk 'NR==2{{printf \"%d\\n\", $2*1024}}'",
+        # The KiB field as df prints it, multiplied here: busybox awk formats %d as a 32-bit
+        # integer, which turned a 22.5 GB mount into -2147483648.
+        out = kube.exec_sh(ns, client[0], f"df -kP {self.opt('mount')} | awk 'NR==2{{print $2}}'",
                            container=client[1], timeout=60).strip()
         if not out.isdigit() or int(out) <= 0:
-            raise RuntimeError(f"df of {self.opt('mount')} in {client[0]} returned no byte "
-                               f"count: {out!r}")
-        return int(out)
+            raise RuntimeError(f"df of {self.opt('mount')} in {client[0]} returned no size: "
+                               f"{out!r}")
+        return int(out) * 1024
 
     # ── snapshot ─────────────────────────────────────────────────────────────────────
 

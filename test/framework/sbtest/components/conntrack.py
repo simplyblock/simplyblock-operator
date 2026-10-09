@@ -18,7 +18,6 @@ helper pod per node to do so.
 from __future__ import annotations
 
 import concurrent.futures
-import json
 import re
 import threading
 from datetime import datetime
@@ -128,9 +127,10 @@ class ConntrackSampler(Component):
             ctx.log.warn(f"{self.name}: no node plugin running; nothing to sample")
             return
         docs = []
+        helpers: dict[str, str] = {}
         for node in nodes:
             name = f"{ctx.run_id}-ct-{kube.short(node)}"
-            self._helpers[kube.short(node)] = name
+            helpers[kube.short(node)] = name
             docs.append({
                 "apiVersion": "v1", "kind": "Pod",
                 "metadata": {"name": name, "labels": {"sbtest": ctx.run_id,
@@ -147,13 +147,20 @@ class ConntrackSampler(Component):
                         # Reading the host's table needs CAP_NET_ADMIN in its namespace.
                         "securityContext": {"privileged": True}}],
                 }})
-        kube.run(["-n", str(self.opt("namespace")), "apply", "-f", "-"],
-                 stdin=json.dumps({"apiVersion": "v1", "kind": "List", "items": docs}))
+        kube.apply_each(str(self.opt("namespace")), docs)
+        # Only once they exist: a helper that was never created reads as a node with no
+        # flows, which is the one thing this component must not claim without looking.
+        self._helpers = helpers
         ctx.log.info(f"{self.name}: a helper on each of {len(docs)} node(s)")
 
     def _read(self, node: str, pod: str) -> str:
-        return kube.exec_sh(str(self.opt("namespace")), pod, _READ,
-                            timeout=int(self.opt("timeout_s")))
+        """The helper's output, or UNAVAILABLE when the exec itself failed: an exec into a
+        pod that is not running prints nothing, and nothing parses as no flows."""
+        cp = kube.run(["-n", str(self.opt("namespace")), "exec", pod, "--", "sh", "-c", _READ],
+                      timeout=int(self.opt("timeout_s")), check=False)
+        if cp.returncode != 0:
+            return f"{UNAVAILABLE} exec into {pod} exited {cp.returncode}"
+        return cp.stdout
 
     def _sample(self, ctx: RunContext) -> None:
         if not self._helpers:
