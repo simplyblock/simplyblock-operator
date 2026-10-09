@@ -59,6 +59,7 @@ from ..core import (
     Registrant,
     Restart,
     Versions,
+    VolumeOp,
 )
 
 
@@ -568,6 +569,43 @@ class ArchiveEvidence:
                 gone_s=float(gone) if isinstance(gone, int | float) else None,
                 error=str(c.get("error") or "")))
         out.sort(key=lambda c: c.created)
+        return out
+
+    def volume_ops(self) -> list[VolumeOp]:
+        p = os.path.join(self.outdir, "volume-ops.json")
+        try:
+            with open(p) as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return []
+        out = []
+        for o in raw.get("ops", []) if isinstance(raw, dict) else []:
+            requested = _dt(o.get("requested")) if isinstance(o, dict) else None
+            if requested is None:
+                continue
+
+            def num(key: str, o: dict = o) -> int:
+                v = o.get(key)
+                return int(v) if isinstance(v, int | float) else 0
+
+            timeout = o.get("timeout_s")
+            out.append(VolumeOp(
+                op=str(o.get("op", "")), claim=str(o.get("claim", "")), requested=requested,
+                timeout_s=float(timeout) if isinstance(timeout, int | float) else 0.0,
+                skipped=str(o.get("skipped") or ""), error=str(o.get("error") or ""),
+                target_bytes=num("target_bytes"), capacity_at=_dt(o.get("capacity_at")),
+                client_pod=str(o.get("client_pod") or ""),
+                client_before_b=num("client_before_b"), client_after_b=num("client_after_b"),
+                client_seen_at=_dt(o.get("client_seen_at")),
+                snapshot=str(o.get("snapshot") or ""), marker_md5=str(o.get("marker_md5") or ""),
+                ready_at=_dt(o.get("ready_at")),
+                restore_claim=str(o.get("restore_claim") or ""),
+                restored_at=_dt(o.get("restored_at")),
+                restore_md5=str(o.get("restore_md5") or ""),
+                restore_deleted=_dt(o.get("restore_deleted")),
+                snapshot_deleted=_dt(o.get("snapshot_deleted")),
+                cleanup_error=str(o.get("cleanup_error") or "")))
+        out.sort(key=lambda o: o.requested)
         return out
 
     def pnfs_volumes(self) -> list[PnfsVolume]:

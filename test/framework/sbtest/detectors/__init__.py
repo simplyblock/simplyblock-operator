@@ -28,7 +28,9 @@ from . import (  # noqa: F401
     pnfs,
     reservations,
     security,
+    volume_ops,
 )
 
 __all__ = ["ana", "chaos", "churn", "conntrack", "control", "fence", "fio", "kernel", "logs", "meta",
-           "metadata", "migration", "nvme", "pnfs", "reservations", "security"]
+           "metadata", "migration", "nvme", "pnfs", "reservations", "security",
+           "volume_ops"]

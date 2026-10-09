@@ -374,6 +374,46 @@ class MetadataCheck:
 
 
 @dataclass(frozen=True)
+class VolumeOp:
+    """One operation chaos.volume-ops performed on a live pNFS volume, and how far it got.
+
+    `op` is `expand` or `snapshot`. A step that did not happen leaves its timestamp None,
+    and `skipped` says why an operation was not attempted at all, which is not a failure.
+
+    For an expansion, `target_bytes` is the size asked for, `capacity_at` when the claim's
+    status reached it, and `client_seen_at` when `df` in `client_pod` reported more than
+    `client_before_b`. For a snapshot, `marker_md5` is the checksum of a file a client wrote
+    just before it, `ready_at` when the snapshot was ready to use, and `restore_md5` what a
+    pod read back from `restore_claim`, a block volume restored from it, at `restored_at`.
+    `snapshot` is set only once the VolumeSnapshot was created. A deletion is recorded only
+    when the object was gone, and a deletion that failed or did not finish is in
+    `cleanup_error`, apart from `error`, which is the operation itself failing.
+    """
+
+    op: str
+    claim: str
+    requested: datetime
+    timeout_s: float = 0.0
+    skipped: str = ""
+    error: str = ""
+    target_bytes: int = 0
+    capacity_at: datetime | None = None
+    client_pod: str = ""
+    client_before_b: int = 0
+    client_after_b: int = 0
+    client_seen_at: datetime | None = None
+    snapshot: str = ""
+    marker_md5: str = ""
+    ready_at: datetime | None = None
+    restore_claim: str = ""
+    restored_at: datetime | None = None
+    restore_md5: str = ""
+    restore_deleted: datetime | None = None
+    snapshot_deleted: datetime | None = None
+    cleanup_error: str = ""
+
+
+@dataclass(frozen=True)
 class ConntrackSample:
     """One NFS flow in a node's connection tracking table at one moment.
 
@@ -522,6 +562,10 @@ class Evidence(Protocol):
 
     def metadata_checks(self) -> list[MetadataCheck]:
         """Each comparison of a worker's directory with its manifest, oldest first."""
+        ...
+
+    def volume_ops(self) -> list[VolumeOp]:
+        """The operations chaos.volume-ops performed on live pNFS volumes, oldest first."""
         ...
 
     def log_spans(self) -> list[LogSpan]:
