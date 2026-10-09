@@ -13,7 +13,9 @@ import (
 	"context"
 	"slices"
 	"testing"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -262,5 +264,75 @@ func TestAnExplicitlyEmptySelectorCoversTheWholeNamespace(t *testing.T) {
 
 	if !slices.Equal(api.attaches, []string{testLvolID}) {
 		t.Errorf("attached %v, want the namespace's claim", api.attaches)
+	}
+}
+
+// The mirror records every backup in the operator's namespace, so a policy
+// finds its own by the claim's namespace and name together. A claim of the same
+// name in another namespace is a different claim, and its backups say nothing
+// about whether this policy is running.
+func TestPolicyLastBackupIsTheNewestOneOfItsOwnClaimsInTheOperatorsNamespace(t *testing.T) {
+	older := metav1.NewTime(time.Unix(1700000000, 0))
+	newer := metav1.NewTime(time.Unix(1700005000, 0))
+	elsewhere := metav1.NewTime(time.Unix(1700009000, 0))
+	recorded := func(name, claimNamespace string, completed metav1.Time) *simplyblockv1alpha2.StorageBackup {
+		return &simplyblockv1alpha2.StorageBackup{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
+			Status: simplyblockv1alpha2.StorageBackupStatus{
+				Backup: &simplyblockv1alpha2.BackupCopy{CompletedAt: &completed},
+				Source: &simplyblockv1alpha2.BackupSource{ClaimName: "data", ClaimNamespace: claimNamespace},
+			},
+		}
+	}
+	r := policyReconciler(t, &fakeControlPlane{},
+		recorded("older", "apps", older),
+		recorded("newer", "apps", newer),
+		recorded("another-teams", "other-apps", elsewhere))
+	r.Namespace = testNamespace
+	policy := &simplyblockv1alpha2.StorageBackupPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "nightly", Namespace: "apps"},
+		Status: simplyblockv1alpha2.StorageBackupPolicyStatus{
+			AttachedClaims: []simplyblockv1alpha2.AttachedClaim{{Name: "data"}},
+		},
+	}
+
+	got := r.lastBackupAt(context.Background(), policy)
+
+	if got == nil || !got.Equal(&newer) {
+		t.Errorf("lastBackupAt = %v, want %v, the newest backup of apps/data", got, newer)
+	}
+}
+
+// The coverage gauge counts the restorable backups of each claim a policy covers.
+// They are in the operator's namespace, and a claim of the same name in another
+// namespace is a different claim.
+func TestPolicyCoverageCountsOnlyItsOwnClaimsBackupsInTheOperatorsNamespace(t *testing.T) {
+	available := func(name, claimNamespace string) *simplyblockv1alpha2.StorageBackup {
+		completed := metav1.NewTime(time.Unix(1700000000, 0))
+		return &simplyblockv1alpha2.StorageBackup{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: testNamespace,
+				Labels: map[string]string{simplyblockv1alpha2.BackupLabelClaim: "data"},
+			},
+			Status: simplyblockv1alpha2.StorageBackupStatus{
+				Phase:  simplyblockv1alpha2.StorageBackupPhaseAvailable,
+				Backup: &simplyblockv1alpha2.BackupCopy{CompletedAt: &completed},
+				Source: &simplyblockv1alpha2.BackupSource{ClaimName: "data", ClaimNamespace: claimNamespace},
+			},
+		}
+	}
+	r := policyReconciler(t, &fakeControlPlane{},
+		available("mine-1", "apps"), available("mine-2", "apps"), available("another-teams", "other-apps"))
+	r.Namespace = testNamespace
+	policy := &simplyblockv1alpha2.StorageBackupPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "nightly", Namespace: "apps"},
+		Spec:       simplyblockv1alpha2.StorageBackupPolicySpec{ClusterRef: "coverage-cluster"},
+	}
+
+	r.publishCoverage(context.Background(), policy,
+		[]simplyblockv1alpha2.AttachedClaim{{Name: "data"}})
+
+	if got := testutil.ToFloat64(backupAvailableCount.WithLabelValues("coverage-cluster", "data")); got != 2 {
+		t.Errorf("available backups of apps/data = %v, want 2", got)
 	}
 }

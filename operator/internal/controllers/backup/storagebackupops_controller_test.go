@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/ptr"
@@ -81,11 +82,11 @@ func restoreOps(name string) *simplyblockv1alpha2.StorageBackupOps {
 			Finalizers: []string{opsFinalizer},
 		},
 		Spec: simplyblockv1alpha2.StorageBackupOpsSpec{
-			ClusterRef: testClusterCR,
+			ClusterRef: simplyblockv1alpha2.NamespacedReference{Name: testClusterCR},
 			BackupRef:  "backup-1",
 			Action:     simplyblockv1alpha2.StorageBackupOpsActionRestore,
 			Restore: &simplyblockv1alpha2.RestoreSpec{
-				ClaimName:  "restored-claim",
+				Claim:      simplyblockv1alpha2.NamespacedReference{Name: "restored-claim"},
 				TargetPool: testPoolCR,
 			},
 		},
@@ -247,12 +248,179 @@ func TestRestoreRunsTheWholeGraphAndProducesAClaim(t *testing.T) {
 	}
 }
 
+// crossNamespaceWorld is a restore whose operation, cluster, backup, and claim
+// are all in different namespaces: the operation in apps, the cluster and its
+// pool in infra, the backup in the operator's namespace, and the claim in team-b.
+func crossNamespaceWorld() (*fakeControlPlane, *simplyblockv1alpha2.StorageBackupOps, []client.Object) {
+	handle := lvol.NewVolumeHandle(testClusterID, testPoolID, testRestoreID)
+	api := &fakeControlPlane{
+		restoredID: testRestoreID,
+		volumes:    map[string]lvol.Volume{string(handle): {Status: cpVolumeOnline}},
+		connection: lvol.Connection{
+			NQN:       "nqn.2023-01.io.simplyblock:lvol",
+			Endpoints: []lvol.Endpoint{{Transport: "tcp", Address: "10.0.0.1", Port: 4420}},
+		},
+	}
+	cluster := testClusterObject()
+	cluster.Namespace = testInfraNamespace
+	pool := testPoolObject()
+	pool.Namespace = testInfraNamespace
+	ops := restoreOps(testOpsName)
+	ops.Namespace = "apps"
+	ops.Spec.ClusterRef.Namespace = testInfraNamespace
+	ops.Spec.Restore.Claim.Namespace = testTeamNamespace
+	return api, ops, []client.Object{cluster, pool, availableBackup(), ops}
+}
+
+// Backup from anywhere, restore to anywhere. Nothing about the operation, the
+// cluster, the backup, or the claim has to share a namespace with any other.
+func TestARestoreReachesAcrossNamespaces(t *testing.T) {
+	api, ops, objs := crossNamespaceWorld()
+	r := opsReconciler(t, api, objs...)
+	r.Namespace = testNamespace
+	key := client.ObjectKeyFromObject(ops)
+	claimKey := client.ObjectKey{Name: "restored-claim", Namespace: testTeamNamespace}
+
+	for range 8 {
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+		var claim corev1.PersistentVolumeClaim
+		if err := r.Get(context.Background(), claimKey, &claim); err == nil {
+			claim.Status.Phase = corev1.ClaimBound
+			if err := r.Status().Update(context.Background(), &claim); err != nil {
+				t.Fatalf("bind the claim: %v", err)
+			}
+			break
+		}
+	}
+	var got simplyblockv1alpha2.StorageBackupOps
+	for range 5 {
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+		if err := r.Get(context.Background(), key, &got); err != nil {
+			t.Fatal(err)
+		}
+		if terminal(got.Status.Phase) {
+			break
+		}
+	}
+
+	if got.Status.Phase != simplyblockv1alpha2.StorageBackupOpsPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", got.Status.Phase, got.Status.Message)
+	}
+	if got.Status.ClaimNamespace != testTeamNamespace {
+		t.Errorf("status.claimNamespace = %q, want team-b", got.Status.ClaimNamespace)
+	}
+	var claim corev1.PersistentVolumeClaim
+	if err := r.Get(context.Background(), claimKey, &claim); err != nil {
+		t.Fatalf("the claim is not in the namespace that was asked for: %v", err)
+	}
+	if claim.Labels[RestoredByLabel] != testOpsName || claim.Labels[RestoredByNamespaceLabel] != "apps" {
+		t.Errorf("claim labels = %v, want the operation's name and its namespace", claim.Labels)
+	}
+	var volume corev1.PersistentVolume
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "restore-uid-restore-1"}, &volume); err != nil {
+		t.Fatalf("the restore produced no volume: %v", err)
+	}
+	if ref := volume.Spec.ClaimRef; ref == nil || ref.Namespace != testTeamNamespace {
+		t.Errorf("the volume is pre-bound to %+v, want the claim in team-b", ref)
+	}
+	for _, namespace := range []string{"apps", testNamespace, testInfraNamespace} {
+		var stray corev1.PersistentVolumeClaim
+		err := r.Get(context.Background(), client.ObjectKey{Name: "restored-claim", Namespace: namespace}, &stray)
+		if err == nil {
+			t.Errorf("a claim was also created in %s", namespace)
+		}
+	}
+}
+
+// A claim another namespace's operation of the same name created is somebody
+// else's. Recognizing it by the operation's name alone would adopt it, which is
+// the replacement of a workload's data the refusal exists to prevent.
+func TestAClaimMadeByASameNamedOperationInAnotherNamespaceIsRefused(t *testing.T) {
+	api, _, objs := crossNamespaceWorld()
+	occupied := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{
+		Name: "restored-claim", Namespace: testTeamNamespace,
+		Labels: map[string]string{RestoredByLabel: testOpsName, RestoredByNamespaceLabel: "other-apps"},
+	}}
+	r := opsReconciler(t, api, append(objs, occupied)...)
+	r.Namespace = testNamespace
+	key := types.NamespacedName{Namespace: "apps", Name: testOpsName}
+
+	var got simplyblockv1alpha2.StorageBackupOps
+	for range 6 {
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+		if err := r.Get(context.Background(), key, &got); err != nil {
+			t.Fatal(err)
+		}
+		if terminal(got.Status.Phase) {
+			break
+		}
+	}
+
+	if got.Status.Phase != simplyblockv1alpha2.StorageBackupOpsPhaseFailed {
+		t.Fatalf("phase = %q (%s), want Failed: the claim is another operation's", got.Status.Phase, got.Status.Message)
+	}
+	if api.restores != 0 {
+		t.Errorf("the control plane was asked for %d restore(s) despite the refusal", api.restores)
+	}
+}
+
+// The lock is a name, and an operation's name is only unique within its own
+// namespace. The bare name is how an operation in the backup's own namespace
+// holds it, so an operation of that name elsewhere must not be mistaken for it.
+func TestASameNamedOperationInAnotherNamespaceDoesNotShareTheLock(t *testing.T) {
+	api, _, objs := crossNamespaceWorld()
+	for _, obj := range objs {
+		if backup, ok := obj.(*simplyblockv1alpha2.StorageBackup); ok {
+			backup.Status.ActiveOpsRef = testOpsName
+		}
+	}
+	r := opsReconciler(t, api, objs...)
+	r.Namespace = testNamespace
+	key := types.NamespacedName{Namespace: "apps", Name: testOpsName}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var got simplyblockv1alpha2.StorageBackupOps
+	if err := r.Get(context.Background(), key, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Phase == simplyblockv1alpha2.StorageBackupOpsPhaseRunning {
+		t.Errorf("the operation started although another namespace's operation holds the backup")
+	}
+	if api.restores != 0 {
+		t.Errorf("the control plane was asked for %d restore(s) while the backup was held", api.restores)
+	}
+}
+
+// A backup is in the operator's namespace and the operations naming it are
+// wherever their authors are, so a change to the backup has to reach them all.
+func TestAChangedBackupWakesOperationsInOtherNamespaces(t *testing.T) {
+	_, ops, objs := crossNamespaceWorld()
+	r := opsReconciler(t, &fakeControlPlane{}, objs...)
+	r.Namespace = testNamespace
+
+	requests := r.operationsOn(context.Background(), availableBackup())
+
+	want := reconcile.Request{NamespacedName: client.ObjectKeyFromObject(ops)}
+	if !slices.Contains(requests, want) {
+		t.Errorf("requests = %v, want the operation in apps", requests)
+	}
+}
+
 // One operation at a time per backup. The second is admitted, acquires nothing,
 // and waits: queueing is the default rather than a feature anything built.
 func TestASecondRestoreOfOneBackupWaitsRatherThanRunning(t *testing.T) {
 	api := &fakeControlPlane{restoredID: testRestoreID}
 	first, second := restoreOps(testOpsName), restoreOps("restore-2")
-	second.Spec.Restore.ClaimName = "another-claim"
+	second.Spec.Restore.Claim.Name = "another-claim"
 
 	r := opsReconciler(t, api, testClusterObject(), testPoolObject(), availableBackup(), first, second)
 

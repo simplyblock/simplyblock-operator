@@ -175,7 +175,8 @@ type BackupCopy struct {
 // by nobody else, so there is no request here to carry.
 type StorageBackupSpec struct {
 	// ClusterRef names the StorageCluster whose store this backup was found in.
-	// With BackupID it is the whole of this object's identity.
+	// With ClusterNamespace and BackupID it is the whole of this object's
+	// identity.
 	//
 	// Bounded at what a StorageCluster name may be, since a longer value names
 	// nothing that can exist.
@@ -184,6 +185,15 @@ type StorageBackupSpec struct {
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
 	ClusterRef string `json:"clusterRef"`
+
+	// ClusterNamespace is the namespace of that StorageCluster. Empty means the
+	// object's own namespace, which is how a record written before every backup
+	// moved to the operator's namespace keeps resolving.
+	// +kubebuilder:validation:MaxLength=63
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Namespace"
+	// +optional
+	// +k8s:immutable
+	ClusterNamespace string `json:"clusterNamespace,omitempty"`
 
 	// BackupID is the identifier the store holds the backup under, and what a
 	// restore addresses. It is the store's identifier rather than a name this

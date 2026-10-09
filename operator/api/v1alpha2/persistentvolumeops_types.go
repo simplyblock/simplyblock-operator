@@ -423,9 +423,14 @@ type VolumeBackupStatus struct {
 	SnapshotID string `json:"snapshotID,omitempty"`
 
 	// BackupID is the storage cluster's identifier for the backup. The backup
-	// appears as a StorageBackup named after it, beside the StorageCluster.
+	// appears as a StorageBackup of that name in the operator's namespace.
 	// +optional
 	BackupID string `json:"backupID,omitempty"`
+
+	// BackupNamespace is the namespace that StorageBackup is in, which is the
+	// operator's, recorded so a restore is written without looking for it.
+	// +optional
+	BackupNamespace string `json:"backupNamespace,omitempty"`
 }
 
 // PersistentVolumeOpsStatus is the observed state of one volume operation.

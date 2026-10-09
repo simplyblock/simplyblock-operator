@@ -5,6 +5,11 @@
 # the backup's, and that is refused twice: once at admission, and once by the
 # operation's own first step, which catches a claim created in between.
 #
+# Both references, spec.clusterRef and spec.restore.claim, take a name and an
+# optional namespace. A namespace left out means this object's own, so the
+# claim here is created beside the operation. Name a namespace to restore into
+# another one.
+#
 # The pool is named rather than defaulted. A backup found in a store several
 # clusters share may have been written by another cluster, so the pool it came
 # from is not one this cluster is obliged to have, and which pool a volume lands
@@ -14,9 +19,11 @@ kind: StorageBackupOps
 metadata:
   name: storagebackupops-sample
 spec:
-  clusterRef: my-cluster
+  clusterRef:
+    name: my-cluster
   backupRef: storagebackup-sample
   action: Restore
   restore:
-    claimName: restored-claim
+    claim:
+      name: restored-claim
     targetPool: my-pool

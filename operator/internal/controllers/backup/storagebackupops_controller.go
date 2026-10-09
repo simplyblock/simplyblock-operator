@@ -76,6 +76,12 @@ const (
 	// status.claimName and this label together are what separate a claim this
 	// operation created from one somebody else did.
 	RestoredByLabel = "storage.simplyblock.io/restored-by"
+
+	// RestoredByNamespaceLabel is the namespace of that operation. Two operations
+	// of one name in different namespaces may restore into the same claim
+	// namespace, and the name alone would let each recognize the other's claim as
+	// its own.
+	RestoredByNamespaceLabel = "storage.simplyblock.io/restored-by-namespace"
 )
 
 // StorageBackupOpsReconciler reconciles a StorageBackupOps.
@@ -84,6 +90,11 @@ type StorageBackupOpsReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
 	API      RestoreClient
+
+	// Namespace is the operator's, where every StorageBackup is recorded. Empty
+	// means the operation's own, which is where a test with one namespace keeps
+	// them.
+	Namespace string
 }
 
 // RestoreClient is the control-plane surface a restore needs: the copy back,
@@ -131,17 +142,19 @@ func (r *StorageBackupOpsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// operationsOn enqueues every operation naming this backup.
+// operationsOn enqueues every operation naming this backup. The operations are
+// in whatever namespaces their authors work in, so all of them are read.
 func (r *StorageBackupOpsReconciler) operationsOn(
 	ctx context.Context, backup client.Object,
 ) []reconcile.Request {
 	var operations simplyblockv1alpha2.StorageBackupOpsList
-	if err := r.List(ctx, &operations, client.InNamespace(backup.GetNamespace())); err != nil {
+	if err := r.List(ctx, &operations); err != nil {
 		return nil
 	}
 	var requests []reconcile.Request
 	for i := range operations.Items {
-		if operations.Items[i].Spec.BackupRef != backup.GetName() {
+		if operations.Items[i].Spec.BackupRef != backup.GetName() ||
+			r.backupNamespace(&operations.Items[i]) != backup.GetNamespace() {
 			continue
 		}
 		requests = append(requests, reconcile.Request{
@@ -449,10 +462,10 @@ func (r *StorageBackupOpsReconciler) observeOperation(
 	ops *simplyblockv1alpha2.StorageBackupOps, phase simplyblockv1alpha2.StorageBackupOpsPhase,
 ) {
 	action := string(ops.Spec.Action)
-	backupOperationsTotal.WithLabelValues(ops.Spec.ClusterRef, action, resultOf(phase)).Inc()
+	backupOperationsTotal.WithLabelValues(ops.Spec.ClusterRef.Name, action, resultOf(phase)).Inc()
 
 	if started := ops.Status.StartedAt; started != nil {
-		backupOperationDurationSeconds.WithLabelValues(ops.Spec.ClusterRef, action).
+		backupOperationDurationSeconds.WithLabelValues(ops.Spec.ClusterRef.Name, action).
 			Observe(time.Since(started.Time).Seconds())
 	}
 }
@@ -517,7 +530,7 @@ func (r *StorageBackupOpsReconciler) acquireLock(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
 ) (bool, error) {
 	var backup simplyblockv1alpha2.StorageBackup
-	err := r.Get(ctx, client.ObjectKey{Name: ops.Spec.BackupRef, Namespace: ops.Namespace}, &backup)
+	err := r.Get(ctx, client.ObjectKey{Name: ops.Spec.BackupRef, Namespace: r.backupNamespace(ops)}, &backup)
 	if apierrors.IsNotFound(err) {
 		// The target went while the operation was waiting. That is the operation
 		// stopping without going wrong, which is what Aborted means.
@@ -529,7 +542,8 @@ func (r *StorageBackupOpsReconciler) acquireLock(
 		return false, err
 	}
 
-	if held := backup.Status.ActiveOpsRef; held != "" && held != ops.Name {
+	lock := r.lockRef(ops)
+	if held := backup.Status.ActiveOpsRef; held != "" && held != lock {
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal,
 			ReasonOperationQueued, ReasonOperationQueued,
 			"Backup %s is held by operation %s; this one is waiting", backup.Name, held)
@@ -537,9 +551,9 @@ func (r *StorageBackupOpsReconciler) acquireLock(
 			held, backup.Name))
 	}
 
-	if backup.Status.ActiveOpsRef != ops.Name {
+	if backup.Status.ActiveOpsRef != lock {
 		patch := client.MergeFromWithOptions(backup.DeepCopy(), client.MergeFromWithOptimisticLock{})
-		backup.Status.ActiveOpsRef = ops.Name
+		backup.Status.ActiveOpsRef = lock
 		if err := r.Status().Patch(ctx, &backup, patch); err != nil {
 			if apierrors.IsConflict(err) {
 				// Somebody else moved the object between the read and the write.
@@ -575,14 +589,14 @@ func (r *StorageBackupOpsReconciler) releaseLock(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
 ) error {
 	var backup simplyblockv1alpha2.StorageBackup
-	err := r.Get(ctx, client.ObjectKey{Name: ops.Spec.BackupRef, Namespace: ops.Namespace}, &backup)
+	err := r.Get(ctx, client.ObjectKey{Name: ops.Spec.BackupRef, Namespace: r.backupNamespace(ops)}, &backup)
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if backup.Status.ActiveOpsRef != ops.Name {
+	if backup.Status.ActiveOpsRef != r.lockRef(ops) {
 		return nil
 	}
 
@@ -736,5 +750,40 @@ func (r *StorageBackupOpsReconciler) clusterIDFor(
 	if recorded := ops.Status.ClusterID; recorded != "" {
 		return recorded, nil
 	}
-	return utils.ResolveClusterUUID(ctx, r.Client, ops.Namespace, ops.Spec.ClusterRef)
+	return utils.ResolveClusterUUID(ctx, r.Client, clusterNamespaceOfOps(ops), ops.Spec.ClusterRef.Name)
+}
+
+// lockRef is what the operation writes into the backup's activeOpsRef. An
+// operation's name is unique only within its own namespace, so one outside the
+// backup's namespace writes namespace/name. One beside the backup writes its bare
+// name, which is what every lock written before backups moved to one namespace
+// holds, so a restore in flight across an upgrade still finds its own lock.
+func (r *StorageBackupOpsReconciler) lockRef(ops *simplyblockv1alpha2.StorageBackupOps) string {
+	if ops.Namespace == r.backupNamespace(ops) {
+		return ops.Name
+	}
+	return ops.Namespace + "/" + ops.Name
+}
+
+// backupNamespace is where the operation's backup is, which is the operator's
+// namespace for every backup the mirror records.
+func (r *StorageBackupOpsReconciler) backupNamespace(ops *simplyblockv1alpha2.StorageBackupOps) string {
+	if r.Namespace != "" {
+		return r.Namespace
+	}
+	return ops.Namespace
+}
+
+// clusterNamespaceOfOps is the namespace of the operation's StorageCluster, and
+// of the pool it restores into.
+func clusterNamespaceOfOps(ops *simplyblockv1alpha2.StorageBackupOps) string {
+	return ops.Spec.ClusterRef.NamespaceOr(ops.Namespace)
+}
+
+// claimNamespaceOfOps is the namespace the restored claim is created in.
+func claimNamespaceOfOps(ops *simplyblockv1alpha2.StorageBackupOps) string {
+	if ops.Spec.Restore == nil {
+		return ops.Namespace
+	}
+	return ops.Spec.Restore.Claim.NamespaceOr(ops.Namespace)
 }

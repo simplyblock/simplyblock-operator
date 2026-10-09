@@ -191,8 +191,13 @@ func TestAbsorbBackupRestoresWritesTheOperationTerminal(t *testing.T) {
 	if absorbed.Spec.BackupRef != "backup-1" || absorbed.Spec.Restore.TargetPool != "pool-a" {
 		t.Errorf("spec = %+v, want the backup and pool the restore named", absorbed.Spec)
 	}
-	if absorbed.Spec.Restore.ClaimName != "restored-claim" {
-		t.Errorf("claimName = %q, want the claim the restore produced", absorbed.Spec.Restore.ClaimName)
+	if absorbed.Spec.ClusterRef.Name != "production" || absorbed.Spec.ClusterRef.Namespace != "" {
+		t.Errorf("clusterRef = %+v, want the restore's cluster in the restore's own namespace",
+			absorbed.Spec.ClusterRef)
+	}
+	if absorbed.Spec.Restore.Claim.Name != "restored-claim" || absorbed.Spec.Restore.Claim.Namespace != "" {
+		t.Errorf("claim = %+v, want the claim the restore produced in the restore's own namespace",
+			absorbed.Spec.Restore.Claim)
 	}
 	if absorbed.Status.Phase != simplyblockv1alpha2.StorageBackupOpsPhaseSucceeded {
 		t.Errorf("phase = %q, want Succeeded", absorbed.Status.Phase)

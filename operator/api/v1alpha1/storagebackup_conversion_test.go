@@ -164,6 +164,32 @@ func TestStorageBackupConvertFromFlattensTheStatus(t *testing.T) {
 	}
 }
 
+// The hub's clusterNamespace has no v1alpha1 field, so it rides the stash.
+//
+// Regression: 2026-10-09-backup-cluster-namespace-roundtrip: a StorageBackup
+// that names a cluster in another namespace lost that namespace on the trip
+// through v1alpha1 and back, and resolved against its own namespace afterward.
+func TestStorageBackupClusterNamespaceSurvivesTheTripThroughV1alpha1(t *testing.T) {
+	hub := &v1alpha2.StorageBackup{
+		Spec: v1alpha2.StorageBackupSpec{
+			ClusterRef: testCluster, ClusterNamespace: "infra", BackupID: "backup-uuid",
+		},
+	}
+
+	var spoke StorageBackup
+	if err := spoke.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StorageBackup
+	if err := spoke.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if got := back.Spec.ClusterNamespace; got != "infra" {
+		t.Errorf("spec.clusterNamespace = %q, want %q", got, "infra")
+	}
+}
+
 // A restore reads a backup by name and refuses one whose phase is Failed, so
 // both spellings of every phase have to agree. The two the hub does not declare
 // are the control plane's own lifecycle states, which status.apiStatus keeps

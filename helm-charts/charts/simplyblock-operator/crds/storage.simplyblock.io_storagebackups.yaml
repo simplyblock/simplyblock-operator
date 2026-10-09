@@ -246,10 +246,21 @@ spec:
                   x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
+                clusterNamespace:
+                  description: |-
+                    ClusterNamespace is the namespace of that StorageCluster. Empty means the
+                    object's own namespace, which is how a record written before every backup
+                    moved to the operator's namespace keeps resolving.
+                  maxLength: 63
+                  type: string
+                  x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                 clusterRef:
                   description: |-
                     ClusterRef names the StorageCluster whose store this backup was found in.
-                    With BackupID it is the whole of this object's identity.
+                    With ClusterNamespace and BackupID it is the whole of this object's
+                    identity.
 
                     Bounded at what a StorageCluster name may be, since a longer value names
                     nothing that can exist.
@@ -262,6 +273,9 @@ spec:
                 - backupID
                 - clusterRef
               type: object
+              x-kubernetes-validations:
+                - message: field clusterNamespace is immutable once set
+                  rule: '!has(oldSelf.clusterNamespace) || has(self.clusterNamespace)'
             status:
               description: status defines the observed state of StorageBackup
               properties:

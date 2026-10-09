@@ -464,7 +464,7 @@ func main() {
 	// The data-protection band's two streams, both scoped per cluster. The
 	// backup stream is the only source of a StorageBackup object, so the cluster
 	// that opens it is also what registers the namespace its objects belong in.
-	backupSubscription := subscriptions.NewBackupSubscription()
+	backupSubscription := subscriptions.NewBackupSubscription(operatorNamespace)
 	backupScopes := cpSubscriptions.AddSubscription(backupSubscription)
 	backupPolicySubscription := subscriptions.NewBackupPolicySubscription()
 	backupPolicyScopes := cpSubscriptions.AddSubscription(backupPolicySubscription)
@@ -680,10 +680,11 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&backupcontrollers.StorageBackupReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Backups:  backupSubscription,
-		Recorder: mgr.GetEventRecorder("storagebackup-controller"),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Backups:   backupSubscription,
+		Recorder:  mgr.GetEventRecorder("storagebackup-controller"),
+		Namespace: operatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackup")
 		os.Exit(1)
@@ -693,6 +694,8 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagebackuppolicy-controller"),
 		API:      backupAPI,
+
+		Namespace: operatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupPolicy")
 		os.Exit(1)
@@ -702,6 +705,8 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagebackupops-controller"),
 		API:      backupAPI,
+
+		Namespace: operatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupOps")
 		os.Exit(1)
@@ -710,6 +715,8 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("backuprestore-controller"),
+
+		OperatorNamespace: operatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupRestore")
 		os.Exit(1)
@@ -744,6 +751,8 @@ func main() {
 		Recorder: mgr.GetEventRecorder("persistentvolumeops-controller"),
 		API:      backupAPI,
 		Backups:  backupAPI,
+
+		Namespace: operatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PersistentVolumeOps")
 		os.Exit(1)
@@ -1086,7 +1095,11 @@ func main() {
 		setupLog.Info("registered storagebackuppolicy validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagebackupops",
-			&webhook.Admission{Handler: &internalwebhook.StorageBackupOpsValidator{Client: mgr.GetClient()}})
+			&webhook.Admission{Handler: &internalwebhook.StorageBackupOpsValidator{
+				Client:            mgr.GetClient(),
+				OperatorNamespace: operatorNamespace,
+				Reviewer:          &internalwebhook.SubjectAccessReviewer{Client: mgr.GetClient()},
+			}})
 		setupLog.Info("registered storagebackupops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-controlplaneops",

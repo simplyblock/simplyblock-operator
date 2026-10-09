@@ -2,7 +2,7 @@
 
 **Status:** Implemented, with the exceptions §14 records  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-30 (last updated 2026-09-17)  
+**Date:** 2026-08-30 (last updated 2026-10-09)  
 **Test Plan:** [`tests/test-plan-storagebackup.md`](../../tests/test-plan-storagebackup.md)
 
 This document specifies the target model for the whole data-protection layer.
@@ -232,10 +232,16 @@ is identity and nothing else:
 
 ```go
 // ClusterRef names the StorageCluster whose store this backup was found in. With
-// BackupID it is the whole of this object's identity.
+// ClusterNamespace and BackupID it is the whole of this object's identity.
 // +kubebuilder:validation:Required
 // +k8s:immutable
 ClusterRef string `json:"clusterRef"`
+
+// ClusterNamespace is the namespace of that StorageCluster. Empty means the
+// object's own namespace.
+// +optional
+// +k8s:immutable
+ClusterNamespace string `json:"clusterNamespace,omitempty"`
 
 // BackupID is the identifier the store holds the backup under, and what a
 // restore addresses.
@@ -282,10 +288,42 @@ object goes when the store stops reporting the copy, not when a policy is delete
 What a policy governs is what is taken rather than what is kept, which is the same
 reading §9 gives retention.
 
+**Every `StorageBackup` lives in the operator's namespace.** The control plane knows
+nothing of Kubernetes namespaces, and a backup belongs to a store rather than to the
+namespace of the claim it was taken from or of the cluster that reads the store. The
+mirror therefore creates every object in the namespace the operator runs in, named
+after the backup's identifier, whichever namespace holds the cluster, the claim, or the
+operation that asked for the copy. The cluster is named by `spec.clusterRef` and
+`spec.clusterNamespace`, and an object without `clusterNamespace` names a cluster in its
+own namespace, which is how a record written before this placement keeps resolving.
+Everything that reads backups reads one namespace, and a restore can address any backup
+in the store without the operation, the cluster, or the claim sharing a namespace with
+it (§6, §8).
+
+**One name is one backup, and the first cluster to record it owns the object.** The
+name is the store's identifier, so two clusters whose stores hold the same backup would
+produce the same name. The cluster that recorded it first is the owner, and a second
+cluster that reports the same identifier does not take the object over. It raises
+`BackupNameTaken` on its own `StorageCluster`, naming the owner, and leaves the object
+as it is (§14, Q6).
+
+**A scheduled backup is attributed to its claim's namespace.** A policy lists the
+backups taken under it by the claim they came from. Since every object is in one
+namespace, the match is on `status.source.claimNamespace` and `status.source.claimName`
+together, and a claim in another namespace with the same name is not counted.
+
 **A one-off backup is requested of a volume.** It is the `Backup` action of
 `PersistentVolumeOps` ([`design-persistentvolumeops.md`](design-persistentvolumeops.md)
-§5.2). The mirror creates the `StorageBackup` in the `StorageCluster`'s namespace, and
-the operation's `status.backup.backupID` is its name.
+§5.2). The mirror creates the `StorageBackup` as above, and the operation records the
+object's name in `status.backup.backupID` and its namespace in
+`status.backup.backupNamespace`.
+
+**Velero places its records the same way.** Its `Backup` and `Restore` objects must be in
+the namespace of the Velero server, its backup sync controller recreates the backups it
+finds in a bucket in that namespace and skips a backup whose name is already taken, and a
+restore reaches another namespace through `spec.namespaceMapping`, which rewrites the
+persistent volume's claim reference. Velero has no check of its own on who may restore
+which backup into which namespace. §7 adds one.
 
 ### 5.2 Status, in three groups
 
@@ -346,13 +384,23 @@ Appendix C.
 type StorageBackupOpsAction string
 ```
 
-| Action    | Steps                                                     | Target                              |
-|-----------|-----------------------------------------------------------|-------------------------------------|
-| `Restore` | `Validating` → `Restoring` → `AwaitingVolume` → `Binding` | A `StorageBackup` in this namespace |
+| Action    | Steps                                                     | Target                                        |
+|-----------|-----------------------------------------------------------|-----------------------------------------------|
+| `Restore` | `Validating` → `Restoring` → `AwaitingVolume` → `Binding` | A `StorageBackup` in the operator's namespace |
 
-**`spec.backupRef` is required, and names a `StorageBackup` in this namespace.** Every
-backup in the cluster's store has an object (§5.1), so a restore always has one to
-address and the reference is never optional.
+**`spec.backupRef` is required, and names a `StorageBackup` in the operator's
+namespace.** Every backup in the cluster's store has an object there (§5.1), so a
+restore always has one to address and the reference is never optional.
+
+**A restore says where its cluster is and where its claim goes, and both default to the
+operation's own namespace.** `spec.clusterRef` and `spec.restore.claim` are each an object
+of a `name` and an optional `namespace` (Appendix C). The `StorageCluster` is the one
+`spec.clusterRef` names, and the claim is created where `spec.restore.claim` says. The pool
+named by `spec.restore.targetPool` is resolved in the cluster's namespace. An operation can
+therefore live in the namespace of the team that asked for it while the cluster is in an
+infrastructure namespace and the restored claim lands in a third. Each object is immutable
+as a whole, so its name and its namespace are fixed together, like every reference in
+this group (§7). A cluster name is at most 63 characters, and a claim name at most 253.
 
 **A restore cannot be aborted after its third step.** One that has created a logical
 volume has produced something, and the graph declares no edge to `Aborted` from there,
@@ -403,14 +451,14 @@ A validating webhook per kind (`StorageBackupPolicyValidator`,
 `StorageBackupValidator`, and `StorageBackupOpsValidator`) resolves each reference
 and rejects the create when it does not resolve.
 
-| Field                                      | Names                                       | Rejected when                            |
-|--------------------------------------------|---------------------------------------------|------------------------------------------|
-| `StorageBackupPolicy.spec.clusterRef`      | a `StorageCluster` in this namespace        | No such object                           |
-| `StorageBackup.spec.clusterRef`            | a `StorageCluster` in this namespace        | No such object                           |
-| `StorageBackupOps.spec.clusterRef`         | a `StorageCluster` in this namespace        | No such object                           |
-| `StorageBackupOps.spec.backupRef`          | a `StorageBackup` in this namespace         | No such object, or its phase is `Failed` |
-| `StorageBackupOps.spec.restore.targetPool` | a `StoragePool` in this namespace           | No such object                           |
-| `StorageBackupOps.spec.restore.claimName`  | a claim to create, which must not exist yet | A claim of that name already exists (§8) |
+| Field                                      | Names                                        | Rejected when                            |
+|--------------------------------------------|----------------------------------------------|------------------------------------------|
+| `StorageBackupPolicy.spec.clusterRef`      | a `StorageCluster` in this namespace         | No such object                           |
+| `StorageBackup.spec.clusterRef`            | a `StorageCluster` in `clusterNamespace`     | No such object                           |
+| `StorageBackupOps.spec.clusterRef`         | a `StorageCluster` in `clusterRef.namespace` | No such object                           |
+| `StorageBackupOps.spec.backupRef`          | a `StorageBackup` in the operator namespace  | No such object, or its phase is `Failed` |
+| `StorageBackupOps.spec.restore.targetPool` | a `StoragePool` in `clusterRef.namespace`    | No such object                           |
+| `StorageBackupOps.spec.restore.claim`      | a claim to create in `claim.namespace`       | A claim of that name already exists (§8) |
 
 **Existence is the webhook's and shape is the type's**, which is the division
 [`design-persistentvolumeops.md`](design-persistentvolumeops.md) §4.3 draws. There is no
@@ -424,7 +472,7 @@ is a fact about a different object that CEL cannot see.
 is naming a record of something that does not exist. That is decided once and stays
 decided: a backup does not recover from `Failed`, it is replaced by another backup.
 
-**`spec.restore.claimName` is the one row where admission narrows a race it cannot
+**`spec.restore.claim` is the one row where admission narrows a race it cannot
 close.** A claim can be created between the operation's admission and its
 `Validating` step, so the step keeps its own check and its `ClaimExists` event (§8).
 Admission catches the ordinary mistake, restoring onto a name already in use, and
@@ -432,13 +480,35 @@ the step catches the interleaving. Both are needed, and the destructive case is 
 reason: replacing a running workload's data with a backup's is the worst outcome this
 document can produce, so it is guarded twice rather than once.
 
-**Every lookup is namespace-local, which is what makes them affordable.**
-`spec.claimRef` is a `corev1.LocalObjectReference` and every other reference is a
-bare name meaning the same namespace, so each check is one `Get` rather than a
-`List`. That is the group's convention for a namespaced kind, and the contrast is
-`PersistentVolumeOps`, whose references carry a namespace because that kind is
-cluster-scoped and a bare name has no namespace to mean
+**Every lookup is one `Get`, which is what makes them affordable.** The namespace each
+reference is read in is fixed by the table above: the operator's for a backup, the
+cluster reference's namespace for a cluster and a pool, and the claim reference's for a
+claim. A namespace left out of either object is the operation's own. That is the group's convention for a
+namespaced kind, and the contrast is `PersistentVolumeOps`, whose references carry a
+namespace because that kind is cluster-scoped and a bare name has no namespace to mean
 ([`design-persistentvolumeops.md`](design-persistentvolumeops.md) §4.1).
+
+**A reference that leaves the operation's namespace is authorized as well as resolved.**
+The operator reads every namespace, so resolving a reference says nothing about whether
+the person who wrote it may use what it names. Without a check, anyone able to create a
+`StorageBackupOps` in one namespace could restore any backup into any other. The
+validator therefore asks the API server, through a `SubjectAccessReview` for the
+requesting user, groups, and extra attributes, whether that identity may do on the
+target what the operation does there. A check runs only when the reference leaves the
+operation's namespace, and each is one review.
+
+| Reference that crosses a namespace                                | The requester must be allowed to                                    |
+|-------------------------------------------------------------------|---------------------------------------------------------------------|
+| `backupRef`, when the operator's namespace is not the operation's | `get` the named `storagebackups` object in the operator's namespace |
+| `spec.clusterRef.namespace`, when it is not the operation's       | `get` the named `storageclusters` object in that namespace          |
+| `spec.restore.claim.namespace`, when it is not the operation's    | `create` `persistentvolumeclaims` in that namespace                 |
+
+**The grants are ordinary RBAC, and a name-scoped grant is how one backup is shared.** A
+`Role` in the operator's namespace with `resourceNames` lets a team restore its own
+backups and no others, and a cluster administrator already holds all three. The
+operator's own identity is not asked, because it acts for the validated object and the
+gate is the admission of the object itself. The fields are immutable, so the check is
+made once, at creation.
 
 **Two fields are deliberately not checked at admission.**
 `StorageBackup.spec.snapshotName` names a snapshot in the control plane rather than
@@ -470,7 +540,7 @@ costs a rejected write and nothing more.
 
 The webhooks need `get` on `storageclusters`, `storagebackups`, `storagepools`, and
 `persistentvolumeclaims`, all of which the manager already reads to reconcile these
-kinds.
+kinds, and `create` on `subjectaccessreviews` in `authorization.k8s.io`, which is new.
 
 ---
 
@@ -484,11 +554,11 @@ where that claim comes from is the design decision this section exists for.
 ```go
 // RestoreSpec parameterizes the Restore action.
 type RestoreSpec struct {
-	// ClaimName is the PersistentVolumeClaim to create. It must not already
+	// Claim is the PersistentVolumeClaim to create. It must not already
 	// exist: a restore that adopted an existing claim would overwrite a volume
 	// somebody else is using.
 	// +kubebuilder:validation:Required
-	ClaimName string `json:"claimName"`
+	Claim NamespacedReference `json:"claim"`
 
 	// TargetPool is the StoragePool to restore into, required because a
 	// discovered backup may name a pool this cluster does not have (Appendix C).
@@ -497,6 +567,11 @@ type RestoreSpec struct {
 	// ...
 }
 ```
+
+**The claim is created in `spec.restore.claim.namespace`, and the volume is pre-bound to
+it there.** The `PersistentVolume` the restore writes carries a `claimRef` naming that
+namespace, so a restore into a namespace other than the operation's is the same
+mechanism as one into its own. `status.claimNamespace` records where the claim went.
 
 **The claim must not already exist, and that is a refusal rather than an
 adoption.** Restoring over a claim a workload is using would replace its data
@@ -524,9 +599,12 @@ restart into a claim of the right name that the step cannot distinguish from
 somebody else's, and §7's refusal would then block the operation from finishing its
 own work. Two things prevent that: `status.claimName` is written before the claim is
 created, so a restarted step knows the name it was about to use, and the claim carries
-`storage.simplyblock.io/restored-by` naming the operation. A claim bearing that label
-with this operation's name is its own and is completed, and a claim without it is
-somebody else's and is refused.
+`storage.simplyblock.io/restored-by` naming the operation and
+`storage.simplyblock.io/restored-by-namespace` naming its namespace. A claim bearing
+both labels with this operation's name and namespace is its own and is completed, and a
+claim without them is somebody else's and is refused. The namespace label is what keeps
+two operations of the same name in different namespaces, restoring into one claim
+namespace, from recognizing each other's claims.
 
 **The pool is named, never defaulted.** `status.source.poolName` records where the
 volume lived (§5.2), and since 26.4 that may be a pool in another cluster entirely: a
@@ -642,6 +720,7 @@ which is the audit record.
 | A backup was found in the store and an object created        | `Normal`  | `BackupDiscovered`     | `StorageBackup`       |
 | The store could not be walked                                | `Warning` | `StoreUnreachable`     | `StorageCluster`      |
 | A backup left the store, so its object was removed           | `Normal`  | `BackupGone`           | `StorageCluster`      |
+| A backup's name is already recorded for another cluster      | `Warning` | `BackupNameTaken`      | `StorageCluster`      |
 | The backup failed in the control plane                       | `Warning` | `BackupFailed`         | `StorageBackup`       |
 | The backup's target is not configured on the cluster         | `Warning` | `BackupTargetMissing`  | `StorageBackup`       |
 | A backup was pruned by the control plane                     | `Normal`  | `BackupPruned`         | `StorageBackupPolicy` |
@@ -717,28 +796,44 @@ of a round trip catches it.
 
 ## 13. Migration from the Registered API
 
-| Registered                                                                          | This design                                                                 | Cost                                                                                                                                               |
-|-------------------------------------------------------------------------------------|-----------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
-| `BackupPolicy`                                                                      | `StorageBackupPolicy` (§4)                                                  | A rename is a new CRD. Policies are user-authored, so existing ones must be converted                                                              |
-| `BackupRestore`                                                                     | `StorageBackupOps` (§6)                                                     | Absorbed as `spec.action: Restore`, which is now the kind's only action                                                                            |
-| `BackupImport`                                                                      | Retired                                                                     | The store is the inventory (§3), so a backup another cluster wrote needs no import                                                                 |
-| `StorageBackup` declared to request a copy                                          | Discovered from the store (§5.1)                                            | Behavioral, and the largest change here. The object is an observation, and neither creatable nor deletable by a user                               |
-| `StorageCluster.spec.backup`, an S3 target                                          | The same field, a `BackupStoreSpec` (`design-storagecluster.md` Appendix A) | The type is renamed away from a collision with `design-controlplane.md`'s, and gains the bucket and region the walk needs                          |
-| `spec.clusterName` on all four                                                      | `spec.clusterRef`                                                           | Spec rename, matching every other reference in the group                                                                                           |
-| No claim selector on the policy                                                     | `spec.claimSelector` (§4.1)                                                 | Additive, and it is the Kubernetes half the policy never had                                                                                       |
-| `status.attachedLvols`                                                              | `status.attachedClaims` (§4.1)                                              | Status regrouping, in Kubernetes terms rather than control-plane ones                                                                              |
-| Twenty-two ungrouped status fields on `StorageBackup`                               | `status.backup` and `status.source` (§5.2)                                  | Status regrouping. The largest single readability change here                                                                                      |
-| Untyped phases on all four                                                          | A typed phase per kind (§5.2, §6)                                           | Additive                                                                                                                                           |
-| No step field on the two operations                                                 | `status.step` on `StorageBackupOps` (§6)                                    | The restore's four steps are improvised today                                                                                                      |
-| No reference is checked anywhere                                                    | Every reference resolved at admission (§7)                                  | New. Each of these fields is immutable, so a wrong one could only ever be deleted rather than fixed                                                |
-| No `observedGeneration` on any of the four                                          | Present on all three                                                        | Required by `design-crd-model.md` §7.9                                                                                                             |
-| No exclusion between two restores of one backup                                     | `StorageBackup.status.activeOpsRef` (§6)                                    | New, and the same lock every other entity with an `Ops` companion carries. Two restores of one backup now queue rather than run together (§14, Q5) |
-| No `shortName` on `BackupPolicy` or `StorageBackup`                                 | `sbp` and `sb`                                                              | Additive. `br` and `bi` are retired with their kinds                                                                                               |
-| `spec.backup.snapshotBackups`, `withCompression`, `secondaryTarget`, `localTesting` | Removed (`design-storagecluster.md` Appendix A)                             | The store is a location, so how a copy is taken stays with the control plane                                                                       |
-| No owner reference from a policy to its backups                                     | Still none (§5.1)                                                           | The control plane reports no policy attribution, so the edge cannot be built. The object's lifetime is the store's report rather than the policy's |
-| Restore's claim owned by the operation                                              | Unowned, and created only at `Binding` (§8)                                 | Deleting the audit record no longer deletes the recovered volume, and a failed restore leaves no claim                                             |
-| Polling every backend read                                                          | A `?watch=true` subscription (§10)                                          | The mirror of §5.1 reads it, so a walk of the bucket is never performed                                                                            |
-| No event, no metric                                                                 | Fourteen reasons and eight metrics (§11)                                    | New infrastructure                                                                                                                                 |
+| Registered                                                                          | This design                                                                 | Cost                                                                                                                                                                             |
+|-------------------------------------------------------------------------------------|-----------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `BackupPolicy`                                                                      | `StorageBackupPolicy` (§4)                                                  | A rename is a new CRD. Policies are user-authored, so existing ones must be converted                                                                                            |
+| `BackupRestore`                                                                     | `StorageBackupOps` (§6)                                                     | Absorbed as `spec.action: Restore`, which is now the kind's only action                                                                                                          |
+| `BackupImport`                                                                      | Retired                                                                     | The store is the inventory (§3), so a backup another cluster wrote needs no import                                                                                               |
+| `StorageBackup` declared to request a copy                                          | Discovered from the store (§5.1)                                            | Behavioral, and the largest change here. The object is an observation, and neither creatable nor deletable by a user                                                             |
+| `StorageCluster.spec.backup`, an S3 target                                          | The same field, a `BackupStoreSpec` (`design-storagecluster.md` Appendix A) | The type is renamed away from a collision with `design-controlplane.md`'s, and gains the bucket and region the walk needs                                                        |
+| `spec.clusterName` on all four                                                      | `spec.clusterRef` (an object on `StorageBackupOps`, §6)                     | Spec rename, matching every other reference in the group. On `StorageBackupOps` the string becomes `{name, namespace}`                                                           |
+| No claim selector on the policy                                                     | `spec.claimSelector` (§4.1)                                                 | Additive, and it is the Kubernetes half the policy never had                                                                                                                     |
+| `status.attachedLvols`                                                              | `status.attachedClaims` (§4.1)                                              | Status regrouping, in Kubernetes terms rather than control-plane ones                                                                                                            |
+| Twenty-two ungrouped status fields on `StorageBackup`                               | `status.backup` and `status.source` (§5.2)                                  | Status regrouping. The largest single readability change here                                                                                                                    |
+| Untyped phases on all four                                                          | A typed phase per kind (§5.2, §6)                                           | Additive                                                                                                                                                                         |
+| No step field on the two operations                                                 | `status.step` on `StorageBackupOps` (§6)                                    | The restore's four steps are improvised today                                                                                                                                    |
+| No reference is checked anywhere                                                    | Every reference resolved at admission (§7)                                  | New. Each of these fields is immutable, so a wrong one could only ever be deleted rather than fixed                                                                              |
+| No `observedGeneration` on any of the four                                          | Present on all three                                                        | Required by `design-crd-model.md` §7.9                                                                                                                                           |
+| No exclusion between two restores of one backup                                     | `StorageBackup.status.activeOpsRef` (§6)                                    | New, and the same lock every other entity with an `Ops` companion carries. Two restores of one backup now queue rather than run together (§14, Q5)                               |
+| No `shortName` on `BackupPolicy` or `StorageBackup`                                 | `sbp` and `sb`                                                              | Additive. `br` and `bi` are retired with their kinds                                                                                                                             |
+| `spec.backup.snapshotBackups`, `withCompression`, `secondaryTarget`, `localTesting` | Removed (`design-storagecluster.md` Appendix A)                             | The store is a location, so how a copy is taken stays with the control plane                                                                                                     |
+| No owner reference from a policy to its backups                                     | Still none (§5.1)                                                           | The control plane reports no policy attribution, so the edge cannot be built. The object's lifetime is the store's report rather than the policy's                               |
+| A `StorageBackup` beside its cluster                                                | Always in the operator's namespace (§5.1)                                   | Behavioral. An object written before this placement is deleted once the same name exists in the operator's namespace, and nothing moves where the two namespaces are already one |
+| A restore resolves everything in its own namespace                                  | `spec.clusterRef` and `spec.restore.claim` objects (§6, §8)                 | Breaking, see below. The namespace is optional and defaults to the operation's. A reference that leaves it is authorized at admission (§7)                                       |
+| Restore's claim owned by the operation                                              | Unowned, and created only at `Binding` (§8)                                 | Deleting the audit record no longer deletes the recovered volume, and a failed restore leaves no claim                                                                           |
+| Polling every backend read                                                          | A `?watch=true` subscription (§10)                                          | The mirror of §5.1 reads it, so a walk of the bucket is never performed                                                                                                          |
+| No event, no metric                                                                 | Twenty reasons and eight metrics (§11)                                      | New infrastructure                                                                                                                                                               |
+
+**Breaking change: `StorageBackupOps.spec.clusterRef` and `spec.restore.claim` are
+objects, and `spec.restore.claimName`, `spec.restore.claimNamespace`, and
+`spec.clusterNamespace` are gone.** `spec.clusterRef` was a string in the shipped
+v1alpha2 schema, and a string no longer validates against an object. There is no
+conversion webhook for this kind and none is added, because the kind was born at v1alpha2
+and no older version exists to convert from. An existing `StorageBackupOps` therefore
+no longer decodes: a list or a get of it fails in the client, and the operator cannot
+reconcile it. A terminal one is an audit record, and it can be deleted. A running one
+has to finish before the upgrade, which is the same rule as the two kind removals below.
+The upgrade tool writes the new shape when it absorbs a `BackupRestore`, naming no
+namespace in either object, because a `BackupRestore`'s cluster, pool, and claim were
+always in its own namespace. `StorageBackup` keeps `spec.clusterRef` as a string beside
+`spec.clusterNamespace`, so the two kinds spell the same reference differently (§14, Q7).
 
 **The two kind removals are the breaking ones and they are not symmetrical with
 the renames.** `BackupPolicy` becoming `StorageBackupPolicy` needs existing
@@ -776,6 +871,13 @@ object per backup is the obvious shape and the control plane owns the format, so
 a question for whoever writes it rather than one this document can settle. Until it is
 settled, `status.source` and `status.backup` are fields with no stated source.
 
+**Q6: What happens when two clusters read one store.** §5.1 gives a backup name to the
+first cluster that records it, so a second cluster reading the same store reports the
+backup and raises `BackupNameTaken` without an object of its own. A restore through the
+second cluster then has no `StorageBackup` that names it. Whether the object should
+instead name every cluster that reports the backup, or be keyed by cluster as well as by
+identifier, is unsettled, and the second choice gives up the identifier as the name.
+
 **Q5: Whether the backup is the right thing a restore locks.** §6 puts
 `activeOpsRef` on `StorageBackup` because that is the target `spec.backupRef` names
 and because every entity with an `Ops` companion carries the field
@@ -784,9 +886,16 @@ restores of one backup into two different claims run one after the other, and
 nothing about the store or the control plane requires that: both reads are of the
 same immutable object. The alternative is to lock what a restore actually
 contends for, which is the claim name it creates, and §7 already refuses a
-`claimName` that exists. That leaves the backup an entity with an `Ops` companion
+`spec.restore.claim` that exists. That leaves the backup an entity with an `Ops` companion
 and no lock, which the group rule does not currently allow, so the question is for
 `design-crd-model.md` as much as for this document.
+
+**Q7: Whether `StorageBackup` takes the same reference object.** `StorageBackupOps.spec.clusterRef`
+is `{name, namespace}`, and `StorageBackup.spec.clusterRef` is a string beside
+`spec.clusterNamespace` (§5.1). The two spell one reference differently. Moving
+`StorageBackup` to the object changes a shipped, immutable identity field of an object
+the operator writes, so it is a separate change with its own migration, and this
+document does not settle it.
 
 ---
 
@@ -1030,10 +1139,17 @@ type BackupCopy struct {
 // how big it is, and where it came from are all observations and live in status.
 type StorageBackupSpec struct {
 	// ClusterRef names the StorageCluster whose store this backup was found in.
-	// With BackupID it is the whole of this object's identity.
+	// With ClusterNamespace and BackupID it is the whole of this object's
+	// identity.
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
 	ClusterRef string `json:"clusterRef"`
+
+	// ClusterNamespace is the namespace of that StorageCluster. Empty means the
+	// object's own namespace.
+	// +optional
+	// +k8s:immutable
+	ClusterNamespace string `json:"clusterNamespace,omitempty"`
 
 	// BackupID is the identifier the store holds the backup under, and what a
 	// restore addresses. It is the store's identifier rather than a name this
@@ -1155,14 +1271,37 @@ const (
 
 )
 
+// NamespacedReference names an object that may live in another namespace.
+//
+// The namespace is optional, and omitting it means the namespace of the object
+// that carries the reference. That is the shape a reference had before it could
+// leave its namespace, so a manifest that stays in one namespace names nothing
+// more than a name.
+type NamespacedReference struct {
+	// Name is the object's name.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+
+	// Namespace is where the object lives. When it is omitted, the object is
+	// looked up in the namespace of the resource that carries the reference.
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+}
+
 // RestoreSpec parameterizes the Restore action and is ignored by the other.
 type RestoreSpec struct {
-	// ClaimName is the PersistentVolumeClaim to create. It must not already
+	// Claim is the PersistentVolumeClaim to create, by name and namespace. The
+	// namespace defaults to the operation's own. The claim must not already
 	// exist: a restore that adopted an existing claim would replace a running
 	// workload's data with the backup's.
+	//
+	// The name and the namespace are fixed together at creation.
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
-	ClaimName string `json:"claimName"`
+	Claim NamespacedReference `json:"claim"`
 
 	// TargetPool is the StoragePool to restore into. It is required rather than
 	// defaulted: a backup found in the store may have been written by another
@@ -1184,12 +1323,18 @@ type RestoreSpec struct {
 
 // StorageBackupOpsSpec is one operation to perform against a backup.
 type StorageBackupOpsSpec struct {
-	// ClusterRef names the StorageCluster the operation runs against.
+	// ClusterRef names the StorageCluster the operation runs against, and
+	// locates the pool the restore targets. The namespace defaults to the
+	// operation's own.
+	//
+	// The name and the namespace are fixed together at creation.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="size(self.name) <= 63",message="a StorageCluster name is at most 63 characters"
 	// +k8s:immutable
-	ClusterRef string `json:"clusterRef"`
+	ClusterRef NamespacedReference `json:"clusterRef"`
 
-	// BackupRef names the StorageBackup this operation acts on. Required, since
+	// BackupRef names the StorageBackup this operation acts on, in the
+	// operator's namespace. Required, since
 	// Restore is the only action and every backup in the store has an object
 	// (§5.1).
 	// +kubebuilder:validation:Required
@@ -1228,6 +1373,10 @@ type StorageBackupOpsStatus struct {
 	// operation.
 	// +optional
 	ClaimName string `json:"claimName,omitempty"`
+
+	// ClaimNamespace is the namespace that claim was created in.
+	// +optional
+	ClaimNamespace string `json:"claimNamespace,omitempty"`
 
 	// BackupRef is the StorageBackup the restore read from, recorded so the
 	// operation says what it restored after the object list has moved on.

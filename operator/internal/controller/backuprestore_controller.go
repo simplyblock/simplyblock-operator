@@ -121,6 +121,11 @@ type BackupRestoreReconciler struct {
 	Recorder  events.EventRecorder
 	APIClient *webapi.Client
 
+	// OperatorNamespace is where every StorageBackup is recorded. A restore looks
+	// there first and then in its own namespace, which is where a backup a
+	// previous release or an import wrote is.
+	OperatorNamespace string
+
 	// attempts counts reconciles each restore has spent unaccepted. In memory on
 	// purpose: an operator restart resetting a count is not worth a field in the API.
 	attempts attemptCounter
@@ -281,6 +286,22 @@ func (r *BackupRestoreReconciler) resolveClusterUUID(
 	return clusterUUID, ctrl.Result{}, false, nil
 }
 
+// getBackup reads the restore's backup from the operator's namespace, where the
+// mirror records every one, and then from the restore's own namespace, where a
+// backup a previous release or an import wrote is.
+func (r *BackupRestoreReconciler) getBackup(
+	ctx context.Context, restoreCR *simplyblockv1alpha1.BackupRestore, backup *simplyblockv1alpha2.StorageBackup,
+) error {
+	name := restoreCR.Spec.BackupRef.Name
+	if r.OperatorNamespace != "" && r.OperatorNamespace != restoreCR.Namespace {
+		err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: r.OperatorNamespace}, backup)
+		if err == nil || !kerrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return r.Get(ctx, client.ObjectKey{Name: name, Namespace: restoreCR.Namespace}, backup)
+}
+
 func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 	ctx context.Context,
 	restoreCR *simplyblockv1alpha1.BackupRestore,
@@ -288,10 +309,7 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 	apiClient *webapi.Client,
 ) (ctrl.Result, bool, error) {
 	backup := &simplyblockv1alpha2.StorageBackup{}
-	if err := r.Get(ctx, client.ObjectKey{
-		Name:      restoreCR.Spec.BackupRef.Name,
-		Namespace: restoreCR.Namespace,
-	}, backup); err != nil {
+	if err := r.getBackup(ctx, restoreCR, backup); err != nil {
 		msg := fmt.Sprintf("StorageBackup %q not found: %v", restoreCR.Spec.BackupRef.Name, err)
 		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
 			s.Phase = simplyblockv1alpha1.RestorePhasePending

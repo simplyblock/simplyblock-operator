@@ -238,6 +238,52 @@ func TestBackupRestoreFailsWhenBackupIsFailed(t *testing.T) {
 	}
 }
 
+// Every StorageBackup is recorded in the operator's namespace, so a restore
+// written in any other namespace finds its backup there.
+func TestBackupRestoreReadsItsBackupFromTheOperatorsNamespace(t *testing.T) {
+	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
+
+	cluster := testCluster("default", "mycluster", "cluster-uuid")
+	backup := &simplyblockv1alpha2.StorageBackup{
+		ObjectMeta: metav1.ObjectMeta{Name: "backup-sample", Namespace: "operator-ns"},
+		Status: simplyblockv1alpha2.StorageBackupStatus{
+			Phase:   simplyblockv1alpha2.StorageBackupPhaseFailed,
+			Message: "Snapshot snap-1 not found",
+		},
+	}
+	restore := &simplyblockv1alpha1.BackupRestore{
+		ObjectMeta: metav1.ObjectMeta{Name: "restore-sample", Namespace: "default"},
+		Spec: simplyblockv1alpha1.BackupRestoreSpec{
+			ClusterName: "mycluster",
+			BackupRef:   simplyblockv1alpha1.BackupRef{Name: "backup-sample"},
+		},
+	}
+	k8sClient := newTestClient(t, scheme,
+		[]client.Object{&simplyblockv1alpha1.BackupRestore{}}, cluster, backup, restore)
+	r := &BackupRestoreReconciler{
+		Client:            k8sClient,
+		Scheme:            scheme,
+		Recorder:          events.NewFakeRecorder(10),
+		OperatorNamespace: "operator-ns",
+	}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "restore-sample", Namespace: "default"},
+	}); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	got := &simplyblockv1alpha1.BackupRestore{}
+	if err := k8sClient.Get(context.Background(),
+		client.ObjectKey{Name: "restore-sample", Namespace: "default"}, got); err != nil {
+		t.Fatalf("failed to get restore: %v", err)
+	}
+	if !strings.Contains(got.Status.Message, "Snapshot snap-1 not found") {
+		t.Errorf("Message = %q, want the backup found in the operator's namespace and its failure reported",
+			got.Status.Message)
+	}
+}
+
 func TestResolveCrossClusterCredentialsLocalRestoreReturnsNil(t *testing.T) {
 	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
 	k8sClient := newTestClient(t, scheme, nil)

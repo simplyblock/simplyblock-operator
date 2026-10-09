@@ -11,12 +11,14 @@ package backup
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -112,6 +114,148 @@ func TestMirrorCreatesAnObjectForADiscoveredBackup(t *testing.T) {
 	}
 	if got := backup.Labels[simplyblockv1alpha2.BackupLabelClaim]; got != "claim-1" {
 		t.Errorf("claim label = %q, want claim-1", got)
+	}
+}
+
+// A cluster in another namespace still has its backups recorded in the
+// operator's. The cluster is named by spec.clusterRef and spec.clusterNamespace,
+// and the object is found where every other reader looks for it.
+func TestMirrorRecordsABackupOfAClusterInAnotherNamespaceInTheOperatorsNamespace(t *testing.T) {
+	cluster := testClusterObject()
+	cluster.Namespace = testInfraNamespace
+	cache := syncedCache(reportedBackup())
+	cache.namespace = testNamespace
+	r := backupMirror(t, cache, cluster)
+
+	if _, err := r.Reconcile(context.Background(), backupRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var backup simplyblockv1alpha2.StorageBackup
+	if err := r.Get(context.Background(), backupRequest().NamespacedName, &backup); err != nil {
+		t.Fatalf("no object in the operator's namespace: %v", err)
+	}
+	if backup.Spec.ClusterRef != testClusterCR || backup.Spec.ClusterNamespace != testInfraNamespace {
+		t.Errorf("spec = %+v, want the cluster %s/%s", backup.Spec, testInfraNamespace, testClusterCR)
+	}
+	var elsewhere simplyblockv1alpha2.StorageBackup
+	err := r.Get(context.Background(),
+		types.NamespacedName{Namespace: testInfraNamespace, Name: backupObjectName()}, &elsewhere)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("an object was also written beside the cluster: %v", err)
+	}
+}
+
+// The name is the store's identifier, so a second cluster whose store holds the
+// same backup has no object of its own. The first cluster keeps it, and the
+// second says so instead of overwriting the owner's status with its own view.
+func TestMirrorLeavesABackupAnotherClusterRecordedAlone(t *testing.T) {
+	owned := &simplyblockv1alpha2.StorageBackup{
+		ObjectMeta: metav1.ObjectMeta{Name: backupObjectName(), Namespace: testNamespace},
+		Spec: simplyblockv1alpha2.StorageBackupSpec{
+			ClusterRef: "first", ClusterNamespace: "elsewhere", BackupID: testBackupID,
+		},
+		Status: simplyblockv1alpha2.StorageBackupStatus{ClusterID: "first-uuid"},
+	}
+	cache := syncedCache(reportedBackup())
+	cache.namespace = testNamespace
+	r := backupMirror(t, cache, testClusterObject(), owned)
+	recorder := events.NewFakeRecorder(8)
+	r.Recorder = recorder
+
+	if _, err := r.Reconcile(context.Background(), backupRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var got simplyblockv1alpha2.StorageBackup
+	if err := r.Get(context.Background(), backupRequest().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.ClusterRef != "first" || got.Status.ClusterID != "first-uuid" {
+		t.Errorf("the object was taken over: spec = %+v, status.clusterID = %q",
+			got.Spec, got.Status.ClusterID)
+	}
+	if got.Status.Phase != "" {
+		t.Errorf("the second cluster wrote its view into the owner's status: phase = %q", got.Status.Phase)
+	}
+	select {
+	case note := <-recorder.Events:
+		if !strings.Contains(note, ReasonBackupNameTaken) {
+			t.Errorf("event = %q, want %s", note, ReasonBackupNameTaken)
+		}
+	default:
+		t.Error("no event said the backup's name was already taken")
+	}
+}
+
+// An object a previous release wrote beside its cluster is not reported under
+// its own key any more, so the mirror removes it. It is not a backup that left
+// the store, and the event that says so would be wrong.
+func TestMirrorRemovesARecordLeftInTheClustersNamespaceWithoutSayingItLeftTheStore(t *testing.T) {
+	cluster := testClusterObject()
+	cluster.Namespace = testInfraNamespace
+	legacy := &simplyblockv1alpha2.StorageBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: backupObjectName(), Namespace: testInfraNamespace,
+			Labels: map[string]string{simplyblockv1alpha2.BackupLabelCluster: testClusterCR},
+		},
+		Spec: simplyblockv1alpha2.StorageBackupSpec{
+			ClusterRef: testClusterCR, BackupID: testBackupID,
+		},
+		Status: simplyblockv1alpha2.StorageBackupStatus{ClusterID: testClusterID},
+	}
+	cache := syncedCache(reportedBackup())
+	cache.namespace = testNamespace
+	r := backupMirror(t, cache, cluster, legacy)
+	r.Namespace = testNamespace
+	recorder := events.NewFakeRecorder(8)
+	r.Recorder = recorder
+
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: testInfraNamespace, Name: backupObjectName()}}
+	if _, err := r.Reconcile(context.Background(), request); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var got simplyblockv1alpha2.StorageBackup
+	if err := r.Get(context.Background(), request.NamespacedName, &got); !apierrors.IsNotFound(err) {
+		t.Errorf("the record beside the cluster survived: %v", err)
+	}
+	select {
+	case note := <-recorder.Events:
+		t.Errorf("event = %q, want none: the backup is still in the store", note)
+	default:
+	}
+}
+
+// A backup that leaves the store is reported on the cluster that held it,
+// wherever that cluster is.
+func TestMirrorReportsABackupGoneOnAClusterInAnotherNamespace(t *testing.T) {
+	cluster := testClusterObject()
+	cluster.Namespace = testInfraNamespace
+	recorded := &simplyblockv1alpha2.StorageBackup{
+		ObjectMeta: metav1.ObjectMeta{Name: backupObjectName(), Namespace: testNamespace},
+		Spec: simplyblockv1alpha2.StorageBackupSpec{
+			ClusterRef: testClusterCR, ClusterNamespace: testInfraNamespace, BackupID: testBackupID,
+		},
+		Status: simplyblockv1alpha2.StorageBackupStatus{ClusterID: testClusterID},
+	}
+	cache := syncedCache()
+	cache.namespace = testNamespace
+	r := backupMirror(t, cache, cluster, recorded)
+	recorder := events.NewFakeRecorder(8)
+	r.Recorder = recorder
+
+	if _, err := r.Reconcile(context.Background(), backupRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	select {
+	case note := <-recorder.Events:
+		if !strings.Contains(note, ReasonBackupGone) {
+			t.Errorf("event = %q, want %s", note, ReasonBackupGone)
+		}
+	default:
+		t.Error("the cluster in the other namespace was told nothing")
 	}
 }
 

@@ -93,6 +93,34 @@ const (
 	StorageBackupOpsStepBinding        StorageBackupOpsStep = "Binding"
 )
 
+// NamespacedReference names an object that may live in another namespace.
+//
+// The namespace is optional, and omitting it means the namespace of the object
+// that carries the reference. That is the shape a reference had before it could
+// leave its namespace, so a manifest that stays in one namespace names nothing
+// more than a name.
+type NamespacedReference struct {
+	// Name is the object's name.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+
+	// Namespace is where the object lives. When it is omitted, the object is
+	// looked up in the namespace of the resource that carries the reference.
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// NamespaceOr returns the reference's namespace, or fallback when it names none.
+func (r NamespacedReference) NamespaceOr(fallback string) string {
+	if r.Namespace != "" {
+		return r.Namespace
+	}
+	return fallback
+}
+
 // RestoreSpec parameterizes the Restore action.
 //
 // It carries no size, no access mode, and no volume mode, which the registered
@@ -102,13 +130,16 @@ const (
 // controller reads the size off status.backup.size and mounts the filesystem
 // status.source.fsType records.
 type RestoreSpec struct {
-	// ClaimName is the PersistentVolumeClaim to create. It must not already
+	// Claim is the PersistentVolumeClaim to create, by name and namespace. The
+	// namespace defaults to the operation's own. The claim must not already
 	// exist: a restore that adopted an existing claim would replace a running
 	// workload's data with the backup's.
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Claim Name"
+	//
+	// The name and the namespace are fixed together at creation.
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Claim"
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
-	ClaimName string `json:"claimName"`
+	Claim NamespacedReference `json:"claim"`
 
 	// TargetPool is the StoragePool to restore into. It is required rather than
 	// defaulted: a backup found in the store may have been written by another
@@ -138,19 +169,20 @@ type RestoreSpec struct {
 
 // StorageBackupOpsSpec is one operation to perform against a backup.
 type StorageBackupOpsSpec struct {
-	// ClusterRef names the StorageCluster the operation runs against.
+	// ClusterRef names the StorageCluster the operation runs against, and
+	// locates the pool the restore targets. The namespace defaults to the
+	// operation's own.
 	//
-	// Bounded at what a StorageCluster name may be, since a longer value names
-	// nothing that can exist.
-	// +kubebuilder:validation:MaxLength=63
+	// The name and the namespace are fixed together at creation.
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Ref"
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="size(self.name) <= 63",message="a StorageCluster name is at most 63 characters"
 	// +k8s:immutable
-	ClusterRef string `json:"clusterRef"`
+	ClusterRef NamespacedReference `json:"clusterRef"`
 
-	// BackupRef names the StorageBackup this operation acts on, in this
-	// namespace. Required, since Restore is the only action and every backup in
-	// the store has an object.
+	// BackupRef names the StorageBackup this operation acts on, in the
+	// operator's namespace. Required, since Restore is the only action and
+	// every backup in the store has an object there.
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Backup Ref"
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
@@ -226,6 +258,12 @@ type StorageBackupOpsStatus struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Claim Name"
 	// +optional
 	ClaimName string `json:"claimName,omitempty"`
+
+	// ClaimNamespace is the namespace that claim was created in, written with
+	// ClaimName.
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Claim Namespace"
+	// +optional
+	ClaimNamespace string `json:"claimNamespace,omitempty"`
 
 	// Message is the reason the phase is what it is: one sentence, replaced as
 	// the operation moves, and never a log.

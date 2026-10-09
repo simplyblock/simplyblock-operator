@@ -127,6 +127,11 @@ type PersistentVolumeOpsReconciler struct {
 	// Backups is the control-plane surface the Backup action calls.
 	Backups BackupClient
 
+	// Namespace is the operator's, where the mirror records every StorageBackup.
+	// The Backup action records it beside the backup's identifier, so the object
+	// is found without being looked for.
+	Namespace string
+
 	// Reader is uncached, and the consumer lookup is what it is for: a stale
 	// informer cache can miss a pod that is genuinely running, and a volume
 	// whose consumer was missed is one whose host never gets the target's

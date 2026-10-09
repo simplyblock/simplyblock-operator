@@ -12,11 +12,16 @@ package webhook
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	admissionv1 "k8s.io/api/admission/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -31,6 +36,12 @@ import (
 // cluster's namespace and deliberately not the operator's: the identity check is
 // about who the caller is, not about where the object sits.
 const backupNamespace = "sb"
+
+// The namespaces a cross-namespace restore spreads its references across.
+const (
+	infraNamespace = "infra"
+	teamNamespace  = "team-b"
+)
 
 func backupValidator(t *testing.T, objs ...client.Object) *StorageBackupValidator {
 	t.Helper()
@@ -198,11 +209,11 @@ func restoreOpsObject() *simplyblockv1alpha2.StorageBackupOps {
 	return &simplyblockv1alpha2.StorageBackupOps{
 		ObjectMeta: metav1.ObjectMeta{Name: "restore-1", Namespace: backupNamespace},
 		Spec: simplyblockv1alpha2.StorageBackupOpsSpec{
-			ClusterRef: "production",
+			ClusterRef: simplyblockv1alpha2.NamespacedReference{Name: "production"},
 			BackupRef:  "backup-1",
 			Action:     simplyblockv1alpha2.StorageBackupOpsActionRestore,
 			Restore: &simplyblockv1alpha2.RestoreSpec{
-				ClaimName:  "restored-claim",
+				Claim:      simplyblockv1alpha2.NamespacedReference{Name: "restored-claim"},
 				TargetPool: "pool-a",
 			},
 		},
@@ -323,5 +334,272 @@ func TestDeletingARestoreThatCreatedNothingIsAdmitted(t *testing.T) {
 	finished.Status.Step.State = string(simplyblockv1alpha2.StorageBackupOpsStepBinding)
 	if resp := v.Handle(context.Background(), deleteOpsRequest(t, finished)); !resp.Allowed {
 		t.Errorf("deleting a terminal operation was refused: %q", resp.Result.Message)
+	}
+}
+
+// fakeReviewer answers an access review from a rule a test sets and records
+// every question it was asked.
+type fakeReviewer struct {
+	asked []authorizationv1.ResourceAttributes
+	users []authenticationv1.UserInfo
+	deny  func(authorizationv1.ResourceAttributes) bool
+	err   error
+}
+
+func (f *fakeReviewer) Allowed(
+	_ context.Context, user authenticationv1.UserInfo, attributes authorizationv1.ResourceAttributes,
+) (bool, error) {
+	f.asked = append(f.asked, attributes)
+	f.users = append(f.users, user)
+	if f.err != nil {
+		return false, f.err
+	}
+	return f.deny == nil || !f.deny(attributes), nil
+}
+
+// crossingOps is a restore whose operation, cluster, and claim are in three
+// different namespaces, with the backup in the operator's.
+func crossingOps() *simplyblockv1alpha2.StorageBackupOps {
+	ops := restoreOpsObject()
+	ops.Namespace = "apps"
+	ops.Spec.ClusterRef.Namespace = infraNamespace
+	ops.Spec.Restore.Claim.Namespace = teamNamespace
+	return ops
+}
+
+func crossingWorld() []client.Object {
+	cluster := clusterObject()
+	cluster.Namespace = infraNamespace
+	pool := poolObject()
+	pool.Namespace = infraNamespace
+	return []client.Object{cluster, availableBackupObject(), pool}
+}
+
+func crossingValidator(t *testing.T, reviewer AccessReviewer, objs ...client.Object) *StorageBackupOpsValidator {
+	t.Helper()
+	v := opsValidator(t, objs...)
+	v.OperatorNamespace = backupNamespace
+	v.Reviewer = reviewer
+	return v
+}
+
+func crossingRequest(t *testing.T, ops *simplyblockv1alpha2.StorageBackupOps) admission.Request {
+	t.Helper()
+	req := createRequest(t, ops)
+	req.UserInfo = authenticationv1.UserInfo{Username: "alice", Groups: []string{"team-a"}}
+	return req
+}
+
+// Backup from anywhere, restore to anywhere: every reference may name another
+// namespace, and the validator resolves each where it is.
+func TestARestoreAcrossNamespacesIsAdmittedAndEachReferenceIsAuthorized(t *testing.T) {
+	reviewer := &fakeReviewer{}
+	v := crossingValidator(t, reviewer, crossingWorld()...)
+
+	resp := v.Handle(context.Background(), crossingRequest(t, crossingOps()))
+
+	if !resp.Allowed {
+		t.Fatalf("a restore across namespaces was refused: %q", resp.Result.Message)
+	}
+	want := []authorizationv1.ResourceAttributes{
+		{Verb: "get", Group: "storage.simplyblock.io", Resource: "storagebackups", Namespace: backupNamespace, Name: "backup-1"},
+		{Verb: "get", Group: "storage.simplyblock.io", Resource: "storageclusters", Namespace: infraNamespace, Name: "production"},
+		{Verb: "create", Resource: "persistentvolumeclaims", Namespace: teamNamespace},
+	}
+	if !reflect.DeepEqual(reviewer.asked, want) {
+		t.Errorf("reviews asked = %+v, want %+v", reviewer.asked, want)
+	}
+	for _, user := range reviewer.users {
+		if user.Username != "alice" || !slices.Contains(user.Groups, "team-a") {
+			t.Errorf("a review was made for %+v, want the requesting user and their groups", user)
+		}
+	}
+}
+
+// Resolving a reference says nothing about whether the requester may use what it
+// names, so each crossing is refused when the requester is not allowed to.
+func TestAReferenceTheRequesterMayNotUseIsRefused(t *testing.T) {
+	for _, tc := range []struct{ name, resource, namespace string }{
+		{"backup", "storagebackups", backupNamespace},
+		{"cluster", "storageclusters", infraNamespace},
+		{"claim namespace", "persistentvolumeclaims", teamNamespace},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reviewer := &fakeReviewer{deny: func(a authorizationv1.ResourceAttributes) bool {
+				return a.Resource == tc.resource
+			}}
+			v := crossingValidator(t, reviewer, crossingWorld()...)
+
+			resp := v.Handle(context.Background(), crossingRequest(t, crossingOps()))
+
+			if resp.Allowed {
+				t.Fatalf("a restore using %s the requester may not use was admitted", tc.resource)
+			}
+			if !strings.Contains(resp.Result.Message, tc.resource) ||
+				!strings.Contains(resp.Result.Message, tc.namespace) {
+				t.Errorf("the refusal does not name %s in %s: %q", tc.resource, tc.namespace, resp.Result.Message)
+			}
+		})
+	}
+}
+
+// An operation that stays in its own namespace is what every restore was before
+// the fields existed, and it needs no review.
+func TestARestoreWithinOneNamespaceAsksForNoReview(t *testing.T) {
+	reviewer := &fakeReviewer{}
+	v := opsValidator(t, clusterObject(), availableBackupObject(), poolObject())
+	v.OperatorNamespace = backupNamespace
+	v.Reviewer = reviewer
+
+	resp := v.Handle(context.Background(), createRequest(t, restoreOpsObject()))
+
+	if !resp.Allowed {
+		t.Fatalf("a restore within one namespace was refused: %q", resp.Result.Message)
+	}
+	if len(reviewer.asked) != 0 {
+		t.Errorf("reviews asked = %+v, want none", reviewer.asked)
+	}
+}
+
+// A refusal that said "no such backup" to somebody who may not read backups
+// would tell them which ones exist.
+func TestAnUnauthorizedReferenceIsRefusedBeforeItIsResolved(t *testing.T) {
+	reviewer := &fakeReviewer{deny: func(authorizationv1.ResourceAttributes) bool { return true }}
+	cluster := clusterObject()
+	cluster.Namespace = infraNamespace
+	v := crossingValidator(t, reviewer, cluster) // no backup, no pool
+
+	resp := v.Handle(context.Background(), crossingRequest(t, crossingOps()))
+
+	if resp.Allowed {
+		t.Fatal("an unauthorized restore was admitted")
+	}
+	if strings.Contains(resp.Result.Message, "does not name") {
+		t.Errorf("the refusal reveals whether the object exists: %q", resp.Result.Message)
+	}
+}
+
+func TestARestoreIsRefusedWhenTheAuthorizerCannotBeAsked(t *testing.T) {
+	reviewer := &fakeReviewer{err: errors.New("the API server is unreachable")}
+	v := crossingValidator(t, reviewer, crossingWorld()...)
+
+	if resp := v.Handle(context.Background(), crossingRequest(t, crossingOps())); resp.Allowed {
+		t.Error("a restore was admitted without an answer from the authorizer")
+	}
+}
+
+func TestACrossNamespaceRestoreResolvesThePoolInTheClustersNamespace(t *testing.T) {
+	cluster := clusterObject()
+	cluster.Namespace = infraNamespace
+	// The pool is in the operation's namespace, where the restore does not look.
+	pool := poolObject()
+	pool.Namespace = "apps"
+	v := crossingValidator(t, &fakeReviewer{}, cluster, availableBackupObject(), pool)
+
+	resp := v.Handle(context.Background(), crossingRequest(t, crossingOps()))
+
+	if resp.Allowed {
+		t.Fatal("a pool in the wrong namespace was accepted")
+	}
+	if !strings.Contains(resp.Result.Message, `"infra"`) {
+		t.Errorf("the refusal does not name the namespace it looked in: %q", resp.Result.Message)
+	}
+}
+
+func TestACrossNamespaceRestoreRefusesAClaimThatExistsInTheClaimNamespace(t *testing.T) {
+	occupied := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "restored-claim", Namespace: teamNamespace},
+	}
+	v := crossingValidator(t, &fakeReviewer{}, append(crossingWorld(), occupied)...)
+
+	resp := v.Handle(context.Background(), crossingRequest(t, crossingOps()))
+
+	if resp.Allowed {
+		t.Fatal("a restore onto an existing claim in another namespace was admitted")
+	}
+	if !strings.Contains(resp.Result.Message, `"team-b"`) {
+		t.Errorf("the refusal does not name the claim's namespace: %q", resp.Result.Message)
+	}
+}
+
+// rawRestoreRequest is a create request whose references are written the way a
+// manifest writes them, as objects with an optional namespace, so the test
+// states the wire shape and not the Go type behind it.
+func rawRestoreRequest(namespace, clusterRef, claim string) admission.Request {
+	raw := fmt.Sprintf(`{
+	  "apiVersion": "storage.simplyblock.io/v1alpha2", "kind": "StorageBackupOps",
+	  "metadata": {"name": "restore-1", "namespace": %q},
+	  "spec": {
+	    "clusterRef": %s, "backupRef": "backup-1", "action": "Restore",
+	    "restore": {"claim": %s, "targetPool": "pool-a"}
+	  }}`, namespace, clusterRef, claim)
+	return admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+		Operation: admissionv1.Create,
+		Namespace: namespace,
+		UserInfo:  authenticationv1.UserInfo{Username: "alice"},
+		Object:    runtime.RawExtension{Raw: []byte(raw)},
+	}}
+}
+
+// A reference that names no namespace means the operation's own, so an operation
+// that omits both stays where it is and asks for no review.
+func TestAReferenceWithoutANamespaceMeansTheOperationsNamespace(t *testing.T) {
+	reviewer := &fakeReviewer{}
+	v := opsValidator(t, clusterObject(), availableBackupObject(), poolObject())
+	v.OperatorNamespace = backupNamespace
+	v.Reviewer = reviewer
+
+	resp := v.Handle(context.Background(), rawRestoreRequest(backupNamespace,
+		`{"name": "production"}`, `{"name": "restored-claim"}`))
+
+	if !resp.Allowed {
+		t.Fatalf("a restore whose references omit the namespace was refused: %q", resp.Result.Message)
+	}
+	if len(reviewer.asked) != 0 {
+		t.Errorf("reviews asked = %+v, want none", reviewer.asked)
+	}
+}
+
+// The default is the operation's namespace and not the operator's: the cluster
+// is looked up where the operation is, and the refusal says where.
+func TestAClusterRefWithoutANamespaceIsResolvedInTheOperationsNamespace(t *testing.T) {
+	cluster := clusterObject()
+	cluster.Namespace = infraNamespace
+	pool := poolObject()
+	pool.Namespace = infraNamespace
+	v := crossingValidator(t, &fakeReviewer{}, cluster, availableBackupObject(), pool)
+
+	resp := v.Handle(context.Background(), rawRestoreRequest("apps",
+		`{"name": "production"}`, `{"name": "restored-claim"}`))
+
+	if resp.Allowed {
+		t.Fatal("a cluster in another namespace was resolved without being named")
+	}
+	if !strings.Contains(resp.Result.Message, `"apps"`) {
+		t.Errorf("the refusal does not name the namespace it looked in: %q", resp.Result.Message)
+	}
+}
+
+// A claim that names no namespace is checked, and authorized, in the
+// operation's namespace.
+func TestAClaimWithoutANamespaceIsCheckedInTheOperationsNamespace(t *testing.T) {
+	occupied := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "restored-claim", Namespace: "apps"},
+	}
+	cluster := clusterObject()
+	cluster.Namespace = infraNamespace
+	pool := poolObject()
+	pool.Namespace = infraNamespace
+	reviewer := &fakeReviewer{}
+	v := crossingValidator(t, reviewer, cluster, availableBackupObject(), pool, occupied)
+
+	resp := v.Handle(context.Background(), rawRestoreRequest("apps",
+		`{"name": "production", "namespace": "infra"}`, `{"name": "restored-claim"}`))
+
+	if resp.Allowed {
+		t.Fatal("a restore onto a claim in the operation's namespace was admitted")
+	}
+	if !strings.Contains(resp.Result.Message, `"apps"`) {
+		t.Errorf("the refusal does not name the claim's namespace: %q", resp.Result.Message)
 	}
 }

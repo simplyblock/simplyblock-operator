@@ -40,6 +40,11 @@ const (
 	testBackupID     = "44444444-4444-4444-4444-444444444444"
 	testRestoreID    = "55555555-5555-5555-5555-555555555555"
 	testStorageClass = "simplyblock-production-pool-a"
+
+	// The namespaces a cross-namespace test spreads its objects across, besides
+	// testNamespace, which is the operator's.
+	testInfraNamespace = "infra"
+	testTeamNamespace  = "team-b"
 )
 
 func testScope() cpinformer.Scope { return cpinformer.Scope{testClusterID} }
@@ -110,6 +115,10 @@ func testPoolObject() *simplyblockv1alpha2.StoragePool {
 type fakeBackupCache struct {
 	synced  bool
 	backups map[string]subscriptions.BackupDTO
+
+	// namespace is the one namespace the cache names objects in, which is the
+	// operator's. Empty means any, which is what a test with one namespace wants.
+	namespace string
 }
 
 func (f *fakeBackupCache) Triggers() <-chan event.GenericEvent { return nil }
@@ -118,6 +127,9 @@ func (f *fakeBackupCache) Lookup(
 	key types.NamespacedName,
 ) (cpinformer.Scope, subscriptions.BackupDTO, bool) {
 	dto, ok := f.backups[key.Name]
+	if f.namespace != "" && key.Namespace != f.namespace {
+		ok = false
+	}
 	if !ok {
 		return nil, subscriptions.BackupDTO{}, false
 	}

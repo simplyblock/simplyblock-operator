@@ -23,6 +23,7 @@ import (
 	"net/http"
 
 	admissionv1 "k8s.io/api/admission/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -73,6 +74,15 @@ var undeletableSteps = map[simplyblockv1alpha2.StorageBackupOpsStep]string{
 // advances a restore anyway.
 type StorageBackupOpsValidator struct {
 	Client client.Client
+
+	// OperatorNamespace is where every StorageBackup is recorded. Empty means the
+	// operation's own namespace.
+	OperatorNamespace string
+
+	// Reviewer authorizes a reference that leaves the operation's namespace
+	// (design-storagebackup.md §7). It is asked only then, so an operation that
+	// stays in its own namespace needs none.
+	Reviewer AccessReviewer
 }
 
 func (v *StorageBackupOpsValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
@@ -104,17 +114,24 @@ func (v *StorageBackupOpsValidator) admitCreate(
 		return admission.Allowed("a record of work already done")
 	}
 
-	if denied := clusterMustExist(ctx, v.Client, ops.Namespace, ops.Spec.ClusterRef); denied != nil {
+	// Authorization comes before resolution. A refusal that said "no such backup"
+	// to somebody who may not read backups would tell them which ones exist.
+	if denied := v.authorizeReferences(ctx, req, &ops); denied != nil {
 		return *denied
 	}
 
+	if denied := clusterMustExist(ctx, v.Client, clusterNamespace(&ops), ops.Spec.ClusterRef.Name); denied != nil {
+		return *denied
+	}
+
+	backupNamespace := v.backupNamespace(&ops)
 	var backup simplyblockv1alpha2.StorageBackup
 	err := v.Client.Get(ctx,
-		client.ObjectKey{Name: ops.Spec.BackupRef, Namespace: ops.Namespace}, &backup)
+		client.ObjectKey{Name: ops.Spec.BackupRef, Namespace: backupNamespace}, &backup)
 	if apierrors.IsNotFound(err) {
 		return admission.Denied(fmt.Sprintf(
 			"spec.backupRef %q does not name a StorageBackup in namespace %q",
-			ops.Spec.BackupRef, ops.Namespace))
+			ops.Spec.BackupRef, backupNamespace))
 	}
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, err)
@@ -156,11 +173,11 @@ func (v *StorageBackupOpsValidator) poolMustExist(
 	// cluster has.
 	var pool simplyblockv1alpha2.StoragePool
 	err := v.Client.Get(ctx,
-		client.ObjectKey{Name: ops.Spec.Restore.TargetPool, Namespace: ops.Namespace}, &pool)
+		client.ObjectKey{Name: ops.Spec.Restore.TargetPool, Namespace: clusterNamespace(ops)}, &pool)
 	if apierrors.IsNotFound(err) {
 		denied := admission.Denied(fmt.Sprintf(
 			"spec.restore.targetPool %q does not name a StoragePool in namespace %q",
-			ops.Spec.Restore.TargetPool, ops.Namespace))
+			ops.Spec.Restore.TargetPool, clusterNamespace(ops)))
 		return &denied
 	}
 	if err != nil {
@@ -177,9 +194,10 @@ func (v *StorageBackupOpsValidator) poolMustExist(
 func (v *StorageBackupOpsValidator) claimMustNotExist(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
 ) admission.Response {
+	claimNamespace := claimNamespaceOf(ops)
 	var claim corev1.PersistentVolumeClaim
 	err := v.Client.Get(ctx,
-		client.ObjectKey{Name: ops.Spec.Restore.ClaimName, Namespace: ops.Namespace}, &claim)
+		client.ObjectKey{Name: ops.Spec.Restore.Claim.Name, Namespace: claimNamespace}, &claim)
 	if apierrors.IsNotFound(err) {
 		return admission.Allowed("")
 	}
@@ -190,7 +208,89 @@ func (v *StorageBackupOpsValidator) claimMustNotExist(
 		"a PersistentVolumeClaim named %q already exists in namespace %q. A restore creates its claim "+
 			"and never adopts one, because adopting it would replace that workload's data with the "+
 			"backup's; name a claim that does not exist yet.",
-		ops.Spec.Restore.ClaimName, ops.Namespace))
+		ops.Spec.Restore.Claim.Name, claimNamespace))
+}
+
+// backupNamespace is where the operation's backup is. The mirror records every
+// backup in the operator's namespace.
+func (v *StorageBackupOpsValidator) backupNamespace(ops *simplyblockv1alpha2.StorageBackupOps) string {
+	if v.OperatorNamespace != "" {
+		return v.OperatorNamespace
+	}
+	return ops.Namespace
+}
+
+// clusterNamespace is the namespace of the operation's cluster and of the pool it
+// restores into.
+func clusterNamespace(ops *simplyblockv1alpha2.StorageBackupOps) string {
+	return ops.Spec.ClusterRef.NamespaceOr(ops.Namespace)
+}
+
+// claimNamespaceOf is the namespace the restored claim is created in.
+func claimNamespaceOf(ops *simplyblockv1alpha2.StorageBackupOps) string {
+	if ops.Spec.Restore != nil && ops.Spec.Restore.Claim.Namespace != "" {
+		return ops.Spec.Restore.Claim.Namespace
+	}
+	return ops.Namespace
+}
+
+// authorizeReferences asks whether the requester may use each object the
+// operation names outside its own namespace, and returns the first refusal.
+//
+// The operator reads every namespace, so resolving a reference proves only that
+// the object exists. Without this, anyone able to create a StorageBackupOps in
+// one namespace could restore any backup into any other. Each question is one
+// SubjectAccessReview and is asked only where a reference crosses, so an
+// operation that stays in its own namespace needs no reviewer at all
+// (design-storagebackup.md §7).
+func (v *StorageBackupOpsValidator) authorizeReferences(
+	ctx context.Context, req admission.Request, ops *simplyblockv1alpha2.StorageBackupOps,
+) *admission.Response {
+	type question struct {
+		namespace string
+		attrs     authorizationv1.ResourceAttributes
+	}
+	var questions []question
+	if namespace := v.backupNamespace(ops); namespace != ops.Namespace {
+		questions = append(questions, question{namespace, authorizationv1.ResourceAttributes{
+			Verb: "get", Group: simplyblockv1alpha2.GroupVersion.Group, Resource: "storagebackups",
+			Namespace: namespace, Name: ops.Spec.BackupRef,
+		}})
+	}
+	if namespace := clusterNamespace(ops); namespace != ops.Namespace {
+		questions = append(questions, question{namespace, authorizationv1.ResourceAttributes{
+			Verb: "get", Group: simplyblockv1alpha2.GroupVersion.Group, Resource: "storageclusters",
+			Namespace: namespace, Name: ops.Spec.ClusterRef.Name,
+		}})
+	}
+	if namespace := claimNamespaceOf(ops); namespace != ops.Namespace {
+		questions = append(questions, question{namespace, authorizationv1.ResourceAttributes{
+			Verb: "create", Resource: "persistentvolumeclaims", Namespace: namespace,
+		}})
+	}
+
+	for _, q := range questions {
+		if v.Reviewer == nil {
+			errored := admission.Errored(http.StatusInternalServerError,
+				fmt.Errorf("no access reviewer is configured, so a reference to namespace %q cannot be authorized",
+					q.namespace))
+			return &errored
+		}
+		allowed, err := v.Reviewer.Allowed(ctx, req.UserInfo, q.attrs)
+		if err != nil {
+			errored := admission.Errored(http.StatusInternalServerError, err)
+			return &errored
+		}
+		if !allowed {
+			denied := admission.Denied(fmt.Sprintf(
+				"%q may not %s %s in namespace %q, which this operation refers to. The operation's "+
+					"references are checked against the requester's own permissions because the operator "+
+					"can read every namespace.",
+				req.UserInfo.Username, q.attrs.Verb, q.attrs.Resource, q.namespace))
+			return &denied
+		}
+	}
+	return nil
 }
 
 // admitDelete refuses to withdraw the record of an operation that has produced
