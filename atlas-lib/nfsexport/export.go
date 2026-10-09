@@ -336,9 +336,13 @@ func (a *Assembler) addToRoot(spec Spec) error {
 	}
 	clients := slices.Clone(spec.Clients)
 	if old, err := os.ReadFile(final); err == nil {
-		for _, field := range strings.Fields(string(old))[1:] {
-			host, _, _ := strings.Cut(field, "(")
-			clients = append(clients, host)
+		// The first field is the path. A file without one is empty, which is
+		// how the guest image creates it, and holds no clients yet.
+		if fields := strings.Fields(string(old)); len(fields) > 1 {
+			for _, field := range fields[1:] {
+				host, _, _ := strings.Cut(field, "(")
+				clients = append(clients, host)
+			}
 		}
 	}
 	slices.Sort(clients)
