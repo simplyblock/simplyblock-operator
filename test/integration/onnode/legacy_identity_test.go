@@ -225,6 +225,11 @@ func byIDLink(t *testing.T, devicePath string) string {
 		t.Skipf("no %s on this node, and the case is about the link it holds: %v", byID, err)
 	}
 	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".#") {
+			// udev creates each link under a temporary name and renames it into
+			// place, so this name may be gone by the time mkfs opens it.
+			continue
+		}
 		link := filepath.Join(byID, entry.Name())
 		resolved, err := filepath.EvalSymlinks(link)
 		if err != nil || resolved != devicePath {
