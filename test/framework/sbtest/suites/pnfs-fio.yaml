@@ -78,6 +78,13 @@ components:
     guaranteed: 1
     chance: 0.02
 
+  # One expansion and one snapshot of a shared claim under load. The snapshot is restored
+  # into a block XFS volume and a marker written before it is read back. A clone into a
+  # pNFS claim is refused by the driver, so it is not attempted.
+  chaos.volume-ops:
+    ops: {expand: 1, snapshot: 1}
+    grow_gb: 1
+
   # The SPDK containers outrun kubelet rotation within minutes, so they are followed live
   # for the whole run, as the migration suites do. They are where a restarted metadata
   # server's reservation preempts and reconnects land.
