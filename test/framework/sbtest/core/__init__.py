@@ -10,6 +10,8 @@ from .evidence import (
     ControlEvent,
     DeployedImage,
     Evidence,
+    Fence,
+    FenceWrite,
     FioJob,
     IopsSample,
     LogSpan,
@@ -42,7 +44,7 @@ from .runner import Runner, findings_by_subject_table
 
 __all__ = [
     "AnaSample", "Attribution", "BlockSample", "ChurnPod", "Component", "Config",
-    "DeployedImage", "Detector", "Event", "Evidence", "KERNEL_CLOCK_PROBE",
+    "DeployedImage", "Detector", "Event", "Evidence", "Fence", "FenceWrite", "KERNEL_CLOCK_PROBE",
     "NamespaceReservation", "NfsSample", "NodeVersion", "PnfsVolume", "Registrant", "Restart",
     "Versions",
     "ControlEvent", "Finding", "LogSpan",

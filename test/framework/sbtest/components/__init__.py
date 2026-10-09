@@ -10,16 +10,17 @@ are the pieces the components share.
 """
 
 from . import (  # noqa: F401
-           chaos,
-           events,
-           logs,
-           migration,
-           nfs,
-           nvme,
-           reservations,
-           versions,
-           workloads,
+    chaos,
+    events,
+    fence,
+    logs,
+    migration,
+    nfs,
+    nvme,
+    reservations,
+    versions,
+    workloads,
 )
 
-__all__ = ["chaos", "events", "logs", "migration", "nfs", "nvme", "reservations", "versions",
-           "workloads"]
+__all__ = ["chaos", "events", "fence", "logs", "migration", "nfs", "nvme", "reservations",
+           "versions", "workloads"]

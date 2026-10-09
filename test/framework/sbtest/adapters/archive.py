@@ -42,6 +42,8 @@ from ..core import (
     ChurnPod,
     ControlEvent,
     DeployedImage,
+    Fence,
+    FenceWrite,
     FioJob,
     IopsSample,
     LogSpan,
@@ -416,6 +418,37 @@ class ArchiveEvidence:
             kubelet=str(n.get("kubelet", "")))
             for n in raw.get("nodes", []) if isinstance(n, dict))
         return Versions(server=str(raw.get("server", "")), images=images, nodes=nodes)
+
+    def fence(self) -> Fence | None:
+        p = os.path.join(self.outdir, "fence.json")
+        try:
+            with open(p) as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(raw, dict):
+            return None
+        writes = []
+        for w in raw.get("writes", []):
+            t = _dt(w.get("ts")) if isinstance(w, dict) else None
+            if t is not None:
+                writes.append(FenceWrite(ts=t, ok=bool(w.get("ok")),
+                                         detail=str(w.get("detail") or "")))
+        writes.sort(key=lambda w: w.ts)
+        return Fence(
+            victim_node=str(raw.get("victim_node", "")),
+            recaller_node=str(raw.get("recaller_node", "")),
+            claim=str(raw.get("claim", "")),
+            victim_pod=str(raw.get("victim_pod") or ""),
+            recaller_pod=str(raw.get("recaller_pod") or ""),
+            file=str(raw.get("file") or ""),
+            rules=tuple(str(r) for r in raw.get("rules", [])),
+            partitioned=_dt(raw.get("partitioned")), healed=_dt(raw.get("healed")),
+            truncate_issued=_dt(raw.get("truncate_issued")),
+            truncate_returned=_dt(raw.get("truncate_returned")),
+            truncate_timeout_s=float(raw.get("truncate_timeout_s") or 0),
+            truncate_error=str(raw.get("truncate_error") or ""),
+            writes=tuple(writes), error=str(raw.get("error") or ""))
 
     def restarts(self) -> list[Restart]:
         p = os.path.join(self.outdir, "restarts.json")

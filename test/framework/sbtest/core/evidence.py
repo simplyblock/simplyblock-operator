@@ -199,6 +199,45 @@ class NvmeController:
 
 
 @dataclass(frozen=True)
+class FenceWrite:
+    """One write of the fence scenario's probe writer on the partitioned node."""
+
+    ts: datetime
+    ok: bool
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class Fence:
+    """What the fence scenario did and saw (chaos.fence).
+
+    The victim node is cut off from the metadata server while its NVMe-oF paths stay up,
+    and the recaller changes the size of the file the victim's probe writer holds a layout
+    on. nfsd recalls the victim's layout, cannot reach it, and fences it by preempting its
+    reservation key, after which no write of the victim's may land.
+    """
+
+    victim_node: str
+    recaller_node: str
+    claim: str
+    victim_pod: str = ""
+    recaller_pod: str = ""
+    file: str = ""
+    rules: tuple[str, ...] = ()
+    partitioned: datetime | None = None
+    healed: datetime | None = None
+    truncate_issued: datetime | None = None
+    #: None when the truncate did not return within truncate_timeout_s.
+    truncate_returned: datetime | None = None
+    truncate_timeout_s: float = 0.0
+    #: The truncate's exit status and first error line, empty when it succeeded.
+    truncate_error: str = ""
+    writes: tuple[FenceWrite, ...] = ()
+    #: Why the scenario could not run to the end, empty when it did.
+    error: str = ""
+
+
+@dataclass(frozen=True)
 class Restart:
     """One pod a run restarted on purpose, and when its replacement came back."""
 
@@ -382,6 +421,10 @@ class Evidence(Protocol):
 
     def restarts(self) -> list[Restart]:
         """The pods the run restarted on purpose, oldest first."""
+        ...
+
+    def fence(self) -> Fence | None:
+        """The fence scenario's record, or None when it did not run."""
         ...
 
     def churn(self) -> list[ChurnPod]:

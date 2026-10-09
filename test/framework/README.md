@@ -358,6 +358,7 @@ Every one of these came from a real defect. Defaults encode what the runs measur
 | `pnfs.device-io`             | **A pNFS client node whose NVMe-oF namespace did not see the data.** The other end of the same question: per volume and consuming node, the namespace must be attached and its read and write counters must grow, without standing still longer than `max_stall_s`. A pause that begins at a metadata server restart and stays within `restart_pause_s` is that restart working, reported as INFO. |
 | `pnfs.recovery`              | **The time from a metadata server restart back to each client's direct path**: the first sample after the restart's pause that saw a write reach the client's namespace. INFO within `budget_s`, a warning above it or when writes never came back.                                                                                                                                                |
 | `chaos.recovery`             | **A pod the run restarted that never came back.** Every restart `chaos.restart` made must end with a Ready replacement. The ones that did are listed as INFO with how long they took.                                                                                                                                                                                                              |
+| `pnfs.fence`                 | **A write that landed after nfsd fenced its client.** From `chaos.fence`: a write by the partitioned node after the recaller's truncate returned and before the heal is critical, and so is a truncate that never returned. A warning when no write failed during the partition, since the run then proved nothing about fencing.                                                                  |
 | `pnfs.churn`                 | **A pod that joined a pNFS volume and never did I/O, or an own volume left behind.** Every churn pod must reach fio's timed run. A pod that brought its own volume must leave no PersistentVolume and no NFSExport behind, and a cleanup slower than `delete_budget_s` is a warning.                                                                                                               |
 | `nvme.stale-reservations`    | **A pNFS namespace still carrying a registration from an earlier MDS boot** at the end of the run, which blocks that client's new key and sends its I/O through the metadata server. Critical, or PRE_EXISTING when the key was stale before the run. Also warns about clients registered on a namespace nobody reserves.                                                                          |
 
@@ -392,6 +393,7 @@ Three things are load-bearing and worth knowing:
 | `workload.pnfs`       | Provisions pNFS volumes some pods share and some own, and runs verified fio in every container, each instance with a data file of its own. Pods sharing a volume are spread across nodes. `required`.                                                                                                                                    |
 | `nvme.iostat`         | Samples every node's NVMe namespace I/O counters (sysfs `stat`, head devices only) on an interval, for `pnfs.device-io`. Finds a replaced node plugin and keeps reading through it.                                                                                                                                                      |
 | `chaos.restart`       | Restarts the metadata server, a pNFS client's node plugin, or the CSI controller during the timed run: `guaranteed` times at seeded random moments, and otherwise with a low `chance` per tick. Records each restart and its recovery in `restarts.json`, and the victim's log through its shutdown in `restart-<n>-<target>-<pod>.txt`. |
+| `chaos.fence`         | Once per run, at a seeded time, cuts one node off from the metadata server (port 2049 only) while a probe there writes with a layout, and has a probe on another node truncate the file, which makes nfsd recall the layout and fence the node. Records the rules, the truncate, and every probe write in `fence.json`.                  |
 | `workload.pnfs-churn` | Keeps short-lived pods joining and leaving pNFS volumes during the run, on a seeded schedule: some join a volume `workload.pnfs` shares, some bring a volume of their own and delete it when they leave. Each runs a verified fio for its lifetime and is recorded in `churn.json`.                                                      |
 |-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `nvme.reservations`   | Records every namespace's NVMe reservation (holder, registrants, keys) through `nvme resv-report` on each node, before and after the run, for `nvme.stale-reservations`. Only the pNFS volumes' namespaces once the workload has mapped them.                                                                                            |
@@ -673,6 +675,24 @@ deleted, so `fio.checksum` and `fio.job-error` judge it like any other instance.
 `churn.json` records when each pod arrived, reached I/O, finished, and left, and for an own
 volume whether its PersistentVolume and NFSExport were gone afterward, which `pnfs.churn`
 judges.
+
+### Fencing a client
+
+A pNFS client cut off from the metadata server keeps its NVMe-oF paths, so once nfsd has
+given up on recalling its layout, the reservation is the only thing that stops its writes.
+`chaos.fence` stages that once per run, at a seeded time that leaves room for the whole
+scenario before `quiet_tail_s`. A probe on the victim node writes 4 KiB with O_DIRECT through
+one open file descriptor every `write_interval_s` and logs each result. Once those writes go
+direct, a privileged hostNetwork helper on the same node drops TCP port 2049 to and from
+the metadata server's addresses, and a probe on another node truncates the file to
+`grow_mb`. nfsd recalls the layout, cannot reach the victim, fences it after two lease
+periods, and only then completes the truncate, which is bounded by `truncate_timeout_s`.
+The victim keeps writing for `after_s`, then the partition heals. The victim is a node
+where no workload pod mounts a volume, because every pNFS mount on it loses the server too.
+`allow_busy_victim` lifts that restriction. Teardown removes exactly the rules it recorded, the helper
+removes them when it is terminated or after `max_partition_s`, and a rule that cannot be
+removed is logged as an error with the command that removes it. `pnfs.fence` reads
+`fence.json`: a write that succeeded between the truncate's return and the heal is critical.
 
 ### Reservations
 

@@ -14,6 +14,7 @@ from . import (  # noqa: F401
     chaos,
     churn,
     control,
+    fence,
     fio,
     kernel,
     logs,
@@ -25,5 +26,5 @@ from . import (  # noqa: F401
     security,
 )
 
-__all__ = ["ana", "chaos", "churn", "control", "fio", "kernel", "logs", "meta", "migration",
-           "nvme", "pnfs", "reservations", "security"]
+__all__ = ["ana", "chaos", "churn", "control", "fence", "fio", "kernel", "logs", "meta",
+           "migration", "nvme", "pnfs", "reservations", "security"]

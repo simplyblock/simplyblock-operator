@@ -24,6 +24,8 @@ from sbtest.core import (  # noqa: E402
     BlockSample,
     ChurnPod,
     ControlEvent,
+    Fence,
+    FenceWrite,
     Finding,
     FioJob,
     IopsSample,
@@ -78,6 +80,7 @@ class FakeEvidence:
         blocks: list[BlockSample] | None = None,
         pnfs: list[PnfsVolume] | None = None,
         restarts: list[Restart] | None = None,
+        fence: Fence | None = None,
         churn: list[ChurnPod] | None = None,
         reservations_pre: list[NamespaceReservation] | None = None,
         reservations_post: list[NamespaceReservation] | None = None,
@@ -101,6 +104,7 @@ class FakeEvidence:
         self._blocks = blocks or []
         self._pnfs = pnfs or []
         self._restarts = restarts or []
+        self._fence = fence
         self._churn = churn or []
         self._resv_pre = reservations_pre or []
         self._resv_post = reservations_post or []
@@ -147,8 +151,12 @@ class FakeEvidence:
     def restarts(self) -> list[Restart]:
         return list(self._restarts)
 
+    def fence(self) -> Fence | None:
+        return self._fence
+
     def churn(self) -> list[ChurnPod]:
         return list(self._churn)
+
     def reservations_pre(self) -> list[NamespaceReservation]:
         return list(self._resv_pre)
 
@@ -1481,4 +1489,67 @@ class PnfsRecovery(unittest.TestCase):
         ev = FakeEvidence(blocks=self._blocks(), pnfs=[self.VOL])
         with self.assertRaises(SkipDetector):
             list(build_detector("pnfs.recovery").detect(ev))
+
+
+def fenced(writes: list[tuple[int, bool]], **kw: object) -> Fence:
+    """A fence run partitioned at 100s, the truncate issued at 120s and returned at 200s,
+    healed at 300s, unless kw says otherwise. writes are (second, ok)."""
+    base: dict[str, object] = {
+        "victim_node": "w1", "recaller_node": "w2", "claim": "r-pnfs-shared-0",
+        "victim_pod": "r-fence-writer", "recaller_pod": "r-fence-recaller",
+        "file": "/data/r-fence.probe",
+        "rules": ("OUTPUT -d 10.0.0.9 -p tcp --dport 2049 -j DROP",),
+        "partitioned": ts(100), "healed": ts(300), "truncate_issued": ts(120),
+        "truncate_returned": ts(200), "truncate_timeout_s": 240.0,
+        "writes": tuple(FenceWrite(ts=ts(t), ok=ok) for t, ok in writes)}
+    base.update(kw)
+    return Fence(**base)  # type: ignore[arg-type]
+
+
+class PnfsFence(unittest.TestCase):
+    """A client cut off from the metadata server keeps its NVMe-oF paths, so once nfsd has
+    fenced it only the reservation stops its writes. A write that lands after the fence
+    means two writers on one filesystem."""
+
+    def found(self, fence: Fence | None) -> list[Finding]:
+        return list(build_detector("pnfs.fence").detect(FakeEvidence(fence=fence)))
+
+    def severities(self, fence: Fence) -> list[Severity]:
+        return [f.severity for f in self.found(fence) if f.severity != Severity.INFO]
+
+    def test_writes_that_stop_once_fenced_are_information(self):
+        writes = [(50, True), (110, True), (150, False), (250, False), (310, True)]
+        self.assertEqual(self.severities(fenced(writes)), [])
+        self.assertTrue(self.found(fenced(writes)))
+
+    def test_a_write_that_lands_after_the_fence_is_critical(self):
+        writes = [(50, True), (150, False), (250, True), (260, True), (310, True)]
+        found = [f for f in self.found(fenced(writes)) if f.severity == Severity.CRITICAL]
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].evidence["writes_after_fence"], 2)
+
+    def test_a_write_after_the_heal_is_not_split_brain(self):
+        writes = [(50, True), (150, False), (300, True), (310, True)]
+        self.assertEqual(self.severities(fenced(writes)), [])
+
+    def test_a_truncate_that_never_returned_is_critical(self):
+        writes = [(50, True), (150, False)]
+        self.assertEqual(self.severities(fenced(writes, truncate_returned=None)),
+                         [Severity.CRITICAL])
+
+    def test_a_victim_whose_writes_never_failed_proved_nothing(self):
+        """Its writes went through the metadata server, or the partition did not take, so
+        no layout was at stake."""
+        writes = [(50, True), (110, True), (150, True), (190, True)]
+        self.assertEqual(self.severities(fenced(writes, healed=ts(200))), [Severity.WARNING])
+
+    def test_a_scenario_that_could_not_run_is_a_warning(self):
+        self.assertEqual(self.severities(fenced([], partitioned=None, truncate_issued=None,
+                                                truncate_returned=None, healed=None,
+                                                error="no idle node to fence")),
+                         [Severity.WARNING])
+
+    def test_a_run_without_the_scenario_is_skipped(self):
+        with self.assertRaises(SkipDetector):
+            self.found(None)
 
