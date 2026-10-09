@@ -272,6 +272,23 @@ Bundled suites live in `sbtest/suites/` (`migration-full`, `migration-soak`,
 anything generating them programmatically. CLI `--enable-detector` / `--disable-component`
 layer on top, and disable wins over enable.
 
+### Namespaces
+
+Where things run is a property of the deployment, so a run names three namespaces once, in
+the suite's `run:` block or with the matching flag, and every component takes its own from
+them:
+
+| Run setting          | Flag                   | What lives there                                                   | Default                |
+|----------------------|------------------------|--------------------------------------------------------------------|------------------------|
+| `operator_namespace` | `--operator-namespace` | the operator, the control plane, the CSI driver, the pNFS MDS      | `simplyblock`          |
+| `cluster_namespace`  | `--cluster-namespace`  | the storage cluster's own pods: SPDK and the node agents           | the operator namespace |
+| `test_namespace`     | `--test-namespace`     | what the run creates: client pods, migration CRs, log grabber pods | `default`              |
+
+A flag beats the suite, which beats the default. Clusters can each be deployed into a
+namespace of their own, and a run tests one. A component option naming a namespace still
+wins when set, and a `logs.collect` target, `logs.stream`, and `host.dmesg` pick theirs by
+`plane` (`cluster` or `operator`).
+
 ## Detector catalogue
 
 Every one of these came from a real defect. Defaults encode what the runs measured.

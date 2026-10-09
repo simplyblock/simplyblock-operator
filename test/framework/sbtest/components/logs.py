@@ -59,18 +59,6 @@ def dump_script(namespace: str, pod: str, container: str) -> str:
             + 'for f in $(ls -1tr "$d" 2>/dev/null); do ' + _CAT_ONE + 'done')
 
 
-#: Where the storage plane's pods run: the operator deploys them into simplyblock, older
-#: deployments into default. Both are searched, since a target looking in the wrong one
-#: finds nothing and the log is simply missing.
-STORAGE_NAMESPACES = ["simplyblock", "default"]
-
-
-def pods_in(namespaces: str | list[str], matching: list[str]) -> list[kube.Pod]:
-    """The pods matching any of `matching` in one namespace or several."""
-    names = [namespaces] if isinstance(namespaces, str) else list(namespaces)
-    return [p for ns in names for p in kube.list_pods(ns, matching)]
-
-
 def stream_script(namespace: str, pod: str, container: str, poll_s: int = 5) -> str:
     """Retained segments, then follow the live one for as long as this runs.
 
@@ -117,8 +105,11 @@ class _GrabberBase(Component):
     """Shared management of the privileged pod that reads the host's /var/log/pods.
 
     A Component rather than a bare mixin: it uses `opt` and `name`, so inheriting states
-    that dependency instead of leaving it to whatever it happens to be mixed into.
+    that dependency instead of leaving it to whatever it happens to be mixed into. The
+    grabbers are the run's own pods, so `namespace` is the test namespace by default.
     """
+
+    namespace_options = {"namespace": "test"}  # noqa: RUF012
 
     def _grabber_manifest(self, ctx: RunContext, node: str, name: str, ttl_s: int) -> str:
         import json as _json
@@ -199,13 +190,15 @@ class LogStream(_GrabberBase):
 
     def defaults(self) -> dict[str, Any]:
         return {
-            # Where the grabber pods run.
-            "namespace": "default",
+            # Where the grabber pods run: the test namespace when unset.
+            "namespace": None,
             "image": DEFAULT_GRABBER_IMAGE,
-            # Pods to follow, matched by substring, where to look for them, and the
-            # containers within them.
+            # Pods to follow, matched by substring, and the containers within them. `plane`
+            # says which of the run's namespaces they are in: "cluster" for the storage
+            # cluster's own pods, "operator" for the operator's, the CSI driver's, and the
+            # control plane's.
             "pods_matching": ["snode-spdk"],
-            "pod_namespaces": STORAGE_NAMESPACES,
+            "plane": "cluster",
             "containers": ["spdk-container", "spdk-proxy-container"],
             # Artifact name: "spdk-<port>" and "spdk-<port>-proxy" for the SPDK pods.
             "name_from": "snode-port",
@@ -233,10 +226,11 @@ class LogStream(_GrabberBase):
 
     # -- lifecycle ------------------------------------------------------------------
     def setup(self, ctx: RunContext) -> None:
-        self._pods = pods_in(self.opt("pod_namespaces"), self.opt("pods_matching"))
+        ns = ctx.namespace(str(self.opt("plane")))
+        self._pods = kube.list_pods(ns, self.opt("pods_matching"))
         if not self._pods:
             ctx.log.warn(f"{self.name}: no pods matching {self.opt('pods_matching')} in "
-                         f"{self.opt('pod_namespaces')}; nothing to follow")
+                         f"{ns}; nothing to follow")
             return
         nodes = {p.node for p in self._pods if p.node}
         self._grabbers = self._start_grabbers(ctx, sorted(nodes), int(self.opt("ttl_s")))
@@ -340,41 +334,44 @@ class LogCollect(_GrabberBase):
 
     def defaults(self) -> dict[str, Any]:
         return {
-            "namespace": "default",
-            "control_plane_namespace": "simplyblock",
+            # Where the grabber pods run: the test namespace when unset.
+            "namespace": None,
             "image": DEFAULT_GRABBER_IMAGE,
-            #: [{pods: [substr], containers: [name]|"all", name_from: ..., namespace: ...}]
+            #: [{pods: [substr], containers: [name]|"all", name_from: ..., plane: ...}]. A
+            #: target's `plane` is the run namespace its pods are in: "cluster" for the
+            #: storage cluster's own (SPDK, node agents), "operator" for the rest. A
+            #: `namespace` of its own overrides it.
             "targets": [
                 {"pods": ["snode-spdk"], "containers": ["spdk-container", "spdk-proxy-container"],
-                 "namespace": STORAGE_NAMESPACES, "name_from": "snode-port"},
+                 "plane": "cluster", "name_from": "snode-port"},
                 {"pods": ["operator", "webappapi"], "containers": "all",
-                 "namespace": "simplyblock", "name_from": "pod-key"},
+                 "plane": "operator", "name_from": "pod-key"},
                 # One artifact per container, not per pod. The tasks pod runs seventeen
                 # independent runners, so merging them produces a 50 MiB file that is not in
                 # time order — which makes its time span meaningless and stops a pattern being
                 # scoped to the one runner you care about. The container names are already
                 # unique and descriptive, so they are the artifact names.
                 {"pods": ["tasks"], "containers": "all",
-                 "namespace": "simplyblock", "name_from": "container"},
+                 "plane": "operator", "name_from": "container"},
                 # The CSI driver is where the connects, the path reconcilers and
                 # NodeStage/NodePublish actually happen, so it is the log that says what the
                 # *host side* did and why. Kept per node rather than merged: the node plugin
                 # reconciles per host, so "which node" is the first question about anything
                 # it did, and a merged file loses it.
                 {"pods": ["simplyblock-csi-node"], "containers": ["csi-node"],
-                 "namespace": "simplyblock", "name_from": "pod-node", "name": "csi-node"},
+                 "plane": "operator", "name_from": "pod-node", "name": "csi-node"},
                 # The node-side agent the control plane talks to on each host. It is what
                 # starts and probes the SPDK process, which puts it on the causal path of
                 # every "the node went offline" event — including the liveness check that
                 # concluded SPDK was dead because a Kubernetes API call blipped.
                 {"pods": ["simplyblock-storage-node-ds"], "containers": "all",
-                 "namespace": STORAGE_NAMESPACES, "name_from": "pod-node", "name": "snode-api"},
+                 "plane": "cluster", "name_from": "pod-node", "name": "snode-api"},
                 {"pods": ["simplyblock-csi-controller"], "containers": "all",
-                 "namespace": "simplyblock", "name_from": "container"},
+                 "plane": "operator", "name_from": "container"},
                 # The pNFS metadata server: the runner, whose log carries the guest's
                 # console, so its boot, grace period, and export assembly.
                 {"pods": ["simplyblock-pnfs-mds"], "containers": "all",
-                 "namespace": "simplyblock", "name_from": "container"},
+                 "plane": "operator", "name_from": "container"},
             ],
             "ttl_s": 1800,
         }
@@ -390,8 +387,8 @@ class LogCollect(_GrabberBase):
         streamed = ctx.shared.get("logs.streamed", set())
         plan: list[tuple[kube.Pod, str, str]] = []
         for target in self.opt("targets"):
-            ns = target.get("namespace", self.opt("namespace"))
-            pods = pods_in(ns, target["pods"])
+            ns = target.get("namespace") or ctx.namespace(str(target.get("plane", "operator")))
+            pods = kube.list_pods(ns, target["pods"])
             if not pods:
                 # Said, because the detectors reading this log can only report themselves
                 # skipped, which does not say the target looked in the wrong place.
@@ -507,17 +504,20 @@ class Dmesg(Component):
     summary = "dmesg from each storage worker, ISO-timestamped so events can be placed in time"
 
     def defaults(self) -> dict[str, Any]:
-        return {"namespace": "default", "pods_matching": ["snode-spdk"],
+        # A privileged pod on each node to read dmesg through. `plane` is the run namespace
+        # it is in, and `namespace` overrides it.
+        return {"plane": "cluster", "namespace": None, "pods_matching": ["snode-spdk"],
                 "container": "spdk-container"}
 
     def collect(self, ctx: RunContext) -> None:
-        pods = kube.list_pods(self.opt("namespace"), self.opt("pods_matching"))
+        ns = self.opt("namespace") or ctx.namespace(str(self.opt("plane")))
+        pods = kube.list_pods(ns, self.opt("pods_matching"))
         if not pods:
             # Said, because the detectors reading dmesg can only report themselves skipped,
             # which does not say that this component was pointed at the wrong pods.
             ctx.log.warn(f"{self.name}: no pods matching {self.opt('pods_matching')} in "
-                         f"{self.opt('namespace')}, so no dmesg was collected; point namespace, "
-                         "pods_matching and container at a privileged pod on each node")
+                         f"{ns}, so no dmesg was collected; point plane, pods_matching and "
+                         "container at a privileged pod on each node")
         for p in pods:
             if not p.node:
                 continue

@@ -92,6 +92,7 @@ class Runner:
             # Appended before the hook runs, so a component that failed half-way through
             # allocating still gets the teardown it is owed.
             self._entered.append(c)
+            c.bind_namespaces(self.ctx)
             self._phase("setup", [c], fatal=c.required)
 
     def start(self) -> None:

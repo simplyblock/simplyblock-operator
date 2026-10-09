@@ -12,6 +12,9 @@ description: >-
 run:
   id_prefix: fiomig
   outdir: ./runs
+  # These runs target clusters whose storage plane was deployed apart from the operator,
+  # into default.
+  cluster_namespace: default
 
 components:
   # The SPDK containers outrun kubelet rotation within the hour, so they are followed live;

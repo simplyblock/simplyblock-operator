@@ -10,6 +10,12 @@ description: >-
 run:
   id_prefix: pnfs
   outdir: ./runs
+  # Where the operator, control plane, CSI driver, and MDS run, where the storage cluster's
+  # SPDK and node agents run, and where the client pods go. An operator-deployed cluster
+  # keeps the first two in one namespace.
+  operator_namespace: simplyblock
+  cluster_namespace: simplyblock
+  test_namespace: default
 
 components:
   workload.pnfs:
@@ -57,7 +63,7 @@ components:
   # The clients' kernels are the ones a pNFS run is about: layouts, NVMe-oF paths,
   # blocklayout errors. The CSI node plugin runs privileged on every node, so it reads them.
   host.dmesg:
-    namespace: simplyblock
+    plane: operator
     pods_matching: [simplyblock-csi-node]
     container: csi-node
 

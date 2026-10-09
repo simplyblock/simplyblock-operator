@@ -101,10 +101,11 @@ class Restarter(Component):
 
     name = "chaos.restart"
     summary = "restart the MDS, csi-node, or csi-controller pods during the run"
+    namespace_options = {"namespace": "operator"}  # noqa: RUF012
 
     def defaults(self) -> dict[str, Any]:
         return {
-            "namespace": "simplyblock",
+            "namespace": None,       # the operator namespace when unset
             # Relative weights. The metadata server matters most under load, the node plugin
             # next. The controller is off the I/O path and proves little until the run
             # provisions volumes mid-flight.

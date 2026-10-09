@@ -62,10 +62,11 @@ class MigrationDriver(Component):
     name = "migration.driver"
     summary = "create VolumeMigration CRs in a loop and record what each one did"
     required = True
+    namespace_options = {"namespace": "test"}  # noqa: RUF012
 
     def defaults(self) -> dict[str, Any]:
         return {
-            "namespace": "default",
+            "namespace": None,  # the run's test namespace when unset
             "api_group": "storage.simplyblock.io/v1alpha1",
             # alternate | consumer | no-consumer | random. The policy is about whether the
             # *target* also hosts a pod consuming this subsystem — the materially harder case,

@@ -20,9 +20,10 @@ class ClusterEvents(Component):
 
     name = "cluster.events"
     summary = "sbctl cluster get-logs -> cluster-events.json"
+    namespace_options = {"namespace": "operator"}  # noqa: RUF012
 
     def defaults(self) -> dict[str, Any]:
-        return {"namespace": "simplyblock", "pod_prefix": "simplyblock-webappapi",
+        return {"namespace": None, "pod_prefix": "simplyblock-webappapi",
                 "limit": 50000, "cluster_uuid": None}
 
     def collect(self, ctx: RunContext) -> None:

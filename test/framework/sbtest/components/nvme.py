@@ -81,6 +81,8 @@ class _CsiNodeBase(Component):
     A Component for the same reason as _GrabberBase: it uses `opt` and `name`.
     """
 
+    namespace_options = {"csi_namespace": "operator"}  # noqa: RUF012
+
     def _csi_node_pods(self, ctx: RunContext) -> dict[str, str]:
         """node -> CSI node-plugin pod, the window onto each host's sysfs."""
         out = {}
@@ -107,7 +109,7 @@ class FabricSnapshot(_CsiNodeBase):
     summary = "snapshot host NVMe controllers before and after the run (leak detection)"
 
     def defaults(self) -> dict[str, Any]:
-        return {"csi_namespace": "simplyblock", "csi_pod_prefix": "simplyblock-csi-node",
+        return {"csi_namespace": None, "csi_pod_prefix": "simplyblock-csi-node",
                 "container": "csi-node", "at_setup": True, "at_collect": True}
 
     def _snapshot(self, ctx: RunContext, label: str) -> list[NvmeController]:
@@ -160,7 +162,7 @@ class AnaSampler(_CsiNodeBase):
     summary = "sample host ANA state per namespace on an interval, per migration"
 
     def defaults(self) -> dict[str, Any]:
-        return {"csi_namespace": "simplyblock", "csi_pod_prefix": "simplyblock-csi-node",
+        return {"csi_namespace": None, "csi_pod_prefix": "simplyblock-csi-node",
                 "container": "csi-node", "interval_s": 2.0, "nodes": None}
 
     def __init__(self, **options: Any) -> None:
@@ -325,7 +327,7 @@ class IostatSampler(_CsiNodeBase):
     summary = "sample NVMe namespace I/O counters per node on an interval"
 
     def defaults(self) -> dict[str, Any]:
-        return {"csi_namespace": "simplyblock", "csi_pod_prefix": "simplyblock-csi-node",
+        return {"csi_namespace": None, "csi_pod_prefix": "simplyblock-csi-node",
                 "container": "csi-node", "interval_s": 5.0}
 
     def __init__(self, **options: Any) -> None:

@@ -8,6 +8,7 @@ only place they can be pinned.
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import os
@@ -15,7 +16,7 @@ import sys
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Any, cast
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -149,6 +150,22 @@ class ConfigResolution(unittest.TestCase):
         self.assertIn("migration.driver", full.components.enabled)
 
 
+@component
+class _Looks(Component):
+    """Records the options it was set up with, for the namespace-binding tests."""
+
+    name = "test.looks"
+    namespace_options = {"csi_namespace": "operator", "snode_namespace": "cluster",  # noqa: RUF012
+                         "namespace": "test"}
+    seen: dict[str, Any] = {}  # noqa: RUF012
+
+    def defaults(self) -> dict[str, Any]:
+        return {"csi_namespace": None, "snode_namespace": None, "namespace": None}
+
+    def setup(self, ctx: RunContext) -> None:
+        _Looks.seen = dict(self.options)
+
+
 class Lifecycle(unittest.TestCase):
     def ctx(self, d):
         return RunContext(run_id="t", outdir=d, log=Logger(None))
@@ -174,6 +191,28 @@ class Lifecycle(unittest.TestCase):
             for phase in ("setup", "start", "tick", "stop", "collect", "teardown"):
                 getattr(r, phase)()
         self.assertEqual(calls, ["setup", "start", "tick", "stop", "collect", "teardown"])
+
+    def _seen(self, **opts: object) -> dict[str, object]:
+        _Looks.seen = {}
+        with tempfile.TemporaryDirectory() as d:
+            cfg = load(None, list(known_components()), list(known_detectors()))
+            apply_cli_toggles(cfg.components, ["test.looks"], [])
+            cfg.components.enabled["test.looks"] = dict(opts)
+            cfg.detectors.enabled = {}
+            ctx = RunContext(run_id="t", outdir=d, log=Logger(None), operator_namespace="sb-op",
+                             cluster_namespace="sb-cluster-a", test_namespace="sb-test")
+            Runner(cfg, ctx).build().setup()
+        return _Looks.seen
+
+    def test_each_namespace_option_gets_its_run_namespace_before_setup(self):
+        """Where the operator, the cluster, and the test's own pods live are properties of
+        the run, not of each component."""
+        self.assertEqual(self._seen(), {"csi_namespace": "sb-op",
+                                        "snode_namespace": "sb-cluster-a",
+                                        "namespace": "sb-test"})
+
+    def test_an_explicit_namespace_option_wins(self):
+        self.assertEqual(self._seen(csi_namespace="csi-only")["csi_namespace"], "csi-only")
 
     def test_teardown_runs_even_when_setup_failed(self):
         """A component that allocates in setup must still get its teardown."""
@@ -548,40 +587,52 @@ class GrabberNaming(unittest.TestCase):
 
 
 class LogNamespaces(unittest.TestCase):
-    """Where the storage plane runs depends on how it was deployed: older clusters put the
-    SPDK and node-agent pods in default, the operator puts them in simplyblock. A target
-    looking in one namespace found nothing in the other and said nothing, so pNFS runs on
-    an operator-deployed cluster collected neither log."""
+    """A storage cluster's pods (SPDK, the node agents) live in its cluster namespace, and
+    the operator's, the control plane's, and the CSI driver's in the operator namespace.
+    Targets that named a namespace of their own found nothing on a cluster deployed
+    differently, and said nothing, so pNFS runs collected neither the SPDK nor the
+    node-agent log."""
 
-    PODS = {"simplyblock": [kube.Pod(name="snode-spdk-pod-4420-06075e", namespace="simplyblock",
-                                     node="vm02", containers=("spdk-container",))]}
+    PODS = {"sb-cluster": [kube.Pod(name="snode-spdk-pod-4420-06075e", namespace="sb-cluster",
+                                    node="vm02", containers=("spdk-container",))],
+            "sb-op": [kube.Pod(name="simplyblock-csi-node-abc", namespace="sb-op",
+                               node="vm02", containers=("csi-node",))]}
 
     def _list(self, ns: str, *a: object, **k: object) -> list[kube.Pod]:
         return list(self.PODS.get(ns, []))
 
-    def test_the_storage_targets_look_in_both_namespaces(self):
+    def _ctx(self, d: str) -> RunContext:
+        return RunContext(run_id="r", outdir=d, log=Logger(None), operator_namespace="sb-op",
+                          cluster_namespace="sb-cluster", test_namespace="sb-test")
+
+    def test_the_default_targets_name_a_plane_and_no_namespace(self):
         from sbtest.components import logs as logs_mod
         for t in logs_mod.LogCollect().opt("targets"):
-            if "snode-spdk" in t["pods"] or "simplyblock-storage-node-ds" in t["pods"]:
-                self.assertEqual(set(t["namespace"]), {"simplyblock", "default"}, t)
+            self.assertNotIn("namespace", t, t)
+            self.assertIn(t.get("plane"), {"operator", "cluster"}, t)
 
-    def test_collect_finds_the_spdk_pods_in_simplyblock(self):
+    def test_collect_reads_each_target_in_its_planes_namespace(self):
         from sbtest.components import logs as logs_mod
 
         class Probe(logs_mod.LogCollect):
             def _start_grabbers(self, ctx, nodes, ttl_s):
                 return {n: f"own-{n}" for n in nodes}
 
-        c = Probe(targets=[{"pods": ["snode-spdk"], "containers": ["spdk-container"],
-                            "namespace": ["simplyblock", "default"], "name_from": "snode-port"}])
+        c = Probe(targets=[
+            {"pods": ["snode-spdk"], "containers": ["spdk-container"], "plane": "cluster",
+             "name_from": "snode-port"},
+            {"pods": ["simplyblock-csi-node"], "containers": ["csi-node"], "plane": "operator",
+             "name_from": "pod-node", "name": "csi-node"}])
         with tempfile.TemporaryDirectory() as d, \
                 mock.patch.object(kube, "list_pods", self._list), \
                 mock.patch.object(kube, "run_bytes", lambda *a, **k: b"log line\n"):
-            ctx = RunContext(run_id="r", outdir=d, log=Logger(None))
+            ctx = self._ctx(d)
+            c.bind_namespaces(ctx)
             c.collect(ctx)
             self.assertTrue(os.path.exists(os.path.join(d, "spdk-4420.txt")))
+            self.assertTrue(os.path.exists(os.path.join(d, "csi-node-vm02.txt")))
 
-    def test_stream_follows_the_spdk_pods_in_simplyblock(self):
+    def test_stream_follows_the_spdk_pods_in_the_cluster_namespace(self):
         from sbtest.components import logs as logs_mod
 
         class Probe(logs_mod.LogStream):
@@ -591,9 +642,43 @@ class LogNamespaces(unittest.TestCase):
         s = Probe()
         with tempfile.TemporaryDirectory() as d, \
                 mock.patch.object(kube, "list_pods", self._list):
-            ctx = RunContext(run_id="r", outdir=d, log=Logger(None))
+            ctx = self._ctx(d)
+            s.bind_namespaces(ctx)
             s.setup(ctx)
         self.assertEqual([p.name for p in s._pods], ["snode-spdk-pod-4420-06075e"])
+
+
+class NamespaceFlags(unittest.TestCase):
+    """A flag beats the suite's run block, which beats the default. The cluster namespace
+    defaults to the operator's, since most clusters are deployed into it."""
+
+    def args(self, **kw: object) -> argparse.Namespace:
+        base: dict[str, object] = {"operator_namespace": None, "cluster_namespace": None,
+                                   "test_namespace": None}
+        base.update(kw)
+        return argparse.Namespace(**base)
+
+    def test_defaults(self):
+        from sbtest import cli
+        cfg = load(None, list(known_components()), list(known_detectors()))
+        self.assertEqual(cli.namespaces(self.args(), cfg),
+                         ("simplyblock", "simplyblock", "default"))
+
+    def test_the_cluster_namespace_follows_the_operator_namespace_unless_set(self):
+        from sbtest import cli
+        cfg = load(None, list(known_components()), list(known_detectors()))
+        cfg.run["operator_namespace"] = "sb-op"
+        self.assertEqual(cli.namespaces(self.args(), cfg), ("sb-op", "sb-op", "default"))
+        cfg.run["cluster_namespace"] = "sb-cluster"
+        self.assertEqual(cli.namespaces(self.args(), cfg), ("sb-op", "sb-cluster", "default"))
+
+    def test_a_flag_beats_the_suite(self):
+        from sbtest import cli
+        cfg = load(None, list(known_components()), list(known_detectors()))
+        cfg.run.update({"operator_namespace": "a", "cluster_namespace": "b",
+                        "test_namespace": "c"})
+        self.assertEqual(cli.namespaces(self.args(cluster_namespace="flag"), cfg),
+                         ("a", "flag", "c"))
 
 
 class GrabberReuse(unittest.TestCase):

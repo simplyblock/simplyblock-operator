@@ -181,6 +181,7 @@ class PollLoop(unittest.TestCase):
             {"status": {"phase": "Completed", "sourceNodeUUID": "uuid-real"}})})
         with _Ctx() as ctx, _patch(kube, "run", fake.run):
             d = migration.MigrationDriver(poll_s=0.01)
+            d.bind_namespaces(ctx)
             rec = Migration(name="m1", start=datetime.now(UTC), pv="pv1", source="uuid-guess")
             d._await_terminal(ctx, rec, "m1", sampler=None)
         self.assertEqual(rec.phase, "Completed")
@@ -195,6 +196,7 @@ class PollLoop(unittest.TestCase):
             {"status": {"phase": "Migrating"}})})
         with _Ctx() as ctx, _patch(kube, "run", fake.run):
             d = migration.MigrationDriver(poll_s=0.01, timeout_s=0.05)
+            d.bind_namespaces(ctx)
             rec = Migration(name="m1", start=datetime.now(UTC), pv="pv1")
             d._await_terminal(ctx, rec, "m1", sampler=None)
         self.assertEqual(rec.phase, "TIMEOUT")
@@ -218,6 +220,7 @@ class PollLoop(unittest.TestCase):
         s = Sampler()
         with _Ctx() as ctx, _patch(kube, "run", run):
             d = migration.MigrationDriver(poll_s=0.01)
+            d.bind_namespaces(ctx)
             rec = Migration(name="m1", start=datetime.now(UTC), pv="pv1")
             d._await_terminal(ctx, rec, "m1", sampler=s)
         # Deduplicated: only transitions, not every poll.
@@ -549,6 +552,7 @@ class RestartLogs(unittest.TestCase):
                 mock.patch.object(chaos.Restarter, "_replacement", lambda *a: "simplyblock-pnfs-mds-x-0"), \
                 mock.patch.object(kube, "run", run), \
                 mock.patch.object(chaos.subprocess, "Popen", Proc):
+            r.bind_namespaces(ctx)
             r._restart(ctx, "mds")
             r.collect(ctx)
             with open(ctx.path("restarts.json")) as fh:
