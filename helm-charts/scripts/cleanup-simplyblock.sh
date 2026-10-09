@@ -141,6 +141,171 @@ if [[ "$FORCE" != true ]]; then
     esac
 fi
 
+# Prints the pods in the namespace that mount a volume of $CSI_DRIVER, one per
+# line as `name owner-kind owner-name`. Kubelet can only unmount such a volume
+# through the driver's node plugin, so these pods must be gone before the plugin
+# is: once it is uninstalled they stay Terminating, and the namespace with them.
+# Fails when any list fails, because an empty answer is then not known to be
+# true, and uninstalling the plugin on it would strand the pods it missed.
+pods_on_csi_volumes() {
+    local pods pvcs pvs
+    pods=$($KUBECTL get pods -n "$NAMESPACE" -o json 2>/dev/null) || return 1
+    pvcs=$($KUBECTL get pvc -n "$NAMESPACE" -o json 2>/dev/null) || return 1
+    pvs=$($KUBECTL get pv -o json 2>/dev/null) || return 1
+    PODS="$pods" PVCS="$pvcs" PVS="$pvs" DRIVER="$CSI_DRIVER" python3 -c '
+import json, os
+driver = os.environ["DRIVER"]
+on_driver = {p["metadata"]["name"] for p in json.loads(os.environ["PVS"])["items"]
+             if (p["spec"].get("csi") or {}).get("driver") == driver}
+claims = {c["metadata"]["name"] for c in json.loads(os.environ["PVCS"])["items"]
+          if c["spec"].get("volumeName") in on_driver}
+for p in json.loads(os.environ["PODS"])["items"]:
+    used = {(v.get("persistentVolumeClaim") or {}).get("claimName") for v in p["spec"].get("volumes", [])}
+    if used & claims or any(v.get("csi", {}).get("driver") == driver for v in p["spec"].get("volumes", [])):
+        owner = next((o for o in p["metadata"].get("ownerReferences", []) if o.get("controller")), {})
+        print(p["metadata"]["name"], owner.get("kind", "-"), owner.get("name", "-"))
+'
+}
+
+# Stops before the node plugin is uninstalled, which is the step that cannot be
+# taken back for a pod still mounting one of its volumes.
+abort_before_uninstall() {
+    error "$*"
+    error "Stopping before the Helm uninstall: the CSI node plugin is still needed to"
+    error "unmount the volumes above. Resolve this, then re-run the script."
+    exit 1
+}
+
+# The controller that would replace a deleted pod, as `kind name`: the owner
+# itself, or for a ReplicaSet the Deployment that owns it. Fails for an owner it
+# cannot stop.
+controller_of() {
+    local kind="$1" name="$2" parent
+    case "$kind" in
+        StatefulSet|DaemonSet|Job|Deployment) echo "$kind $name" ;;
+        ReplicaSet)
+            parent=$($KUBECTL get replicaset "$name" -n "$NAMESPACE" -o \
+                jsonpath='{range .metadata.ownerReferences[?(@.controller==true)]}{.kind} {.name}{end}' \
+                2>/dev/null) || return 1
+            if [[ "$parent" == Deployment\ * ]]; then
+                echo "$parent"
+            else
+                echo "ReplicaSet $name"
+            fi
+            ;;
+        -) echo "" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Prints the NFSExports, in any namespace, that serve a volume of a storage
+# cluster in this namespace, one per line as `namespace name`. An export lives in
+# the namespace of the claim it serves, not the cluster's, and its volumeRef
+# begins with its cluster's UUID.
+nfsexports_of_this_cluster() {
+    local uuids exports
+    uuids=$($KUBECTL get "storageclusters.$CRD_GROUP" -n "$NAMESPACE" \
+        -o jsonpath='{.items[*].status.uuid}' 2>/dev/null) || return 1
+    [[ -z "$uuids" ]] && return 0
+    exports=$($KUBECTL get "nfsexports.$CRD_GROUP" -A -o json 2>/dev/null) || return 1
+    EXPORTS="$exports" UUIDS="$uuids" python3 -c '
+import json, os
+uuids = os.environ["UUIDS"].split()
+for e in json.loads(os.environ["EXPORTS"])["items"]:
+    if e["spec"].get("volumeRef", "").split(":")[0] in uuids:
+        print(e["metadata"]["namespace"], e["metadata"]["name"])
+'
+}
+
+# ---------------------------------------------------------------------------
+# 0a. Remove this cluster's NFSExports while the operator still runs
+# ---------------------------------------------------------------------------
+section "Removing NFSExports of the storage clusters in '$NAMESPACE'"
+
+# The operator's finalizer tears each export down on the metadata server, so
+# they go first, while the operator, the metadata server, and the CSI driver
+# all still run. Step 2 covers only this namespace, and an export left in
+# another one keeps its finalizer with no operator to clear it, and its CRD.
+if ! $KUBECTL get crd "nfsexports.$CRD_GROUP" >/dev/null 2>&1; then
+    info "No NFSExport CRD installed."
+elif ! exports=$(nfsexports_of_this_cluster); then
+    warn "Could not list the storage clusters or NFSExports; step 5 reports any left."
+elif [[ -z "$exports" ]]; then
+    info "No NFSExport serves a volume of a storage cluster in '$NAMESPACE'."
+else
+    while read -r ns name; do
+        info "Deleting NFSExport $ns/$name..."
+        $KUBECTL delete "nfsexports.$CRD_GROUP" "$name" -n "$ns" --ignore-not-found \
+            --wait=false >/dev/null 2>&1 || warn "  Could not delete NFSExport $ns/$name"
+    done <<< "$exports"
+    while read -r ns name; do
+        if ! $KUBECTL wait "nfsexports.$CRD_GROUP" "$name" -n "$ns" --for=delete \
+            --timeout=120s >/dev/null 2>&1; then
+            warn "  NFSExport $ns/$name was not torn down within 120s; clearing its finalizer."
+            $KUBECTL patch "nfsexports.$CRD_GROUP" "$name" -n "$ns" \
+                --type=merge -p '{"metadata":{"finalizers":[]}}' >/dev/null 2>&1 || \
+                warn "  Could not clear the finalizer of NFSExport $ns/$name"
+        fi
+    done <<< "$exports"
+fi
+
+# ---------------------------------------------------------------------------
+# 0. Release simplyblock volumes while the CSI node plugin still runs
+# ---------------------------------------------------------------------------
+section "Releasing simplyblock volumes mounted in namespace '$NAMESPACE'"
+
+# The operator recreates what it manages (the pNFS metadata server's
+# StatefulSet among it), so it stops first, and nothing goes on while it runs.
+operator_deploys=$($KUBECTL get deployment -n "$NAMESPACE" -l app=simplyblock-operator \
+    -o jsonpath='{.items[*].metadata.name}' 2>/dev/null) || \
+    abort_before_uninstall "Could not list the operator's Deployments."
+for deploy in $operator_deploys; do
+    info "Scaling the operator Deployment $deploy to 0..."
+    $KUBECTL scale deployment "$deploy" -n "$NAMESPACE" --replicas=0 >/dev/null 2>&1 || \
+        abort_before_uninstall "Could not scale the operator Deployment $deploy to 0."
+done
+if [[ -n "$operator_deploys" ]]; then
+    $KUBECTL wait pod -n "$NAMESPACE" -l app=simplyblock-operator \
+        --for=delete --timeout=60s >/dev/null 2>&1 || true
+    running=$($KUBECTL get pods -n "$NAMESPACE" -l app=simplyblock-operator -o name 2>/dev/null) || \
+        abort_before_uninstall "Could not check that the operator stopped."
+    [[ -z "$running" ]] || abort_before_uninstall "The operator is still running: $running"
+fi
+
+csi_pods=$(pods_on_csi_volumes) || \
+    abort_before_uninstall "Could not list the pods, claims, and volumes in '$NAMESPACE'."
+if [[ -z "$csi_pods" ]]; then
+    info "No pod in '$NAMESPACE' mounts a $CSI_DRIVER volume."
+else
+    # A pod's controller would replace a deleted pod, so every controller goes
+    # first, and then the pods.
+    controllers=""
+    while read -r pod kind owner; do
+        controller=$(controller_of "$kind" "$owner") || \
+            abort_before_uninstall "Pod $pod is owned by $kind $owner, which this script cannot stop."
+        [[ -n "$controller" ]] && controllers+="$controller"$'\n'
+    done <<< "$csi_pods"
+    while read -r kind name; do
+        [[ -z "$kind" ]] && continue
+        info "Deleting $kind $name, whose pods mount $CSI_DRIVER volumes..."
+        $KUBECTL delete "$kind" "$name" -n "$NAMESPACE" --ignore-not-found \
+            --wait=false >/dev/null 2>&1 || abort_before_uninstall "Could not delete $kind $name."
+    done <<< "$(echo "$controllers" | sort -u)"
+    for pod in $(echo "$csi_pods" | awk '{print $1}'); do
+        $KUBECTL delete pod "$pod" -n "$NAMESPACE" --ignore-not-found \
+            --wait=false >/dev/null 2>&1 || abort_before_uninstall "Could not delete pod $pod."
+    done
+    for pod in $(echo "$csi_pods" | awk '{print $1}'); do
+        $KUBECTL wait pod "$pod" -n "$NAMESPACE" --for=delete --timeout=180s >/dev/null 2>&1 || \
+            abort_before_uninstall "Pod $pod still exists after 180s."
+    done
+    # A replacement created before its controller went would not be in the list above.
+    left=$(pods_on_csi_volumes) || \
+        abort_before_uninstall "Could not check that the pods mounting $CSI_DRIVER volumes are gone."
+    [[ -z "$left" ]] || abort_before_uninstall "Pods still mount $CSI_DRIVER volumes: $(echo "$left" | awk '{print $1}' | xargs)"
+    info "No pod in '$NAMESPACE' mounts a $CSI_DRIVER volume any more."
+fi
+
 # ---------------------------------------------------------------------------
 # 1. Helm uninstall
 # ---------------------------------------------------------------------------
@@ -273,6 +438,50 @@ for kind in pod daemonset deployment statefulset replicaset; do
     fi
 done
 
+# A pod whose containers have all exited but which kubelet still has not removed
+# is held by a volume it cannot unmount: with the CSI driver uninstalled, no node
+# plugin is left to do it, and the namespace waits on the pod for good. That
+# happens when the driver went before step 0 could release the pod. Its PVC and
+# PV may be gone already, so the pod is found by its state rather than its
+# volumes. Only a forced delete removes it, and its node keeps the mount and the
+# NVMe-oF connection until it reboots or they are removed by hand.
+stranded_pods() {
+    local pods
+    pods=$($KUBECTL get pods -n "$NAMESPACE" -o json 2>/dev/null) || return 1
+    PODS="$pods" python3 -c '
+import json, os
+for p in json.loads(os.environ["PODS"])["items"]:
+    meta, status = p["metadata"], p.get("status", {})
+    if not meta.get("deletionTimestamp"):
+        continue
+    states = [c.get("state", {}) for key in
+              ("initContainerStatuses", "containerStatuses", "ephemeralContainerStatuses")
+              for c in status.get(key) or []]
+    # No status at all is not evidence that everything exited.
+    if states and all("terminated" in s for s in states):
+        print(meta["uid"], meta["name"], p["spec"].get("nodeName", "<unknown>"))
+'
+}
+# The same pods, by UID, before and after kubelet's window: a pod that became
+# stranded during the wait has not had it yet, and one replaced under the same
+# name is not the pod that was waited on.
+if ! first=$(stranded_pods); then
+    warn "Could not list the pods in '$NAMESPACE'; not looking for stranded pods."
+    first=""
+fi
+if [[ -n "$first" ]]; then
+    sleep 30  # kubelet may still be finishing a teardown it can do
+    second=$(stranded_pods) || second=""
+    while read -r uid pod node; do
+        [[ -z "$uid" ]] && continue
+        grep -q "^$uid " <<< "$first" || continue
+        warn "Pod $pod exited but kubelet on $node has not removed it: a volume it cannot unmount."
+        warn "  Force-deleting it. Node $node keeps that mount and any NVMe-oF connection."
+        $KUBECTL delete pod "$pod" -n "$NAMESPACE" --force --grace-period=0 \
+            --ignore-not-found 2>/dev/null || warn "  Could not force-delete $pod"
+    done <<< "$second"
+fi
+
 # ---------------------------------------------------------------------------
 # 4. Remove PVCs and their associated PVs
 # ---------------------------------------------------------------------------
@@ -338,6 +547,27 @@ for pv in $csi_pvs; do
         --type=merge -p '{"metadata":{"finalizers":[]}}' 2>/dev/null || true
     $KUBECTL delete pv "$pv" --ignore-not-found --timeout=30s 2>/dev/null || true
 done
+
+# With the driver uninstalled, nothing detaches its VolumeAttachments. One whose
+# PV is gone attaches nothing and only lists a node as attached. An attachment
+# with an inline source names no PV, and a PV lookup that fails says nothing
+# about the PV: both are left alone.
+info "Cleaning up $CSI_DRIVER VolumeAttachments whose PV no longer exists..."
+attachments=$($KUBECTL get volumeattachments \
+    -o jsonpath="{range .items[?(@.spec.attacher==\"${CSI_DRIVER}\")]}{.metadata.name} {.spec.source.persistentVolumeName}{\"\n\"}{end}" \
+    2>/dev/null) || { warn "Could not list VolumeAttachments; leaving them."; attachments=""; }
+while read -r va pv; do
+    [[ -z "$va" || -z "$pv" ]] && continue
+    if ! found=$($KUBECTL get pv "$pv" --ignore-not-found -o name 2>/dev/null); then
+        warn "  Could not look up PV $pv; leaving VolumeAttachment $va."
+        continue
+    fi
+    [[ -n "$found" ]] && continue
+    info "  Deleting VolumeAttachment $va (PV $pv is gone)..."
+    $KUBECTL patch volumeattachment "$va" \
+        --type=merge -p '{"metadata":{"finalizers":[]}}' 2>/dev/null || true
+    $KUBECTL delete volumeattachment "$va" --ignore-not-found --timeout=30s 2>/dev/null || true
+done <<< "$attachments"
 
 # ---------------------------------------------------------------------------
 # 4b. Remove Deployments in kube-system owned by this Helm release
