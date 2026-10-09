@@ -330,7 +330,10 @@ func (a *Assembler) addToRoot(spec Spec) error {
 	a.root.Lock()
 	defer a.root.Unlock()
 
-	final := filepath.Join(a.cfg.ExportsDir, rootDropInName)
+	final, err := a.rootFile()
+	if err != nil {
+		return fmt.Errorf("export %s: %w", spec.Path, err)
+	}
 	clients := slices.Clone(spec.Clients)
 	if old, err := os.ReadFile(final); err == nil {
 		for _, field := range strings.Fields(string(old))[1:] {
@@ -349,6 +352,28 @@ func (a *Assembler) addToRoot(spec Spec) error {
 		return fmt.Errorf("export %s: renaming %s: %w", spec.Path, tmp, err)
 	}
 	return nil
+}
+
+// rootFile is where the root entry is written: the root file in the exports
+// directory or, when that is a link, the file it points at. A host whose
+// exports directory is lost on restart links it to storage that is not, so nfsd
+// starts with every client's address already in an export rather than
+// rejecting each request from an unknown client until the exports are
+// reassembled. Replacing the link with a file would undo that on the next
+// restart.
+func (a *Assembler) rootFile() (string, error) {
+	link := filepath.Join(a.cfg.ExportsDir, rootDropInName)
+	target, err := os.Readlink(link)
+	if err != nil {
+		return link, nil // a regular file, or none yet
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(a.cfg.ExportsDir, target)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return "", fmt.Errorf("creating the root file's directory: %w", err)
+	}
+	return target, nil
 }
 
 // reexport asks nfsd to re-read the export table.
