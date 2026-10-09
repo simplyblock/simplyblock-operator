@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -508,11 +507,27 @@ func (r *ControlPlaneOpsReconciler) await(
 		return r.awaitBackup(ctx, ops, target)
 	}
 
+	if ops.Spec.Action == simplyblockv1alpha2.ControlPlaneOpsActionUpgrade && ops.Spec.Upgrade != nil {
+		// A bad image leaves the old replica serving, so the component counts
+		// below would hold for the whole step budget. The Deployment says sooner.
+		if _, _, err := r.webAPIRolledTo(ctx, target.Namespace, ops.Spec.Upgrade.Image); err != nil {
+			return false, "", err
+		}
+	}
+
+	scope := restartScope(ops)
+	if ops.Spec.Action == simplyblockv1alpha2.ControlPlaneOpsActionRestart {
+		// Ready counts alone pass at once: the old pod is still Ready when the
+		// restart stamp lands, before any replacement has started.
+		if settled, held, err := r.recycledWorkloadsSettled(ctx, target.Namespace, scope); !settled || err != nil {
+			return false, held, err
+		}
+	}
+
 	components, err := observe(ctx, r.Client, target.Namespace)
 	if err != nil {
 		return false, "", err
 	}
-	scope := restartScope(ops)
 	for _, status := range components {
 		if len(scope) > 0 && !slices.Contains(scope, status.Name) {
 			continue
@@ -525,20 +540,28 @@ func (r *ControlPlaneOpsReconciler) await(
 	return true, "", nil
 }
 
-// verify is what makes an upgrade more than an image bump. It re-probes
-// readiness, compares the reported version against what was asked for, and fails
-// the operation when they disagree.
+// verify is what makes an upgrade more than an image bump. It holds until the
+// management API's Deployment carries the requested image on every replica and
+// all of them are ready, then re-probes readiness.
 //
-// A control plane that reports no version at all is a control plane whose
-// /_meta/version read does not exist yet, which design-controlplane.md §8
-// records as a prerequisite. The step passes there rather than failing, and says
-// so in the message, so the record of the operation carries what was and was not
-// verified.
+// The rollout is read from the Deployment rather than from the control plane's
+// own answer. The Deployment is what the operator changed, so its status is the
+// authority on whether the change took, and it needs nothing from the image
+// being rolled.
 func (r *ControlPlaneOpsReconciler) verify(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.ControlPlaneOps,
 	target *simplyblockv1alpha2.ControlPlane,
 ) (bool, string, error) {
+	if ops.Spec.Upgrade == nil {
+		return false, "", &terminalStepError{
+			message: "spec.upgrade.image is gone, so there is nothing to verify the rollout against",
+		}
+	}
+	if done, held, err := r.webAPIRolledTo(ctx, target.Namespace, ops.Spec.Upgrade.Image); !done || err != nil {
+		return false, held, err
+	}
+
 	// The published endpoint is the address alone, so the material to verify it
 	// with is resolved either way: a TLS control plane reached over a client that
 	// trusts only the system store fails the handshake, not the request.
@@ -558,59 +581,59 @@ func (r *ControlPlaneOpsReconciler) verify(
 	if ok, reason := prober.Ready(ctx, endpoint); !ok {
 		return false, fmt.Sprintf("the control plane is not answering yet: %s", reason), nil
 	}
-
-	reported, err := prober.Version(ctx, endpoint)
-	if err != nil {
-		return false, fmt.Sprintf("the version could not be read: %v", err), nil
-	}
-	if reported == "" {
-		return true, "", r.note(ctx, ops,
-			"the rollout finished; the version was not verified because the control plane "+
-				"does not serve a version endpoint")
-	}
-	if ops.Spec.Upgrade == nil {
-		return false, "", &terminalStepError{
-			message: "spec.upgrade.image is gone, so there is nothing to verify the rollout against",
-		}
-	}
-	if !imageStates(ops.Spec.Upgrade.Image, reported) {
-		r.emit(ops, corev1.EventTypeWarning, VersionMismatch, fmt.Sprintf(
-			"the control plane reports %s and the upgrade asked for %s",
-			reported, ops.Spec.Upgrade.Image))
-		return false, "", &terminalStepError{message: fmt.Sprintf(
-			"the rollout finished with the control plane reporting %s rather than %s, which is "+
-				"a rollout that failed back rather than an upgrade that completed",
-			reported, ops.Spec.Upgrade.Image)}
-	}
 	return true, "", nil
 }
 
-// imageStates reports whether an image reference names the version the control
-// plane reports. The comparison is against the image's tag rather than the whole
-// reference, because a version endpoint answers with a version and an image
-// carries a registry and a repository in front of it.
+// webAPIRolledTo reports whether the management API's Deployment has finished
+// rolling to image.
 //
-// The digest is cut off before the tag is read, and the order is the whole of
-// the correctness: a digest carries its own colon, so reading the tag from the
-// last colon of repo:tag@sha256:… yields the hex digest rather than the tag.
-//
-// A digest-pinned image is then not compared at all. What is pinned by digest is
-// not claimed to be any particular version, so an upgrade to one verifies that
-// the rollout finished and stops there.
-func imageStates(image, version string) bool {
-	reference := image
-	if at := strings.LastIndexByte(reference, '@'); at >= 0 {
-		return true
+// It holds, rather than passes, on a Deployment still carrying another image: the
+// entity re-applies its workloads on its own pass after Applying, so the first
+// read can be of a Deployment that is fully ready on the old image. A Deployment
+// whose Progressing condition says ProgressDeadlineExceeded is a rollout that is
+// not going to finish, which fails the operation instead of holding for the rest
+// of the step's budget.
+func (r *ControlPlaneOpsReconciler) webAPIRolledTo(
+	ctx context.Context, namespace, image string,
+) (bool, string, error) {
+	var deploy appsv1.Deployment
+	key := client.ObjectKey{Namespace: namespace, Name: ComponentWebAPI}
+	if err := r.Get(ctx, key, &deploy); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, fmt.Sprintf("%s has not been applied yet", ComponentWebAPI), nil
+		}
+		return false, "", err
 	}
 
-	colon := strings.LastIndexByte(reference, ':')
-	if colon < 0 {
-		// No tag at all, which the spec's pattern does not admit. There is
-		// nothing to compare, so the rollout finishing is the whole of the
-		// verification.
-		return true
+	carried := ""
+	for _, c := range deploy.Spec.Template.Spec.Containers {
+		if c.Name == "webappapi" {
+			carried = c.Image
+		}
 	}
-	return reference[colon+1:] == version
+	if carried != image {
+		return false, fmt.Sprintf("%s still carries %s rather than %s", ComponentWebAPI, carried, image), nil
+	}
+	if deploy.Status.ObservedGeneration < deploy.Generation {
+		return false, fmt.Sprintf("%s has not observed its latest change yet", ComponentWebAPI), nil
+	}
+	for _, cond := range deploy.Status.Conditions {
+		if cond.Type == appsv1.DeploymentProgressing && cond.Reason == "ProgressDeadlineExceeded" {
+			return false, "", &terminalStepError{message: fmt.Sprintf(
+				"%s did not finish rolling to %s: %s", ComponentWebAPI, image, cond.Message)}
+		}
+	}
+
+	want := int32(1)
+	if deploy.Spec.Replicas != nil {
+		want = *deploy.Spec.Replicas
+	}
+	st := deploy.Status
+	if st.UpdatedReplicas < want || st.Replicas > want || st.ReadyReplicas < want {
+		return false, fmt.Sprintf("%s has %d of %d replicas updated and %d ready",
+			ComponentWebAPI, st.UpdatedReplicas, want, st.ReadyReplicas), nil
+	}
+	return true, "", nil
 }
 
 // requestBackup creates or triggers the FoundationDBBackup.
@@ -972,4 +995,55 @@ func (r *ControlPlaneOpsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&simplyblockv1alpha2.ControlPlaneOps{}).
 		Named("controlplaneops").
 		Complete(r)
+}
+
+// recycledWorkloadsSettled reports whether every workload a Restart recycled has
+// finished rolling: its controller has observed the restart stamp, and every
+// replica is on the new pod template and ready. An empty scope is every
+// restartable workload.
+func (r *ControlPlaneOpsReconciler) recycledWorkloadsSettled(
+	ctx context.Context, namespace string, scope []string,
+) (bool, string, error) {
+	for _, comp := range restartableComponents() {
+		if len(scope) > 0 && !slices.Contains(scope, comp.name) {
+			continue
+		}
+		key := client.ObjectKey{Namespace: namespace, Name: comp.name}
+
+		var generation, observed int64
+		var want, updated, ready int32
+		switch comp.kind {
+		case kindDeployment:
+			var d appsv1.Deployment
+			if err := r.Get(ctx, key, &d); err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
+				}
+				return false, "", err
+			}
+			generation, observed = d.Generation, d.Status.ObservedGeneration
+			want, updated, ready = desiredReplicas(d.Spec.Replicas), d.Status.UpdatedReplicas, d.Status.ReadyReplicas
+		case kindStatefulSet:
+			var s appsv1.StatefulSet
+			if err := r.Get(ctx, key, &s); err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
+				}
+				return false, "", err
+			}
+			generation, observed = s.Generation, s.Status.ObservedGeneration
+			want, updated, ready = desiredReplicas(s.Spec.Replicas), s.Status.UpdatedReplicas, s.Status.ReadyReplicas
+		default:
+			continue
+		}
+
+		if observed < generation {
+			return false, fmt.Sprintf("%s has not observed the restart yet", comp.name), nil
+		}
+		if updated < want || ready < want {
+			return false, fmt.Sprintf("%s has %d of %d replicas replaced and %d ready",
+				comp.name, updated, want, ready), nil
+		}
+	}
+	return true, "", nil
 }

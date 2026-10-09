@@ -217,50 +217,50 @@ Files: `operator/api/v1alpha2/controlplane_tls_test.go`,
 
 File: `operator/internal/controllers/controlplane/controlplaneops_controller_unit_test.go`
 
-| #     | Scenario                                                                              | Type     | Test |
-|-------|---------------------------------------------------------------------------------------|----------|------|
-| U-45  | The lock is free: acquired, phase becomes `Running`                                   | Positive | —    |
-| U-46  | Another operation holds the lock: this one stays `Pending`                            | Negative | —    |
-| U-47  | Two reconcilers acquiring one free lock: the loser gets 409                           | Negative | —    |
-| U-48  | Terminal re-reconcile: no side effect, the lock is released again                     | Negative | —    |
-| U-49  | The operation is deleted while `Running`: the finalizer releases the lock             | Positive | —    |
-| U-50  | `Restart`: `Draining` holds while a `StorageNodeOps` is `Running`                     | Negative | —    |
-| U-51  | `Restart`: `Draining` holds while a `StorageClusterOps` is `Running`                  | Negative | —    |
-| U-52  | `Restart`: the last in-flight operation finishes and `Draining` advances              | Positive | —    |
-| U-53  | `Restart`: no operations in flight, so `Draining` advances immediately                | Boundary | —    |
-| U-54  | `Restart`: in-flight operations are never canceled to make the restart proceed        | Negative | —    |
-| U-55  | `Restart`: `Restarting` recycles the workload, `Awaiting` completes on a good probe   | Positive | —    |
-| U-56  | `Upgrade`: `Preflight` fails when the control plane is not `Ready`                    | Negative | —    |
-| U-93  | `Upgrade`: `Preflight` fails when the requested image is the one already running      | Boundary | —    |
-| U-94  | `Upgrade`: `Preflight` passes on a `Ready` control plane with a different image       | Positive | —    |
-| U-95  | `Restart` enters `Draining` directly, with no preflight step of its own               | Positive | —    |
-| U-96  | An operation whose target is deleted after admission: a missing-target failure        | Boundary | —    |
-| U-97  | Every declared step appears in the step `Enum` and in the CEL rule                    | Boundary | —    |
-| U-99  | `Restart` with no components: the whole control plane is recycled                     | Positive | —    |
-| U-100 | `Restart` naming one component: only that workload is recycled                        | Positive | —    |
-| U-101 | `Restart` naming a component absent from the §4.3 table: rejected with the name       | Negative | —    |
-| U-102 | `Restart` naming only non-essential components: `Draining` is skipped                 | Boundary | —    |
-| U-103 | `Restart` naming an essential component: `Draining` runs                              | Boundary | —    |
-| U-104 | `Restart` with an empty component list: `Draining` runs                               | Boundary | —    |
-| U-135 | `Restart` naming only the task runner: `Draining` is skipped                          | Boundary | —    |
-| U-136 | The same restart with an operation in flight: it is not held                          | Negative | —    |
-| U-126 | `Upgrade`: `Draining` holds while a `StorageNodeOps` is `Running`                     | Negative | —    |
-| U-127 | `Upgrade`: `Draining` runs after `Preflight`, never before it                         | Boundary | —    |
-| U-128 | `Upgrade` refused at `Preflight`: no drain is entered and nothing waits               | Boundary | —    |
-| U-129 | `Upgrade`: the last in-flight operation finishes and `Applying` proceeds              | Positive | —    |
-| U-130 | `Upgrade`: in-flight operations are never canceled to let the upgrade proceed         | Negative | —    |
-| U-131 | `Backup` carries no `Draining` and does not wait on in-flight operations              | Negative | —    |
-| U-105 | `Backup`: `Requesting` creates a `FoundationDBBackup` naming the cluster              | Positive | —    |
-| U-106 | `Backup` where one already exists: it is triggered, not duplicated                    | Boundary | —    |
-| U-107 | The `FoundationDBBackup` carries no owner reference to the operation                  | Negative | —    |
-| U-108 | `Backup`: `Awaiting` completes when the backup reports a snapshot                     | Positive | —    |
-| U-109 | `Backup` with no `blobStore` and no existing backup: `Failed` with the reason         | Negative | —    |
-| U-110 | `status.backupRef` names what the run created or triggered                            | Positive | —    |
-| U-57  | `Upgrade` on `source.managed`: the image is applied and `Verifying` compares versions | Positive | —    |
-| U-58  | `Upgrade` whose reported version disagrees: `VersionMismatch`, operation `Failed`     | Negative | —    |
-| U-59  | `Upgrade` succeeding: `spec.source.managed.image` is updated to match                 | Positive | —    |
-| U-60  | `spec.upgrade` absent for `action: Upgrade`: rejected                                 | Negative | —    |
-| U-61  | An unknown action: terminal failure with the action in the message                    | Negative | —    |
+| #     | Scenario                                                                            | Type     | Test |
+|-------|-------------------------------------------------------------------------------------|----------|------|
+| U-45  | The lock is free: acquired, phase becomes `Running`                                 | Positive | —    |
+| U-46  | Another operation holds the lock: this one stays `Pending`                          | Negative | —    |
+| U-47  | Two reconcilers acquiring one free lock: the loser gets 409                         | Negative | —    |
+| U-48  | Terminal re-reconcile: no side effect, the lock is released again                   | Negative | —    |
+| U-49  | The operation is deleted while `Running`: the finalizer releases the lock           | Positive | —    |
+| U-50  | `Restart`: `Draining` holds while a `StorageNodeOps` is `Running`                   | Negative | —    |
+| U-51  | `Restart`: `Draining` holds while a `StorageClusterOps` is `Running`                | Negative | —    |
+| U-52  | `Restart`: the last in-flight operation finishes and `Draining` advances            | Positive | —    |
+| U-53  | `Restart`: no operations in flight, so `Draining` advances immediately              | Boundary | —    |
+| U-54  | `Restart`: in-flight operations are never canceled to make the restart proceed      | Negative | —    |
+| U-55  | `Restart`: `Restarting` recycles the workload, `Awaiting` completes on a good probe | Positive | —    |
+| U-56  | `Upgrade`: `Preflight` fails when the control plane is not `Ready`                  | Negative | —    |
+| U-93  | `Upgrade`: `Preflight` fails when the requested image is the one already running    | Boundary | —    |
+| U-94  | `Upgrade`: `Preflight` passes on a `Ready` control plane with a different image     | Positive | —    |
+| U-95  | `Restart` enters `Draining` directly, with no preflight step of its own             | Positive | —    |
+| U-96  | An operation whose target is deleted after admission: a missing-target failure      | Boundary | —    |
+| U-97  | Every declared step appears in the step `Enum` and in the CEL rule                  | Boundary | —    |
+| U-99  | `Restart` with no components: the whole control plane is recycled                   | Positive | —    |
+| U-100 | `Restart` naming one component: only that workload is recycled                      | Positive | —    |
+| U-101 | `Restart` naming a component absent from the §4.3 table: rejected with the name     | Negative | —    |
+| U-102 | `Restart` naming only non-essential components: `Draining` is skipped               | Boundary | —    |
+| U-103 | `Restart` naming an essential component: `Draining` runs                            | Boundary | —    |
+| U-104 | `Restart` with an empty component list: `Draining` runs                             | Boundary | —    |
+| U-135 | `Restart` naming only the task runner: `Draining` is skipped                        | Boundary | —    |
+| U-136 | The same restart with an operation in flight: it is not held                        | Negative | —    |
+| U-126 | `Upgrade`: `Draining` holds while a `StorageNodeOps` is `Running`                   | Negative | —    |
+| U-127 | `Upgrade`: `Draining` runs after `Preflight`, never before it                       | Boundary | —    |
+| U-128 | `Upgrade` refused at `Preflight`: no drain is entered and nothing waits             | Boundary | —    |
+| U-129 | `Upgrade`: the last in-flight operation finishes and `Applying` proceeds            | Positive | —    |
+| U-130 | `Upgrade`: in-flight operations are never canceled to let the upgrade proceed       | Negative | —    |
+| U-131 | `Backup` carries no `Draining` and does not wait on in-flight operations            | Negative | —    |
+| U-105 | `Backup`: `Requesting` creates a `FoundationDBBackup` naming the cluster            | Positive | —    |
+| U-106 | `Backup` where one already exists: it is triggered, not duplicated                  | Boundary | —    |
+| U-107 | The `FoundationDBBackup` carries no owner reference to the operation                | Negative | —    |
+| U-108 | `Backup`: `Awaiting` completes when the backup reports a snapshot                   | Positive | —    |
+| U-109 | `Backup` with no `blobStore` and no existing backup: `Failed` with the reason       | Negative | —    |
+| U-110 | `status.backupRef` names what the run created or triggered                          | Positive | —    |
+| U-57  | `Upgrade`: the image is applied and `Verifying` waits for the rollout               | Positive | —    |
+| U-58  | `Upgrade` whose rollout stalls: `ProgressDeadlineExceeded` fails it                 | Negative | —    |
+| U-59  | `Upgrade` succeeding: `spec.source.managed.image` is updated to match               | Positive | —    |
+| U-60  | `spec.upgrade` absent for `action: Upgrade`: rejected                               | Negative | —    |
+| U-61  | An unknown action: terminal failure with the action in the message                  | Negative | —    |
 
 ## 2. Integration Tests
 
@@ -336,8 +336,8 @@ A live deployment with a real FoundationDB and a real management API.
 | E-15 | Any action against an external control plane: the apply is rejected outright                             | Negative | —    |
 | E-16 | `action: Backup` against a live control plane: a backup lands in the blob store                          | Positive | —    |
 | E-18 | `action: Restart` naming only the task runner: the management API keeps serving, and queued work resumes | Positive | —    |
-| E-08 | `action: Upgrade` to a new image: the version is verified after the rollout                              | Positive | —    |
-| E-09 | `action: Upgrade` whose rollout fails back: the operation reports `Failed`                               | Negative | —    |
+| E-08 | `action: Upgrade` to a new image: the rollout is verified                                                | Positive | —    |
+| E-09 | `action: Upgrade` to an unpullable image: the operation reports `Failed`                                 | Negative | —    |
 | E-11 | Deleting the singleton with clusters present: held, and named in an event                                | Negative | —    |
 | E-12 | Sustained I/O across a control-plane restart: the data path is unaffected                                | Positive | —    |
 | E-13 | One of two management API replicas killed: `Degraded`, and clusters still reconcile                      | Positive | —    |

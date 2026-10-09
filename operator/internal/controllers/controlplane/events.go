@@ -92,9 +92,4 @@ const (
 
 	// OperationAborted is an operation stopped on request whose unwind finished.
 	OperationAborted = "OperationAborted"
-
-	// VersionMismatch is an upgrade whose Verifying step found the control plane
-	// reporting a version other than the one asked for, which is the difference
-	// between an upgrade that completed and a rollout that failed back.
-	VersionMismatch = "VersionMismatch"
 )

@@ -9,27 +9,64 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	atlasprom "github.com/simplyblock/atlas/prometheus"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 func baselineTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
-	if err := simplyblockv1alpha1.AddToScheme(s); err != nil {
-		t.Fatalf("add simplyblock scheme: %v", err)
+	if err := simplyblockv1alpha2.AddToScheme(s); err != nil {
+		t.Fatalf("add simplyblock v1alpha2 scheme: %v", err)
 	}
 	return s
 }
 
-func storageNodeSet(ns, name, nodeUUID string, p50, p99 int64) *simplyblockv1alpha1.StorageNodeSet {
-	return &simplyblockv1alpha1.StorageNodeSet{
+func storageNode(ns, name, nodeUUID string, p50, p99 int64) *simplyblockv1alpha2.StorageNode {
+	return &simplyblockv1alpha2.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
-		Status: simplyblockv1alpha1.StorageNodeSetStatus{
-			LatencyMetrics: []simplyblockv1alpha1.NodeLatencyMetrics{
-				{NodeUUID: nodeUUID, BaselineP50NS: p50, BaselineP99NS: p99},
+		Status: simplyblockv1alpha2.StorageNodeStatus{
+			LatencyMetrics: &simplyblockv1alpha2.NodeLatencyMetrics{
+				NodeUUID: nodeUUID, BaselineP50NS: p50, BaselineP99NS: p99,
 			},
 		},
+	}
+}
+
+// The benchmark baseline is read from the StorageNode the baseline Job's result
+// is recorded on.
+//
+// Regression: 2026-10-08-benchmark-baseline-reads-retired-set — the provider
+// listed the retired StorageNodeSet, which no cluster has any more, so every node
+// read as having no baseline, every deviation read 0, and automatic rebalancing
+// never found a hot node however loaded one was.
+func TestBenchmarkBaselineProvider_ReadsTheBaselineRecordedOnStorageNodes(t *testing.T) {
+	scheme := baselineTestScheme(t)
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(
+			storageNode("ns1", "node-a", "node-1", 1000, 5000),
+			storageNode("ns1", "node-b", "node-2", 2000, 6000),
+			storageNode("ns1", "node-zero", "node-3", 0, 0), // no baseline yet → omitted
+			storageNode("ns2", "node-other", "node-4", 3000, 7000),
+		).
+		Build()
+
+	p50 := &benchmarkBaselineProvider{client: cl, percentile: atlasprom.PercentileP50}
+	got, err := p50.BaselineNS(context.Background(), makeInput("ns1"))
+	if err != nil {
+		t.Fatalf("BaselineNS: %v", err)
+	}
+	if len(got) != 2 || got["node-1"] != 1000 || got["node-2"] != 2000 {
+		t.Errorf("p50 baselines = %v, want node-1=1000 node-2=2000 only", got)
+	}
+
+	p99 := &benchmarkBaselineProvider{client: cl, percentile: atlasprom.PercentileP99}
+	got, err = p99.BaselineNS(context.Background(), makeInput("ns1"))
+	if err != nil {
+		t.Fatalf("BaselineNS: %v", err)
+	}
+	if got["node-1"] != 5000 || got["node-2"] != 6000 {
+		t.Errorf("p99 baselines = %v, want node-1=5000 node-2=6000", got)
 	}
 }
 
@@ -57,46 +94,6 @@ func TestNewBaselineProvider_SelectsImplementation(t *testing.T) {
 			t.Errorf("strategy=%q gave %T, want *rollingWindowBaselineProvider (default/fallback)", strategy, p)
 		}
 	}
-}
-
-func TestBenchmarkBaselineProvider_ReadsCRs(t *testing.T) {
-	scheme := baselineTestScheme(t)
-	cl := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(
-			storageNodeSet("ns1", "set-a", "node-1", 1000, 5000),
-			storageNodeSet("ns1", "set-b", "node-2", 2000, 6000),
-			storageNodeSet("ns1", "set-zero", "node-3", 0, 0), // no baseline yet → omitted
-		).
-		Build()
-
-	t.Run("p50", func(t *testing.T) {
-		p := &benchmarkBaselineProvider{client: cl, percentile: atlasprom.PercentileP50}
-		got, err := p.BaselineNS(context.Background(), makeInput("ns1"))
-		if err != nil {
-			t.Fatalf("BaselineNS: %v", err)
-		}
-		want := map[string]int64{"node-1": 1000, "node-2": 2000}
-		if len(got) != len(want) {
-			t.Fatalf("got %v, want %v", got, want)
-		}
-		for k, v := range want {
-			if got[k] != v {
-				t.Errorf("node %s = %d, want %d", k, got[k], v)
-			}
-		}
-	})
-
-	t.Run("p99", func(t *testing.T) {
-		p := &benchmarkBaselineProvider{client: cl, percentile: atlasprom.PercentileP99}
-		got, err := p.BaselineNS(context.Background(), makeInput("ns1"))
-		if err != nil {
-			t.Fatalf("BaselineNS: %v", err)
-		}
-		if got["node-1"] != 5000 || got["node-2"] != 6000 {
-			t.Errorf("p99 baselines = %v, want node-1=5000 node-2=6000", got)
-		}
-	})
 }
 
 func TestReduceWindowedBaselines_ColdStart(t *testing.T) {
