@@ -11,9 +11,15 @@
 package nfsexport
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	export "github.com/simplyblock/atlas/nfsexport"
+
+	"github.com/simplyblock/csi-driver/internal/controlplane"
+	"github.com/simplyblock/csi-driver/internal/initiator"
 )
 
 // testVolume is the backing namespace these tests speak about. One spelling,
@@ -60,5 +66,49 @@ func TestControlPlaneInfoOverridesTheLocalContext(t *testing.T) {
 
 	if vc["uuid"] != "the-target-lvol" {
 		t.Errorf("uuid = %q, want the control plane's answer", vc["uuid"])
+	}
+}
+
+// Regression (pnfs-1791525621): the external provisioner deletes a pNFS volume
+// as soon as its claim goes, while kubelet may still be unstaging it on a
+// node. Detach then got "volume not found" from the control plane, failed on
+// every retry, and the node's controllers kept reconnecting to the removed
+// subsystem. A volume the control plane no longer knows is released locally.
+func TestDetachReleasesAVolumeTheControlPlaneNoLongerKnows(t *testing.T) {
+	spec := export.Spec{VolumeUUID: testVolume, ClusterID: "cluster-1"}
+	var released []export.Spec
+	a := attacher{
+		conn: func(context.Context, export.Spec) (initiator.Initiator, error) {
+			return nil, fmt.Errorf("export: connection info for volume %s: %w",
+				testVolume, controlplane.ErrVolumeNotFound)
+		},
+		releaseDeleted: func(_ context.Context, s export.Spec) error {
+			released = append(released, s)
+			return nil
+		},
+	}
+
+	if err := a.Detach(context.Background(), spec); err != nil {
+		t.Fatalf("Detach = %v, want the deleted volume released locally", err)
+	}
+	if len(released) != 1 || released[0].VolumeUUID != testVolume || released[0].ClusterID != "cluster-1" {
+		t.Errorf("released %v, want [%v]", released, spec)
+	}
+}
+
+// Any other control-plane failure is not evidence the volume is gone, so it
+// stays an error and nothing is torn down on a guess.
+func TestDetachKeepsOtherControlPlaneFailuresAnError(t *testing.T) {
+	boom := errors.New("connection refused")
+	a := attacher{
+		conn: func(context.Context, export.Spec) (initiator.Initiator, error) { return nil, boom },
+		releaseDeleted: func(context.Context, export.Spec) error {
+			t.Error("released a volume the control plane did not report deleted")
+			return nil
+		},
+	}
+
+	if err := a.Detach(context.Background(), export.Spec{VolumeUUID: testVolume}); !errors.Is(err, boom) {
+		t.Errorf("Detach = %v, want the control plane's error", err)
 	}
 }

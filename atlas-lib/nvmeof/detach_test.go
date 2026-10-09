@@ -3,6 +3,7 @@ package nvmeof
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/simplyblock/atlas/errs"
@@ -187,5 +188,108 @@ func TestDetachDevice_PropagatesDisconnectFailure(t *testing.T) {
 	}
 	if out.Disconnected {
 		t.Error("reported a disconnect that failed")
+	}
+}
+
+// deletedVolume is the volume the ReleaseDeletedVolume tests release, and
+// ownNQN the subsystem named after it.
+const (
+	deletedVolume = "194db54b-d1e8-4180-bb13-5177f6f71a83"
+	ownNQN        = "nqn.2023-02.io.simplyblock:cluster:lvol:" + deletedVolume
+)
+
+// resolving answers ByNQN with s for ownNQN and not found for anything else.
+func resolving(s nvme.Subsystem) fakeSubs {
+	return fakeSubs{byNQN: func(_ context.Context, nqn string) (nvme.Subsystem, error) {
+		if nqn != ownNQN {
+			return notFound()
+		}
+		return s, nil
+	}}
+}
+
+// The case seen on a client node: the volume was deleted while the node was
+// still unstaging, the target removed the subsystem, and its controllers keep
+// reconnecting to it. No controller is live, so whether the subsystem could be
+// shared cannot be asked, and it does not need to be: the subsystem is named
+// after the deleted volume and serves no other namespace.
+func TestReleaseDeletedVolume_ReapsItsOwnSubsystemWithNoLivePath(t *testing.T) {
+	stubMultiNamespace(t, false, fmt.Errorf("no live controller: %w", errs.ErrNotConnected))
+	c := &recordingConnector{}
+	subs := resolving(nvme.Subsystem{
+		NQN:         ownNQN,
+		Controllers: []nvme.Controller{{ID: "nvme5", State: "connecting"}, {ID: "nvme6", State: "connecting"}},
+		Namespaces:  []nvme.Namespace{{ID: 1, Name: "nvme5n1", UUID: deletedVolume}},
+	})
+
+	out, err := ReleaseDeletedVolume(context.Background(), c, subs, ownNQN, deletedVolume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Disconnected || len(c.disconnected) != 1 || c.disconnected[0] != ownNQN {
+		t.Errorf("outcome = %+v, disconnected = %v, want %s disconnected", out, c.disconnected, ownNQN)
+	}
+}
+
+func TestReleaseDeletedVolume_IsDoneWhenNothingIsAttached(t *testing.T) {
+	c := &recordingConnector{}
+	subs := fakeSubs{byNQN: func(context.Context, string) (nvme.Subsystem, error) { return notFound() }}
+
+	out, err := ReleaseDeletedVolume(context.Background(), c, subs, ownNQN, deletedVolume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Disconnected || len(c.disconnected) != 0 {
+		t.Errorf("outcome = %+v, disconnected = %v, want nothing done", out, c.disconnected)
+	}
+}
+
+// A subsystem named after the deleted volume can still serve another one: a
+// namespaced volume shares the subsystem of the volume that created it.
+func TestReleaseDeletedVolume_KeepsASubsystemServingAnotherVolume(t *testing.T) {
+	stubMultiNamespace(t, false, nil)
+	c := &recordingConnector{}
+	subs := resolving(nvme.Subsystem{
+		NQN:         ownNQN,
+		Controllers: []nvme.Controller{{ID: "nvme5", State: "live", DevicePath: "/dev/nvme5"}},
+		Namespaces:  []nvme.Namespace{{ID: 2, Name: "nvme5n2", UUID: "another-volume"}},
+	})
+
+	out, err := ReleaseDeletedVolume(context.Background(), c, subs, ownNQN, deletedVolume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.SharedSubsystem || len(c.disconnected) != 0 {
+		t.Errorf("outcome = %+v, disconnected = %v, want the subsystem kept", out, c.disconnected)
+	}
+}
+
+// A live subsystem provisioned for several namespaces is kept even with none of
+// them attached here, for the reason DetachDevice gives.
+func TestReleaseDeletedVolume_KeepsALiveShareableSubsystem(t *testing.T) {
+	stubMultiNamespace(t, true, nil)
+	c := &recordingConnector{}
+	subs := resolving(nvme.Subsystem{
+		NQN:         ownNQN,
+		Controllers: []nvme.Controller{{ID: "nvme5", State: "live", DevicePath: "/dev/nvme5"}},
+	})
+
+	out, err := ReleaseDeletedVolume(context.Background(), c, subs, ownNQN, deletedVolume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.SharedSubsystem || len(c.disconnected) != 0 {
+		t.Errorf("outcome = %+v, disconnected = %v, want the subsystem kept", out, c.disconnected)
+	}
+}
+
+func TestReleaseDeletedVolume_ReportsAResolverFailure(t *testing.T) {
+	c := &recordingConnector{}
+	boom := errors.New("sysfs unreadable")
+	subs := fakeSubs{byNQN: func(context.Context, string) (nvme.Subsystem, error) { return nvme.Subsystem{}, boom }}
+
+	_, err := ReleaseDeletedVolume(context.Background(), c, subs, ownNQN, deletedVolume)
+	if !errors.Is(err, boom) || len(c.disconnected) != 0 {
+		t.Errorf("err = %v, disconnected = %v, want the resolver's error and nothing done", err, c.disconnected)
 	}
 }

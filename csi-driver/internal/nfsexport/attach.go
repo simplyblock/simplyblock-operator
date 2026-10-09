@@ -10,6 +10,7 @@ package nfsexport
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,8 +19,11 @@ import (
 
 	export "github.com/simplyblock/atlas/nfsexport"
 	"github.com/simplyblock/atlas/nqn"
+	"github.com/simplyblock/atlas/nvme"
+	"github.com/simplyblock/atlas/nvmeof"
 
 	"github.com/simplyblock/csi-driver/internal/clusters"
+	"github.com/simplyblock/csi-driver/internal/controlplane"
 	"github.com/simplyblock/csi-driver/internal/initiator"
 )
 
@@ -52,6 +56,18 @@ func HostNQN(nodeName string, kubeClient kubernetes.Interface) HostNQNFunc {
 // attacher connects and disconnects the namespace behind an export.
 type attacher struct {
 	hostNQN HostNQNFunc
+
+	// conn and releaseDeleted default to connection and releaseDeletedVolume.
+	// Tests substitute them, because both reach a control plane or a fabric.
+	conn           func(ctx context.Context, spec export.Spec) (initiator.Initiator, error)
+	releaseDeleted func(ctx context.Context, spec export.Spec) error
+}
+
+func (a attacher) connect(ctx context.Context, spec export.Spec) (initiator.Initiator, error) {
+	if a.conn != nil {
+		return a.conn(ctx, spec)
+	}
+	return a.connection(ctx, spec)
 }
 
 // volumeContextFor is what the initiator is built from. The control plane's
@@ -110,13 +126,47 @@ func (a attacher) Attach(ctx context.Context, spec export.Spec) error {
 }
 
 // Detach gives the namespace up, after the export has been unmounted.
+//
+// A volume the control plane no longer knows is released from what this host
+// still holds: the external provisioner deletes a pNFS volume once its claim
+// goes, which can be before kubelet has unstaged it here.
 func (a attacher) Detach(ctx context.Context, spec export.Spec) error {
-	conn, err := a.connection(ctx, spec)
+	conn, err := a.connect(ctx, spec)
+	if errors.Is(err, controlplane.ErrVolumeNotFound) {
+		release := releaseDeletedVolume
+		if a.releaseDeleted != nil {
+			release = a.releaseDeleted
+		}
+		return release(ctx, spec)
+	}
 	if err != nil {
 		return err
 	}
 	if err := conn.Disconnect(ctx); err != nil {
 		return fmt.Errorf("export %s: disconnecting volume %s: %w", spec.Path, spec.VolumeUUID, err)
+	}
+	return nil
+}
+
+// releaseDeletedVolume tears down the subsystem named after a deleted volume,
+// unless it still serves another one. See nvmeof.ReleaseDeletedVolume.
+func releaseDeletedVolume(ctx context.Context, spec export.Spec) error {
+	if spec.ClusterID == "" || spec.VolumeUUID == "" {
+		return fmt.Errorf(
+			"export %s: a deleted volume cannot be released without a cluster and a volume id", spec.Path)
+	}
+	subs := nvme.NewSysfsSubsystemResolver(nvme.SysfsConfig{})
+	subsystemNQN := nqn.Make(spec.ClusterID, spec.VolumeUUID)
+	out, err := nvmeof.ReleaseDeletedVolume(ctx, nvmeof.NewCLIConnector(subs), subs, subsystemNQN, spec.VolumeUUID)
+	if err != nil {
+		return fmt.Errorf("export %s: releasing deleted volume %s: %w", spec.Path, spec.VolumeUUID, err)
+	}
+	switch {
+	case out.Disconnected:
+		klog.Infof("pnfs: volume %s is deleted; disconnected its subsystem %s", spec.VolumeUUID, subsystemNQN)
+	case out.SharedSubsystem:
+		klog.Infof("pnfs: volume %s is deleted; its subsystem %s still serves other volumes, kept",
+			spec.VolumeUUID, subsystemNQN)
 	}
 	return nil
 }
