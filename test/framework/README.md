@@ -318,7 +318,7 @@ their own, and a run tests one. A component option naming a namespace still
 wins when set, and a `logs.collect` target, `logs.stream`, and `host.dmesg` pick theirs by
 `plane` (`cluster` or `operator`).
 
-## Detector catalogue
+## Detector catalog
 
 Every one of these came from a real defect. Defaults encode what the runs measured.
 
@@ -378,7 +378,7 @@ Three things are load-bearing and worth knowing:
   does not merely shift a chart: it names the wrong migration. `ArchiveEvidence` re-derives
   it on replay, which corrects archives written before this was fixed.
 
-## Component catalogue
+## Component catalog
 
 | component             | what it does                                                                                                                                                                                                                                                                                                                             |
 |-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -395,9 +395,7 @@ Three things are load-bearing and worth knowing:
 | `chaos.restart`       | Restarts the metadata server, a pNFS client's node plugin, or the CSI controller during the timed run: `guaranteed` times at seeded random moments, and otherwise with a low `chance` per tick. Records each restart and its recovery in `restarts.json`, and the victim's log through its shutdown in `restart-<n>-<target>-<pod>.txt`. |
 | `chaos.fence`         | Once per run, at a seeded time, cuts one node off from the metadata server (port 2049 only) while a probe there writes with a layout, and has a probe on another node truncate the file, which makes nfsd recall the layout and fence the node. Records the rules, the truncate, and every probe write in `fence.json`.                  |
 | `workload.pnfs-churn` | Keeps short-lived pods joining and leaving pNFS volumes during the run, on a seeded schedule: some join a volume `workload.pnfs` shares, some bring a volume of their own and delete it when they leave. Each runs a verified fio for its lifetime and is recorded in `churn.json`.                                                      |
-|-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `nvme.reservations`   | Records every namespace's NVMe reservation (holder, registrants, keys) through `nvme resv-report` on each node, before and after the run, for `nvme.stale-reservations`. Only the pNFS volumes' namespaces once the workload has mapped them.                                                                                            |
-|-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `nfs.mountstats`      | Samples each pNFS fio pod's NFS client counters (LAYOUTGET, READ, WRITE, transport connects) on an interval, per instance, into `nfs-timeline.csv`, so `pnfs.layout` can say when data went through the server.                                                                                                                          |
 | `run.versions`        | Records at setup every container image and resolved digest in the operator and cluster namespaces, every node's kernel, OS image, runtime, and kubelet, and the server version, in `versions.json`.                                                                                                                                      |
 
