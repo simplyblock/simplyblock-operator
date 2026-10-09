@@ -1,0 +1,67 @@
+2026-10-08T18:32:02Z [INFO    ] components disabled: ana.sample, cluster.events, logs.stream, migration.driver, workload.fio
+2026-10-08T18:32:02Z [INFO    ] detectors disabled: ana.cutover-pause, ana.freeze-count, ana.path-churn, ana.split-brain, ana.unserved-after-cutover, evidence.blind-spot, migration.errors, migration.outcomes
+2026-10-08T18:32:02Z [INFO    ] components enabled (5): host.dmesg, logs.collect, nvme.iostat, nvme.snapshot, workload.pnfs
+2026-10-08T18:32:02Z [INFO    ] detectors enabled (23): control.node-agent, control.node-flap, control.retry-storm, control.task-stuck, control.volume-health, evidence.inventory, evidence.log-coverage, fio.checksum, fio.job-error, fio.outage, fio.throughput-outlier, kernel.fabric-errors, kernel.filesystem-shutdown, kernel.path-loss, logs.pattern, nvme.controller-churn, nvme.dirty-start, nvme.foreign-cluster, nvme.loss-timeout, nvme.stale-controllers, pnfs.device-io, pnfs.layout, security.secret-exposure
+2026-10-08T18:32:02Z [INFO    ] run pnfs-1791484322 -> ./runs/pnfs-1791484322 (duration 300s, keep=True)
+2026-10-08T18:32:05Z [INFO    ] nvme.snapshot (pre): 2 lvol controller(s), 0 connecting, 0 live-with-no-namespace
+2026-10-08T18:32:05Z [INFO    ] workload.pnfs: fio runtime 300s, from the run's duration
+2026-10-08T18:32:06Z [INFO    ] workload.pnfs: StorageClass sbtest-pnfs-1791484322-pnfs, cloned from simplyblock-simplyblock-discovered-initial-discovery-d33c047a-cluster as pNFS
+2026-10-08T18:32:06Z [INFO    ] workload.pnfs: 8 pod(s) on 4 pNFS volume(s), 16 fio instance(s)
+2026-10-08T18:32:24Z [INFO    ] workload.pnfs: all 8 fio pod(s) Running
+2026-10-08T18:32:24Z [INFO    ] workload.pnfs: waiting for fio to finish layout and enter the timed run in 16 instance(s)
+2026-10-08T18:33:19Z [INFO    ] workload.pnfs: fio timed run active in every instance
+2026-10-08T18:33:21Z [INFO    ] workload.pnfs: pnfs-1791484322-pnfs-shared-0 (lvol 57521dc0-c82d-4dfa-a379-6384af19c481): 3 pod(s) on control-plane, worker-1, worker-2
+2026-10-08T18:33:21Z [INFO    ] workload.pnfs: pnfs-1791484322-pnfs-shared-1 (lvol d85d3ec5-2957-4eba-a51d-fb85ff7f3675): 3 pod(s) on control-plane, worker-1, worker-4
+2026-10-08T18:33:21Z [INFO    ] nvme.iostat: sampling every 5.0s on 5 node(s)
+2026-10-08T18:38:21Z [INFO    ] workload.pnfs: waiting up to 178s for fio to finish its runtime in every instance
+2026-10-08T18:38:28Z [INFO    ] workload.pnfs: every fio instance has exited
+2026-10-08T18:38:40Z [INFO    ] logs.collect: csi-attacher.txt (0.4 MiB)
+2026-10-08T18:38:44Z [INFO    ] logs.collect: csi-controller.txt (21.1 MiB)
+2026-10-08T18:38:47Z [INFO    ] logs.collect: csi-health-monitor.txt (7.2 MiB)
+2026-10-08T18:38:48Z [INFO    ] logs.collect: csi-node-control-plane.txt (1.1 MiB)
+2026-10-08T18:38:49Z [INFO    ] logs.collect: csi-node-worker-1.txt (0.8 MiB)
+2026-10-08T18:38:49Z [INFO    ] logs.collect: csi-node-worker-2.txt (0.3 MiB)
+2026-10-08T18:38:50Z [INFO    ] logs.collect: csi-node-worker-3.txt (0.0 MiB)
+2026-10-08T18:38:50Z [INFO    ] logs.collect: csi-node-worker-4.txt (0.3 MiB)
+2026-10-08T18:38:54Z [INFO    ] logs.collect: csi-provisioner.txt (26.6 MiB)
+2026-10-08T18:38:54Z [INFO    ] logs.collect: csi-resizer.txt (0.4 MiB)
+2026-10-08T18:38:55Z [INFO    ] logs.collect: csi-snapshotter.txt (0.1 MiB)
+2026-10-08T18:38:56Z [INFO    ] logs.collect: operator.txt (0.4 MiB)
+2026-10-08T18:38:56Z [INFO    ] logs.collect: tasks-node-add-runner.txt (0.3 MiB)
+2026-10-08T18:38:57Z [INFO    ] logs.collect: tasks-runner-backup.txt (0.0 MiB)
+2026-10-08T18:38:57Z [INFO    ] logs.collect: tasks-runner-backup-merge.txt (0.0 MiB)
+2026-10-08T18:38:57Z [INFO    ] logs.collect: tasks-runner-batch-migration.txt (0.0 MiB)
+2026-10-08T18:38:58Z [INFO    ] logs.collect: tasks-runner-cluster-expand.txt (0.0 MiB)
+2026-10-08T18:38:59Z [INFO    ] logs.collect: tasks-runner-cluster-status.txt (10.4 MiB)
+2026-10-08T18:39:00Z [INFO    ] logs.collect: tasks-runner-failed-migration.txt (0.0 MiB)
+2026-10-08T18:39:00Z [INFO    ] logs.collect: tasks-runner-jc-comp-resume.txt (0.0 MiB)
+2026-10-08T18:39:01Z [INFO    ] logs.collect: tasks-runner-lvol-migration.txt (0.0 MiB)
+2026-10-08T18:39:01Z [INFO    ] logs.collect: tasks-runner-migration.txt (0.0 MiB)
+2026-10-08T18:39:01Z [INFO    ] logs.collect: tasks-runner-new-device-migration.txt (0.0 MiB)
+2026-10-08T18:39:02Z [INFO    ] logs.collect: tasks-runner-node-removal.txt (0.0 MiB)
+2026-10-08T18:39:02Z [INFO    ] logs.collect: tasks-runner-port-allow.txt (0.0 MiB)
+2026-10-08T18:39:03Z [INFO    ] logs.collect: tasks-runner-replication-final.txt (0.0 MiB)
+2026-10-08T18:39:03Z [INFO    ] logs.collect: tasks-runner-restart.txt (0.0 MiB)
+2026-10-08T18:39:03Z [INFO    ] logs.collect: tasks-runner-snapshot-replication.txt (0.0 MiB)
+2026-10-08T18:39:04Z [INFO    ] logs.collect: tasks-runner-sync-lvol-del.txt (0.0 MiB)
+2026-10-08T18:39:06Z [INFO    ] logs.collect: webappapi.txt (9.8 MiB)
+2026-10-08T18:39:06Z [INFO    ] nvme.iostat: 369 reading(s) from 5 node(s)
+2026-10-08T18:39:09Z [INFO    ] nvme.snapshot (post): 18 lvol controller(s), 0 connecting, 0 live-with-no-namespace
+2026-10-08T18:39:55Z [INFO    ] workload.pnfs: collected 16 fio instance(s) from 8 pod(s)
+2026-10-08T18:39:55Z [INFO    ] workload.pnfs: keep set; leaving 8 pod(s), their claims and the StorageClasses in place
+2026-10-08T18:40:01Z [INFO    ] ==============================================================================
+2026-10-08T18:40:01Z [INFO    ] FINDINGS
+2026-10-08T18:40:01Z [INFO    ] ==============================================================================
+2026-10-08T18:40:01Z [INFO    ] INFO (2):
+2026-10-08T18:40:01Z [INFO    ]     evidence: fio_pods=16, fio_jobs=16, container_logs=35, nvme_controllers=18
+2026-10-08T18:40:01Z [INFO    ]         run window 18:32:02..18:39:55 UTC
+2026-10-08T18:40:01Z [INFO    ]     fabric: 12 created / 10 removed
+2026-10-08T18:40:01Z [INFO    ] skipped (5) — not judged on these dimensions:
+2026-10-08T18:40:01Z [WARN    ]     control.node-agent: no node-agent logs collected (enable the storage-node DaemonSet target in logs.collect)
+2026-10-08T18:40:01Z [WARN    ]     control.node-flap: no control-plane event log collected
+2026-10-08T18:40:01Z [WARN    ]     control.retry-storm: no control-plane event log collected
+2026-10-08T18:40:01Z [WARN    ]     control.task-stuck: no control-plane event log collected
+2026-10-08T18:40:01Z [WARN    ]     control.volume-health: no control-plane event log collected
+2026-10-08T18:40:01Z [INFO    ] ==============================================================================
+2026-10-08T18:40:01Z [INFO    ] RESULT: PASS   (0 critical, 0 warning) -> ./runs/pnfs-1791484322/findings.json
+2026-10-08T18:40:01Z [INFO    ] ==============================================================================

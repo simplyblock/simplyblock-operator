@@ -1,0 +1,57 @@
+2026-10-08T12:03:09,058980+00:00 nvme nvme0: creating 3 I/O queues.
+2026-10-08T12:03:09,085034+00:00 nvme nvme0: mapped 3/0/0 default/read/poll queues.
+2026-10-08T12:03:09,087674+00:00 nvme nvme0: new ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:fa5e94c9-faf2-4811-9e6a-70f5647f6df4", addr 10.10.10.143:4430, hostnqn: nqn.2014-08.io.simplyblock:uuid:d86b6884-c455-4d92-bd14-19becf56d45b
+2026-10-08T12:03:09,091993+00:00 nvme_log_error: 1 callbacks suppressed
+2026-10-08T12:03:09,091999+00:00 nvme0c0n1: I/O Cmd(0x2) @ LBA 0, 1 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T12:03:09,092012+00:00 blk_print_req_error: 1 callbacks suppressed
+2026-10-08T12:03:09,092014+00:00 reservation conflict error, dev nvme0c0n1, sector 0 op 0x0:(READ) flags 0x2000000 phys_seg 1 prio class 2
+2026-10-08T12:03:09,092027+00:00 Buffer I/O error on dev nvme0n1, logical block 0, async page read
+2026-10-08T12:03:09,094380+00:00 nvme0c0n1: I/O Cmd(0x2) @ LBA 0, 1 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T12:03:09,094391+00:00 reservation conflict error, dev nvme0c0n1, sector 0 op 0x0:(READ) flags 0x2000000 phys_seg 1 prio class 2
+2026-10-08T12:03:09,094404+00:00 Buffer I/O error on dev nvme0n1, logical block 0, async page read
+2026-10-08T12:03:09,096882+00:00 nvme0c0n1: I/O Cmd(0x2) @ LBA 0, 1 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T12:03:09,096893+00:00 reservation conflict error, dev nvme0c0n1, sector 0 op 0x0:(READ) flags 0x2000000 phys_seg 1 prio class 2
+2026-10-08T12:03:09,096901+00:00 Buffer I/O error on dev nvme0n1, logical block 0, async page read
+2026-10-08T12:03:09,099027+00:00 nvme0c0n1: I/O Cmd(0x2) @ LBA 0, 1 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T12:03:09,099040+00:00 reservation conflict error, dev nvme0c0n1, sector 0 op 0x0:(READ) flags 0x2000000 phys_seg 1 prio class 2
+2026-10-08T12:03:09,099049+00:00 Buffer I/O error on dev nvme0n1, logical block 0, async page read
+2026-10-08T12:03:09,100823+00:00 nvme0c0n1: I/O Cmd(0x2) @ LBA 0, 1 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T12:03:09,100834+00:00 reservation conflict error, dev nvme0c0n1, sector 0 op 0x0:(READ) flags 0x2000000 phys_seg 1 prio class 2
+2026-10-08T12:03:09,100842+00:00 Buffer I/O error on dev nvme0n1, logical block 0, async page read
+2026-10-08T12:03:09,102385+00:00 nvme0c0n1: I/O Cmd(0x2) @ LBA 0, 1 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T12:03:09,102395+00:00 reservation conflict error, dev nvme0c0n1, sector 0 op 0x0:(READ) flags 0x2000000 phys_seg 1 prio class 2
+2026-10-08T12:03:09,102403+00:00 Buffer I/O error on dev nvme0n1, logical block 0, async page read
+2026-10-08T12:03:09,102434+00:00 Dev nvme0n1: unable to read RDB block 0
+2026-10-08T12:03:09,103974+00:00 nvme0c0n1: I/O Cmd(0x2) @ LBA 0, 1 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T12:03:09,103984+00:00 reservation conflict error, dev nvme0c0n1, sector 0 op 0x0:(READ) flags 0x2000000 phys_seg 1 prio class 2
+2026-10-08T12:03:09,103992+00:00 Buffer I/O error on dev nvme0n1, logical block 0, async page read
+2026-10-08T12:03:09,106312+00:00 nvme0c0n1: I/O Cmd(0x2) @ LBA 0, 1 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T12:03:09,106323+00:00 reservation conflict error, dev nvme0c0n1, sector 0 op 0x0:(READ) flags 0x2000000 phys_seg 1 prio class 2
+2026-10-08T12:03:09,106333+00:00 Buffer I/O error on dev nvme0n1, logical block 0, async page read
+2026-10-08T12:03:09,106369+00:00  nvme0n1: unable to read partition table
+2026-10-08T12:03:09,106737+00:00 nvme nvme1: creating 3 I/O queues.
+2026-10-08T12:03:09,112447+00:00 nvme0c0n1: I/O Cmd(0x2) @ LBA 0, 1 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T12:03:09,112462+00:00 reservation conflict error, dev nvme0c0n1, sector 0 op 0x0:(READ) flags 0x2000000 phys_seg 1 prio class 2
+2026-10-08T12:03:09,112471+00:00 Buffer I/O error on dev nvme0n1, logical block 0, async page read
+2026-10-08T12:03:09,134889+00:00 nvme nvme1: mapped 3/0/0 default/read/poll queues.
+2026-10-08T12:03:09,137348+00:00 nvme nvme1: new ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:fa5e94c9-faf2-4811-9e6a-70f5647f6df4", addr 10.10.10.144:4430, hostnqn: nqn.2014-08.io.simplyblock:uuid:d86b6884-c455-4d92-bd14-19becf56d45b
+2026-10-08T12:03:09,172730+00:00 nvme0c0n1: I/O Cmd(0x2) @ LBA 0, 32 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T12:03:09,172748+00:00 reservation conflict error, dev nvme0c0n1, sector 0 op 0x0:(READ) flags 0x2080700 phys_seg 32 prio class 2
+2026-10-08T12:03:09,175862+00:00 Buffer I/O error on dev nvme0n1, logical block 0, async page read
+2026-10-08T12:03:10,273196+00:00 cni0: port 7(veth01396687) entered blocking state
+2026-10-08T12:03:10,273217+00:00 cni0: port 7(veth01396687) entered disabled state
+2026-10-08T12:03:10,273265+00:00 veth01396687: entered allmulticast mode
+2026-10-08T12:03:10,273542+00:00 veth01396687: entered promiscuous mode
+2026-10-08T12:03:10,285339+00:00 cni0: port 7(veth01396687) entered blocking state
+2026-10-08T12:03:10,285351+00:00 cni0: port 7(veth01396687) entered forwarding state
+2026-10-08T12:05:27,201922+00:00 nfs: server 10.105.3.81 not responding, timed out
+2026-10-08T12:05:27,253883+00:00 nfs: server 10.105.3.81 not responding, timed out
+2026-10-08T12:05:27,969895+00:00 nfs: server 10.105.3.81 not responding, timed out
+2026-10-08T12:05:37,697757+00:00 nfs: server 10.105.3.81 not responding, timed out
+2026-10-08T12:05:57,409379+00:00 nfs: server 10.105.3.81 not responding, timed out
+2026-10-08T12:06:02,529344+00:00 nfs: server 10.105.3.81 not responding, timed out
+2026-10-08T12:06:02,849346+00:00 nfs: server 10.105.3.81 not responding, timed out
+2026-10-08T12:06:07,803099+00:00 pNFS: no device found for volume 52666b62743051744349344839496d54
+2026-10-08T12:06:07,804287+00:00 pNFS: no device found for volume 52666b62743051744349344839496d54
+2026-10-08T12:08:07,907839+00:00 pNFS: no device found for volume 52666b62743051744349344839496d54
+2026-10-08T12:09:50,237538+00:00 sbtest-clock-probe wall=2026-10-08T12:10:51+00:00

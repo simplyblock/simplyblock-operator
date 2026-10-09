@@ -27,6 +27,7 @@ class FioWorkload(Component):
     """
 
     required = True
+    namespace_options = {"namespace": "test"}  # noqa: RUF012
 
     #: How long an instance interrupted after its runtime and grace gets to write its
     #: summary and exit.
@@ -37,7 +38,7 @@ class FioWorkload(Component):
 
     def defaults(self) -> dict[str, Any]:
         return {
-            "namespace": "default",
+            "namespace": None,  # the run's test namespace when unset
             "ready_timeout_s": 420,
             # How long setup() waits for every fio instance to finish laying out its file
             # and enter the timed run. 420s, operator/test/fio_migration_test.py's wait.

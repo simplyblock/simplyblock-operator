@@ -1,0 +1,28 @@
+2026-10-08T12:09:50,237534+00:00 sbtest-clock-probe wall=2026-10-08T12:10:51+00:00
+2026-10-08T13:42:25,160672+00:00 sbtest-clock-probe wall=2026-10-08T13:43:26
+2026-10-08T13:42:29,441592+00:00 sbtest-clock-probe wall=2026-10-08T13:43:30+00:00
+2026-10-08T14:18:16,942617+00:00 sbtest-clock-probe wall=2026-10-08T14:19:17+00:00
+2026-10-08T14:18:31,586124+00:00 sbtest-clock-probe wall=2026-10-08T14:19:32
+2026-10-08T18:37:30,405604+00:00 sbtest-clock-probe wall=2026-10-08T18:38:31+00:00
+2026-10-08T19:36:10,999903+00:00 cni0: port 7(veth0a485ee4) entered disabled state
+2026-10-08T19:36:11,000653+00:00 veth0a485ee4 (unregistering): left allmulticast mode
+2026-10-08T19:36:11,000667+00:00 veth0a485ee4 (unregistering): left promiscuous mode
+2026-10-08T19:36:11,000690+00:00 cni0: port 7(veth0a485ee4) entered disabled state
+2026-10-08T19:36:11,536607+00:00 nvme nvme3: Removing ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:57521dc0-c82d-4dfa-a379-6384af19c481"
+2026-10-08T19:36:11,648868+00:00 nvme nvme2: Removing ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:57521dc0-c82d-4dfa-a379-6384af19c481"
+2026-10-08T19:37:55,353019+00:00 nvme nvme2: creating 3 I/O queues.
+2026-10-08T19:37:55,381078+00:00 nvme nvme2: mapped 3/0/0 default/read/poll queues.
+2026-10-08T19:37:55,382869+00:00 nvme nvme2: new ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:77c06b36-f573-4bfa-986e-52e2a06c600b", addr 10.10.10.142:4428, hostnqn: nqn.2014-08.io.simplyblock:uuid:d86b6884-c455-4d92-bd14-19becf56d45b
+2026-10-08T19:37:55,402991+00:00 nvme nvme3: creating 3 I/O queues.
+2026-10-08T19:37:55,431419+00:00 nvme nvme3: mapped 3/0/0 default/read/poll queues.
+2026-10-08T19:37:55,432346+00:00 nvme nvme3: new ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:77c06b36-f573-4bfa-986e-52e2a06c600b", addr 10.10.10.143:4428, hostnqn: nqn.2014-08.io.simplyblock:uuid:d86b6884-c455-4d92-bd14-19becf56d45b
+2026-10-08T19:37:55,990397+00:00 cni0: port 7(veth7aaa79b6) entered blocking state
+2026-10-08T19:37:55,990411+00:00 cni0: port 7(veth7aaa79b6) entered disabled state
+2026-10-08T19:37:55,990434+00:00 veth7aaa79b6: entered allmulticast mode
+2026-10-08T19:37:55,990596+00:00 veth7aaa79b6: entered promiscuous mode
+2026-10-08T19:37:56,000829+00:00 cni0: port 7(veth7aaa79b6) entered blocking state
+2026-10-08T19:37:56,000841+00:00 cni0: port 7(veth7aaa79b6) entered forwarding state
+2026-10-08T19:39:59,654776+00:00 NFS: state manager: check lease failed on NFSv4 server 10.108.108.98 with error 13
+2026-10-08T19:40:00,682098+00:00 NFS: state manager: check lease failed on NFSv4 server 10.108.108.98 with error 13
+2026-10-08T19:40:01,702115+00:00 NFS: state manager: check lease failed on NFSv4 server 10.108.108.98 with error 13
+2026-10-08T19:44:36,230427+00:00 sbtest-clock-probe wall=2026-10-08T19:45:37+00:00

@@ -81,6 +81,8 @@ class _CsiNodeBase(Component):
     A Component for the same reason as _GrabberBase: it uses `opt` and `name`.
     """
 
+    namespace_options = {"csi_namespace": "operator"}  # noqa: RUF012
+
     def _csi_node_pods(self, ctx: RunContext) -> dict[str, str]:
         """node -> CSI node-plugin pod, the window onto each host's sysfs."""
         out = {}
@@ -107,7 +109,7 @@ class FabricSnapshot(_CsiNodeBase):
     summary = "snapshot host NVMe controllers before and after the run (leak detection)"
 
     def defaults(self) -> dict[str, Any]:
-        return {"csi_namespace": "simplyblock", "csi_pod_prefix": "simplyblock-csi-node",
+        return {"csi_namespace": None, "csi_pod_prefix": "simplyblock-csi-node",
                 "container": "csi-node", "at_setup": True, "at_collect": True}
 
     def _snapshot(self, ctx: RunContext, label: str) -> list[NvmeController]:
@@ -160,7 +162,7 @@ class AnaSampler(_CsiNodeBase):
     summary = "sample host ANA state per namespace on an interval, per migration"
 
     def defaults(self) -> dict[str, Any]:
-        return {"csi_namespace": "simplyblock", "csi_pod_prefix": "simplyblock-csi-node",
+        return {"csi_namespace": None, "csi_pod_prefix": "simplyblock-csi-node",
                 "container": "csi-node", "interval_s": 2.0, "nodes": None}
 
     def __init__(self, **options: Any) -> None:
@@ -257,13 +259,17 @@ class AnaSampler(_CsiNodeBase):
 
 
 #: Every NVMe head device's namespace UUID and its sysfs `stat` line, one per device:
-#: device, UUID and stat line, separated by `|`. The per-path nvmeXcYnZ devices are listed too and dropped by the parser,
-#: which is where the rule lives that is worth a test.
+#: device, UUID, and stat line, separated by `|`. The per-path nvmeXcYnZ devices are listed
+#: too and dropped by the parser, which is where the rule lives that is worth a test. The
+#: last line is _IOSTAT_RAN, so that a node with no devices can be told from a pod that is
+#: gone.
+_IOSTAT_RAN = "sbtest-iostat-ok"
 _IOSTAT_SH = r'''
 for b in /sys/block/nvme*n*; do
   [ -f "$b/stat" ] || continue
   printf '%s|%s|%s\n' "$(basename "$b")" "$(cat "$b/uuid" 2>/dev/null)" "$(cat "$b/stat")"
 done
+echo sbtest-iostat-ok
 '''
 
 
@@ -321,7 +327,7 @@ class IostatSampler(_CsiNodeBase):
     summary = "sample NVMe namespace I/O counters per node on an interval"
 
     def defaults(self) -> dict[str, Any]:
-        return {"csi_namespace": "simplyblock", "csi_pod_prefix": "simplyblock-csi-node",
+        return {"csi_namespace": None, "csi_pod_prefix": "simplyblock-csi-node",
                 "container": "csi-node", "interval_s": 5.0}
 
     def __init__(self, **options: Any) -> None:
@@ -336,15 +342,37 @@ class IostatSampler(_CsiNodeBase):
         self._pods = self._csi_node_pods(ctx)
 
     def _sample(self) -> None:
-        for node, pod in self._pods.items():
-            try:
-                out = kube.exec_sh(self.opt("csi_namespace"), pod, _IOSTAT_SH,
-                                   container=self.opt("container"), timeout=30)
-            except Exception:  # noqa: BLE001
-                continue
+        for node, pod in list(self._pods.items()):
+            out = self._read(pod)
+            if _IOSTAT_RAN not in out:
+                # The pod did not answer, which is a node plugin that was replaced (see
+                # chaos.restart) far more often than a broken one. Find the one now on
+                # the node and read through it, rather than going blind on that node for
+                # the rest of the run.
+                replacement = self._replacement(node)
+                if replacement and replacement != pod:
+                    self._pods[node] = replacement
+                    out = self._read(replacement)
             batch = parse_iostat(kube.short(node), now_utc(), out)
             with self._lock:
                 self._samples.extend(batch)
+
+    def _read(self, pod: str) -> str:
+        try:
+            return kube.exec_sh(self.opt("csi_namespace"), pod, _IOSTAT_SH,
+                                container=self.opt("container"), timeout=30)
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _replacement(self, node: str) -> str:
+        try:
+            pods = kube.list_pods(self.opt("csi_namespace"), [self.opt("csi_pod_prefix")])
+        except Exception:  # noqa: BLE001
+            return ""
+        for p in pods:
+            if p.node == node and p.phase == "Running":
+                return p.name
+        return ""
 
     def start(self, ctx: RunContext) -> None:
         if not self._pods:

@@ -1,0 +1,18 @@
+{
+ "jobs": [
+  {
+   "jobname": "fiotest",
+   "error": 0,
+   "job_start": 1791468796988,
+   "job_runtime": 300007,
+   "read": {
+    "iops": 1653.669094,
+    "io_bytes": 1946595328
+   },
+   "write": {
+    "iops": 570.356662,
+    "io_bytes": 603398144
+   }
+  }
+ ]
+}

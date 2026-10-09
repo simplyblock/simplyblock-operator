@@ -111,6 +111,16 @@ class RunContext:
     run_id: str
     outdir: str
     log: Logger
+    #: Where the operator, the control plane, the CSI driver, and the pNFS metadata server
+    #: run.
+    operator_namespace: str = "simplyblock"
+    #: Where the storage cluster under test runs its own pods: SPDK and the node agents.
+    #: One cluster per namespace, so a run names the one it tests. Its own default rather
+    #: than the operator's: the operator and control plane are to move to
+    #: simplyblock-system, and the initial cluster stays in simplyblock.
+    cluster_namespace: str = "simplyblock"
+    #: Where the run creates its own objects: client pods, CRs, and helper pods.
+    test_namespace: str = "default"
     timeline: Timeline = field(default_factory=Timeline)
     #: Free-form scratch space shared between components, keyed by component name. Used for
     #: the handful of genuine dependencies between them (a workload publishing the pods it
@@ -119,6 +129,16 @@ class RunContext:
     shared: dict[str, Any] = field(default_factory=dict)
     #: Set when the run is being torn down, so a component's background loop can exit.
     stopping: threading.Event = field(default_factory=threading.Event)
+
+    def namespace(self, kind: str) -> str:
+        """The run's namespace of one kind: `operator`, `cluster`, or `test`."""
+        if kind == "operator":
+            return self.operator_namespace
+        if kind == "cluster":
+            return self.cluster_namespace
+        if kind == "test":
+            return self.test_namespace
+        raise ValueError(f"unknown namespace kind {kind!r}")
 
     def path(self, *parts: str) -> str:
         """A path inside the artifact directory, with parent directories created."""

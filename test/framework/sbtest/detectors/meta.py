@@ -13,8 +13,9 @@ that exists, opens fine, and is missing the two hours you needed.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import timedelta
 
-from ..core import Detector, Evidence, Finding, SkipDetector, detector, info, warning
+from ..core import Detector, Evidence, Finding, Restart, SkipDetector, detector, info, warning
 
 
 @detector
@@ -53,6 +54,11 @@ class LogCoverage(Detector):
 
         min_gap = float(self.opt("min_gap_s"))
         ignore = set(self.opt("ignore") or [])
+        # The log of a pod the run restarted, beginning while it came back, belongs to the
+        # replacement, which had nothing to say before it existed. Any other log beginning
+        # then is still short: the restart did not cut it.
+        restarted = [(r, r.deleted, (r.ready or r.deleted) + timedelta(seconds=min_gap))
+                     for r in ev.restarts()]
         short: list[tuple[str, float, float]] = []  # name, missing-at-start, covered fraction
         empty: list[str] = []
         total = (end - start).total_seconds() if end else 0.0
@@ -62,6 +68,8 @@ class LogCoverage(Detector):
                 continue
             if not sp.first or not sp.last:
                 empty.append(sp.name)
+                continue
+            if any(lo <= sp.first <= hi and _log_of(sp.name, r) for r, lo, hi in restarted):
                 continue
             missing = (sp.first - start).total_seconds()
             covered = max(0.0, (sp.last - max(sp.first, start)).total_seconds())
@@ -96,6 +104,20 @@ class LogCoverage(Detector):
                 note="Either the collection produced nothing or the format is unrecognised; "
                      "either way nothing in these can be placed in time.",
             )
+
+
+def _log_of(name: str, r: Restart) -> bool:
+    """Whether the log called name is the restarted pod's: the follow chaos.restart wrote,
+    or what the collectors call that pod's containers."""
+    if name.startswith("restart-") and name.endswith(f"-{r.target}-{r.pod}"):
+        return True
+    if r.target == "mds":
+        return name == "mds-runner"
+    if r.target == "csi-node":
+        return name == f"csi-node-{r.node}"
+    if r.target == "csi-controller":
+        return name.startswith("csi-") and not name.startswith("csi-node-")
+    return False
 
 
 @detector
@@ -188,3 +210,44 @@ class EvidenceInventory(Detector):
             evidence={**have, "cluster": ev.cluster_uuid(),
                       "window_known": bool(start)},
         )
+
+
+@detector
+class DeployedVersions(Detector):
+    """What the run started on: the operator, CSI, MDS, and SPDK images by digest, and the
+    nodes' kernels, in one finding. Reported as information. Its value is that two runs'
+    reports can be compared without reconstructing what either one ran."""
+
+    name = "evidence.versions"
+    summary = "the images and digests, node kernels, and server version the run started on"
+
+    #: Which images a pod's name says it carries.
+    ROLES = {"operator": "operator", "csi": "simplyblock-csi",  # noqa: RUF012
+             "mds": "pnfs-mds", "spdk": "snode-spdk"}
+
+    def detect(self, ev: Evidence) -> Iterable[Finding]:
+        v = ev.versions()
+        if v is None:
+            raise SkipDetector("no versions.json; enable run.versions to record what was "
+                               "deployed")
+        roles: dict[str, list[str]] = {}
+        for role, marker in self.ROLES.items():
+            roles[role] = sorted({_ref(i.image, i.image_id) for i in v.images
+                                  if marker in i.pod})
+        kernels: dict[str, int] = {}
+        for n in v.nodes:
+            kernels[n.kernel] = kernels.get(n.kernel, 0) + 1
+        parts = [f"{role} {', '.join(refs) or '-'}" for role, refs in roles.items()]
+        yield info(
+            self.name, title="deployed: " + "; ".join(parts),
+            subject="deployment",
+            detail="kernels: " + ", ".join(f"{k} ({n} node(s))" for k, n in sorted(
+                kernels.items())) + f"; server {v.server or '?'}",
+            evidence={**roles, "kernels": kernels, "server": v.server})
+
+
+def _ref(image: str, image_id: str) -> str:
+    """The image as asked for, with the first twelve hex digits of the digest it resolved
+    to: enough to tell two builds of one tag apart."""
+    _, sep, digest = image_id.partition("@sha256:")
+    return f"{image}@sha256:{digest[:12]}" if sep else image

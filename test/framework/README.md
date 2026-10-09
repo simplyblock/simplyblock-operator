@@ -85,6 +85,32 @@ fixed and tried **immediately against the run that motivated it**, instead of ag
 next four-hour run. Not being able to do that was the single biggest gap in the harness this
 grew from.
 
+### Regression corpus
+
+`tests/fixtures/runs` holds archived runs that found or confirmed a bug, trimmed to the
+evidence the detectors read, and `tests/test_corpus.py` judges each one with the pnfs-fio
+suite's settings on every `make gate`. Each test asserts the verdict the run reached and its
+key findings by detector, severity, and count: an MDS restart whose clients never returned
+to their namespaces, one that lost a pod's open files, and two that recovered. A detector
+change that flips a corpus verdict therefore fails the gate, and has to be deliberate: either
+the detector now sees something the run hid, which the change should say, or it stopped
+seeing something it saw.
+
+To add a run, trim it, judge both the full run and the fixture, and write the fixture's
+expectations from what they agree on. The `--outdir` keeps the fixture free of a
+`findings.json`:
+
+    python3 tests/fixtures/trim_run.py runs/<run-id> tests/fixtures/runs/<run-id>
+    make analyze RUN=runs/<run-id> SUITE=pnfs-fio
+    .venv/bin/python -m sbtest analyze tests/fixtures/runs/<run-id> --suite pnfs-fio \
+        --outdir /tmp/<run-id>
+
+The trim keeps the run window, the pNFS volume map, the NVMe samples and snapshots, each fio
+instance's summary, time series, and NFS counters, and the dmesg within ten minutes of the
+run, so a trimmed run should reach the full run's critical and warning findings exactly.
+Compare the two before committing the fixture. Only informational findings that count
+collected logs may differ.
+
 ## It reproduces the findings it was built from
 
 Run against `operator/fio-mig-1787171993` (20 pods, 46 migrations, 4h08m), the detectors
@@ -132,11 +158,11 @@ same report: one measures the pause, the other says whether the host survived it
 
 Measured across three archived runs, counting only what happened **inside each run's window**:
 
-| run | requeued | `failfast expired` | failing I/O | filesystems shut down |
-|---|---|---|---|---|
-| `-1787159565` | 2 | 18 | 0 | 0 |
-| `-1787171993` | 163 | 84 | 0 | 0 |
-| `-1787205545` | 35 (+186 before) | 20 (+118 before) | 0 (+30 before) | 0 (+20 before) |
+| run           | requeued         | `failfast expired` | failing I/O    | filesystems shut down |
+|---------------|------------------|--------------------|----------------|-----------------------|
+| `-1787159565` | 2                | 18                 | 0              | 0                     |
+| `-1787171993` | 163              | 84                 | 0              | 0                     |
+| `-1787205545` | 35 (+186 before) | 20 (+118 before)   | 0 (+30 before) | 0 (+20 before)        |
 
 The parenthesised numbers are the reason attribution exists. Read without a window, that last
 run looks catastrophic — 30 failed I/Os and 19 filesystems shut down. All of it happened
@@ -152,11 +178,11 @@ predecessor's failure, and — worse — a genuinely broken run hides inside inh
 
 Every finding therefore carries an `Attribution`:
 
-| attribution | meaning | counts against the run? |
-|---|---|---|
-| `run` | happened inside the run's window | yes |
-| `unknown` | no usable timestamp, or no known window | **yes** — "I cannot date this" must not become "not our problem" |
-| `pre-existing` | positively dated before the run began | no |
+| attribution    | meaning                                 | counts against the run?                                          |
+|----------------|-----------------------------------------|------------------------------------------------------------------|
+| `run`          | happened inside the run's window        | yes                                                              |
+| `unknown`      | no usable timestamp, or no known window | **yes** — "I cannot date this" must not become "not our problem" |
+| `pre-existing` | positively dated before the run began   | no                                                               |
 
 Severity says *does this matter*; attribution says *whose fault*. The two are orthogonal, so
 the same observation is CRITICAL when the run caused it and a hygiene WARNING when it did not.
@@ -166,10 +192,10 @@ the same observation is CRITICAL when the run caused it and a hygiene WARNING wh
 Almost nothing, and the distinction is worth stating because the temptation is to fail on any
 inherited mess:
 
-| pre-existing condition | affects this run? | verdict |
-|---|---|---|
-| Dead-cluster controllers, old reconnect storms, old fabric errors | No — they cannot make a *different* cluster's migration fail | hygiene WARNING |
-| A filesystem killed before the run, on a volume the run does not use | No | hygiene WARNING |
+| pre-existing condition                                                                      | affects this run?                                                                                                            | verdict          |
+|---------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|------------------|
+| Dead-cluster controllers, old reconnect storms, old fabric errors                           | No — they cannot make a *different* cluster's migration fail                                                                 | hygiene WARNING  |
+| A filesystem killed before the run, on a volume the run does not use                        | No                                                                                                                           | hygiene WARNING  |
 | **Live-cluster** controllers already `live`-with-no-namespace at setup (`nvme.dirty-start`) | **Yes** — `VerifyMigrationPaths` will reject migrations that should pass, so the completion rate measures the inherited mess | **INCONCLUSIVE** |
 
 That last row is the only thing that produces `INCONCLUSIVE`, and it is a third verdict rather
@@ -272,43 +298,70 @@ Bundled suites live in `sbtest/suites/` (`migration-full`, `migration-soak`,
 anything generating them programmatically. CLI `--enable-detector` / `--disable-component`
 layer on top, and disable wins over enable.
 
-## Detector catalogue
+### Namespaces
+
+Where things run is a property of the deployment, so a run names three namespaces once, in
+the suite's `run:` block or with the matching flag, and every component takes its own from
+them:
+
+| Run setting          | Flag                   | What lives there                                                   | Default       |
+|----------------------|------------------------|--------------------------------------------------------------------|---------------|
+| `operator_namespace` | `--operator-namespace` | the operator, the control plane, the CSI driver, the pNFS MDS      | `simplyblock` |
+| `cluster_namespace`  | `--cluster-namespace`  | the storage cluster's own pods: SPDK and the node agents           | `simplyblock` |
+| `test_namespace`     | `--test-namespace`     | what the run creates: client pods, migration CRs, log grabber pods | `default`     |
+
+A flag beats the suite, which beats the default. Today, the operator and the cluster share
+`simplyblock`. The planned layout moves the operator and control plane to
+`simplyblock-system` and keeps the initial cluster in `simplyblock`, which is one setting:
+`operator_namespace: simplyblock-system`. Clusters can each be deployed into a namespace of
+their own, and a run tests one. A component option naming a namespace still
+wins when set, and a `logs.collect` target, `logs.stream`, and `host.dmesg` pick theirs by
+`plane` (`cluster` or `operator`).
+
+## Detector catalog
 
 Every one of these came from a real defect. Defaults encode what the runs measured.
 
-| detector | what it catches |
-|---|---|
-| `ana.freeze-count` | **A migration that froze the volume more than once.** Exact predictor of silent write loss so far: 4/4 corrupting vs 0/42 clean. A migration takes the cutover pause once; the rest are retries, and each retry replays a non-idempotent transfer against a source that has been serving writes. |
-| `ana.cutover-pause` | An all-paths-inaccessible window longer than the design pause (~2s). Complements the count: catches one window that overran, which the count cannot see. |
-| `ana.split-brain` | Source and target both `optimized` at the same instant — two writers, silent corruption by construction. |
-| `ana.unserved-after-cutover` | A Completed migration whose live target controller serves only some of the subsystem's namespaces — the half-moved case. |
-| `ana.path-churn` | More distinct path addresses per host than the topology should produce. Informational: healthy counts are topology-dependent. |
-| `fio.checksum` | **fio read back data it never wrote.** Reads succeeded, so nothing else notices. Attributes to a migration through a verify lag (see below). |
-| `fio.job-error` | An fio job ended with a non-zero errno, with the errno's meaning — 121/EREMOTEIO points straight at the ANA detectors. |
-| `fio.outage` | A pod's I/O stopped for longer than a cutover should cost — reported as a **freeze** when it came back and a **loss** when it never did. Both fail; only one means writes went missing. |
-| `fio.throughput-outlier` | A pod far below the run's median IOPS. Weak alone; strong next to an ANA finding on the same subject. |
-| `logs.pattern` | **User-definable regex checks over any collected log.** Ships a catalogue: undrained transfer, migration sub-task failure, host-not-allowed reconnect storm, write-to-RO-range, path-validation failure, stuck migration group, kernel reconnect loop. |
-| `migration.outcomes` | Completion rate and phase breakdown. |
-| `migration.errors` | Distinct migration errors, grouped by shape — 16 identical failures are one defect. |
-| `nvme.stale-controllers` | Controllers that are live with no namespace (blocks every later migration of that subsystem) or stuck connecting. |
-| `nvme.loss-timeout` | A `ctrl_loss_tmo` long enough that a leaked path outlives the run that made it. |
-| `kernel.path-loss` | **How far the kernel got up the path-loss ladder** (see below). Stronger than ANA sampling for the same event: it is what the kernel did, not what a sampler caught, so it cannot miss a window shorter than the interval. |
-| `kernel.filesystem-shutdown` | XFS/ext4 shut down or went read-only after failed log I/O — the volume needs unmount and repair. |
-| `nvme.foreign-cluster` | **A controller retrying a subsystem whose cluster no longer exists.** No threshold, no topology: an NQN names its cluster. Hygiene only — it cannot affect the live cluster's migrations. |
-| `nvme.dirty-start` | The fabric already held blocking debris **for the live cluster** at setup, so the run's results cannot be trusted. The one pre-existing CRITICAL. |
-| `nvme.controller-churn` | Controllers created vs removed — "they never disappear", counted — plus controllers retrying without ever succeeding. |
-| `kernel.fabric-errors` | Connect/reset/timeout errors grouped by kind. Texture around a failure rather than a verdict. |
-| `control.node-flap` | A node marked down and back within seconds — a liveness check that depended on something other than the node. The shape behind a 9.5h outage. |
-| `control.volume-health` | A volume or node whose health went false during the run and never returned. |
-| `control.task-stuck` | Tasks created and never resolved — "the control plane stopped finishing things". |
-| `control.retry-storm` | One operation attempted far more often than it should be; each retry re-does what the last half-did. |
-| `control.node-agent` | The node-side agent returning errors, or **gaps in the liveness polling** — the upstream half of a false offline, visible nowhere else. |
-| `evidence.log-coverage` | **A collected log that does not span the run**, bounding what every other log-based finding may claim. |
-| `evidence.blind-spot` | A migration no log covers, so it cannot be post-mortemed whatever it did. |
-| `evidence.inventory` | What evidence the run produced (INFO). |
-| `security.secret-exposure` | Credential-shaped strings in collected logs. Reports the location, never the value. |
-| `pnfs.layout` | **A pNFS mount that got no layouts**: it ran as plain NFS, every byte through the metadata server, and fio's verification still passed. Warns when data went through the server beside layouts. Reads the NFS client's own per-operation counters. |
-| `pnfs.device-io` | **A pNFS client node whose NVMe-oF namespace did not see the data.** The other end of the same question: per volume and consuming node, the namespace must be attached and its read and write counters must grow, without standing still longer than `max_stall_s`. |
+| detector                     | what it catches                                                                                                                                                                                                                                                                                                                                                                                    |
+|------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `ana.freeze-count`           | **A migration that froze the volume more than once.** Exact predictor of silent write loss so far: 4/4 corrupting vs 0/42 clean. A migration takes the cutover pause once; the rest are retries, and each retry replays a non-idempotent transfer against a source that has been serving writes.                                                                                                   |
+| `ana.cutover-pause`          | An all-paths-inaccessible window longer than the design pause (~2s). Complements the count: catches one window that overran, which the count cannot see.                                                                                                                                                                                                                                           |
+| `ana.split-brain`            | Source and target both `optimized` at the same instant — two writers, silent corruption by construction.                                                                                                                                                                                                                                                                                           |
+| `ana.unserved-after-cutover` | A Completed migration whose live target controller serves only some of the subsystem's namespaces — the half-moved case.                                                                                                                                                                                                                                                                           |
+| `ana.path-churn`             | More distinct path addresses per host than the topology should produce. Informational: healthy counts are topology-dependent.                                                                                                                                                                                                                                                                      |
+| `fio.checksum`               | **fio read back data it never wrote.** Reads succeeded, so nothing else notices. Attributes to a migration through a verify lag (see below).                                                                                                                                                                                                                                                       |
+| `fio.job-error`              | An fio job ended with a non-zero errno, with the errno's meaning — 121/EREMOTEIO points straight at the ANA detectors.                                                                                                                                                                                                                                                                             |
+| `fio.outage`                 | A pod's I/O stopped for longer than a cutover should cost — reported as a **freeze** when it came back and a **loss** when it never did. Both fail; only one means writes went missing.                                                                                                                                                                                                            |
+| `fio.throughput-outlier`     | A pod far below the run's median IOPS. Weak alone; strong next to an ANA finding on the same subject.                                                                                                                                                                                                                                                                                              |
+| `logs.pattern`               | **User-definable regex checks over any collected log.** Ships a catalog: undrained transfer, migration sub-task failure, host-not-allowed reconnect storm, write-to-RO-range, path-validation failure, stuck migration group, kernel reconnect loop.                                                                                                                                               |
+| `migration.outcomes`         | Completion rate and phase breakdown.                                                                                                                                                                                                                                                                                                                                                               |
+| `migration.errors`           | Distinct migration errors, grouped by shape — 16 identical failures are one defect.                                                                                                                                                                                                                                                                                                                |
+| `nvme.stale-controllers`     | Controllers that are live with no namespace (blocks every later migration of that subsystem) or stuck connecting.                                                                                                                                                                                                                                                                                  |
+| `nvme.loss-timeout`          | A `ctrl_loss_tmo` long enough that a leaked path outlives the run that made it.                                                                                                                                                                                                                                                                                                                    |
+| `kernel.path-loss`           | **How far the kernel got up the path-loss ladder** (see below). Stronger than ANA sampling for the same event: it is what the kernel did, not what a sampler caught, so it cannot miss a window shorter than the interval.                                                                                                                                                                         |
+| `kernel.filesystem-shutdown` | XFS/ext4 shut down or went read-only after failed log I/O — the volume needs unmount and repair.                                                                                                                                                                                                                                                                                                   |
+| `nvme.foreign-cluster`       | **A controller retrying a subsystem whose cluster no longer exists.** No threshold, no topology: an NQN names its cluster. Hygiene only — it cannot affect the live cluster's migrations.                                                                                                                                                                                                          |
+| `nvme.dirty-start`           | The fabric already held blocking debris **for the live cluster** at setup, so the run's results cannot be trusted. The one pre-existing CRITICAL.                                                                                                                                                                                                                                                  |
+| `nvme.controller-churn`      | Controllers created vs removed — "they never disappear," counted — plus controllers retrying without ever succeeding.                                                                                                                                                                                                                                                                              |
+| `kernel.fabric-errors`       | Connect/reset/timeout errors grouped by kind. Texture around a failure rather than a verdict.                                                                                                                                                                                                                                                                                                      |
+| `control.node-flap`          | A node marked down and back within seconds — a liveness check that depended on something other than the node. The shape behind a 9.5h outage.                                                                                                                                                                                                                                                      |
+| `control.volume-health`      | A volume or node whose health went false during the run and never returned.                                                                                                                                                                                                                                                                                                                        |
+| `control.task-stuck`         | Tasks created and never resolved — "the control plane stopped finishing things."                                                                                                                                                                                                                                                                                                                   |
+| `control.retry-storm`        | One operation attempted far more often than it should be; each retry re-does what the last half-did.                                                                                                                                                                                                                                                                                               |
+| `control.node-agent`         | The node-side agent returning errors, or **gaps in the liveness polling** — the upstream half of a false offline, visible nowhere else.                                                                                                                                                                                                                                                            |
+| `evidence.log-coverage`      | **A collected log that does not span the run**, bounding what every other log-based finding may claim.                                                                                                                                                                                                                                                                                             |
+| `evidence.blind-spot`        | A migration no log covers, so it cannot be post-mortemed whatever it did.                                                                                                                                                                                                                                                                                                                          |
+| `evidence.inventory`         | What evidence the run produced (INFO).                                                                                                                                                                                                                                                                                                                                                             |
+| `evidence.versions`          | What the run started on (INFO): the operator, CSI, MDS, and SPDK images with the digest each resolved to, the nodes' kernels, and the server version, from `run.versions`. Makes two runs comparable without reconstructing what either ran.                                                                                                                                                       |
+| `security.secret-exposure`   | Credential-shaped strings in collected logs. Reports the location, never the value.                                                                                                                                                                                                                                                                                                                |
+| `pnfs.layout`                | **A pNFS mount that got no layouts**: it ran as plain NFS, every byte through the metadata server, and fio's verification still passed. Warns when data went through the server beside layouts. Reads the NFS client's own per-operation counters.                                                                                                                                                 |
+| `pnfs.device-io`             | **A pNFS client node whose NVMe-oF namespace did not see the data.** The other end of the same question: per volume and consuming node, the namespace must be attached and its read and write counters must grow, without standing still longer than `max_stall_s`. A pause that begins at a metadata server restart and stays within `restart_pause_s` is that restart working, reported as INFO. |
+| `pnfs.recovery`              | **The time from a metadata server restart back to each client's direct path**: the first sample after the restart's pause that saw a write reach the client's namespace. INFO within `budget_s`, a warning above it or when writes never came back.                                                                                                                                                |
+| `chaos.recovery`             | **A pod the run restarted that never came back.** Every restart `chaos.restart` made must end with a Ready replacement. The ones that did are listed as INFO with how long they took.                                                                                                                                                                                                              |
+| `pnfs.conntrack-pinned`      | **An NFS flow still sent to the replaced MDS pod after its replacement was Ready**: the client reconnected from its old source port, matched the node's old connection tracking entry, and kept going to the deleted pod's address. INFO when the samples cover a restart and nothing was pinned, which rules the cause out. Reads `nfs.conntrack` against `chaos.restart`'s pod addresses.        |
+| `pnfs.fence`                 | **A write that landed after nfsd fenced its client.** From `chaos.fence`: a write by the partitioned node after the recaller's truncate returned and before the heal is critical, and so is a truncate that never returned. A warning when no write failed during the partition, since the run then proved nothing about fencing.                                                                  |
+| `pnfs.churn`                 | **A pod that joined a pNFS volume and never did I/O, or an own volume left behind.** Every churn pod must reach fio's timed run. A pod that brought its own volume must leave no PersistentVolume and no NFSExport behind, and a cleanup slower than `delete_budget_s` is a warning.                                                                                                               |
+| `nvme.stale-reservations`    | **A pNFS namespace still carrying a registration from an earlier MDS boot** at the end of the run, which blocks that client's new key and sends its I/O through the metadata server. Critical, or PRE_EXISTING when the key was stale before the run. Also warns about clients registered on a namespace nobody reserves.                                                                          |
 
 Three things are load-bearing and worth knowing:
 
@@ -326,33 +379,40 @@ Three things are load-bearing and worth knowing:
   does not merely shift a chart: it names the wrong migration. `ArchiveEvidence` re-derives
   it on replay, which corrects archives written before this was fixed.
 
-## Component catalogue
+## Component catalog
 
-| component | what it does |
-|---|---|
-| `logs.stream` | Follows chosen container logs for the whole run, surviving kubelet rotation, container restarts, and pod recreation. |
-| `logs.collect` | Grabs container logs from each host's `/var/log/pods` at the end. Skips whatever `logs.stream` followed. |
-| `host.dmesg` | `dmesg -T` from each storage worker. |
-| `cluster.events` | `sbctl cluster get-logs` → `cluster-events.json`. |
-| `nvme.snapshot` | Fabric snapshot before *and* after the run — "did the last run leave a mess?" is a real question, because a leaked controller breaks the *next* run. |
-| `ana.sample` | Per-namespace ANA state on every consuming node, on an interval, written per migration in the layout `ArchiveEvidence` reads. Needs a driver to tell it which migration is in flight. |
-| `workload.fio` | Provisions volumes from two StorageClasses (single-namespace and packed) and drives continuous md5-verified fio against them. `required`. |
-| `migration.driver` | Creates `VolumeMigration` CRs in a loop, one at a time, and records what each one did. `required`. |
-| `workload.pnfs` | Provisions pNFS volumes some pods share and some own, and runs verified fio in every container, each instance with a data file of its own. Pods sharing a volume are spread across nodes. `required`. |
-| `nvme.iostat` | Samples every node's NVMe namespace I/O counters (sysfs `stat`, head devices only) on an interval, for `pnfs.device-io`. |
+| component             | what it does                                                                                                                                                                                                                                                                                                                             |
+|-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `logs.stream`         | Follows chosen container logs for the whole run, surviving kubelet rotation, container restarts, and pod recreation.                                                                                                                                                                                                                     |
+| `logs.collect`        | Grabs container logs from each host's `/var/log/pods` at the end. Skips whatever `logs.stream` followed.                                                                                                                                                                                                                                 |
+| `host.dmesg`          | `dmesg -T` from each storage worker.                                                                                                                                                                                                                                                                                                     |
+| `cluster.events`      | `sbctl cluster get-logs` → `cluster-events.json`.                                                                                                                                                                                                                                                                                        |
+| `nvme.snapshot`       | Fabric snapshot before *and* after the run — "did the last run leave a mess?" is a real question, because a leaked controller breaks the *next* run.                                                                                                                                                                                     |
+| `ana.sample`          | Per-namespace ANA state on every consuming node, on an interval, written per migration in the layout `ArchiveEvidence` reads. Needs a driver to tell it which migration is in flight.                                                                                                                                                    |
+| `workload.fio`        | Provisions volumes from two StorageClasses (single-namespace and packed) and drives continuous md5-verified fio against them. `required`.                                                                                                                                                                                                |
+| `migration.driver`    | Creates `VolumeMigration` CRs in a loop, one at a time, and records what each one did. `required`.                                                                                                                                                                                                                                       |
+| `workload.pnfs`       | Provisions pNFS volumes some pods share and some own, and runs verified fio in every container, each instance with a data file of its own. Pods sharing a volume are spread across nodes. `required`.                                                                                                                                    |
+| `nvme.iostat`         | Samples every node's NVMe namespace I/O counters (sysfs `stat`, head devices only) on an interval, for `pnfs.device-io`. Finds a replaced node plugin and keeps reading through it.                                                                                                                                                      |
+| `chaos.restart`       | Restarts the metadata server, a pNFS client's node plugin, or the CSI controller during the timed run: `guaranteed` times at seeded random moments, and otherwise with a low `chance` per tick. Records each restart and its recovery in `restarts.json`, and the victim's log through its shutdown in `restart-<n>-<target>-<pod>.txt`. |
+| `chaos.fence`         | Once per run, at a seeded time, cuts one node off from the metadata server (port 2049 only) while a probe there writes with a layout, and has a probe on another node truncate the file, which makes nfsd recall the layout and fence the node. Records the rules, the truncate, and every probe write in `fence.json`.                  |
+| `workload.pnfs-churn` | Keeps short-lived pods joining and leaving pNFS volumes during the run, on a seeded schedule: some join a volume `workload.pnfs` shares, some bring a volume of their own and delete it when they leave. Each runs a verified fio for its lifetime and is recorded in `churn.json`.                                                      |
+| `nvme.reservations`   | Records every namespace's NVMe reservation (holder, registrants, keys) through `nvme resv-report` on each node, before and after the run, for `nvme.stale-reservations`. Only the pNFS volumes' namespaces once the workload has mapped them.                                                                                            |
+| `nfs.mountstats`      | Samples each pNFS fio pod's NFS client counters (LAYOUTGET, READ, WRITE, transport connects) on an interval, per instance, into `nfs-timeline.csv`, so `pnfs.layout` can say when data went through the server.                                                                                                                          |
+| `nfs.conntrack`       | Samples each node's NFS flows in its connection tracking table (the client's tuple and the pod it was translated to) on an interval, through a host-network helper per node, into `conntrack.csv`, for `pnfs.conntrack-pinned`.                                                                                                          |
+| `run.versions`        | Records at setup every container image and resolved digest in the operator and cluster namespaces, every node's kernel, OS image, runtime, and kubelet, and the server version, in `versions.json`.                                                                                                                                      |
 
 ### What gets collected
 
-| artifact | source | why per-what |
-|---|---|---|
-| `spdk-<port>.txt` | storage-node SPDK container | **must be streamed.** Measured on vm04: a rotation every ~2 min, so the whole 50 MiB budget bought about **10 minutes** of retention. A migration was unrecoverable 6 seconds after it ended |
-| `spdk-<port>-proxy.txt` | the SPDK JSON-RPC proxy | streamed too, but far lower volume and survives hours — so it is the fallback when the SPDK log is gone. It carries the RPC-level narrative (which calls, in what order, with what arguments) without SPDK's internal errors |
-| `snode-api-<node>.txt` | storage-node DaemonSet | per node — it starts and probes SPDK, so it is on the causal path of every node-offline decision |
-| `csi-node-<node>.txt` | CSI node plugin | per node — the plugin reconciles per host, so "which node" is the first question about anything it did |
-| `<container>.txt` | tasks pod, csi-controller | **per container.** The tasks pod runs seventeen independent runners; merging them gives a 50 MiB file that is not in time order, so its time span is meaningless and a pattern cannot be scoped to one runner |
-| `operator.txt`, `webappapi.txt` | control plane | single-container, so per pod is fine |
-| `dmesg-<node>.txt` | each storage worker | ISO-timestamped, see the attribution section |
-| `cluster-events.json` | `sbctl cluster get-logs` | the control plane's own account |
+| artifact                        | source                      | why per-what                                                                                                                                                                                                                 |
+|---------------------------------|-----------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `spdk-<port>.txt`               | storage-node SPDK container | **must be streamed.** Measured on vm04: a rotation every ~2 min, so the whole 50 MiB budget bought about **10 minutes** of retention. A migration was unrecoverable 6 seconds after it ended                                 |
+| `spdk-<port>-proxy.txt`         | the SPDK JSON-RPC proxy     | streamed too, but far lower volume and survives hours — so it is the fallback when the SPDK log is gone. It carries the RPC-level narrative (which calls, in what order, with what arguments) without SPDK's internal errors |
+| `snode-api-<node>.txt`          | storage-node DaemonSet      | per node — it starts and probes SPDK, so it is on the causal path of every node-offline decision                                                                                                                             |
+| `csi-node-<node>.txt`           | CSI node plugin             | per node — the plugin reconciles per host, so "which node" is the first question about anything it did                                                                                                                       |
+| `<container>.txt`               | tasks pod, csi-controller   | **per container.** The tasks pod runs seventeen independent runners; merging them gives a 50 MiB file that is not in time order, so its time span is meaningless and a pattern cannot be scoped to one runner                |
+| `operator.txt`, `webappapi.txt` | control plane               | single-container, so per pod is fine                                                                                                                                                                                         |
+| `dmesg-<node>.txt`              | each storage worker         | ISO-timestamped, see the attribution section                                                                                                                                                                                 |
+| `cluster-events.json`           | `sbctl cluster get-logs`    | the control plane's own account                                                                                                                                                                                              |
 
 ### Why both log components exist
 
@@ -573,9 +633,79 @@ reads the client node's NVMe counters (did the volume's namespace on that node s
 and writes, all run long). A client whose namespace stayed flat while fio ran sent its data
 through the metadata server.
 
+`nfs.mountstats` adds the NFS side over time. With its timeline, `pnfs.layout` reports from
+when to when data went through the server instead of only that it did, and `pnfs.recovery`
+measures, per client and per metadata server restart, how long the client took to write to
+its own namespace again.
+
 Shared volumes prefer one pod per node rather than requiring it, so the suite runs on a small
 cluster too. The setup log says when every pod sharing a volume landed on one node, since such
 a volume exercises one NFS client rather than several.
+
+### Restarts during the run
+
+`chaos.restart` restarts what the data path depends on while fio runs, because the moments
+that break volumes are rarely the steady state. The metadata server's guest boots cold and
+its clients have to reclaim, a node plugin comes back knowing nothing of the mounts it
+staged, and the controller restarts mid-reconcile. The suite asks for at least one restart
+per run (`guaranteed`) and a low chance of more on every tick (`chance`), with the metadata
+server weighted highest. A second restart while one is in flight happens only with
+`overlap_chance`, and nothing restarts in the last `quiet_tail_s`, so each recovery is
+observed before fio ends. The log names the seed, and `seed:` replays the schedule.
+
+What each restart should cost differs, and the detectors judge it that way. A metadata
+server restart pauses every client until its grace period ends, so a pause within
+`restart_pause_s` that begins at one is INFO. A node plugin or controller restart is not on
+the data path, and any pause around one is a finding. Writes that never resume are critical
+whatever was restarted, and `chaos.recovery` fails a restart whose pod never came back.
+
+### Pods joining and leaving
+
+`workload.pnfs-churn` keeps a flow of short-lived pods coming and going while the long-lived
+pods run, which is how a ReadWriteMany volume is used day to day. A churn pod joins one of
+the volumes `workload.pnfs` shares (`reuse_ratio`), which is a new NFS client taking layouts
+on a volume already in use, or brings a pNFS volume of its own, which is a whole export
+created and torn down under load. Arrivals follow a seeded Poisson process
+(`mean_interval_s`), each pod lives `min_life_s` to `max_life_s`, an arrival that finds
+`max_concurrent` pods running waits for room, and nothing arrives in the last
+`quiet_tail_s`. The log names the seed, and `seed:` replays the flow.
+
+Each churn pod runs one md5-verified fio on a file of its own, collected before the pod is
+deleted, so `fio.checksum` and `fio.job-error` judge it like any other instance.
+`churn.json` records when each pod arrived, reached I/O, finished, and left, and for an own
+volume whether its PersistentVolume and NFSExport were gone afterward, which `pnfs.churn`
+judges.
+
+### Fencing a client
+
+A pNFS client cut off from the metadata server keeps its NVMe-oF paths, so once nfsd has
+given up on recalling its layout, the reservation is the only thing that stops its writes.
+`chaos.fence` stages that once per run, at a seeded time that leaves room for the whole
+scenario before `quiet_tail_s`. A probe on the victim node writes 4 KiB with O_DIRECT through
+one open file descriptor every `write_interval_s` and logs each result. Once those writes go
+direct, a privileged hostNetwork helper on the same node drops TCP port 2049 to and from
+the metadata server's addresses, and a probe on another node truncates the file to
+`grow_mb`. nfsd recalls the layout, cannot reach the victim, fences it after two lease
+periods, and only then completes the truncate, which is bounded by `truncate_timeout_s`.
+The victim keeps writing for `after_s`, then the partition heals. The victim is a node
+where no workload pod mounts a volume, because every pNFS mount on it loses the server too.
+`allow_busy_victim` lifts that restriction. Teardown removes exactly the rules it recorded, the helper
+removes them when it is terminated or after `max_partition_s`, and a rule that cannot be
+removed is logged as an error with the command that removes it. `pnfs.fence` reads
+`fence.json`: a write that succeeded between the truncate's return and the heal is critical.
+
+### Reservations
+
+The metadata server holds an NVMe reservation on each export's namespace, and each client
+registers the key nfsd hands it, whose upper 32 bits are nfsd's boot time. On NVMe a
+client's registration outlives the server that issued it, so after a metadata server restart
+the old registration blocks the new key, and the client's I/O goes through the metadata
+server without a word anywhere. `nvme.reservations` records every namespace's registrants
+through `nvme resv-report`, before the run and after it, and `nvme.stale-reservations`
+fails a pNFS namespace that still carries a key from an earlier boot at the end. A key is
+from an earlier boot when it is older than the newest client key on the namespace, or older
+than an MDS restart the run recorded, since after a restart no client may have registered
+anew.
 
 ## Not yet here
 

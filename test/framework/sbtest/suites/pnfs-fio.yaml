@@ -10,6 +10,12 @@ description: >-
 run:
   id_prefix: pnfs
   outdir: ./runs
+  # Where the operator, control plane, CSI driver, and MDS run, where the storage cluster's
+  # SPDK and node agents run, and where the client pods go. An operator-deployed cluster
+  # keeps the first two in one namespace.
+  operator_namespace: simplyblock
+  cluster_namespace: simplyblock
+  test_namespace: default
 
 components:
   workload.pnfs:
@@ -39,11 +45,52 @@ components:
   # clean fabric, and whether it left one. dmesg can only infer the first from old lines.
   nvme.snapshot: true
 
+  # Short-lived pods joining and leaving pNFS volumes all run long, half of them on a volume
+  # of their own that is created and deleted under load. Lifetimes and the quiet tail are
+  # sized so a 300s run still sees a few, and every one is gone before fio ends.
+  workload.pnfs-churn:
+    mean_interval_s: 30
+    min_life_s: 45
+    max_life_s: 120
+    quiet_tail_s: 180
+
+  # The NFS client's own counters over the run, per fio instance: when data went through the
+  # metadata server, and how long a client took to get its layouts back after a restart.
+  nfs.mountstats:
+    interval_s: 10
+
+  # Each node's NFS flows in its connection tracking table, with the pod each was translated
+  # to: whether a client's reconnect after an MDS restart still went to the old pod.
+  nfs.conntrack:
+    interval_s: 10
+
+  # Every pNFS namespace's NVMe reservation before and after the run, so a registration left
+  # over from an earlier metadata server boot is caught rather than guessed at.
+  nvme.reservations: true
+
+  # What was deployed: images and digests of the operator, CSI driver, MDS, and storage
+  # pods, and each node's kernel.
+  run.versions: true
+
+  # Restarts during the timed run: the metadata server most often, a client's node plugin
+  # next, the controller rarely. At least one per run, and a low chance of more.
+  chaos.restart:
+    guaranteed: 1
+    chance: 0.02
+
+  # The SPDK containers outrun kubelet rotation within minutes, so they are followed live
+  # for the whole run, as the migration suites do. They are where a restarted metadata
+  # server's reservation preempts and reconnects land.
+  logs.stream:
+    containers:
+      - spdk-container
+      - spdk-proxy-container
+    ttl_s: 21600
   logs.collect: true
   # The clients' kernels are the ones a pNFS run is about: layouts, NVMe-oF paths,
   # blocklayout errors. The CSI node plugin runs privileged on every node, so it reads them.
   host.dmesg:
-    namespace: simplyblock
+    plane: operator
     pods_matching: [simplyblock-csi-node]
     container: csi-node
 
@@ -52,6 +99,9 @@ detectors:
     # A layout recall and re-fetch costs seconds; a minute without a written sector while
     # six writers are running is not that.
     max_stall_s: 60
+    # A metadata server restart pauses clients through the guest's boot and the grace
+    # period, which waits for the slowest client to reclaim: 70s to 90s measured.
+    restart_pause_s: 180
   # Nothing here migrates, so the migration and ANA detectors would only report skips.
   migration.outcomes: false
   migration.errors: false

@@ -83,22 +83,43 @@ class JobError(Detector):
     }
 
     def defaults(self) -> dict:
-        return {"ignore_errnos": []}
+        return {
+            "ignore_errnos": [],
+            # How long after a restart the run caused an error is still placed in it. A
+            # pNFS client was measured taking up to 97 s back to its direct path.
+            "restart_window_s": 180.0,
+        }
 
     def detect(self, ev: Evidence) -> Iterable[Finding]:
         jobs = ev.fio_jobs()
         if not jobs:
             raise SkipDetector("no fio job results")
         ignore = {int(x) for x in self.opt("ignore_errnos")}
+        restarts = ev.restarts()
+        window = timedelta(seconds=float(self.opt("restart_window_s")))
         for j in jobs:
             if not j.error or j.error in ignore:
                 continue
+            evidence: dict = {"errno": j.error, "total_iops": j.total_iops}
+            note = ""
+            ended = j.start + timedelta(seconds=j.runtime_s) if j.start else None
+            during = [r for r in restarts if ended and r.deleted <= ended <= r.deleted + window]
+            if during:
+                # Still critical: the application saw the error. The restart says where
+                # to look, not that it was expected.
+                r = max(during, key=lambda r: r.deleted)
+                after = (ended - r.deleted).total_seconds() if ended else 0.0
+                evidence["restart"] = f"{r.target}/{r.pod}"
+                note = (f"fio stopped {after:.0f}s after the {r.target} restart of {r.pod} "
+                        f"at {r.deleted:%H:%M:%S}; the client and server logs from that "
+                        "window explain it")
             yield critical(
                 self.name,
                 title=f"fio job ended in error {j.error}",
                 subject=j.pod,
                 detail=self.ERRNO_HINT.get(j.error, ""),
-                evidence={"errno": j.error, "total_iops": j.total_iops},
+                evidence=evidence,
+                note=note,
             )
 
 
@@ -334,10 +355,15 @@ class Throughput(Detector):
     summary = "a pod whose average IOPS is far below the run's median"
 
     def defaults(self) -> dict:
-        return {"min_fraction_of_median": 0.5, "min_pods": 4}
+        # `exclude` leaves out instances whose name contains any of these. The churn pods'
+        # (workload.pnfs-churn) live for minutes, mostly laying out their file, so their
+        # average says nothing about the volume and would drag the median down.
+        return {"min_fraction_of_median": 0.5, "min_pods": 4, "exclude": ["-fio-churn-"]}
 
     def detect(self, ev: Evidence) -> Iterable[Finding]:
-        jobs = [j for j in ev.fio_jobs() if j.total_iops > 0]
+        exclude = list(self.opt("exclude") or [])
+        jobs = [j for j in ev.fio_jobs()
+                if j.total_iops > 0 and not any(x in j.pod for x in exclude)]
         if len(jobs) < int(self.opt("min_pods")):
             raise SkipDetector(f"needs at least {self.opt('min_pods')} pods with I/O, "
                                f"got {len(jobs)}")

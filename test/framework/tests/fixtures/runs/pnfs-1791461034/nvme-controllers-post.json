@@ -1,0 +1,200 @@
+[
+  {
+    "node": "control-plane",
+    "name": "nvme0",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:e500a6c4-a0dc-4413-b0a4-8db8df45c070",
+    "address": "10.10.10.142:4428",
+    "state": "live",
+    "namespaces": {
+      "1": "optimized"
+    },
+    "ctrl_loss_tmo": 60
+  },
+  {
+    "node": "control-plane",
+    "name": "nvme1",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:e500a6c4-a0dc-4413-b0a4-8db8df45c070",
+    "address": "10.10.10.143:4428",
+    "state": "live",
+    "namespaces": {
+      "1": "non-optimized"
+    },
+    "ctrl_loss_tmo": 60
+  },
+  {
+    "node": "control-plane",
+    "name": "nvme2",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:6e17bb9b-7988-4874-8153-c0ebc720a627",
+    "address": "10.10.10.145:4432",
+    "state": "live",
+    "namespaces": {
+      "1": "optimized"
+    },
+    "ctrl_loss_tmo": 60
+  },
+  {
+    "node": "control-plane",
+    "name": "nvme3",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:fa5e94c9-faf2-4811-9e6a-70f5647f6df4",
+    "address": "10.10.10.143:4430",
+    "state": "live",
+    "namespaces": {
+      "1": "optimized"
+    },
+    "ctrl_loss_tmo": 60
+  },
+  {
+    "node": "control-plane",
+    "name": "nvme4",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:6e17bb9b-7988-4874-8153-c0ebc720a627",
+    "address": "10.10.10.142:4432",
+    "state": "live",
+    "namespaces": {
+      "1": "non-optimized"
+    },
+    "ctrl_loss_tmo": 60
+  },
+  {
+    "node": "control-plane",
+    "name": "nvme5",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:fa5e94c9-faf2-4811-9e6a-70f5647f6df4",
+    "address": "10.10.10.144:4430",
+    "state": "live",
+    "namespaces": {
+      "1": "non-optimized"
+    },
+    "ctrl_loss_tmo": 60
+  },
+  {
+    "node": "control-plane",
+    "name": "nvme6",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:0d631002-c19a-49e5-b9bd-a63102827f14",
+    "address": "10.10.10.143:4430",
+    "state": "live",
+    "namespaces": {
+      "1": "optimized"
+    },
+    "ctrl_loss_tmo": 60
+  },
+  {
+    "node": "control-plane",
+    "name": "nvme7",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:0d631002-c19a-49e5-b9bd-a63102827f14",
+    "address": "10.10.10.144:4430",
+    "state": "live",
+    "namespaces": {
+      "1": "non-optimized"
+    },
+    "ctrl_loss_tmo": 60
+  },
+  {
+    "node": "worker-1",
+    "name": "nvme0",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:27e038dc-aeff-40ce-be8d-e1fa11bd0ee7",
+    "address": "10.10.10.143:4430",
+    "state": "live",
+    "namespaces": {
+      "1": "optimized"
+    },
+    "ctrl_loss_tmo": 60
+  },
+  {
+    "node": "worker-1",
+    "name": "nvme1",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:fa5e94c9-faf2-4811-9e6a-70f5647f6df4",
+    "address": "10.10.10.143:4430",
+    "state": "live",
+    "namespaces": {
+      "1": "optimized"
+    },
+    "ctrl_loss_tmo": 60
+  },
+  {
+    "node": "worker-1",
+    "name": "nvme2",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:27e038dc-aeff-40ce-be8d-e1fa11bd0ee7",
+    "address": "10.10.10.144:4430",
+    "state": "live",
+    "namespaces": {
+      "1": "non-optimized"
+    },
+    "ctrl_loss_tmo": 60
+  },
+  {
+    "node": "worker-1",
+    "name": "nvme3",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:6e17bb9b-7988-4874-8153-c0ebc720a627",
+    "address": "10.10.10.145:4432",
+    "state": "live",
+    "namespaces": {
+      "1": "optimized"
+    },
+    "ctrl_loss_tmo": 60
+  },
+  {
+    "node": "worker-1",
+    "name": "nvme4",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:fa5e94c9-faf2-4811-9e6a-70f5647f6df4",
+    "address": "10.10.10.144:4430",
+    "state": "live",
+    "namespaces": {
+      "1": "non-optimized"
+    },
+    "ctrl_loss_tmo": 60
+  },
+  {
+    "node": "worker-1",
+    "name": "nvme5",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:6e17bb9b-7988-4874-8153-c0ebc720a627",
+    "address": "10.10.10.142:4432",
+    "state": "live",
+    "namespaces": {
+      "1": "non-optimized"
+    },
+    "ctrl_loss_tmo": 60
+  },
+  {
+    "node": "worker-2",
+    "name": "nvme0",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:fa5e94c9-faf2-4811-9e6a-70f5647f6df4",
+    "address": "10.10.10.143:4430",
+    "state": "live",
+    "namespaces": {
+      "1": "optimized"
+    },
+    "ctrl_loss_tmo": 60
+  },
+  {
+    "node": "worker-2",
+    "name": "nvme1",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:fa5e94c9-faf2-4811-9e6a-70f5647f6df4",
+    "address": "10.10.10.144:4430",
+    "state": "live",
+    "namespaces": {
+      "1": "non-optimized"
+    },
+    "ctrl_loss_tmo": 60
+  },
+  {
+    "node": "worker-4",
+    "name": "nvme0",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:6e17bb9b-7988-4874-8153-c0ebc720a627",
+    "address": "10.10.10.145:4432",
+    "state": "live",
+    "namespaces": {
+      "1": "optimized"
+    },
+    "ctrl_loss_tmo": 60
+  },
+  {
+    "node": "worker-4",
+    "name": "nvme1",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:6e17bb9b-7988-4874-8153-c0ebc720a627",
+    "address": "10.10.10.142:4432",
+    "state": "live",
+    "namespaces": {
+      "1": "non-optimized"
+    },
+    "ctrl_loss_tmo": 60
+  }
+]

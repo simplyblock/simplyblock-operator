@@ -21,11 +21,21 @@ import time
 import unittest
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import sbtest  # noqa: E402,F401
-from sbtest.components import kube, migration, nfs, nvme  # noqa: E402
+from sbtest.components import (  # noqa: E402
+    chaos,
+    kube,
+    logs,
+    migration,
+    nfs,
+    nvme,
+    reservations,
+    versions,  # noqa: E402
+)
 from sbtest.components.workloads import fio, pnfs_rwx, volumemigration  # noqa: E402
 from sbtest.core import Logger, Migration, RunContext  # noqa: E402
 
@@ -180,6 +190,7 @@ class PollLoop(unittest.TestCase):
             {"status": {"phase": "Completed", "sourceNodeUUID": "uuid-real"}})})
         with _Ctx() as ctx, _patch(kube, "run", fake.run):
             d = migration.MigrationDriver(poll_s=0.01)
+            d.bind_namespaces(ctx)
             rec = Migration(name="m1", start=datetime.now(UTC), pv="pv1", source="uuid-guess")
             d._await_terminal(ctx, rec, "m1", sampler=None)
         self.assertEqual(rec.phase, "Completed")
@@ -194,6 +205,7 @@ class PollLoop(unittest.TestCase):
             {"status": {"phase": "Migrating"}})})
         with _Ctx() as ctx, _patch(kube, "run", fake.run):
             d = migration.MigrationDriver(poll_s=0.01, timeout_s=0.05)
+            d.bind_namespaces(ctx)
             rec = Migration(name="m1", start=datetime.now(UTC), pv="pv1")
             d._await_terminal(ctx, rec, "m1", sampler=None)
         self.assertEqual(rec.phase, "TIMEOUT")
@@ -217,6 +229,7 @@ class PollLoop(unittest.TestCase):
         s = Sampler()
         with _Ctx() as ctx, _patch(kube, "run", run):
             d = migration.MigrationDriver(poll_s=0.01)
+            d.bind_namespaces(ctx)
             rec = Migration(name="m1", start=datetime.now(UTC), pv="pv1")
             d._await_terminal(ctx, rec, "m1", sampler=s)
         # Deduplicated: only transitions, not every poll.
@@ -483,6 +496,259 @@ class NvmeIostat(unittest.TestCase):
         with _Ctx() as ctx:
             nvme.write_iostat(ctx.path("iostat.csv"), samples)
             back = ArchiveEvidence(ctx.outdir).block_samples()
+        self.assertEqual(back, samples)
+
+
+class NvmeIostatAcrossARestart(unittest.TestCase):
+    """chaos.restart replaces the node plugin the sampler reads a host through. A sampler that
+    kept the old pod's name would read nothing for the rest of the run, and the node it
+    stopped measuring would look idle exactly when its recovery is being judged."""
+
+    OUT = "nvme0n1|u1|1 0 8 0 2 0 16 0 0 0 0\nsbtest-iostat-ok\n"
+
+    def test_a_replaced_node_plugin_is_found_and_read_again(self):
+        live = {"csi-node-new"}
+        calls: list[str] = []
+
+        def exec_sh(ns: str, pod: str, script: str, **kw: object) -> str:
+            calls.append(pod)
+            return self.OUT if pod in live else ""
+
+        pods = [kube.Pod(name="csi-node-new", namespace="simplyblock", node="worker-1",
+                         containers=("csi-node",), phase="Running")]
+        sampler = nvme.IostatSampler()
+        sampler._pods = {"worker-1": "csi-node-old"}
+        with mock.patch.object(kube, "exec_sh", exec_sh), \
+                mock.patch.object(kube, "list_pods", lambda *a, **k: pods):
+            sampler._sample()
+        self.assertEqual(sampler._pods, {"worker-1": "csi-node-new"})
+        self.assertEqual(len(sampler._samples), 1)
+        self.assertEqual(calls, ["csi-node-old", "csi-node-new"])
+
+
+class RestartLogs(unittest.TestCase):
+    """A restarted pod's log is evidence of the moment that matters, and kubelet deletes it
+    with the pod. logs.collect only finds what still exists at the end of the run."""
+
+    def test_the_metadata_server_log_is_collected(self):
+        targets = logs.LogCollect().opt("targets")
+        self.assertTrue(any(any("pnfs-mds" in p for p in t["pods"]) for t in targets),
+                        targets)
+
+    def test_a_restart_follows_the_victims_log_before_deleting_it(self):
+        order: list[str] = []
+
+        class Proc:
+            def __init__(self, args: list[str], **kw: object) -> None:
+                order.append("follow " + " ".join(args))
+
+            def wait(self, timeout: float | None = None) -> int:
+                return 0
+
+            def poll(self) -> int:
+                return 0
+
+            def kill(self) -> None: ...
+
+        def run(args: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+            order.append("kubectl " + " ".join(args))
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        victim = kube.Pod(name="simplyblock-pnfs-mds-x-0", namespace="simplyblock",
+                          node="worker-1", containers=("mds-runner",), phase="Running")
+        r = chaos.Restarter(ready_timeout_s=5)
+        with _Ctx() as ctx, mock.patch.object(chaos.Restarter, "_victim", lambda *a: victim), \
+                mock.patch.object(chaos.Restarter, "_replacement",
+                                  lambda *a: ("simplyblock-pnfs-mds-x-0", "")), \
+                mock.patch.object(kube, "run", run), \
+                mock.patch.object(chaos.subprocess, "Popen", Proc):
+            r.bind_namespaces(ctx)
+            r._restart(ctx, "mds")
+            r.collect(ctx)
+            with open(ctx.path("restarts.json")) as fh:
+                record = json.load(fh)["restarts"][0]
+        follow = next(i for i, o in enumerate(order) if o.startswith("follow "))
+        delete = next(i for i, o in enumerate(order) if " delete pod " in o)
+        self.assertLess(follow, delete, order)
+        self.assertIn("logs -f simplyblock-pnfs-mds-x-0 --all-containers", order[follow])
+        self.assertEqual(record["log"], "restart-1-mds-simplyblock-pnfs-mds-x-0.txt")
+
+
+class ChurnPodSpec(unittest.TestCase):
+    """A churn pod is found by its own label, never by workload.pnfs's, and leaves its
+    evidence where the fio detectors read it."""
+
+    def test_a_churn_pod_is_labeled_for_churn_and_not_as_a_pnfs_fio_pod(self):
+        from sbtest.components.workloads import churn
+        w = churn.ChurnWorkload()
+        inst = fio.FioInstance(pod="run1-churn-1", container="fio-0",
+                               filename="/data/run1-churn-1.fio", logdir="/logs/c0",
+                               evidence="run1-fio-churn-1")
+        with _Ctx() as ctx:
+            doc = w._pod(ctx, inst, "run1-pnfs-shared-0", 90.0)
+        labels = doc["metadata"]["labels"]
+        self.assertNotIn("app", labels)
+        self.assertEqual(labels[churn.CHURN_LABEL], "run1")
+        self.assertEqual(labels["sbtest"], "run1")
+        script = doc["spec"]["containers"][0]["command"][-1]
+        self.assertIn("--runtime=90", script)
+        self.assertIn("--verify=md5", script)
+        self.assertIn("-fio-", inst.evidence)
+
+
+#: What the reservation script prints on a pNFS client, captured on lab-talos: a namespace
+#: under the MDS's reservation with one client registered, the MDS's own state disk, which
+#: carries no reservation at all, and a device whose report produced nothing.
+RESV_REPORT = """### nvme3n1|62a413e3-d36b-413f-b172-f6f2f943af02
+{
+  "gen":4,
+  "rtype":4,
+  "regctl":2,
+  "ptpls":1,
+  "regctlext":[
+    {
+      "cntlid":65535,
+      "rcsts":1,
+      "rkey":72057594037927936,
+      "hostid":"8d2a561eeafe4d92a29c2a1cf66fa2c0"
+    },
+    {
+      "cntlid":65535,
+      "rcsts":0,
+      "rkey":7694384339219550510,
+      "hostid":"913d3d9f8a854ec185036f2a83039d59"
+    }
+  ]
+}
+### nvme0n1|e500a6c4-a0dc-4413-b0a4-8db8df45c070
+{
+  "gen":0,
+  "rtype":0,
+  "regctl":0,
+  "ptpls":0,
+  "regctlext":[]
+}
+### nvme9n1|0d631002-c19a-49e5-b9bd-a63102827f14
+### end
+"""
+
+
+class NvmeReservations(unittest.TestCase):
+    def test_every_namespace_and_registrant_is_read(self):
+        got = reservations.parse_report("worker-1", RESV_REPORT)
+        self.assertEqual([(n.device, n.uuid, n.rtype, n.generation) for n in got], [
+            ("nvme3n1", "62a413e3-d36b-413f-b172-f6f2f943af02", 4, 4),
+            ("nvme0n1", "e500a6c4-a0dc-4413-b0a4-8db8df45c070", 0, 0)])
+        regs = got[0].registrants
+        self.assertEqual([(r.hostid, r.rkey, r.holder) for r in regs], [
+            ("8d2a561eeafe4d92a29c2a1cf66fa2c0", 72057594037927936, True),
+            ("913d3d9f8a854ec185036f2a83039d59", 7694384339219550510, False)])
+        self.assertEqual(got[1].registrants, ())
+        self.assertEqual({n.node for n in got}, {"worker-1"})
+
+    def test_a_device_whose_report_failed_is_left_out_rather_than_read_as_empty(self):
+        """No JSON is not "no reservation": an empty registrant list would read as a
+        namespace nobody may write to, which it is not known to be."""
+        got = reservations.parse_report("worker-1", RESV_REPORT)
+        self.assertNotIn("nvme9n1", [n.device for n in got])
+
+    def test_a_per_path_device_is_left_to_its_head(self):
+        """The reservation is the namespace's, so each path would report it again."""
+        out = RESV_REPORT.replace("### end", "### nvme3c3n1|62a413e3-d36b-413f-b172-f6f2f943af02\n"
+                                  '{"gen":4,"rtype":4,"regctlext":[]}\n### end')
+        got = reservations.parse_report("worker-1", out)
+        self.assertEqual([n.device for n in got], ["nvme3n1", "nvme0n1"])
+
+    def test_snapshots_round_trip_through_the_archive(self):
+        from sbtest.adapters import ArchiveEvidence
+        got = reservations.parse_report("worker-1", RESV_REPORT)
+        with _Ctx() as ctx:
+            reservations.write_snapshot(ctx, "post", got)
+            back = ArchiveEvidence(ctx.outdir).reservations_post()
+        self.assertEqual(back, got)
+
+
+class RunVersions(unittest.TestCase):
+    """What the run recorded as deployed, from the shapes kubectl prints."""
+
+    PODS = {"items": [{
+        "metadata": {"name": "simplyblock-pnfs-mds-06075ebb-0", "namespace": "simplyblock"},
+        "status": {"containerStatuses": [{
+            "name": "mds-runner", "image": "public.ecr.aws/simply-block/spdkcsi:pnfs-mds",
+            "imageID": "public.ecr.aws/simply-block/spdkcsi@sha256:07d8"}]}}]}
+    NODES = {"items": [{"metadata": {"name": "worker-1"}, "status": {"nodeInfo": {
+        "kernelVersion": "6.18.5-talos", "osImage": "Talos (v1.12.7)",
+        "containerRuntimeVersion": "containerd://2.1.4", "kubeletVersion": "v1.34.1"}}}]}
+    SERVER = {"serverVersion": {"gitVersion": "v1.34.1"}}
+
+    def test_images_nodes_and_the_server_are_recorded(self):
+        doc = versions.parse_versions([self.PODS], self.NODES, self.SERVER)
+        self.assertEqual(doc["server"], "v1.34.1")
+        self.assertEqual(doc["images"], [{
+            "namespace": "simplyblock", "pod": "simplyblock-pnfs-mds-06075ebb-0",
+            "container": "mds-runner", "image": "public.ecr.aws/simply-block/spdkcsi:pnfs-mds",
+            "image_id": "public.ecr.aws/simply-block/spdkcsi@sha256:07d8"}])
+        self.assertEqual(doc["nodes"], [{
+            "node": "worker-1", "kernel": "6.18.5-talos", "os_image": "Talos (v1.12.7)",
+            "runtime": "containerd://2.1.4", "kubelet": "v1.34.1"}])
+
+    def test_one_namespace_listed_twice_is_recorded_once(self):
+        """The operator and the cluster share a namespace today."""
+        doc = versions.parse_versions([self.PODS, self.PODS], self.NODES, self.SERVER)
+        self.assertEqual(len(doc["images"]), 1)
+
+
+MOUNT_STATS = """device rootfs mounted on / with fstype rootfs
+device 10.111.155.124:/default-shared-1 mounted on /data with fstype nfs4 statvers=1.1
+\topts:\trw,vers=4.1
+\tnfsv4:\tbm0=0xfdffafff,sessions,pnfs=LAYOUT_SCSI,lease_time=90
+\txprt:\ttcp 1 2 6 3 29 169588 169584 4 4885578 5 31 7116 4400333
+\tper-op statistics
+\tREAD: 30802 30801 1 5 6 2 1 2
+\tWRITE: 9994 9993 1 7 8 3 1 2
+\tLAYOUTGET: 18 17 1 464 336 2 1 3
+device tmpfs mounted on /run with fstype tmpfs
+"""
+
+
+class NfsTimeline(unittest.TestCase):
+    """The NFS client's own counters over the run, per fio instance."""
+
+    def test_a_sample_carries_the_ops_and_the_connect_count(self):
+        self.assertEqual(nfs.mount_sample(MOUNT_STATS, "/data"),
+                         {"LAYOUTGET": 18, "READ": 30802, "WRITE": 9994, "connects": 6})
+
+    def test_a_missing_mount_is_no_sample(self):
+        self.assertIsNone(nfs.mount_sample(MOUNT_STATS, "/elsewhere"))
+
+    def test_each_pod_is_read_once_and_sampled_for_every_instance(self):
+        calls: list[str] = []
+
+        def exec_sh(ns: str, pod: str, script: str, **kw: object) -> str:
+            calls.append(pod)
+            return MOUNT_STATS
+
+        s = nfs.MountstatsSampler()
+        with _Ctx() as ctx, mock.patch.object(kube, "exec_sh", exec_sh):
+            ctx.shared["pnfs.instances"] = [
+                {"evidence": "r-fio-0-c0", "pod": "r-pnfs-0", "container": "fio-0"},
+                {"evidence": "r-fio-0-c1", "pod": "r-pnfs-0", "container": "fio-1"}]
+            s.bind_namespaces(ctx)
+            s._sample(ctx)
+        self.assertEqual(calls, ["r-pnfs-0"])
+        self.assertEqual(sorted(x.instance for x in s._samples), ["r-fio-0-c0", "r-fio-0-c1"])
+        self.assertEqual({(x.read, x.write, x.layoutget, x.connects) for x in s._samples},
+                         {(30802, 9994, 18, 6)})
+
+    def test_samples_round_trip_through_the_archive(self):
+        from sbtest.adapters import ArchiveEvidence
+        from sbtest.core import NfsSample
+        t = datetime(2026, 10, 8, 9, 0, 0, tzinfo=UTC)
+        samples = [NfsSample(ts=t, instance="r-fio-0-c0", pod="r-pnfs-0", container="fio-0",
+                             layoutget=18, read=30802, write=9994, connects=6)]
+        with _Ctx() as ctx:
+            nfs.write_timeline(ctx.path("nfs-timeline.csv"), samples)
+            back = ArchiveEvidence(ctx.outdir).nfs_timeline()
         self.assertEqual(back, samples)
 
 

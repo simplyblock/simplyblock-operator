@@ -8,6 +8,7 @@ only place they can be pinned.
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import os
@@ -15,7 +16,7 @@ import sys
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Any, cast
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -23,6 +24,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import sbtest  # noqa: E402,F401  (registers the bundled plugins)
 from sbtest.adapters import ArchiveEvidence  # noqa: E402
 from sbtest.components import kube  # noqa: E402
+from sbtest.components.chaos import RestartPlan  # noqa: E402
+from sbtest.components.workloads.churn import ChurnPlan  # noqa: E402
 from sbtest.core import (  # noqa: E402
     Component,
     Detector,
@@ -148,6 +151,22 @@ class ConfigResolution(unittest.TestCase):
         self.assertIn("migration.driver", full.components.enabled)
 
 
+@component
+class _Looks(Component):
+    """Records the options it was set up with, for the namespace-binding tests."""
+
+    name = "test.looks"
+    namespace_options = {"csi_namespace": "operator", "snode_namespace": "cluster",  # noqa: RUF012
+                         "namespace": "test"}
+    seen: dict[str, Any] = {}  # noqa: RUF012
+
+    def defaults(self) -> dict[str, Any]:
+        return {"csi_namespace": None, "snode_namespace": None, "namespace": None}
+
+    def setup(self, ctx: RunContext) -> None:
+        _Looks.seen = dict(self.options)
+
+
 class Lifecycle(unittest.TestCase):
     def ctx(self, d):
         return RunContext(run_id="t", outdir=d, log=Logger(None))
@@ -173,6 +192,28 @@ class Lifecycle(unittest.TestCase):
             for phase in ("setup", "start", "tick", "stop", "collect", "teardown"):
                 getattr(r, phase)()
         self.assertEqual(calls, ["setup", "start", "tick", "stop", "collect", "teardown"])
+
+    def _seen(self, **opts: object) -> dict[str, object]:
+        _Looks.seen = {}
+        with tempfile.TemporaryDirectory() as d:
+            cfg = load(None, list(known_components()), list(known_detectors()))
+            apply_cli_toggles(cfg.components, ["test.looks"], [])
+            cfg.components.enabled["test.looks"] = dict(opts)
+            cfg.detectors.enabled = {}
+            ctx = RunContext(run_id="t", outdir=d, log=Logger(None), operator_namespace="sb-op",
+                             cluster_namespace="sb-cluster-a", test_namespace="sb-test")
+            Runner(cfg, ctx).build().setup()
+        return _Looks.seen
+
+    def test_each_namespace_option_gets_its_run_namespace_before_setup(self):
+        """Where the operator, the cluster, and the test's own pods live are properties of
+        the run, not of each component."""
+        self.assertEqual(self._seen(), {"csi_namespace": "sb-op",
+                                        "snode_namespace": "sb-cluster-a",
+                                        "namespace": "sb-test"})
+
+    def test_an_explicit_namespace_option_wins(self):
+        self.assertEqual(self._seen(csi_namespace="csi-only")["csi_namespace"], "csi-only")
 
     def test_teardown_runs_even_when_setup_failed(self):
         """A component that allocates in setup must still get its teardown."""
@@ -323,6 +364,18 @@ class Archive(unittest.TestCase):
             self.assertEqual(len(ev.fio_timeseries("fiomig-test-fio-0")), 2)
             self.assertIn("spdk-4420", ev.container_logs())
 
+    def test_a_followed_log_is_placed_in_time_through_its_pod_prefix(self):
+        # chaos.restart follows a victim with `kubectl logs --prefix --timestamps`, which
+        # puts the pod and container in front of the stamp. Unparsed, the whole restart log
+        # counted as carrying no timestamp, and nothing in it could be placed in time.
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "restart-1-mds-mds-0.txt"), "w") as fh:
+                fh.write("[pod/mds-0/mds-runner] 2026-10-09T06:07:43.860630989Z booting\n"
+                         "[pod/mds-0/mds-runner] 2026-10-09T06:08:11.000000000Z ready\n")
+            span = {s.name: s for s in ArchiveEvidence(d).log_spans()}["restart-1-mds-mds-0"]
+            self.assertEqual(span.first, datetime(2026, 10, 9, 6, 7, 43, tzinfo=UTC))
+            self.assertEqual(span.last, datetime(2026, 10, 9, 6, 8, 11, tzinfo=UTC))
+
     def test_missing_files_yield_empty_not_an_exception(self):
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "state.json"), "w") as fh:
@@ -344,6 +397,113 @@ class Archive(unittest.TestCase):
             with open(os.path.join(d, "pnfs.json"), "w") as fh:
                 json.dump({"volumes": [{"claim": "c", "lvol": "l", "cluster": cluster}]}, fh)
             self.assertEqual(ArchiveEvidence(d).cluster_uuid(), cluster)
+
+    def test_reads_the_reservation_snapshots(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "state.json"), "w") as fh:
+                json.dump({"run_id": "r", "migrations": []}, fh)
+            with open(os.path.join(d, "reservations-post.json"), "w") as fh:
+                json.dump({"namespaces": [
+                    {"node": "w1", "device": "nvme3n1", "uuid": "lv1", "rtype": 4,
+                     "generation": 4, "registrants": [
+                         {"hostid": "8d2a", "rkey": 72057594037927936, "holder": True},
+                         {"hostid": "913d", "rkey": 7694384339219550510,
+                          "holder": False}]}]}, fh)
+            ev = ArchiveEvidence(d)
+            post, pre = ev.reservations_post(), ev.reservations_pre()
+        self.assertEqual(pre, [])
+        self.assertEqual(len(post), 1)
+        self.assertEqual((post[0].uuid, post[0].rtype), ("lv1", 4))
+        self.assertEqual([(r.hostid, r.holder) for r in post[0].registrants],
+                         [("8d2a", True), ("913d", False)])
+        self.assertEqual(post[0].registrants[1].rkey, 7694384339219550510)
+
+    def test_reads_what_was_deployed(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "state.json"), "w") as fh:
+                json.dump({"run_id": "r", "migrations": []}, fh)
+            with open(os.path.join(d, "versions.json"), "w") as fh:
+                json.dump({"server": "v1.34.1",
+                           "images": [{"namespace": "simplyblock", "pod": "p", "container": "c",
+                                       "image": "repo/x:1", "image_id": "repo/x@sha256:ab"}],
+                           "nodes": [{"node": "w1", "kernel": "6.18.5", "os_image": "Talos",
+                                      "runtime": "containerd://2", "kubelet": "v1.34.1"}]}, fh)
+            got = ArchiveEvidence(d).versions()
+        assert got is not None
+        self.assertEqual(got.server, "v1.34.1")
+        self.assertEqual([(i.pod, i.image_id) for i in got.images], [("p", "repo/x@sha256:ab")])
+        self.assertEqual([(n.node, n.kernel) for n in got.nodes], [("w1", "6.18.5")])
+
+    def test_an_archive_without_versions_has_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "state.json"), "w") as fh:
+                json.dump({"run_id": "r", "migrations": []}, fh)
+            self.assertIsNone(ArchiveEvidence(d).versions())
+
+    def test_reads_the_restarts_a_run_made(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "state.json"), "w") as fh:
+                json.dump({"run_id": "r", "migrations": []}, fh)
+            with open(os.path.join(d, "restarts.json"), "w") as fh:
+                json.dump({"restarts": [
+                    {"target": "mds", "pod": "mds-0", "node": "w3",
+                     "deleted": "2026-08-19T22:00:10Z", "ready": "2026-08-19T22:00:40Z",
+                     "replacement": "mds-0"},
+                    {"target": "csi-node", "pod": "csi-a", "node": "w1",
+                     "deleted": "2026-08-19T22:01:00Z", "ready": None}]}, fh)
+            got = ArchiveEvidence(d).restarts()
+        self.assertEqual([r.target for r in got], ["mds", "csi-node"])
+        ready = got[0].ready
+        assert ready is not None
+        self.assertEqual((ready - got[0].deleted).total_seconds(), 30)
+        self.assertIsNone(got[1].ready)
+        # A run from before the pod IPs were recorded reads as unknown, not as an error.
+        self.assertEqual((got[0].ip, got[0].replacement_ip), ("", ""))
+
+    def test_reads_the_pod_ips_a_restart_recorded(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "restarts.json"), "w") as fh:
+                json.dump({"restarts": [
+                    {"target": "mds", "pod": "mds-0", "node": "w3",
+                     "deleted": "2026-08-19T22:00:10Z", "ready": "2026-08-19T22:00:40Z",
+                     "replacement": "mds-0", "ip": "10.244.3.118",
+                     "replacement_ip": "10.244.3.123"}]}, fh)
+            got = ArchiveEvidence(d).restarts()
+        self.assertEqual((got[0].ip, got[0].replacement_ip), ("10.244.3.118", "10.244.3.123"))
+
+    def test_reads_the_conntrack_samples_a_run_took(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "conntrack.csv"), "w") as fh:
+                fh.write("ts,node,state,orig_src,orig_sport,orig_dst,orig_dport,reply_src\n"
+                         "2026-10-09T06:08:20Z,w1,ESTABLISHED,10.10.10.11,835,10.108.41.72,"
+                         "2049,10.244.3.118\n"
+                         "2026-10-09T06:08:10Z,w2,NONE,,0,,0,\n")
+            got = ArchiveEvidence(d).conntrack()
+        self.assertEqual([(s.node, s.state) for s in got], [("w2", "NONE"), ("w1", "ESTABLISHED")])
+        self.assertEqual((got[1].orig_sport, got[1].orig_dport, got[1].reply_src),
+                         (835, 2049, "10.244.3.118"))
+
+    def test_reads_the_churn_a_run_made(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "state.json"), "w") as fh:
+                json.dump({"run_id": "r", "migrations": []}, fh)
+            with open(os.path.join(d, "churn.json"), "w") as fh:
+                json.dump({"seed": 3, "pods": [
+                    {"pod": "r-churn-2", "claim": "r-pnfs-shared-0", "own_volume": False,
+                     "created": "2026-08-19T22:01:00Z", "node": "w2"},
+                    {"pod": "r-churn-1", "claim": "r-churn-1", "own_volume": True,
+                     "created": "2026-08-19T22:00:00Z", "io_started": "2026-08-19T22:00:05Z",
+                     "deleted": "2026-08-19T22:01:05Z", "rc": 0, "pv": "pvc-1",
+                     "pvc_deleted": "2026-08-19T22:01:06Z", "pv_gone": True,
+                     "export_gone": False, "gone_s": 30.5}]}, fh)
+            got = ArchiveEvidence(d).churn()
+        self.assertEqual([c.pod for c in got], ["r-churn-1", "r-churn-2"])
+        first = got[0]
+        self.assertTrue(first.own_volume)
+        self.assertEqual((first.rc, first.pv, first.pv_gone, first.export_gone, first.gone_s),
+                         (0, "pvc-1", True, False, 30.5))
+        self.assertIsNone(got[1].io_started)
+        self.assertIsNone(got[1].pv_gone)
 
     def test_falls_back_to_test_log_when_state_is_absent(self):
         with tempfile.TemporaryDirectory() as d:
@@ -528,6 +688,107 @@ class GrabberNaming(unittest.TestCase):
         self.assertIn("logs-collect", name2)
 
 
+class LogNamespaces(unittest.TestCase):
+    """A storage cluster's pods (SPDK, the node agents) live in its cluster namespace, and
+    the operator's, the control plane's, and the CSI driver's in the operator namespace.
+    Targets that named a namespace of their own found nothing on a cluster deployed
+    differently, and said nothing, so pNFS runs collected neither the SPDK nor the
+    node-agent log."""
+
+    PODS = {"sb-cluster": [kube.Pod(name="snode-spdk-pod-4420-06075e", namespace="sb-cluster",
+                                    node="vm02", containers=("spdk-container",))],
+            "sb-op": [kube.Pod(name="simplyblock-csi-node-abc", namespace="sb-op",
+                               node="vm02", containers=("csi-node",))]}
+
+    def _list(self, ns: str, *a: object, **k: object) -> list[kube.Pod]:
+        return list(self.PODS.get(ns, []))
+
+    def _ctx(self, d: str) -> RunContext:
+        return RunContext(run_id="r", outdir=d, log=Logger(None), operator_namespace="sb-op",
+                          cluster_namespace="sb-cluster", test_namespace="sb-test")
+
+    def test_the_default_targets_name_a_plane_and_no_namespace(self):
+        from sbtest.components import logs as logs_mod
+        for t in logs_mod.LogCollect().opt("targets"):
+            self.assertNotIn("namespace", t, t)
+            self.assertIn(t.get("plane"), {"operator", "cluster"}, t)
+
+    def test_collect_reads_each_target_in_its_planes_namespace(self):
+        from sbtest.components import logs as logs_mod
+
+        class Probe(logs_mod.LogCollect):
+            def _start_grabbers(self, ctx, nodes, ttl_s):
+                return {n: f"own-{n}" for n in nodes}
+
+        c = Probe(targets=[
+            {"pods": ["snode-spdk"], "containers": ["spdk-container"], "plane": "cluster",
+             "name_from": "snode-port"},
+            {"pods": ["simplyblock-csi-node"], "containers": ["csi-node"], "plane": "operator",
+             "name_from": "pod-node", "name": "csi-node"}])
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(kube, "list_pods", self._list), \
+                mock.patch.object(kube, "run_bytes", lambda *a, **k: b"log line\n"):
+            ctx = self._ctx(d)
+            c.bind_namespaces(ctx)
+            c.collect(ctx)
+            self.assertTrue(os.path.exists(os.path.join(d, "spdk-4420.txt")))
+            self.assertTrue(os.path.exists(os.path.join(d, "csi-node-vm02.txt")))
+
+    def test_stream_follows_the_spdk_pods_in_the_cluster_namespace(self):
+        from sbtest.components import logs as logs_mod
+
+        class Probe(logs_mod.LogStream):
+            def _start_grabbers(self, ctx, nodes, ttl_s):
+                return {n: f"stream-{n}" for n in nodes}
+
+        s = Probe()
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(kube, "list_pods", self._list):
+            ctx = self._ctx(d)
+            s.bind_namespaces(ctx)
+            s.setup(ctx)
+        self.assertEqual([p.name for p in s._pods], ["snode-spdk-pod-4420-06075e"])
+
+
+class NamespaceFlags(unittest.TestCase):
+    """A flag beats the suite's run block, which beats the default. Today, the operator and
+    the cluster both run in simplyblock. The planned layout moves the operator and control
+    plane to simplyblock-system and keeps the initial cluster in simplyblock, so the two
+    defaults are independent."""
+
+    def args(self, **kw: object) -> argparse.Namespace:
+        base: dict[str, object] = {"operator_namespace": None, "cluster_namespace": None,
+                                   "test_namespace": None}
+        base.update(kw)
+        return argparse.Namespace(**base)
+
+    def test_defaults(self):
+        from sbtest import cli
+        cfg = load(None, list(known_components()), list(known_detectors()))
+        self.assertEqual(cli.namespaces(self.args(), cfg),
+                         ("simplyblock", "simplyblock", "default"))
+
+    def test_moving_the_operator_leaves_the_cluster_in_simplyblock(self):
+        from sbtest import cli
+        cfg = load(None, list(known_components()), list(known_detectors()))
+        cfg.run["operator_namespace"] = "simplyblock-system"
+        self.assertEqual(cli.namespaces(self.args(), cfg),
+                         ("simplyblock-system", "simplyblock", "default"))
+
+    def test_an_unset_run_context_puts_the_cluster_in_simplyblock(self):
+        ctx = RunContext(run_id="t", outdir="/tmp", log=Logger(None),
+                         operator_namespace="simplyblock-system")
+        self.assertEqual(ctx.namespace("cluster"), "simplyblock")
+
+    def test_a_flag_beats_the_suite(self):
+        from sbtest import cli
+        cfg = load(None, list(known_components()), list(known_detectors()))
+        cfg.run.update({"operator_namespace": "a", "cluster_namespace": "b",
+                        "test_namespace": "c"})
+        self.assertEqual(cli.namespaces(self.args(cluster_namespace="flag"), cfg),
+                         ("a", "flag", "c"))
+
+
 class GrabberReuse(unittest.TestCase):
     """logs.collect must reuse logs.stream's grabbers, and must not delete them.
 
@@ -638,3 +899,300 @@ class GrabberReuse(unittest.TestCase):
 
         self.assertLess(order.index("stream.stop"), order.index("collect.collect"))
         self.assertLess(order.index("collect.collect"), order.index("stream.teardown"))
+
+
+class RestartDeleteFailure(unittest.TestCase):
+    """A restart whose delete failed did not happen. Recorded as one, chaos.recovery
+    reported the untouched pod as never coming back (review on #698)."""
+
+    def test_a_failed_delete_is_not_a_restart(self):
+        import subprocess
+
+        from sbtest.components import chaos
+
+        def run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            rc = 1 if "delete" in args else 0
+            return subprocess.CompletedProcess(args, rc, "", "forbidden" if rc else "")
+
+        r = chaos.Restarter(ready_timeout_s=1)
+        victim = kube.Pod(name="mds-0", namespace="simplyblock", node="w3", containers=(),
+                          phase="Running", ip="10.244.3.118")
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(kube, "run", run), \
+                mock.patch.object(chaos, "_uid", return_value="u1"), \
+                mock.patch.object(r, "_victim", return_value=victim), \
+                mock.patch.object(r, "_follow", return_value=None):
+            ctx = RunContext(run_id="r1", outdir=d, log=Logger(os.path.join(d, "run.log")))
+            r.bind_namespaces(ctx)
+            r._restart(ctx, "mds")
+            r.collect(ctx)
+            ctx.log.close()
+            with open(os.path.join(d, "restarts.json")) as fh:
+                saved = json.load(fh)
+        self.assertEqual(saved["restarts"], [])
+        self.assertEqual([f["pod"] for f in saved["failed"]], ["mds-0"])
+        self.assertIn("forbidden", saved["failed"][0]["error"])
+
+
+class ChurnLeave(unittest.TestCase):
+    """A churn pod has left only when its delete succeeded. Counted as gone after a failed
+    delete, it freed a slot under the concurrency cap while still running, and a claim
+    whose delete failed started the cleanup clock (review on #698)."""
+
+    def leave(self, pod_rc: int, pvc_rc: int):
+        import subprocess
+        from datetime import UTC, datetime
+
+        from sbtest.components.workloads import churn, fio
+
+        def run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            rc = pod_rc if "pod" in args else pvc_rc if "pvc" in args else 0
+            return subprocess.CompletedProcess(args, rc, "", "forbidden" if rc else "")
+
+        w = churn.ChurnWorkload()
+        inst = fio.FioInstance(pod="r1-fio-churn-1", container="fio-0", filename="/data/f",
+                               logdir="/logs", evidence="r1-fio-churn-1")
+        record = churn._Record(pod=inst.pod, claim="r1-churn-1", own_volume=True,
+                               created=datetime.now(UTC))
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(kube, "run", run), \
+                mock.patch.object(churn, "_volume_of", return_value=("pv-1", "lvol-1")):
+            ctx = RunContext(run_id="r1", outdir=d, log=Logger(os.path.join(d, "run.log")))
+            w._leave(ctx, "default", inst, record)
+            ctx.log.close()
+        return record
+
+    def test_a_failed_pod_delete_has_not_left(self):
+        record = self.leave(pod_rc=1, pvc_rc=0)
+        self.assertIsNone(record.deleted)
+        self.assertIsNone(record.pvc_deleted)
+        self.assertIn("forbidden", record.error)
+
+    def test_a_failed_claim_delete_starts_no_cleanup_clock(self):
+        record = self.leave(pod_rc=0, pvc_rc=1)
+        self.assertIsNotNone(record.deleted)
+        self.assertIsNone(record.pvc_deleted)
+        self.assertIn("forbidden", record.error)
+
+    def test_both_deleted_is_a_clean_leave(self):
+        record = self.leave(pod_rc=0, pvc_rc=0)
+        self.assertIsNotNone(record.deleted)
+        self.assertIsNotNone(record.pvc_deleted)
+        self.assertEqual(record.error, "")
+
+
+class RestartSchedule(unittest.TestCase):
+    """When chaos.restart restarts what: at least `guaranteed` times inside the window,
+    otherwise by a low chance per tick, never after the window, reproducibly per seed."""
+
+    WEIGHTS = {"mds": 2.0, "csi-node": 1.0, "csi-controller": 0.5}
+
+    def plan(self, **kw: object) -> RestartPlan:
+        args = {"seed": 7, "weights": self.WEIGHTS, "start": 0.0, "end": 300.0,
+                "guaranteed": 2, "chance": 0.0, "overlap_chance": 0.0}
+        args.update(kw)
+        return RestartPlan(**args)  # type: ignore[arg-type]
+
+    def fire(self, plan: RestartPlan, until: float = 400.0, step: float = 5.0,
+             in_flight: int = 0) -> list[tuple[float, str]]:
+        out, t = [], 0.0
+        while t <= until:
+            out += [(t, target) for target in plan.due(t, in_flight)]
+            t += step
+        return out
+
+    def test_the_guaranteed_restarts_all_happen_inside_the_window(self):
+        fired = self.fire(self.plan(guaranteed=3))
+        self.assertEqual(len(fired), 3)
+        self.assertTrue(all(0.0 <= t <= 300.0 for t, _ in fired))
+
+    def test_nothing_fires_after_the_window_whatever_the_chance(self):
+        fired = self.fire(self.plan(guaranteed=0, chance=1.0), until=600.0)
+        self.assertTrue(fired)
+        self.assertTrue(all(t <= 300.0 for t, _ in fired))
+
+    def test_the_same_seed_gives_the_same_schedule(self):
+        a = self.fire(self.plan(guaranteed=2, chance=0.1))
+        b = self.fire(self.plan(guaranteed=2, chance=0.1))
+        self.assertEqual(a, b)
+
+    def test_a_target_weighted_zero_is_never_chosen(self):
+        fired = self.fire(self.plan(weights={"mds": 1.0, "csi-node": 0.0}, guaranteed=0,
+                                    chance=1.0))
+        self.assertEqual({target for _, target in fired}, {"mds"})
+
+    def test_a_restart_waits_for_the_one_in_flight_unless_overlap_comes_up(self):
+        plan = self.plan(guaranteed=1)
+        self.assertEqual(self.fire(plan, until=290.0, in_flight=1), [])
+        # Once nothing is in flight, the deferred restart goes, still inside the window.
+        fired = self.fire(plan, until=300.0)
+        self.assertEqual(len(fired), 1)
+
+
+class ChurnSchedule(unittest.TestCase):
+    """When a churn pod arrives, how long it lives, and whether it brings its own volume:
+    a steady flow inside the window, capped, deferred rather than dropped at the cap, and
+    the same for the same seed."""
+
+    def plan(self, **kw: object) -> ChurnPlan:
+        args: dict[str, object] = {"seed": 11, "start": 0.0, "end": 600.0,
+                                   "mean_interval_s": 20.0, "min_life_s": 30.0,
+                                   "max_life_s": 90.0, "reuse_ratio": 0.5,
+                                   "max_concurrent": 100}
+        args.update(kw)
+        return ChurnPlan(**args)  # type: ignore[arg-type]
+
+    def flow(self, plan: ChurnPlan, until: float = 900.0, active: int = 0,
+            step: float = 1.0) -> list[tuple[float, bool, float]]:
+        out, t = [], 0.0
+        while t <= until:
+            out += [(t, a.reuse, a.lifetime_s) for a in plan.due(t, active)]
+            t += step
+        return out
+
+    def test_arrivals_keep_coming_inside_the_window_and_stop_after_it(self):
+        got = self.flow(self.plan())
+        self.assertGreater(len(got), 10)   # about 30 expected at one per 20s over 600s
+        self.assertTrue(all(t <= 600.0 for t, _, _ in got))
+
+    def test_lifetimes_stay_within_their_bounds(self):
+        got = self.flow(self.plan())
+        self.assertTrue(all(30.0 <= life <= 90.0 for _, _, life in got))
+
+    def test_the_reuse_ratio_decides_who_brings_a_volume(self):
+        self.assertTrue(all(reuse for _, reuse, _ in self.flow(self.plan(reuse_ratio=1.0))))
+        self.assertFalse(any(reuse for _, reuse, _ in self.flow(self.plan(reuse_ratio=0.0))))
+
+    def test_the_same_seed_gives_the_same_flow(self):
+        self.assertEqual(self.flow(self.plan()), self.flow(self.plan()))
+
+    def test_at_the_cap_an_arrival_waits_for_room_instead_of_being_dropped(self):
+        plan = self.plan(max_concurrent=2)
+        self.assertEqual(self.flow(plan, until=100.0, active=2), [])
+        # Room again: the arrival that was held goes first, inside the window.
+        later = self.flow(plan, until=101.0)
+        self.assertTrue(later)
+        self.assertLessEqual(later[0][0], 101.0)
+
+
+def _cp(stdout: str = "", rc: int = 0) -> Any:
+    return argparse.Namespace(stdout=stdout, stderr="", returncode=rc)
+
+
+class PodAddresses(unittest.TestCase):
+    """The pod IP a restart replaced is what tells a stale conntrack entry from a live one."""
+
+    def test_list_pods_carries_each_pods_ip(self):
+        items = {"items": [{"metadata": {"name": "mds-0"},
+                            "spec": {"nodeName": "w3", "containers": [{"name": "c"}]},
+                            "status": {"phase": "Running", "podIP": "10.244.3.118"}}]}
+        with mock.patch.object(kube, "run", lambda *a, **k: _cp(json.dumps(items))):
+            self.assertEqual([p.ip for p in kube.list_pods("ns")], ["10.244.3.118"])
+
+    def test_a_restart_records_the_old_and_the_new_pod_ip(self):
+        from sbtest.components import chaos
+
+        victim = kube.Pod(name="simplyblock-pnfs-mds-x-0", namespace="op", node="w3",
+                          containers=("mds-runner",), phase="Running", ip="10.244.3.118")
+        replacement = {"items": [{
+            "metadata": {"name": victim.name, "uid": "new"}, "spec": {"nodeName": "w3"},
+            "status": {"podIP": "10.244.3.123",
+                       "conditions": [{"type": "Ready", "status": "True"}]}}]}
+
+        def run(args: list[str], **_: object) -> Any:
+            return _cp(json.dumps(replacement)) if "get" in args else _cp()
+
+        r = chaos.Restarter(namespace="op")
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(kube, "list_pods", lambda *a, **k: [victim]), \
+                mock.patch.object(kube, "run", run), \
+                mock.patch.object(chaos, "_uid", lambda *a: "old"), \
+                mock.patch.object(chaos.Restarter, "_follow", lambda *a: None):
+            ctx = RunContext(run_id="t", outdir=d, log=Logger(None))
+            r._restart(ctx, "mds")
+            r.collect(ctx)
+            with open(os.path.join(d, "restarts.json")) as fh:
+                rec = json.load(fh)["restarts"][0]
+        self.assertEqual((rec["ip"], rec["replacement_ip"]), ("10.244.3.118", "10.244.3.123"))
+
+
+class ConntrackSampling(unittest.TestCase):
+    """What the conntrack sampler reads off a node, and what it records."""
+
+    TOOLS = ("tcp      6 431996 ESTABLISHED src=10.10.10.11 dst=10.108.41.72 sport=835 "
+             "dport=2049 src=10.244.3.118 dst=10.10.10.11 sport=2049 dport=835 [ASSURED] "
+             "mark=0 use=1\n")
+    PROC = ("ipv4     2 tcp      6 116 SYN_SENT src=10.10.10.12 dst=10.103.85.218 sport=962 "
+            "dport=2049 [UNREPLIED] src=10.244.3.118 dst=10.10.10.12 sport=2049 dport=962 "
+            "mark=0 zone=0 use=2\n")
+    T = datetime(2026, 10, 9, 6, 8, 20, tzinfo=UTC)
+
+    def test_parses_both_tuples_of_a_conntrack_tools_line(self):
+        from sbtest.components.conntrack import parse_conntrack
+        [s] = parse_conntrack(self.TOOLS, self.T, "w1")
+        self.assertEqual((s.state, s.orig_src, s.orig_sport, s.orig_dst, s.orig_dport,
+                          s.reply_src),
+                         ("ESTABLISHED", "10.10.10.11", 835, "10.108.41.72", 2049,
+                          "10.244.3.118"))
+
+    def test_parses_a_proc_nf_conntrack_line(self):
+        from sbtest.components.conntrack import parse_conntrack
+        [s] = parse_conntrack(self.PROC, self.T, "w2")
+        self.assertEqual((s.state, s.orig_sport, s.reply_src), ("SYN_SENT", 962, "10.244.3.118"))
+
+    def test_keeps_only_flows_to_the_nfs_port(self):
+        from sbtest.components.conntrack import parse_conntrack
+        other = self.TOOLS.replace("dport=2049 src", "dport=443 src")
+        text = other + "conntrack v1.4.8 (conntrack-tools): 1 flow entries have been shown.\n"
+        self.assertEqual(parse_conntrack(text, self.T, "w1"), [])
+
+    def _sampler(self, outputs: dict[str, str]) -> Any:
+        from sbtest.components.conntrack import ConntrackSampler
+        s = ConntrackSampler(namespace="sb-test", csi_namespace="sb-op")
+        s._helpers = {node: f"r-ct-{node}" for node in outputs}
+        by_pod = {f"r-ct-{node}": out for node, out in outputs.items()}
+        return s, lambda ns, pod, script, **k: by_pod[pod]
+
+    def test_a_node_with_no_nfs_flows_is_still_recorded_as_sampled(self):
+        # Otherwise "nothing pinned" and "never looked" read the same.
+        s, exec_sh = self._sampler({"w1": self.TOOLS, "w2": ""})
+        with mock.patch.object(kube, "exec_sh", exec_sh):
+            s._sample(RunContext(run_id="r", outdir="/tmp", log=Logger(None)))
+        self.assertEqual(sorted((x.node, x.state) for x in s._samples),
+                         [("w1", "ESTABLISHED"), ("w2", "NONE")])
+
+    def test_a_node_it_cannot_read_records_nothing(self):
+        from sbtest.components.conntrack import UNAVAILABLE
+        s, exec_sh = self._sampler({"w1": UNAVAILABLE + "\n"})
+        with mock.patch.object(kube, "exec_sh", exec_sh):
+            s._sample(RunContext(run_id="r", outdir="/tmp", log=Logger(None)))
+        self.assertEqual(s._samples, [])
+
+    def test_the_samples_written_are_the_ones_the_archive_reads(self):
+        s, exec_sh = self._sampler({"w1": self.TOOLS, "w2": ""})
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(kube, "exec_sh", exec_sh):
+            ctx = RunContext(run_id="r", outdir=d, log=Logger(None))
+            s._sample(ctx)
+            s.collect(ctx)
+            got = ArchiveEvidence(d).conntrack()
+        self.assertEqual(sorted((x.node, x.state, x.reply_src) for x in got),
+                         [("w1", "ESTABLISHED", "10.244.3.118"), ("w2", "NONE", "")])
+
+    def test_a_helper_goes_on_every_node_running_a_node_plugin(self):
+        from sbtest.components.conntrack import ConntrackSampler
+        pods = [kube.Pod(name=f"simplyblock-csi-node-{n}", namespace="sb-op", node=f"{n}.lab",
+                         containers=("csi-node",), phase="Running") for n in ("w1", "w2")]
+        applied: list[str] = []
+
+        def run(args: list[str], stdin: str | None = None, **_: object) -> Any:
+            if stdin:
+                applied.append(stdin)
+            return _cp()
+
+        s = ConntrackSampler(namespace="sb-test", csi_namespace="sb-op")
+        with mock.patch.object(kube, "list_pods", lambda *a, **k: pods), \
+                mock.patch.object(kube, "run", run):
+            s.setup(RunContext(run_id="r", outdir="/tmp", log=Logger(None)))
+        docs = json.loads(applied[0])["items"]
+        self.assertEqual(sorted(d["spec"]["nodeName"] for d in docs), ["w1.lab", "w2.lab"])
+        self.assertTrue(all(d["spec"]["hostNetwork"] for d in docs))
+        self.assertEqual(sorted(s._helpers), ["w1", "w2"])
+

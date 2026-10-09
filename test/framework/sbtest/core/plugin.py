@@ -108,6 +108,11 @@ class Component:
     #: produces a green result for a test that never happened, which is the worst outcome
     #: available.
     required: bool = False
+    #: Options naming a namespace, and which of the run's namespaces fills each one that
+    #: is left unset: `operator`, `cluster`, or `test` (see RunContext). Where things run is
+    #: a property of the deployment, so it is set once for the run rather than per
+    #: component, and an option set explicitly still wins.
+    namespace_options: dict[str, str] = {}  # noqa: RUF012
 
     def __init__(self, **options: Any) -> None:
         self.options = {**self.defaults(), **options}
@@ -122,6 +127,12 @@ class Component:
 
     def opt(self, key: str) -> Any:
         return self.options.get(key)
+
+    def bind_namespaces(self, ctx: RunContext) -> None:
+        """Fill every unset namespace option from the run. Called before setup."""
+        for key, kind in self.namespace_options.items():
+            if self.options.get(key) is None:
+                self.options[key] = ctx.namespace(kind)
 
     # -- lifecycle, all optional ----------------------------------------------------
     def setup(self, ctx: RunContext) -> None: ...

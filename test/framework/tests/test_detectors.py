@@ -22,17 +22,26 @@ from sbtest.core import (  # noqa: E402
     AnaSample,
     Attribution,
     BlockSample,
+    ChurnPod,
+    ConntrackSample,
     ControlEvent,
+    Fence,
+    FenceWrite,
     Finding,
     FioJob,
     IopsSample,
     LogSpan,
     Migration,
+    NamespaceReservation,
+    NfsSample,
     NvmeController,
     PnfsVolume,
+    Registrant,
     Report,
+    Restart,
     Severity,
     SkipDetector,
+    Versions,
     attribute_window,
     build_detector,
     freeze_windows,
@@ -71,6 +80,14 @@ class FakeEvidence:
         nfs: dict[str, dict[str, int]] | None = None,
         blocks: list[BlockSample] | None = None,
         pnfs: list[PnfsVolume] | None = None,
+        restarts: list[Restart] | None = None,
+        fence: Fence | None = None,
+        churn: list[ChurnPod] | None = None,
+        reservations_pre: list[NamespaceReservation] | None = None,
+        reservations_post: list[NamespaceReservation] | None = None,
+        versions: Versions | None = None,
+        timeline: list[NfsSample] | None = None,
+        conntrack: list[ConntrackSample] | None = None,
     ) -> None:
         self.run_id = run_id
         self.outdir = outdir
@@ -88,6 +105,14 @@ class FakeEvidence:
         self._nfs = nfs or {}
         self._blocks = blocks or []
         self._pnfs = pnfs or []
+        self._restarts = restarts or []
+        self._fence = fence
+        self._churn = churn or []
+        self._resv_pre = reservations_pre or []
+        self._resv_post = reservations_post or []
+        self._versions = versions
+        self._timeline = timeline or []
+        self._conntrack = conntrack or []
 
     def migrations(self) -> list[Migration]:
         return list(self._migrations)
@@ -125,6 +150,30 @@ class FakeEvidence:
 
     def pnfs_volumes(self) -> list[PnfsVolume]:
         return list(self._pnfs)
+
+    def restarts(self) -> list[Restart]:
+        return list(self._restarts)
+
+    def fence(self) -> Fence | None:
+        return self._fence
+
+    def churn(self) -> list[ChurnPod]:
+        return list(self._churn)
+
+    def reservations_pre(self) -> list[NamespaceReservation]:
+        return list(self._resv_pre)
+
+    def reservations_post(self) -> list[NamespaceReservation]:
+        return list(self._resv_post)
+
+    def versions(self) -> Versions | None:
+        return self._versions
+
+    def nfs_timeline(self) -> list[NfsSample]:
+        return list(self._timeline)
+
+    def conntrack(self) -> list[ConntrackSample]:
+        return list(self._conntrack)
 
     def cluster_uuid(self) -> str:
         return self._cluster
@@ -326,6 +375,24 @@ class FioChecksum(unittest.TestCase):
             list(build_detector("fio.checksum").detect(FakeEvidence(jobs=[FioJob(pod="p")])))
 
 
+class FioThroughputOutlier(unittest.TestCase):
+    """A churn pod lives for minutes, most of them spent laying out its file, so its average
+    says nothing about the volume and would pull the median down for everyone else."""
+
+    def jobs(self) -> list[FioJob]:
+        steady = [FioJob(pod=f"r-fio-{i}-c0", total_iops=1000.0 + i) for i in range(5)]
+        return steady + [FioJob(pod="r-fio-churn-3-c0", total_iops=50.0)]
+
+    def test_churn_instances_are_left_out_by_default(self):
+        found = list(build_detector("fio.throughput-outlier").detect(FakeEvidence(jobs=self.jobs())))
+        self.assertEqual(found, [])
+
+    def test_a_steady_pod_far_below_the_median_still_warns(self):
+        jobs = self.jobs() + [FioJob(pod="r-fio-9-c0", total_iops=100.0)]
+        found = list(build_detector("fio.throughput-outlier").detect(FakeEvidence(jobs=jobs)))
+        self.assertEqual([f.subject for f in found], ["r-fio-9-c0"])
+
+
 class FioJobError(unittest.TestCase):
     def test_eremoteio_carries_the_hint_that_points_at_ana(self):
         ev = FakeEvidence(jobs=[FioJob(pod="fio-0", error=121)])
@@ -348,6 +415,25 @@ class FioJobError(unittest.TestCase):
     def test_ignore_list(self):
         ev = FakeEvidence(jobs=[FioJob(pod="fio-0", error=121)])
         self.assertEqual(list(build_detector("fio.job-error", ignore_errnos=[121]).detect(ev)), [])
+
+    # An error inside a restart the run caused is still the application seeing it, so it
+    # stays critical. What changes is where to look: pnfs-1791525621's EIO and EACCES all
+    # ended within 35 s of an MDS deletion, and the finding has to say so.
+    def test_an_error_during_a_restart_names_the_restart(self):
+        mds = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(100), ready=ts(120))
+        job = FioJob(pod="fio-churn-5", error=5, start=ts(0), runtime_s=135)
+        found = list(build_detector("fio.job-error").detect(
+            FakeEvidence(jobs=[job], restarts=[mds])))
+        self.assertEqual(found[0].severity, Severity.CRITICAL)
+        self.assertIn("mds restart", found[0].note)
+        self.assertEqual(found[0].evidence["restart"], "mds/mds-0")
+
+    def test_an_error_long_after_a_restart_does_not_name_it(self):
+        mds = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(100), ready=ts(120))
+        job = FioJob(pod="fio-0", error=5, start=ts(0), runtime_s=1000)
+        found = list(build_detector("fio.job-error").detect(
+            FakeEvidence(jobs=[job], restarts=[mds])))
+        self.assertNotIn("restart", found[0].evidence)
 
 
 class FioOutage(unittest.TestCase):
@@ -565,6 +651,35 @@ class LogPattern(unittest.TestCase):
     def test_skips_without_logs(self):
         with self.assertRaises(SkipDetector):
             list(build_detector("logs.pattern").detect(FakeEvidence()))
+
+    # SPDK prints status 01/82 under the I/O command's name whatever the command was. On a
+    # Fabric Connect, which always runs on queue 0, it means the subsystem is gone, not that
+    # a write landed on a frozen range (pnfs-1791525621: 28 such lines, no write among them).
+    _REFUSED_CONNECT = [
+        "[2026-10-09 06:12:01.180571] ctrlr.c:1041:nvmf_ctrlr_cmd_connect: *NOTICE*: Invalid "
+        "subsystem...1...target nqn.2023-02.io.simplyblock:c:lvol:194db54b host nqn.h\n",
+        "[2026-10-09 06:12:01.180653] nvme_qpair.c: 291:nvme_admin_qpair_print_command_s: "
+        "*NOTICE*: FABRIC CONNECT qid:0 cid:49152 SGL DATA BLOCK OFFSET 0x0 len:0x400\n",
+        "[2026-10-09 06:12:01.180672] nvme_qpair.c: 547:spdk_nvme_print_completion_s: "
+        "*NOTICE*: WRITE TO RO RANGE (01/82) qid:0 cid:49152 cdw0:10100 sqhd:0000 p:0 m:0 "
+        "dnr:0\n",
+    ]
+
+    def _subjects(self, lines: list[str]) -> list[str]:
+        ev = FakeEvidence(logs={"spdk-4420": lines})
+        return [f.subject for f in build_detector("logs.pattern").detect(ev)]
+
+    def test_a_refused_connect_is_not_a_write_to_a_readonly_range(self):
+        self.assertNotIn("nvme.write-to-readonly", self._subjects(self._REFUSED_CONNECT))
+
+    def test_a_write_on_an_io_queue_is_still_a_write_to_a_readonly_range(self):
+        line = ("[2026-10-09 06:12:01.1] nvme_qpair.c: 547:spdk_nvme_print_completion_s: "
+                "*NOTICE*: WRITE TO RO RANGE (01/82) qid:3 cid:12 cdw0:0 sqhd:0000 p:0 m:0 "
+                "dnr:0\n")
+        self.assertIn("nvme.write-to-readonly", self._subjects([line]))
+
+    def test_a_host_connecting_to_a_removed_subsystem_is_reported(self):
+        self.assertIn("nvme.connect-to-removed-subsystem", self._subjects(self._REFUSED_CONNECT))
 
 
 class MigrationOutcomes(unittest.TestCase):
@@ -963,10 +1078,41 @@ class EvidenceCoverage(unittest.TestCase):
             LogSpan("operator", self.START, self.END, 100)])
         self.assertEqual(list(build_detector("evidence.log-coverage").detect(ev)), [])
 
+    # A pod the run restarted has nothing to say before its replacement existed, and the
+    # follow of the victim begins at its deletion (pnfs-1791525621: mds-runner and
+    # restart-2-mds-... were reported as missing the first 8-9 minutes).
+    def test_a_log_that_begins_with_a_restart_the_run_caused_is_not_short(self):
+        deleted = self.START + timedelta(minutes=60)
+        mds = Restart(target="mds", pod="mds-0", node="w3", deleted=deleted,
+                      ready=deleted + timedelta(seconds=20))
+        ev = FakeEvidence(window=(self.START, self.END), restarts=[mds], spans=[
+            LogSpan("mds-runner", deleted + timedelta(seconds=3), self.END, 100),
+            LogSpan("restart-1-mds-mds-0", deleted, deleted + timedelta(seconds=5), 10),
+            LogSpan("spdk-4424", self.START + timedelta(minutes=90), self.END, 100)])
+        found = list(build_detector("evidence.log-coverage").detect(ev))
+        self.assertEqual(sorted(found[0].evidence["logs"]), ["spdk-4424"])
+
     def test_skips_without_a_run_window(self):
         ev = FakeEvidence(spans=[LogSpan("x", self.START, self.END, 1)])
         with self.assertRaises(SkipDetector):
             list(build_detector("evidence.log-coverage").detect(ev))
+
+    def test_a_restart_excuses_only_the_restarted_pods_logs(self):
+        """An SPDK log that rotated through the first half of the run is still short when its
+        first surviving line falls inside an MDS restart (review on #698)."""
+        deleted = self.START + timedelta(minutes=60)
+        mds = Restart(target="mds", pod="mds-0", node="w3", deleted=deleted,
+                      ready=deleted + timedelta(seconds=20))
+        node = Restart(target="csi-node", pod="csi-node-abc", node="w1",
+                       deleted=deleted, ready=deleted + timedelta(seconds=20))
+        first = deleted + timedelta(seconds=5)
+        ev = FakeEvidence(window=(self.START, self.END), restarts=[mds, node], spans=[
+            LogSpan("spdk-4424", first, self.END, 100),
+            LogSpan("csi-node-w2", first, self.END, 100),
+            LogSpan("csi-node-w1", first, self.END, 100),
+            LogSpan("mds-runner", first, self.END, 100)])
+        found = list(build_detector("evidence.log-coverage").detect(ev))
+        self.assertEqual(sorted(found[0].evidence["logs"]), ["csi-node-w2", "spdk-4424"])
 
     def test_a_migration_no_log_covers_is_a_blind_spot(self):
         """The real case: the corrupting migration ended six seconds before a log began."""
@@ -1083,6 +1229,47 @@ class PnfsDeviceIO(unittest.TestCase):
                          [(Severity.CRITICAL, "c1@w2")])
         self.assertIn("never resumed", found[0].title)
 
+    # w2 stops writing at 20s and resumes at 110s: a 90s pause.
+    PAUSE = (0, 10, 20, 100, 110, 200)
+
+    def _paused(self) -> list[BlockSample]:
+        return ([blk("w1", o, o * 10, o * 5) for o in self.PAUSE]
+                + [blk("w2", o, o * 10, 100 if 20 <= o <= 100 else o * 5) for o in self.PAUSE])
+
+    def test_a_pause_across_an_mds_restart_within_budget_is_expected(self):
+        """Clients wait out the guest's boot and grace period, so writes pause. That is the
+        restart working, not a stall."""
+        mds = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(15), ready=ts(40))
+        ev = FakeEvidence(blocks=self._paused(), pnfs=[self.VOL], restarts=[mds])
+        found = list(build_detector("pnfs.device-io", max_stall_s=60).detect(ev))
+        self.assertEqual([f.severity for f in found if f.severity != Severity.INFO], [])
+
+    def test_a_pause_longer_than_the_restart_budget_still_warns(self):
+        mds = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(15), ready=ts(40))
+        ev = FakeEvidence(blocks=self._paused(), pnfs=[self.VOL], restarts=[mds])
+        found = list(build_detector("pnfs.device-io", max_stall_s=60,
+                                    restart_pause_s=60).detect(ev))
+        self.assertEqual([(f.severity, f.subject) for f in found],
+                         [(Severity.WARNING, "c1@w2")])
+
+    def test_a_pause_across_a_csi_node_restart_still_warns(self):
+        """The node plugin is not on the data path, so restarting it must not pause I/O."""
+        node = Restart(target="csi-node", pod="csi-node-x", node="w2", deleted=ts(15),
+                       ready=ts(40))
+        ev = FakeEvidence(blocks=self._paused(), pnfs=[self.VOL], restarts=[node])
+        found = list(build_detector("pnfs.device-io", max_stall_s=60).detect(ev))
+        self.assertEqual([(f.severity, f.subject) for f in found],
+                         [(Severity.WARNING, "c1@w2")])
+
+    def test_writes_that_never_resumed_after_a_restart_still_fail(self):
+        mds = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(15), ready=ts(40))
+        blocks = ([blk("w1", o, o * 10, o * 5) for o in self.PAUSE]
+                  + [blk("w2", o, min(o, 20) * 10, min(o, 20) * 5) for o in self.PAUSE])
+        ev = FakeEvidence(blocks=blocks, pnfs=[self.VOL], restarts=[mds])
+        found = list(build_detector("pnfs.device-io", max_stall_s=60).detect(ev))
+        self.assertEqual([(f.severity, f.subject) for f in found],
+                         [(Severity.CRITICAL, "c1@w2")])
+
     def test_reads_are_not_required_when_the_run_did_not_read(self):
         blocks = [blk(n, off, 0, off * 5) for n in ("w1", "w2") for off in (0, 10, 20)]
         self.assertEqual(self._found(blocks, require_reads=False), [])
@@ -1109,4 +1296,412 @@ class PnfsDeviceIO(unittest.TestCase):
         jobs = [FioJob(pod="r-fio-0-c0", start=ts(0), runtime_s=200)]
         found = self._found(blocks, jobs=jobs, vol=vol, max_stall_s=60)
         self.assertEqual([f.severity for f in found], [Severity.WARNING])
+
+
+class ChaosRecovery(unittest.TestCase):
+    """Every restart the run made must have come back: a pod that never returned is a
+    cluster left broken by the test, and nothing after it is evidence of anything."""
+
+    def test_a_restart_whose_replacement_never_turned_ready_is_critical(self):
+        r = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(10), ready=None)
+        found = list(build_detector("chaos.recovery").detect(FakeEvidence(restarts=[r])))
+        self.assertEqual([(f.severity, f.subject) for f in found],
+                         [(Severity.CRITICAL, "mds/mds-0")])
+
+    def test_restarts_that_recovered_are_reported_as_information(self):
+        restarts = [Restart(target="mds", pod="mds-0", node="w3", deleted=ts(10),
+                            ready=ts(40)),
+                    Restart(target="csi-node", pod="csi-node-a", node="w1", deleted=ts(90),
+                            ready=ts(100))]
+        found = list(build_detector("chaos.recovery").detect(FakeEvidence(restarts=restarts)))
+        self.assertEqual({f.severity for f in found}, {Severity.INFO})
+
+    def test_a_run_without_restarts_is_skipped(self):
+        with self.assertRaises(SkipDetector):
+            list(build_detector("chaos.recovery").detect(FakeEvidence()))
+
+
+def churned(n: int, own: bool = True, **kw: object) -> ChurnPod:
+    """A churn pod that came, did I/O, and left cleanly, unless kw says otherwise."""
+    base: dict[str, object] = {
+        "pod": f"r-churn-{n}", "claim": f"r-churn-{n}" if own else "r-pnfs-shared-0",
+        "own_volume": own, "created": ts(n * 10), "node": "w1", "io_started": ts(n * 10 + 5),
+        "finished": ts(n * 10 + 60), "deleted": ts(n * 10 + 65), "rc": 0}
+    if own:
+        base.update({"pvc_deleted": ts(n * 10 + 66), "pv": f"pvc-{n}", "pv_gone": True,
+                     "export_gone": True, "gone_s": 20.0})
+    base.update(kw)
+    return ChurnPod(**base)  # type: ignore[arg-type]
+
+
+class PnfsChurn(unittest.TestCase):
+    """Pods join pNFS volumes, run fio, and leave, some with a volume of their own. Each one
+    has to reach I/O, and an own volume has to be gone, export and all, once it is deleted."""
+
+    def found(self, pods: list[ChurnPod], **opts: object) -> list:
+        return list(build_detector("pnfs.churn", **opts).detect(FakeEvidence(churn=pods)))
+
+    def test_a_clean_flow_is_reported_as_information_only(self):
+        found = self.found([churned(1), churned(2, own=False), churned(3)])
+        self.assertTrue(found)
+        self.assertEqual({f.severity for f in found}, {Severity.INFO})
+
+    def test_a_pod_that_never_reached_io_is_critical(self):
+        found = self.found([churned(1, io_started=None, error="timed run not reached")])
+        self.assertEqual([(f.severity, f.subject) for f in found if f.severity != Severity.INFO],
+                         [(Severity.CRITICAL, "r-churn-1")])
+
+    def test_an_own_volume_whose_export_outlived_it_is_critical(self):
+        found = self.found([churned(1, export_gone=False)])
+        crit = [f for f in found if f.severity == Severity.CRITICAL]
+        self.assertEqual(len(crit), 1)
+        self.assertIn("NFSExport", crit[0].title)
+
+    def test_an_own_volume_whose_pv_outlived_it_is_critical(self):
+        found = self.found([churned(1, pv_gone=False)])
+        crit = [f for f in found if f.severity == Severity.CRITICAL]
+        self.assertEqual(len(crit), 1)
+        self.assertIn("PersistentVolume", crit[0].title)
+
+    def test_a_slow_cleanup_is_a_warning(self):
+        found = self.found([churned(1, gone_s=400.0)], delete_budget_s=120)
+        self.assertEqual([f.severity for f in found if f.severity != Severity.INFO],
+                         [Severity.WARNING])
+
+    def test_a_reused_volume_is_not_judged_on_its_cleanup(self):
+        """A volume the run's long-lived pods share stays when a churn pod leaves it."""
+        found = self.found([churned(1, own=False)])
+        self.assertEqual({f.severity for f in found}, {Severity.INFO})
+
+    def test_a_run_without_churn_is_skipped(self):
+        with self.assertRaises(SkipDetector):
+            self.found([])
+
+
+MDS_KEY = 0x0100000000000000
+OLD_BOOT = 0x6AC79C58      # 2026-10-08T13:36:24Z, the previous metadata server
+NEW_BOOT = 0x6AC79CF4      # 2026-10-08T13:39:00Z, after its restart
+
+
+def resv(uuid: str, *clients: tuple[str, int], holder: bool = True,
+         node: str = "w1") -> NamespaceReservation:
+    """A namespace's reservation state: the MDS's key (the holder, when `holder`) and one
+    registration per (hostid, boot) client."""
+    regs = [Registrant(hostid="mds-host", rkey=MDS_KEY, holder=holder)]
+    regs += [Registrant(hostid=h, rkey=(boot << 32) | (i + 1), holder=False)
+             for i, (h, boot) in enumerate(clients)]
+    return NamespaceReservation(node=node, device="nvme3n1", uuid=uuid,
+                                rtype=4 if holder else 0, generation=4,
+                                registrants=tuple(regs))
+
+
+class StaleReservations(unittest.TestCase):
+    """A client registers the key nfsd gives it, and the key carries nfsd's boot time. A
+    registration from an earlier boot outlives that server on NVMe and blocks the client's
+    new key, and the client's I/O then goes through the metadata server without a word."""
+
+    VOL = PnfsVolume(claim="c1", lvol="lv1", shared=True, nodes=["w1", "w2"])
+
+    def found(self, **kw: object) -> list[Finding]:
+        kw.setdefault("pnfs", [self.VOL])
+        ev = FakeEvidence(**kw)  # type: ignore[arg-type]
+        return list(build_detector("nvme.stale-reservations").detect(ev))
+
+    def test_a_key_from_an_earlier_boot_beside_current_ones_is_critical(self):
+        post = [resv("lv1", ("host-a", NEW_BOOT), ("host-b", OLD_BOOT))]
+        crit = [f for f in self.found(reservations_post=post) if f.severity == Severity.CRITICAL]
+        self.assertEqual([f.subject for f in crit], ["lv1"])
+        self.assertEqual(crit[0].evidence["stale"], ["host-b"])
+        self.assertIs(crit[0].attribution, Attribution.RUN)
+
+    def test_keys_older_than_a_recorded_mds_restart_are_stale_even_when_all_are_old(self):
+        """The shape seen on lab-talos: after the restart no client could register its new
+        key, so every key on the namespace was from the previous boot."""
+        post = [resv("lv1", ("host-a", OLD_BOOT), ("host-b", OLD_BOOT))]
+        mds = Restart(target="mds", pod="mds-0", node="w3",
+                      deleted=datetime(2026, 10, 8, 13, 38, 50, tzinfo=UTC),
+                      ready=datetime(2026, 10, 8, 13, 39, 5, tzinfo=UTC))
+        crit = [f for f in self.found(reservations_post=post, restarts=[mds])
+                if f.severity == Severity.CRITICAL]
+        self.assertEqual(len(crit), 1)
+        self.assertEqual(sorted(crit[0].evidence["stale"]), ["host-a", "host-b"])
+
+    def test_current_keys_under_the_mds_reservation_are_clean(self):
+        post = [resv("lv1", ("host-a", NEW_BOOT), ("host-b", NEW_BOOT))]
+        self.assertEqual({f.severity for f in self.found(reservations_post=post)},
+                         {Severity.INFO})
+
+    def test_the_mds_key_alone_is_never_stale(self):
+        post = [resv("lv1")]
+        self.assertEqual({f.severity for f in self.found(reservations_post=post)},
+                         {Severity.INFO})
+
+    def test_clients_registered_with_no_holder_is_a_warning(self):
+        post = [resv("lv1", ("host-a", NEW_BOOT), holder=False)]
+        self.assertEqual([f.severity for f in self.found(reservations_post=post)
+                          if f.severity != Severity.INFO], [Severity.WARNING])
+
+    def test_a_key_already_stale_before_the_run_is_pre_existing(self):
+        pre = [resv("lv1", ("host-a", NEW_BOOT), ("host-b", OLD_BOOT))]
+        post = [resv("lv1", ("host-a", NEW_BOOT), ("host-b", OLD_BOOT))]
+        crit = [f for f in self.found(reservations_pre=pre, reservations_post=post)
+                if f.severity != Severity.INFO]
+        self.assertEqual(len(crit), 1)
+        self.assertIs(crit[0].attribution, Attribution.PRE_EXISTING)
+
+    def test_a_namespace_seen_from_several_nodes_is_judged_once(self):
+        post = [resv("lv1", ("host-a", NEW_BOOT), ("host-b", OLD_BOOT), node=n)
+                for n in ("w1", "w2")]
+        crit = [f for f in self.found(reservations_post=post) if f.severity == Severity.CRITICAL]
+        self.assertEqual(len(crit), 1)
+
+    def test_namespaces_of_other_volumes_are_not_judged(self):
+        post = [resv("not-pnfs", ("host-a", NEW_BOOT), ("host-b", OLD_BOOT))]
+        self.assertEqual(self.found(reservations_post=post), [])
+
+    def test_a_run_without_a_post_snapshot_is_skipped(self):
+        with self.assertRaises(SkipDetector):
+            self.found()
+
+
+class EvidenceVersions(unittest.TestCase):
+    """A result is only comparable with another when both say what was deployed."""
+
+    def _versions(self) -> Versions:
+        from sbtest.core import DeployedImage, NodeVersion
+        def img(pod: str, container: str, image: str, digest: str) -> DeployedImage:
+            return DeployedImage(namespace="simplyblock", pod=pod, container=container,
+                                 image=image, image_id=f"{image.split(':')[0]}@sha256:{digest}")
+        return Versions(
+            server="v1.34.1",
+            images=(
+                img("simplyblock-operator-6d9f", "manager", "repo/operator:main", "a" * 64),
+                img("simplyblock-csi-node-x1", "csi-node", "repo/spdkcsi:feat", "b" * 64),
+                img("simplyblock-csi-node-x2", "csi-node", "repo/spdkcsi:feat", "b" * 64),
+                img("simplyblock-pnfs-mds-06075ebb-0", "mds-runner", "repo/spdkcsi:pnfs-mds",
+                    "c" * 64),
+                img("snode-spdk-pod-4420-06075e", "spdk-container", "repo/spdk:main", "d" * 64),
+            ),
+            nodes=(NodeVersion(node="w1", kernel="6.18.5-talos", os_image="Talos (v1.12.7)",
+                               runtime="containerd://2.1", kubelet="v1.34.1"),
+                   NodeVersion(node="w2", kernel="6.18.5-talos", os_image="Talos (v1.12.7)",
+                               runtime="containerd://2.1", kubelet="v1.34.1")))
+
+    def test_one_finding_names_the_images_and_kernels_that_were_deployed(self):
+        found = list(build_detector("evidence.versions").detect(
+            FakeEvidence(versions=self._versions())))
+        self.assertEqual([f.severity for f in found], [Severity.INFO])
+        ev = found[0].evidence
+        self.assertEqual(ev["operator"], ["repo/operator:main@sha256:aaaaaaaaaaaa"])
+        self.assertEqual(ev["csi"], ["repo/spdkcsi:feat@sha256:bbbbbbbbbbbb"])
+        self.assertEqual(ev["mds"], ["repo/spdkcsi:pnfs-mds@sha256:cccccccccccc"])
+        self.assertEqual(ev["spdk"], ["repo/spdk:main@sha256:dddddddddddd"])
+        self.assertEqual(ev["kernels"], {"6.18.5-talos": 2})
+        self.assertEqual(ev["server"], "v1.34.1")
+
+    def test_a_run_without_versions_is_skipped(self):
+        with self.assertRaises(SkipDetector):
+            list(build_detector("evidence.versions").detect(FakeEvidence()))
+
+
+def nfs(instance: str, sec: int, read: int, write: int, layouts: int = 4) -> NfsSample:
+    return NfsSample(ts=ts(sec), instance=instance, pod="p0", container="c0",
+                     layoutget=layouts, read=read, write=write)
+
+
+class PnfsLayoutTimeline(unittest.TestCase):
+    """End totals say that data went through the metadata server. The timeline says when,
+    which is what ties it to a restart, a recall, or nothing at all."""
+
+    def test_the_window_of_server_io_is_reported(self):
+        offs = (0, 50, 100, 110, 120, 160, 200)
+        io = (0, 0, 0, 10, 20, 42, 42)
+        timeline = [nfs("r-fio-0-c0", o, v, 0) for o, v in zip(offs, io, strict=True)]
+        ev = FakeEvidence(nfs={"r-fio-0-c0": {"LAYOUTGET": 4, "READ": 42, "WRITE": 0}},
+                          timeline=timeline)
+        found = list(build_detector("pnfs.layout").detect(ev))
+        self.assertEqual([f.severity for f in found], [Severity.WARNING])
+        self.assertEqual(found[0].evidence["server_io_from"], ts(100).isoformat())
+        self.assertEqual(found[0].evidence["server_io_until"], ts(160).isoformat())
+        self.assertIn("from 22:01:40 to 22:02:40", found[0].detail)
+
+    def test_without_a_timeline_the_totals_are_reported_as_before(self):
+        ev = FakeEvidence(nfs={"r-fio-0-c0": {"LAYOUTGET": 4, "READ": 42, "WRITE": 0}})
+        found = list(build_detector("pnfs.layout").detect(ev))
+        self.assertNotIn("server_io_from", found[0].evidence)
+
+
+class PnfsRecovery(unittest.TestCase):
+    """How long after a metadata server restart each client was writing to its own
+    namespace again: the number a restart costs, per client."""
+
+    VOL = PnfsVolume(claim="c1", lvol="lv1", shared=True, nodes=["w1", "w2"])
+    MDS = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(15), ready=ts(40))
+    OFFS = (0, 10, 20, 100, 110, 200)
+
+    def _blocks(self, w2_resumes: bool = True) -> list[BlockSample]:
+        def w2(o: int) -> int:
+            if 20 <= o <= 100 or (not w2_resumes and o > 100):
+                return 100
+            return o * 5
+        return ([blk("w1", o, o * 10, o * 5) for o in self.OFFS]
+                + [blk("w2", o, o * 10, w2(o)) for o in self.OFFS])
+
+    def _found(self, blocks: list[BlockSample], **opts: object) -> dict[str, Finding]:
+        ev = FakeEvidence(blocks=blocks, pnfs=[self.VOL], restarts=[self.MDS])
+        return {f.subject: f for f in build_detector("pnfs.recovery", **opts).detect(ev)}
+
+    def test_a_client_back_within_budget_is_information(self):
+        found = self._found(self._blocks())
+        self.assertEqual(found["c1@w2"].severity, Severity.INFO)
+        self.assertEqual(found["c1@w2"].evidence["direct_after_s"], 95)
+
+    def test_a_client_whose_writes_did_not_pause_is_information(self):
+        found = self._found(self._blocks())
+        self.assertEqual(found["c1@w1"].severity, Severity.INFO)
+        self.assertEqual(found["c1@w1"].evidence["direct_after_s"], 0)
+
+    def test_a_client_back_after_the_budget_warns(self):
+        found = self._found(self._blocks(), budget_s=60)
+        self.assertEqual(found["c1@w2"].severity, Severity.WARNING)
+
+    def test_a_client_that_never_came_back_warns(self):
+        found = self._found(self._blocks(w2_resumes=False))
+        self.assertEqual(found["c1@w2"].severity, Severity.WARNING)
+        self.assertIn("not back", found["c1@w2"].title)
+
+    def test_a_run_without_an_mds_restart_is_skipped(self):
+        ev = FakeEvidence(blocks=self._blocks(), pnfs=[self.VOL])
+        with self.assertRaises(SkipDetector):
+            list(build_detector("pnfs.recovery").detect(ev))
+
+
+def fenced(writes: list[tuple[int, bool]], **kw: object) -> Fence:
+    """A fence run partitioned at 100s, the truncate issued at 120s and returned at 200s,
+    healed at 300s, unless kw says otherwise. writes are (second, ok)."""
+    base: dict[str, object] = {
+        "victim_node": "w1", "recaller_node": "w2", "claim": "r-pnfs-shared-0",
+        "victim_pod": "r-fence-writer", "recaller_pod": "r-fence-recaller",
+        "file": "/data/r-fence.probe",
+        "rules": ("OUTPUT -d 10.0.0.9 -p tcp --dport 2049 -j DROP",),
+        "partitioned": ts(100), "healed": ts(300), "truncate_issued": ts(120),
+        "truncate_returned": ts(200), "truncate_timeout_s": 240.0,
+        "writes": tuple(FenceWrite(ts=ts(t), ok=ok) for t, ok in writes)}
+    base.update(kw)
+    return Fence(**base)  # type: ignore[arg-type]
+
+
+class PnfsFence(unittest.TestCase):
+    """A client cut off from the metadata server keeps its NVMe-oF paths, so once nfsd has
+    fenced it only the reservation stops its writes. A write that lands after the fence
+    means two writers on one filesystem."""
+
+    def found(self, fence: Fence | None) -> list[Finding]:
+        return list(build_detector("pnfs.fence").detect(FakeEvidence(fence=fence)))
+
+    def severities(self, fence: Fence) -> list[Severity]:
+        return [f.severity for f in self.found(fence) if f.severity != Severity.INFO]
+
+    def test_writes_that_stop_once_fenced_are_information(self):
+        writes = [(50, True), (110, True), (150, False), (250, False), (310, True)]
+        self.assertEqual(self.severities(fenced(writes)), [])
+        self.assertTrue(self.found(fenced(writes)))
+
+    def test_a_write_that_lands_after_the_fence_is_critical(self):
+        writes = [(50, True), (150, False), (250, True), (260, True), (310, True)]
+        found = [f for f in self.found(fenced(writes)) if f.severity == Severity.CRITICAL]
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].evidence["writes_after_fence"], 2)
+
+    def test_a_write_after_the_heal_is_not_split_brain(self):
+        writes = [(50, True), (150, False), (300, True), (310, True)]
+        self.assertEqual(self.severities(fenced(writes)), [])
+
+    def test_a_truncate_that_never_returned_is_critical(self):
+        writes = [(50, True), (150, False)]
+        self.assertEqual(self.severities(fenced(writes, truncate_returned=None)),
+                         [Severity.CRITICAL])
+
+    def test_a_failed_truncate_proves_no_fence(self):
+        """An exit status other than timeout's still records when the truncate returned,
+        but nothing was recalled, so later writes are not split brain (review on #698)."""
+        writes = [(50, True), (150, False), (250, True), (260, True)]
+        found = self.found(fenced(writes, truncate_error="exit 1: Permission denied"))
+        self.assertNotIn(Severity.CRITICAL, [f.severity for f in found])
+        self.assertTrue(any("truncate failed" in f.title for f in found))
+
+    def test_a_victim_whose_writes_never_failed_proved_nothing(self):
+        """Its writes went through the metadata server, or the partition did not take, so
+        no layout was at stake."""
+        writes = [(50, True), (110, True), (150, True), (190, True)]
+        self.assertEqual(self.severities(fenced(writes, healed=ts(200))), [Severity.WARNING])
+
+    def test_a_scenario_that_could_not_run_is_a_warning(self):
+        self.assertEqual(self.severities(fenced([], partitioned=None, truncate_issued=None,
+                                                truncate_returned=None, healed=None,
+                                                error="no idle node to fence")),
+                         [Severity.WARNING])
+
+    def test_a_run_without_the_scenario_is_skipped(self):
+        with self.assertRaises(SkipDetector):
+            self.found(None)
+
+
+class ConntrackPinned(unittest.TestCase):
+    """A client flow to the export still translated to the deleted MDS pod's address after
+    the replacement is Ready: the reconnect reused its source port and so its conntrack
+    entry (pnfs-1791525621, finding 2)."""
+
+    OLD, NEW = "10.244.3.118", "10.244.3.123"
+    MDS = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(100), ready=ts(130),
+                  ip=OLD, replacement_ip=NEW)
+
+    @staticmethod
+    def flow(sec: int, reply: str, node: str = "w1", sport: int = 835,
+             state: str = "ESTABLISHED") -> ConntrackSample:
+        return ConntrackSample(ts=ts(sec), node=node, state=state, orig_src="10.10.10.11",
+                               orig_sport=sport, orig_dst="10.108.41.72", orig_dport=2049,
+                               reply_src=reply)
+
+    def found(self, samples: list[ConntrackSample],
+              restarts: list[Restart] | None = None) -> list[Finding]:
+        ev = FakeEvidence(conntrack=samples,
+                          restarts=[self.MDS] if restarts is None else restarts)
+        return list(build_detector("pnfs.conntrack-pinned").detect(ev))
+
+    def test_a_flow_still_on_the_old_pod_after_ready_is_pinned(self):
+        found = self.found([self.flow(90, self.OLD), self.flow(160, self.OLD),
+                            self.flow(220, self.OLD)])
+        self.assertEqual([f.severity for f in found], [Severity.CRITICAL])
+        ev = found[0].evidence
+        self.assertEqual((ev["node"], ev["flow"]), ("w1", "10.10.10.11:835 -> 10.108.41.72"))
+        self.assertEqual(ev["pinned_after_ready_s"], 90)
+
+    def test_the_same_flow_on_the_new_pod_is_not_pinned(self):
+        found = self.found([self.flow(90, self.OLD), self.flow(160, self.NEW)])
+        self.assertEqual([f.severity for f in found], [Severity.INFO])
+        self.assertIn("ruled out", found[0].title)
+
+    def test_the_old_pod_inside_the_grace_after_ready_is_not_pinned(self):
+        # Ready at 130: the client may still be finishing its reconnect at 140.
+        found = self.found([self.flow(140, self.OLD), self.flow(160, self.NEW)])
+        self.assertEqual([f.severity for f in found], [Severity.INFO])
+
+    def test_a_closed_entry_that_lingers_is_not_pinned(self):
+        found = self.found([self.flow(160, self.OLD, state="TIME_WAIT"),
+                            self.flow(160, "", node="w2", state="NONE")])
+        self.assertEqual([f.severity for f in found], [Severity.INFO])
+
+    def test_a_restart_the_samples_never_reach_after_is_not_judged(self):
+        with self.assertRaises(SkipDetector):
+            self.found([self.flow(90, self.OLD)])
+
+    def test_a_restart_without_recorded_addresses_is_skipped(self):
+        bare = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(100), ready=ts(130))
+        with self.assertRaises(SkipDetector):
+            self.found([self.flow(160, self.OLD)], restarts=[bare])
+
+    def test_a_run_without_samples_is_skipped(self):
+        with self.assertRaises(SkipDetector):
+            self.found([])
 

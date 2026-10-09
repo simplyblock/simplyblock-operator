@@ -84,12 +84,24 @@ CATALOGUE: list[Pattern] = [
     ),
     Pattern(
         id="nvme.write-to-readonly",
-        regex=r"WRITE TO RO RANGE",
+        # I/O queues only. SPDK names status 01/82 after the I/O command whatever the
+        # command was, and on a Fabric Connect (queue 0) it is a refused connect.
+        regex=r"WRITE TO RO RANGE \(01/82\) qid:[1-9]",
         logs=["spdk-*"],
         severity="warning",
         min_count=1,
         note="A write reached a range the target considers read-only, which during a "
              "migration means it landed on a copy that was already frozen.",
+    ),
+    Pattern(
+        id="nvme.connect-to-removed-subsystem",
+        regex=r"nvmf_ctrlr_cmd_connect: \*NOTICE\*: Invalid subsystem",
+        logs=["spdk-*"],
+        severity="warning",
+        min_count=1,
+        note="A host kept connecting to a subsystem the target no longer has: a controller "
+             "left behind when its volume was deleted. The host NQN in the line names the "
+             "node, and its csi-node log shows why the unstage did not disconnect it.",
     ),
     Pattern(
         id="operator.path-validation-failed",
