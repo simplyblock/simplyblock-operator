@@ -338,6 +338,24 @@ class FioChecksum(unittest.TestCase):
             list(build_detector("fio.checksum").detect(FakeEvidence(jobs=[FioJob(pod="p")])))
 
 
+class FioThroughputOutlier(unittest.TestCase):
+    """A churn pod lives for minutes, most of them spent laying out its file, so its average
+    says nothing about the volume and would pull the median down for everyone else."""
+
+    def jobs(self) -> list[FioJob]:
+        steady = [FioJob(pod=f"r-fio-{i}-c0", total_iops=1000.0 + i) for i in range(5)]
+        return steady + [FioJob(pod="r-fio-churn-3-c0", total_iops=50.0)]
+
+    def test_churn_instances_are_left_out_by_default(self):
+        found = list(build_detector("fio.throughput-outlier").detect(FakeEvidence(jobs=self.jobs())))
+        self.assertEqual(found, [])
+
+    def test_a_steady_pod_far_below_the_median_still_warns(self):
+        jobs = self.jobs() + [FioJob(pod="r-fio-9-c0", total_iops=100.0)]
+        found = list(build_detector("fio.throughput-outlier").detect(FakeEvidence(jobs=jobs)))
+        self.assertEqual([f.subject for f in found], ["r-fio-9-c0"])
+
+
 class FioJobError(unittest.TestCase):
     def test_eremoteio_carries_the_hint_that_points_at_ana(self):
         ev = FakeEvidence(jobs=[FioJob(pod="fio-0", error=121)])

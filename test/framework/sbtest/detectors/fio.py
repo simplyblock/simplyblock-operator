@@ -334,10 +334,15 @@ class Throughput(Detector):
     summary = "a pod whose average IOPS is far below the run's median"
 
     def defaults(self) -> dict:
-        return {"min_fraction_of_median": 0.5, "min_pods": 4}
+        # `exclude` leaves out instances whose name contains any of these. The churn pods'
+        # (workload.pnfs-churn) live for minutes, mostly laying out their file, so their
+        # average says nothing about the volume and would drag the median down.
+        return {"min_fraction_of_median": 0.5, "min_pods": 4, "exclude": ["-fio-churn-"]}
 
     def detect(self, ev: Evidence) -> Iterable[Finding]:
-        jobs = [j for j in ev.fio_jobs() if j.total_iops > 0]
+        exclude = list(self.opt("exclude") or [])
+        jobs = [j for j in ev.fio_jobs()
+                if j.total_iops > 0 and not any(x in j.pod for x in exclude)]
         if len(jobs) < int(self.opt("min_pods")):
             raise SkipDetector(f"needs at least {self.opt('min_pods')} pods with I/O, "
                                f"got {len(jobs)}")
