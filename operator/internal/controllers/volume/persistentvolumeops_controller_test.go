@@ -366,14 +366,43 @@ func TestAnAbortAfterTheCutoverIsRefusedAndTheOperationRunsOn(t *testing.T) {
 	runPass(t, r)
 
 	ops = operationFrom(t, r)
-	if terminal(ops.Status.Phase) {
+	if ops.Status.Phase == simplyblockv1alpha2.PersistentVolumeOpsPhaseAborted {
 		t.Fatalf("the abort was honored at Verifying: phase = %q", ops.Status.Phase)
 	}
 	if api.cancels != 0 {
 		t.Errorf("a migration that had already cut over was canceled %d times", api.cancels)
 	}
-	if ops.Status.Message == "" {
-		t.Error("the refusal is not reported anywhere the user can read it")
+}
+
+// TestAnAbortAfterTheCutoverDoesNotStallTheMigration.
+//
+// Regression: 2026-10-09-late-abort-stall: an abort that arrived at Verifying
+// was answered with a note and nothing else, so Verifying never ran again and
+// the migration stayed Running with its cleanup undone.
+func TestAnAbortAfterTheCutoverDoesNotStallTheMigration(t *testing.T) {
+	api := idleSubsystem()
+	r := testReconciler(t, api, testWorld()...)
+
+	ops := operationFrom(t, r)
+	ops.Spec.Abort = true
+	if err := r.Update(context.Background(), ops); err != nil {
+		t.Fatal(err)
+	}
+	if err := atStep(r, stepVerifying); err != nil {
+		t.Fatal(err)
+	}
+
+	// One pass advances at most one step, so a migration takes a handful. The
+	// bound turns an operation that stopped moving into a failed test.
+	for range 30 {
+		runPass(t, r)
+		if ops = operationFrom(t, r); terminal(ops.Status.Phase) {
+			break
+		}
+	}
+
+	if ops.Status.Phase != simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", ops.Status.Phase, ops.Status.Message)
 	}
 }
 
