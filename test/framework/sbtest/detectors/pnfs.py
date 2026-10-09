@@ -12,12 +12,17 @@ evidence that can, from both ends of the data path:
 * `pnfs.device-io` reads the client node's NVMe counters: whether the namespace under the
   volume is attached on each consuming node, and whether reads and writes on it kept
   growing for the length of the run.
+
+A restart of the metadata server (`chaos.restart`) pauses every client until the guest has
+booted and its grace period has ended, and a pause that begins at such a restart and stays
+within `restart_pause_s` is that restart working, reported as information. A restart of
+anything else is no excuse: the node plugin and the controller are not on the data path.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from ..core import (
@@ -27,9 +32,11 @@ from ..core import (
     Finding,
     FioJob,
     PnfsVolume,
+    Restart,
     SkipDetector,
     critical,
     detector,
+    info,
     warning,
 )
 
@@ -86,6 +93,11 @@ class DeviceIO(Detector):
             # Reads are required to grow too, which needs a workload that reads. A write-only
             # run turns this off rather than failing on it.
             "require_reads": True,
+            # The longest pause a metadata server restart explains: the guest's boot, and
+            # its grace period, which lasts until the slowest client has reclaimed.
+            "restart_pause_s": 180,
+            # The restarts that pause clients at all.
+            "pausing_targets": ["mds"],
         }
 
     def detect(self, ev: Evidence) -> Iterable[Finding]:
@@ -100,6 +112,8 @@ class DeviceIO(Detector):
         for s in samples:
             series.setdefault((s.node, s.uuid), []).append(s)
         jobs = {j.pod: j for j in ev.fio_jobs()}
+        pausing = set(self.opt("pausing_targets") or [])
+        self._restarts = [r for r in ev.restarts() if r.target in pausing]
 
         for vol in volumes:
             if not vol.lvol:
@@ -153,27 +167,64 @@ class DeviceIO(Detector):
                      "this is a device lookup made from the pod's mount namespace")
             return
 
-        stall = _longest_stall(got)
-        if stall > float(self.opt("max_stall_s")):
+        budget = float(self.opt("restart_pause_s"))
+        unexplained, explained = 0.0, []
+        for start, seconds in _stalls(got):
+            if seconds <= float(self.opt("max_stall_s")):
+                continue
+            restart = _pausing_restart(self._restarts, start, seconds, budget)
+            if restart:
+                explained.append((seconds, restart))
+            else:
+                unexplained = max(unexplained, seconds)
+        if unexplained:
             yield warning(
-                self.name, title=f"writes to the namespace stalled for {stall:.0f}s",
+                self.name, title=f"writes to the namespace stalled for {unexplained:.0f}s",
                 subject=subject,
-                detail=f"{node}: no sector written for {stall:.0f}s while the run was going",
-                evidence={"lvol": lvol, "node": node, "stall_s": stall},
+                detail=f"{node}: no sector written for {unexplained:.0f}s while the run was "
+                       "going",
+                evidence={"lvol": lvol, "node": node, "stall_s": unexplained},
                 note="the client stopped writing to its namespace for a while; if the "
                      "NFS counters grew meanwhile, its I/O went through the server")
+        for seconds, restart in explained:
+            yield info(
+                self.name, title=f"writes paused for {seconds:.0f}s across a {restart.target} "
+                                 "restart",
+                subject=subject,
+                detail=f"{node}: paused from {restart.deleted:%H:%M:%S}, within the "
+                       f"{budget:.0f}s a restart may take",
+                evidence={"lvol": lvol, "node": node, "stall_s": seconds,
+                          "restart": restart.pod})
 
 
-def _longest_stall(got: list[BlockSample]) -> float:
-    """The longest span over which the written-sector counter did not move."""
-    longest = 0.0
+def _stalls(got: list[BlockSample]) -> list[tuple[datetime, float]]:
+    """Every span over which the written-sector counter did not move, as (start, seconds):
+    from the last sample that saw it move to the last that still did not. A span still
+    open at the end of the series is included."""
+    out: list[tuple[datetime, float]] = []
     since = got[0]
     for prev, cur in zip(got, got[1:], strict=False):
         if cur.write_sectors > prev.write_sectors:
+            if prev is not since:
+                out.append((since.ts, (prev.ts - since.ts).total_seconds()))
             since = cur
-            continue
-        longest = max(longest, (cur.ts - since.ts).total_seconds())
-    return longest
+    if since is not got[-1]:
+        out.append((since.ts, (got[-1].ts - since.ts).total_seconds()))
+    return out
+
+
+def _pausing_restart(restarts: list[Restart], start: datetime, seconds: float,
+                     budget: float) -> Restart | None:
+    """The restart that explains a pause, when one began near the pause's start and the
+    pause stayed within the budget. The margin covers the sampling interval, since a pause
+    is dated from the last sample that still saw a write."""
+    if seconds > budget:
+        return None
+    margin = timedelta(seconds=30)
+    for r in restarts:
+        if r.deleted - margin <= start <= r.deleted + margin:
+            return r
+    return None
 
 
 def _trailing_stall(got: list[BlockSample]) -> float:

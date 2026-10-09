@@ -198,6 +198,20 @@ class NvmeController:
         return not self.namespaces
 
 
+@dataclass(frozen=True)
+class Restart:
+    """One pod a run restarted on purpose, and when its replacement came back."""
+
+    target: str
+    pod: str
+    node: str
+    deleted: datetime
+    ready: datetime | None = None
+    replacement: str = ""
+    #: The victim's log, followed from its deletion until its containers exited.
+    log: str = ""
+
+
 # ── the contract ────────────────────────────────────────────────────────────────────
 
 
@@ -257,6 +271,10 @@ class Evidence(Protocol):
         ...
 
     def control_events(self) -> list[ControlEvent]: ...
+
+    def restarts(self) -> list[Restart]:
+        """The pods the run restarted on purpose, oldest first."""
+        ...
 
     def log_spans(self) -> list[LogSpan]:
         """The time range each collected log covers. Empty when not determinable."""
