@@ -1,3 +1,7 @@
+// Tests for the nfsd watchdog, the agent's view of the guest's own NFS server.
+// They run against a /proc tree written to a temporary directory, so they need
+// neither a guest nor nfsd: the watchdog only ever reads files.
+
 package agent
 
 import (
@@ -36,6 +40,14 @@ func (p *fakeProc) pool(arrived, enqueued, woken int) {
 	p.write("fs/nfsd/pool_stats", fmt.Sprintf(
 		"# pool packets-arrived sockets-enqueued threads-woken threads-timedout\n0 %d %d %d 0\n",
 		arrived, enqueued, woken))
+}
+
+// rpcCalls writes /proc/net/rpc/nfsd with calls on its rpc line: the count of
+// requests nfsd has processed, which is what tells progress from a backlog.
+func (p *fakeProc) rpcCalls(calls int) {
+	p.write("net/rpc/nfsd", fmt.Sprintf(
+		"rc 0 0 0\nfh 0 0 0 0 0\nio 0 0\nth 8 0 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000\n"+
+			"net %d 0 %d 3\nrpc %d 0 0 0 0\nproc4 2 0 %d\n", calls, calls, calls, calls))
 }
 
 func (p *fakeProc) thread(pid int, comm, state, wchan string) {
@@ -187,14 +199,17 @@ func TestAThreadWhoseWaitChangesIsNotStuck(t *testing.T) {
 
 // Work arriving while no thread wakes for it is nfsd not draining, even when
 // every thread looks idle: the CLOSE_WAIT sockets of pnfs-1791558094.
-func TestWorkArrivingWithNoThreadWokenIsNotDraining(t *testing.T) {
+// Work arriving while no request completes is a server that stopped
+// processing, whatever its threads are doing.
+func TestWorkArrivingWithNoRequestProcessedIsNotDraining(t *testing.T) {
 	p := newFakeProc(t)
 	p.thread(100, "nfsd", "S", "svc_recv")
 	rec := &recorder{}
 	now := time.Unix(0, 0)
 	w := newWatchdog(p, rec, &now)
 	for i := range 4 {
-		p.pool(10+i, 10+i, 10)
+		p.pool(10+i, 10+i, 10+i)
+		p.rpcCalls(500)
 		w.Tick()
 	}
 	if len(rec.warnings) != 1 || !strings.Contains(rec.warnings[0], "not draining") {
@@ -202,18 +217,39 @@ func TestWorkArrivingWithNoThreadWokenIsNotDraining(t *testing.T) {
 	}
 }
 
-func TestWorkThatWakesThreadsIsDraining(t *testing.T) {
+// Review on #710: under steady load the running threads keep draining without
+// waking anyone, so threads-woken stays flat while requests complete. That is
+// progress, not a stall.
+func TestRequestsCompletingWithNoThreadWokenIsDraining(t *testing.T) {
+	p := newFakeProc(t)
+	p.thread(100, "nfsd", "R", "")
+	rec := &recorder{}
+	now := time.Unix(0, 0)
+	w := newWatchdog(p, rec, &now)
+	for i := range 6 {
+		p.pool(10+i, 10+i, 10)
+		p.rpcCalls(500 + 100*i)
+		w.Tick()
+	}
+	if len(rec.warnings) != 0 {
+		t.Errorf("a draining nfsd raised warnings: %v", rec.warnings)
+	}
+}
+
+// Without the RPC statistics there is no progress to compare, so the backlog
+// rule does not judge rather than guess.
+func TestWithoutRPCStatisticsTheBacklogIsNotJudged(t *testing.T) {
 	p := newFakeProc(t)
 	p.thread(100, "nfsd", "S", "svc_recv")
 	rec := &recorder{}
 	now := time.Unix(0, 0)
 	w := newWatchdog(p, rec, &now)
 	for i := range 6 {
-		p.pool(10+i, 10+i, 10+i)
+		p.pool(10+i, 10+i, 10)
 		w.Tick()
 	}
 	if len(rec.warnings) != 0 {
-		t.Errorf("a draining nfsd raised warnings: %v", rec.warnings)
+		t.Errorf("warned without RPC statistics: %v", rec.warnings)
 	}
 }
 

@@ -133,6 +133,26 @@ func readPoolStats(root string) (poolStats, bool, error) {
 }
 
 // nfsdThread is one nfsd kernel thread as /proc showed it.
+// readRPCCalls is the count of requests nfsd has processed, the first field of
+// the rpc line in <root>/net/rpc/nfsd. It moves only when a request completes,
+// which is the progress the backlog rule compares arrivals with: threads-woken
+// counts idle threads woken, and busy threads drain a backlog without waking
+// anyone. ok is false when the file or the line is absent.
+func readRPCCalls(root string) (calls uint64, ok bool) {
+	data, err := os.ReadFile(filepath.Join(root, "net", "rpc", "nfsd"))
+	if err != nil {
+		return 0, false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "rpc" {
+			n, err := strconv.ParseUint(fields[1], 10, 64)
+			return n, err == nil
+		}
+	}
+	return 0, false
+}
+
 type nfsdThread struct {
 	PID   int
 	State string
@@ -204,6 +224,7 @@ type NFSDWatchdog struct {
 	ticks       int
 	waits       map[int]waiting
 	pools       []poolStats // the last stuckTicks+1 readings, oldest first
+	calls       []uint64    // processed RPC calls at the same ticks, oldest first
 	lastSummary *poolStats
 	inEpisode   bool
 	episodeAt   time.Time
@@ -235,7 +256,8 @@ func (w *NFSDWatchdog) Tick() {
 	}
 
 	stuck := w.trackWaits(threads)
-	notDraining := running && w.trackPool(pool)
+	calls, haveCalls := readRPCCalls(root)
+	notDraining := running && w.trackPool(pool, calls, haveCalls)
 	if running && w.ticks%summaryEvery == 0 {
 		w.summarize(threads, pool)
 	}
@@ -278,17 +300,24 @@ func (w *NFSDWatchdog) trackWaits(threads []nfsdThread) []nfsdThread {
 }
 
 // trackPool reports whether work arrived over the last stuckTicks ticks while
-// no thread woke for it.
-func (w *NFSDWatchdog) trackPool(pool poolStats) bool {
+// nfsd processed no request. Without the RPC statistics it does not judge:
+// there is no progress to compare the arrivals with.
+func (w *NFSDWatchdog) trackPool(pool poolStats, calls uint64, haveCalls bool) bool {
+	if !haveCalls {
+		w.pools, w.calls = nil, nil
+		return false
+	}
 	w.pools = append(w.pools, pool)
+	w.calls = append(w.calls, calls)
 	if len(w.pools) > stuckTicks+1 {
 		w.pools = w.pools[len(w.pools)-stuckTicks-1:]
+		w.calls = w.calls[len(w.calls)-stuckTicks-1:]
 	}
 	if len(w.pools) <= stuckTicks {
 		return false
 	}
 	moved := pool.minus(w.pools[0])
-	return (moved.Arrived > 0 || moved.Enqueued > 0) && moved.Woken == 0
+	return (moved.Arrived > 0 || moved.Enqueued > 0) && calls == w.calls[0]
 }
 
 // summarize logs one line: threads by state, the wchans they wait in, and the
@@ -336,7 +365,8 @@ func describeEpisode(stuck []nfsdThread, notDraining bool) string {
 		parts = append(parts, fmt.Sprintf("pid %d %s in %s for %d ticks", t.PID, t.State, t.WChan, stuckTicks))
 	}
 	if notDraining {
-		parts = append(parts, fmt.Sprintf("not draining: work arrived over %d ticks and no thread woke", stuckTicks))
+		parts = append(parts, fmt.Sprintf(
+			"not draining: work arrived over %d ticks and no request was processed", stuckTicks))
 	}
 	return strings.Join(parts, "; ")
 }
