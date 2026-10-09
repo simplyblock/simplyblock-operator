@@ -375,6 +375,66 @@ class FioChecksum(unittest.TestCase):
             list(build_detector("fio.checksum").detect(FakeEvidence(jobs=[FioJob(pod="p")])))
 
 
+class FioCrossRead(unittest.TestCase):
+    """A reader on another node verifies each round its writer publishes. A wrong block is
+    fio.checksum's, and this judges what checksum cannot see: a reader that never verified
+    a round, and a round a reader could not read at all."""
+
+    READER = "r-fio-xr-0-0"
+
+    @staticmethod
+    def line(sec: int, what: str) -> str:
+        return f"[xread] 2026-08-19T22:00:{sec:02d}Z {what}"
+
+    def detect(self, logs: dict[str, list[str]]) -> list[Finding]:
+        return list(build_detector("fio.cross-read").detect(FakeEvidence(fio_logs=logs)))
+
+    def test_a_reader_that_verified_its_rounds_is_information(self):
+        found = self.detect({self.READER: [
+            self.line(1, "round 1 verified"), self.line(31, "round 2 verified"),
+            self.line(62, "done: verified=2 failed=0 skipped=0 missing=0 timeouts=0")]})
+        self.assertEqual([f.severity for f in found], [Severity.INFO])
+        self.assertEqual(found[0].evidence["verified"], 2)
+
+    def test_a_reader_that_never_verified_a_round_warns(self):
+        found = self.detect({self.READER: [
+            self.line(1, "waiting for a round after 0 timed out after 120s"),
+            self.line(2, "done: verified=0 failed=0 skipped=0 missing=0 timeouts=1")]})
+        self.assertEqual([f.severity for f in found], [Severity.WARNING])
+        self.assertEqual(found[0].subject, self.READER)
+        self.assertEqual(found[0].evidence["timeouts"], 1)
+
+    def test_a_round_the_reader_could_not_read_is_critical(self):
+        found = self.detect({self.READER: [
+            self.line(1, "round 1 verified"),
+            "fio: pid=12, err=116/file:io_u.c:1889, func=io_u error, error=Stale file handle",
+            self.line(31, "round 2 failed rc=1")]})
+        crit = [f for f in found if f.severity == Severity.CRITICAL]
+        self.assertEqual(len(crit), 1)
+        self.assertEqual(crit[0].evidence["failed_rounds"], [2])
+
+    def test_a_round_that_read_back_wrong_is_left_to_fio_checksum(self):
+        """fio.checksum already reports it as corruption, with its blocks. A second
+        critical for the same blocks would count one defect twice."""
+        logs = {self.READER: [
+            self.line(1, "round 1 verified"),
+            FioChecksum.LINE.format(sec=40),
+            self.line(41, "round 2 failed rc=1")]}
+        self.assertFalse([f for f in self.detect(logs) if f.severity == Severity.CRITICAL])
+        checksum = list(build_detector("fio.checksum").detect(FakeEvidence(fio_logs=logs)))
+        self.assertEqual([f.severity for f in checksum], [Severity.CRITICAL])
+
+    def test_writers_and_randrw_instances_are_not_judged(self):
+        found = self.detect({self.READER: [self.line(1, "round 1 verified")],
+                             "r-fio-xw-0": ["[xwrite] 2026-08-19T22:00:01Z round 1 written rc=0"],
+                             "r-fio-0-c0": ["all good"]})
+        self.assertEqual([f.subject for f in found], [self.READER])
+
+    def test_skips_without_readers(self):
+        with self.assertRaises(SkipDetector):
+            self.detect({"r-fio-0-c0": ["all good"]})
+
+
 class FioThroughputOutlier(unittest.TestCase):
     """A churn pod lives for minutes, most of them spent laying out its file, so its average
     says nothing about the volume and would pull the median down for everyone else."""
@@ -391,6 +451,14 @@ class FioThroughputOutlier(unittest.TestCase):
         jobs = self.jobs() + [FioJob(pod="r-fio-9-c0", total_iops=100.0)]
         found = list(build_detector("fio.throughput-outlier").detect(FakeEvidence(jobs=jobs)))
         self.assertEqual([f.subject for f in found], ["r-fio-9-c0"])
+
+    def test_round_writers_and_readers_are_left_out_by_default(self):
+        """They write or read one file per round and idle between, so their averages are
+        not comparable with a randrw instance's."""
+        jobs = self.jobs() + [FioJob(pod="r-fio-xw-0", total_iops=60.0),
+                              FioJob(pod="r-fio-xr-0-1", total_iops=40.0)]
+        found = list(build_detector("fio.throughput-outlier").detect(FakeEvidence(jobs=jobs)))
+        self.assertEqual(found, [])
 
 
 class FioJobError(unittest.TestCase):

@@ -333,6 +333,7 @@ Every one of these came from a real defect. Defaults encode what the runs measur
 | `fio.job-error`              | An fio job ended with a non-zero errno, with the errno's meaning — 121/EREMOTEIO points straight at the ANA detectors.                                                                                                                                                                                                                                                                             |
 | `fio.outage`                 | A pod's I/O stopped for longer than a cutover should cost — reported as a **freeze** when it came back and a **loss** when it never did. Both fail; only one means writes went missing.                                                                                                                                                                                                            |
 | `fio.throughput-outlier`     | A pod far below the run's median IOPS. Weak alone; strong next to an ANA finding on the same subject.                                                                                                                                                                                                                                                                                              |
+| `fio.cross-read`             | **A cross-client reader that verified no round** (warning), or a published round it could not read (critical). A round that read back wrong is `fio.checksum`'s. Only with `workload.pnfs` `cross_readers`.                                                                                                                                                                                        |
 | `logs.pattern`               | **User-definable regex checks over any collected log.** Ships a catalog: undrained transfer, migration sub-task failure, host-not-allowed reconnect storm, write-to-RO-range, path-validation failure, stuck migration group, kernel reconnect loop.                                                                                                                                               |
 | `migration.outcomes`         | Completion rate and phase breakdown.                                                                                                                                                                                                                                                                                                                                                               |
 | `migration.errors`           | Distinct migration errors, grouped by shape — 16 identical failures are one defect.                                                                                                                                                                                                                                                                                                                |
@@ -391,7 +392,7 @@ Three things are load-bearing and worth knowing:
 | `ana.sample`          | Per-namespace ANA state on every consuming node, on an interval, written per migration in the layout `ArchiveEvidence` reads. Needs a driver to tell it which migration is in flight.                                                                                                                                                    |
 | `workload.fio`        | Provisions volumes from two StorageClasses (single-namespace and packed) and drives continuous md5-verified fio against them. `required`.                                                                                                                                                                                                |
 | `migration.driver`    | Creates `VolumeMigration` CRs in a loop, one at a time, and records what each one did. `required`.                                                                                                                                                                                                                                       |
-| `workload.pnfs`       | Provisions pNFS volumes some pods share and some own, and runs verified fio in every container, each instance with a data file of its own. Pods sharing a volume are spread across nodes. `required`.                                                                                                                                    |
+| `workload.pnfs`       | Provisions pNFS volumes some pods share and some own, and runs verified fio in every container, each instance with a data file of its own. Pods sharing a volume are spread across nodes. `required`. `cross_readers` adds readers on other nodes that verify a shared volume's rounds.                                                  |
 | `nvme.iostat`         | Samples every node's NVMe namespace I/O counters (sysfs `stat`, head devices only) on an interval, for `pnfs.device-io`. Finds a replaced node plugin and keeps reading through it.                                                                                                                                                      |
 | `chaos.restart`       | Restarts the metadata server, a pNFS client's node plugin, or the CSI controller during the timed run: `guaranteed` times at seeded random moments, and otherwise with a low `chance` per tick. Records each restart and its recovery in `restarts.json`, and the victim's log through its shutdown in `restart-<n>-<target>-<pod>.txt`. |
 | `chaos.fence`         | Once per run, at a seeded time, cuts one node off from the metadata server (port 2049 only) while a probe there writes with a layout, and has a probe on another node truncate the file, which makes nfsd recall the layout and fence the node. Records the rules, the truncate, and every probe write in `fence.json`.                  |
@@ -641,6 +642,24 @@ its own namespace again.
 Shared volumes prefer one pod per node rather than requiring it, so the suite runs on a small
 cluster too. The setup log says when every pod sharing a volume landed on one node, since such
 a volume exercises one NFS client rather than several.
+
+### Reads across clients
+
+Every instance above verifies what its own client wrote, and a client can satisfy that from
+its own cache. With `cross_readers` set, `workload.pnfs` also checks that another client sees
+the data. Each shared volume gets a writer pod that writes a new file of `round_size_mb` per
+round, at most every `round_s` seconds, with an md5 header in every block, and fsyncs and
+closes it. Only then does it publish the round in a marker file, replaced with `mv`. Each of
+the `cross_readers` reader pods, never on the writer's node, waits for the next marker and
+verifies the newest round with fio's `--verify_only` and the writer's parameters. NFS
+promises close-to-open consistency, so every block must match. A wrong block is reported by
+`fio.checksum` like any other, and each reader leaves `fio.job-error` its result. A wait
+longer than `round_wait_s` is logged as a timeout and the reader waits again. A reader stops
+`round_wait_s` after its runtime, so `round_wait_s` must stay below `stop_timeout_s`.
+`fio.cross-read` warns about a reader that verified no round, and fails a round a reader could
+not read. The writer keeps its last three rounds, which count against `volume_size_gb`. The
+round pods stay out of `pnfs.json`'s nodes: `pnfs.device-io` requires writes on every node
+listed there, and a reader-only node never writes to the namespace.
 
 ### Restarts during the run
 

@@ -106,20 +106,181 @@ def unverified_warning(who: str, numjobs: int) -> str:
             "integrity; use iodepth for concurrency instead")
 
 
-def container_script(args: list[str], logdir: str) -> str:
-    """The shell a fio container runs: install fio, run it, keep the logs readable."""
+def _install(logdir: str) -> str:
     return (
         "set -u\n"
         'echo "[pod] $(date -u +%FT%TZ) installing fio"\n'
         "apk add --no-cache fio >/dev/null 2>&1 || "
         '{ echo "[pod] apk add fio FAILED"; exit 90; }\n'
         f"mkdir -p {logdir}\n"
-        'echo "[pod] $(date -u +%FT%TZ) starting fio"\n'
+    )
+
+
+def container_script(args: list[str], logdir: str) -> str:
+    """The shell a fio container runs: install fio, run it, keep the logs readable."""
+    return (
+        _install(logdir)
+        + 'echo "[pod] $(date -u +%FT%TZ) starting fio"\n'
         + " ".join(args) + "\n"
         "rc=$?\n"
         f'echo "$rc" > {logdir}/fio.rc\n'
         'echo "[pod] $(date -u +%FT%TZ) fio exited rc=$rc"\n'
         # Stay alive after fio exits so the logs on the emptyDir can still be collected.
+        "sleep 100000\n"
+    )
+
+
+# ── rounds: one writer, readers on other clients ─────────────────────────────────────
+#
+# A randrw instance verifies its own writes through its own client, so it cannot show that
+# another client sees them. Rounds can: a writer writes a whole file, closes it, and only
+# then publishes a marker, and readers on other nodes open the file after the marker and
+# verify it. NFS promises close-to-open consistency, so a reader that opens after the
+# writer's close must see every block, and fio's verify_only checks each one against the
+# header the writer put in it.
+
+#: Rounds a writer keeps on the volume: the one being written, and the two before it, which
+#: readers may still be verifying. Older rounds are removed.
+ROUND_KEEP = 3
+
+
+@dataclass(frozen=True)
+class Rounds:
+    """Where and how one writer publishes its rounds, which its readers must know too."""
+
+    base: str        # round N is <base>.r<N>, and the marker round_marker(base)
+    size_mb: int     # the size of each round's file
+    round_s: int     # a writer starts a round at most this often
+    wait_s: int      # how long a reader waits for the next round before recording a timeout
+    runtime_s: int   # how long the writer starts new rounds
+
+
+def round_marker(base: str) -> str:
+    """The file a writer replaces after each round: `<round> <rc> <more|last>`."""
+    return f"{base}.marker"
+
+
+def round_args(opts: Mapping[str, Any], rounds: Rounds, *, direct: bool) -> list[str]:
+    """The fio arguments a round's writer and its readers share.
+
+    A sequential write of the whole file, with fio's default seeds, lays out the same blocks
+    and headers every time, which is what lets a reader's verify_only check a file another
+    process wrote. The file and output are shell variables the round loop sets.
+    """
+    return [
+        "fio", "--name=xround", '--filename="$f"', f"--size={rounds.size_mb}M",
+        f"--ioengine={opts['ioengine']}", f"--direct={1 if direct else 0}", "--rw=write",
+        f"--bs={opts['bs']}", f"--iodepth={opts['iodepth']}", "--numjobs=1",
+        "--continue_on_error=all", "--verify=md5",
+        f"--verify_fatal={1 if opts['verify_fatal'] else 0}",
+        # No dump of a failing block, and no verify state file: either would land in the
+        # working directory, which nothing collects.
+        "--verify_dump=0", "--verify_state_save=0",
+        *(["--serialize_overlap=1"] if int(opts["iodepth"]) > 1 else []),
+        '--output="$out"', "--output-format=json",
+    ]
+
+
+# fio exits 0 after errors it continued past, so its JSON summary is what says a round
+# failed. Shared by both scripts: sets r to fio's exit code, or to 1 for such errors.
+_ROUND_RC = (
+    "r=$?\n"
+    '  if [ "$r" -eq 0 ] && grep -q \'"error" : [1-9]\' "$out" 2>/dev/null; then r=1; fi\n'
+    # result.json is the first failed round's summary, else the latest round's.
+    '  if [ "$rc" -eq 0 ]; then cp -f "$out" "$logs/result.json" 2>/dev/null; rc=$r; fi\n'
+)
+
+
+def round_writer_script(opts: Mapping[str, Any], rounds: Rounds, logdir: str,
+                        direct: bool = True) -> str:
+    """Write a new file each round, fsync it, and close it, then publish a marker.
+
+    The marker is replaced with `mv`, which is atomic in one directory, so a reader never
+    reads a half-written marker. A round whose fio failed is published with its rc, and
+    readers skip it. Writes no IOPS log: rounds idle between files, which fio.outage reads
+    as an outage.
+    """
+    args = [*round_args(opts, rounds, direct=direct), "--do_verify=0", "--end_fsync=1",
+            "--fsync_on_close=1"]
+    marker = round_marker(rounds.base)
+    return (
+        _install(logdir)
+        + f"logs={logdir}; base={rounds.base}; out=$logs/round.json\n"
+        f"end=$(( $(date +%s) + {rounds.runtime_s} )); n=0; r=0; rc=0\n"
+        f'echo "[xwrite] $(date -u +%FT%TZ) writing {rounds.size_mb}M rounds to $base.r<N>"\n'
+        'while [ "$(date +%s)" -lt "$end" ]; do\n'
+        '  n=$((n + 1)); f="$base.r$n"; t0=$(date +%s)\n'
+        "  " + " ".join(args) + "\n"
+        "  " + _ROUND_RC
+        + f'  echo "$n $r more" > "{marker}.tmp" && mv -f "{marker}.tmp" "{marker}"\n'
+        '  echo "[xwrite] $(date -u +%FT%TZ) round $n written rc=$r"\n'
+        f'  rm -f "$base.r$((n - {ROUND_KEEP}))"\n'
+        f"  pause=$(( t0 + {rounds.round_s} - $(date +%s) ))\n"
+        '  if [ "$pause" -gt 0 ]; then sleep "$pause"; fi\n'
+        "done\n"
+        f'echo "$n $r last" > "{marker}.tmp" && mv -f "{marker}.tmp" "{marker}"\n'
+        # The summary before fio.rc: stop() and collection go ahead once fio.rc exists.
+        'echo "[xwrite] $(date -u +%FT%TZ) done: rounds=$n rc=$rc"\n'
+        f'echo "$rc" > {logdir}/fio.rc\n'
+        "sleep 100000\n"
+    )
+
+
+def round_reader_script(opts: Mapping[str, Any], rounds: Rounds, logdir: str,
+                        direct: bool = True) -> str:
+    """Wait for each new round's marker, then verify that round with fio's verify_only.
+
+    Verifies the newest round each time, so a reader slower than its writer skips rounds
+    rather than falling behind. Every wait is bounded: a wait longer than wait_s is logged
+    as a timeout and the reader waits again, and the reader stops at runtime_s + wait_s
+    whatever happened, so stop() always finds its exit code. One line per round names the
+    outcome, and the last line counts them, for fio.cross-read.
+    """
+    args = [*round_args(opts, rounds, direct=direct), "--verify_only"]
+    return (
+        _install(logdir)
+        + f"logs={logdir}; base={rounds.base}; out=$logs/round.json\n"
+        f"deadline=$(( $(date +%s) + {rounds.runtime_s} + {rounds.wait_s} ))\n"
+        "last=0; rc=0; final=0; verified=0; failed=0; skipped=0; missing=0; timeouts=0\n"
+        'while [ "$final" -eq 0 ] && [ "$(date +%s)" -lt "$deadline" ]; do\n'
+        "  since=$(date +%s); n=0; w=0; st=more\n"
+        "  while :; do\n"
+        f'    set -- $(cat "{round_marker(rounds.base)}" 2>/dev/null)\n'
+        '    n=${1:-0}; w=${2:-0}; st=${3:-more}\n'
+        '    if [ "$n" -gt "$last" ] || [ "$st" = last ]; then break; fi\n'
+        f'    if [ $(( $(date +%s) - since )) -ge {rounds.wait_s} ] || '
+        '[ "$(date +%s)" -ge "$deadline" ]; then\n'
+        "      timeouts=$((timeouts + 1))\n"
+        '      echo "[xread] $(date -u +%FT%TZ) waiting for a round after $last timed out '
+        f'after {rounds.wait_s}s"\n'
+        "      break\n"
+        "    fi\n"
+        "    sleep 1\n"
+        "  done\n"
+        '  if [ "$st" = last ]; then final=1; fi\n'
+        '  if [ "$n" -le "$last" ]; then continue; fi\n'
+        '  last=$n; f="$base.r$n"\n'
+        '  if [ "$w" -ne 0 ]; then\n'
+        "    skipped=$((skipped + 1))\n"
+        '    echo "[xread] $(date -u +%FT%TZ) round $n skipped: its writer ended rc=$w"\n'
+        # Never let fio lay out a file that is not there: that would write the volume, and
+        # verify the zeros it wrote.
+        '  elif [ ! -f "$f" ]; then\n'
+        "    missing=$((missing + 1))\n"
+        '    echo "[xread] $(date -u +%FT%TZ) round $n missing: $f is gone"\n'
+        "  else\n"
+        "    " + " ".join(args) + "\n"
+        "    " + _ROUND_RC.replace("\n  ", "\n    ")
+        + '    if [ "$r" -eq 0 ]; then verified=$((verified + 1)); '
+        'echo "[xread] $(date -u +%FT%TZ) round $n verified"\n'
+        '    else failed=$((failed + 1)); '
+        'echo "[xread] $(date -u +%FT%TZ) round $n failed rc=$r"; fi\n'
+        "  fi\n"
+        "done\n"
+        # The count before fio.rc: stop() and collection go ahead once fio.rc exists.
+        'echo "[xread] $(date -u +%FT%TZ) done: verified=$verified failed=$failed '
+        'skipped=$skipped missing=$missing timeouts=$timeouts"\n'
+        f'echo "$rc" > {logdir}/fio.rc\n'
         "sleep 100000\n"
     )
 

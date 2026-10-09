@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -911,6 +912,258 @@ class WorkloadPnfs(unittest.TestCase):
             ev = ArchiveEvidence(ctx.outdir)
             for inst in w._instances:
                 self.assertEqual(ev.nfs_ops(inst.evidence)["LAYOUTGET"], 3)
+
+
+class CrossReadLayout(unittest.TestCase):
+    """cross_readers adds, per shared volume, a writer that publishes its file in rounds and
+    readers that verify each round from other nodes. A reader on its writer's node would
+    read through the same NFS client, which proves nothing about another client."""
+
+    def _plan(self, **opts: object) -> tuple[pnfs_rwx.PnfsRwxWorkload, list[dict]]:
+        w = pnfs_rwx.PnfsRwxWorkload(**opts)
+        with _Ctx() as ctx:
+            docs = w._documents(ctx, "sc-pnfs")
+        return w, docs
+
+    @staticmethod
+    def _pods(docs: list[dict]) -> list[dict]:
+        return [d for d in docs if d["kind"] == "Pod"]
+
+    @staticmethod
+    def _claim(pod: dict) -> str:
+        return str(next(v["persistentVolumeClaim"]["claimName"] for v in pod["spec"]["volumes"]
+                        if "persistentVolumeClaim" in v))
+
+    def test_off_by_default_so_the_layout_is_unchanged(self):
+        w, docs = self._plan(shared_volumes=2, pods_per_shared=3, solo_pods=1)
+        self.assertEqual(len(self._pods(docs)), 2 * 3 + 1)
+        self.assertFalse([p for p in self._pods(docs)
+                          if "pnfs-xwriter" in p["metadata"]["labels"]])
+        self.assertFalse([i for i in w._instances if "-fio-x" in i.evidence])
+
+    def test_every_shared_volume_gets_a_writer_and_its_readers(self):
+        w, docs = self._plan(shared_volumes=2, pods_per_shared=2, solo_pods=1,
+                             cross_readers=2)
+        shared = sorted(w._shared)
+        self.assertEqual(len(shared), 2)
+        writers = [p for p in self._pods(docs) if "pnfs-xwriter" in p["metadata"]["labels"]]
+        self.assertEqual(sorted(self._claim(p) for p in writers), shared)
+        for claim in shared:
+            readers = [p for p in self._pods(docs) if self._claim(p) == claim
+                       and p["metadata"]["labels"].get("pnfs-xreader") == claim]
+            self.assertEqual(len(readers), 2, claim)
+        solo = [c for c in set(w._claim_of.values()) if c not in w._shared]
+        for p in self._pods(docs):
+            if self._claim(p) in solo:
+                self.assertNotIn("pnfs-xreader", p["metadata"]["labels"])
+
+    def test_no_reader_runs_on_its_writers_node(self):
+        """Required, not preferred: a reader that shared its writer's NFS client would pass
+        through that client's cache and prove nothing about cross-client reads."""
+        _, docs = self._plan(shared_volumes=2, pods_per_shared=2, cross_readers=2)
+        readers = [p for p in self._pods(docs) if "pnfs-xreader" in p["metadata"]["labels"]]
+        self.assertEqual(len(readers), 4)
+        for p in readers:
+            terms = p["spec"]["affinity"]["podAntiAffinity"][
+                "requiredDuringSchedulingIgnoredDuringExecution"]
+            self.assertIn({"labelSelector": {"matchLabels": {"pnfs-xwriter": self._claim(p)}},
+                           "topologyKey": "kubernetes.io/hostname"}, terms)
+
+    def test_readers_read_the_rounds_their_own_writer_publishes(self):
+        w, docs = self._plan(shared_volumes=2, pods_per_shared=1, cross_readers=1)
+        writer_base = {}
+        for p in self._pods(docs):
+            if "pnfs-xwriter" in p["metadata"]["labels"]:
+                inst = next(i for i in w._instances if i.pod == p["metadata"]["name"])
+                writer_base[self._claim(p)] = inst.filename
+        for p in self._pods(docs):
+            if "pnfs-xreader" in p["metadata"]["labels"]:
+                inst = next(i for i in w._instances if i.pod == p["metadata"]["name"])
+                self.assertEqual(inst.filename, writer_base[self._claim(p)])
+                self.assertIn(fio.round_marker(inst.filename),
+                              p["spec"]["containers"][0]["command"][-1])
+
+    def test_round_instances_leave_evidence_the_analyser_finds(self):
+        from sbtest.adapters import ArchiveEvidence
+        w, _ = self._plan(shared_volumes=1, pods_per_shared=1, cross_readers=2)
+        names = [i.evidence for i in w._instances]
+        self.assertEqual(len(set(names)), len(names))
+        self.assertEqual(len([n for n in names if "-fio-xw-" in n]), 1)
+        self.assertEqual(len([n for n in names if "-fio-xr-" in n]), 2)
+        with _Ctx() as ctx:
+            for n in names:
+                ctx.dir(n)
+            self.assertEqual(sorted(ArchiveEvidence(ctx.outdir).pods()), sorted(names))
+
+    def test_the_kept_rounds_count_against_the_volume(self):
+        with _Ctx() as ctx, self.assertRaises(RuntimeError) as e:
+            pnfs_rwx.PnfsRwxWorkload(shared_volumes=1, pods_per_shared=2, containers_per_pod=2,
+                                     file_size_gb=4, volume_size_gb=20, cross_readers=1,
+                                     round_size_mb=1024)._documents(ctx, "sc")
+        self.assertIn("round", str(e.exception))
+
+    def test_a_reader_wait_longer_than_the_stop_grace_is_refused(self):
+        """stop() interrupts only fio, so a reader still waiting for a round when the grace
+        ends would never write its exit code."""
+        with _Ctx() as ctx, self.assertRaises(RuntimeError) as e:
+            pnfs_rwx.PnfsRwxWorkload(shared_volumes=1, cross_readers=1, round_wait_s=300,
+                                     stop_timeout_s=180)._documents(ctx, "sc")
+        self.assertIn("round_wait_s", str(e.exception))
+
+    def test_round_instances_do_not_hold_up_the_timed_run_wait(self):
+        """A reader prints no fio status until a round is published, and a round writer
+        writes sequentially, so neither ever looks like the timed run of a randrw job."""
+        w, _ = self._plan(shared_volumes=1, pods_per_shared=2, solo_pods=0, cross_readers=1)
+        timed = w.timed_instances()
+        self.assertEqual(len(timed), 2 * 2)
+        self.assertFalse([i for i in timed if "-fio-x" in i.evidence])
+
+    def test_the_volume_map_keeps_round_pods_out_of_the_device_check(self):
+        """A reader-only node writes nothing to the namespace, and pnfs.device-io would call
+        that a client whose I/O bypassed the namespace."""
+        from sbtest.adapters import ArchiveEvidence
+        w, _ = self._plan(shared_volumes=1, pods_per_shared=1, solo_pods=0,
+                          containers_per_pod=1, cross_readers=2)
+        nodes = {p: f"node-{i}" for i, p in enumerate(sorted(w._claim_of))}
+        randrw = [i for i in w._instances if "-fio-x" not in i.evidence]
+        with _Ctx() as ctx:
+            w._write_volume_map(ctx, nodes)
+            vol = ArchiveEvidence(ctx.outdir).pnfs_volumes()[0]
+            with open(ctx.path("pnfs.json")) as fh:
+                raw = json.load(fh)["volumes"][0]
+        self.assertEqual(vol.nodes, sorted({nodes[i.pod] for i in randrw}))
+        self.assertEqual(set(vol.instances), {i.evidence for i in randrw})
+        self.assertEqual(len(raw["cross_read"]), 3)
+
+
+class CrossReadScripts(unittest.TestCase):
+    """The round writer and reader scripts. The pure checks hold everywhere. The end-to-end
+    ones run the scripts with a real fio against a local directory, where one is installed."""
+
+    def setUp(self) -> None:
+        self.ROUNDS = fio.Rounds(base="/data/run1-xw-0", size_mb=4, round_s=1, wait_s=2,
+                                 runtime_s=3)
+
+    @staticmethod
+    def _fio_line(script: str) -> list[str]:
+        line = next(ln for ln in script.splitlines() if ln.lstrip().startswith("fio "))
+        return line.split()
+
+    def test_a_round_is_published_only_after_fio_has_closed_it(self):
+        s = fio.round_writer_script(fio.FIO_DEFAULTS, self.ROUNDS, "/logs/xw")
+        for flag in ("--rw=write", "--verify=md5", "--do_verify=0", "--end_fsync=1",
+                     "--verify_state_save=0"):
+            self.assertIn(flag, self._fio_line(s))
+        marker = fio.round_marker(self.ROUNDS.base)
+        lines = s.splitlines()
+        ran = next(n for n, ln in enumerate(lines) if ln.lstrip().startswith("fio "))
+        published = next(n for n, ln in enumerate(lines) if "mv -f" in ln and marker in ln)
+        self.assertLess(ran, published)
+        self.assertIn("/logs/xw/fio.rc", s)
+
+    def test_readers_verify_with_the_writers_parameters(self):
+        writer = self._fio_line(fio.round_writer_script(fio.FIO_DEFAULTS, self.ROUNDS, "/l"))
+        reader = self._fio_line(fio.round_reader_script(fio.FIO_DEFAULTS, self.ROUNDS, "/l"))
+        self.assertIn("--verify_only", reader)
+        only_writer = {"--do_verify=0", "--end_fsync=1", "--fsync_on_close=1"}
+        self.assertEqual([a for a in writer if a not in only_writer],
+                         [a for a in reader if a != "--verify_only"])
+
+    def test_reader_waits_are_bounded(self):
+        s = fio.round_reader_script(fio.FIO_DEFAULTS, self.ROUNDS, "/logs/xr")
+        self.assertIn("timed out", s)
+        self.assertIn("/logs/xr/fio.rc", s)
+        self.assertIn(f"{self.ROUNDS.runtime_s} + {self.ROUNDS.wait_s}", s)
+
+    # ── end to end, with a real fio ────────────────────────────────────────────────
+
+    def _run(self, d: str, script: str, name: str) -> subprocess.Popen[str]:
+        # A stub stands in for Alpine's apk, and fio comes from the host.
+        os.makedirs(os.path.join(d, "bin"), exist_ok=True)
+        with open(os.path.join(d, "bin", "apk"), "w") as fh:
+            fh.write("#!/bin/sh\nexit 0\n")
+        os.chmod(os.path.join(d, "bin", "apk"), 0o755)
+        env = dict(os.environ, PATH=os.path.join(d, "bin") + os.pathsep + os.environ["PATH"])
+        out = open(os.path.join(d, f"{name}.out"), "w")  # noqa: SIM115
+        self.addCleanup(out.close)
+        # cwd in the temp dir, so nothing fio writes beside its files lands in the checkout.
+        p = subprocess.Popen(["sh", "-c", script], stdout=out, stderr=subprocess.STDOUT,
+                             env=env, cwd=d, text=True)
+        self.addCleanup(p.wait)
+        self.addCleanup(p.kill)
+        return p
+
+    @staticmethod
+    def _rc(logdir: str, timeout_s: float) -> str:
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            try:
+                with open(os.path.join(logdir, "fio.rc")) as fh:
+                    rc = fh.read().strip()
+                if rc:
+                    return rc
+            except OSError:
+                pass
+            time.sleep(0.2)
+        raise AssertionError(f"no fio.rc in {logdir} after {timeout_s}s")
+
+    def _local(self, d: str, **kw: int) -> tuple[dict, fio.Rounds]:
+        opts = dict(fio.FIO_DEFAULTS, ioengine="psync", iodepth=1)
+        fields = {"size_mb": 2, "round_s": 1, "wait_s": 3, "runtime_s": 3} | kw
+        return opts, fio.Rounds(base=os.path.join(d, "data", "xw"), **fields)
+
+    @unittest.skipUnless(shutil.which("fio"), "needs fio")
+    def test_a_reader_verifies_the_rounds_its_writer_publishes(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "data"))
+            opts, r = self._local(d)
+            w = self._run(d, fio.round_writer_script(opts, r, f"{d}/xw", direct=False), "xw")
+            rd = self._run(d, fio.round_reader_script(opts, r, f"{d}/xr", direct=False), "xr")
+            self.assertEqual(self._rc(f"{d}/xw", 30), "0")
+            self.assertEqual(self._rc(f"{d}/xr", 30), "0")
+            w.kill()
+            rd.kill()
+            with open(os.path.join(d, "xr.out")) as fh:
+                log = fh.read()
+            self.assertRegex(log, r"\[xread\] \S+ round \d+ verified")
+            self.assertNotRegex(log, r"round \d+ failed")
+            self.assertTrue(os.path.exists(f"{d}/xr/result.json"))
+            # Old rounds are removed, so a long run does not fill the volume.
+            kept = [f for f in os.listdir(os.path.join(d, "data")) if ".r" in f]
+            self.assertLessEqual(len(kept), fio.ROUND_KEEP, kept)
+
+    @unittest.skipUnless(shutil.which("fio"), "needs fio")
+    def test_a_round_that_reads_back_wrong_fails_its_reader(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "data"))
+            opts, r = self._local(d, runtime_s=2)
+            self._run(d, fio.round_writer_script(opts, r, f"{d}/xw", direct=False), "xw")
+            self.assertEqual(self._rc(f"{d}/xw", 30), "0")
+            # The writer is done, so its marker names the last round, the one a reader reads.
+            with open(fio.round_marker(r.base)) as fh:
+                last = fh.read().split()[0]
+            with open(f"{r.base}.r{last}", "r+b") as fh:
+                fh.seek(8192)
+                fh.write(b"\0" * 4096)   # a lost write reads back as zeros
+            self._run(d, fio.round_reader_script(opts, r, f"{d}/xr", direct=False), "xr")
+            self.assertNotEqual(self._rc(f"{d}/xr", 30), "0")
+            with open(os.path.join(d, "xr.out")) as fh:
+                log = fh.read()
+            self.assertRegex(log, rf"\[xread\] \S+ round {last} failed")
+            self.assertIn("verify: bad magic header", log)
+            with open(f"{d}/xr/result.json") as fh:
+                self.assertNotEqual(json.load(fh)["jobs"][0]["error"], 0)
+
+    def test_a_reader_with_no_writer_times_out_and_exits(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "data"))
+            opts, r = self._local(d, runtime_s=1, wait_s=1)
+            self._run(d, fio.round_reader_script(opts, r, f"{d}/xr", direct=False), "xr")
+            self.assertEqual(self._rc(f"{d}/xr", 15), "0")
+            with open(os.path.join(d, "xr.out")) as fh:
+                log = fh.read()
+            self.assertIn("timed out", log)
+            self.assertRegex(log, r"verified=0\b")
 
 
 class WorkloadStop(unittest.TestCase):

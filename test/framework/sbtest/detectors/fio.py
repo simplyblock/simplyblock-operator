@@ -20,6 +20,7 @@ from ..core import (
     attribute_window,
     critical,
     detector,
+    info,
     warning,
 )
 
@@ -195,6 +196,66 @@ class Checksum(Detector):
             )
 
 
+#: A cross-read reader's evidence directory (workload.pnfs, cross_readers).
+_READER_MARK = "-fio-xr-"
+#: What a reader logs per round, and its timeouts (fio.round_reader_script).
+_ROUND_RE = re.compile(r"\[xread\] \S+ round (\d+) (verified|failed|skipped|missing)")
+_TIMEOUT_RE = re.compile(r"\[xread\] \S+ waiting for a round .* timed out")
+
+
+@detector
+class CrossRead(Detector):
+    """A cross-client reader that verified no round, or a round it could not read.
+
+    A reader on another node verifies each round its writer publishes after closing the
+    file. A block that reads back wrong is fio.checksum's, which reports it with the blocks,
+    so this does not report it again. What is left is what checksum cannot see: a round
+    whose fio failed without a verify error (the file vanished or went stale under the read,
+    an I/O error), and a reader that never verified anything, which leaves the cross-client
+    case unproven rather than failed.
+    """
+
+    name = "fio.cross-read"
+    summary = "a cross-client reader that verified no round, or could not read one"
+
+    def detect(self, ev: Evidence) -> Iterable[Finding]:
+        readers = [p for p in ev.pods() if _READER_MARK in p]
+        if not readers:
+            raise SkipDetector("no cross-client readers; set workload.pnfs cross_readers")
+        for pod in readers:
+            rounds: dict[str, list[int]] = {}
+            timeouts, checksum = 0, False
+            for line in ev.fio_log(pod):
+                m = _ROUND_RE.search(line)
+                if m:
+                    rounds.setdefault(m.group(2), []).append(int(m.group(1)))
+                elif _TIMEOUT_RE.search(line):
+                    timeouts += 1
+                elif _VERIFY_RE.search(line):
+                    checksum = True
+            counts = {k: len(rounds.get(k, [])) for k in
+                      ("verified", "failed", "skipped", "missing")}
+            evidence = {**counts, "timeouts": timeouts,
+                        "failed_rounds": sorted(rounds.get("failed", []))}
+            detail = ", ".join(f"{k}={v}" for k, v in evidence.items() if k != "failed_rounds")
+            if counts["failed"] and not checksum:
+                yield critical(
+                    self.name, title=f"reader could not read {counts['failed']} round(s)",
+                    subject=pod, detail=detail, evidence=evidence,
+                    artifacts=[f"{pod}/fio.log", f"{pod}/result.json"],
+                    note="fio failed on a published round without a verify error: the file "
+                         "another client had closed could not be read from this one")
+            if not counts["verified"]:
+                yield warning(
+                    self.name, title="reader verified no round", subject=pod, detail=detail,
+                    evidence=evidence, artifacts=[f"{pod}/fio.log"],
+                    note="nothing was read across clients, so the run says nothing about "
+                         "cross-client consistency on this volume")
+            elif not counts["failed"]:
+                yield info(self.name, title=f"reader verified {counts['verified']} round(s)",
+                           subject=pod, detail=detail, evidence=evidence)
+
+
 @dataclass(frozen=True)
 class _Window:
     """One stretch of a pod doing no I/O.
@@ -357,8 +418,11 @@ class Throughput(Detector):
     def defaults(self) -> dict:
         # `exclude` leaves out instances whose name contains any of these. The churn pods'
         # (workload.pnfs-churn) live for minutes, mostly laying out their file, so their
-        # average says nothing about the volume and would drag the median down.
-        return {"min_fraction_of_median": 0.5, "min_pods": 4, "exclude": ["-fio-churn-"]}
+        # average says nothing about the volume and would drag the median down. The
+        # cross-read writers and readers (workload.pnfs) idle between rounds, so theirs
+        # would too.
+        return {"min_fraction_of_median": 0.5, "min_pods": 4,
+                "exclude": ["-fio-churn-", "-fio-xw-", "-fio-xr-"]}
 
     def detect(self, ev: Evidence) -> Iterable[Finding]:
         exclude = list(self.opt("exclude") or [])

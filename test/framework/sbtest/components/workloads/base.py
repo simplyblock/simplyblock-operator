@@ -74,6 +74,11 @@ class FioWorkload(Component):
     def after_collect(self, ctx: RunContext) -> None:
         """Collect what is specific to the workload, after every instance's evidence."""
 
+    def timed_instances(self) -> list[fio.FioInstance]:
+        """The instances setup() waits for to enter fio's timed run. All of them unless a
+        subclass runs instances that never print a timed-run status."""
+        return list(self._instances)
+
     def selector(self, ctx: RunContext) -> str:
         """The label selector teardown deletes pods and claims by."""
         return f"sbtest={ctx.run_id}"
@@ -104,7 +109,7 @@ class FioWorkload(Component):
                          float(self.opt("ready_timeout_s")))
         # The runtime clock starts with the timed run, not with the pods: fio's runtime
         # does not count the layout before it.
-        fio.wait_io_flowing(ctx, self.name, self.opt("namespace"), self._instances,
+        fio.wait_io_flowing(ctx, self.name, self.opt("namespace"), self.timed_instances(),
                             float(self.opt("io_timeout_s")))
         self._io_started = time.time()
         self.after_running(ctx)
