@@ -80,6 +80,10 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 		findings = append(findings, finding{reason: DeviceNotFound, message: found})
 	}
 
+	if found := r.missingSites(ctx, config); found != "" {
+		findings = append(findings, finding{reason: MissingSites, message: found})
+	}
+
 	overflow, err := r.failureDomainOverflow(ctx, config)
 	if err != nil {
 		return nil, err
@@ -385,6 +389,54 @@ func (r *ClusterDeploymentConfigReconciler) failureDomainsRequired(
 		return false
 	}
 	return cluster.Spec.EnableFailureDomains != nil && *cluster.Spec.EnableFailureDomains
+}
+
+// missingSites reports a sync-replication document whose groups do not all
+// declare a site. Like a missing failure domain, provisioning holds on it
+// rather than failing, so a document approved without a site per group produces
+// nodes the backend refuses at add time.
+func (r *ClusterDeploymentConfigReconciler) missingSites(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) string {
+	if !r.syncReplicationRequired(ctx, config) {
+		return ""
+	}
+
+	var found []string
+	for _, set := range config.Spec.NodeSets {
+		for _, group := range set.Groups {
+			if group.Site == "" {
+				found = append(found, set.Name+"/"+group.Name)
+			}
+		}
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"the cluster has sync replication enabled and group %s %s no site; "+
+			"provisioning holds until each declares one",
+		strings.Join(found, ", "), plural(len(found), "declares", "declare"))
+}
+
+// syncReplicationRequired reports whether the document's cluster has sync
+// replication enabled, whether the document creates the cluster or adds to one
+// that already exists.
+func (r *ClusterDeploymentConfigReconciler) syncReplicationRequired(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) bool {
+	if config.Spec.ClusterRef == "" {
+		template := config.Spec.Cluster
+		return template != nil && template.EnableSyncReplication != nil &&
+			*template.EnableSyncReplication
+	}
+
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := client.ObjectKey{Namespace: config.Namespace, Name: config.Spec.ClusterRef}
+	if err := r.Get(ctx, key, &cluster); err != nil {
+		return false
+	}
+	return cluster.Spec.EnableSyncReplication != nil && *cluster.Spec.EnableSyncReplication
 }
 
 // summarize renders the findings for status.message: one sentence, which is what

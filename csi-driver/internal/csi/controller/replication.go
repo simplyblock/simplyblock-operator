@@ -261,6 +261,16 @@ func (cs *Server) EnableVolumeReplication(
 	ctx context.Context,
 	req *replication.EnableVolumeReplicationRequest,
 ) (*replication.EnableVolumeReplicationResponse, error) {
+	method, _, err := resolveMethod(req.GetParameters())
+	if err != nil {
+		return nil, err
+	}
+	if method == methodSync {
+		// A sync volume has no policy to attach: it keeps one identity on both
+		// sites (design §6.3). Returning success keeps the Enable-then-Promote
+		// sequence intact.
+		return &replication.EnableVolumeReplicationResponse{}, nil
+	}
 	policyID := req.GetParameters()[replicationPolicyParam]
 	// An empty replicationPolicyID is the FAIL-OVER TARGET: the side becoming
 	// primary carries no reverse-direction policy yet, because the reverse
@@ -332,6 +342,14 @@ func (cs *Server) DisableVolumeReplication(
 	ctx context.Context,
 	req *replication.DisableVolumeReplicationRequest,
 ) (*replication.DisableVolumeReplicationResponse, error) {
+	method, _, err := resolveMethod(req.GetParameters())
+	if err != nil {
+		return nil, err
+	}
+	if method == methodSync {
+		// No relationship to configure on a sync volume (design §6.3).
+		return &replication.DisableVolumeReplicationResponse{}, nil
+	}
 	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
 		// The local group: this site detaches what it holds, never the live
 		// group on the other site.
@@ -435,6 +453,38 @@ func (cs *Server) PromoteVolume(
 	ctx context.Context,
 	req *replication.PromoteVolumeRequest,
 ) (*replication.PromoteVolumeResponse, error) {
+	method, site, err := resolveMethod(req.GetParameters())
+	if err != nil {
+		return nil, err
+	}
+	if method == methodSync {
+		if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
+			// The whole consistency group promotes as one unit (design §13).
+			client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
+			if err != nil {
+				return nil, status.Error(codes.Unavailable, err.Error())
+			}
+			if _, err := client.SyncPromoteGroup(ctx, gh, site, !req.GetForce()); err != nil {
+				return nil, classifySyncError(err)
+			}
+			return &replication.PromoteVolumeResponse{}, nil
+		}
+		h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		client, err := clusters.ReplicationClient(ctx, h.ClusterID)
+		if err != nil {
+			return nil, status.Error(codes.Unavailable, err.Error())
+		}
+		// Force inverts to planned: an unforced promote is a planned switchover,
+		// a forced promote a disaster fail-over (design §6.1). The connection
+		// entries in the result are read separately at node staging.
+		if _, err := client.SyncPromote(ctx, h.Handle(), site, !req.GetForce()); err != nil {
+			return nil, classifySyncError(err)
+		}
+		return &replication.PromoteVolumeResponse{}, nil
+	}
 	// A group handle promotes the whole consistency group atomically (design
 	// §14.4): every member is cloned from the same group generation. The
 	// planned/forced split is the backend group failover's own concern, so
@@ -505,6 +555,37 @@ func (cs *Server) DemoteVolume(
 	ctx context.Context,
 	req *replication.DemoteVolumeRequest,
 ) (*replication.DemoteVolumeResponse, error) {
+	method, site, err := resolveMethod(req.GetParameters())
+	if err != nil {
+		return nil, err
+	}
+	if method == methodSync {
+		if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
+			// The whole consistency group fences as one unit (design §13).
+			client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
+			if err != nil {
+				return nil, status.Error(codes.Unavailable, err.Error())
+			}
+			if err := client.SyncDemoteGroup(ctx, gh, site); err != nil {
+				return nil, classifySyncError(err)
+			}
+			return &replication.DemoteVolumeResponse{}, nil
+		}
+		h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		client, err := clusters.ReplicationClient(ctx, h.ClusterID)
+		if err != nil {
+			return nil, status.Error(codes.Unavailable, err.Error())
+		}
+		// Fence the volume on this site. A not-served-here demote is a 204 no-op,
+		// so a retry is safe (design §6.2).
+		if err := client.SyncDemote(ctx, h.Handle(), site); err != nil {
+			return nil, classifySyncError(err)
+		}
+		return &replication.DemoteVolumeResponse{}, nil
+	}
 	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
 		// The local group: a relocate back demotes the group this site serves,
 		// which after the first move is the peer of the group the VGR names.
@@ -563,6 +644,13 @@ func (cs *Server) ResyncVolume(
 	ctx context.Context,
 	req *replication.ResyncVolumeRequest,
 ) (*replication.ResyncVolumeResponse, error) {
+	if method, _, err := resolveMethod(req.GetParameters()); err != nil {
+		return nil, err
+	} else if method == methodSync {
+		// A sync volume catches up automatically after a desync; there is nothing
+		// to resync (design §6.3).
+		return &replication.ResyncVolumeResponse{}, nil
+	}
 	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
 		gh, client, err := resolveGroupTarget(ctx, gh, groupActiveEnd)
 		if err != nil {

@@ -487,6 +487,15 @@ spec:
                           plane takes it at cluster create and never re-applies it, so this is the
                           only moment it can be set at all.
                         type: boolean
+                      enableSyncReplication:
+                        description: |-
+                          EnableSyncReplication opts the cluster into synchronous two-site
+                          replication. The cluster then spans exactly two sites and every node group
+                          declares a site (see NodeGroup.Site). It is on the document because it is
+                          immutable on the cluster it lands on: the backend accepts it only at
+                          cluster-create, so a cluster created without it is one nobody can turn it
+                          on for.
+                        type: boolean
                       fabricType:
                         description: FabricType is the storage fabric.
                         maxLength: 32
@@ -930,6 +939,16 @@ spec:
                                   are writing over one another's pool configuration.
                                 maxLength: 63
                                 pattern: ^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$
+                                type: string
+                              site:
+                                description: |-
+                                  Site is the replication site every worker in this group belongs to, one of
+                                  the cluster's two sites. Discovery seeds it from topology.kubernetes.io/zone,
+                                  as it does FailureDomain, since a sync cluster's two sites are its two zones.
+                                  Required when the cluster has enableSyncReplication=true, rejected otherwise.
+                                  It expands into StorageNode.spec.config.site, whose shape it shares.
+                                maxLength: 63
+                                pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
                                 type: string
                               spdkSystemMemory:
                                 description: |-

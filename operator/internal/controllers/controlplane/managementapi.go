@@ -424,6 +424,8 @@ func taskServices() []service {
 		{name: "tasks-runner-port-allow", module: "simplyblock_core/services/tasks_runner_port_allow.py"},
 		{name: "tasks-runner-jc-comp-resume", module: "simplyblock_core/services/tasks_runner_jc_comp.py"},
 		{name: "tasks-runner-sync-lvol-del", module: "simplyblock_core/services/tasks_runner_sync_lvol_del.py"},
+		{name: "tasks-runner-sync-promote", module: "simplyblock_core/services/tasks_runner_sync_promote.py"},
+		{name: "tasks-runner-sync-resync", module: "simplyblock_core/services/tasks_runner_sync_resync.py"},
 		{name: "tasks-runner-cluster-expand", module: "simplyblock_core/services/tasks_runner_cluster_expand.py"},
 		{name: "tasks-runner-node-removal", module: "simplyblock_core/services/tasks_runner_node_removal.py"},
 		{name: "tasks-runner-snapshot-replication", module: "simplyblock_core/services/snapshot_replication.py"},

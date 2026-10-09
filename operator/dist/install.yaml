@@ -984,6 +984,15 @@ spec:
                       plane takes it at cluster create and never re-applies it, so this is the
                       only moment it can be set at all.
                     type: boolean
+                  enableSyncReplication:
+                    description: |-
+                      EnableSyncReplication opts the cluster into synchronous two-site
+                      replication. The cluster then spans exactly two sites and every node group
+                      declares a site (see NodeGroup.Site). It is on the document because it is
+                      immutable on the cluster it lands on: the backend accepts it only at
+                      cluster-create, so a cluster created without it is one nobody can turn it
+                      on for.
+                    type: boolean
                   fabricType:
                     description: FabricType is the storage fabric.
                     maxLength: 32
@@ -1577,6 +1586,16 @@ spec:
                               are writing over one another's pool configuration.
                             maxLength: 63
                             pattern: ^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$
+                            type: string
+                          site:
+                            description: |-
+                              Site is the replication site every worker in this group belongs to, one of
+                              the cluster's two sites. Discovery seeds it from topology.kubernetes.io/zone,
+                              as it does FailureDomain, since a sync cluster's two sites are its two zones.
+                              Required when the cluster has enableSyncReplication=true, rejected otherwise.
+                              It expands into StorageNode.spec.config.site, whose shape it shares.
+                            maxLength: 63
+                            pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
                             type: string
                           spdkSystemMemory:
                             description: |-
@@ -7383,6 +7402,17 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              enableSyncReplication:
+                description: |-
+                  EnableSyncReplication opts the cluster into synchronous two-site
+                  replication, where the cluster spans exactly two sites, every node
+                  declares a site, and each logical volume store is replicated to the other
+                  site. Immutable: the backend accepts it only at cluster-create, so a
+                  cluster created without it cannot be converted.
+                type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               enableVolumeAutoPlacement:
                 description: EnableVolumeAutoPlacement turns on automatic, latency-driven
                   rebalancing.
@@ -8043,6 +8073,8 @@ spec:
               rule: '!has(oldSelf.snodeApiPort) || has(self.snodeApiPort)'
             - message: field enableFailureDomains is immutable once set
               rule: '!has(oldSelf.enableFailureDomains) || has(self.enableFailureDomains)'
+            - message: field enableSyncReplication is immutable once set
+              rule: '!has(oldSelf.enableSyncReplication) || has(self.enableSyncReplication)'
             - message: field enableNodeAffinity is immutable once set
               rule: '!has(oldSelf.enableNodeAffinity) || has(self.enableNodeAffinity)'
             - message: field enableChecksumValidation is immutable once set
@@ -9888,6 +9920,18 @@ spec:
                     maxLength: 63
                     pattern: ^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$
                     type: string
+                  site:
+                    description: |-
+                      Site is the replication site this node belongs to, one of the cluster's two
+                      sites, copied from the ClusterDeploymentConfig node group that produced the
+                      node. Required when the cluster has enableSyncReplication=true. Immutable: a
+                      host sits entirely on one site for the cluster's life.
+                    maxLength: 63
+                    pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
+                    type: string
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                   sizing:
                     description: |-
                       Sizing is what this node's huge pages and core layout were sized from.
@@ -9971,6 +10015,8 @@ spec:
                   rule: '!has(oldSelf.driveSizeRange) || has(self.driveSizeRange)'
                 - message: field failureDomain is immutable once set
                   rule: '!has(oldSelf.failureDomain) || has(self.failureDomain)'
+                - message: field site is immutable once set
+                  rule: '!has(oldSelf.site) || has(self.site)'
                 - message: field expand is immutable once set
                   rule: '!has(oldSelf.expand) || has(self.expand)'
               nodeIndex:
@@ -12432,6 +12478,15 @@ spec:
                           plane takes it at cluster create and never re-applies it, so this is the
                           only moment it can be set at all.
                         type: boolean
+                      enableSyncReplication:
+                        description: |-
+                          EnableSyncReplication opts the cluster into synchronous two-site
+                          replication. The cluster then spans exactly two sites and every node group
+                          declares a site (see NodeGroup.Site). It is on the document because it is
+                          immutable on the cluster it lands on: the backend accepts it only at
+                          cluster-create, so a cluster created without it is one nobody can turn it
+                          on for.
+                        type: boolean
                       fabricType:
                         description: FabricType is the storage fabric.
                         maxLength: 32
@@ -12875,6 +12930,16 @@ spec:
                                   are writing over one another's pool configuration.
                                 maxLength: 63
                                 pattern: ^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$
+                                type: string
+                              site:
+                                description: |-
+                                  Site is the replication site every worker in this group belongs to, one of
+                                  the cluster's two sites. Discovery seeds it from topology.kubernetes.io/zone,
+                                  as it does FailureDomain, since a sync cluster's two sites are its two zones.
+                                  Required when the cluster has enableSyncReplication=true, rejected otherwise.
+                                  It expands into StorageNode.spec.config.site, whose shape it shares.
+                                maxLength: 63
+                                pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
                                 type: string
                               spdkSystemMemory:
                                 description: |-

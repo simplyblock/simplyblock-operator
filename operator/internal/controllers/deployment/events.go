@@ -27,6 +27,11 @@ const (
 	// the ones its cluster has already mapped, exceed what the mapping holds.
 	TooManyFailureDomains = "TooManyFailureDomains"
 
+	// MissingSites is a sync-replication document whose groups do not all declare
+	// a site. Every node of a sync cluster needs one, so provisioning holds until
+	// they are filled in.
+	MissingSites = "MissingSites"
+
 	// What the document says about erasure coding, which is the one part of a
 	// deployment nothing below the operator checks: the control plane validates
 	// the scheme on the cluster create and counts devices at activation, never
