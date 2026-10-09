@@ -357,6 +357,7 @@ Every one of these came from a real defect. Defaults encode what the runs measur
 | `pnfs.device-io`             | **A pNFS client node whose NVMe-oF namespace did not see the data.** The other end of the same question: per volume and consuming node, the namespace must be attached and its read and write counters must grow, without standing still longer than `max_stall_s`. A pause that begins at a metadata server restart and stays within `restart_pause_s` is that restart working, reported as INFO. |
 | `chaos.recovery`             | **A pod the run restarted that never came back.** Every restart `chaos.restart` made must end with a Ready replacement. The ones that did are listed as INFO with how long they took.                                                                                                                                                                                                              |
 | `pnfs.churn`                 | **A pod that joined a pNFS volume and never did I/O, or an own volume left behind.** Every churn pod must reach fio's timed run. A pod that brought its own volume must leave no PersistentVolume and no NFSExport behind, and a cleanup slower than `delete_budget_s` is a warning.                                                                                                               |
+| `nvme.stale-reservations`    | **A pNFS namespace still carrying a registration from an earlier MDS boot** at the end of the run, which blocks that client's new key and sends its I/O through the metadata server. Critical, or PRE_EXISTING when the key was stale before the run. Also warns about clients registered on a namespace nobody reserves.                                                                          |
 
 Three things are load-bearing and worth knowing:
 
@@ -390,6 +391,8 @@ Three things are load-bearing and worth knowing:
 | `nvme.iostat`         | Samples every node's NVMe namespace I/O counters (sysfs `stat`, head devices only) on an interval, for `pnfs.device-io`. Finds a replaced node plugin and keeps reading through it.                                                                                                                                                      |
 | `chaos.restart`       | Restarts the metadata server, a pNFS client's node plugin, or the CSI controller during the timed run: `guaranteed` times at seeded random moments, and otherwise with a low `chance` per tick. Records each restart and its recovery in `restarts.json`, and the victim's log through its shutdown in `restart-<n>-<target>-<pod>.txt`. |
 | `workload.pnfs-churn` | Keeps short-lived pods joining and leaving pNFS volumes during the run, on a seeded schedule: some join a volume `workload.pnfs` shares, some bring a volume of their own and delete it when they leave. Each runs a verified fio for its lifetime and is recorded in `churn.json`.                                                      |
+|-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `nvme.reservations`   | Records every namespace's NVMe reservation (holder, registrants, keys) through `nvme resv-report` on each node, before and after the run, for `nvme.stale-reservations`. Only the pNFS volumes' namespaces once the workload has mapped them.                                                                                            |
 
 ### What gets collected
 
@@ -660,6 +663,19 @@ deleted, so `fio.checksum` and `fio.job-error` judge it like any other instance.
 `churn.json` records when each pod arrived, reached I/O, finished, and left, and for an own
 volume whether its PersistentVolume and NFSExport were gone afterward, which `pnfs.churn`
 judges.
+
+### Reservations
+
+The metadata server holds an NVMe reservation on each export's namespace, and each client
+registers the key nfsd hands it, whose upper 32 bits are nfsd's boot time. On NVMe a
+client's registration outlives the server that issued it, so after a metadata server restart
+the old registration blocks the new key, and the client's I/O goes through the metadata
+server without a word anywhere. `nvme.reservations` records every namespace's registrants
+through `nvme resv-report`, before the run and after it, and `nvme.stale-reservations`
+fails a pNFS namespace that still carries a key from an earlier boot at the end. A key is
+from an earlier boot when it is older than the newest client key on the namespace, or older
+than an MDS restart the run recorded, since after a restart no client may have registered
+anew.
 
 ## Not yet here
 

@@ -13,8 +13,10 @@ from .evidence import (
     IopsSample,
     LogSpan,
     Migration,
+    NamespaceReservation,
     NvmeController,
     PnfsVolume,
+    Registrant,
     Restart,
     attribute,
     attribute_window,
@@ -35,8 +37,9 @@ from .plugin import (
 from .runner import Runner, findings_by_subject_table
 
 __all__ = [
-    "AnaSample", "Attribution", "BlockSample", "ChurnPod", "Component", "Config", "Detector", "Event",
-    "Evidence", "KERNEL_CLOCK_PROBE", "PnfsVolume", "Restart",
+    "AnaSample", "Attribution", "BlockSample", "ChurnPod", "Component", "Config", "Detector",
+    "Event", "Evidence", "KERNEL_CLOCK_PROBE", "NamespaceReservation", "PnfsVolume",
+    "Registrant", "Restart",
     "ControlEvent", "Finding", "LogSpan",
     "FioJob", "IopsSample", "Logger", "Migration", "NvmeController", "Report",
     "RunContext", "Runner", "Selection", "Severity", "SkipDetector", "Timeline",

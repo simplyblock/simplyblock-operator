@@ -26,7 +26,15 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import sbtest  # noqa: E402,F401
-from sbtest.components import chaos, kube, logs, migration, nfs, nvme  # noqa: E402
+from sbtest.components import (  # noqa: E402
+    chaos,
+    kube,
+    logs,
+    migration,
+    nfs,
+    nvme,
+    reservations,
+)
 from sbtest.components.workloads import fio, pnfs_rwx, volumemigration  # noqa: E402
 from sbtest.core import Logger, Migration, RunContext  # noqa: E402
 
@@ -584,6 +592,78 @@ class ChurnPodSpec(unittest.TestCase):
         self.assertIn("--runtime=90", script)
         self.assertIn("--verify=md5", script)
         self.assertIn("-fio-", inst.evidence)
+
+
+#: What the reservation script prints on a pNFS client, captured on lab-talos: a namespace
+#: under the MDS's reservation with one client registered, the MDS's own state disk, which
+#: carries no reservation at all, and a device whose report produced nothing.
+RESV_REPORT = """### nvme3n1|62a413e3-d36b-413f-b172-f6f2f943af02
+{
+  "gen":4,
+  "rtype":4,
+  "regctl":2,
+  "ptpls":1,
+  "regctlext":[
+    {
+      "cntlid":65535,
+      "rcsts":1,
+      "rkey":72057594037927936,
+      "hostid":"8d2a561eeafe4d92a29c2a1cf66fa2c0"
+    },
+    {
+      "cntlid":65535,
+      "rcsts":0,
+      "rkey":7694384339219550510,
+      "hostid":"913d3d9f8a854ec185036f2a83039d59"
+    }
+  ]
+}
+### nvme0n1|e500a6c4-a0dc-4413-b0a4-8db8df45c070
+{
+  "gen":0,
+  "rtype":0,
+  "regctl":0,
+  "ptpls":0,
+  "regctlext":[]
+}
+### nvme9n1|0d631002-c19a-49e5-b9bd-a63102827f14
+### end
+"""
+
+
+class NvmeReservations(unittest.TestCase):
+    def test_every_namespace_and_registrant_is_read(self):
+        got = reservations.parse_report("worker-1", RESV_REPORT)
+        self.assertEqual([(n.device, n.uuid, n.rtype, n.generation) for n in got], [
+            ("nvme3n1", "62a413e3-d36b-413f-b172-f6f2f943af02", 4, 4),
+            ("nvme0n1", "e500a6c4-a0dc-4413-b0a4-8db8df45c070", 0, 0)])
+        regs = got[0].registrants
+        self.assertEqual([(r.hostid, r.rkey, r.holder) for r in regs], [
+            ("8d2a561eeafe4d92a29c2a1cf66fa2c0", 72057594037927936, True),
+            ("913d3d9f8a854ec185036f2a83039d59", 7694384339219550510, False)])
+        self.assertEqual(got[1].registrants, ())
+        self.assertEqual({n.node for n in got}, {"worker-1"})
+
+    def test_a_device_whose_report_failed_is_left_out_rather_than_read_as_empty(self):
+        """No JSON is not "no reservation": an empty registrant list would read as a
+        namespace nobody may write to, which it is not known to be."""
+        got = reservations.parse_report("worker-1", RESV_REPORT)
+        self.assertNotIn("nvme9n1", [n.device for n in got])
+
+    def test_a_per_path_device_is_left_to_its_head(self):
+        """The reservation is the namespace's, so each path would report it again."""
+        out = RESV_REPORT.replace("### end", "### nvme3c3n1|62a413e3-d36b-413f-b172-f6f2f943af02\n"
+                                  '{"gen":4,"rtype":4,"regctlext":[]}\n### end')
+        got = reservations.parse_report("worker-1", out)
+        self.assertEqual([n.device for n in got], ["nvme3n1", "nvme0n1"])
+
+    def test_snapshots_round_trip_through_the_archive(self):
+        from sbtest.adapters import ArchiveEvidence
+        got = reservations.parse_report("worker-1", RESV_REPORT)
+        with _Ctx() as ctx:
+            reservations.write_snapshot(ctx, "post", got)
+            back = ArchiveEvidence(ctx.outdir).reservations_post()
+        self.assertEqual(back, got)
 
 
 class WorkloadPnfs(unittest.TestCase):

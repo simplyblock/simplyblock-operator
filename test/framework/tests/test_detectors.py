@@ -29,8 +29,10 @@ from sbtest.core import (  # noqa: E402
     IopsSample,
     LogSpan,
     Migration,
+    NamespaceReservation,
     NvmeController,
     PnfsVolume,
+    Registrant,
     Report,
     Restart,
     Severity,
@@ -75,6 +77,8 @@ class FakeEvidence:
         pnfs: list[PnfsVolume] | None = None,
         restarts: list[Restart] | None = None,
         churn: list[ChurnPod] | None = None,
+        reservations_pre: list[NamespaceReservation] | None = None,
+        reservations_post: list[NamespaceReservation] | None = None,
     ) -> None:
         self.run_id = run_id
         self.outdir = outdir
@@ -94,6 +98,8 @@ class FakeEvidence:
         self._pnfs = pnfs or []
         self._restarts = restarts or []
         self._churn = churn or []
+        self._resv_pre = reservations_pre or []
+        self._resv_post = reservations_post or []
 
     def migrations(self) -> list[Migration]:
         return list(self._migrations)
@@ -137,6 +143,11 @@ class FakeEvidence:
 
     def churn(self) -> list[ChurnPod]:
         return list(self._churn)
+    def reservations_pre(self) -> list[NamespaceReservation]:
+        return list(self._resv_pre)
+
+    def reservations_post(self) -> list[NamespaceReservation]:
+        return list(self._resv_post)
 
     def cluster_uuid(self) -> str:
         return self._cluster
@@ -1260,4 +1271,90 @@ class PnfsChurn(unittest.TestCase):
     def test_a_run_without_churn_is_skipped(self):
         with self.assertRaises(SkipDetector):
             self.found([])
+
+
+MDS_KEY = 0x0100000000000000
+OLD_BOOT = 0x6AC79C58      # 2026-10-08T13:36:24Z, the previous metadata server
+NEW_BOOT = 0x6AC79CF4      # 2026-10-08T13:39:00Z, after its restart
+
+
+def resv(uuid: str, *clients: tuple[str, int], holder: bool = True,
+         node: str = "w1") -> NamespaceReservation:
+    """A namespace's reservation state: the MDS's key (the holder, when `holder`) and one
+    registration per (hostid, boot) client."""
+    regs = [Registrant(hostid="mds-host", rkey=MDS_KEY, holder=holder)]
+    regs += [Registrant(hostid=h, rkey=(boot << 32) | (i + 1), holder=False)
+             for i, (h, boot) in enumerate(clients)]
+    return NamespaceReservation(node=node, device="nvme3n1", uuid=uuid,
+                                rtype=4 if holder else 0, generation=4,
+                                registrants=tuple(regs))
+
+
+class StaleReservations(unittest.TestCase):
+    """A client registers the key nfsd gives it, and the key carries nfsd's boot time. A
+    registration from an earlier boot outlives that server on NVMe and blocks the client's
+    new key, and the client's I/O then goes through the metadata server without a word."""
+
+    VOL = PnfsVolume(claim="c1", lvol="lv1", shared=True, nodes=["w1", "w2"])
+
+    def found(self, **kw: object) -> list[Finding]:
+        kw.setdefault("pnfs", [self.VOL])
+        ev = FakeEvidence(**kw)  # type: ignore[arg-type]
+        return list(build_detector("nvme.stale-reservations").detect(ev))
+
+    def test_a_key_from_an_earlier_boot_beside_current_ones_is_critical(self):
+        post = [resv("lv1", ("host-a", NEW_BOOT), ("host-b", OLD_BOOT))]
+        crit = [f for f in self.found(reservations_post=post) if f.severity == Severity.CRITICAL]
+        self.assertEqual([f.subject for f in crit], ["lv1"])
+        self.assertEqual(crit[0].evidence["stale"], ["host-b"])
+        self.assertIs(crit[0].attribution, Attribution.RUN)
+
+    def test_keys_older_than_a_recorded_mds_restart_are_stale_even_when_all_are_old(self):
+        """The shape seen on lab-talos: after the restart no client could register its new
+        key, so every key on the namespace was from the previous boot."""
+        post = [resv("lv1", ("host-a", OLD_BOOT), ("host-b", OLD_BOOT))]
+        mds = Restart(target="mds", pod="mds-0", node="w3",
+                      deleted=datetime(2026, 10, 8, 13, 38, 50, tzinfo=UTC),
+                      ready=datetime(2026, 10, 8, 13, 39, 5, tzinfo=UTC))
+        crit = [f for f in self.found(reservations_post=post, restarts=[mds])
+                if f.severity == Severity.CRITICAL]
+        self.assertEqual(len(crit), 1)
+        self.assertEqual(sorted(crit[0].evidence["stale"]), ["host-a", "host-b"])
+
+    def test_current_keys_under_the_mds_reservation_are_clean(self):
+        post = [resv("lv1", ("host-a", NEW_BOOT), ("host-b", NEW_BOOT))]
+        self.assertEqual({f.severity for f in self.found(reservations_post=post)},
+                         {Severity.INFO})
+
+    def test_the_mds_key_alone_is_never_stale(self):
+        post = [resv("lv1")]
+        self.assertEqual({f.severity for f in self.found(reservations_post=post)},
+                         {Severity.INFO})
+
+    def test_clients_registered_with_no_holder_is_a_warning(self):
+        post = [resv("lv1", ("host-a", NEW_BOOT), holder=False)]
+        self.assertEqual([f.severity for f in self.found(reservations_post=post)
+                          if f.severity != Severity.INFO], [Severity.WARNING])
+
+    def test_a_key_already_stale_before_the_run_is_pre_existing(self):
+        pre = [resv("lv1", ("host-a", NEW_BOOT), ("host-b", OLD_BOOT))]
+        post = [resv("lv1", ("host-a", NEW_BOOT), ("host-b", OLD_BOOT))]
+        crit = [f for f in self.found(reservations_pre=pre, reservations_post=post)
+                if f.severity != Severity.INFO]
+        self.assertEqual(len(crit), 1)
+        self.assertIs(crit[0].attribution, Attribution.PRE_EXISTING)
+
+    def test_a_namespace_seen_from_several_nodes_is_judged_once(self):
+        post = [resv("lv1", ("host-a", NEW_BOOT), ("host-b", OLD_BOOT), node=n)
+                for n in ("w1", "w2")]
+        crit = [f for f in self.found(reservations_post=post) if f.severity == Severity.CRITICAL]
+        self.assertEqual(len(crit), 1)
+
+    def test_namespaces_of_other_volumes_are_not_judged(self):
+        post = [resv("not-pnfs", ("host-a", NEW_BOOT), ("host-b", OLD_BOOT))]
+        self.assertEqual(self.found(reservations_post=post), [])
+
+    def test_a_run_without_a_post_snapshot_is_skipped(self):
+        with self.assertRaises(SkipDetector):
+            self.found()
 

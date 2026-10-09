@@ -240,6 +240,32 @@ class ChurnPod:
     error: str = ""
 
 
+@dataclass(frozen=True)
+class Registrant:
+    """One host registered on a namespace's NVMe reservation, with the key it holds."""
+
+    hostid: str
+    rkey: int
+    holder: bool = False
+
+
+@dataclass(frozen=True)
+class NamespaceReservation:
+    """A namespace's NVMe reservation as one node's `nvme resv-report` saw it.
+
+    The state is the target's, so every node attached to the namespace reports the same
+    registrants. A pNFS metadata server holds the reservation, and each client registers
+    the key nfsd gave it, whose upper 32 bits are nfsd's boot time.
+    """
+
+    node: str
+    device: str
+    uuid: str
+    rtype: int
+    generation: int
+    registrants: tuple[Registrant, ...] = ()
+
+
 # ── the contract ────────────────────────────────────────────────────────────────────
 
 
@@ -286,6 +312,14 @@ class Evidence(Protocol):
 
     def pnfs_volumes(self) -> list[PnfsVolume]:
         """The pNFS volumes the run provisioned, with their consuming nodes."""
+        ...
+
+    def reservations_pre(self) -> list[NamespaceReservation]:
+        """Every namespace's NVMe reservation when the run started, one entry per node."""
+        ...
+
+    def reservations_post(self) -> list[NamespaceReservation]:
+        """Every namespace's NVMe reservation when the run ended, one entry per node."""
         ...
 
     def run_window(self) -> tuple[datetime | None, datetime | None]:
