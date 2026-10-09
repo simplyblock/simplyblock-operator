@@ -158,11 +158,11 @@ same report: one measures the pause, the other says whether the host survived it
 
 Measured across three archived runs, counting only what happened **inside each run's window**:
 
-| run | requeued | `failfast expired` | failing I/O | filesystems shut down |
-|---|---|---|---|---|
-| `-1787159565` | 2 | 18 | 0 | 0 |
-| `-1787171993` | 163 | 84 | 0 | 0 |
-| `-1787205545` | 35 (+186 before) | 20 (+118 before) | 0 (+30 before) | 0 (+20 before) |
+| run           | requeued         | `failfast expired` | failing I/O    | filesystems shut down |
+|---------------|------------------|--------------------|----------------|-----------------------|
+| `-1787159565` | 2                | 18                 | 0              | 0                     |
+| `-1787171993` | 163              | 84                 | 0              | 0                     |
+| `-1787205545` | 35 (+186 before) | 20 (+118 before)   | 0 (+30 before) | 0 (+20 before)        |
 
 The parenthesised numbers are the reason attribution exists. Read without a window, that last
 run looks catastrophic — 30 failed I/Os and 19 filesystems shut down. All of it happened
@@ -178,11 +178,11 @@ predecessor's failure, and — worse — a genuinely broken run hides inside inh
 
 Every finding therefore carries an `Attribution`:
 
-| attribution | meaning | counts against the run? |
-|---|---|---|
-| `run` | happened inside the run's window | yes |
-| `unknown` | no usable timestamp, or no known window | **yes** — "I cannot date this" must not become "not our problem" |
-| `pre-existing` | positively dated before the run began | no |
+| attribution    | meaning                                 | counts against the run?                                          |
+|----------------|-----------------------------------------|------------------------------------------------------------------|
+| `run`          | happened inside the run's window        | yes                                                              |
+| `unknown`      | no usable timestamp, or no known window | **yes** — "I cannot date this" must not become "not our problem" |
+| `pre-existing` | positively dated before the run began   | no                                                               |
 
 Severity says *does this matter*; attribution says *whose fault*. The two are orthogonal, so
 the same observation is CRITICAL when the run caused it and a hygiene WARNING when it did not.
@@ -192,10 +192,10 @@ the same observation is CRITICAL when the run caused it and a hygiene WARNING wh
 Almost nothing, and the distinction is worth stating because the temptation is to fail on any
 inherited mess:
 
-| pre-existing condition | affects this run? | verdict |
-|---|---|---|
-| Dead-cluster controllers, old reconnect storms, old fabric errors | No — they cannot make a *different* cluster's migration fail | hygiene WARNING |
-| A filesystem killed before the run, on a volume the run does not use | No | hygiene WARNING |
+| pre-existing condition                                                                      | affects this run?                                                                                                            | verdict          |
+|---------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|------------------|
+| Dead-cluster controllers, old reconnect storms, old fabric errors                           | No — they cannot make a *different* cluster's migration fail                                                                 | hygiene WARNING  |
+| A filesystem killed before the run, on a volume the run does not use                        | No                                                                                                                           | hygiene WARNING  |
 | **Live-cluster** controllers already `live`-with-no-namespace at setup (`nvme.dirty-start`) | **Yes** — `VerifyMigrationPaths` will reject migrations that should pass, so the completion rate measures the inherited mess | **INCONCLUSIVE** |
 
 That last row is the only thing that produces `INCONCLUSIVE`, and it is a third verdict rather
@@ -403,16 +403,16 @@ Three things are load-bearing and worth knowing:
 
 ### What gets collected
 
-| artifact | source | why per-what |
-|---|---|---|
-| `spdk-<port>.txt` | storage-node SPDK container | **must be streamed.** Measured on vm04: a rotation every ~2 min, so the whole 50 MiB budget bought about **10 minutes** of retention. A migration was unrecoverable 6 seconds after it ended |
-| `spdk-<port>-proxy.txt` | the SPDK JSON-RPC proxy | streamed too, but far lower volume and survives hours — so it is the fallback when the SPDK log is gone. It carries the RPC-level narrative (which calls, in what order, with what arguments) without SPDK's internal errors |
-| `snode-api-<node>.txt` | storage-node DaemonSet | per node — it starts and probes SPDK, so it is on the causal path of every node-offline decision |
-| `csi-node-<node>.txt` | CSI node plugin | per node — the plugin reconciles per host, so "which node" is the first question about anything it did |
-| `<container>.txt` | tasks pod, csi-controller | **per container.** The tasks pod runs seventeen independent runners; merging them gives a 50 MiB file that is not in time order, so its time span is meaningless and a pattern cannot be scoped to one runner |
-| `operator.txt`, `webappapi.txt` | control plane | single-container, so per pod is fine |
-| `dmesg-<node>.txt` | each storage worker | ISO-timestamped, see the attribution section |
-| `cluster-events.json` | `sbctl cluster get-logs` | the control plane's own account |
+| artifact                        | source                      | why per-what                                                                                                                                                                                                                 |
+|---------------------------------|-----------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `spdk-<port>.txt`               | storage-node SPDK container | **must be streamed.** Measured on vm04: a rotation every ~2 min, so the whole 50 MiB budget bought about **10 minutes** of retention. A migration was unrecoverable 6 seconds after it ended                                 |
+| `spdk-<port>-proxy.txt`         | the SPDK JSON-RPC proxy     | streamed too, but far lower volume and survives hours — so it is the fallback when the SPDK log is gone. It carries the RPC-level narrative (which calls, in what order, with what arguments) without SPDK's internal errors |
+| `snode-api-<node>.txt`          | storage-node DaemonSet      | per node — it starts and probes SPDK, so it is on the causal path of every node-offline decision                                                                                                                             |
+| `csi-node-<node>.txt`           | CSI node plugin             | per node — the plugin reconciles per host, so "which node" is the first question about anything it did                                                                                                                       |
+| `<container>.txt`               | tasks pod, csi-controller   | **per container.** The tasks pod runs seventeen independent runners; merging them gives a 50 MiB file that is not in time order, so its time span is meaningless and a pattern cannot be scoped to one runner                |
+| `operator.txt`, `webappapi.txt` | control plane               | single-container, so per pod is fine                                                                                                                                                                                         |
+| `dmesg-<node>.txt`              | each storage worker         | ISO-timestamped, see the attribution section                                                                                                                                                                                 |
+| `cluster-events.json`           | `sbctl cluster get-logs`    | the control plane's own account                                                                                                                                                                                              |
 
 ### Why both log components exist
 
