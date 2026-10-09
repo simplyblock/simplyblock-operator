@@ -21,13 +21,12 @@ true
 {{- end -}}
 {{- end -}}
 
-{{/* The customer's own Prometheus, named next to simplyblock-prometheus in the
-     management API's trusted scrapers (SB_K8S_METRICS_SERVICE_ACCOUNTS). Empty
-     until prometheusOperator.serviceAccount.name is set, same as
-     sbcc.trustedAccount leaves the Control Center's entry empty until it opts
-     in. */}}
+{{/* The customer's own Prometheus, named to the management API's trusted
+     scrapers (SB_K8S_METRICS_SERVICE_ACCOUNTS). Empty until
+     prometheus.serviceAccount.name is set, same as sbcc.trustedAccount leaves
+     the Control Center's entry empty until it opts in. */}}
 {{- define "simplyblock.extraMetricsServiceAccount" -}}
-{{- $sa := .Values.prometheusOperator.serviceAccount | default dict -}}
+{{- $sa := .Values.prometheus.serviceAccount | default dict -}}
 {{- if $sa.name -}}
 {{- printf "system:serviceaccount:%s:%s" ($sa.namespace | default .Release.Namespace) $sa.name -}}
 {{- end -}}

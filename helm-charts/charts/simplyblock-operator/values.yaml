@@ -821,16 +821,6 @@ reloader:
       nodeSelector: {}
       tolerations: []
 
-# This chart no longer deploys a Prometheus of its own: prometheusOperator
-# below, against a prometheus-operator the customer already runs, is the only
-# supported way to scrape this install. What is left here is not a monitoring
-# stack of any kind, only the fallback Control Center's own Prometheus link
-# resolves to when controlCenter.prometheusUrl is unset -- empty is simply
-# "unknown" rather than a host this chart ever promises to stand up.
-prometheus:
-  simplyblock:
-    prometheusURL: ""
-    prometheusPORT: 9090
 # The Control Center — the simplyblock web console (control-center/ in the
 # monorepo). Off by default: it proxies the Kubernetes API with the pod's
 # ServiceAccount token, so enabling it is a deliberate decision about who may
@@ -1096,7 +1086,7 @@ ramen:
 # chart deploys no Prometheus of its own, so this is the only way anything it
 # runs gets scraped at all; off by default means no monitoring wiring, not an
 # alternative to one.
-prometheusOperator:
+prometheus:
   enabled: false
   # The labels the customer's `Prometheus` CR selects on, via its
   # serviceMonitorSelector/podMonitorSelector/ruleSelector (kube-prometheus-stack's
@@ -1116,6 +1106,12 @@ prometheusOperator:
   serviceAccount:
     name: ""
     namespace: ""
+  # Fallback for Control Center's own Prometheus link, when
+  # controlCenter.prometheusUrl is unset — empty is simply "unknown" rather
+  # than a host this chart ever promises to stand up.
+  simplyblock:
+    prometheusURL: ""
+    prometheusPORT: 9090
 
 tls:
   # On by default. Everything this chart deploys reaches the control plane over

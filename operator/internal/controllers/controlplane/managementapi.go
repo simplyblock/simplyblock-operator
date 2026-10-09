@@ -705,7 +705,7 @@ func adminServiceAccounts(namespace string) string {
 // scrapers. This chart deploys no Prometheus of its own, so there is no
 // account to trust by default: a bring-your-own prometheus-operator's
 // Prometheus pod presents its own ServiceAccount's token, and the chart sets
-// this from prometheusOperator's configured account. An install without it
+// this from the Helm value prometheus.serviceAccount. An install without it
 // trusts no metrics scraper at all, and every scrape gets a 401.
 const extraMetricsAccountsEnv = "SB_EXTRA_METRICS_SERVICE_ACCOUNTS"
 

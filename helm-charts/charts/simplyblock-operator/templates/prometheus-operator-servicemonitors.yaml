@@ -1,12 +1,12 @@
 # ServiceMonitor, PodMonitor, and ScrapeConfig objects for the
 # prometheus-operator the customer runs. This chart deploys no Prometheus of
 # its own, so a prometheus-operator install is the only way to scrape it.
-{{- if .Values.prometheusOperator.enabled }}
+{{- if .Values.prometheus.enabled }}
 {{- if not (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor") }}
-{{ fail "prometheusOperator.enabled is true, but this cluster has no monitoring.coreos.com/v1 ServiceMonitor CRD. Install prometheus-operator (or kube-prometheus-stack) first, or set prometheusOperator.enabled to false." }}
+{{ fail "prometheus.enabled is true, but this cluster has no monitoring.coreos.com/v1 ServiceMonitor CRD. Install prometheus-operator (or kube-prometheus-stack) first, or set prometheus.enabled to false." }}
 {{- end }}
 {{- if not (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1alpha1/ScrapeConfig") }}
-{{ fail "prometheusOperator.enabled is true, but this cluster has no monitoring.coreos.com/v1alpha1 ScrapeConfig CRD. Upgrade prometheus-operator (or kube-prometheus-stack) to a version that ships it, or set prometheusOperator.enabled to false." }}
+{{ fail "prometheus.enabled is true, but this cluster has no monitoring.coreos.com/v1alpha1 ScrapeConfig CRD. Upgrade prometheus-operator (or kube-prometheus-stack) to a version that ships it, or set prometheus.enabled to false." }}
 {{- end }}
 ---
 apiVersion: monitoring.coreos.com/v1
@@ -15,7 +15,7 @@ metadata:
   name: simplyblock-webappapi
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- toYaml .Values.prometheusOperator.additionalLabels | nindent 4 }}
+    {{- toYaml .Values.prometheus.additionalLabels | nindent 4 }}
 spec:
   namespaceSelector:
     matchNames:
@@ -39,7 +39,7 @@ spec:
     # double every count and sum over this job, though not its ratios.
     - port: http
       path: /_meta/metrics
-      interval: {{ .Values.prometheusOperator.interval }}
+      interval: {{ .Values.prometheus.interval }}
       scrapeTimeout: 30s
       {{- if .Values.tls.enabled }}
       scheme: https
@@ -72,13 +72,13 @@ metadata:
   name: simplyblock-webappapi-cluster-metrics
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- toYaml .Values.prometheusOperator.additionalLabels | nindent 4 }}
+    {{- toYaml .Values.prometheus.additionalLabels | nindent 4 }}
 spec:
   staticConfigs:
     - targets:
         - simplyblock-webappapi.{{ .Release.Namespace }}.svc:5000
   metricsPath: /api/v2/metrics
-  scrapeInterval: {{ .Values.prometheusOperator.interval }}
+  scrapeInterval: {{ .Values.prometheus.interval }}
   scrapeTimeout: 30s
   # The webappapi job's own identity, read off the scraping pod rather than a
   # minted Secret: it is Prometheus's own in-cluster token, the same one the
@@ -113,7 +113,7 @@ metadata:
   name: simplyblock-fdb-exporter
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- toYaml .Values.prometheusOperator.additionalLabels | nindent 4 }}
+    {{- toYaml .Values.prometheus.additionalLabels | nindent 4 }}
 spec:
   namespaceSelector:
     matchNames:
@@ -126,7 +126,7 @@ spec:
   endpoints:
     - port: metrics
       path: /metrics
-      interval: {{ .Values.prometheusOperator.interval }}
+      interval: {{ .Values.prometheus.interval }}
       honorLabels: true
       # No namespace relabeling here: unlike the static target in
       # controlplane_configmap.yaml, a ServiceMonitor-discovered target already
@@ -139,7 +139,7 @@ metadata:
   name: simplyblock-rebalancer
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- toYaml .Values.prometheusOperator.additionalLabels | nindent 4 }}
+    {{- toYaml .Values.prometheus.additionalLabels | nindent 4 }}
 spec:
   namespaceSelector:
     matchNames:
@@ -155,7 +155,7 @@ spec:
   podMetricsEndpoints:
     - port: latency-metrics
       path: /metrics
-      interval: {{ .Values.prometheusOperator.interval }}
+      interval: {{ .Values.prometheus.interval }}
       # Storage node pods that have no rebalancer sidecar simply have no port
       # of this name. prometheus-operator drops them from the target list
       # rather than scraping nothing.
@@ -166,7 +166,7 @@ metadata:
   name: simplyblock-spdk-proxy
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- toYaml .Values.prometheusOperator.additionalLabels | nindent 4 }}
+    {{- toYaml .Values.prometheus.additionalLabels | nindent 4 }}
 spec:
   namespaceSelector:
     matchNames:
@@ -179,7 +179,7 @@ spec:
   podMetricsEndpoints:
     - port: proxy-http
       path: /_meta/metrics
-      interval: {{ .Values.prometheusOperator.interval }}
+      interval: {{ .Values.prometheus.interval }}
       {{- if .Values.tls.enabled }}
       scheme: https
       tlsConfig:

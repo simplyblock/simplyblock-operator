@@ -122,7 +122,7 @@ data:
       editable: true
 ---
 # The eleven rules below are mirrored, independently, as a PrometheusRule in
-# prometheus-operator-alerting.yaml for prometheusOperator.enabled installs.
+# prometheus-operator-alerting.yaml for prometheus.enabled installs.
 # Adding or changing a rule here means doing the same there. Nothing checks
 # that the two stay in step. Expected to be temporary: once Grafana alerting
 # is retired, this ConfigMap goes and that PrometheusRule is the only copy.

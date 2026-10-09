@@ -106,9 +106,8 @@ spec:
             {{- end }}
             {{- with include "simplyblock.extraMetricsServiceAccount" . }}
             # A bring-your-own prometheus-operator's Prometheus pod scrapes as
-            # its own ServiceAccount, not simplyblock-prometheus's
-            # (prometheusOperator.serviceAccount). The management API trusts it
-            # next to the bundled subchart's account.
+            # its own ServiceAccount (prometheus.serviceAccount); the
+            # management API trusts no metrics scraper without this.
             - name: SB_EXTRA_METRICS_SERVICE_ACCOUNTS
               value: {{ . | quote }}
             {{- end }}
