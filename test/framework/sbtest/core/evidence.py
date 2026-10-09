@@ -326,6 +326,54 @@ class NfsSample:
 
 
 @dataclass(frozen=True)
+class MetadataOp:
+    """One namespace operation a workload.pnfs-metadata worker made on a pNFS volume.
+
+    `ts` is when the operation started and `ms` how long it took, so it completed at
+    `ts + ms`. `error` is the errno name of a failed operation.
+    """
+
+    ts: datetime
+    worker: str
+    op: str
+    path: str
+    ok: bool
+    ms: float
+    error: str = ""
+
+    @property
+    def ended(self) -> datetime:
+        return self.ts + timedelta(milliseconds=self.ms)
+
+
+@dataclass(frozen=True)
+class MetadataCheck:
+    """One comparison of a worker's directory, as another client lists it, with the
+    manifest the worker wrote while holding still.
+
+    Paths are relative to the worker's directory. `error` says why the check could not run,
+    and then the path lists are empty.
+    """
+
+    ts: datetime
+    worker: str
+    worker_node: str
+    verifier_node: str
+    missing: tuple[str, ...] = ()
+    extra: tuple[str, ...] = ()
+    mismatched: tuple[str, ...] = ()
+    error: str = ""
+
+    @property
+    def cross_node(self) -> bool:
+        return self.worker_node != self.verifier_node
+
+    @property
+    def clean(self) -> bool:
+        return not (self.missing or self.extra or self.mismatched)
+
+
+@dataclass(frozen=True)
 class ConntrackSample:
     """One NFS flow in a node's connection tracking table at one moment.
 
@@ -466,6 +514,14 @@ class Evidence(Protocol):
     def conntrack(self) -> list[ConntrackSample]:
         """Each node's NFS flows in its connection tracking table over the run, oldest
         first."""
+        ...
+
+    def metadata_ops(self) -> list[MetadataOp]:
+        """Every namespace operation of workload.pnfs-metadata's workers, oldest first."""
+        ...
+
+    def metadata_checks(self) -> list[MetadataCheck]:
+        """Each comparison of a worker's directory with its manifest, oldest first."""
         ...
 
     def log_spans(self) -> list[LogSpan]:
