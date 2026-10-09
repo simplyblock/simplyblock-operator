@@ -191,9 +191,10 @@ whose control plane has to be configured for both.
 
 **`enableVolumeSnapshots` decides whether snapshot support is part of this
 deployment.** It defaults to true, and true is the `VolumeSnapshotClass` for
-`spec.driverName`, plus the CRDs and a controller where the cluster serves
-neither (§4.1). False applies none of them, which is the chart's
-`snapshotclass.create` and `snapshotcontroller.create` as one field.
+`spec.driverName`, plus a report in `status.snapshotSupport` of whether the
+cluster can serve it (§4.1). The operator installs no snapshot CRDs or
+controller. False applies and reports nothing, which is the chart's
+`snapshotclass.create`.
 
 **`enableCSIAddons` decides whether the controller plugin runs the csi-addons
 sidecar.** It defaults to false. The sidecar publishes a `CSIAddonsNode`, so it
@@ -251,10 +252,10 @@ field that hides it.
 `status.controllerReady` is whether the controller plugin is serving, which is the
 single fact that decides whether provisioning happens at all.
 
-`status.snapshotSupport` is `Detected` when the cluster already served
-`snapshot.storage.k8s.io/v1` and `Installed` when this operator applied the CRDs
-and a controller (§4.1). It is the field that says whether other drivers in the
-cluster depend on what this one installed.
+`status.snapshotSupport` is `Detected` when the cluster serves
+`snapshot.storage.k8s.io/v1` and `Missing` when it does not (§4.1). It follows
+the cluster, and `Missing` raises a warning event. It says nothing about whether
+a snapshot-controller runs. `Installed` is reserved and never set.
 
 `status.version` is the version the deployed driver reports, published so that a
 skew against `ControlPlane.status.version` is visible on one screen (§5).
@@ -386,14 +387,18 @@ after it. An answer that is neither yes nor no fails the reconcile instead of
 being guessed at: guessing served applies a class the API server has no kind
 for, and guessing absent withdraws a class an adopted cluster is using.
 
-**The install half is not built.** The chart applies the CRDs and the controller
-today, and conditionally — its templates are guarded on
-`.Capabilities.APIVersions.Has`, which is the same rule stated here. What a
-chart cannot cover is an installation that is not a chart, or a release with
-`snapshotcontroller.create` false, and that is the case still open. It needs the
-upstream manifests carried in the operator's binary and an image for the
-controller that no field names, so `status.snapshotSupport` reaches `Detected`
-and not yet `Installed`.
+**The operator reports and does not install.** The snapshot CRDs and the
+controller are cluster-scoped and shared by every CSI driver, and upstream
+expects the distribution or the cluster admin to supply them, so the operator
+applies neither. The chart installs them only when `snapshotcontroller.create` is
+true, which is off by default, and its CRD templates are guarded on
+`.Capabilities.APIVersions.Has`. An installation without the chart, such as an
+OLM bundle, learns what is missing from `status.snapshotSupport` and a warning
+event naming the fix.
+
+Only the API is checked. A snapshot-controller can run under any name in any
+namespace, so the operator does not look for one, and a cluster with the CRDs and
+no controller reads `Detected`.
 
 **The `VolumeSnapshotClass` for this driver is applied either way.** It names
 `spec.driverName` and belongs to this deployment, unlike the CRDs and the
@@ -583,7 +588,8 @@ diffs for.
 | The name the live `CSIDriver` carries, from `driverName` | `spec.driverName`, read from the registration rather than defaulted                             |
 | `controller.replicas`                                    | `spec.controllerReplicas`                                                                       |
 | `controller.nodeSelector`, `controller.tolerations`      | `spec.controllerNodeSelector`, `spec.controllerTolerations` (§3.1)                              |
-| `snapshotclass.create`, `snapshotcontroller.create`      | `spec.enableVolumeSnapshots` (§3.1)                                                             |
+| `snapshotclass.create`                                   | `spec.enableVolumeSnapshots` (§3.1)                                                             |
+| `snapshotcontroller.create`                              | Stays a chart value, off by default (§4.1)                                                      |
 | The six sidecar image and tag values                     | `spec.sidecarImages`, written only where the release pinned one (§3.1)                          |
 
 **`driverName` is read rather than defaulted, and it is the row that would cost
@@ -952,16 +958,11 @@ and §4.1's `clusters` list to carry the backends under it. §3.1 answered Q5 wi
 `spec.sidecarImages`: a pin a release made survives adoption, and a sidecar left
 at a chart default does not become one.
 
-**Q2: What removes an installed snapshot controller.** §4.1 has the operator
-install the CRDs and a controller where the cluster has none, without a controller
-reference, so nothing removes them when the `SimplyblockDriver` is deleted. A
-cluster left with snapshot CRDs and a controller has working snapshot support and
-no simplyblock, which is harmless and untidy. Removing them needs a count of what
-else in the cluster relies on them, and `status.snapshotSupport` records only what
-this object did. Leaving them is what §4.1 specifies.
+**Q2: What removes an installed snapshot controller.** The operator installs no
+snapshot CRDs or controller (§4.1), so it has nothing to remove. What the chart
+installed is the open part.
 
-An adopted deployment reaches the same place by a different route and leaves more
-behind. The chart installed the CRDs and put a `snapshot-controller` in
+An adopted deployment leaves more behind. The chart installed the CRDs and put a `snapshot-controller` in
 `kube-system`, both annotated `helm.sh/resource-policy: keep`, so after the
 handover Helm no longer tracks them, this operator did not install them, and
 `status.snapshotSupport` reads `Detected` (§4.3). The `Deployment` is then a
@@ -1221,19 +1222,19 @@ type SimplyblockDriverSpec struct {
 	TLS DriverTLS `json:"tls,omitempty"`
 }
 
-// SnapshotSupportOrigin is where the cluster's snapshot support came from.
-// +kubebuilder:validation:Enum=Detected;Installed
+// SnapshotSupportOrigin is the state of the cluster's snapshot support.
+// +kubebuilder:validation:Enum=Detected;Installed;Missing
 type SnapshotSupportOrigin string
 
 const (
-	// SnapshotSupportOriginDetected is a cluster that already served
-	// snapshot.storage.k8s.io/v1, so the operator applied no CRDs and no
-	// controller.
+	// SnapshotSupportOriginDetected is a cluster that serves
+	// snapshot.storage.k8s.io/v1.
 	SnapshotSupportOriginDetected SnapshotSupportOrigin = "Detected"
-	// SnapshotSupportOriginInstalled is a cluster where the operator applied
-	// them. They are cluster-scoped and shared, so they carry no controller
-	// reference and outlive this object (§4.1).
+	// SnapshotSupportOriginInstalled is reserved and never set: the operator
+	// installs no snapshot CRDs or controller (§4.1).
 	SnapshotSupportOriginInstalled SnapshotSupportOrigin = "Installed"
+	// SnapshotSupportOriginMissing is a cluster that serves no snapshot API.
+	SnapshotSupportOriginMissing SnapshotSupportOrigin = "Missing"
 )
 
 // SimplyblockDriverOrigin is where the running deployment came from. Every

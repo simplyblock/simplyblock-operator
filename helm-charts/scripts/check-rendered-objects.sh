@@ -253,11 +253,29 @@ checkLogCollector() {
   fi
 }
 
+# The snapshot CRDs and controller belong to the cluster, so the chart installs
+# them only on request: nothing by default, and the controller when asked for.
+checkSnapshotController() {
+  local default asked
+  default="$(render standalone | grep -xF "Deployment/simplyblock-snapshot-controller" || true)"
+  asked="$(render standalone --set snapshotcontroller.create=true | grep -cxF "Deployment/simplyblock-snapshot-controller" || true)"
+  if [ -n "$default" ]; then
+    echo "  snapshot controller: rendered by default, want only with snapshotcontroller.create=true"
+    fail=1
+  elif [ "$asked" -eq 0 ]; then
+    echo "  snapshot controller: not rendered with snapshotcontroller.create=true"
+    fail=1
+  else
+    echo "  snapshot controller: off by default, rendered with snapshotcontroller.create=true"
+  fi
+}
+
 check standalone "${COMMON[@]}"
 check managed "${COMMON[@]}"
 check empty "${OPERATOR[@]}"
 checkEmpty
 checkVendoredCRDs
+checkSnapshotController
 checkLogCollector
 
 exit "$fail"

@@ -294,8 +294,11 @@ type SimplyblockDriverSpec struct {
 	EnableServiceAccountAuth *bool `json:"enableServiceAccountAuth,omitempty"`
 
 	// EnableVolumeSnapshots decides whether snapshot support is part of this
-	// deployment: the VolumeSnapshotClass for DriverName, and the CRDs and a
-	// controller where the cluster serves neither. False applies none of them.
+	// deployment: the VolumeSnapshotClass for DriverName, and a report in
+	// status.snapshotSupport of whether the cluster can serve it. The snapshot
+	// CRDs and controller are cluster-shared and not installed by the operator;
+	// the Helm chart installs them, and any other installation supplies its own.
+	// False applies and reports nothing.
 	// +kubebuilder:default=true
 	// +optional
 	EnableVolumeSnapshots *bool `json:"enableVolumeSnapshots,omitempty"`
@@ -322,19 +325,24 @@ type SimplyblockDriverSpec struct {
 	PNFS DriverPNFS `json:"pnfs,omitempty"`
 }
 
-// SnapshotSupportOrigin is where the cluster's snapshot support came from.
-// +kubebuilder:validation:Enum=Detected;Installed
+// SnapshotSupportOrigin is the state of the cluster's snapshot support, which is
+// what an administrator on an installation without the Helm chart acts on.
+// +kubebuilder:validation:Enum=Detected;Installed;Missing
 type SnapshotSupportOrigin string
 
 const (
-	// SnapshotSupportOriginDetected is a cluster that already served
-	// snapshot.storage.k8s.io/v1, so the operator applied no CRDs and no
-	// controller.
+	// SnapshotSupportOriginDetected is a cluster that serves
+	// snapshot.storage.k8s.io/v1. Whether a snapshot-controller runs is not
+	// checked, because it can run under any name in any namespace.
 	SnapshotSupportOriginDetected SnapshotSupportOrigin = "Detected"
-	// SnapshotSupportOriginInstalled is a cluster where the operator applied
-	// them. They are cluster-scoped and shared, so they carry no controller
-	// reference and outlive this object.
+	// SnapshotSupportOriginInstalled is reserved and never set: the operator
+	// installs no snapshot CRDs or controller, because they are cluster-scoped
+	// and shared by every CSI driver.
 	SnapshotSupportOriginInstalled SnapshotSupportOrigin = "Installed"
+	// SnapshotSupportOriginMissing is a cluster that serves no snapshot API, so
+	// VolumeSnapshots cannot work until an administrator installs the CRDs and a
+	// snapshot-controller.
+	SnapshotSupportOriginMissing SnapshotSupportOrigin = "Missing"
 )
 
 // SimplyblockDriverOrigin is where the running deployment came from. Every
@@ -359,9 +367,9 @@ type SimplyblockDriverStatus struct {
 	// +optional
 	Phase SimplyblockDriverPhase `json:"phase,omitempty"`
 
-	// SnapshotSupport is whether the cluster already had snapshot support or the
-	// operator installed it, which is what says whether other drivers depend on
-	// what this one applied.
+	// SnapshotSupport is whether the cluster serves the snapshot API: Detected
+	// when it does, Missing when it does not. It follows the cluster, and says
+	// nothing about whether a snapshot-controller runs.
 	// +optional
 	SnapshotSupport SnapshotSupportOrigin `json:"snapshotSupport,omitempty"`
 

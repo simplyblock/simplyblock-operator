@@ -59,6 +59,7 @@ const (
 	reasonAdoptionRefused   = "AdoptionRefused"
 	reasonNoImage           = "NoImage"
 	reasonSnapshotsEnabled  = "SnapshotsEnabled"
+	reasonSnapshotsMissing  = "SnapshotSupportMissing"
 )
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=simplyblockdrivers,verbs=get;list;watch;create;update;patch;delete
@@ -471,13 +472,12 @@ func (r *SimplyblockDriverReconciler) recordOrigin(
 	})
 }
 
-// recordSnapshotSupport writes status.snapshotSupport, and emits §6.1's event
-// the first time it becomes known.
+// recordSnapshotSupport writes status.snapshotSupport and emits §6.1's event
+// when it changes.
 //
-// It is written once and not maintained. The field records what happened when
-// this deployment came up, which is what an administrator reading it wants to
-// know, and a cluster that later loses the snapshot API has a problem this
-// field is not the place to report.
+// It follows the cluster, because Missing is what an administrator acts on and
+// Detected is what tells them it worked. A cluster reading Missing gets a
+// warning naming the fix.
 func (r *SimplyblockDriverReconciler) recordSnapshotSupport(
 	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
 ) error {
@@ -489,20 +489,19 @@ func (r *SimplyblockDriverReconciler) recordSnapshotSupport(
 		return nil
 	}
 
-	r.event(d, corev1.EventTypeNormal, reasonSnapshotsEnabled,
-		fmt.Sprintf("volume snapshots are available through %s, on a cluster that %s",
-			names(d).snapshotClass, snapshotOriginPhrase(origin)))
+	switch origin {
+	case simplyblockv1alpha2.SnapshotSupportOriginMissing:
+		r.event(d, corev1.EventTypeWarning, reasonSnapshotsMissing,
+			"the cluster serves no snapshot API, so VolumeSnapshots cannot work: install the "+
+				"external-snapshotter CRDs and snapshot-controller, or deploy through the Helm chart, which installs them")
+	default:
+		r.event(d, corev1.EventTypeNormal, reasonSnapshotsEnabled,
+			fmt.Sprintf("volume snapshots are available through %s, on a cluster that was "+
+				"already serving the snapshot API", names(d).snapshotClass))
+	}
 	return r.writeStatus(ctx, d, func(status *simplyblockv1alpha2.SimplyblockDriverStatus) {
 		status.SnapshotSupport = origin
 	})
-}
-
-// snapshotOriginPhrase is how an event says which of the two happened.
-func snapshotOriginPhrase(origin simplyblockv1alpha2.SnapshotSupportOrigin) string {
-	if origin == simplyblockv1alpha2.SnapshotSupportOriginInstalled {
-		return "had no snapshot support until this deployment installed it"
-	}
-	return "was already serving the snapshot API"
 }
 
 // applyConfiguration turns a built object into the shape a server-side apply

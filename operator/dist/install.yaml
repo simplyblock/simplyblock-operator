@@ -4709,8 +4709,11 @@ spec:
                 default: true
                 description: |-
                   EnableVolumeSnapshots decides whether snapshot support is part of this
-                  deployment: the VolumeSnapshotClass for DriverName, and the CRDs and a
-                  controller where the cluster serves neither. False applies none of them.
+                  deployment: the VolumeSnapshotClass for DriverName, and a report in
+                  status.snapshotSupport of whether the cluster can serve it. The snapshot
+                  CRDs and controller are cluster-shared and not installed by the operator;
+                  the Helm chart installs them, and any other installation supplies its own.
+                  False applies and reports nothing.
                 type: boolean
               image:
                 description: |-
@@ -5138,12 +5141,13 @@ spec:
                 type: string
               snapshotSupport:
                 description: |-
-                  SnapshotSupport is whether the cluster already had snapshot support or the
-                  operator installed it, which is what says whether other drivers depend on
-                  what this one applied.
+                  SnapshotSupport is whether the cluster serves the snapshot API: Detected
+                  when it does, Missing when it does not. It follows the cluster, and says
+                  nothing about whether a snapshot-controller runs.
                 enum:
                 - Detected
                 - Installed
+                - Missing
                 type: string
               version:
                 description: |-
