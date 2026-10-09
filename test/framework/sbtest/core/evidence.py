@@ -213,6 +213,21 @@ class Restart:
 
 
 @dataclass(frozen=True)
+class NfsSample:
+    """One fio instance's NFS client counters at one moment. The counts are the pod's
+    mount's, which every instance in the pod writes through."""
+
+    ts: datetime
+    instance: str   # the instance's evidence directory, such as "<run>-fio-0-c0"
+    pod: str
+    container: str
+    layoutget: int
+    read: int
+    write: int
+    connects: int = 0
+
+
+@dataclass(frozen=True)
 class DeployedImage:
     """One container of the deployment, and the image it actually ran."""
 
@@ -309,6 +324,10 @@ class Evidence(Protocol):
 
     def versions(self) -> Versions | None:
         """What was deployed, or None when the run did not record it."""
+        ...
+
+    def nfs_timeline(self) -> list[NfsSample]:
+        """Each fio instance's NFS client counters over the run, oldest first."""
         ...
 
     def log_spans(self) -> list[LogSpan]:

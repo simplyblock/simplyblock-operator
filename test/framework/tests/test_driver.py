@@ -594,6 +594,60 @@ class RunVersions(unittest.TestCase):
         self.assertEqual(len(doc["images"]), 1)
 
 
+MOUNT_STATS = """device rootfs mounted on / with fstype rootfs
+device 10.111.155.124:/default-shared-1 mounted on /data with fstype nfs4 statvers=1.1
+\topts:\trw,vers=4.1
+\tnfsv4:\tbm0=0xfdffafff,sessions,pnfs=LAYOUT_SCSI,lease_time=90
+\txprt:\ttcp 1 2 6 3 29 169588 169584 4 4885578 5 31 7116 4400333
+\tper-op statistics
+\tREAD: 30802 30801 1 5 6 2 1 2
+\tWRITE: 9994 9993 1 7 8 3 1 2
+\tLAYOUTGET: 18 17 1 464 336 2 1 3
+device tmpfs mounted on /run with fstype tmpfs
+"""
+
+
+class NfsTimeline(unittest.TestCase):
+    """The NFS client's own counters over the run, per fio instance."""
+
+    def test_a_sample_carries_the_ops_and_the_connect_count(self):
+        self.assertEqual(nfs.mount_sample(MOUNT_STATS, "/data"),
+                         {"LAYOUTGET": 18, "READ": 30802, "WRITE": 9994, "connects": 6})
+
+    def test_a_missing_mount_is_no_sample(self):
+        self.assertIsNone(nfs.mount_sample(MOUNT_STATS, "/elsewhere"))
+
+    def test_each_pod_is_read_once_and_sampled_for_every_instance(self):
+        calls: list[str] = []
+
+        def exec_sh(ns: str, pod: str, script: str, **kw: object) -> str:
+            calls.append(pod)
+            return MOUNT_STATS
+
+        s = nfs.MountstatsSampler()
+        with _Ctx() as ctx, mock.patch.object(kube, "exec_sh", exec_sh):
+            ctx.shared["pnfs.instances"] = [
+                {"evidence": "r-fio-0-c0", "pod": "r-pnfs-0", "container": "fio-0"},
+                {"evidence": "r-fio-0-c1", "pod": "r-pnfs-0", "container": "fio-1"}]
+            s.bind_namespaces(ctx)
+            s._sample(ctx)
+        self.assertEqual(calls, ["r-pnfs-0"])
+        self.assertEqual(sorted(x.instance for x in s._samples), ["r-fio-0-c0", "r-fio-0-c1"])
+        self.assertEqual({(x.read, x.write, x.layoutget, x.connects) for x in s._samples},
+                         {(30802, 9994, 18, 6)})
+
+    def test_samples_round_trip_through_the_archive(self):
+        from sbtest.adapters import ArchiveEvidence
+        from sbtest.core import NfsSample
+        t = datetime(2026, 10, 8, 9, 0, 0, tzinfo=UTC)
+        samples = [NfsSample(ts=t, instance="r-fio-0-c0", pod="r-pnfs-0", container="fio-0",
+                             layoutget=18, read=30802, write=9994, connects=6)]
+        with _Ctx() as ctx:
+            nfs.write_timeline(ctx.path("nfs-timeline.csv"), samples)
+            back = ArchiveEvidence(ctx.outdir).nfs_timeline()
+        self.assertEqual(back, samples)
+
+
 class WorkloadPnfs(unittest.TestCase):
     """pNFS volumes, some shared by several pods and some private, every container running
     its own fio. Multi-reader and multi-writer on one filesystem, without the writers

@@ -28,6 +28,7 @@ from sbtest.core import (  # noqa: E402
     IopsSample,
     LogSpan,
     Migration,
+    NfsSample,
     NvmeController,
     PnfsVolume,
     Report,
@@ -75,6 +76,7 @@ class FakeEvidence:
         pnfs: list[PnfsVolume] | None = None,
         restarts: list[Restart] | None = None,
         versions: Versions | None = None,
+        timeline: list[NfsSample] | None = None,
     ) -> None:
         self.run_id = run_id
         self.outdir = outdir
@@ -94,6 +96,7 @@ class FakeEvidence:
         self._pnfs = pnfs or []
         self._restarts = restarts or []
         self._versions = versions
+        self._timeline = timeline or []
 
     def migrations(self) -> list[Migration]:
         return list(self._migrations)
@@ -137,6 +140,9 @@ class FakeEvidence:
 
     def versions(self) -> Versions | None:
         return self._versions
+
+    def nfs_timeline(self) -> list[NfsSample]:
+        return list(self._timeline)
 
     def cluster_uuid(self) -> str:
         return self._cluster
@@ -1225,4 +1231,76 @@ class EvidenceVersions(unittest.TestCase):
     def test_a_run_without_versions_is_skipped(self):
         with self.assertRaises(SkipDetector):
             list(build_detector("evidence.versions").detect(FakeEvidence()))
+
+
+def nfs(instance: str, sec: int, read: int, write: int, layouts: int = 4) -> NfsSample:
+    return NfsSample(ts=ts(sec), instance=instance, pod="p0", container="c0",
+                     layoutget=layouts, read=read, write=write)
+
+
+class PnfsLayoutTimeline(unittest.TestCase):
+    """End totals say that data went through the metadata server. The timeline says when,
+    which is what ties it to a restart, a recall, or nothing at all."""
+
+    def test_the_window_of_server_io_is_reported(self):
+        offs = (0, 50, 100, 110, 120, 160, 200)
+        io = (0, 0, 0, 10, 20, 42, 42)
+        timeline = [nfs("r-fio-0-c0", o, v, 0) for o, v in zip(offs, io, strict=True)]
+        ev = FakeEvidence(nfs={"r-fio-0-c0": {"LAYOUTGET": 4, "READ": 42, "WRITE": 0}},
+                          timeline=timeline)
+        found = list(build_detector("pnfs.layout").detect(ev))
+        self.assertEqual([f.severity for f in found], [Severity.WARNING])
+        self.assertEqual(found[0].evidence["server_io_from"], ts(100).isoformat())
+        self.assertEqual(found[0].evidence["server_io_until"], ts(160).isoformat())
+        self.assertIn("from 22:01:40 to 22:02:40", found[0].detail)
+
+    def test_without_a_timeline_the_totals_are_reported_as_before(self):
+        ev = FakeEvidence(nfs={"r-fio-0-c0": {"LAYOUTGET": 4, "READ": 42, "WRITE": 0}})
+        found = list(build_detector("pnfs.layout").detect(ev))
+        self.assertNotIn("server_io_from", found[0].evidence)
+
+
+class PnfsRecovery(unittest.TestCase):
+    """How long after a metadata server restart each client was writing to its own
+    namespace again: the number a restart costs, per client."""
+
+    VOL = PnfsVolume(claim="c1", lvol="lv1", shared=True, nodes=["w1", "w2"])
+    MDS = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(15), ready=ts(40))
+    OFFS = (0, 10, 20, 100, 110, 200)
+
+    def _blocks(self, w2_resumes: bool = True) -> list[BlockSample]:
+        def w2(o: int) -> int:
+            if 20 <= o <= 100 or (not w2_resumes and o > 100):
+                return 100
+            return o * 5
+        return ([blk("w1", o, o * 10, o * 5) for o in self.OFFS]
+                + [blk("w2", o, o * 10, w2(o)) for o in self.OFFS])
+
+    def _found(self, blocks: list[BlockSample], **opts: object) -> dict[str, Finding]:
+        ev = FakeEvidence(blocks=blocks, pnfs=[self.VOL], restarts=[self.MDS])
+        return {f.subject: f for f in build_detector("pnfs.recovery", **opts).detect(ev)}
+
+    def test_a_client_back_within_budget_is_information(self):
+        found = self._found(self._blocks())
+        self.assertEqual(found["c1@w2"].severity, Severity.INFO)
+        self.assertEqual(found["c1@w2"].evidence["direct_after_s"], 95)
+
+    def test_a_client_whose_writes_did_not_pause_is_information(self):
+        found = self._found(self._blocks())
+        self.assertEqual(found["c1@w1"].severity, Severity.INFO)
+        self.assertEqual(found["c1@w1"].evidence["direct_after_s"], 0)
+
+    def test_a_client_back_after_the_budget_warns(self):
+        found = self._found(self._blocks(), budget_s=60)
+        self.assertEqual(found["c1@w2"].severity, Severity.WARNING)
+
+    def test_a_client_that_never_came_back_warns(self):
+        found = self._found(self._blocks(w2_resumes=False))
+        self.assertEqual(found["c1@w2"].severity, Severity.WARNING)
+        self.assertIn("not back", found["c1@w2"].title)
+
+    def test_a_run_without_an_mds_restart_is_skipped(self):
+        ev = FakeEvidence(blocks=self._blocks(), pnfs=[self.VOL])
+        with self.assertRaises(SkipDetector):
+            list(build_detector("pnfs.recovery").detect(ev))
 

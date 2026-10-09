@@ -330,6 +330,7 @@ Every one of these came from a real defect. Defaults encode what the runs measur
 | `security.secret-exposure`   | Credential-shaped strings in collected logs. Reports the location, never the value.                                                                                                                                                                                                                                                                                                                |
 | `pnfs.layout`                | **A pNFS mount that got no layouts**: it ran as plain NFS, every byte through the metadata server, and fio's verification still passed. Warns when data went through the server beside layouts. Reads the NFS client's own per-operation counters.                                                                                                                                                 |
 | `pnfs.device-io`             | **A pNFS client node whose NVMe-oF namespace did not see the data.** The other end of the same question: per volume and consuming node, the namespace must be attached and its read and write counters must grow, without standing still longer than `max_stall_s`. A pause that begins at a metadata server restart and stays within `restart_pause_s` is that restart working, reported as INFO. |
+| `pnfs.recovery`              | **The time from a metadata server restart back to each client's direct path**: the first sample after the restart's pause that saw a write reach the client's namespace. INFO within `budget_s`, a warning above it or when writes never came back.                                                                                                                                                |
 | `chaos.recovery`             | **A pod the run restarted that never came back.** Every restart `chaos.restart` made must end with a Ready replacement. The ones that did are listed as INFO with how long they took.                                                                                                                                                                                                              |
 
 Three things are load-bearing and worth knowing:
@@ -362,6 +363,7 @@ Three things are load-bearing and worth knowing:
 | `migration.driver` | Creates `VolumeMigration` CRs in a loop, one at a time, and records what each one did. `required`.                                                                                                                                                                                                                                       |
 | `workload.pnfs`    | Provisions pNFS volumes some pods share and some own, and runs verified fio in every container, each instance with a data file of its own. Pods sharing a volume are spread across nodes. `required`.                                                                                                                                    |
 | `nvme.iostat`      | Samples every node's NVMe namespace I/O counters (sysfs `stat`, head devices only) on an interval, for `pnfs.device-io`. Finds a replaced node plugin and keeps reading through it.                                                                                                                                                      |
+| `nfs.mountstats`   | Samples each pNFS fio pod's NFS client counters (LAYOUTGET, READ, WRITE, transport connects) on an interval, per instance, into `nfs-timeline.csv`, so `pnfs.layout` can say when data went through the server.                                                                                                                          |
 | `chaos.restart`    | Restarts the metadata server, a pNFS client's node plugin, or the CSI controller during the timed run: `guaranteed` times at seeded random moments, and otherwise with a low `chance` per tick. Records each restart and its recovery in `restarts.json`, and the victim's log through its shutdown in `restart-<n>-<target>-<pod>.txt`. |
 | `run.versions`     | Records at setup every container image and resolved digest in the operator and cluster namespaces, every node's kernel, OS image, runtime, and kubelet, and the server version, in `versions.json`.                                                                                                                                      |
 
@@ -596,6 +598,11 @@ counters (were layouts issued, did data go through the server anyway), and `pnfs
 reads the client node's NVMe counters (did the volume's namespace on that node see the reads
 and writes, all run long). A client whose namespace stayed flat while fio ran sent its data
 through the metadata server.
+
+`nfs.mountstats` adds the NFS side over time. With its timeline, `pnfs.layout` reports from
+when to when data went through the server instead of only that it did, and `pnfs.recovery`
+measures, per client and per metadata server restart, how long the client took to write to
+its own namespace again.
 
 Shared volumes prefer one pod per node rather than requiring it, so the suite runs on a small
 cluster too. The setup log says when every pod sharing a volume landed on one node, since such

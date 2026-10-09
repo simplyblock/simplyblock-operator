@@ -15,6 +15,7 @@ becomes a fixture for the whole detector set:
       iostat.csv                     NVMe namespace I/O counters per node over the run
       pnfs.json                      the run's pNFS volumes and their consuming nodes
       versions.json                  deployed images and digests, node kernels, server version
+      nfs-timeline.csv               each pNFS fio instance's NFS client counters over the run
       spdk-<port>[-proxy].txt        host-sourced container logs
       operator.txt / webappapi.txt   likewise
       dmesg-<vm>.txt                 kernel ring buffer per storage worker
@@ -44,6 +45,7 @@ from ..core import (
     IopsSample,
     LogSpan,
     Migration,
+    NfsSample,
     NodeVersion,
     NvmeController,
     PnfsVolume,
@@ -341,6 +343,29 @@ class ArchiveEvidence:
         except OSError:
             return []
         out.sort(key=lambda b: (b.ts, b.node, b.device))
+        return out
+
+    def nfs_timeline(self) -> list[NfsSample]:
+        p = os.path.join(self.outdir, "nfs-timeline.csv")
+        out: list[NfsSample] = []
+        try:
+            with open(p, newline="") as fh:
+                for r in csv.DictReader(fh):
+                    t = _dt(r.get("ts"))
+                    if t is None:
+                        continue
+                    try:
+                        out.append(NfsSample(
+                            ts=t, instance=r.get("instance", ""), pod=r.get("pod", ""),
+                            container=r.get("container", ""),
+                            layoutget=int(r.get("layoutget") or 0),
+                            read=int(r.get("read") or 0), write=int(r.get("write") or 0),
+                            connects=int(r.get("connects") or 0)))
+                    except ValueError:
+                        continue
+        except OSError:
+            return []
+        out.sort(key=lambda x: (x.ts, x.instance))
         return out
 
     def versions(self) -> Versions | None:

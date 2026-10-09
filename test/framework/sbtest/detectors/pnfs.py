@@ -17,6 +17,8 @@ A restart of the metadata server (`chaos.restart`) pauses every client until the
 booted and its grace period has ended, and a pause that begins at such a restart and stays
 within `restart_pause_s` is that restart working, reported as information. A restart of
 anything else is no excuse: the node plugin and the controller are not on the data path.
+`pnfs.recovery` measures that pause per client, from the restart to the first write that
+reached the client's namespace again.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from ..core import (
     Evidence,
     Finding,
     FioJob,
+    NfsSample,
     PnfsVolume,
     Restart,
     SkipDetector,
@@ -56,6 +59,9 @@ class Layout(Detector):
         measured = {p: ops for p in ev.pods() if (ops := ev.nfs_ops(p))}
         if not measured:
             raise SkipDetector("no NFS mount statistics; this run used no pNFS volume")
+        timeline: dict[str, list[NfsSample]] = {}
+        for x in ev.nfs_timeline():
+            timeline.setdefault(x.instance, []).append(x)
         for pod, ops in sorted(measured.items()):
             layouts = ops.get("LAYOUTGET", 0)
             server_io = ops.get("READ", 0) + ops.get("WRITE", 0)
@@ -69,13 +75,19 @@ class Layout(Detector):
                     note="every byte went through the metadata server; check that its "
                          "kernel issues SCSI layouts and the export carries pnfs")
             elif server_io > int(self.opt("max_server_io_ops")):
+                detail = (f"LAYOUTGET {layouts}, READ {ops.get('READ', 0)}, "
+                          f"WRITE {ops.get('WRITE', 0)}")
+                evidence: dict[str, Any] = {"ops": ops, "server_io_ops": server_io}
+                window = _server_io_window(timeline.get(pod, []))
+                if window:
+                    detail += f"; through the server from {window[0]:%H:%M:%S} to " \
+                              f"{window[1]:%H:%M:%S}"
+                    evidence["server_io_from"] = window[0].isoformat()
+                    evidence["server_io_until"] = window[1].isoformat()
                 yield warning(
                     self.name, title=f"{server_io} data operation(s) through the metadata "
                                      "server beside layouts",
-                    subject=pod,
-                    detail=f"LAYOUTGET {layouts}, READ {ops.get('READ', 0)}, "
-                           f"WRITE {ops.get('WRITE', 0)}",
-                    evidence={"ops": ops, "server_io_ops": server_io},
+                    subject=pod, detail=detail, evidence=evidence,
                     note="layouts were issued but some I/O fell back to the server, e.g. "
                          "after a recall or for a range the layout did not cover")
 
@@ -195,6 +207,97 @@ class DeviceIO(Detector):
                        f"{budget:.0f}s a restart may take",
                 evidence={"lvol": lvol, "node": node, "stall_s": seconds,
                           "restart": restart.pod})
+
+
+@detector
+class Recovery(Detector):
+    """How long after a metadata server restart each client wrote to its own namespace
+    again: the time to the direct path, which is what a restart costs a client.
+
+    A client's writes pause from about when the guest goes down until its grace period
+    has ended and the client holds a layout again. That pause is found as the stall in the
+    client's namespace counters that begins at the restart, and the time is counted to the
+    first sample that saw a write again. A client whose writes never paused is reported
+    with zero, and one whose writes never came back is a warning. `pnfs.device-io` judges
+    the pause itself, and this reports what it measured.
+    """
+
+    name = "pnfs.recovery"
+    summary = "the time from a metadata server restart to each client's direct path"
+
+    def defaults(self) -> dict[str, Any]:
+        # The device-io detector's restart_pause_s: the same restart, measured from the
+        # restart rather than from the last write before it.
+        return {"budget_s": 180, "targets": ["mds"]}
+
+    def detect(self, ev: Evidence) -> Iterable[Finding]:
+        targets = set(self.opt("targets") or [])
+        restarts = [r for r in ev.restarts() if r.target in targets]
+        if not restarts:
+            raise SkipDetector("no metadata server restart in this run")
+        volumes, samples = ev.pnfs_volumes(), ev.block_samples()
+        if not volumes or not samples:
+            raise SkipDetector("no pNFS volumes or NVMe I/O samples to measure recovery on")
+        series: dict[tuple[str, str], list[BlockSample]] = {}
+        for x in samples:
+            series.setdefault((x.node, x.uuid), []).append(x)
+        budget = float(self.opt("budget_s"))
+        for r in restarts:
+            for vol in volumes:
+                for node in vol.nodes:
+                    got = sorted(series.get((node, vol.lvol), []), key=lambda b: b.ts)
+                    if len(got) < 2:
+                        continue
+                    yield self._judge(r, f"{vol.claim}@{node}", node, got, budget)
+
+    def _judge(self, r: Restart, subject: str, node: str, got: list[BlockSample],
+               budget: float) -> Finding:
+        evidence: dict[str, Any] = {"restart": r.pod, "node": node}
+        resumed = _resumed_after(got, r)
+        if resumed is None:
+            return warning(
+                self.name, title=f"not back on the direct path after the {r.target} restart",
+                subject=subject,
+                detail=f"{node}: no write reached the namespace after the pause that began "
+                       f"at {r.deleted:%H:%M:%S}",
+                evidence=evidence,
+                note="the client's I/O went through the metadata server, or nowhere, for "
+                     "the rest of the run")
+        took = max(0.0, (resumed - r.deleted).total_seconds())
+        evidence["direct_after_s"] = round(took)
+        make = warning if took > budget else info
+        return make(
+            self.name, title=f"back on the direct path {took:.0f}s after the {r.target} "
+                             "restart",
+            subject=subject,
+            detail=f"{node}: {r.target} {r.pod} deleted {r.deleted:%H:%M:%S}, writes to the "
+                   f"namespace again at {resumed:%H:%M:%S} (budget {budget:.0f}s)",
+            evidence=evidence)
+
+
+def _resumed_after(got: list[BlockSample], r: Restart) -> datetime | None:
+    """When the client wrote to its namespace again after the restart: the first sample
+    after the pause that began at it, the restart itself when no pause began there, and
+    None when the pause lasted to the end of the series."""
+    margin = timedelta(seconds=30)
+    for start, seconds in _stalls(got):
+        if not r.deleted - margin <= start <= r.deleted + margin:
+            continue
+        flat_until = start + timedelta(seconds=seconds)
+        return next((b.ts for b in got if b.ts > flat_until), None)
+    return r.deleted
+
+
+def _server_io_window(samples: list[NfsSample]) -> tuple[datetime, datetime] | None:
+    """From the last sample before data started going through the server to the last one
+    that saw it grow, or None when the timeline never saw it grow."""
+    ordered = sorted(samples, key=lambda x: x.ts)
+    first = last = None
+    for prev, cur in zip(ordered, ordered[1:], strict=False):
+        if cur.read + cur.write > prev.read + prev.write:
+            first = first or prev.ts
+            last = cur.ts
+    return (first, last) if first and last else None
 
 
 def _stalls(got: list[BlockSample]) -> list[tuple[datetime, float]]:

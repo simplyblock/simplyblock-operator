@@ -84,6 +84,10 @@ class PnfsRwxWorkload(FioWorkload):
         nodes = self._nodes()
         # Which nodes mount a pNFS volume, for chaos.restart to pick a node plugin from.
         ctx.shared["pnfs.client_nodes"] = sorted(set(nodes.values()))
+        # Which fio instance runs in which pod and container, for nfs.mountstats.
+        ctx.shared["pnfs.instances"] = [
+            {"evidence": i.evidence, "pod": i.pod, "container": i.container}
+            for i in self._instances]
         self._write_volume_map(ctx, nodes)
         self._report_spread(ctx, nodes)
 

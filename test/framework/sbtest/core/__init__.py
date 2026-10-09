@@ -13,6 +13,7 @@ from .evidence import (
     IopsSample,
     LogSpan,
     Migration,
+    NfsSample,
     NodeVersion,
     NvmeController,
     PnfsVolume,
@@ -38,7 +39,7 @@ from .runner import Runner, findings_by_subject_table
 
 __all__ = [
     "AnaSample", "Attribution", "BlockSample", "Component", "Config", "Detector", "Event",
-    "DeployedImage", "Evidence", "KERNEL_CLOCK_PROBE", "NodeVersion", "PnfsVolume", "Restart",
+    "DeployedImage", "Evidence", "KERNEL_CLOCK_PROBE", "NfsSample", "NodeVersion", "PnfsVolume", "Restart",
     "Versions",
     "ControlEvent", "Finding", "LogSpan",
     "FioJob", "IopsSample", "Logger", "Migration", "NvmeController", "Report",
