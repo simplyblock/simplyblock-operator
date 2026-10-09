@@ -45,6 +45,28 @@ components:
   # clean fabric, and whether it left one. dmesg can only infer the first from old lines.
   nvme.snapshot: true
 
+  # Short-lived pods joining and leaving pNFS volumes all run long, half of them on a volume
+  # of their own that is created and deleted under load. Lifetimes and the quiet tail are
+  # sized so a 300s run still sees a few, and every one is gone before fio ends.
+  workload.pnfs-churn:
+    mean_interval_s: 30
+    min_life_s: 45
+    max_life_s: 120
+    quiet_tail_s: 180
+
+  # The NFS client's own counters over the run, per fio instance: when data went through the
+  # metadata server, and how long a client took to get its layouts back after a restart.
+  nfs.mountstats:
+    interval_s: 10
+
+  # Every pNFS namespace's NVMe reservation before and after the run, so a registration left
+  # over from an earlier metadata server boot is caught rather than guessed at.
+  nvme.reservations: true
+
+  # What was deployed: images and digests of the operator, CSI driver, MDS, and storage
+  # pods, and each node's kernel.
+  run.versions: true
+
   # Restarts during the timed run: the metadata server most often, a client's node plugin
   # next, the controller rarely. At least one per run, and a low chance of more.
   chaos.restart:
