@@ -188,3 +188,44 @@ class EvidenceInventory(Detector):
             evidence={**have, "cluster": ev.cluster_uuid(),
                       "window_known": bool(start)},
         )
+
+
+@detector
+class DeployedVersions(Detector):
+    """What the run started on: the operator, CSI, MDS, and SPDK images by digest, and the
+    nodes' kernels, in one finding. Reported as information. Its value is that two runs'
+    reports can be compared without reconstructing what either one ran."""
+
+    name = "evidence.versions"
+    summary = "the images and digests, node kernels, and server version the run started on"
+
+    #: Which images a pod's name says it carries.
+    ROLES = {"operator": "operator", "csi": "simplyblock-csi",  # noqa: RUF012
+             "mds": "pnfs-mds", "spdk": "snode-spdk"}
+
+    def detect(self, ev: Evidence) -> Iterable[Finding]:
+        v = ev.versions()
+        if v is None:
+            raise SkipDetector("no versions.json; enable run.versions to record what was "
+                               "deployed")
+        roles: dict[str, list[str]] = {}
+        for role, marker in self.ROLES.items():
+            roles[role] = sorted({_ref(i.image, i.image_id) for i in v.images
+                                  if marker in i.pod})
+        kernels: dict[str, int] = {}
+        for n in v.nodes:
+            kernels[n.kernel] = kernels.get(n.kernel, 0) + 1
+        parts = [f"{role} {', '.join(refs) or '-'}" for role, refs in roles.items()]
+        yield info(
+            self.name, title="deployed: " + "; ".join(parts),
+            subject="deployment",
+            detail="kernels: " + ", ".join(f"{k} ({n} node(s))" for k, n in sorted(
+                kernels.items())) + f"; server {v.server or '?'}",
+            evidence={**roles, "kernels": kernels, "server": v.server})
+
+
+def _ref(image: str, image_id: str) -> str:
+    """The image as asked for, with the first twelve hex digits of the digest it resolved
+    to: enough to tell two builds of one tag apart."""
+    _, sep, digest = image_id.partition("@sha256:")
+    return f"{image}@sha256:{digest[:12]}" if sep else image

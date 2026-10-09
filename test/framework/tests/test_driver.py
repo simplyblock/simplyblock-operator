@@ -34,6 +34,7 @@ from sbtest.components import (  # noqa: E402
     nfs,
     nvme,
     reservations,
+    versions,  # noqa: E402
 )
 from sbtest.components.workloads import fio, pnfs_rwx, volumemigration  # noqa: E402
 from sbtest.core import Logger, Migration, RunContext  # noqa: E402
@@ -664,6 +665,90 @@ class NvmeReservations(unittest.TestCase):
             reservations.write_snapshot(ctx, "post", got)
             back = ArchiveEvidence(ctx.outdir).reservations_post()
         self.assertEqual(back, got)
+
+
+class RunVersions(unittest.TestCase):
+    """What the run recorded as deployed, from the shapes kubectl prints."""
+
+    PODS = {"items": [{
+        "metadata": {"name": "simplyblock-pnfs-mds-06075ebb-0", "namespace": "simplyblock"},
+        "status": {"containerStatuses": [{
+            "name": "mds-runner", "image": "public.ecr.aws/simply-block/spdkcsi:pnfs-mds",
+            "imageID": "public.ecr.aws/simply-block/spdkcsi@sha256:07d8"}]}}]}
+    NODES = {"items": [{"metadata": {"name": "worker-1"}, "status": {"nodeInfo": {
+        "kernelVersion": "6.18.5-talos", "osImage": "Talos (v1.12.7)",
+        "containerRuntimeVersion": "containerd://2.1.4", "kubeletVersion": "v1.34.1"}}}]}
+    SERVER = {"serverVersion": {"gitVersion": "v1.34.1"}}
+
+    def test_images_nodes_and_the_server_are_recorded(self):
+        doc = versions.parse_versions([self.PODS], self.NODES, self.SERVER)
+        self.assertEqual(doc["server"], "v1.34.1")
+        self.assertEqual(doc["images"], [{
+            "namespace": "simplyblock", "pod": "simplyblock-pnfs-mds-06075ebb-0",
+            "container": "mds-runner", "image": "public.ecr.aws/simply-block/spdkcsi:pnfs-mds",
+            "image_id": "public.ecr.aws/simply-block/spdkcsi@sha256:07d8"}])
+        self.assertEqual(doc["nodes"], [{
+            "node": "worker-1", "kernel": "6.18.5-talos", "os_image": "Talos (v1.12.7)",
+            "runtime": "containerd://2.1.4", "kubelet": "v1.34.1"}])
+
+    def test_one_namespace_listed_twice_is_recorded_once(self):
+        """The operator and the cluster share a namespace today."""
+        doc = versions.parse_versions([self.PODS, self.PODS], self.NODES, self.SERVER)
+        self.assertEqual(len(doc["images"]), 1)
+
+
+MOUNT_STATS = """device rootfs mounted on / with fstype rootfs
+device 10.111.155.124:/default-shared-1 mounted on /data with fstype nfs4 statvers=1.1
+\topts:\trw,vers=4.1
+\tnfsv4:\tbm0=0xfdffafff,sessions,pnfs=LAYOUT_SCSI,lease_time=90
+\txprt:\ttcp 1 2 6 3 29 169588 169584 4 4885578 5 31 7116 4400333
+\tper-op statistics
+\tREAD: 30802 30801 1 5 6 2 1 2
+\tWRITE: 9994 9993 1 7 8 3 1 2
+\tLAYOUTGET: 18 17 1 464 336 2 1 3
+device tmpfs mounted on /run with fstype tmpfs
+"""
+
+
+class NfsTimeline(unittest.TestCase):
+    """The NFS client's own counters over the run, per fio instance."""
+
+    def test_a_sample_carries_the_ops_and_the_connect_count(self):
+        self.assertEqual(nfs.mount_sample(MOUNT_STATS, "/data"),
+                         {"LAYOUTGET": 18, "READ": 30802, "WRITE": 9994, "connects": 6})
+
+    def test_a_missing_mount_is_no_sample(self):
+        self.assertIsNone(nfs.mount_sample(MOUNT_STATS, "/elsewhere"))
+
+    def test_each_pod_is_read_once_and_sampled_for_every_instance(self):
+        calls: list[str] = []
+
+        def exec_sh(ns: str, pod: str, script: str, **kw: object) -> str:
+            calls.append(pod)
+            return MOUNT_STATS
+
+        s = nfs.MountstatsSampler()
+        with _Ctx() as ctx, mock.patch.object(kube, "exec_sh", exec_sh):
+            ctx.shared["pnfs.instances"] = [
+                {"evidence": "r-fio-0-c0", "pod": "r-pnfs-0", "container": "fio-0"},
+                {"evidence": "r-fio-0-c1", "pod": "r-pnfs-0", "container": "fio-1"}]
+            s.bind_namespaces(ctx)
+            s._sample(ctx)
+        self.assertEqual(calls, ["r-pnfs-0"])
+        self.assertEqual(sorted(x.instance for x in s._samples), ["r-fio-0-c0", "r-fio-0-c1"])
+        self.assertEqual({(x.read, x.write, x.layoutget, x.connects) for x in s._samples},
+                         {(30802, 9994, 18, 6)})
+
+    def test_samples_round_trip_through_the_archive(self):
+        from sbtest.adapters import ArchiveEvidence
+        from sbtest.core import NfsSample
+        t = datetime(2026, 10, 8, 9, 0, 0, tzinfo=UTC)
+        samples = [NfsSample(ts=t, instance="r-fio-0-c0", pod="r-pnfs-0", container="fio-0",
+                             layoutget=18, read=30802, write=9994, connects=6)]
+        with _Ctx() as ctx:
+            nfs.write_timeline(ctx.path("nfs-timeline.csv"), samples)
+            back = ArchiveEvidence(ctx.outdir).nfs_timeline()
+        self.assertEqual(back, samples)
 
 
 class WorkloadPnfs(unittest.TestCase):

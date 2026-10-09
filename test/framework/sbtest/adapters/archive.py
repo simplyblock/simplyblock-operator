@@ -14,6 +14,8 @@ becomes a fixture for the whole detector set:
       <run>-fio-N/nfs-ops.json       per-op counts of the NFS mount it wrote through (pNFS)
       iostat.csv                     NVMe namespace I/O counters per node over the run
       pnfs.json                      the run's pNFS volumes and their consuming nodes
+      versions.json                  deployed images and digests, node kernels, server version
+      nfs-timeline.csv               each pNFS fio instance's NFS client counters over the run
       spdk-<port>[-proxy].txt        host-sourced container logs
       operator.txt / webappapi.txt   likewise
       dmesg-<vm>.txt                 kernel ring buffer per storage worker
@@ -39,15 +41,19 @@ from ..core import (
     BlockSample,
     ChurnPod,
     ControlEvent,
+    DeployedImage,
     FioJob,
     IopsSample,
     LogSpan,
     Migration,
     NamespaceReservation,
+    NfsSample,
+    NodeVersion,
     NvmeController,
     PnfsVolume,
     Registrant,
     Restart,
+    Versions,
 )
 
 
@@ -366,6 +372,50 @@ class ArchiveEvidence:
                 uuid=str(n.get("uuid", "")), rtype=int(n.get("rtype", 0)),
                 generation=int(n.get("generation", 0)), registrants=regs))
         return out
+
+    def nfs_timeline(self) -> list[NfsSample]:
+        p = os.path.join(self.outdir, "nfs-timeline.csv")
+        out: list[NfsSample] = []
+        try:
+            with open(p, newline="") as fh:
+                for r in csv.DictReader(fh):
+                    t = _dt(r.get("ts"))
+                    if t is None:
+                        continue
+                    try:
+                        out.append(NfsSample(
+                            ts=t, instance=r.get("instance", ""), pod=r.get("pod", ""),
+                            container=r.get("container", ""),
+                            layoutget=int(r.get("layoutget") or 0),
+                            read=int(r.get("read") or 0), write=int(r.get("write") or 0),
+                            connects=int(r.get("connects") or 0)))
+                    except ValueError:
+                        continue
+        except OSError:
+            return []
+        out.sort(key=lambda x: (x.ts, x.instance))
+        return out
+
+    def versions(self) -> Versions | None:
+        p = os.path.join(self.outdir, "versions.json")
+        try:
+            with open(p) as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(raw, dict):
+            return None
+        images = tuple(DeployedImage(
+            namespace=str(i.get("namespace", "")), pod=str(i.get("pod", "")),
+            container=str(i.get("container", "")), image=str(i.get("image", "")),
+            image_id=str(i.get("image_id", "")))
+            for i in raw.get("images", []) if isinstance(i, dict))
+        nodes = tuple(NodeVersion(
+            node=str(n.get("node", "")), kernel=str(n.get("kernel", "")),
+            os_image=str(n.get("os_image", "")), runtime=str(n.get("runtime", "")),
+            kubelet=str(n.get("kubelet", "")))
+            for n in raw.get("nodes", []) if isinstance(n, dict))
+        return Versions(server=str(raw.get("server", "")), images=images, nodes=nodes)
 
     def restarts(self) -> list[Restart]:
         p = os.path.join(self.outdir, "restarts.json")

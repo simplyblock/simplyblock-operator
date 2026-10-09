@@ -406,6 +406,28 @@ class Archive(unittest.TestCase):
                          [("8d2a", True), ("913d", False)])
         self.assertEqual(post[0].registrants[1].rkey, 7694384339219550510)
 
+    def test_reads_what_was_deployed(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "state.json"), "w") as fh:
+                json.dump({"run_id": "r", "migrations": []}, fh)
+            with open(os.path.join(d, "versions.json"), "w") as fh:
+                json.dump({"server": "v1.34.1",
+                           "images": [{"namespace": "simplyblock", "pod": "p", "container": "c",
+                                       "image": "repo/x:1", "image_id": "repo/x@sha256:ab"}],
+                           "nodes": [{"node": "w1", "kernel": "6.18.5", "os_image": "Talos",
+                                      "runtime": "containerd://2", "kubelet": "v1.34.1"}]}, fh)
+            got = ArchiveEvidence(d).versions()
+        assert got is not None
+        self.assertEqual(got.server, "v1.34.1")
+        self.assertEqual([(i.pod, i.image_id) for i in got.images], [("p", "repo/x@sha256:ab")])
+        self.assertEqual([(n.node, n.kernel) for n in got.nodes], [("w1", "6.18.5")])
+
+    def test_an_archive_without_versions_has_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "state.json"), "w") as fh:
+                json.dump({"run_id": "r", "migrations": []}, fh)
+            self.assertIsNone(ArchiveEvidence(d).versions())
+
     def test_reads_the_restarts_a_run_made(self):
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "state.json"), "w") as fh:
