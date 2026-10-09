@@ -44,6 +44,7 @@ from ..core import (
     Migration,
     NvmeController,
     PnfsVolume,
+    Restart,
 )
 
 
@@ -336,6 +337,26 @@ class ArchiveEvidence:
         except OSError:
             return []
         out.sort(key=lambda b: (b.ts, b.node, b.device))
+        return out
+
+    def restarts(self) -> list[Restart]:
+        p = os.path.join(self.outdir, "restarts.json")
+        try:
+            with open(p) as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return []
+        out = []
+        for r in raw.get("restarts", []) if isinstance(raw, dict) else []:
+            deleted = _dt(r.get("deleted")) if isinstance(r, dict) else None
+            if deleted is None:
+                continue
+            out.append(Restart(target=str(r.get("target", "")), pod=str(r.get("pod", "")),
+                               node=str(r.get("node", "")), deleted=deleted,
+                               ready=_dt(r.get("ready")),
+                               replacement=str(r.get("replacement", "")),
+                               log=str(r.get("log") or "")))
+        out.sort(key=lambda r: r.deleted)
         return out
 
     def pnfs_volumes(self) -> list[PnfsVolume]:

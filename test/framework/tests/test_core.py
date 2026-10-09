@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import sbtest  # noqa: E402,F401  (registers the bundled plugins)
 from sbtest.adapters import ArchiveEvidence  # noqa: E402
 from sbtest.components import kube  # noqa: E402
+from sbtest.components.chaos import RestartPlan  # noqa: E402
 from sbtest.core import (  # noqa: E402
     Component,
     Detector,
@@ -345,6 +346,24 @@ class Archive(unittest.TestCase):
                 json.dump({"volumes": [{"claim": "c", "lvol": "l", "cluster": cluster}]}, fh)
             self.assertEqual(ArchiveEvidence(d).cluster_uuid(), cluster)
 
+    def test_reads_the_restarts_a_run_made(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "state.json"), "w") as fh:
+                json.dump({"run_id": "r", "migrations": []}, fh)
+            with open(os.path.join(d, "restarts.json"), "w") as fh:
+                json.dump({"restarts": [
+                    {"target": "mds", "pod": "mds-0", "node": "w3",
+                     "deleted": "2026-08-19T22:00:10Z", "ready": "2026-08-19T22:00:40Z",
+                     "replacement": "mds-0"},
+                    {"target": "csi-node", "pod": "csi-a", "node": "w1",
+                     "deleted": "2026-08-19T22:01:00Z", "ready": None}]}, fh)
+            got = ArchiveEvidence(d).restarts()
+        self.assertEqual([r.target for r in got], ["mds", "csi-node"])
+        ready = got[0].ready
+        assert ready is not None
+        self.assertEqual((ready - got[0].deleted).total_seconds(), 30)
+        self.assertIsNone(got[1].ready)
+
     def test_falls_back_to_test_log_when_state_is_absent(self):
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "test.log"), "w") as fh:
@@ -638,3 +657,52 @@ class GrabberReuse(unittest.TestCase):
 
         self.assertLess(order.index("stream.stop"), order.index("collect.collect"))
         self.assertLess(order.index("collect.collect"), order.index("stream.teardown"))
+
+
+class RestartSchedule(unittest.TestCase):
+    """When chaos.restart restarts what: at least `guaranteed` times inside the window,
+    otherwise by a low chance per tick, never after the window, reproducibly per seed."""
+
+    WEIGHTS = {"mds": 2.0, "csi-node": 1.0, "csi-controller": 0.5}
+
+    def plan(self, **kw: object) -> RestartPlan:
+        args = {"seed": 7, "weights": self.WEIGHTS, "start": 0.0, "end": 300.0,
+                "guaranteed": 2, "chance": 0.0, "overlap_chance": 0.0}
+        args.update(kw)
+        return RestartPlan(**args)  # type: ignore[arg-type]
+
+    def fire(self, plan: RestartPlan, until: float = 400.0, step: float = 5.0,
+             in_flight: int = 0) -> list[tuple[float, str]]:
+        out, t = [], 0.0
+        while t <= until:
+            out += [(t, target) for target in plan.due(t, in_flight)]
+            t += step
+        return out
+
+    def test_the_guaranteed_restarts_all_happen_inside_the_window(self):
+        fired = self.fire(self.plan(guaranteed=3))
+        self.assertEqual(len(fired), 3)
+        self.assertTrue(all(0.0 <= t <= 300.0 for t, _ in fired))
+
+    def test_nothing_fires_after_the_window_whatever_the_chance(self):
+        fired = self.fire(self.plan(guaranteed=0, chance=1.0), until=600.0)
+        self.assertTrue(fired)
+        self.assertTrue(all(t <= 300.0 for t, _ in fired))
+
+    def test_the_same_seed_gives_the_same_schedule(self):
+        a = self.fire(self.plan(guaranteed=2, chance=0.1))
+        b = self.fire(self.plan(guaranteed=2, chance=0.1))
+        self.assertEqual(a, b)
+
+    def test_a_target_weighted_zero_is_never_chosen(self):
+        fired = self.fire(self.plan(weights={"mds": 1.0, "csi-node": 0.0}, guaranteed=0,
+                                    chance=1.0))
+        self.assertEqual({target for _, target in fired}, {"mds"})
+
+    def test_a_restart_waits_for_the_one_in_flight_unless_overlap_comes_up(self):
+        plan = self.plan(guaranteed=1)
+        self.assertEqual(self.fire(plan, until=290.0, in_flight=1), [])
+        # Once nothing is in flight, the deferred restart goes, still inside the window.
+        fired = self.fire(plan, until=300.0)
+        self.assertEqual(len(fired), 1)
+

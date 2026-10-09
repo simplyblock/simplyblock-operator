@@ -356,6 +356,10 @@ class LogCollect(_GrabberBase):
                  "namespace": "default", "name_from": "pod-node", "name": "snode-api"},
                 {"pods": ["simplyblock-csi-controller"], "containers": "all",
                  "namespace": "simplyblock", "name_from": "container"},
+                # The pNFS metadata server: the runner, whose log carries the guest's
+                # console, so its boot, grace period, and export assembly.
+                {"pods": ["simplyblock-pnfs-mds"], "containers": "all",
+                 "namespace": "simplyblock", "name_from": "container"},
             ],
             "ttl_s": 1800,
         }

@@ -82,6 +82,8 @@ class PnfsRwxWorkload(FioWorkload):
     def after_running(self, ctx: RunContext) -> None:
         self._cluster_of, self._lvol_of = self._resolve_lvols()
         nodes = self._nodes()
+        # Which nodes mount a pNFS volume, for chaos.restart to pick a node plugin from.
+        ctx.shared["pnfs.client_nodes"] = sorted(set(nodes.values()))
         self._write_volume_map(ctx, nodes)
         self._report_spread(ctx, nodes)
 

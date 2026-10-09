@@ -31,6 +31,7 @@ from sbtest.core import (  # noqa: E402
     NvmeController,
     PnfsVolume,
     Report,
+    Restart,
     Severity,
     SkipDetector,
     attribute_window,
@@ -71,6 +72,7 @@ class FakeEvidence:
         nfs: dict[str, dict[str, int]] | None = None,
         blocks: list[BlockSample] | None = None,
         pnfs: list[PnfsVolume] | None = None,
+        restarts: list[Restart] | None = None,
     ) -> None:
         self.run_id = run_id
         self.outdir = outdir
@@ -88,6 +90,7 @@ class FakeEvidence:
         self._nfs = nfs or {}
         self._blocks = blocks or []
         self._pnfs = pnfs or []
+        self._restarts = restarts or []
 
     def migrations(self) -> list[Migration]:
         return list(self._migrations)
@@ -125,6 +128,9 @@ class FakeEvidence:
 
     def pnfs_volumes(self) -> list[PnfsVolume]:
         return list(self._pnfs)
+
+    def restarts(self) -> list[Restart]:
+        return list(self._restarts)
 
     def cluster_uuid(self) -> str:
         return self._cluster
@@ -1083,6 +1089,47 @@ class PnfsDeviceIO(unittest.TestCase):
                          [(Severity.CRITICAL, "c1@w2")])
         self.assertIn("never resumed", found[0].title)
 
+    # w2 stops writing at 20s and resumes at 110s: a 90s pause.
+    PAUSE = (0, 10, 20, 100, 110, 200)
+
+    def _paused(self) -> list[BlockSample]:
+        return ([blk("w1", o, o * 10, o * 5) for o in self.PAUSE]
+                + [blk("w2", o, o * 10, 100 if 20 <= o <= 100 else o * 5) for o in self.PAUSE])
+
+    def test_a_pause_across_an_mds_restart_within_budget_is_expected(self):
+        """Clients wait out the guest's boot and grace period, so writes pause. That is the
+        restart working, not a stall."""
+        mds = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(15), ready=ts(40))
+        ev = FakeEvidence(blocks=self._paused(), pnfs=[self.VOL], restarts=[mds])
+        found = list(build_detector("pnfs.device-io", max_stall_s=60).detect(ev))
+        self.assertEqual([f.severity for f in found if f.severity != Severity.INFO], [])
+
+    def test_a_pause_longer_than_the_restart_budget_still_warns(self):
+        mds = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(15), ready=ts(40))
+        ev = FakeEvidence(blocks=self._paused(), pnfs=[self.VOL], restarts=[mds])
+        found = list(build_detector("pnfs.device-io", max_stall_s=60,
+                                    restart_pause_s=60).detect(ev))
+        self.assertEqual([(f.severity, f.subject) for f in found],
+                         [(Severity.WARNING, "c1@w2")])
+
+    def test_a_pause_across_a_csi_node_restart_still_warns(self):
+        """The node plugin is not on the data path, so restarting it must not pause I/O."""
+        node = Restart(target="csi-node", pod="csi-node-x", node="w2", deleted=ts(15),
+                       ready=ts(40))
+        ev = FakeEvidence(blocks=self._paused(), pnfs=[self.VOL], restarts=[node])
+        found = list(build_detector("pnfs.device-io", max_stall_s=60).detect(ev))
+        self.assertEqual([(f.severity, f.subject) for f in found],
+                         [(Severity.WARNING, "c1@w2")])
+
+    def test_writes_that_never_resumed_after_a_restart_still_fail(self):
+        mds = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(15), ready=ts(40))
+        blocks = ([blk("w1", o, o * 10, o * 5) for o in self.PAUSE]
+                  + [blk("w2", o, min(o, 20) * 10, min(o, 20) * 5) for o in self.PAUSE])
+        ev = FakeEvidence(blocks=blocks, pnfs=[self.VOL], restarts=[mds])
+        found = list(build_detector("pnfs.device-io", max_stall_s=60).detect(ev))
+        self.assertEqual([(f.severity, f.subject) for f in found],
+                         [(Severity.CRITICAL, "c1@w2")])
+
     def test_reads_are_not_required_when_the_run_did_not_read(self):
         blocks = [blk(n, off, 0, off * 5) for n in ("w1", "w2") for off in (0, 10, 20)]
         self.assertEqual(self._found(blocks, require_reads=False), [])
@@ -1109,4 +1156,27 @@ class PnfsDeviceIO(unittest.TestCase):
         jobs = [FioJob(pod="r-fio-0-c0", start=ts(0), runtime_s=200)]
         found = self._found(blocks, jobs=jobs, vol=vol, max_stall_s=60)
         self.assertEqual([f.severity for f in found], [Severity.WARNING])
+
+
+class ChaosRecovery(unittest.TestCase):
+    """Every restart the run made must have come back: a pod that never returned is a
+    cluster left broken by the test, and nothing after it is evidence of anything."""
+
+    def test_a_restart_whose_replacement_never_turned_ready_is_critical(self):
+        r = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(10), ready=None)
+        found = list(build_detector("chaos.recovery").detect(FakeEvidence(restarts=[r])))
+        self.assertEqual([(f.severity, f.subject) for f in found],
+                         [(Severity.CRITICAL, "mds/mds-0")])
+
+    def test_restarts_that_recovered_are_reported_as_information(self):
+        restarts = [Restart(target="mds", pod="mds-0", node="w3", deleted=ts(10),
+                            ready=ts(40)),
+                    Restart(target="csi-node", pod="csi-node-a", node="w1", deleted=ts(90),
+                            ready=ts(100))]
+        found = list(build_detector("chaos.recovery").detect(FakeEvidence(restarts=restarts)))
+        self.assertEqual({f.severity for f in found}, {Severity.INFO})
+
+    def test_a_run_without_restarts_is_skipped(self):
+        with self.assertRaises(SkipDetector):
+            list(build_detector("chaos.recovery").detect(FakeEvidence()))
 

@@ -14,6 +14,7 @@ from .evidence import (
     Migration,
     NvmeController,
     PnfsVolume,
+    Restart,
     attribute,
     attribute_window,
     freeze_windows,
@@ -34,7 +35,7 @@ from .runner import Runner, findings_by_subject_table
 
 __all__ = [
     "AnaSample", "Attribution", "BlockSample", "Component", "Config", "Detector", "Event",
-    "Evidence", "KERNEL_CLOCK_PROBE", "PnfsVolume",
+    "Evidence", "KERNEL_CLOCK_PROBE", "PnfsVolume", "Restart",
     "ControlEvent", "Finding", "LogSpan",
     "FioJob", "IopsSample", "Logger", "Migration", "NvmeController", "Report",
     "RunContext", "Runner", "Selection", "Severity", "SkipDetector", "Timeline",

@@ -21,11 +21,12 @@ import time
 import unittest
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import sbtest  # noqa: E402,F401
-from sbtest.components import kube, migration, nfs, nvme  # noqa: E402
+from sbtest.components import chaos, kube, logs, migration, nfs, nvme  # noqa: E402
 from sbtest.components.workloads import fio, pnfs_rwx, volumemigration  # noqa: E402
 from sbtest.core import Logger, Migration, RunContext  # noqa: E402
 
@@ -484,6 +485,79 @@ class NvmeIostat(unittest.TestCase):
             nvme.write_iostat(ctx.path("iostat.csv"), samples)
             back = ArchiveEvidence(ctx.outdir).block_samples()
         self.assertEqual(back, samples)
+
+
+class NvmeIostatAcrossARestart(unittest.TestCase):
+    """chaos.restart replaces the node plugin the sampler reads a host through. A sampler that
+    kept the old pod's name would read nothing for the rest of the run, and the node it
+    stopped measuring would look idle exactly when its recovery is being judged."""
+
+    OUT = "nvme0n1|u1|1 0 8 0 2 0 16 0 0 0 0\nsbtest-iostat-ok\n"
+
+    def test_a_replaced_node_plugin_is_found_and_read_again(self):
+        live = {"csi-node-new"}
+        calls: list[str] = []
+
+        def exec_sh(ns: str, pod: str, script: str, **kw: object) -> str:
+            calls.append(pod)
+            return self.OUT if pod in live else ""
+
+        pods = [kube.Pod(name="csi-node-new", namespace="simplyblock", node="worker-1",
+                         containers=("csi-node",), phase="Running")]
+        sampler = nvme.IostatSampler()
+        sampler._pods = {"worker-1": "csi-node-old"}
+        with mock.patch.object(kube, "exec_sh", exec_sh), \
+                mock.patch.object(kube, "list_pods", lambda *a, **k: pods):
+            sampler._sample()
+        self.assertEqual(sampler._pods, {"worker-1": "csi-node-new"})
+        self.assertEqual(len(sampler._samples), 1)
+        self.assertEqual(calls, ["csi-node-old", "csi-node-new"])
+
+
+class RestartLogs(unittest.TestCase):
+    """A restarted pod's log is evidence of the moment that matters, and kubelet deletes it
+    with the pod. logs.collect only finds what still exists at the end of the run."""
+
+    def test_the_metadata_server_log_is_collected(self):
+        targets = logs.LogCollect().opt("targets")
+        self.assertTrue(any(any("pnfs-mds" in p for p in t["pods"]) for t in targets),
+                        targets)
+
+    def test_a_restart_follows_the_victims_log_before_deleting_it(self):
+        order: list[str] = []
+
+        class Proc:
+            def __init__(self, args: list[str], **kw: object) -> None:
+                order.append("follow " + " ".join(args))
+
+            def wait(self, timeout: float | None = None) -> int:
+                return 0
+
+            def poll(self) -> int:
+                return 0
+
+            def kill(self) -> None: ...
+
+        def run(args: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+            order.append("kubectl " + " ".join(args))
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        victim = kube.Pod(name="simplyblock-pnfs-mds-x-0", namespace="simplyblock",
+                          node="worker-1", containers=("mds-runner",), phase="Running")
+        r = chaos.Restarter(ready_timeout_s=5)
+        with _Ctx() as ctx, mock.patch.object(chaos.Restarter, "_victim", lambda *a: victim), \
+                mock.patch.object(chaos.Restarter, "_replacement", lambda *a: "simplyblock-pnfs-mds-x-0"), \
+                mock.patch.object(kube, "run", run), \
+                mock.patch.object(chaos.subprocess, "Popen", Proc):
+            r._restart(ctx, "mds")
+            r.collect(ctx)
+            with open(ctx.path("restarts.json")) as fh:
+                record = json.load(fh)["restarts"][0]
+        follow = next(i for i, o in enumerate(order) if o.startswith("follow "))
+        delete = next(i for i, o in enumerate(order) if " delete pod " in o)
+        self.assertLess(follow, delete, order)
+        self.assertIn("logs -f simplyblock-pnfs-mds-x-0 --all-containers", order[follow])
+        self.assertEqual(record["log"], "restart-1-mds-simplyblock-pnfs-mds-x-0.txt")
 
 
 class WorkloadPnfs(unittest.TestCase):

@@ -39,6 +39,12 @@ components:
   # clean fabric, and whether it left one. dmesg can only infer the first from old lines.
   nvme.snapshot: true
 
+  # Restarts during the timed run: the metadata server most often, a client's node plugin
+  # next, the controller rarely. At least one per run, and a low chance of more.
+  chaos.restart:
+    guaranteed: 1
+    chance: 0.02
+
   logs.collect: true
   # The clients' kernels are the ones a pNFS run is about: layouts, NVMe-oF paths,
   # blocklayout errors. The CSI node plugin runs privileged on every node, so it reads them.
@@ -52,6 +58,9 @@ detectors:
     # A layout recall and re-fetch costs seconds; a minute without a written sector while
     # six writers are running is not that.
     max_stall_s: 60
+    # A metadata server restart pauses clients through the guest's boot and the grace
+    # period, which waits for the slowest client to reclaim: 70s to 90s measured.
+    restart_pause_s: 180
   # Nothing here migrates, so the migration and ANA detectors would only report skips.
   migration.outcomes: false
   migration.errors: false
