@@ -37,7 +37,11 @@ type ForgetFlowsRequest struct {
 	// Destination port the client connected to, before translation.
 	DstPort uint32 `protobuf:"varint,2,opt,name=dst_port,json=dstPort,proto3" json:"dst_port,omitempty"`
 	// Address the flows were translated to: the dead backend.
-	ReplySource   string `protobuf:"bytes,3,opt,name=reply_source,json=replySource,proto3" json:"reply_source,omitempty"`
+	ReplySource string `protobuf:"bytes,3,opt,name=reply_source,json=replySource,proto3" json:"reply_source,omitempty"`
+	// Address the client connected to, before translation: the Service's
+	// ClusterIP. Required, because a dead backend's address can be reused by a
+	// pod behind another Service.
+	OrigDst       string `protobuf:"bytes,4,opt,name=orig_dst,json=origDst,proto3" json:"orig_dst,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -93,6 +97,13 @@ func (x *ForgetFlowsRequest) GetReplySource() string {
 	return ""
 }
 
+func (x *ForgetFlowsRequest) GetOrigDst() string {
+	if x != nil {
+		return x.OrigDst
+	}
+	return ""
+}
+
 // ForgetFlowsResponse says how many entries were deleted.
 type ForgetFlowsResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -143,11 +154,12 @@ var File_flow_proto protoreflect.FileDescriptor
 const file_flow_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"flow.proto\x12\x12atlas.conntrack.v1\"n\n" +
+	"flow.proto\x12\x12atlas.conntrack.v1\"\x89\x01\n" +
 	"\x12ForgetFlowsRequest\x12\x1a\n" +
 	"\bprotocol\x18\x01 \x01(\rR\bprotocol\x12\x19\n" +
 	"\bdst_port\x18\x02 \x01(\rR\adstPort\x12!\n" +
-	"\freply_source\x18\x03 \x01(\tR\vreplySource\"/\n" +
+	"\freply_source\x18\x03 \x01(\tR\vreplySource\x12\x19\n" +
+	"\borig_dst\x18\x04 \x01(\tR\aorigDst\"/\n" +
 	"\x13ForgetFlowsResponse\x12\x18\n" +
 	"\adeleted\x18\x01 \x01(\x04R\adeleted2m\n" +
 	"\vFlowService\x12^\n" +

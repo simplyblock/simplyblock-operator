@@ -55,7 +55,8 @@ func serve(t *testing.T, f *recordingForgetter) *Client {
 }
 
 var oldMDS = conntrack.Selector{
-	Protocol: conntrack.TCP, DstPort: 2049, ReplySource: netip.MustParseAddr("10.244.3.215"),
+	Protocol: conntrack.TCP, OrigDst: netip.MustParseAddr("10.102.100.19"), DstPort: 2049,
+	ReplySource: netip.MustParseAddr("10.244.3.215"),
 }
 
 func TestASelectorReachesTheNodeIntactAndTheCountComesBack(t *testing.T) {
@@ -89,6 +90,23 @@ func TestAnInvalidSelectorIsRefusedOnBothEnds(t *testing.T) {
 	}
 	if len(f.got) != 0 {
 		t.Errorf("node forgot %+v for an invalid selector", f.got)
+	}
+}
+
+// Review on #711: a request that names no original destination would delete
+// another Service's flows on a reused pod IP, so the node refuses it.
+func TestARequestWithoutTheOriginalDestinationIsRefused(t *testing.T) {
+	srv, err := NewServer(func(conntrack.Selector) (uint, error) {
+		t.Fatal("the node forgot flows for a request without an original destination")
+		return 0, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noDst := oldMDS
+	noDst.OrigDst = netip.Addr{}
+	if _, err := srv.ForgetFlows(context.Background(), forgetRequest(noDst)); err == nil {
+		t.Error("ForgetFlows accepted a request without an original destination")
 	}
 }
 

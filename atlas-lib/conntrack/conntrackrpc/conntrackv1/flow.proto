@@ -14,7 +14,7 @@ option go_package = "github.com/simplyblock/atlas/conntrack/conntrackrpc/conntra
 // FlowService forgets flows on the node it runs on.
 service FlowService {
   // ForgetFlows deletes the host's conntrack entries of one protocol and
-  // original destination port whose reply source is one address. Nothing
+  // original destination address and port whose reply source is one address. Nothing
   // matching is success with a count of zero, because the caller repeats the
   // call and the entries may already have expired.
   rpc ForgetFlows(ForgetFlowsRequest) returns (ForgetFlowsResponse);
@@ -28,6 +28,10 @@ message ForgetFlowsRequest {
   uint32 dst_port = 2;
   // Address the flows were translated to: the dead backend.
   string reply_source = 3;
+  // Address the client connected to, before translation: the Service's
+  // ClusterIP. Required, because a dead backend's address can be reused by a
+  // pod behind another Service.
+  string orig_dst = 4;
 }
 
 // ForgetFlowsResponse says how many entries were deleted.

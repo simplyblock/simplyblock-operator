@@ -11,10 +11,13 @@ import (
 	"github.com/simplyblock/atlas/errs"
 )
 
-var deadPod = netip.MustParseAddr("10.244.3.215")
+var (
+	deadPod   = netip.MustParseAddr("10.244.3.215")
+	exportSvc = netip.MustParseAddr("10.102.100.19")
+)
 
 func nfsToDeadPod() Selector {
-	return Selector{Protocol: TCP, DstPort: 2049, ReplySource: deadPod}
+	return Selector{Protocol: TCP, OrigDst: exportSvc, DstPort: 2049, ReplySource: deadPod}
 }
 
 // The flow pinned in run pnfs-1791575321: a client's connection to an export's
@@ -34,12 +37,15 @@ func TestAFlowTranslatedToTheOldAddressMatches(t *testing.T) {
 // Only that one address, port, and protocol: anything else on the host is
 // another workload's connection.
 func TestAnythingElseDoesNotMatch(t *testing.T) {
-	base := Tuple{Protocol: TCP, OrigDstPort: 2049, ReplySource: deadPod}
+	base := Tuple{Protocol: TCP, OrigDst: exportSvc, OrigDstPort: 2049, ReplySource: deadPod}
 	for name, flow := range map[string]Tuple{
-		"another backend": {Protocol: TCP, OrigDstPort: 2049, ReplySource: netip.MustParseAddr("10.244.3.226")},
-		"another port":    {Protocol: TCP, OrigDstPort: 443, ReplySource: deadPod},
-		"UDP":             {Protocol: UDP, OrigDstPort: 2049, ReplySource: deadPod},
-		"IPv6":            {Protocol: TCP, OrigDstPort: 2049, ReplySource: netip.MustParseAddr("::ffff:10.244.3.216")},
+		"another backend": {Protocol: TCP, OrigDst: exportSvc, OrigDstPort: 2049, ReplySource: netip.MustParseAddr("10.244.3.226")},
+		"another port":    {Protocol: TCP, OrigDst: exportSvc, OrigDstPort: 443, ReplySource: deadPod},
+		"UDP":             {Protocol: UDP, OrigDst: exportSvc, OrigDstPort: 2049, ReplySource: deadPod},
+		"IPv6":            {Protocol: TCP, OrigDst: exportSvc, OrigDstPort: 2049, ReplySource: netip.MustParseAddr("::ffff:10.244.3.216")},
+		// Review on #711: the dead pod's IP can be handed to another pod that
+		// also serves 2049. Its flows go to another Service and stay.
+		"another Service": {Protocol: TCP, OrigDst: netip.MustParseAddr("10.96.0.50"), OrigDstPort: 2049, ReplySource: deadPod},
 	} {
 		if nfsToDeadPod().Matches(flow) {
 			t.Errorf("%s: %+v matched; only %+v should", name, flow, base)
@@ -51,10 +57,14 @@ func TestAnythingElseDoesNotMatch(t *testing.T) {
 // point is to forget one dead backend's flows, not to flush a node.
 func TestASelectorMissingAPartIsRefused(t *testing.T) {
 	for name, sel := range map[string]Selector{
-		"no protocol": {DstPort: 2049, ReplySource: deadPod},
-		"no port":     {Protocol: TCP, ReplySource: deadPod},
-		"no address":  {Protocol: TCP, DstPort: 2049},
-		"unspecified": {Protocol: TCP, DstPort: 2049, ReplySource: netip.IPv4Unspecified()},
+		"no protocol":    {OrigDst: exportSvc, DstPort: 2049, ReplySource: deadPod},
+		"no port":        {Protocol: TCP, OrigDst: exportSvc, ReplySource: deadPod},
+		"no address":     {Protocol: TCP, OrigDst: exportSvc, DstPort: 2049},
+		"unspecified":    {Protocol: TCP, OrigDst: exportSvc, DstPort: 2049, ReplySource: netip.IPv4Unspecified()},
+		"no destination": {Protocol: TCP, DstPort: 2049, ReplySource: deadPod},
+		"unspecified destination": {
+			Protocol: TCP, OrigDst: netip.IPv4Unspecified(), DstPort: 2049, ReplySource: deadPod,
+		},
 	} {
 		if err := sel.Validate(); !errors.Is(err, ErrInvalidSelector) {
 			t.Errorf("%s: Validate = %v, want ErrInvalidSelector", name, err)

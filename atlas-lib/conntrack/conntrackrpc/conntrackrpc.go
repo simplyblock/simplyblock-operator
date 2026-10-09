@@ -97,6 +97,9 @@ func forgetRequest(sel conntrack.Selector) *conntrackv1.ForgetFlowsRequest {
 	if sel.ReplySource.IsValid() {
 		req.ReplySource = sel.ReplySource.String()
 	}
+	if sel.OrigDst.IsValid() {
+		req.OrigDst = sel.OrigDst.String()
+	}
 	return req
 }
 
@@ -115,6 +118,13 @@ func selectorFromProto(req *conntrackv1.ForgetFlowsRequest) (conntrack.Selector,
 			return conntrack.Selector{}, fmt.Errorf("%w: reply source %q: %v", conntrack.ErrInvalidSelector, s, err)
 		}
 		sel.ReplySource = addr
+	}
+	if s := req.GetOrigDst(); s != "" {
+		addr, err := netip.ParseAddr(s)
+		if err != nil {
+			return conntrack.Selector{}, fmt.Errorf("%w: original destination %q: %v", conntrack.ErrInvalidSelector, s, err)
+		}
+		sel.OrigDst = addr
 	}
 	return sel, sel.Validate()
 }

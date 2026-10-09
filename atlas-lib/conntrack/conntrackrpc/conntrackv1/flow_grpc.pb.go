@@ -37,7 +37,7 @@ const (
 // FlowService forgets flows on the node it runs on.
 type FlowServiceClient interface {
 	// ForgetFlows deletes the host's conntrack entries of one protocol and
-	// original destination port whose reply source is one address. Nothing
+	// original destination address and port whose reply source is one address. Nothing
 	// matching is success with a count of zero, because the caller repeats the
 	// call and the entries may already have expired.
 	ForgetFlows(ctx context.Context, in *ForgetFlowsRequest, opts ...grpc.CallOption) (*ForgetFlowsResponse, error)
@@ -68,7 +68,7 @@ func (c *flowServiceClient) ForgetFlows(ctx context.Context, in *ForgetFlowsRequ
 // FlowService forgets flows on the node it runs on.
 type FlowServiceServer interface {
 	// ForgetFlows deletes the host's conntrack entries of one protocol and
-	// original destination port whose reply source is one address. Nothing
+	// original destination address and port whose reply source is one address. Nothing
 	// matching is success with a count of zero, because the caller repeats the
 	// call and the entries may already have expired.
 	ForgetFlows(context.Context, *ForgetFlowsRequest) (*ForgetFlowsResponse, error)

@@ -12,9 +12,11 @@
 // the CSI node plugin on the host's network, and asked for by the operator, so
 // it lives here rather than in either consumer.
 //
-// A Selector names one protocol, one original destination port, and one reply
-// source, the address a flow was translated to, and nothing broader. Flushing a
-// node's table would break every other workload's connections.
+// A Selector names one protocol, one original destination address and port, and
+// one reply source, the address a flow was translated to, and nothing broader.
+// Flushing a node's table would break every other workload's connections, and
+// the reply source alone is not enough either: a dead pod's IP can be handed to
+// another pod serving the same port behind another Service.
 package conntrack
 
 import (
@@ -40,6 +42,9 @@ const (
 type Selector struct {
 	// Protocol of the flows.
 	Protocol Protocol
+	// OrigDst is the address the client connected to, before any translation:
+	// a Service's ClusterIP.
+	OrigDst netip.Addr
 	// DstPort is the destination port the client connected to, before any
 	// translation: a Service's port.
 	DstPort uint16
@@ -53,6 +58,8 @@ func (s Selector) Validate() error {
 	switch {
 	case s.Protocol != TCP && s.Protocol != UDP:
 		return fmt.Errorf("%w: protocol %d", ErrInvalidSelector, s.Protocol)
+	case !s.OrigDst.IsValid() || s.OrigDst.IsUnspecified():
+		return fmt.Errorf("%w: no original destination address", ErrInvalidSelector)
 	case s.DstPort == 0:
 		return fmt.Errorf("%w: no destination port", ErrInvalidSelector)
 	case !s.ReplySource.IsValid() || s.ReplySource.IsUnspecified():
@@ -73,7 +80,8 @@ type Tuple struct {
 
 // Matches reports whether the entry is one of the selected flows.
 func (s Selector) Matches(t Tuple) bool {
-	return t.Protocol == s.Protocol && t.OrigDstPort == s.DstPort && t.ReplySource == s.ReplySource
+	return t.Protocol == s.Protocol && t.OrigDst == s.OrigDst && t.OrigDstPort == s.DstPort &&
+		t.ReplySource == s.ReplySource
 }
 
 // Forget deletes the host's entries the selector matches and returns how many
