@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -52,6 +53,42 @@ func TestTheBaselineJobIsShippedToTheLogCollector(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-08-baseline-job-selector-backend-hostname — the Job was
+// pinned to the control plane's "<host>_<rpcPort>" name, which labels no node,
+// so every baseline Job stayed Pending.
+func TestTheBaselineJobIsPinnedToTheWorkerHostingTheNode(t *testing.T) {
+	job := createdBaselineJob(t, nil)
+
+	got := job.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"]
+	if got != "worker-1.example.com" {
+		t.Errorf("the Job is pinned to kubernetes.io/hostname=%q, want the worker \"worker-1.example.com\"", got)
+	}
+}
+
+// Regression: 2026-10-08-baseline-job-selector-backend-hostname — the probe
+// target was filed under the "<host>_<rpcPort>" name, which no sidecar's
+// $HOSTNAME matches.
+func TestTheProbeTargetIsFiledUnderTheWorkerHostingTheNode(t *testing.T) {
+	node := &simplyblockv1alpha2.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-1", Namespace: "simplyblock"},
+		Spec:       simplyblockv1alpha2.StorageNodeSpec{WorkerNode: "worker-1.example.com"},
+		Status: simplyblockv1alpha2.StorageNodeStatus{
+			UUID:           "22222222-2222-2222-2222-222222222222",
+			Hostname:       "worker-1_4420",
+			LatencyMetrics: &simplyblockv1alpha2.NodeLatencyMetrics{BaselineP99NS: 1000},
+		},
+	}
+	cluster := &simplyblockv1alpha2.StorageCluster{ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "simplyblock"}}
+	r := &StorageNodeLatencyReconciler{Provisioner: &AutomaticBenchmarkProvisioner{}}
+
+	hostConfigs := map[string][]autoplacement.NodeConfig{}
+	r.processNodeBaseline(context.Background(), cluster, cluster, "", node, "rebalancer:test", hostConfigs)
+
+	if _, ok := hostConfigs["worker-1.example.com"]; !ok {
+		t.Errorf("probe target filed under %v, want the worker \"worker-1.example.com\"", hostConfigs)
+	}
+}
+
 // createdBaselineJob runs the reconciler's Job creation against a fake client
 // for one storage node of a cluster with the given tolerations, and returns
 // the one Job it created.
@@ -73,9 +110,10 @@ func createdBaselineJob(t *testing.T, tolerations []corev1.Toleration) batchv1.J
 	}
 	node := &simplyblockv1alpha2.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "node-1", Namespace: "simplyblock"},
+		Spec:       simplyblockv1alpha2.StorageNodeSpec{WorkerNode: "worker-1.example.com"},
 		Status: simplyblockv1alpha2.StorageNodeStatus{
 			UUID:     "22222222-2222-2222-2222-222222222222",
-			Hostname: "worker-1",
+			Hostname: "worker-1_4420",
 		},
 	}
 

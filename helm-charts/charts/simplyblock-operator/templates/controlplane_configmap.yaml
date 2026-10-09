@@ -102,6 +102,31 @@ data:
 
 ---
 
+{{- /* Scrapes the rebalancer probe sidecar via the prometheus.simplyblock.io/* pod annotations. */ -}}
+{{- define "simplyblock.prometheusRebalancerProbeJob" }}
+  - job_name: 'simplyblock_rebalancer_probe'
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: ['{{ .Release.Namespace }}']
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_simplyblock_io_scrape]
+        action: keep
+        regex: 'true'
+      - source_labels: [__meta_kubernetes_pod_container_port_name]
+        action: keep
+        regex: latency-metrics
+      - source_labels: [__meta_kubernetes_pod_ip, __meta_kubernetes_pod_annotation_prometheus_simplyblock_io_port]
+        action: replace
+        regex: '(.+);(.+)'
+        replacement: '$1:$2'
+        target_label: __address__
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_simplyblock_io_path]
+        action: replace
+        regex: '(.+)'
+        target_label: __metrics_path__
+{{- end }}
+
 {{- $name := "simplyblock-prometheus-config" -}}
 {{- $existing := (lookup "v1" "ConfigMap" .Release.Namespace $name) }}
 apiVersion: v1
@@ -113,8 +138,13 @@ metadata:
   namespace: {{ .Release.Namespace }}
 data:
   {{- if $existing }}
+  {{- /* Append the probe job on upgrade; this assumes scrape_configs is the last key. */}}
+  {{- $current := index $existing.data "prometheus.yml" }}
   prometheus.yml: |
-{{ index $existing.data "prometheus.yml" | indent 4 }}
+{{ $current | indent 4 }}
+  {{- if not (contains "simplyblock_rebalancer_probe" $current) }}
+{{ include "simplyblock.prometheusRebalancerProbeJob" . | indent 4 }}
+  {{- end }}
   {{- else }}
   prometheus.yml: |
     global:
@@ -156,6 +186,7 @@ data:
         honor_labels: true
         metrics_path: '/metrics'
       {{- end }}
+{{ include "simplyblock.prometheusRebalancerProbeJob" . | indent 4 }}
   {{- end }}
   
 {{- if .Values.controlplane.observability.enabled }}

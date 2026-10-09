@@ -9,26 +9,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	atlasprom "github.com/simplyblock/atlas/prometheus"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 func baselineTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
-	if err := simplyblockv1alpha1.AddToScheme(s); err != nil {
+	if err := simplyblockv1alpha2.AddToScheme(s); err != nil {
 		t.Fatalf("add simplyblock scheme: %v", err)
 	}
 	return s
 }
 
-func storageNodeSet(ns, name, nodeUUID string, p50, p99 int64) *simplyblockv1alpha1.StorageNodeSet {
-	return &simplyblockv1alpha1.StorageNodeSet{
+func storageNode(ns, name, nodeUUID string, p50, p99 int64) *simplyblockv1alpha2.StorageNode {
+	return &simplyblockv1alpha2.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
-		Status: simplyblockv1alpha1.StorageNodeSetStatus{
-			LatencyMetrics: []simplyblockv1alpha1.NodeLatencyMetrics{
-				{NodeUUID: nodeUUID, BaselineP50NS: p50, BaselineP99NS: p99},
-			},
+		Status: simplyblockv1alpha2.StorageNodeStatus{
+			LatencyMetrics: &simplyblockv1alpha2.NodeLatencyMetrics{NodeUUID: nodeUUID, BaselineP50NS: p50, BaselineP99NS: p99},
 		},
 	}
 }
@@ -59,14 +56,17 @@ func TestNewBaselineProvider_SelectsImplementation(t *testing.T) {
 	}
 }
 
-func TestBenchmarkBaselineProvider_ReadsCRs(t *testing.T) {
+// Regression: 2026-10-08-benchmark-baseline-reads-retired-set — the provider
+// listed the retired StorageNodeSet, so every node read as having no baseline
+// and automatic rebalancing never found a hot node.
+func TestBenchmarkBaselineProvider_ReadsStorageNodes(t *testing.T) {
 	scheme := baselineTestScheme(t)
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(
-			storageNodeSet("ns1", "set-a", "node-1", 1000, 5000),
-			storageNodeSet("ns1", "set-b", "node-2", 2000, 6000),
-			storageNodeSet("ns1", "set-zero", "node-3", 0, 0), // no baseline yet → omitted
+			storageNode("ns1", "node-a", "node-1", 1000, 5000),
+			storageNode("ns1", "node-b", "node-2", 2000, 6000),
+			storageNode("ns1", "node-zero", "node-3", 0, 0), // no baseline yet → omitted
 		).
 		Build()
 
