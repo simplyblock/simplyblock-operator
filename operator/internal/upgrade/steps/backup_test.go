@@ -188,11 +188,11 @@ func TestAbsorbBackupRestoresWritesTheOperationTerminal(t *testing.T) {
 	if absorbed.Spec.Action != simplyblockv1alpha2.StorageBackupOpsActionRestore {
 		t.Errorf("action = %q, want Restore", absorbed.Spec.Action)
 	}
-	if absorbed.Spec.BackupRef != "backup-1" || absorbed.Spec.Restore.TargetPool != "pool-a" {
+	if absorbed.Spec.BackupRef.Name != "backup-1" || absorbed.Spec.Restore.TargetPool != "pool-a" {
 		t.Errorf("spec = %+v, want the backup and pool the restore named", absorbed.Spec)
 	}
 	if absorbed.Spec.Restore.ClaimName != "restored-claim" {
-		t.Errorf("claimName = %q, want the claim the restore produced", absorbed.Spec.Restore.ClaimName)
+		t.Errorf("claim = %q, want the claim the restore produced", absorbed.Spec.Restore.ClaimName)
 	}
 	if absorbed.Status.Phase != simplyblockv1alpha2.StorageBackupOpsPhaseSucceeded {
 		t.Errorf("phase = %q, want Succeeded", absorbed.Status.Phase)

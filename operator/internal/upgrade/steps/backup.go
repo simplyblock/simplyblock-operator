@@ -365,8 +365,8 @@ func (absorbBackupRestores) Apply(
 			},
 		},
 		Spec: simplyblockv1alpha2.StorageBackupOpsSpec{
-			ClusterRef: restore.Spec.ClusterName,
-			BackupRef:  restore.Spec.BackupRef.Name,
+			ClusterRef: simplyblockv1alpha2.StorageClusterReference{Name: restore.Spec.ClusterName},
+			BackupRef:  simplyblockv1alpha2.NamespacedReference{Name: restore.Spec.BackupRef.Name},
 			Action:     simplyblockv1alpha2.StorageBackupOpsActionRestore,
 			Restore: &simplyblockv1alpha2.RestoreSpec{
 				ClaimName:  restoredClaimName(restore),

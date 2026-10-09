@@ -236,39 +236,53 @@ spec:
             spec:
               description: spec identifies the backup this object reports on
               properties:
-                backupID:
-                  description: |-
-                    BackupID is the identifier the store holds the backup under, and what a
-                    restore addresses. It is the store's identifier rather than a name this
-                    operator assigns, so the same backup is the same object however many
-                    clusters have the location configured.
-                  type: string
-                  x-kubernetes-validations:
-                    - message: field is immutable
-                      rule: self == oldSelf
                 clusterRef:
                   description: |-
                     ClusterRef names the StorageCluster whose store this backup was found in.
-                    With BackupID it is the whole of this object's identity.
-
-                    Bounded at what a StorageCluster name may be, since a longer value names
-                    nothing that can exist.
+                    A request does not set it: the cluster is the one that provisioned the
+                    claim's volume.
                   maxLength: 63
                   type: string
                   x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
-              required:
-                - backupID
-                - clusterRef
+                source:
+                  description: |-
+                    Source asks for a new backup of a claim, the way a VolumeSnapshot asks
+                    for a snapshot. Leave it unset on a record.
+                  properties:
+                    claimName:
+                      description: |-
+                        ClaimName is the PersistentVolumeClaim to back up, in this object's own
+                        namespace. It must be bound to a volume this product provisioned.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                  required:
+                    - claimName
+                  type: object
+                  x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
               type: object
+              x-kubernetes-validations:
+                - message: field clusterRef is immutable once set
+                  rule: '!has(oldSelf.clusterRef) || has(self.clusterRef)'
+                - message: field source is immutable once set
+                  rule: '!has(oldSelf.source) || has(self.source)'
+                - message: set exactly one of source (to request a backup) or clusterRef (to record one the store holds)
+                  rule: has(self.source) != has(self.clusterRef)
             status:
               description: status defines the observed state of StorageBackup
               properties:
                 activeOpsRef:
                   description: |-
                     ActiveOpsRef names the StorageBackupOps currently allowed to act on this
-                    backup. Empty when none is running.
+                    backup, as namespace/name when it is in another namespace. Empty when none
+                    is running.
                   type: string
                 apiStatus:
                   description: |-

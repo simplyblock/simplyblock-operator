@@ -171,6 +171,11 @@ func TestEveryClusterReferenceIsBoundedByWhatAClusterNameMayBe(t *testing.T) {
 		}
 		for where, ref := range refs {
 			found++
+			// A reference that carries a namespace is an object, and its name is
+			// what the bound applies to.
+			if name, ok := ref.Properties["name"]; ok {
+				where, ref = where+".name", name
+			}
 			switch {
 			case ref.MaxLength == nil:
 				t.Errorf("%s.%s carries no maxLength, so it admits 253 characters of a "+

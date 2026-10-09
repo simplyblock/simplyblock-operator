@@ -25,11 +25,13 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/simplyblock/atlas/lvol"
@@ -63,6 +65,20 @@ func IndexPersistentVolumeLvolID(o client.Object) []string {
 		return nil
 	}
 	return []string{handle.VolumeID}
+}
+
+// RequestedBackupIndex indexes the requests that have produced a backup by the
+// name the mirror would give its record, so the mirror can find the owner.
+const RequestedBackupIndex = "status.backup.backupID.requested"
+
+// IndexRequestedBackup is the index function for [RequestedBackupIndex],
+// exported so that a test's client can register what the manager does.
+func IndexRequestedBackup(o client.Object) []string {
+	sb, ok := o.(*simplyblockv1alpha2.StorageBackup)
+	if !ok || sb.Spec.Source == nil || sb.BackupID() == "" {
+		return nil
+	}
+	return []string{simplyblockv1alpha2.StorageBackupName(sb.BackupID())}
 }
 
 // backupRetry is how long the mirror waits before looking again at something
@@ -125,9 +141,24 @@ func (r *StorageBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	); err != nil {
 		return err
 	}
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(), &simplyblockv1alpha2.StorageBackup{},
+		RequestedBackupIndex, IndexRequestedBackup,
+	); err != nil {
+		return err
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha2.StorageBackup{}).
 		Named("storagebackup").
+		Watches(&simplyblockv1alpha2.StorageBackup{}, handler.Funcs{
+			DeleteFunc: func(ctx context.Context, e event.DeleteEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				if sb, ok := e.Object.(*simplyblockv1alpha2.StorageBackup); ok {
+					for _, req := range r.recordOf(ctx, sb) {
+						q.Add(req)
+					}
+				}
+			},
+		}).
 		WatchesRawSource(source.Channel(r.Backups.Triggers(), &handler.EnqueueRequestForObject{})).
 		Complete(r)
 }
@@ -147,6 +178,25 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 
+	// A request is the request reconciler's. Once it has produced a backup it
+	// also owns that backup's record, so a record made before it knew the ID
+	// goes.
+	if exists && sb.Spec.Source != nil {
+		if id := sb.BackupID(); id != "" {
+			return ctrl.Result{}, r.removeRecords(ctx, simplyblockv1alpha2.StorageBackupName(id))
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// A backup a request owns has that request for its object, not a record.
+	var owners simplyblockv1alpha2.StorageBackupList
+	if err := r.List(ctx, &owners, client.MatchingFields{RequestedBackupIndex: req.Name}); err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(owners.Items) > 0 {
+		return r.deferTo(ctx, &owners.Items[0], req.Name, inCache && dto.Status != cpBackupMerged)
+	}
+
 	switch {
 	// A merged backup was folded into its successor, which unmapped its keys and
 	// deleted its manifest: the control plane keeps only a record of it, and the
@@ -160,6 +210,63 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	default:
 		return ctrl.Result{}, nil // nothing cached and no object — nothing to do
 	}
+}
+
+// deferTo leaves a backup to the request that owns it: it removes any record of
+// the backup, and fails the request when the copy leaves the store. A request is
+// a person's object, so unlike a record it is not deleted.
+func (r *StorageBackupReconciler) deferTo(
+	ctx context.Context, owner *simplyblockv1alpha2.StorageBackup, name string, reported bool,
+) (ctrl.Result, error) {
+	if err := r.removeRecords(ctx, name); err != nil {
+		return ctrl.Result{}, err
+	}
+	if reported || owner.Status.Phase != simplyblockv1alpha2.StorageBackupPhaseAvailable ||
+		!r.Backups.Synced(cpinformer.Scope{owner.Status.ClusterID}) {
+		return ctrl.Result{}, nil
+	}
+	patch := client.MergeFrom(owner.DeepCopy())
+	owner.Status.Phase = simplyblockv1alpha2.StorageBackupPhaseFailed
+	owner.Status.Message = "The backup left the store"
+	if err := r.Status().Patch(ctx, owner, patch); err != nil {
+		return ctrl.Result{}, err
+	}
+	r.Recorder.Eventf(owner, nil, corev1.EventTypeWarning, ReasonBackupGone, ReasonBackupGone,
+		"Backup %s left the store", owner.BackupID())
+	return ctrl.Result{}, nil
+}
+
+// recordOf queues the record of a deleted request's backup. The store reports
+// nothing when the request goes, so the deletion has to bring the record back.
+func (r *StorageBackupReconciler) recordOf(
+	ctx context.Context, sb *simplyblockv1alpha2.StorageBackup,
+) []reconcile.Request {
+	if sb.Spec.Source == nil || sb.BackupID() == "" {
+		return nil
+	}
+	cluster, err := r.clusterFor(ctx, metav1.NamespaceAll, sb.Status.ClusterID)
+	if err != nil || cluster == nil {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Namespace: cluster.Namespace, Name: simplyblockv1alpha2.StorageBackupName(sb.BackupID()),
+	}}}
+}
+
+// removeRecords deletes the records, not the requests, that carry the name.
+func (r *StorageBackupReconciler) removeRecords(ctx context.Context, name string) error {
+	var all simplyblockv1alpha2.StorageBackupList
+	if err := r.List(ctx, &all); err != nil {
+		return err
+	}
+	for i := range all.Items {
+		if sb := &all.Items[i]; sb.Name == name && sb.Spec.Source == nil {
+			if err := r.Delete(ctx, sb); client.IgnoreNotFound(err) != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // upsert creates the object if it is missing and brings its status to what the
@@ -186,7 +293,7 @@ func (r *StorageBackupReconciler) upsert(
 		return ctrl.Result{}, err
 	}
 
-	created, err := r.ensureObject(ctx, key, cluster, dto, taken)
+	created, err := r.ensureObject(ctx, key, cluster, taken)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -207,7 +314,6 @@ func (r *StorageBackupReconciler) ensureObject(
 	ctx context.Context,
 	key types.NamespacedName,
 	cluster *simplyblockv1alpha2.StorageCluster,
-	dto subscriptions.BackupDTO,
 	taken simplyblockv1alpha2.BackupSource,
 ) (bool, error) {
 	var existing simplyblockv1alpha2.StorageBackup
@@ -227,7 +333,6 @@ func (r *StorageBackupReconciler) ensureObject(
 		},
 		Spec: simplyblockv1alpha2.StorageBackupSpec{
 			ClusterRef: cluster.Name,
-			BackupID:   dto.ID,
 		},
 	}
 	// No owner reference. §13 wants a policy to own the backups taken under it,
@@ -459,7 +564,7 @@ func (r *StorageBackupReconciler) unreported(
 		return ctrl.Result{}, err
 	}
 	r.Recorder.Eventf(cluster, nil, corev1.EventTypeNormal, ReasonBackupGone, ReasonBackupGone,
-		"Backup %s left the store, so StorageBackup %s was removed", sb.Spec.BackupID, sb.Name)
+		"Backup %s left the store, so StorageBackup %s was removed", firstNonEmpty(sb.BackupID(), sb.Name), sb.Name)
 	return ctrl.Result{}, nil
 }
 

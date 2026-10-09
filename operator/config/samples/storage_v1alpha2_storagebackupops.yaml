@@ -14,8 +14,12 @@ kind: StorageBackupOps
 metadata:
   name: storagebackupops-sample
 spec:
-  clusterRef: my-cluster
-  backupRef: storagebackup-sample
+  clusterRef:
+    name: my-cluster
+    namespace: simplyblock # omit when the cluster is in this namespace
+  backupRef:
+    name: storagebackup-sample
+    namespace: simplyblock # omit when the backup is in this namespace
   action: Restore
   restore:
     claimName: restored-claim

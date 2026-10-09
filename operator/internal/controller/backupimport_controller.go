@@ -292,12 +292,10 @@ func (r *BackupImportReconciler) ensureStorageBackupCR(
 			},
 		},
 		Spec: simplyblockv1alpha2.StorageBackupSpec{
+			// The imported copy keeps the source's identifier, which the import
+			// does not change. The identifier and where the copy came from are
+			// observations, so both go in status below.
 			ClusterRef: importCR.Spec.TargetClusterName,
-			// The imported copy is addressed by the source's identifier, which
-			// the import does not change. The spec is identity and nothing else
-			// now (design-storagebackup.md §5.1), so where the copy came from
-			// is an observation and moves to status.source below.
-			BackupID: importCR.Spec.SourceBackupID,
 		},
 	}
 	if err := r.Create(ctx, backupCR); err != nil {

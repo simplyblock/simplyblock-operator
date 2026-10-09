@@ -11,6 +11,9 @@
 // the control plane applies, and a record that could be deleted invites the
 // reading that deleting it reclaims the storage.
 //
+// A StorageBackup that carries spec.source is a person's request for a backup,
+// not a record, so the guard admits it and its deletion.
+//
 // It is the same guard the StorageDevice validator next door applies, for the
 // same reason and with the same failure policy.
 
@@ -18,6 +21,7 @@ package webhook
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -76,6 +80,12 @@ func (v *StorageBackupValidator) Handle(ctx context.Context, req admission.Reque
 		return admission.Allowed("operator-driven write")
 	}
 
+	// A request records nothing the store holds, so the reasons below do not
+	// apply. An object that does not parse is treated as a record.
+	if isBackupRequest(req) {
+		return admission.Allowed("backup request")
+	}
+
 	if req.Operation == admissionv1.Create {
 		return admission.Denied(fmt.Sprintf(
 			"StorageBackup %s/%s cannot be created by hand: a backup object records a copy the operator "+
@@ -107,6 +117,21 @@ func (v *StorageBackupValidator) Handle(ctx context.Context, req admission.Reque
 			"operator when the store stops reporting it. Deleting the record would not delete the "+
 			"copy, which is governed by the bucket's lifecycle policy and by the control plane's "+
 			"retention.", req.Namespace, req.Name))
+}
+
+// isBackupRequest reports whether the object being created or deleted carries
+// spec.source.
+func isBackupRequest(req admission.Request) bool {
+	raw := req.Object.Raw
+	if req.Operation == admissionv1.Delete {
+		raw = req.OldObject.Raw
+	}
+	var sb struct {
+		Spec struct {
+			Source *struct{} `json:"source"`
+		} `json:"spec"`
+	}
+	return json.Unmarshal(raw, &sb) == nil && sb.Spec.Source != nil
 }
 
 // namespaceIsTerminating reports whether the object's namespace is being

@@ -81,8 +81,8 @@ func restoreOps(name string) *simplyblockv1alpha2.StorageBackupOps {
 			Finalizers: []string{opsFinalizer},
 		},
 		Spec: simplyblockv1alpha2.StorageBackupOpsSpec{
-			ClusterRef: testClusterCR,
-			BackupRef:  "backup-1",
+			ClusterRef: simplyblockv1alpha2.StorageClusterReference{Name: testClusterCR},
+			BackupRef:  simplyblockv1alpha2.NamespacedReference{Name: "backup-1"},
 			Action:     simplyblockv1alpha2.StorageBackupOpsActionRestore,
 			Restore: &simplyblockv1alpha2.RestoreSpec{
 				ClaimName:  "restored-claim",
@@ -96,13 +96,13 @@ func availableBackup() *simplyblockv1alpha2.StorageBackup {
 	return &simplyblockv1alpha2.StorageBackup{
 		ObjectMeta: objectMeta("backup-1"),
 		Spec: simplyblockv1alpha2.StorageBackupSpec{
-			ClusterRef: testClusterCR, BackupID: testBackupID,
+			ClusterRef: testClusterCR,
 		},
 		Status: simplyblockv1alpha2.StorageBackupStatus{
 			Phase:     simplyblockv1alpha2.StorageBackupPhaseAvailable,
 			ClusterID: testClusterID,
 			Backup:    &simplyblockv1alpha2.BackupCopy{BackupID: testBackupID, Size: ptr.To(int64(1 << 30))},
-			Source:    &simplyblockv1alpha2.BackupSource{FSType: "xfs", ClaimName: "claim-1"},
+			Source:    &simplyblockv1alpha2.BackupSource{FSType: "xfs", ClaimName: testClaim},
 		},
 	}
 }
@@ -420,5 +420,113 @@ func TestTheRestoreRequestIsIssuedOnlyOnce(t *testing.T) {
 
 	if api.restores != 1 {
 		t.Errorf("the control plane was asked for %d restores, want exactly 1", api.restores)
+	}
+}
+
+// A requested backup has no spec.backupID, so a restore must take the
+// identifier from status. Reading spec sent the control plane a blank one.
+func TestRestoreOfARequestedBackupUsesTheIdentifierInStatus(t *testing.T) {
+	requested := availableBackup()
+	requested.Spec = simplyblockv1alpha2.StorageBackupSpec{
+		Source: &simplyblockv1alpha2.BackupRequest{ClaimName: testClaim},
+	}
+	api := &fakeControlPlane{restoredID: testRestoreID}
+	r := opsReconciler(t, api, testClusterObject(), testPoolObject(), requested, restoreOps(testOpsName))
+
+	for range 4 { // Validating and Restoring read the identifier
+		if _, err := r.Reconcile(context.Background(), opsRequest(testOpsName)); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+	}
+
+	if len(api.restored) != 1 || api.restored[0].BackupID != testBackupID {
+		t.Errorf("restores = %+v, want one of %q", api.restored, testBackupID)
+	}
+}
+
+// A restore names its backup and its cluster by namespace. They are read where
+// they are said to be, and the claim is created beside the operation.
+func TestRestoreReachesAcrossNamespaces(t *testing.T) {
+	const app = "app"
+	for name, tc := range map[string]struct{ clusterNamespace, backupNamespace string }{
+		"the cluster is in another namespace": {testNamespace, ""},
+		"the backup is in another namespace":  {testNamespace, testNamespace},
+	} {
+		t.Run(name, func(t *testing.T) {
+			handle := lvol.NewVolumeHandle(testClusterID, testPoolID, testRestoreID)
+			api := &fakeControlPlane{
+				restoredID: testRestoreID,
+				volumes:    map[string]lvol.Volume{string(handle): {Status: cpVolumeOnline}},
+				connection: lvol.Connection{
+					NQN:       "nqn.2023-01.io.simplyblock:lvol",
+					Endpoints: []lvol.Endpoint{{Transport: "tcp", Address: "10.0.0.1", Port: 4420}},
+				},
+			}
+			ops := restoreOps(testOpsName)
+			ops.Namespace = app
+			ops.Spec.ClusterRef.Namespace = tc.clusterNamespace
+			ops.Spec.BackupRef.Namespace = tc.backupNamespace
+			backup := availableBackup()
+			backup.Namespace = app
+			if tc.backupNamespace != "" {
+				backup.Namespace = tc.backupNamespace
+			}
+			r := opsReconciler(t, api, testClusterObject(), testPoolObject(), backup, ops)
+
+			key := client.ObjectKey{Namespace: app, Name: testOpsName}
+			claimKey := client.ObjectKey{Name: "restored-claim", Namespace: app}
+			for range 12 {
+				if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+					t.Fatalf("Reconcile: %v", err)
+				}
+				var claim corev1.PersistentVolumeClaim
+				if r.Get(context.Background(), claimKey, &claim) == nil && claim.Status.Phase != corev1.ClaimBound {
+					claim.Status.Phase = corev1.ClaimBound // what the volume controller does
+					if err := r.Status().Update(context.Background(), &claim); err != nil {
+						t.Fatalf("bind the claim: %v", err)
+					}
+				}
+			}
+
+			var got simplyblockv1alpha2.StorageBackupOps
+			if err := r.Get(context.Background(), key, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Status.Phase != simplyblockv1alpha2.StorageBackupOpsPhaseSucceeded {
+				t.Errorf("phase = %q (%s), want Succeeded", got.Status.Phase, got.Status.Message)
+			}
+			if err := r.Get(context.Background(), claimKey, &corev1.PersistentVolumeClaim{}); err != nil {
+				t.Errorf("the claim was not created in the operation's namespace: %v", err)
+			}
+		})
+	}
+}
+
+// The lock names its holder, and operations of one name in different namespaces
+// can name one backup, so a name alone would let the second believe it holds
+// what the first does.
+func TestRestoresOfOneBackupFromTwoNamespacesTakeTurns(t *testing.T) {
+	first, second := restoreOps(testOpsName), restoreOps(testOpsName)
+	second.Namespace = "app"
+	second.Spec.ClusterRef.Namespace = testNamespace
+	second.Spec.BackupRef.Namespace = testNamespace
+	second.Spec.Restore.ClaimName = "another-claim"
+	api := &fakeControlPlane{restoredID: testRestoreID}
+	r := opsReconciler(t, api, testClusterObject(), testPoolObject(), availableBackup(), first, second)
+
+	for _, ns := range []string{testNamespace, "app"} {
+		key := client.ObjectKey{Namespace: ns, Name: testOpsName}
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("Reconcile in %s: %v", ns, err)
+		}
+	}
+
+	var waiting simplyblockv1alpha2.StorageBackupOps
+	if err := r.Get(context.Background(), client.ObjectKey{Namespace: "app", Name: testOpsName}, &waiting); err != nil {
+		t.Fatal(err)
+	}
+	if waiting.Status.Phase != simplyblockv1alpha2.StorageBackupOpsPhasePending || api.restores != 0 {
+		t.Errorf("the second operation is %q with %d restore(s) issued, want Pending and none while the first holds the backup",
+			waiting.Status.Phase, api.restores)
 	}
 }

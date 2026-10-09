@@ -170,29 +170,39 @@ type BackupCopy struct {
 	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
 }
 
-// StorageBackupSpec is the identity of one backup the operator found in a
-// cluster's store, and nothing else. The object is created by the operator and
-// by nobody else, so there is no request here to carry.
+// BackupRequest asks for one backup of one claim.
+type BackupRequest struct {
+	// ClaimName is the PersistentVolumeClaim to back up, in this object's own
+	// namespace. It must be bound to a volume this product provisioned.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Required
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Claim Name"
+	// +k8s:immutable
+	ClaimName string `json:"claimName"`
+}
+
+// StorageBackupSpec is a record of a copy the store holds (clusterRef, written
+// by the operator) or a request for a new one (source, written by a person).
+// The backup's identifier is in status.backup.backupID in both cases.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.source) != has(self.clusterRef)",message="set exactly one of source (to request a backup) or clusterRef (to record one the store holds)"
 type StorageBackupSpec struct {
 	// ClusterRef names the StorageCluster whose store this backup was found in.
-	// With BackupID it is the whole of this object's identity.
-	//
-	// Bounded at what a StorageCluster name may be, since a longer value names
-	// nothing that can exist.
+	// A request does not set it: the cluster is the one that provisioned the
+	// claim's volume.
 	// +kubebuilder:validation:MaxLength=63
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Ref"
-	// +kubebuilder:validation:Required
+	// +optional
 	// +k8s:immutable
-	ClusterRef string `json:"clusterRef"`
+	ClusterRef string `json:"clusterRef,omitempty"`
 
-	// BackupID is the identifier the store holds the backup under, and what a
-	// restore addresses. It is the store's identifier rather than a name this
-	// operator assigns, so the same backup is the same object however many
-	// clusters have the location configured.
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Backup ID"
-	// +kubebuilder:validation:Required
+	// Source asks for a new backup of a claim, the way a VolumeSnapshot asks
+	// for a snapshot. Leave it unset on a record.
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Source"
+	// +optional
 	// +k8s:immutable
-	BackupID string `json:"backupID"`
+	Source *BackupRequest `json:"source,omitempty"`
 }
 
 // StorageBackupStatus is the observed state of one backup, in three groups: the
@@ -227,7 +237,8 @@ type StorageBackupStatus struct {
 	Source *BackupSource `json:"source,omitempty"`
 
 	// ActiveOpsRef names the StorageBackupOps currently allowed to act on this
-	// backup. Empty when none is running.
+	// backup, as namespace/name when it is in another namespace. Empty when none
+	// is running.
 	// +optional
 	ActiveOpsRef string `json:"activeOpsRef,omitempty"`
 
@@ -263,6 +274,12 @@ func (b *StorageBackup) Copy() BackupCopy {
 
 // Source returns the status.source group, or a zero-valued one when the backup
 // has not been observed yet.
+// BackupID is the identifier the store holds the backup under, and what a
+// restore addresses. It is empty until the backup exists.
+func (b *StorageBackup) BackupID() string {
+	return b.Copy().BackupID
+}
+
 func (b *StorageBackup) Source() BackupSource {
 	if b.Status.Source == nil {
 		return BackupSource{}

@@ -17,7 +17,7 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.backupRef
+    - jsonPath: .spec.backupRef.name
       name: Backup
       type: string
     - jsonPath: .spec.action
@@ -94,21 +94,50 @@ spec:
                   rule: self == oldSelf
               backupRef:
                 description: |-
-                  BackupRef names the StorageBackup this operation acts on, in this
-                  namespace. Required, since Restore is the only action and every backup in
-                  the store has an object.
-                type: string
+                  BackupRef names the StorageBackup this operation acts on. Its namespace
+                  defaults to this operation's. A backup in another namespace needs the
+                  requesting user to be allowed to read it there.
+                properties:
+                  name:
+                    description: Name is the object's name.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace is the object's namespace. When it is empty, the namespace of the
+                      object that holds the reference.
+                    maxLength: 63
+                    type: string
+                required:
+                - name
+                type: object
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
               clusterRef:
                 description: |-
-                  ClusterRef names the StorageCluster the operation runs against.
+                  ClusterRef names the StorageCluster the operation runs against. Its
+                  namespace defaults to this operation's. The cluster's StoragePool, which
+                  spec.restore.targetPool names, is read from the cluster's namespace.
 
-                  Bounded at what a StorageCluster name may be, since a longer value names
-                  nothing that can exist.
-                maxLength: 63
-                type: string
+                  A cluster in another namespace needs the requesting user to be allowed to
+                  read it there.
+                properties:
+                  name:
+                    description: Name is the StorageCluster's name.
+                    maxLength: 63
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace is the object's namespace. When it is empty, the namespace of the
+                      object that holds the reference.
+                    maxLength: 63
+                    type: string
+                required:
+                - name
+                type: object
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
@@ -140,9 +169,9 @@ spec:
                       rule: self == oldSelf
                   claimName:
                     description: |-
-                      ClaimName is the PersistentVolumeClaim to create. It must not already
-                      exist: a restore that adopted an existing claim would replace a running
-                      workload's data with the backup's.
+                      ClaimName is the PersistentVolumeClaim to create, in this operation's
+                      namespace. It must not already exist: a restore that adopted an existing
+                      claim would replace a running workload's data with the backup's.
                     type: string
                     x-kubernetes-validations:
                     - message: field is immutable

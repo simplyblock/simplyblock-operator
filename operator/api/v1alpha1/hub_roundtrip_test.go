@@ -133,7 +133,6 @@ func TestStorageBackupRoundTripsFromTheHub(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "backup-1", Namespace: "sb"},
 		Spec: v1alpha2.StorageBackupSpec{
 			ClusterRef: "production",
-			BackupID:   "backup-uuid",
 		},
 		Status: v1alpha2.StorageBackupStatus{
 			Phase:     v1alpha2.StorageBackupPhaseAvailable,

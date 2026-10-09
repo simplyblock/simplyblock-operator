@@ -72,7 +72,7 @@ func sourceVolume() *corev1.PersistentVolume {
 	return &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: "pv-1"},
 		Spec: corev1.PersistentVolumeSpec{
-			ClaimRef: &corev1.ObjectReference{Name: "claim-1", Namespace: testNamespace},
+			ClaimRef: &corev1.ObjectReference{Name: testClaim, Namespace: testNamespace},
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
 				CSI: &corev1.CSIPersistentVolumeSource{
 					VolumeHandle: testClusterID + ":" + testPoolID + ":" + testLvolID,
@@ -95,8 +95,11 @@ func TestMirrorCreatesAnObjectForADiscoveredBackup(t *testing.T) {
 		t.Fatalf("the mirror created no object: %v", err)
 	}
 
-	if backup.Spec.ClusterRef != testClusterCR || backup.Spec.BackupID != testBackupID {
-		t.Errorf("spec = %+v, want the cluster and the store's identifier", backup.Spec)
+	if backup.Spec.ClusterRef != testClusterCR || backup.Spec.Source != nil {
+		t.Errorf("spec = %+v, want a record naming the cluster", backup.Spec)
+	}
+	if backup.BackupID() != testBackupID {
+		t.Errorf("status.backup.backupID = %q, want the store's identifier %q", backup.BackupID(), testBackupID)
 	}
 	if got := backup.Status.Phase; got != simplyblockv1alpha2.StorageBackupPhaseAvailable {
 		t.Errorf("status.phase = %q, want %q", got, simplyblockv1alpha2.StorageBackupPhaseAvailable)
@@ -107,10 +110,10 @@ func TestMirrorCreatesAnObjectForADiscoveredBackup(t *testing.T) {
 	// The Kubernetes half of the source, which the control plane does not report
 	// and the mirror resolves through the volume's handle.
 	source := backup.Source()
-	if source.ClaimName != "claim-1" || source.FSType != "xfs" || source.PoolUUID != testPoolID {
+	if source.ClaimName != testClaim || source.FSType != "xfs" || source.PoolUUID != testPoolID {
 		t.Errorf("status.source = %+v, want the claim, filesystem, and pool of the source volume", source)
 	}
-	if got := backup.Labels[simplyblockv1alpha2.BackupLabelClaim]; got != "claim-1" {
+	if got := backup.Labels[simplyblockv1alpha2.BackupLabelClaim]; got != testClaim {
 		t.Errorf("claim label = %q, want claim-1", got)
 	}
 }
@@ -149,7 +152,7 @@ func TestMirrorNeverRewritesTheSourceGroup(t *testing.T) {
 	recorded := &simplyblockv1alpha2.StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{Name: backupObjectName(), Namespace: testNamespace},
 		Spec: simplyblockv1alpha2.StorageBackupSpec{
-			ClusterRef: testClusterCR, BackupID: testBackupID,
+			ClusterRef: testClusterCR,
 		},
 		Status: simplyblockv1alpha2.StorageBackupStatus{
 			ClusterID: testClusterID,
@@ -177,7 +180,7 @@ func TestMirrorDeletesAnObjectWhoseBackupLeftTheStore(t *testing.T) {
 	recorded := &simplyblockv1alpha2.StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{Name: backupObjectName(), Namespace: testNamespace},
 		Spec: simplyblockv1alpha2.StorageBackupSpec{
-			ClusterRef: testClusterCR, BackupID: testBackupID,
+			ClusterRef: testClusterCR,
 		},
 		Status: simplyblockv1alpha2.StorageBackupStatus{ClusterID: testClusterID},
 	}
@@ -205,7 +208,7 @@ func TestMirrorTreatsAMergedBackupAsGone(t *testing.T) {
 	recorded := &simplyblockv1alpha2.StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{Name: backupObjectName(), Namespace: testNamespace},
 		Spec: simplyblockv1alpha2.StorageBackupSpec{
-			ClusterRef: testClusterCR, BackupID: testBackupID,
+			ClusterRef: testClusterCR,
 		},
 		Status: simplyblockv1alpha2.StorageBackupStatus{ClusterID: testClusterID},
 	}
@@ -236,7 +239,7 @@ func TestMirrorKeepsAnObjectWhileTheStreamHasNotSynced(t *testing.T) {
 	recorded := &simplyblockv1alpha2.StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{Name: backupObjectName(), Namespace: testNamespace},
 		Spec: simplyblockv1alpha2.StorageBackupSpec{
-			ClusterRef: testClusterCR, BackupID: testBackupID,
+			ClusterRef: testClusterCR,
 		},
 		Status: simplyblockv1alpha2.StorageBackupStatus{ClusterID: testClusterID},
 	}
@@ -303,4 +306,92 @@ func TestVolumeIndexCoversOnlyWellFormedSimplyblockVolumes(t *testing.T) {
 	if indexed := IndexPersistentVolumeLvolID(malformed); indexed != nil {
 		t.Errorf("a malformed handle indexed as %v, want nothing", indexed)
 	}
+}
+
+// A request is a person's object, so the mirror leaves it to its reconciler. It
+// records no second object for a backup a request owns, removes one it recorded
+// before the request knew the ID, and fails the request when the copy is pruned.
+func TestMirrorDefersToTheRequestThatOwnsABackup(t *testing.T) {
+	requestKey := types.NamespacedName{Namespace: "app", Name: "nightly"}
+	request := func(owns bool) *simplyblockv1alpha2.StorageBackup {
+		sb := &simplyblockv1alpha2.StorageBackup{
+			ObjectMeta: metav1.ObjectMeta{Name: requestKey.Name, Namespace: requestKey.Namespace},
+			Spec:       simplyblockv1alpha2.StorageBackupSpec{Source: &simplyblockv1alpha2.BackupRequest{ClaimName: testClaim}},
+		}
+		if owns {
+			sb.Status = simplyblockv1alpha2.StorageBackupStatus{
+				Phase:     simplyblockv1alpha2.StorageBackupPhaseAvailable,
+				ClusterID: testClusterID,
+				Backup:    &simplyblockv1alpha2.BackupCopy{BackupID: testBackupID},
+			}
+		}
+		return sb
+	}
+	record := &simplyblockv1alpha2.StorageBackup{
+		ObjectMeta: metav1.ObjectMeta{Name: backupObjectName(), Namespace: testNamespace},
+		Spec:       simplyblockv1alpha2.StorageBackupSpec{ClusterRef: testClusterCR},
+		Status:     simplyblockv1alpha2.StorageBackupStatus{ClusterID: testClusterID},
+	}
+
+	for name, tc := range map[string]struct {
+		cache     *fakeBackupCache
+		objs      []client.Object
+		reconcile types.NamespacedName
+		check     func(t *testing.T, r *StorageBackupReconciler)
+	}{
+		"a request with no backup yet is not read as a copy that left the store": {
+			cache: syncedCache(), objs: []client.Object{request(false)}, reconcile: requestKey,
+			check: func(t *testing.T, r *StorageBackupReconciler) { mustExist(t, r, requestKey) },
+		},
+		"no record is created for a backup a request owns": {
+			cache: syncedCache(reportedBackup()), objs: []client.Object{request(true), sourceVolume()},
+			reconcile: backupRequest().NamespacedName,
+			check: func(t *testing.T, r *StorageBackupReconciler) {
+				if err := r.Get(context.Background(), backupRequest().NamespacedName, &simplyblockv1alpha2.StorageBackup{}); err == nil {
+					t.Error("the mirror recorded a second object for a requested backup")
+				}
+			},
+		},
+		"a record made before the request knew the ID is removed": {
+			cache: syncedCache(reportedBackup()), objs: []client.Object{request(true), record}, reconcile: requestKey,
+			check: func(t *testing.T, r *StorageBackupReconciler) {
+				if err := r.Get(context.Background(), backupRequest().NamespacedName, &simplyblockv1alpha2.StorageBackup{}); err == nil {
+					t.Error("the duplicate record survived the request learning the ID")
+				}
+			},
+		},
+		"a copy that leaves the store fails the request": {
+			cache: syncedCache(), objs: []client.Object{request(true)}, reconcile: backupRequest().NamespacedName,
+			check: func(t *testing.T, r *StorageBackupReconciler) {
+				if got := mustExist(t, r, requestKey).Status.Phase; got != simplyblockv1alpha2.StorageBackupPhaseFailed {
+					t.Errorf("request phase = %q, want Failed once the copy left the store", got)
+				}
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := backupMirror(t, tc.cache, append([]client.Object{testClusterObject()}, tc.objs...)...)
+			if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: tc.reconcile}); err != nil {
+				t.Fatal(err)
+			}
+			tc.check(t, r)
+		})
+	}
+
+	t.Run("deleting a request queues the record of its backup", func(t *testing.T) {
+		r := backupMirror(t, syncedCache(reportedBackup()), testClusterObject())
+		got := r.recordOf(context.Background(), request(true))
+		if len(got) != 1 || got[0].NamespacedName != backupRequest().NamespacedName {
+			t.Errorf("queued %v, want the backup's record in the cluster's namespace", got)
+		}
+	})
+}
+
+func mustExist(t *testing.T, r *StorageBackupReconciler, key types.NamespacedName) *simplyblockv1alpha2.StorageBackup {
+	t.Helper()
+	var got simplyblockv1alpha2.StorageBackup
+	if err := r.Get(context.Background(), key, &got); err != nil {
+		t.Fatalf("%s is gone: %v", key, err)
+	}
+	return &got
 }

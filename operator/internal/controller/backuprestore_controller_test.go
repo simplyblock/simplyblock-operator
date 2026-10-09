@@ -486,7 +486,7 @@ func TestBackupRestoreAcceptsARestoreOnItsLastAttempt(t *testing.T) {
 	// The backup finishes, so the next pass can place the restore.
 	backup := &simplyblockv1alpha2.StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{Name: "late-backup", Namespace: "default"},
-		Spec:       simplyblockv1alpha2.StorageBackupSpec{ClusterRef: "mycluster", BackupID: "backup-id"},
+		Spec:       simplyblockv1alpha2.StorageBackupSpec{ClusterRef: "mycluster"},
 		Status: simplyblockv1alpha2.StorageBackupStatus{
 			Phase:  simplyblockv1alpha2.StorageBackupPhaseAvailable,
 			Backup: &simplyblockv1alpha2.BackupCopy{BackupID: "backup-id", Size: ptr.To(int64(1 << 30))},
