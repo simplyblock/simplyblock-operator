@@ -25,6 +25,7 @@ import sbtest  # noqa: E402,F401  (registers the bundled plugins)
 from sbtest.adapters import ArchiveEvidence  # noqa: E402
 from sbtest.components import kube  # noqa: E402
 from sbtest.components.chaos import RestartPlan  # noqa: E402
+from sbtest.components.workloads.churn import ChurnPlan  # noqa: E402
 from sbtest.core import (  # noqa: E402
     Component,
     Detector,
@@ -402,6 +403,28 @@ class Archive(unittest.TestCase):
         assert ready is not None
         self.assertEqual((ready - got[0].deleted).total_seconds(), 30)
         self.assertIsNone(got[1].ready)
+
+    def test_reads_the_churn_a_run_made(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "state.json"), "w") as fh:
+                json.dump({"run_id": "r", "migrations": []}, fh)
+            with open(os.path.join(d, "churn.json"), "w") as fh:
+                json.dump({"seed": 3, "pods": [
+                    {"pod": "r-churn-2", "claim": "r-pnfs-shared-0", "own_volume": False,
+                     "created": "2026-08-19T22:01:00Z", "node": "w2"},
+                    {"pod": "r-churn-1", "claim": "r-churn-1", "own_volume": True,
+                     "created": "2026-08-19T22:00:00Z", "io_started": "2026-08-19T22:00:05Z",
+                     "deleted": "2026-08-19T22:01:05Z", "rc": 0, "pv": "pvc-1",
+                     "pvc_deleted": "2026-08-19T22:01:06Z", "pv_gone": True,
+                     "export_gone": False, "gone_s": 30.5}]}, fh)
+            got = ArchiveEvidence(d).churn()
+        self.assertEqual([c.pod for c in got], ["r-churn-1", "r-churn-2"])
+        first = got[0]
+        self.assertTrue(first.own_volume)
+        self.assertEqual((first.rc, first.pv, first.pv_gone, first.export_gone, first.gone_s),
+                         (0, "pvc-1", True, False, 30.5))
+        self.assertIsNone(got[1].io_started)
+        self.assertIsNone(got[1].pv_gone)
 
     def test_falls_back_to_test_log_when_state_is_absent(self):
         with tempfile.TemporaryDirectory() as d:
@@ -845,4 +868,50 @@ class RestartSchedule(unittest.TestCase):
         # Once nothing is in flight, the deferred restart goes, still inside the window.
         fired = self.fire(plan, until=300.0)
         self.assertEqual(len(fired), 1)
+
+
+class ChurnSchedule(unittest.TestCase):
+    """When a churn pod arrives, how long it lives, and whether it brings its own volume:
+    a steady flow inside the window, capped, deferred rather than dropped at the cap, and
+    the same for the same seed."""
+
+    def plan(self, **kw: object) -> ChurnPlan:
+        args: dict[str, object] = {"seed": 11, "start": 0.0, "end": 600.0,
+                                   "mean_interval_s": 20.0, "min_life_s": 30.0,
+                                   "max_life_s": 90.0, "reuse_ratio": 0.5,
+                                   "max_concurrent": 100}
+        args.update(kw)
+        return ChurnPlan(**args)  # type: ignore[arg-type]
+
+    def flow(self, plan: ChurnPlan, until: float = 900.0, active: int = 0,
+            step: float = 1.0) -> list[tuple[float, bool, float]]:
+        out, t = [], 0.0
+        while t <= until:
+            out += [(t, a.reuse, a.lifetime_s) for a in plan.due(t, active)]
+            t += step
+        return out
+
+    def test_arrivals_keep_coming_inside_the_window_and_stop_after_it(self):
+        got = self.flow(self.plan())
+        self.assertGreater(len(got), 10)   # about 30 expected at one per 20s over 600s
+        self.assertTrue(all(t <= 600.0 for t, _, _ in got))
+
+    def test_lifetimes_stay_within_their_bounds(self):
+        got = self.flow(self.plan())
+        self.assertTrue(all(30.0 <= life <= 90.0 for _, _, life in got))
+
+    def test_the_reuse_ratio_decides_who_brings_a_volume(self):
+        self.assertTrue(all(reuse for _, reuse, _ in self.flow(self.plan(reuse_ratio=1.0))))
+        self.assertFalse(any(reuse for _, reuse, _ in self.flow(self.plan(reuse_ratio=0.0))))
+
+    def test_the_same_seed_gives_the_same_flow(self):
+        self.assertEqual(self.flow(self.plan()), self.flow(self.plan()))
+
+    def test_at_the_cap_an_arrival_waits_for_room_instead_of_being_dropped(self):
+        plan = self.plan(max_concurrent=2)
+        self.assertEqual(self.flow(plan, until=100.0, active=2), [])
+        # Room again: the arrival that was held goes first, inside the window.
+        later = self.flow(plan, until=101.0)
+        self.assertTrue(later)
+        self.assertLessEqual(later[0][0], 101.0)
 

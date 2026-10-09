@@ -330,6 +330,7 @@ Every one of these came from a real defect. Defaults encode what the runs measur
 | `pnfs.layout`                | **A pNFS mount that got no layouts**: it ran as plain NFS, every byte through the metadata server, and fio's verification still passed. Warns when data went through the server beside layouts. Reads the NFS client's own per-operation counters.                                                                                                                                                 |
 | `pnfs.device-io`             | **A pNFS client node whose NVMe-oF namespace did not see the data.** The other end of the same question: per volume and consuming node, the namespace must be attached and its read and write counters must grow, without standing still longer than `max_stall_s`. A pause that begins at a metadata server restart and stays within `restart_pause_s` is that restart working, reported as INFO. |
 | `chaos.recovery`             | **A pod the run restarted that never came back.** Every restart `chaos.restart` made must end with a Ready replacement. The ones that did are listed as INFO with how long they took.                                                                                                                                                                                                              |
+| `pnfs.churn`                 | **A pod that joined a pNFS volume and never did I/O, or an own volume left behind.** Every churn pod must reach fio's timed run. A pod that brought its own volume must leave no PersistentVolume and no NFSExport behind, and a cleanup slower than `delete_budget_s` is a warning.                                                                                                               |
 
 Three things are load-bearing and worth knowing:
 
@@ -349,19 +350,20 @@ Three things are load-bearing and worth knowing:
 
 ## Component catalogue
 
-| component          | what it does                                                                                                                                                                                                                                                                                                                             |
-|--------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `logs.stream`      | Follows chosen container logs for the whole run, surviving kubelet rotation, container restarts, and pod recreation.                                                                                                                                                                                                                     |
-| `logs.collect`     | Grabs container logs from each host's `/var/log/pods` at the end. Skips whatever `logs.stream` followed.                                                                                                                                                                                                                                 |
-| `host.dmesg`       | `dmesg -T` from each storage worker.                                                                                                                                                                                                                                                                                                     |
-| `cluster.events`   | `sbctl cluster get-logs` → `cluster-events.json`.                                                                                                                                                                                                                                                                                        |
-| `nvme.snapshot`    | Fabric snapshot before *and* after the run — "did the last run leave a mess?" is a real question, because a leaked controller breaks the *next* run.                                                                                                                                                                                     |
-| `ana.sample`       | Per-namespace ANA state on every consuming node, on an interval, written per migration in the layout `ArchiveEvidence` reads. Needs a driver to tell it which migration is in flight.                                                                                                                                                    |
-| `workload.fio`     | Provisions volumes from two StorageClasses (single-namespace and packed) and drives continuous md5-verified fio against them. `required`.                                                                                                                                                                                                |
-| `migration.driver` | Creates `VolumeMigration` CRs in a loop, one at a time, and records what each one did. `required`.                                                                                                                                                                                                                                       |
-| `workload.pnfs`    | Provisions pNFS volumes some pods share and some own, and runs verified fio in every container, each instance with a data file of its own. Pods sharing a volume are spread across nodes. `required`.                                                                                                                                    |
-| `nvme.iostat`      | Samples every node's NVMe namespace I/O counters (sysfs `stat`, head devices only) on an interval, for `pnfs.device-io`. Finds a replaced node plugin and keeps reading through it.                                                                                                                                                      |
-| `chaos.restart`    | Restarts the metadata server, a pNFS client's node plugin, or the CSI controller during the timed run: `guaranteed` times at seeded random moments, and otherwise with a low `chance` per tick. Records each restart and its recovery in `restarts.json`, and the victim's log through its shutdown in `restart-<n>-<target>-<pod>.txt`. |
+| component             | what it does                                                                                                                                                                                                                                                                                                                             |
+|-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `logs.stream`         | Follows chosen container logs for the whole run, surviving kubelet rotation, container restarts, and pod recreation.                                                                                                                                                                                                                     |
+| `logs.collect`        | Grabs container logs from each host's `/var/log/pods` at the end. Skips whatever `logs.stream` followed.                                                                                                                                                                                                                                 |
+| `host.dmesg`          | `dmesg -T` from each storage worker.                                                                                                                                                                                                                                                                                                     |
+| `cluster.events`      | `sbctl cluster get-logs` → `cluster-events.json`.                                                                                                                                                                                                                                                                                        |
+| `nvme.snapshot`       | Fabric snapshot before *and* after the run — "did the last run leave a mess?" is a real question, because a leaked controller breaks the *next* run.                                                                                                                                                                                     |
+| `ana.sample`          | Per-namespace ANA state on every consuming node, on an interval, written per migration in the layout `ArchiveEvidence` reads. Needs a driver to tell it which migration is in flight.                                                                                                                                                    |
+| `workload.fio`        | Provisions volumes from two StorageClasses (single-namespace and packed) and drives continuous md5-verified fio against them. `required`.                                                                                                                                                                                                |
+| `migration.driver`    | Creates `VolumeMigration` CRs in a loop, one at a time, and records what each one did. `required`.                                                                                                                                                                                                                                       |
+| `workload.pnfs`       | Provisions pNFS volumes some pods share and some own, and runs verified fio in every container, each instance with a data file of its own. Pods sharing a volume are spread across nodes. `required`.                                                                                                                                    |
+| `nvme.iostat`         | Samples every node's NVMe namespace I/O counters (sysfs `stat`, head devices only) on an interval, for `pnfs.device-io`. Finds a replaced node plugin and keeps reading through it.                                                                                                                                                      |
+| `chaos.restart`       | Restarts the metadata server, a pNFS client's node plugin, or the CSI controller during the timed run: `guaranteed` times at seeded random moments, and otherwise with a low `chance` per tick. Records each restart and its recovery in `restarts.json`, and the victim's log through its shutdown in `restart-<n>-<target>-<pod>.txt`. |
+| `workload.pnfs-churn` | Keeps short-lived pods joining and leaving pNFS volumes during the run, on a seeded schedule: some join a volume `workload.pnfs` shares, some bring a volume of their own and delete it when they leave. Each runs a verified fio for its lifetime and is recorded in `churn.json`.                                                      |
 
 ### What gets collected
 
@@ -615,6 +617,23 @@ server restart pauses every client until its grace period ends, so a pause withi
 `restart_pause_s` that begins at one is INFO. A node plugin or controller restart is not on
 the data path, and any pause around one is a finding. Writes that never resume are critical
 whatever was restarted, and `chaos.recovery` fails a restart whose pod never came back.
+
+### Pods joining and leaving
+
+`workload.pnfs-churn` keeps a flow of short-lived pods coming and going while the long-lived
+pods run, which is how a ReadWriteMany volume is used day to day. A churn pod joins one of
+the volumes `workload.pnfs` shares (`reuse_ratio`), which is a new NFS client taking layouts
+on a volume already in use, or brings a pNFS volume of its own, which is a whole export
+created and torn down under load. Arrivals follow a seeded Poisson process
+(`mean_interval_s`), each pod lives `min_life_s` to `max_life_s`, an arrival that finds
+`max_concurrent` pods running waits for room, and nothing arrives in the last
+`quiet_tail_s`. The log names the seed, and `seed:` replays the flow.
+
+Each churn pod runs one md5-verified fio on a file of its own, collected before the pod is
+deleted, so `fio.checksum` and `fio.job-error` judge it like any other instance.
+`churn.json` records when each pod arrived, reached I/O, finished, and left, and for an own
+volume whether its PersistentVolume and NFSExport were gone afterward, which `pnfs.churn`
+judges.
 
 ## Not yet here
 

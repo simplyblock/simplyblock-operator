@@ -73,7 +73,10 @@ class PnfsRwxWorkload(FioWorkload):
     # ── the layout ──────────────────────────────────────────────────────────────────
 
     def documents(self, ctx: RunContext) -> list[dict]:
-        docs = self._documents(ctx, self._storageclass(ctx))
+        sc = self._storageclass(ctx)
+        # For workload.pnfs-churn, whose own volumes come from the same class.
+        ctx.shared["pnfs.storageclass"] = sc
+        docs = self._documents(ctx, sc)
         ctx.log.info(f"{self.name}: {len(self._claim_of)} pod(s) on "
                      f"{len(set(self._claim_of.values()))} pNFS volume(s), "
                      f"{len(self._instances)} fio instance(s)")
@@ -84,6 +87,8 @@ class PnfsRwxWorkload(FioWorkload):
         nodes = self._nodes()
         # Which nodes mount a pNFS volume, for chaos.restart to pick a node plugin from.
         ctx.shared["pnfs.client_nodes"] = sorted(set(nodes.values()))
+        # The long-lived claims, which workload.pnfs-churn's pods join and leave.
+        ctx.shared["pnfs.claims"] = sorted(set(self._claim_of.values()))
         self._write_volume_map(ctx, nodes)
         self._report_spread(ctx, nodes)
 

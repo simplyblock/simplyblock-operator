@@ -6,6 +6,7 @@ from .evidence import (
     KERNEL_CLOCK_PROBE,
     AnaSample,
     BlockSample,
+    ChurnPod,
     ControlEvent,
     Evidence,
     FioJob,
@@ -34,7 +35,7 @@ from .plugin import (
 from .runner import Runner, findings_by_subject_table
 
 __all__ = [
-    "AnaSample", "Attribution", "BlockSample", "Component", "Config", "Detector", "Event",
+    "AnaSample", "Attribution", "BlockSample", "ChurnPod", "Component", "Config", "Detector", "Event",
     "Evidence", "KERNEL_CLOCK_PROBE", "PnfsVolume", "Restart",
     "ControlEvent", "Finding", "LogSpan",
     "FioJob", "IopsSample", "Logger", "Migration", "NvmeController", "Report",

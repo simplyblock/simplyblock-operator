@@ -12,6 +12,7 @@ rather than the system.
 from . import (  # noqa: F401
     ana,
     chaos,
+    churn,
     control,
     fio,
     kernel,
@@ -23,5 +24,5 @@ from . import (  # noqa: F401
     security,
 )
 
-__all__ = ["ana", "chaos", "control", "fio", "kernel", "logs", "meta", "migration", "nvme", "pnfs",
-           "security"]
+__all__ = ["ana", "chaos", "churn", "control", "fio", "kernel", "logs", "meta", "migration",
+           "nvme", "pnfs", "security"]
