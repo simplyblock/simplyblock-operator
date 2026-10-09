@@ -37,6 +37,7 @@ from datetime import UTC, datetime, timedelta
 from ..core import (
     AnaSample,
     BlockSample,
+    ChurnPod,
     ControlEvent,
     FioJob,
     IopsSample,
@@ -357,6 +358,34 @@ class ArchiveEvidence:
                                replacement=str(r.get("replacement", "")),
                                log=str(r.get("log") or "")))
         out.sort(key=lambda r: r.deleted)
+        return out
+
+    def churn(self) -> list[ChurnPod]:
+        p = os.path.join(self.outdir, "churn.json")
+        try:
+            with open(p) as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return []
+        out = []
+        for c in raw.get("pods", []) if isinstance(raw, dict) else []:
+            created = _dt(c.get("created")) if isinstance(c, dict) else None
+            if created is None:
+                continue
+            rc, gone = c.get("rc"), c.get("gone_s")
+            out.append(ChurnPod(
+                pod=str(c.get("pod", "")), claim=str(c.get("claim", "")),
+                own_volume=bool(c.get("own_volume")), created=created,
+                node=str(c.get("node") or ""), io_started=_dt(c.get("io_started")),
+                finished=_dt(c.get("finished")), deleted=_dt(c.get("deleted")),
+                rc=int(rc) if isinstance(rc, int) else None,
+                pvc_deleted=_dt(c.get("pvc_deleted")), pv=str(c.get("pv") or ""),
+                pv_gone=c.get("pv_gone") if isinstance(c.get("pv_gone"), bool) else None,
+                export_gone=(c.get("export_gone") if isinstance(c.get("export_gone"), bool)
+                             else None),
+                gone_s=float(gone) if isinstance(gone, int | float) else None,
+                error=str(c.get("error") or "")))
+        out.sort(key=lambda c: c.created)
         return out
 
     def pnfs_volumes(self) -> list[PnfsVolume]:

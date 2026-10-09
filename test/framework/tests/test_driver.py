@@ -564,6 +564,28 @@ class RestartLogs(unittest.TestCase):
         self.assertEqual(record["log"], "restart-1-mds-simplyblock-pnfs-mds-x-0.txt")
 
 
+class ChurnPodSpec(unittest.TestCase):
+    """A churn pod is found by its own label, never by workload.pnfs's, and leaves its
+    evidence where the fio detectors read it."""
+
+    def test_a_churn_pod_is_labeled_for_churn_and_not_as_a_pnfs_fio_pod(self):
+        from sbtest.components.workloads import churn
+        w = churn.ChurnWorkload()
+        inst = fio.FioInstance(pod="run1-churn-1", container="fio-0",
+                               filename="/data/run1-churn-1.fio", logdir="/logs/c0",
+                               evidence="run1-fio-churn-1")
+        with _Ctx() as ctx:
+            doc = w._pod(ctx, inst, "run1-pnfs-shared-0", 90.0)
+        labels = doc["metadata"]["labels"]
+        self.assertNotIn("app", labels)
+        self.assertEqual(labels[churn.CHURN_LABEL], "run1")
+        self.assertEqual(labels["sbtest"], "run1")
+        script = doc["spec"]["containers"][0]["command"][-1]
+        self.assertIn("--runtime=90", script)
+        self.assertIn("--verify=md5", script)
+        self.assertIn("-fio-", inst.evidence)
+
+
 class WorkloadPnfs(unittest.TestCase):
     """pNFS volumes, some shared by several pods and some private, every container running
     its own fio. Multi-reader and multi-writer on one filesystem, without the writers

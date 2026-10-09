@@ -22,6 +22,7 @@ from sbtest.core import (  # noqa: E402
     AnaSample,
     Attribution,
     BlockSample,
+    ChurnPod,
     ControlEvent,
     Finding,
     FioJob,
@@ -73,6 +74,7 @@ class FakeEvidence:
         blocks: list[BlockSample] | None = None,
         pnfs: list[PnfsVolume] | None = None,
         restarts: list[Restart] | None = None,
+        churn: list[ChurnPod] | None = None,
     ) -> None:
         self.run_id = run_id
         self.outdir = outdir
@@ -91,6 +93,7 @@ class FakeEvidence:
         self._blocks = blocks or []
         self._pnfs = pnfs or []
         self._restarts = restarts or []
+        self._churn = churn or []
 
     def migrations(self) -> list[Migration]:
         return list(self._migrations)
@@ -131,6 +134,9 @@ class FakeEvidence:
 
     def restarts(self) -> list[Restart]:
         return list(self._restarts)
+
+    def churn(self) -> list[ChurnPod]:
+        return list(self._churn)
 
     def cluster_uuid(self) -> str:
         return self._cluster
@@ -1179,4 +1185,61 @@ class ChaosRecovery(unittest.TestCase):
     def test_a_run_without_restarts_is_skipped(self):
         with self.assertRaises(SkipDetector):
             list(build_detector("chaos.recovery").detect(FakeEvidence()))
+
+
+def churned(n: int, own: bool = True, **kw: object) -> ChurnPod:
+    """A churn pod that came, did I/O, and left cleanly, unless kw says otherwise."""
+    base: dict[str, object] = {
+        "pod": f"r-churn-{n}", "claim": f"r-churn-{n}" if own else "r-pnfs-shared-0",
+        "own_volume": own, "created": ts(n * 10), "node": "w1", "io_started": ts(n * 10 + 5),
+        "finished": ts(n * 10 + 60), "deleted": ts(n * 10 + 65), "rc": 0}
+    if own:
+        base.update({"pvc_deleted": ts(n * 10 + 66), "pv": f"pvc-{n}", "pv_gone": True,
+                     "export_gone": True, "gone_s": 20.0})
+    base.update(kw)
+    return ChurnPod(**base)  # type: ignore[arg-type]
+
+
+class PnfsChurn(unittest.TestCase):
+    """Pods join pNFS volumes, run fio, and leave, some with a volume of their own. Each one
+    has to reach I/O, and an own volume has to be gone, export and all, once it is deleted."""
+
+    def found(self, pods: list[ChurnPod], **opts: object) -> list:
+        return list(build_detector("pnfs.churn", **opts).detect(FakeEvidence(churn=pods)))
+
+    def test_a_clean_flow_is_reported_as_information_only(self):
+        found = self.found([churned(1), churned(2, own=False), churned(3)])
+        self.assertTrue(found)
+        self.assertEqual({f.severity for f in found}, {Severity.INFO})
+
+    def test_a_pod_that_never_reached_io_is_critical(self):
+        found = self.found([churned(1, io_started=None, error="timed run not reached")])
+        self.assertEqual([(f.severity, f.subject) for f in found if f.severity != Severity.INFO],
+                         [(Severity.CRITICAL, "r-churn-1")])
+
+    def test_an_own_volume_whose_export_outlived_it_is_critical(self):
+        found = self.found([churned(1, export_gone=False)])
+        crit = [f for f in found if f.severity == Severity.CRITICAL]
+        self.assertEqual(len(crit), 1)
+        self.assertIn("NFSExport", crit[0].title)
+
+    def test_an_own_volume_whose_pv_outlived_it_is_critical(self):
+        found = self.found([churned(1, pv_gone=False)])
+        crit = [f for f in found if f.severity == Severity.CRITICAL]
+        self.assertEqual(len(crit), 1)
+        self.assertIn("PersistentVolume", crit[0].title)
+
+    def test_a_slow_cleanup_is_a_warning(self):
+        found = self.found([churned(1, gone_s=400.0)], delete_budget_s=120)
+        self.assertEqual([f.severity for f in found if f.severity != Severity.INFO],
+                         [Severity.WARNING])
+
+    def test_a_reused_volume_is_not_judged_on_its_cleanup(self):
+        """A volume the run's long-lived pods share stays when a churn pod leaves it."""
+        found = self.found([churned(1, own=False)])
+        self.assertEqual({f.severity for f in found}, {Severity.INFO})
+
+    def test_a_run_without_churn_is_skipped(self):
+        with self.assertRaises(SkipDetector):
+            self.found([])
 

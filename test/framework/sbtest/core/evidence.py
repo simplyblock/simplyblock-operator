@@ -212,6 +212,34 @@ class Restart:
     log: str = ""
 
 
+@dataclass(frozen=True)
+class ChurnPod:
+    """One short-lived pod that joined a pNFS volume, ran fio, and left.
+
+    `own_volume` says whether it brought a volume of its own, which it deleted when it
+    left, or used one the run's long-lived pods share. For an own volume, `pv_gone` and
+    `export_gone` say whether the PersistentVolume and the NFSExport behind it were gone by
+    the end of the run, None when that was never checked, and `gone_s` how long after the
+    claim's deletion both were.
+    """
+
+    pod: str
+    claim: str
+    own_volume: bool
+    created: datetime
+    node: str = ""
+    io_started: datetime | None = None
+    finished: datetime | None = None
+    deleted: datetime | None = None
+    rc: int | None = None
+    pvc_deleted: datetime | None = None
+    pv: str = ""
+    pv_gone: bool | None = None
+    export_gone: bool | None = None
+    gone_s: float | None = None
+    error: str = ""
+
+
 # ── the contract ────────────────────────────────────────────────────────────────────
 
 
@@ -274,6 +302,10 @@ class Evidence(Protocol):
 
     def restarts(self) -> list[Restart]:
         """The pods the run restarted on purpose, oldest first."""
+        ...
+
+    def churn(self) -> list[ChurnPod]:
+        """The short-lived pods that joined and left pNFS volumes, oldest first."""
         ...
 
     def log_spans(self) -> list[LogSpan]:
