@@ -31,6 +31,9 @@ from sbtest.core import (  # noqa: E402
     FioJob,
     IopsSample,
     LogSpan,
+    MetadataCheck,
+    MetadataOp,
+    MetadataWorker,
     Migration,
     NamespaceReservation,
     NfsSample,
@@ -89,6 +92,9 @@ class FakeEvidence:
         versions: Versions | None = None,
         timeline: list[NfsSample] | None = None,
         conntrack: list[ConntrackSample] | None = None,
+        metadata_ops: list[MetadataOp] | None = None,
+        metadata_checks: list[MetadataCheck] | None = None,
+        metadata_workers: list[MetadataWorker] | None = None,
         volume_ops: list[VolumeOp] | None = None,
     ) -> None:
         self.run_id = run_id
@@ -115,6 +121,9 @@ class FakeEvidence:
         self._versions = versions
         self._timeline = timeline or []
         self._conntrack = conntrack or []
+        self._metadata_ops = metadata_ops or []
+        self._metadata_checks = metadata_checks or []
+        self._metadata_workers = metadata_workers or []
         self._volume_ops = volume_ops or []
 
     def migrations(self) -> list[Migration]:
@@ -178,6 +187,14 @@ class FakeEvidence:
     def conntrack(self) -> list[ConntrackSample]:
         return list(self._conntrack)
 
+    def metadata_ops(self) -> list[MetadataOp]:
+        return list(self._metadata_ops)
+
+    def metadata_checks(self) -> list[MetadataCheck]:
+        return list(self._metadata_checks)
+
+    def metadata_workers(self) -> list[MetadataWorker]:
+        return list(self._metadata_workers)
     def volume_ops(self) -> list[VolumeOp]:
         return list(self._volume_ops)
 
@@ -710,6 +727,127 @@ class MigrationOutcomes(unittest.TestCase):
         self.assertEqual(len(found), 1)  # three messages, one shape
         self.assertEqual(found[0].evidence["count"], 3)
 
+
+def mop(sec: float, op: str = "create", ok: bool = True, worker: str = "r-meta-0",
+        error: str = "", ms: float = 2.0) -> MetadataOp:
+    return MetadataOp(ts=T0 + timedelta(seconds=sec), worker=worker, op=op, path=f"p{sec}",
+                      ok=ok, ms=ms, error=error)
+
+
+def steady(until: int, every: int = 1, worker: str = "r-meta-0") -> list[MetadataOp]:
+    return [mop(t, worker=worker) for t in range(0, until, every)]
+
+
+class PnfsMetadata(unittest.TestCase):
+    """Namespace operations against the metadata server while fio runs, and what another
+    client of the volume sees of them."""
+
+    MDS = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(100), ready=ts(130))
+
+    def found(self, **kw: object) -> list[Finding]:
+        return list(build_detector("pnfs.metadata").detect(FakeEvidence(**kw)))  # type: ignore[arg-type]
+
+    def by(self, found: list[Finding], sev: Severity) -> list[Finding]:
+        return [f for f in found if f.severity == sev]
+
+    def test_a_clean_run_is_information_only(self):
+        found = self.found(metadata_ops=steady(300), metadata_checks=[
+            MetadataCheck(ts=ts(300), worker="r-meta-0", worker_node="w1",
+                          verifier_node="w2")])
+        self.assertTrue(found)
+        self.assertEqual([f.severity for f in found if f.severity != Severity.INFO], [])
+        summary = [f for f in found if f.severity == Severity.INFO][0]
+        self.assertIn("create", summary.evidence["latency_ms"])
+
+    def test_a_namespace_another_client_sees_differently_is_critical(self):
+        found = self.found(metadata_ops=steady(10), metadata_checks=[
+            MetadataCheck(ts=ts(10), worker="r-meta-0", worker_node="w1", verifier_node="w2",
+                          missing=("d/a",), mismatched=("b",))])
+        crit = self.by(found, Severity.CRITICAL)
+        self.assertEqual(len(crit), 1)
+        self.assertEqual(crit[0].evidence["missing"], ["d/a"])
+        self.assertEqual(crit[0].evidence["mismatched"], ["b"])
+
+    def test_a_check_that_could_not_run_is_a_warning(self):
+        found = self.found(metadata_ops=steady(10), metadata_checks=[
+            MetadataCheck(ts=ts(10), worker="r-meta-0", worker_node="w1", verifier_node="w2",
+                          error="the worker never paused")])
+        self.assertEqual([f.severity for f in found if f.severity != Severity.INFO],
+                         [Severity.WARNING])
+
+    def test_an_error_outside_any_restart_is_critical(self):
+        ops = steady(300) + [mop(50, op="rename", ok=False, error="EIO")]
+        crit = self.by(self.found(metadata_ops=ops, restarts=[self.MDS]), Severity.CRITICAL)
+        self.assertEqual(len(crit), 1)
+        self.assertEqual(crit[0].evidence["errors"], {"EIO": 1})
+
+    def test_an_error_during_a_restart_is_a_warning_naming_it(self):
+        ops = steady(300) + [mop(110, op="rename", ok=False, error="EIO")]
+        found = self.found(metadata_ops=ops, restarts=[self.MDS])
+        self.assertEqual(self.by(found, Severity.CRITICAL), [])
+        warn = self.by(found, Severity.WARNING)
+        self.assertEqual(len(warn), 1)
+        self.assertEqual(warn[0].evidence["restart"], "mds/mds-0")
+
+    def test_a_stall_is_a_warning_and_names_the_restart_that_explains_it(self):
+        ops = [mop(t) for t in range(0, 100)] + [mop(t) for t in range(190, 300)]
+        warn = self.by(self.found(metadata_ops=ops, restarts=[self.MDS]), Severity.WARNING)
+        self.assertEqual(len(warn), 1)
+        self.assertEqual(warn[0].evidence["restart"], "mds/mds-0")
+        self.assertGreaterEqual(warn[0].evidence["stall_s"], 90)
+
+    def test_a_stall_no_restart_explains_says_so(self):
+        ops = [mop(t) for t in range(0, 20)] + [mop(t) for t in range(120, 200)]
+        warn = self.by(self.found(metadata_ops=ops), Severity.WARNING)
+        self.assertEqual(len(warn), 1)
+        self.assertNotIn("restart", warn[0].evidence)
+
+    def test_a_slow_op_counts_as_progress_only_when_it_completes(self):
+        """One op blocked for 80 s is the stall: it started at 20 and returned at 100."""
+        ops = [mop(t) for t in range(0, 21)] + [mop(20.5, ms=80_000)] + \
+            [mop(t) for t in range(101, 200)]
+        warn = self.by(self.found(metadata_ops=ops), Severity.WARNING)
+        self.assertEqual(len(warn), 1)
+
+    def test_a_run_without_the_workload_is_skipped(self):
+        with self.assertRaises(SkipDetector):
+            self.found()
+
+    # Review on #705: a worker whose last op hangs, or that stops making ops, has no later
+    # completion, so the gap after its last one was never judged.
+    def test_a_worker_that_stopped_before_its_stop_time_is_a_stall(self):
+        found = self.found(metadata_ops=steady(100), metadata_workers=[
+            MetadataWorker(worker="r-meta-0", stop_at=ts(300))])
+        warn = self.by(found, Severity.WARNING)
+        self.assertEqual(len(warn), 1)
+        self.assertGreaterEqual(warn[0].evidence["stall_s"], 190)
+
+    def test_a_worker_that_ran_until_its_stop_time_is_not_a_stall(self):
+        found = self.found(metadata_ops=steady(300), metadata_workers=[
+            MetadataWorker(worker="r-meta-0", stop_at=ts(300))])
+        self.assertEqual(self.by(found, Severity.WARNING), [])
+
+    def test_a_worker_with_no_ops_at_all_is_reported(self):
+        found = self.found(metadata_checks=[
+            MetadataCheck(ts=ts(10), worker="r-meta-0", worker_node="w1", verifier_node="w2")],
+            metadata_workers=[MetadataWorker(worker="r-meta-0", stop_at=ts(300))])
+        self.assertEqual(len(self.by(found, Severity.WARNING)), 1)
+
+    def test_a_worker_whose_ops_could_not_be_collected_is_a_warning(self):
+        """Missing ops are not clean ops: an unread log hides every error and stall."""
+        found = self.found(metadata_ops=steady(300), metadata_workers=[
+            MetadataWorker(worker="r-meta-0", stop_at=ts(300),
+                           collect_error="container gone")])
+        warn = self.by(found, Severity.WARNING)
+        self.assertEqual(len(warn), 1)
+        self.assertIn("container gone", warn[0].detail)
+
+    def test_a_worker_that_never_started_is_a_warning(self):
+        found = self.found(metadata_workers=[
+            MetadataWorker(worker="r-meta-0", start_error="pods not ready within 300s")])
+        warn = self.by(found, Severity.WARNING)
+        self.assertEqual(len(warn), 1)
+        self.assertIn("not ready", warn[0].detail)
 
 
 def expanded(**kw: object) -> VolumeOp:

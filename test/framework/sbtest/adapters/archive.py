@@ -48,6 +48,9 @@ from ..core import (
     FioJob,
     IopsSample,
     LogSpan,
+    MetadataCheck,
+    MetadataOp,
+    MetadataWorker,
     Migration,
     NamespaceReservation,
     NfsSample,
@@ -400,6 +403,65 @@ class ArchiveEvidence:
         except OSError:
             return []
         out.sort(key=lambda x: (x.ts, x.instance))
+        return out
+
+    def metadata_ops(self) -> list[MetadataOp]:
+        """Every worker's op log, `metadata-<worker>.log`, one JSON object per line. A line
+        that does not parse is skipped: the worker may have been cut off mid-write."""
+        out: list[MetadataOp] = []
+        for p in sorted(glob.glob(os.path.join(self.outdir, "metadata-*.log"))):
+            worker = os.path.basename(p)[len("metadata-"):-len(".log")]
+            for line in self._lines(p):
+                try:
+                    o = json.loads(line)
+                    out.append(MetadataOp(
+                        ts=datetime.fromtimestamp(float(o["t"]), tz=UTC), worker=worker,
+                        op=str(o["op"]), path=str(o.get("path", "")), ok=bool(o["ok"]),
+                        ms=float(o.get("ms") or 0.0), error=str(o.get("err") or "")))
+                except (ValueError, KeyError, TypeError):
+                    continue
+        out.sort(key=lambda o: o.ts)
+        return out
+
+    def metadata_workers(self) -> list[MetadataWorker]:
+        """Each worker's entry in metadata.json: its stop time and its errors."""
+        p = os.path.join(self.outdir, "metadata.json")
+        try:
+            with open(p) as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return []
+        out: list[MetadataWorker] = []
+        for w in raw.get("workers", []) if isinstance(raw, dict) else []:
+            if not isinstance(w, dict) or not w.get("worker"):
+                continue
+            out.append(MetadataWorker(
+                worker=str(w["worker"]), node=str(w.get("node") or ""),
+                stop_at=_dt(w.get("stop_at")), start_error=str(w.get("start_error") or ""),
+                collect_error=str(w.get("collect_error") or "")))
+        return out
+
+    def metadata_checks(self) -> list[MetadataCheck]:
+        p = os.path.join(self.outdir, "metadata.json")
+        try:
+            with open(p) as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return []
+        out: list[MetadataCheck] = []
+        for c in raw.get("checks", []) if isinstance(raw, dict) else []:
+            t = _dt(c.get("ts")) if isinstance(c, dict) else None
+            if t is None:
+                continue
+            out.append(MetadataCheck(
+                ts=t, worker=str(c.get("worker", "")),
+                worker_node=str(c.get("worker_node") or ""),
+                verifier_node=str(c.get("verifier_node") or ""),
+                missing=tuple(str(x) for x in c.get("missing") or []),
+                extra=tuple(str(x) for x in c.get("extra") or []),
+                mismatched=tuple(str(x) for x in c.get("mismatched") or []),
+                error=str(c.get("error") or "")))
+        out.sort(key=lambda c: c.ts)
         return out
 
     def conntrack(self) -> list[ConntrackSample]:
