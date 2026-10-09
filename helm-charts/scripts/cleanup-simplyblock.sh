@@ -217,6 +217,34 @@ for e in json.loads(os.environ["EXPORTS"])["items"]:
 '
 }
 
+# Prints the $CSI_DRIVER StorageClasses of the storage clusters in this
+# namespace, one name per line: those whose cluster_id is one of $1 (the
+# clusters' UUIDs), and those the operator labeled with this namespace. A
+# StorageClass is cluster-scoped and outlives the namespace. Left behind, the
+# next install under the same cluster name adopts the operator's class by its
+# labels, and its cluster_id, which cannot be changed, names the removed cluster.
+storage_classes_of_this_cluster() {
+    local classes
+    classes=$($KUBECTL get storageclass -o json 2>/dev/null) || return 1
+    CLASSES="$classes" UUIDS="$1" DRIVER="$CSI_DRIVER" NS="$NAMESPACE" python3 -c '
+import json, os
+uuids, ns = os.environ["UUIDS"].split(), os.environ["NS"]
+for c in json.loads(os.environ["CLASSES"])["items"]:
+    if c.get("provisioner") != os.environ["DRIVER"]:
+        continue
+    labels = c["metadata"].get("labels") or {}
+    managed_here = ("storage.simplyblock.io/managed-by" in labels
+                    and labels.get("storage.simplyblock.io/namespace") == ns)
+    if (c.get("parameters") or {}).get("cluster_id") in uuids or managed_here:
+        print(c["metadata"]["name"])
+'
+}
+
+# Read now, while the StorageClusters exist: step 2 deletes them, and step 4
+# finds the clusters' StorageClasses by these UUIDs.
+CLUSTER_UUIDS=$($KUBECTL get "storageclusters.$CRD_GROUP" -n "$NAMESPACE" \
+    -o jsonpath='{.items[*].status.uuid}' 2>/dev/null || true)
+
 # ---------------------------------------------------------------------------
 # 0a. Remove this cluster's NFSExports while the operator still runs
 # ---------------------------------------------------------------------------
@@ -568,6 +596,17 @@ while read -r va pv; do
         --type=merge -p '{"metadata":{"finalizers":[]}}' 2>/dev/null || true
     $KUBECTL delete volumeattachment "$va" --ignore-not-found --timeout=30s 2>/dev/null || true
 done <<< "$attachments"
+
+info "Cleaning up the $CSI_DRIVER StorageClasses of the storage clusters in '$NAMESPACE'..."
+if ! classes=$(storage_classes_of_this_cluster "$CLUSTER_UUIDS"); then
+    warn "Could not list StorageClasses; leaving them."
+else
+    for sc in $classes; do
+        info "  Deleting StorageClass $sc..."
+        $KUBECTL delete storageclass "$sc" --ignore-not-found --timeout=30s 2>/dev/null || \
+            warn "  Could not delete StorageClass $sc"
+    done
+fi
 
 # ---------------------------------------------------------------------------
 # 4b. Remove Deployments in kube-system owned by this Helm release
