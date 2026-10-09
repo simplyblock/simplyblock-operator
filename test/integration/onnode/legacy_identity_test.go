@@ -222,7 +222,7 @@ const byIDLinkTimeout = 15 * time.Second
 // byIDLink is the /dev/disk/by-id link pointing at device, which is the path
 // the previous node service mounted a volume from.
 //
-// udev creates each link under a temporary ".#" name and renames it into place,
+// udev creates each link under a temporary `.#` name and renames it into place,
 // so right after a connect the temporary name can be the only match, and gone by
 // the time mkfs opens it. The lookup waits for the stable name, and a link that
 // never appears fails the case rather than skipping it: the case exists to

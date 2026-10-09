@@ -12,7 +12,7 @@ import (
 )
 
 // Regression: 2026-10-09-onnode-udev-temporary-link (#697, run 37897452947). udev
-// creates a link under ".#name" and renames it into place, so the temporary
+// creates a link under `.#name` and renames it into place, so the temporary
 // name alone must not count as the device's link, and the stable one must.
 func TestStableByIDLinkWaitsOutUdevsTemporaryName(t *testing.T) {
 	dir := t.TempDir()
