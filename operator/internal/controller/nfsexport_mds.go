@@ -267,7 +267,7 @@ func (r *NFSExportReconciler) refreshMDS(ctx context.Context, export *simplybloc
 	var wait *mdsWaitError
 	switch {
 	case errors.As(err, &wait):
-		// The template cannot be built; the running guest keeps serving.
+		// The template cannot be built. The running guest keeps serving.
 		r.event(export, corev1.EventTypeWarning, wait.reason,
 			fmt.Sprintf("cannot update the metadata server StatefulSet %s: %v", key.Name, err))
 		return nil
