@@ -739,6 +739,8 @@ CRD carries.
 | U-450 | A suspended, retried add: `Resolving` holds, quoting its task's result             | Regression | `TestAFailingAddIsReportedOnTheNodeThatPostedIt`         |
 | U-451 | A task result past an event note's 1 KiB is clipped on a character boundary        | Regression | `TestALongTaskResultIsClippedToWhatAnEventTakes`         |
 | U-390 | A sibling posts no add while another worker is held at `AwaitingWorker`            | Negative   | `TestASiblingWaitsWhileAnotherWorkerIsHeld`              |
+| U-516 | The baseline Job is pinned to the worker hosting the node                          | Regression | `TestTheBaselineJobIsPinnedToTheWorkerHostingTheNode`    |
+| U-517 | The probe target is filed under the worker's hostname                              | Regression | `TestTheProbeTargetIsFiledUnderTheWorkerHostingTheNode`  |
 
 `U-384` to `U-390` are the reboot. The storage pool's MachineConfig is applied by
 rebooting the machine, so the first node of a fresh cluster is cordoned, drained
