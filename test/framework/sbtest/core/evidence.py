@@ -212,6 +212,37 @@ class Restart:
     log: str = ""
 
 
+@dataclass(frozen=True)
+class DeployedImage:
+    """One container of the deployment, and the image it actually ran."""
+
+    namespace: str
+    pod: str
+    container: str
+    image: str      # the reference the pod asked for, usually a tag
+    image_id: str   # what the runtime resolved it to, with the digest
+
+
+@dataclass(frozen=True)
+class NodeVersion:
+    """What one node runs underneath the pods."""
+
+    node: str
+    kernel: str
+    os_image: str
+    runtime: str
+    kubelet: str
+
+
+@dataclass(frozen=True)
+class Versions:
+    """What was deployed when the run started, so a result can be tied to it."""
+
+    server: str
+    images: tuple[DeployedImage, ...] = ()
+    nodes: tuple[NodeVersion, ...] = ()
+
+
 # ── the contract ────────────────────────────────────────────────────────────────────
 
 
@@ -274,6 +305,10 @@ class Evidence(Protocol):
 
     def restarts(self) -> list[Restart]:
         """The pods the run restarted on purpose, oldest first."""
+        ...
+
+    def versions(self) -> Versions | None:
+        """What was deployed, or None when the run did not record it."""
         ...
 
     def log_spans(self) -> list[LogSpan]:

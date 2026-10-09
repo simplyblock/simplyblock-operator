@@ -14,6 +14,7 @@ becomes a fixture for the whole detector set:
       <run>-fio-N/nfs-ops.json       per-op counts of the NFS mount it wrote through (pNFS)
       iostat.csv                     NVMe namespace I/O counters per node over the run
       pnfs.json                      the run's pNFS volumes and their consuming nodes
+      versions.json                  deployed images and digests, node kernels, server version
       spdk-<port>[-proxy].txt        host-sourced container logs
       operator.txt / webappapi.txt   likewise
       dmesg-<vm>.txt                 kernel ring buffer per storage worker
@@ -38,13 +39,16 @@ from ..core import (
     AnaSample,
     BlockSample,
     ControlEvent,
+    DeployedImage,
     FioJob,
     IopsSample,
     LogSpan,
     Migration,
+    NodeVersion,
     NvmeController,
     PnfsVolume,
     Restart,
+    Versions,
 )
 
 
@@ -338,6 +342,27 @@ class ArchiveEvidence:
             return []
         out.sort(key=lambda b: (b.ts, b.node, b.device))
         return out
+
+    def versions(self) -> Versions | None:
+        p = os.path.join(self.outdir, "versions.json")
+        try:
+            with open(p) as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(raw, dict):
+            return None
+        images = tuple(DeployedImage(
+            namespace=str(i.get("namespace", "")), pod=str(i.get("pod", "")),
+            container=str(i.get("container", "")), image=str(i.get("image", "")),
+            image_id=str(i.get("image_id", "")))
+            for i in raw.get("images", []) if isinstance(i, dict))
+        nodes = tuple(NodeVersion(
+            node=str(n.get("node", "")), kernel=str(n.get("kernel", "")),
+            os_image=str(n.get("os_image", "")), runtime=str(n.get("runtime", "")),
+            kubelet=str(n.get("kubelet", "")))
+            for n in raw.get("nodes", []) if isinstance(n, dict))
+        return Versions(server=str(raw.get("server", "")), images=images, nodes=nodes)
 
     def restarts(self) -> list[Restart]:
         p = os.path.join(self.outdir, "restarts.json")

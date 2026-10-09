@@ -26,7 +26,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import sbtest  # noqa: E402,F401
-from sbtest.components import chaos, kube, logs, migration, nfs, nvme  # noqa: E402
+from sbtest.components import chaos, kube, logs, migration, nfs, nvme, versions  # noqa: E402
 from sbtest.components.workloads import fio, pnfs_rwx, volumemigration  # noqa: E402
 from sbtest.core import Logger, Migration, RunContext  # noqa: E402
 
@@ -562,6 +562,36 @@ class RestartLogs(unittest.TestCase):
         self.assertLess(follow, delete, order)
         self.assertIn("logs -f simplyblock-pnfs-mds-x-0 --all-containers", order[follow])
         self.assertEqual(record["log"], "restart-1-mds-simplyblock-pnfs-mds-x-0.txt")
+
+
+class RunVersions(unittest.TestCase):
+    """What the run recorded as deployed, from the shapes kubectl prints."""
+
+    PODS = {"items": [{
+        "metadata": {"name": "simplyblock-pnfs-mds-06075ebb-0", "namespace": "simplyblock"},
+        "status": {"containerStatuses": [{
+            "name": "mds-runner", "image": "public.ecr.aws/simply-block/spdkcsi:pnfs-mds",
+            "imageID": "public.ecr.aws/simply-block/spdkcsi@sha256:07d8"}]}}]}
+    NODES = {"items": [{"metadata": {"name": "worker-1"}, "status": {"nodeInfo": {
+        "kernelVersion": "6.18.5-talos", "osImage": "Talos (v1.12.7)",
+        "containerRuntimeVersion": "containerd://2.1.4", "kubeletVersion": "v1.34.1"}}}]}
+    SERVER = {"serverVersion": {"gitVersion": "v1.34.1"}}
+
+    def test_images_nodes_and_the_server_are_recorded(self):
+        doc = versions.parse_versions([self.PODS], self.NODES, self.SERVER)
+        self.assertEqual(doc["server"], "v1.34.1")
+        self.assertEqual(doc["images"], [{
+            "namespace": "simplyblock", "pod": "simplyblock-pnfs-mds-06075ebb-0",
+            "container": "mds-runner", "image": "public.ecr.aws/simply-block/spdkcsi:pnfs-mds",
+            "image_id": "public.ecr.aws/simply-block/spdkcsi@sha256:07d8"}])
+        self.assertEqual(doc["nodes"], [{
+            "node": "worker-1", "kernel": "6.18.5-talos", "os_image": "Talos (v1.12.7)",
+            "runtime": "containerd://2.1.4", "kubelet": "v1.34.1"}])
+
+    def test_one_namespace_listed_twice_is_recorded_once(self):
+        """The operator and the cluster share a namespace today."""
+        doc = versions.parse_versions([self.PODS, self.PODS], self.NODES, self.SERVER)
+        self.assertEqual(len(doc["images"]), 1)
 
 
 class WorkloadPnfs(unittest.TestCase):

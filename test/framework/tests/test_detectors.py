@@ -34,6 +34,7 @@ from sbtest.core import (  # noqa: E402
     Restart,
     Severity,
     SkipDetector,
+    Versions,
     attribute_window,
     build_detector,
     freeze_windows,
@@ -73,6 +74,7 @@ class FakeEvidence:
         blocks: list[BlockSample] | None = None,
         pnfs: list[PnfsVolume] | None = None,
         restarts: list[Restart] | None = None,
+        versions: Versions | None = None,
     ) -> None:
         self.run_id = run_id
         self.outdir = outdir
@@ -91,6 +93,7 @@ class FakeEvidence:
         self._blocks = blocks or []
         self._pnfs = pnfs or []
         self._restarts = restarts or []
+        self._versions = versions
 
     def migrations(self) -> list[Migration]:
         return list(self._migrations)
@@ -131,6 +134,9 @@ class FakeEvidence:
 
     def restarts(self) -> list[Restart]:
         return list(self._restarts)
+
+    def versions(self) -> Versions | None:
+        return self._versions
 
     def cluster_uuid(self) -> str:
         return self._cluster
@@ -1179,4 +1185,44 @@ class ChaosRecovery(unittest.TestCase):
     def test_a_run_without_restarts_is_skipped(self):
         with self.assertRaises(SkipDetector):
             list(build_detector("chaos.recovery").detect(FakeEvidence()))
+
+
+class EvidenceVersions(unittest.TestCase):
+    """A result is only comparable with another when both say what was deployed."""
+
+    def _versions(self) -> Versions:
+        from sbtest.core import DeployedImage, NodeVersion
+        def img(pod: str, container: str, image: str, digest: str) -> DeployedImage:
+            return DeployedImage(namespace="simplyblock", pod=pod, container=container,
+                                 image=image, image_id=f"{image.split(':')[0]}@sha256:{digest}")
+        return Versions(
+            server="v1.34.1",
+            images=(
+                img("simplyblock-operator-6d9f", "manager", "repo/operator:main", "a" * 64),
+                img("simplyblock-csi-node-x1", "csi-node", "repo/spdkcsi:feat", "b" * 64),
+                img("simplyblock-csi-node-x2", "csi-node", "repo/spdkcsi:feat", "b" * 64),
+                img("simplyblock-pnfs-mds-06075ebb-0", "mds-runner", "repo/spdkcsi:pnfs-mds",
+                    "c" * 64),
+                img("snode-spdk-pod-4420-06075e", "spdk-container", "repo/spdk:main", "d" * 64),
+            ),
+            nodes=(NodeVersion(node="w1", kernel="6.18.5-talos", os_image="Talos (v1.12.7)",
+                               runtime="containerd://2.1", kubelet="v1.34.1"),
+                   NodeVersion(node="w2", kernel="6.18.5-talos", os_image="Talos (v1.12.7)",
+                               runtime="containerd://2.1", kubelet="v1.34.1")))
+
+    def test_one_finding_names_the_images_and_kernels_that_were_deployed(self):
+        found = list(build_detector("evidence.versions").detect(
+            FakeEvidence(versions=self._versions())))
+        self.assertEqual([f.severity for f in found], [Severity.INFO])
+        ev = found[0].evidence
+        self.assertEqual(ev["operator"], ["repo/operator:main@sha256:aaaaaaaaaaaa"])
+        self.assertEqual(ev["csi"], ["repo/spdkcsi:feat@sha256:bbbbbbbbbbbb"])
+        self.assertEqual(ev["mds"], ["repo/spdkcsi:pnfs-mds@sha256:cccccccccccc"])
+        self.assertEqual(ev["spdk"], ["repo/spdk:main@sha256:dddddddddddd"])
+        self.assertEqual(ev["kernels"], {"6.18.5-talos": 2})
+        self.assertEqual(ev["server"], "v1.34.1")
+
+    def test_a_run_without_versions_is_skipped(self):
+        with self.assertRaises(SkipDetector):
+            list(build_detector("evidence.versions").detect(FakeEvidence()))
 
