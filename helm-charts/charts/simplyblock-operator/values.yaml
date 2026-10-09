@@ -38,7 +38,11 @@ rbac:
 
 
 snapshotcontroller:
-  create: true
+  # Install the snapshot CRDs (where the cluster does not serve them) and a
+  # snapshot-controller in kube-system. Off by default, because both are shared
+  # by every CSI driver and most distributions ship them. The SimplyblockDriver
+  # reports a missing API or controller in status.snapshotSupport.
+  create: false
 
 csiaddons:
   # Deploy the kubernetes-csi-addons machinery: the CRDs (VolumeReplication

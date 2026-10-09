@@ -330,8 +330,8 @@ func TestReconcileRecordsWhereSnapshotSupportCameFrom(t *testing.T) {
 	}
 }
 
-// A cluster serving no snapshot API reconciles rather than failing, and says
-// nothing about an origin it does not have.
+// A cluster serving no snapshot API reconciles rather than failing, and says it
+// is missing, which is the report an installation without the chart acts on.
 func TestReconcileSucceedsOnAClusterWithNoSnapshotAPI(t *testing.T) {
 	scheme := reconcilerScheme(t)
 	d := testDriver("simplyblock")
@@ -348,8 +348,8 @@ func TestReconcileSucceedsOnAClusterWithNoSnapshotAPI(t *testing.T) {
 	if err := c.Get(t.Context(), client.ObjectKeyFromObject(d), &got); err != nil {
 		t.Fatalf("re-read: %v", err)
 	}
-	if got.Status.SnapshotSupport != "" {
-		t.Errorf("status.snapshotSupport = %q on a cluster with no snapshot support at all",
+	if got.Status.SnapshotSupport != simplyblockv1alpha2.SnapshotSupportOriginMissing {
+		t.Errorf("status.snapshotSupport = %q, want Missing on a cluster with no snapshot support at all",
 			got.Status.SnapshotSupport)
 	}
 }
