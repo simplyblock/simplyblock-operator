@@ -65,6 +65,7 @@ import (
 const (
 	annoBackupActiveOpsRef       = "storage.simplyblock.io/conversion-status.activeOpsRef"
 	annoBackupObservedGeneration = "storage.simplyblock.io/conversion-status.observedGeneration"
+	annoBackupClusterNamespace   = "storage.simplyblock.io/conversion-spec.clusterNamespace"
 	annoBackupAllowedHosts       = "storage.simplyblock.io/conversion-status.allowedHosts"
 	annoBackupSnapshotRequest    = "storage.simplyblock.io/conversion-spec.snapshotName"
 	annoBackupSourceRequest      = "storage.simplyblock.io/conversion-spec.sourceClusterUUID"
@@ -120,6 +121,9 @@ func (src *StorageBackup) ConvertTo(dstRaw conversion.Hub) error {
 		return err
 	}
 	if err := unstash(&dst.ObjectMeta, annoBackupObservedGeneration, &dst.Status.ObservedGeneration); err != nil {
+		return err
+	}
+	if err := unstash(&dst.ObjectMeta, annoBackupClusterNamespace, &dst.Spec.ClusterNamespace); err != nil {
 		return err
 	}
 
@@ -231,6 +235,9 @@ func (dst *StorageBackup) ConvertFrom(srcRaw conversion.Hub) error {
 		return err
 	}
 	if err := stash(&dst.ObjectMeta, annoBackupObservedGeneration, src.Status.ObservedGeneration); err != nil {
+		return err
+	}
+	if err := stash(&dst.ObjectMeta, annoBackupClusterNamespace, src.Spec.ClusterNamespace); err != nil {
 		return err
 	}
 

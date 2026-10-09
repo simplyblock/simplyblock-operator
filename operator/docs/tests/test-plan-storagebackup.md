@@ -168,6 +168,85 @@ foreign backup is asserted here about a discovered one.
 | U-72 | A backup in the store this cluster did not write: one `StorageBackup` is created, carrying the writing cluster's UUID in `status.source` | Positive | —    |
 | U-73 | A discovered foreign backup restores through the ordinary `Restore` action                                                               | Positive | —    |
 
+### Backups in One Namespace: The Mirror (design §5.1)
+
+Files: `operator/internal/cpinformer/subscriptions/backup_test.go`,
+`operator/internal/controllers/backup/storagebackup_controller_test.go`, and
+`operator/api/v1alpha1/storagebackup_conversion_test.go`
+
+Every `StorageBackup` is recorded in the operator's namespace, whichever namespace
+holds the cluster whose store reports it.
+
+| #    | Scenario                                                                                                               | Type       | Test                                                                            |
+|------|------------------------------------------------------------------------------------------------------------------------|------------|---------------------------------------------------------------------------------|
+| U-75 | The subscription names every object in the operator's namespace, not in its cluster's                                  | Positive   | `TestBackupSubscriptionNamesTheObjectInTheOperatorsNamespace`                   |
+| U-76 | A backup of a cluster in another namespace: the object is in the operator's namespace and names the cluster's          | Positive   | `TestMirrorRecordsABackupOfAClusterInAnotherNamespaceInTheOperatorsNamespace`   |
+| U-77 | A second cluster reports a backup another recorded: the owner keeps the object and the second raises `BackupNameTaken` | Negative   | `TestMirrorLeavesABackupAnotherClusterRecordedAlone`                            |
+| U-78 | A record a previous release left beside its cluster is removed without saying the backup left the store                | Positive   | `TestMirrorRemovesARecordLeftInTheClustersNamespaceWithoutSayingItLeftTheStore` |
+| U-79 | A backup leaves the store: `BackupGone` reaches the cluster even when it is in another namespace                       | Positive   | `TestMirrorReportsABackupGoneOnAClusterInAnotherNamespace`                      |
+| U-80 | `spec.clusterNamespace` survives the trip through v1alpha1 and back (2026-10-09-backup-cluster-namespace-roundtrip)    | Regression | `TestStorageBackupClusterNamespaceSurvivesTheTripThroughV1alpha1`               |
+
+### Backups in One Namespace: Policy (design §5.1)
+
+File: `operator/internal/controllers/backup/storagebackuppolicy_controller_test.go`
+
+| #    | Scenario                                                                                                   | Type     | Test                                                                      |
+|------|------------------------------------------------------------------------------------------------------------|----------|---------------------------------------------------------------------------|
+| U-81 | A policy's last backup is the newest of its own claims' backups, matched on the claim's namespace and name | Positive | `TestPolicyLastBackupIsTheNewestOneOfItsOwnClaimsInTheOperatorsNamespace` |
+| U-94 | The coverage gauge counts only the restorable backups of the policy's own claims                           | Positive | `TestPolicyCoverageCountsOnlyItsOwnClaimsBackupsInTheOperatorsNamespace`  |
+
+### Backups in One Namespace: Restore (design §6, §8)
+
+File: `operator/internal/controllers/backup/storagebackupops_controller_test.go`
+
+| #    | Scenario                                                                                                            | Type     | Test                                                             |
+|------|---------------------------------------------------------------------------------------------------------------------|----------|------------------------------------------------------------------|
+| U-82 | The operation, cluster, backup, and claim are in four namespaces: the restore succeeds and the claim is where asked | Positive | `TestARestoreReachesAcrossNamespaces`                            |
+| U-83 | A claim created by a same-named operation in another namespace is refused, not adopted                              | Negative | `TestAClaimMadeByASameNamedOperationInAnotherNamespaceIsRefused` |
+| U-84 | A same-named operation in another namespace does not share the backup's lock                                        | Negative | `TestASameNamedOperationInAnotherNamespaceDoesNotShareTheLock`   |
+| U-85 | A change to a backup wakes the operations naming it in other namespaces                                             | Positive | `TestAChangedBackupWakesOperationsInOtherNamespaces`             |
+
+### Backups in One Namespace: Admission (design §7)
+
+File: `operator/internal/webhook/storagebackup_validator_test.go`
+
+| #    | Scenario                                                                                                     | Type     | Test                                                                   |
+|------|--------------------------------------------------------------------------------------------------------------|----------|------------------------------------------------------------------------|
+| U-86 | A restore across namespaces is admitted, and each crossing is reviewed for the requesting user and groups    | Positive | `TestARestoreAcrossNamespacesIsAdmittedAndEachReferenceIsAuthorized`   |
+| U-87 | Each crossing is refused when the requester may not use it: the backup, the cluster, and the claim namespace | Negative | `TestAReferenceTheRequesterMayNotUseIsRefused`                         |
+| U-88 | A restore that stays in its own namespace asks for no review                                                 | Boundary | `TestARestoreWithinOneNamespaceAsksForNoReview`                        |
+| U-89 | An unauthorized reference is refused before it is resolved, so the refusal does not reveal what exists       | Negative | `TestAnUnauthorizedReferenceIsRefusedBeforeItIsResolved`               |
+| U-90 | The authorizer cannot be asked: the restore is refused                                                       | Negative | `TestARestoreIsRefusedWhenTheAuthorizerCannotBeAsked`                  |
+| U-91 | The pool is resolved in the cluster's namespace, and one in the operation's namespace is not found           | Negative | `TestACrossNamespaceRestoreResolvesThePoolInTheClustersNamespace`      |
+| U-92 | A claim that exists in the claim namespace is refused at admission                                           | Negative | `TestACrossNamespaceRestoreRefusesAClaimThatExistsInTheClaimNamespace` |
+| U-96 | `spec.clusterRef` and `spec.restore.claim` without a namespace mean the operation's own: admitted, no review | Boundary | `TestAReferenceWithoutANamespaceMeansTheOperationsNamespace`           |
+| U-97 | A `spec.clusterRef` without a namespace is resolved in the operation's namespace, not the operator's         | Negative | `TestAClusterRefWithoutANamespaceIsResolvedInTheOperationsNamespace`   |
+| U-98 | A `spec.restore.claim` without a namespace is checked in the operation's namespace                           | Negative | `TestAClaimWithoutANamespaceIsCheckedInTheOperationsNamespace`         |
+
+### Namespaced References: The Upgrade (design §13)
+
+File: `operator/internal/upgrade/steps/backup_test.go`
+
+| #    | Scenario                                                                                                    | Type     | Test                                                 |
+|------|-------------------------------------------------------------------------------------------------------------|----------|------------------------------------------------------|
+| U-99 | An absorbed `BackupRestore` becomes an operation whose cluster and claim name no namespace, so mean its own | Positive | `TestAbsorbBackupRestoresWritesTheOperationTerminal` |
+
+### Backups in One Namespace: The Backup Action (design §5.1)
+
+File: `operator/internal/controllers/volume/backup_test.go`
+
+| #    | Scenario                                                            | Type     | Test                                                  |
+|------|---------------------------------------------------------------------|----------|-------------------------------------------------------|
+| U-93 | A `Backup` records the namespace of the `StorageBackup` it produces | Positive | `TestABackupRecordsTheNamespaceOfTheObjectItProduces` |
+
+### Backups in One Namespace: The Registered Restore (design §13)
+
+File: `operator/internal/controller/backuprestore_controller_test.go`
+
+| #    | Scenario                                                                            | Type     | Test                                                       |
+|------|-------------------------------------------------------------------------------------|----------|------------------------------------------------------------|
+| U-95 | A `BackupRestore` in another namespace finds its backup in the operator's namespace | Positive | `TestBackupRestoreReadsItsBackupFromTheOperatorsNamespace` |
+
 ---
 
 ## 2. Integration Tests
@@ -175,24 +254,30 @@ foreign backup is asserted here about a discovered one.
 Full reconcile loop against a real Kubernetes API server via `envtest`. The CEL
 rules and the ownership cascades cannot be exercised any other way.
 
-| #        | Scenario                                                                         | Type     | Test |
-|----------|----------------------------------------------------------------------------------|----------|------|
-| I-01     | `action: Restore` without `spec.backupRef`: rejected by the CEL rule             | Negative | —    |
-| ~~I-02~~ | `action: Import` with `spec.backupRef`. Withdrawn with the action                | —        | —    |
-| I-03     | `spec.action` outside the enum: rejected                                         | Negative | —    |
-| I-04     | `spec.action` changed after creation: rejected as immutable                      | Negative | —    |
-| I-05     | `spec.backupRef` changed after creation: rejected as immutable                   | Negative | —    |
-| I-06     | `spec.restore.claimName` changed after creation: rejected as immutable           | Negative | —    |
-| I-07     | `StorageBackup.spec.claimRef` changed after creation: rejected as immutable      | Negative | —    |
-| I-08     | `StorageBackupPolicy.spec.clusterRef` changed after creation: rejected           | Negative | —    |
-| I-09     | `spec.maxVersions` negative: rejected by the minimum                             | Boundary | —    |
-| I-10     | Short names `sbp`, `sb`, and `sbops` resolve to the same lists as the full kinds | Positive | —    |
-| I-11     | Deleting a policy garbage-collects the `StorageBackup` objects it owns           | Positive | —    |
-| I-12     | Deleting a policy leaves a hand-created `StorageBackup` alone                    | Negative | —    |
-| I-13     | Deleting a `StorageBackupOps` garbage-collects the claim it restored             | Positive | —    |
-| I-14     | Two policies in two namespaces with the same name: neither reads the other       | Negative | —    |
-| I-15     | A policy selecting a claim in its own namespace only                             | Negative | —    |
-| I-16     | The controller's role covers creating claims and reading volumes                 | Positive | —    |
+| #        | Scenario                                                                                             | Type       | Test                                                         |
+|----------|------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------------|
+| I-01     | `action: Restore` without `spec.backupRef`: rejected by the CEL rule                                 | Negative   | —                                                            |
+| ~~I-02~~ | `action: Import` with `spec.backupRef`. Withdrawn with the action                                    | —          | —                                                            |
+| I-03     | `spec.action` outside the enum: rejected                                                             | Negative   | —                                                            |
+| I-04     | `spec.action` changed after creation: rejected as immutable                                          | Negative   | —                                                            |
+| I-05     | `spec.backupRef` changed after creation: rejected as immutable                                       | Negative   | —                                                            |
+| I-06     | `spec.restore.claim` changed after creation, in its name or its namespace: rejected as immutable     | Negative   | `TestStorageBackupOpsFreezesBothReferences`                  |
+| I-07     | `StorageBackup.spec.claimRef` changed after creation: rejected as immutable                          | Negative   | —                                                            |
+| I-08     | `StorageBackupPolicy.spec.clusterRef` changed after creation: rejected                               | Negative   | —                                                            |
+| I-09     | `spec.maxVersions` negative: rejected by the minimum                                                 | Boundary   | —                                                            |
+| I-10     | Short names `sbp`, `sb`, and `sbops` resolve to the same lists as the full kinds                     | Positive   | —                                                            |
+| I-11     | Deleting a policy garbage-collects the `StorageBackup` objects it owns                               | Positive   | —                                                            |
+| I-12     | Deleting a policy leaves a hand-created `StorageBackup` alone                                        | Negative   | —                                                            |
+| I-13     | Deleting a `StorageBackupOps` garbage-collects the claim it restored                                 | Positive   | —                                                            |
+| I-14     | Two policies in two namespaces with the same name: neither reads the other                           | Negative   | —                                                            |
+| I-15     | A policy selecting a claim in its own namespace only                                                 | Negative   | —                                                            |
+| I-16     | The controller's role covers creating claims and reading volumes                                     | Positive   | —                                                            |
+| I-17     | `spec.clusterRef` and `spec.restore.claim` without a namespace: accepted, and no namespace is stored | Positive   | `TestStorageBackupOpsAcceptsReferencesWithoutANamespace`     |
+| I-18     | `spec.clusterRef` or `spec.restore.claim` without a name: rejected                                   | Negative   | `TestStorageBackupOpsRequiresTheNameOfEachReference`         |
+| I-19     | `spec.clusterRef` as a string, the shape before the change: rejected                                 | Regression | `TestStorageBackupOpsRejectsAStringClusterRef`               |
+| I-20     | A namespace omitted at creation cannot be added afterward                                            | Negative   | `TestStorageBackupOpsFreezesAnOmittedNamespace`              |
+| I-21     | A namespace set at creation cannot be removed from either reference                                  | Negative   | `TestStorageBackupOpsFreezesBothReferences`                  |
+| I-22     | A cluster name over 63 characters is rejected, and a claim name of 64 is accepted                    | Boundary   | `TestStorageBackupOpsBoundsTheClusterNameAndNotTheClaimName` |
 
 ---
 
@@ -201,22 +286,23 @@ rules and the ownership cascades cannot be exercised any other way.
 A live cluster with a real S3 target and a real data path. This is the only class
 that can prove the layer does what it is for.
 
-| #        | Scenario                                                                             | Type     | Test |
-|----------|--------------------------------------------------------------------------------------|----------|------|
-| E-01     | A backup of a claim with known data: reaches `Available`                             | Positive | —    |
-| E-02     | Restoring that backup: the restored claim's checksums match the original exactly     | Positive | —    |
-| E-03     | A backup taken under load: the restore's checksums match the snapshot point          | Positive | —    |
-| E-04     | A policy on a schedule: backups appear at the interval, and retention prunes them    | Positive | —    |
-| E-05     | `spec.maxVersions` of 3: the fourth backup prunes the first                          | Boundary | —    |
-| E-06     | `spec.maxAge`: a backup older than it is pruned                                      | Boundary | —    |
-| E-07     | An incremental chain: `previousBackupID` links them and each restores correctly      | Positive | —    |
-| E-08     | Deleting a base backup an incremental one depends on: what happens is recorded       | Negative | —    |
-| ~~E-09~~ | An import from a second cluster. Withdrawn with the action, replaced by `E-14`       | —        | —    |
-| E-10     | A restore into a pool other than the source: the volume lands there and serves I/O   | Positive | —    |
-| E-11     | The S3 target is unreachable: the backup fails with a legible reason                 | Negative | —    |
-| E-12     | Detaching a claim from a policy: its existing backups remain restorable              | Negative | —    |
-| E-13     | Restoring a claim whose original still exists: two independent volumes, both correct | Positive | —    |
-| E-14     | A backup written by a second cluster: the walk discovers it and it restores here     | Positive | —    |
+| #        | Scenario                                                                                                              | Type     | Test |
+|----------|-----------------------------------------------------------------------------------------------------------------------|----------|------|
+| E-01     | A backup of a claim with known data: reaches `Available`                                                              | Positive | —    |
+| E-02     | Restoring that backup: the restored claim's checksums match the original exactly                                      | Positive | —    |
+| E-03     | A backup taken under load: the restore's checksums match the snapshot point                                           | Positive | —    |
+| E-04     | A policy on a schedule: backups appear at the interval, and retention prunes them                                     | Positive | —    |
+| E-05     | `spec.maxVersions` of 3: the fourth backup prunes the first                                                           | Boundary | —    |
+| E-06     | `spec.maxAge`: a backup older than it is pruned                                                                       | Boundary | —    |
+| E-07     | An incremental chain: `previousBackupID` links them and each restores correctly                                       | Positive | —    |
+| E-08     | Deleting a base backup an incremental one depends on: what happens is recorded                                        | Negative | —    |
+| ~~E-09~~ | An import from a second cluster. Withdrawn with the action, replaced by `E-14`                                        | —        | —    |
+| E-10     | A restore into a pool other than the source: the volume lands there and serves I/O                                    | Positive | —    |
+| E-11     | The S3 target is unreachable: the backup fails with a legible reason                                                  | Negative | —    |
+| E-12     | Detaching a claim from a policy: its existing backups remain restorable                                               | Negative | —    |
+| E-13     | Restoring a claim whose original still exists: two independent volumes, both correct                                  | Positive | —    |
+| E-14     | A backup written by a second cluster: the walk discovers it and it restores here                                      | Positive | —    |
+| E-15     | A claim in one namespace is backed up and restored into another through a cluster in a third, and the checksums match | Positive | —    |
 
 ---
 
@@ -254,10 +340,10 @@ somebody would actually make the mistake.
 
 1. A claim with a workload writing to it continuously.
 2. Create a `StorageBackupOps` with `action: Restore` and
-   `spec.restore.claimName` set to that claim's name. Confirm the create is
+   `spec.restore.claim.name` set to that claim's name. Confirm the create is
    rejected by admission, naming the claim, and that no object was created.
 3. Then the race the webhook cannot close: create the operation with a
-   `claimName` that does not exist yet, and create a claim of that name before
+   claim name that does not exist yet, and create a claim of that name before
    the operation reaches `Validating`. Confirm the operation reaches `Failed`
    with `ClaimExists` rather than adopting it.
 4. Confirm the workload's I/O was not interrupted and its data is unchanged.
@@ -289,23 +375,27 @@ producing backups, and the only symptom is the age of the newest one climbing.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 64        | 0       | 64          | 9         |
-| Integration | 15        | 0       | 15          | 1         |
-| E2E         | 13        | 0       | 13          | 1         |
+| Unit        | 90        | 26      | 64          | 9         |
+| Integration | 21        | 7       | 14          | 1         |
+| E2E         | 14        | 0       | 14          | 1         |
 | Manual      | 3         | 0       | 3           | 0         |
-| **Total**   | **95**    | **0**   | **95**      | **11**    |
+| **Total**   | **128**   | **33**  | **95**      | **11**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as
 neither a scenario nor a gap. All eleven are the retired `Import` action.
 
-Nothing is covered. Two of the four registered kinds have unit test files
+Twenty-six unit scenarios are covered: `U-74` and the twenty-five rows `U-75` to
+`U-99`, which cover where backups are recorded, how a restore reaches across
+namespaces, and the two namespaced references. Seven integration scenarios are covered,
+all of them rules of the `StorageBackupOps` schema that `envtest` evaluates
+(`I-06` and `I-17` to `I-22`). Nothing else is. Two of the four registered kinds have unit test files
 (`backuppolicy_controller_unit_test.go` and `backuprestore_controller_test.go`),
 and neither can be cited here: they test kinds that are being renamed or absorbed,
 against a status shape design §5.2 regroups.
 
-The distribution is unusual for this repository in one respect. Thirteen
-end-to-end scenarios against sixty-four unit tests is a higher end-to-end share than
+The distribution is unusual for this repository in one respect. Fourteen
+end-to-end scenarios against ninety unit tests is a higher end-to-end share than
 any other plan here, and it is not padding: a backup layer's correctness is
 whether data comes back, and that is not a property a fake client has an opinion
 about.
@@ -314,53 +404,53 @@ about.
 
 ## 6. What Is Not Yet Covered
 
-| #           | Gap                                                          | Reason                                                                                                                       |
-|-------------|--------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|
-| U-01 … U-11 | Policy selection                                             | Planned, not built. The registered policy has no claim selector at all, so there is nothing to select with                   |
-| U-12 … U-20 | Policy reconcile and retention                               | Partly covered today against the registered spelling. `U-15` and `U-16` are new: they assert what the operator must not do   |
-| U-21 … U-31 | Backup lifecycle                                             | Partly covered today. `U-28`, `U-29`, and `U-31` are new                                                                     |
-| U-32 … U-38 | The regrouped status                                         | Planned, not built. `U-34` and `U-35` are the rows that keep the source group a snapshot rather than a live view             |
-| U-39 … U-52 | Restore                                                      | Planned, not built. `U-40` and `U-41` are the most important rows here: they stand between a restore and a running workload  |
-| U-60 … U-70 | The action discriminator and the lock                        | The kind does not exist                                                                                                      |
-| U-72, U-73  | Store discovery                                              | Planned, not built. They are what a foreign backup is proved by now that `BackupImport` is retired (design §13)              |
-| I-01 … I-10 | Every admission rule                                         | Needs `envtest`, because CEL and immutability are enforced by the API server and a fake client applies neither               |
-| I-11 … I-16 | Ownership cascades and namespace isolation                   | Needs `envtest` for real garbage collection                                                                                  |
-| E-01 … E-14 | All end-to-end scenarios                                     | Needs a live cluster and a real S3 target. The e2e harness under `test/` is not committed yet                                |
-| E-08        | Deleting a base backup an incremental one depends on         | Design §14 Q1 says nothing here can answer whether that is safe. The row records what happens rather than asserting a result |
-| M-01 … M-03 | The round trip, a restore over a workload, and a silent stop | Need real data, a running workload, and an out-of-band break                                                                 |
-| Metrics     | The eight metrics of design §11.2                            | Designed, not built                                                                                                          |
-| Events      | The fourteen reasons of design §11.1                         | The backup controllers emit no event at all today                                                                            |
-| Streaming   | Nothing asserts a `?watch=true` subscription                 | Design §10 now has both reads on a stream, so a coalesced delivery and a reconnect snapshot both need scenarios              |
+| #                        | Gap                                                          | Reason                                                                                                                       |
+|--------------------------|--------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|
+| U-01 … U-11              | Policy selection                                             | Planned, not built. The registered policy has no claim selector at all, so there is nothing to select with                   |
+| U-12 … U-20              | Policy reconcile and retention                               | Partly covered today against the registered spelling. `U-15` and `U-16` are new: they assert what the operator must not do   |
+| U-21 … U-31              | Backup lifecycle                                             | Partly covered today. `U-28`, `U-29`, and `U-31` are new                                                                     |
+| U-32 … U-38              | The regrouped status                                         | Planned, not built. `U-34` and `U-35` are the rows that keep the source group a snapshot rather than a live view             |
+| U-39 … U-52              | Restore                                                      | Planned, not built. `U-40` and `U-41` are the most important rows here: they stand between a restore and a running workload  |
+| U-60 … U-70              | The action discriminator and the lock                        | The kind does not exist                                                                                                      |
+| U-72, U-73               | Store discovery                                              | Planned, not built. They are what a foreign backup is proved by now that `BackupImport` is retired (design §13)              |
+| I-01 … I-05, I-07 … I-10 | Every admission rule                                         | Needs `envtest`, because CEL and immutability are enforced by the API server and a fake client applies neither               |
+| I-11 … I-16              | Ownership cascades and namespace isolation                   | Needs `envtest` for real garbage collection                                                                                  |
+| E-01 … E-15              | All end-to-end scenarios                                     | Needs a live cluster and a real S3 target. The e2e harness under `test/` is not committed yet                                |
+| E-08                     | Deleting a base backup an incremental one depends on         | Design §14 Q1 says nothing here can answer whether that is safe. The row records what happens rather than asserting a result |
+| M-01 … M-03              | The round trip, a restore over a workload, and a silent stop | Need real data, a running workload, and an out-of-band break                                                                 |
+| Metrics                  | The eight metrics of design §11.2                            | Designed, not built                                                                                                          |
+| Events                   | The fourteen reasons of design §11.1                         | The backup controllers emit no event at all today                                                                            |
+| Streaming                | Nothing asserts a `?watch=true` subscription                 | Design §10 now has both reads on a stream, so a coalesced delivery and a reconnect snapshot both need scenarios              |
 
 ### Axis coverage
 
-| Axis              | Value                            | Scenarios          |
-|-------------------|----------------------------------|--------------------|
-| Policy selection  | Selector matching several claims | U-01, E-04         |
-|                   | Selector matching nothing        | U-03               |
-|                   | No selector                      | U-02               |
-|                   | Two policies, one claim          | U-09               |
-| Backup origin     | Taken by a policy                | U-28, E-04         |
-|                   | Taken by hand                    | U-29, E-01         |
-|                   | Written by another cluster       | U-72, E-14         |
-| Backup chain      | Full                             | U-37, E-01         |
-|                   | Incremental                      | U-36, E-07         |
-|                   | Base of a chain, deleted         | E-08               |
-| Restore target    | New claim, source pool           | U-42, E-02         |
-|                   | New claim, different pool        | U-44, E-10         |
-|                   | Existing claim                   | U-40, U-41, M-02   |
-|                   | Source pool gone                 | U-43               |
-|                   | Original still exists            | E-13               |
-| Data verification | Checksums after restore          | E-02, M-01         |
-|                   | Backup taken under load          | E-03               |
-|                   | No verification                  | Every other E- row |
-| Dependency health | Control plane and S3 reachable   | E-01               |
-|                   | S3 unreachable                   | E-11               |
-|                   | Policy silently stopped          | M-03               |
-| Namespace count   | Single                           | Most scenarios     |
-|                   | Multiple                         | I-14, I-15         |
-| Cluster count     | One                              | Most scenarios     |
-|                   | Two, discovering across          | U-72, U-73, E-14   |
+| Axis              | Value                            | Scenarios                     |
+|-------------------|----------------------------------|-------------------------------|
+| Policy selection  | Selector matching several claims | U-01, E-04                    |
+|                   | Selector matching nothing        | U-03                          |
+|                   | No selector                      | U-02                          |
+|                   | Two policies, one claim          | U-09                          |
+| Backup origin     | Taken by a policy                | U-28, E-04                    |
+|                   | Taken by hand                    | U-29, E-01                    |
+|                   | Written by another cluster       | U-72, E-14                    |
+| Backup chain      | Full                             | U-37, E-01                    |
+|                   | Incremental                      | U-36, E-07                    |
+|                   | Base of a chain, deleted         | E-08                          |
+| Restore target    | New claim, source pool           | U-42, E-02                    |
+|                   | New claim, different pool        | U-44, E-10                    |
+|                   | Existing claim                   | U-40, U-41, M-02              |
+|                   | Source pool gone                 | U-43                          |
+|                   | Original still exists            | E-13                          |
+| Data verification | Checksums after restore          | E-02, M-01                    |
+|                   | Backup taken under load          | E-03                          |
+|                   | No verification                  | Every other E- row            |
+| Dependency health | Control plane and S3 reachable   | E-01                          |
+|                   | S3 unreachable                   | E-11                          |
+|                   | Policy silently stopped          | M-03                          |
+| Namespace count   | Single                           | Most scenarios                |
+|                   | Multiple                         | I-14, I-15, U-75 … U-99, E-15 |
+| Cluster count     | One                              | Most scenarios                |
+|                   | Two, discovering across          | U-72, U-73, E-14              |
 
 **The data-verification axis is the one this plan is built around**, and only
 three rows populate it. `E-02` and `M-01` are the round trip, `E-03` is the round

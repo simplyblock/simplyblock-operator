@@ -507,7 +507,9 @@ nothing tracking it blocks every later migration on the volume, and has.
 `action: Backup` snapshots one volume and asks the storage cluster to back the
 snapshot up. It takes no parameters, locks only the named volume, and moves nothing.
 `status.backup` records the snapshot and backup identifiers, and when the operation
-finishes `status.backup.backupID` is the name of the `StorageBackup` the mirror creates.
+finishes `status.backup.backupID` and `status.backup.backupNamespace` name the
+`StorageBackup` the mirror creates, which is always in the operator's namespace
+([`design-storagebackup.md`](design-storagebackup.md) §5.1).
 
 | Step             | What it does                                                           | Abortable |
 |------------------|------------------------------------------------------------------------|-----------|

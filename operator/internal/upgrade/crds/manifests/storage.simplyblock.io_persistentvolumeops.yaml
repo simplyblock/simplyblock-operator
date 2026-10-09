@@ -198,7 +198,12 @@ spec:
                   backupID:
                     description: |-
                       BackupID is the storage cluster's identifier for the backup. The backup
-                      appears as a StorageBackup named after it, beside the StorageCluster.
+                      appears as a StorageBackup of that name in the operator's namespace.
+                    type: string
+                  backupNamespace:
+                    description: |-
+                      BackupNamespace is the namespace that StorageBackup is in, which is the
+                      operator's, recorded so a restore is written without looking for it.
                     type: string
                   clusterUUID:
                     description: |-

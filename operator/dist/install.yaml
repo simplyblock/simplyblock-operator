@@ -3567,7 +3567,12 @@ spec:
                   backupID:
                     description: |-
                       BackupID is the storage cluster's identifier for the backup. The backup
-                      appears as a StorageBackup named after it, beside the StorageCluster.
+                      appears as a StorageBackup of that name in the operator's namespace.
+                    type: string
+                  backupNamespace:
+                    description: |-
+                      BackupNamespace is the namespace that StorageBackup is in, which is the
+                      operator's, recorded so a restore is written without looking for it.
                     type: string
                   clusterUUID:
                     description: |-
@@ -5292,27 +5297,69 @@ spec:
                   rule: self == oldSelf
               backupRef:
                 description: |-
-                  BackupRef names the StorageBackup this operation acts on, in this
-                  namespace. Required, since Restore is the only action and every backup in
-                  the store has an object.
+                  BackupRef names the StorageBackup this operation acts on, in the
+                  operator's namespace. Required, since Restore is the only action and
+                  every backup in the store has an object there.
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
               clusterRef:
                 description: |-
-                  ClusterRef names the StorageCluster the operation runs against.
+                  ClusterRef names the StorageCluster the operation runs against, and
+                  locates the pool the restore targets. The namespace defaults to the
+                  operation's own.
 
-                  Bounded at what a StorageCluster name may be, since a longer value names
-                  nothing that can exist.
-                maxLength: 63
-                type: string
+                  The name and the namespace are fixed together at creation.
+                properties:
+                  name:
+                    description: Name is the object's name.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace is where the object lives. When it is omitted, the object is
+                      looked up in the namespace of the resource that carries the reference.
+                    maxLength: 63
+                    type: string
+                required:
+                - name
+                type: object
                 x-kubernetes-validations:
+                - message: a StorageCluster name is at most 63 characters
+                  rule: size(self.name) <= 63
                 - message: field is immutable
                   rule: self == oldSelf
               restore:
                 description: Restore parameterizes action Restore.
                 properties:
+                  claim:
+                    description: |-
+                      Claim is the PersistentVolumeClaim to create, by name and namespace. The
+                      namespace defaults to the operation's own. The claim must not already
+                      exist: a restore that adopted an existing claim would replace a running
+                      workload's data with the backup's.
+
+                      The name and the namespace are fixed together at creation.
+                    properties:
+                      name:
+                        description: Name is the object's name.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: |-
+                          Namespace is where the object lives. When it is omitted, the object is
+                          looked up in the namespace of the resource that carries the reference.
+                        maxLength: 63
+                        type: string
+                    required:
+                    - name
+                    type: object
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                   claimAnnotations:
                     additionalProperties:
                       type: string
@@ -5336,15 +5383,6 @@ spec:
                     x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
-                  claimName:
-                    description: |-
-                      ClaimName is the PersistentVolumeClaim to create. It must not already
-                      exist: a restore that adopted an existing claim would replace a running
-                      workload's data with the backup's.
-                    type: string
-                    x-kubernetes-validations:
-                    - message: field is immutable
-                      rule: self == oldSelf
                   targetPool:
                     description: |-
                       TargetPool is the StoragePool to restore into. It is required rather than
@@ -5357,7 +5395,7 @@ spec:
                     - message: field is immutable
                       rule: self == oldSelf
                 required:
-                - claimName
+                - claim
                 - targetPool
                 type: object
                 x-kubernetes-validations:
@@ -5385,6 +5423,11 @@ spec:
                   no owner reference back: a restarted Binding step recognizes its own work
                   by this name together with the storage.simplyblock.io/restored-by label on
                   the claim, and refuses a claim of the right name that carries neither.
+                type: string
+              claimNamespace:
+                description: |-
+                  ClaimNamespace is the namespace that claim was created in, written with
+                  ClaimName.
                 type: string
               clusterID:
                 description: ClusterID is the backend cluster the operation ran against.
@@ -6007,10 +6050,21 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              clusterNamespace:
+                description: |-
+                  ClusterNamespace is the namespace of that StorageCluster. Empty means the
+                  object's own namespace, which is how a record written before every backup
+                  moved to the operator's namespace keeps resolving.
+                maxLength: 63
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               clusterRef:
                 description: |-
                   ClusterRef names the StorageCluster whose store this backup was found in.
-                  With BackupID it is the whole of this object's identity.
+                  With ClusterNamespace and BackupID it is the whole of this object's
+                  identity.
 
                   Bounded at what a StorageCluster name may be, since a longer value names
                   nothing that can exist.
@@ -6023,6 +6077,9 @@ spec:
             - backupID
             - clusterRef
             type: object
+            x-kubernetes-validations:
+            - message: field clusterNamespace is immutable once set
+              rule: '!has(oldSelf.clusterNamespace) || has(self.clusterNamespace)'
           status:
             description: status defines the observed state of StorageBackup
             properties:
@@ -14160,6 +14217,12 @@ rules:
   - authentication.k8s.io
   resources:
   - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
   verbs:
   - create
 - apiGroups:

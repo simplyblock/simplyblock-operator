@@ -418,6 +418,7 @@ func (r *PersistentVolumeOpsReconciler) recordBackup(
 ) error {
 	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.PersistentVolumeOpsStatus) {
 		status.Backup.BackupID = backupID
+		status.Backup.BackupNamespace = r.Namespace
 		status.Message = message
 	})
 }

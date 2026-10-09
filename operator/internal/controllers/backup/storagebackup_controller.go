@@ -107,6 +107,11 @@ type StorageBackupReconciler struct {
 	Scheme   *runtime.Scheme
 	Backups  BackupCache
 	Recorder events.EventRecorder
+
+	// Namespace is the operator's, where every backup object is created. An
+	// object found anywhere else is a record a previous release wrote beside its
+	// cluster.
+	Namespace string
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagebackups,verbs=get;list;watch;create;update;patch;delete
@@ -170,23 +175,35 @@ func (r *StorageBackupReconciler) upsert(
 	scope cpinformer.Scope,
 	dto subscriptions.BackupDTO,
 ) (ctrl.Result, error) {
-	cluster, err := r.clusterFor(ctx, key.Namespace, scope[0])
+	cluster, err := r.clusterByID(ctx, scope[0])
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if cluster == nil {
-		// The stream named a cluster this namespace has no object for. That is
-		// a race at startup rather than an error, and the next trigger or the
+		// The stream named a cluster no namespace has an object for. That is a
+		// race at startup rather than an error, and the next trigger or the
 		// requeue resolves it.
 		return ctrl.Result{RequeueAfter: backupRetry}, nil
 	}
 
-	taken, err := r.resolveSource(ctx, scope[0], dto)
+	taken, err := r.recordedForAnotherCluster(ctx, key, cluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if taken != nil {
+		r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning,
+			ReasonBackupNameTaken, ReasonBackupNameTaken,
+			"Backup %s is already recorded for cluster %s/%s, so no object was made for this cluster",
+			dto.ID, clusterNamespaceOf(taken), taken.Spec.ClusterRef)
+		return ctrl.Result{}, nil
+	}
+
+	origin, err := r.resolveSource(ctx, scope[0], dto)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	created, err := r.ensureObject(ctx, key, cluster, dto, taken)
+	created, err := r.ensureObject(ctx, key, cluster, dto, origin)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -196,7 +213,33 @@ func (r *StorageBackupReconciler) upsert(
 			"Backup %s was found in the store and recorded as StorageBackup %s", dto.ID, key.Name)
 	}
 
-	return ctrl.Result{}, r.writeStatus(ctx, key, cluster, scope, dto, taken)
+	return ctrl.Result{}, r.writeStatus(ctx, key, cluster, scope, dto, origin)
+}
+
+// recordedForAnotherCluster returns the object at key when it names a different
+// cluster than the one reporting the backup, and nil otherwise. The name is the
+// store's identifier, so two clusters whose stores hold the same backup meet at
+// one object, and the first one to record it keeps it.
+func (r *StorageBackupReconciler) recordedForAnotherCluster(
+	ctx context.Context, key types.NamespacedName, cluster *simplyblockv1alpha2.StorageCluster,
+) (*simplyblockv1alpha2.StorageBackup, error) {
+	var existing simplyblockv1alpha2.StorageBackup
+	if err := r.Get(ctx, key, &existing); err != nil {
+		return nil, client.IgnoreNotFound(err)
+	}
+	if existing.Spec.ClusterRef == cluster.Name && clusterNamespaceOf(&existing) == cluster.Namespace {
+		return nil, nil
+	}
+	return &existing, nil
+}
+
+// clusterNamespaceOf is the namespace of the StorageCluster a backup object
+// names. An object with no clusterNamespace names a cluster beside itself.
+func clusterNamespaceOf(sb *simplyblockv1alpha2.StorageBackup) string {
+	if sb.Spec.ClusterNamespace != "" {
+		return sb.Spec.ClusterNamespace
+	}
+	return sb.Namespace
 }
 
 // ensureObject creates the StorageBackup when it is missing, and reports whether
@@ -226,8 +269,9 @@ func (r *StorageBackupReconciler) ensureObject(
 			Labels:    backupLabels(cluster, taken),
 		},
 		Spec: simplyblockv1alpha2.StorageBackupSpec{
-			ClusterRef: cluster.Name,
-			BackupID:   dto.ID,
+			ClusterRef:       cluster.Name,
+			ClusterNamespace: cluster.Namespace,
+			BackupID:         dto.ID,
 		},
 	}
 	// No owner reference. §13 wants a policy to own the backups taken under it,
@@ -427,6 +471,15 @@ func observeBackupCost(clusterName, policy string, dto subscriptions.BackupDTO) 
 func (r *StorageBackupReconciler) unreported(
 	ctx context.Context, sb *simplyblockv1alpha2.StorageBackup,
 ) (ctrl.Result, error) {
+	// A record a previous release wrote beside its cluster is not reported under
+	// its own key any more. The backup is recorded in the operator's namespace
+	// now, so this copy is removed and nothing is said about the store.
+	if r.isLegacyRecord(sb) {
+		logf.FromContext(ctx).Info("removing a backup record left beside its cluster",
+			"backup", sb.Name, "namespace", sb.Namespace)
+		return ctrl.Result{}, client.IgnoreNotFound(r.Delete(ctx, sb))
+	}
+
 	// An object the mirror has never written carries no backend cluster, and the
 	// scope it would be judged against has to come from its spec instead. That is
 	// how a record written by hand is reconciled away rather than left forever:
@@ -454,7 +507,7 @@ func (r *StorageBackupReconciler) unreported(
 		return ctrl.Result{}, err
 	}
 
-	cluster, err := r.clusterFor(ctx, sb.Namespace, clusterID)
+	cluster, err := r.clusterByID(ctx, clusterID)
 	if err != nil || cluster == nil {
 		return ctrl.Result{}, err
 	}
@@ -463,13 +516,23 @@ func (r *StorageBackupReconciler) unreported(
 	return ctrl.Result{}, nil
 }
 
+// isLegacyRecord reports whether an object is one the mirror wrote beside its
+// cluster before every backup moved to the operator's namespace. The cluster
+// label is the mirror's own mark, and an object an operation owns, such as the
+// output of a BackupImport, is not the mirror's to remove.
+func (r *StorageBackupReconciler) isLegacyRecord(sb *simplyblockv1alpha2.StorageBackup) bool {
+	_, mirrored := sb.Labels[simplyblockv1alpha2.BackupLabelCluster]
+	return r.Namespace != "" && sb.Namespace != r.Namespace &&
+		mirrored && len(sb.OwnerReferences) == 0
+}
+
 // clusterIDFor is the backend cluster a backup object's spec names, and the
-// empty string when this namespace has no such cluster or it has no id yet.
+// empty string when that namespace has no such cluster or it has no id yet.
 func (r *StorageBackupReconciler) clusterIDFor(
 	ctx context.Context, sb *simplyblockv1alpha2.StorageBackup,
 ) (string, error) {
 	var clusters simplyblockv1alpha2.StorageClusterList
-	if err := r.List(ctx, &clusters, client.InNamespace(sb.Namespace)); err != nil {
+	if err := r.List(ctx, &clusters, client.InNamespace(clusterNamespaceOf(sb))); err != nil {
 		return "", err
 	}
 	for i := range clusters.Items {
@@ -496,13 +559,14 @@ func (r *StorageBackupReconciler) discardUnbacked(
 	return nil
 }
 
-// clusterFor returns the StorageCluster in this namespace whose backend id is
-// the one given, or nil when the namespace has none.
-func (r *StorageBackupReconciler) clusterFor(
-	ctx context.Context, namespace, clusterID string,
+// clusterByID returns the StorageCluster, in any namespace, whose backend id is
+// the one given, or nil when there is none. A backup object is not in its
+// cluster's namespace, so the cluster is found by the id the stream names it by.
+func (r *StorageBackupReconciler) clusterByID(
+	ctx context.Context, clusterID string,
 ) (*simplyblockv1alpha2.StorageCluster, error) {
 	var clusters simplyblockv1alpha2.StorageClusterList
-	if err := r.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
+	if err := r.List(ctx, &clusters); err != nil {
 		return nil, err
 	}
 	for i := range clusters.Items {

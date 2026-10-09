@@ -62,14 +62,19 @@ type BackupDTO struct {
 // the affected StorageBackup object. It performs no Kubernetes writes; a
 // reconciler consumes its cache and trigger channel.
 //
-// A backup object is created beside the StorageCluster whose store holds it, and
-// the control plane knows nothing of Kubernetes namespaces, so the subscription
-// keeps the backend-cluster-id-to-object mapping that the StorageCluster
-// controller registers. That is what lets Ingest name an object without reading
-// the API — it runs on the stream goroutine and must never block on I/O.
+// Every backup object is created in the operator's namespace, whichever
+// namespace holds the StorageCluster whose store reports it. The control plane
+// knows nothing of Kubernetes namespaces, so the subscription keeps the
+// backend-cluster-id-to-object mapping that the StorageCluster controller
+// registers, and a cluster with no registration names no object. That is what
+// lets Ingest name an object without reading the API. It runs on the stream
+// goroutine and must never block on I/O.
 type BackupSubscription struct {
 	*Cache[BackupDTO]
 	ClusterRegistry
+
+	// namespace is where every backup object is created.
+	namespace string
 
 	ch chan event.GenericEvent
 
@@ -82,11 +87,11 @@ type BackupSubscription struct {
 	byObject map[string]string // "namespace/name" -> backend backup id
 }
 
-// NewBackupSubscription returns a backup subscription. It is not told a
-// namespace: each backup object belongs beside the StorageCluster whose store
-// holds it, which RegisterCluster supplies.
-func NewBackupSubscription() *BackupSubscription {
+// NewBackupSubscription returns a backup subscription whose objects are created
+// in the given namespace, the operator's own.
+func NewBackupSubscription(namespace string) *BackupSubscription {
 	return &BackupSubscription{
+		namespace:       namespace,
 		Cache:           NewCache(func(b BackupDTO) string { return b.ID }),
 		ClusterRegistry: newClusterRegistry(),
 		ch:              make(chan event.GenericEvent, 1024),
@@ -161,12 +166,13 @@ func (s *BackupSubscription) unindex(scope cpinformer.Scope, backupID string) {
 }
 
 func (s *BackupSubscription) objectKey(scope cpinformer.Scope, backupID string) (types.NamespacedName, bool) {
-	cluster, ok := s.cluster(scope[0])
-	if !ok {
+	// The cluster's registration only says that the operator has adopted it. The
+	// object is not in the cluster's namespace.
+	if _, ok := s.cluster(scope[0]); !ok {
 		return types.NamespacedName{}, false
 	}
 	return types.NamespacedName{
-		Namespace: cluster.Namespace,
+		Namespace: s.namespace,
 		Name:      simplyblockv1alpha2.StorageBackupName(backupID),
 	}, true
 }
@@ -176,9 +182,9 @@ func (s *BackupSubscription) objectKey(scope cpinformer.Scope, backupID string) 
 // (see cpinformer.Subscription on why waiting is the right side to err on).
 //
 // A backup whose cluster has no registered object name yields no trigger: the
-// object belongs in that cluster's namespace, and there is nowhere to put it
-// yet. The cluster's registration is followed by the stream's snapshot, which
-// enqueues everything.
+// operator has not adopted that cluster, so nothing can resolve it yet. The
+// cluster's registration is followed by the stream's snapshot, which enqueues
+// everything.
 func (s *BackupSubscription) enqueue(ctx context.Context, scope cpinformer.Scope, backupID string) {
 	key, ok := s.objectKey(scope, backupID)
 	if !ok {

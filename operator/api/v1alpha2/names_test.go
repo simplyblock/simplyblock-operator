@@ -134,6 +134,22 @@ func clusterRefs(
 	}
 }
 
+// requireNameRule checks a reference that is an object. Its name field belongs
+// to a type shared with references to objects whose names may be longer, so the
+// bound of a StorageCluster name is a rule on the reference rather than a
+// maxLength on the field.
+func requireNameRule(t *testing.T, kind, where string, ref apiextensionsv1.JSONSchemaProps) {
+	t.Helper()
+	want := fmt.Sprintf("size(self.name) <= %d", nameBound)
+	for _, rule := range ref.XValidations {
+		if rule.Rule == want {
+			return
+		}
+	}
+	t.Errorf("%s.%s is an object whose name is not bounded by the rule %q, so it admits a "+
+		"StorageCluster name that could never be that long", kind, where, want)
+}
+
 // TestEveryClusterReferenceIsBoundedByWhatAClusterNameMayBe covers every
 // reference to a StorageCluster the group's specs carry.
 //
@@ -171,6 +187,10 @@ func TestEveryClusterReferenceIsBoundedByWhatAClusterNameMayBe(t *testing.T) {
 		}
 		for where, ref := range refs {
 			found++
+			if ref.Type == "object" {
+				requireNameRule(t, kind, where, ref)
+				continue
+			}
 			switch {
 			case ref.MaxLength == nil:
 				t.Errorf("%s.%s carries no maxLength, so it admits 253 characters of a "+

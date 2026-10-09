@@ -34,7 +34,7 @@ func backupSnapshot(t *testing.T, backups ...BackupDTO) cpinformer.Event {
 }
 
 func adoptedBackupSubscription() *BackupSubscription {
-	s := NewBackupSubscription()
+	s := NewBackupSubscription(backupNamespace)
 	s.RegisterCluster(backupCluster, types.NamespacedName{
 		Namespace: backupNamespace, Name: backupClusterCR,
 	})
@@ -62,12 +62,32 @@ func TestBackupSubscriptionNamesTheObjectAfterTheStoresIdentifier(t *testing.T) 
 	}
 }
 
+// Every backup object is in the operator's namespace, whichever namespace holds
+// the cluster whose store reports it.
+func TestBackupSubscriptionNamesTheObjectInTheOperatorsNamespace(t *testing.T) {
+	s := NewBackupSubscription("operator-ns")
+	s.RegisterCluster(backupCluster, types.NamespacedName{Namespace: "infra", Name: backupClusterCR})
+
+	if err := s.Ingest(context.Background(),
+		backupSnapshot(t, BackupDTO{ID: backupID, Status: "completed"})); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	name := simplyblockv1alpha2.StorageBackupName(backupID)
+	if _, _, ok := s.Lookup(types.NamespacedName{Namespace: "operator-ns", Name: name}); !ok {
+		t.Error("the backup is not reachable in the operator's namespace")
+	}
+	if _, _, ok := s.Lookup(types.NamespacedName{Namespace: "infra", Name: name}); ok {
+		t.Error("the backup is reachable in its cluster's namespace, where it no longer belongs")
+	}
+}
+
 // A backup reported for a cluster the operator has not adopted has nowhere to
 // go: the object belongs in that cluster's namespace, and there is none.
 // Caching it and naming nothing is the right pair, because the cluster's
 // registration is followed by a snapshot that enqueues everything.
 func TestBackupSubscriptionNamesNothingForAnUnadoptedCluster(t *testing.T) {
-	s := NewBackupSubscription()
+	s := NewBackupSubscription(backupNamespace)
 
 	if err := s.Ingest(context.Background(),
 		backupSnapshot(t, BackupDTO{ID: backupID, Status: "completed"})); err != nil {
@@ -130,7 +150,7 @@ func TestSeedingForgetsABackupTheListingOmits(t *testing.T) {
 }
 
 func TestBackupSubscriptionStreamsPerCluster(t *testing.T) {
-	s := NewBackupSubscription()
+	s := NewBackupSubscription(backupNamespace)
 	if got, want := s.Path(backupScope()), "/api/v2/clusters/"+backupCluster+"/backups/"; got != want {
 		t.Errorf("Path = %q, want %q", got, want)
 	}

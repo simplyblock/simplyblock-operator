@@ -77,6 +77,11 @@ type StorageBackupPolicyReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
 	API      BackupClient
+
+	// Namespace is the operator's, where every StorageBackup is recorded. Empty
+	// means the policy's own, which is where a test that has one namespace
+	// keeps them.
+	Namespace string
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagebackuppolicies,verbs=get;list;watch;create;update;patch;delete
@@ -371,7 +376,7 @@ func (r *StorageBackupPolicyReconciler) publishCoverage(
 	for _, claim := range attached {
 		var backups simplyblockv1alpha2.StorageBackupList
 		if err := r.List(ctx, &backups,
-			client.InNamespace(policy.Namespace),
+			client.InNamespace(r.backupNamespace(policy)),
 			client.MatchingLabels{simplyblockv1alpha2.BackupLabelClaim: claim.Name},
 		); err != nil {
 			continue
@@ -381,7 +386,8 @@ func (r *StorageBackupPolicyReconciler) publishCoverage(
 		var newest *metav1.Time
 		for i := range backups.Items {
 			backup := &backups.Items[i]
-			if backup.Status.Phase != simplyblockv1alpha2.StorageBackupPhaseAvailable {
+			if backup.Status.Phase != simplyblockv1alpha2.StorageBackupPhaseAvailable ||
+				!isBackupOfClaimIn(backup, policy.Namespace) {
 				continue
 			}
 			available++
@@ -398,6 +404,25 @@ func (r *StorageBackupPolicyReconciler) publishCoverage(
 	}
 }
 
+// backupNamespace is where the policy's backups are recorded, which is the
+// operator's namespace for every backup the mirror writes.
+func (r *StorageBackupPolicyReconciler) backupNamespace(
+	policy *simplyblockv1alpha2.StorageBackupPolicy,
+) string {
+	if r.Namespace != "" {
+		return r.Namespace
+	}
+	return policy.Namespace
+}
+
+// isBackupOfClaimIn reports whether a backup was taken of a claim in the given
+// namespace. Every backup is recorded in one namespace, so the claim's namespace
+// is what separates two claims of the same name. An object that records none is
+// one a previous release wrote beside its claim.
+func isBackupOfClaimIn(backup *simplyblockv1alpha2.StorageBackup, namespace string) bool {
+	return firstNonEmpty(backup.Source().ClaimNamespace, backup.Namespace) == namespace
+}
+
 // lastBackupAt is when the newest copy under this policy completed, read from
 // the backups the mirror has recorded rather than from the control plane. It is
 // what an age alert is computed from, and it is nil while the policy has
@@ -411,14 +436,15 @@ func (r *StorageBackupPolicyReconciler) lastBackupAt(
 	}
 
 	var backups simplyblockv1alpha2.StorageBackupList
-	if err := r.List(ctx, &backups, client.InNamespace(policy.Namespace)); err != nil {
+	if err := r.List(ctx, &backups, client.InNamespace(r.backupNamespace(policy))); err != nil {
 		return policy.Status.LastBackupAt
 	}
 
 	var newest *metav1.Time
 	for i := range backups.Items {
 		backup := &backups.Items[i]
-		if !slices.Contains(claimed, backup.Source().ClaimName) {
+		if !isBackupOfClaimIn(backup, policy.Namespace) ||
+			!slices.Contains(claimed, backup.Source().ClaimName) {
 			continue
 		}
 		if done := backup.Copy().CompletedAt; done != nil && (newest == nil || done.After(newest.Time)) {

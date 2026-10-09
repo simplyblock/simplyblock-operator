@@ -188,6 +188,21 @@ func TestABackupSnapshotsRequestsAndWaitsThenSucceeds(t *testing.T) {
 	}
 }
 
+// TestABackupRecordsTheNamespaceOfTheObjectItProduces. The mirror records every
+// backup in the operator's namespace, whichever namespace the volume's claim and
+// this operation are in, so the operation says where to find it.
+func TestABackupRecordsTheNamespaceOfTheObjectItProduces(t *testing.T) {
+	plane := &fakeBackupPlane{status: "completed"}
+	r := backupReconciler(t, plane, plainVolume(), backupWorld()...)
+	r.Namespace = "operator-ns"
+
+	ops := runToTheEnd(t, r)
+
+	if ops.Status.Backup == nil || ops.Status.Backup.BackupNamespace != "operator-ns" {
+		t.Errorf("status.backup = %+v, want the backup's namespace to be operator-ns", ops.Status.Backup)
+	}
+}
+
 // TestASnapshotAnEarlierAttemptTookIsAdoptedByName. The snapshot is requested
 // before its identifier can be written down, so a pass that died in between
 // leaves a snapshot nothing names. Asking again would make a second one.

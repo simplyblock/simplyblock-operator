@@ -72,6 +72,11 @@ const (
 	ReasonStoreUnreachable = "StoreUnreachable"
 	ReasonBackupGone       = "BackupGone"
 
+	// ReasonBackupNameTaken goes on the StorageCluster that reported a backup
+	// another cluster already recorded. The object's name is the store's
+	// identifier, so there is one object and it stays with its first owner.
+	ReasonBackupNameTaken = "BackupNameTaken"
+
 	// ReasonBackupPruned goes on the policy rather than on the backup, because
 	// the backup object is being deleted at that moment.
 	ReasonBackupPruned = "BackupPruned"

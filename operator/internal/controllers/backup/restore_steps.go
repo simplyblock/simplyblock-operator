@@ -73,12 +73,12 @@ func (r *StorageBackupOpsReconciler) validate(
 
 	clusterID, err := r.clusterIDFor(ctx, ops)
 	if err != nil {
-		return false, fmt.Errorf("resolve cluster %s: %w", ops.Spec.ClusterRef, err)
+		return false, fmt.Errorf("resolve cluster %s: %w", ops.Spec.ClusterRef.Name, err)
 	}
 
 	var backup simplyblockv1alpha2.StorageBackup
 	if err := r.Get(ctx,
-		client.ObjectKey{Name: ops.Spec.BackupRef, Namespace: ops.Namespace}, &backup); err != nil {
+		client.ObjectKey{Name: ops.Spec.BackupRef, Namespace: r.backupNamespace(ops)}, &backup); err != nil {
 		if apierrors.IsNotFound(err) {
 			return false, fatalf("StorageBackup %s does not exist", ops.Spec.BackupRef)
 		}
@@ -96,15 +96,16 @@ func (r *StorageBackupOpsReconciler) validate(
 		return false, nil
 	}
 
-	poolUUID, err := utils.ResolvePoolUUID(ctx, r.Client, ops.Namespace, ops.Spec.ClusterRef, restore.TargetPool)
+	poolUUID, err := utils.ResolvePoolUUID(ctx, r.Client,
+		clusterNamespaceOfOps(ops), ops.Spec.ClusterRef.Name, restore.TargetPool)
 	if err != nil {
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, ReasonPoolNotFound, ReasonPoolNotFound,
 			"The target pool %s could not be resolved: %v", restore.TargetPool, err)
 		return false, fatalf("the target pool %s is not a pool of cluster %s: %v",
-			restore.TargetPool, ops.Spec.ClusterRef, err)
+			restore.TargetPool, ops.Spec.ClusterRef.Name, err)
 	}
 
-	if err := r.refuseExistingClaim(ctx, ops, restore.ClaimName); err != nil {
+	if err := r.refuseExistingClaim(ctx, ops, restore.Claim.Name); err != nil {
 		return false, err
 	}
 
@@ -126,14 +127,14 @@ func (r *StorageBackupOpsReconciler) refuseExistingClaim(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps, claimName string,
 ) error {
 	var claim corev1.PersistentVolumeClaim
-	err := r.Get(ctx, client.ObjectKey{Name: claimName, Namespace: ops.Namespace}, &claim)
+	err := r.Get(ctx, client.ObjectKey{Name: claimName, Namespace: claimNamespaceOfOps(ops)}, &claim)
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if claim.Labels[RestoredByLabel] == ops.Name {
+	if claimBelongsTo(&claim, ops) {
 		return nil
 	}
 
@@ -255,9 +256,10 @@ func (r *StorageBackupOpsReconciler) bind(
 	// own work.
 	if ops.Status.ClaimName == "" {
 		if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageBackupOpsStatus) {
-			status.ClaimName = restore.ClaimName
+			status.ClaimName = restore.Claim.Name
+			status.ClaimNamespace = claimNamespaceOfOps(ops)
 			status.PersistentVolumeName = restoredVolumeName(ops)
-			status.Message = fmt.Sprintf("Binding the restored volume to claim %s", restore.ClaimName)
+			status.Message = fmt.Sprintf("Binding the restored volume to claim %s", restore.Claim.Name)
 		}); err != nil {
 			return false, err
 		}
@@ -276,7 +278,7 @@ func (r *StorageBackupOpsReconciler) bind(
 
 	var claim corev1.PersistentVolumeClaim
 	if err := r.Get(ctx,
-		client.ObjectKey{Name: restore.ClaimName, Namespace: ops.Namespace}, &claim); err != nil {
+		client.ObjectKey{Name: restore.Claim.Name, Namespace: claimNamespaceOfOps(ops)}, &claim); err != nil {
 		return false, err
 	}
 	return claim.Status.Phase == corev1.ClaimBound, nil
@@ -348,8 +350,8 @@ func (r *StorageBackupOpsReconciler) ensurePersistentVolume(
 			ClaimRef: &corev1.ObjectReference{
 				APIVersion: "v1",
 				Kind:       "PersistentVolumeClaim",
-				Name:       ops.Spec.Restore.ClaimName,
-				Namespace:  ops.Namespace,
+				Name:       ops.Spec.Restore.Claim.Name,
+				Namespace:  claimNamespaceOfOps(ops),
 			},
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
 				CSI: &corev1.CSIPersistentVolumeSource{
@@ -384,7 +386,7 @@ func (r *StorageBackupOpsReconciler) ensureClaim(
 ) error {
 	restore := ops.Spec.Restore
 
-	if adopted, err := r.claimIsOurs(ctx, ops, restore.ClaimName); err != nil || adopted {
+	if adopted, err := r.claimIsOurs(ctx, ops, restore.Claim.Name); err != nil || adopted {
 		return err
 	}
 
@@ -397,6 +399,7 @@ func (r *StorageBackupOpsReconciler) ensureClaim(
 		labels[key] = value
 	}
 	labels[RestoredByLabel] = ops.Name
+	labels[RestoredByNamespaceLabel] = ops.Namespace
 
 	storageClass, err := r.restoreStorageClassName(ctx, ops)
 	if err != nil {
@@ -404,8 +407,8 @@ func (r *StorageBackupOpsReconciler) ensureClaim(
 	}
 	claim := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        restore.ClaimName,
-			Namespace:   ops.Namespace,
+			Name:        restore.Claim.Name,
+			Namespace:   claimNamespaceOfOps(ops),
 			Labels:      labels,
 			Annotations: restore.ClaimAnnotations,
 		},
@@ -426,16 +429,16 @@ func (r *StorageBackupOpsReconciler) ensureClaim(
 		// create. Treating that as success would bind a restore to a claim it
 		// never made, which is the adoption the whole step exists to refuse, so
 		// the object is read back and has to prove it is ours.
-		adopted, err := r.claimIsOurs(ctx, ops, restore.ClaimName)
+		adopted, err := r.claimIsOurs(ctx, ops, restore.Claim.Name)
 		if err != nil {
 			return err
 		}
 		if !adopted {
 			r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, ReasonClaimExists, ReasonClaimExists,
 				"Claim %s was created by something else while the restore was binding, so the restore was refused",
-				restore.ClaimName)
+				restore.Claim.Name)
 			return fatalf("claim %s was created by something else while this operation was binding it",
-				restore.ClaimName)
+				restore.Claim.Name)
 		}
 	}
 	return nil
@@ -453,7 +456,7 @@ func (r *StorageBackupOpsReconciler) restoreStorageClassName(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
 ) (string, error) {
 	name, err := pool.ConsumingClassName(ctx, r.Client,
-		ops.Namespace, ops.Spec.ClusterRef, ops.Spec.Restore.TargetPool)
+		clusterNamespaceOfOps(ops), ops.Spec.ClusterRef.Name, ops.Spec.Restore.TargetPool)
 	if err != nil {
 		return "", fatalf("the target pool %s has no StorageClass to restore into: %v",
 			ops.Spec.Restore.TargetPool, err)
@@ -471,14 +474,14 @@ func (r *StorageBackupOpsReconciler) claimIsOurs(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps, claimName string,
 ) (bool, error) {
 	var existing corev1.PersistentVolumeClaim
-	err := r.Get(ctx, client.ObjectKey{Name: claimName, Namespace: ops.Namespace}, &existing)
+	err := r.Get(ctx, client.ObjectKey{Name: claimName, Namespace: claimNamespaceOfOps(ops)}, &existing)
 	if apierrors.IsNotFound(err) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if existing.Labels[RestoredByLabel] != ops.Name {
+	if !claimBelongsTo(&existing, ops) {
 		return false, fatalf("claim %s exists and was not created by this operation", claimName)
 	}
 	return true, nil
@@ -488,8 +491,23 @@ func (r *StorageBackupOpsReconciler) claimIsOurs(
 // operation produces.
 func claimRefMatches(ref *corev1.ObjectReference, ops *simplyblockv1alpha2.StorageBackupOps) bool {
 	return ref != nil &&
-		ref.Name == ops.Spec.Restore.ClaimName &&
-		ref.Namespace == ops.Namespace
+		ref.Name == ops.Spec.Restore.Claim.Name &&
+		ref.Namespace == claimNamespaceOfOps(ops)
+}
+
+// claimBelongsTo reports whether a claim was created by this operation. The name
+// alone is not enough, because two operations of one name in different
+// namespaces can restore into the same claim namespace. A claim written before
+// the namespace label existed has none, and was always beside its operation.
+func claimBelongsTo(claim *corev1.PersistentVolumeClaim, ops *simplyblockv1alpha2.StorageBackupOps) bool {
+	if claim.Labels[RestoredByLabel] != ops.Name {
+		return false
+	}
+	owner, labeled := claim.Labels[RestoredByNamespaceLabel]
+	if !labeled {
+		return claim.Namespace == ops.Namespace
+	}
+	return owner == ops.Namespace
 }
 
 // backupOf reads the operation's target, which the Binding step needs for the
@@ -499,7 +517,7 @@ func (r *StorageBackupOpsReconciler) backupOf(
 ) (*simplyblockv1alpha2.StorageBackup, error) {
 	var backup simplyblockv1alpha2.StorageBackup
 	if err := r.Get(ctx,
-		client.ObjectKey{Name: ops.Spec.BackupRef, Namespace: ops.Namespace}, &backup); err != nil {
+		client.ObjectKey{Name: ops.Spec.BackupRef, Namespace: r.backupNamespace(ops)}, &backup); err != nil {
 		return nil, err
 	}
 	return &backup, nil
