@@ -457,6 +457,31 @@ class Archive(unittest.TestCase):
         assert ready is not None
         self.assertEqual((ready - got[0].deleted).total_seconds(), 30)
         self.assertIsNone(got[1].ready)
+        # A run from before the pod IPs were recorded reads as unknown, not as an error.
+        self.assertEqual((got[0].ip, got[0].replacement_ip), ("", ""))
+
+    def test_reads_the_pod_ips_a_restart_recorded(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "restarts.json"), "w") as fh:
+                json.dump({"restarts": [
+                    {"target": "mds", "pod": "mds-0", "node": "w3",
+                     "deleted": "2026-08-19T22:00:10Z", "ready": "2026-08-19T22:00:40Z",
+                     "replacement": "mds-0", "ip": "10.244.3.118",
+                     "replacement_ip": "10.244.3.123"}]}, fh)
+            got = ArchiveEvidence(d).restarts()
+        self.assertEqual((got[0].ip, got[0].replacement_ip), ("10.244.3.118", "10.244.3.123"))
+
+    def test_reads_the_conntrack_samples_a_run_took(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "conntrack.csv"), "w") as fh:
+                fh.write("ts,node,state,orig_src,orig_sport,orig_dst,orig_dport,reply_src\n"
+                         "2026-10-09T06:08:20Z,w1,ESTABLISHED,10.10.10.11,835,10.108.41.72,"
+                         "2049,10.244.3.118\n"
+                         "2026-10-09T06:08:10Z,w2,NONE,,0,,0,\n")
+            got = ArchiveEvidence(d).conntrack()
+        self.assertEqual([(s.node, s.state) for s in got], [("w2", "NONE"), ("w1", "ESTABLISHED")])
+        self.assertEqual((got[1].orig_sport, got[1].orig_dport, got[1].reply_src),
+                         (835, 2049, "10.244.3.118"))
 
     def test_reads_the_churn_a_run_made(self):
         with tempfile.TemporaryDirectory() as d:
@@ -968,4 +993,128 @@ class ChurnSchedule(unittest.TestCase):
         later = self.flow(plan, until=101.0)
         self.assertTrue(later)
         self.assertLessEqual(later[0][0], 101.0)
+
+
+def _cp(stdout: str = "", rc: int = 0) -> Any:
+    return argparse.Namespace(stdout=stdout, stderr="", returncode=rc)
+
+
+class PodAddresses(unittest.TestCase):
+    """The pod IP a restart replaced is what tells a stale conntrack entry from a live one."""
+
+    def test_list_pods_carries_each_pods_ip(self):
+        items = {"items": [{"metadata": {"name": "mds-0"},
+                            "spec": {"nodeName": "w3", "containers": [{"name": "c"}]},
+                            "status": {"phase": "Running", "podIP": "10.244.3.118"}}]}
+        with mock.patch.object(kube, "run", lambda *a, **k: _cp(json.dumps(items))):
+            self.assertEqual([p.ip for p in kube.list_pods("ns")], ["10.244.3.118"])
+
+    def test_a_restart_records_the_old_and_the_new_pod_ip(self):
+        from sbtest.components import chaos
+
+        victim = kube.Pod(name="simplyblock-pnfs-mds-x-0", namespace="op", node="w3",
+                          containers=("mds-runner",), phase="Running", ip="10.244.3.118")
+        replacement = {"items": [{
+            "metadata": {"name": victim.name, "uid": "new"}, "spec": {"nodeName": "w3"},
+            "status": {"podIP": "10.244.3.123",
+                       "conditions": [{"type": "Ready", "status": "True"}]}}]}
+
+        def run(args: list[str], **_: object) -> Any:
+            return _cp(json.dumps(replacement)) if "get" in args else _cp()
+
+        r = chaos.Restarter(namespace="op")
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(kube, "list_pods", lambda *a, **k: [victim]), \
+                mock.patch.object(kube, "run", run), \
+                mock.patch.object(chaos, "_uid", lambda *a: "old"), \
+                mock.patch.object(chaos.Restarter, "_follow", lambda *a: None):
+            ctx = RunContext(run_id="t", outdir=d, log=Logger(None))
+            r._restart(ctx, "mds")
+            r.collect(ctx)
+            with open(os.path.join(d, "restarts.json")) as fh:
+                rec = json.load(fh)["restarts"][0]
+        self.assertEqual((rec["ip"], rec["replacement_ip"]), ("10.244.3.118", "10.244.3.123"))
+
+
+class ConntrackSampling(unittest.TestCase):
+    """What the conntrack sampler reads off a node, and what it records."""
+
+    TOOLS = ("tcp      6 431996 ESTABLISHED src=10.10.10.11 dst=10.108.41.72 sport=835 "
+             "dport=2049 src=10.244.3.118 dst=10.10.10.11 sport=2049 dport=835 [ASSURED] "
+             "mark=0 use=1\n")
+    PROC = ("ipv4     2 tcp      6 116 SYN_SENT src=10.10.10.12 dst=10.103.85.218 sport=962 "
+            "dport=2049 [UNREPLIED] src=10.244.3.118 dst=10.10.10.12 sport=2049 dport=962 "
+            "mark=0 zone=0 use=2\n")
+    T = datetime(2026, 10, 9, 6, 8, 20, tzinfo=UTC)
+
+    def test_parses_both_tuples_of_a_conntrack_tools_line(self):
+        from sbtest.components.conntrack import parse_conntrack
+        [s] = parse_conntrack(self.TOOLS, self.T, "w1")
+        self.assertEqual((s.state, s.orig_src, s.orig_sport, s.orig_dst, s.orig_dport,
+                          s.reply_src),
+                         ("ESTABLISHED", "10.10.10.11", 835, "10.108.41.72", 2049,
+                          "10.244.3.118"))
+
+    def test_parses_a_proc_nf_conntrack_line(self):
+        from sbtest.components.conntrack import parse_conntrack
+        [s] = parse_conntrack(self.PROC, self.T, "w2")
+        self.assertEqual((s.state, s.orig_sport, s.reply_src), ("SYN_SENT", 962, "10.244.3.118"))
+
+    def test_keeps_only_flows_to_the_nfs_port(self):
+        from sbtest.components.conntrack import parse_conntrack
+        other = self.TOOLS.replace("dport=2049 src", "dport=443 src")
+        text = other + "conntrack v1.4.8 (conntrack-tools): 1 flow entries have been shown.\n"
+        self.assertEqual(parse_conntrack(text, self.T, "w1"), [])
+
+    def _sampler(self, outputs: dict[str, str]) -> Any:
+        from sbtest.components.conntrack import ConntrackSampler
+        s = ConntrackSampler(namespace="sb-test", csi_namespace="sb-op")
+        s._helpers = {node: f"r-ct-{node}" for node in outputs}
+        by_pod = {f"r-ct-{node}": out for node, out in outputs.items()}
+        return s, lambda ns, pod, script, **k: by_pod[pod]
+
+    def test_a_node_with_no_nfs_flows_is_still_recorded_as_sampled(self):
+        # Otherwise "nothing pinned" and "never looked" read the same.
+        s, exec_sh = self._sampler({"w1": self.TOOLS, "w2": ""})
+        with mock.patch.object(kube, "exec_sh", exec_sh):
+            s._sample(RunContext(run_id="r", outdir="/tmp", log=Logger(None)))
+        self.assertEqual(sorted((x.node, x.state) for x in s._samples),
+                         [("w1", "ESTABLISHED"), ("w2", "NONE")])
+
+    def test_a_node_it_cannot_read_records_nothing(self):
+        from sbtest.components.conntrack import UNAVAILABLE
+        s, exec_sh = self._sampler({"w1": UNAVAILABLE + "\n"})
+        with mock.patch.object(kube, "exec_sh", exec_sh):
+            s._sample(RunContext(run_id="r", outdir="/tmp", log=Logger(None)))
+        self.assertEqual(s._samples, [])
+
+    def test_the_samples_written_are_the_ones_the_archive_reads(self):
+        s, exec_sh = self._sampler({"w1": self.TOOLS, "w2": ""})
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(kube, "exec_sh", exec_sh):
+            ctx = RunContext(run_id="r", outdir=d, log=Logger(None))
+            s._sample(ctx)
+            s.collect(ctx)
+            got = ArchiveEvidence(d).conntrack()
+        self.assertEqual(sorted((x.node, x.state, x.reply_src) for x in got),
+                         [("w1", "ESTABLISHED", "10.244.3.118"), ("w2", "NONE", "")])
+
+    def test_a_helper_goes_on_every_node_running_a_node_plugin(self):
+        from sbtest.components.conntrack import ConntrackSampler
+        pods = [kube.Pod(name=f"simplyblock-csi-node-{n}", namespace="sb-op", node=f"{n}.lab",
+                         containers=("csi-node",), phase="Running") for n in ("w1", "w2")]
+        applied: list[str] = []
+
+        def run(args: list[str], stdin: str | None = None, **_: object) -> Any:
+            if stdin:
+                applied.append(stdin)
+            return _cp()
+
+        s = ConntrackSampler(namespace="sb-test", csi_namespace="sb-op")
+        with mock.patch.object(kube, "list_pods", lambda *a, **k: pods), \
+                mock.patch.object(kube, "run", run):
+            s.setup(RunContext(run_id="r", outdir="/tmp", log=Logger(None)))
+        docs = json.loads(applied[0])["items"]
+        self.assertEqual(sorted(d["spec"]["nodeName"] for d in docs), ["w1.lab", "w2.lab"])
+        self.assertTrue(all(d["spec"]["hostNetwork"] for d in docs))
+        self.assertEqual(sorted(s._helpers), ["w1", "w2"])
 

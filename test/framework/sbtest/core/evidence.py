@@ -249,6 +249,11 @@ class Restart:
     replacement: str = ""
     #: The victim's log, followed from its deletion until its containers exited.
     log: str = ""
+    #: The victim's pod IP and its replacement's, "" when the run did not record them. A
+    #: Service routes to the pod IP, so a flow still translated to the old one after the
+    #: replacement is Ready never reaches it.
+    ip: str = ""
+    replacement_ip: str = ""
 
 
 @dataclass(frozen=True)
@@ -318,6 +323,26 @@ class NfsSample:
     read: int
     write: int
     connects: int = 0
+
+
+@dataclass(frozen=True)
+class ConntrackSample:
+    """One NFS flow in a node's connection tracking table at one moment.
+
+    The orig tuple is the client's view (its address and source port to the export's
+    Service address), and reply_src is where the node translated it: the MDS pod. A row
+    with state "NONE" and no tuple records that the node was read and held no NFS flow,
+    which keeps a node with nothing to find apart from a node never read.
+    """
+
+    ts: datetime
+    node: str
+    state: str
+    orig_src: str = ""
+    orig_sport: int = 0
+    orig_dst: str = ""
+    orig_dport: int = 0
+    reply_src: str = ""
 
 
 @dataclass(frozen=True)
@@ -436,6 +461,11 @@ class Evidence(Protocol):
 
     def nfs_timeline(self) -> list[NfsSample]:
         """Each fio instance's NFS client counters over the run, oldest first."""
+        ...
+
+    def conntrack(self) -> list[ConntrackSample]:
+        """Each node's NFS flows in its connection tracking table over the run, oldest
+        first."""
         ...
 
     def log_spans(self) -> list[LogSpan]:

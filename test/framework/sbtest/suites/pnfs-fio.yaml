@@ -59,6 +59,11 @@ components:
   nfs.mountstats:
     interval_s: 10
 
+  # Each node's NFS flows in its connection tracking table, with the pod each was translated
+  # to: whether a client's reconnect after an MDS restart still went to the old pod.
+  nfs.conntrack:
+    interval_s: 10
+
   # Every pNFS namespace's NVMe reservation before and after the run, so a registration left
   # over from an earlier metadata server boot is caught rather than guessed at.
   nvme.reservations: true

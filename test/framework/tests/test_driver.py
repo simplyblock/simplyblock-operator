@@ -558,7 +558,8 @@ class RestartLogs(unittest.TestCase):
                           node="worker-1", containers=("mds-runner",), phase="Running")
         r = chaos.Restarter(ready_timeout_s=5)
         with _Ctx() as ctx, mock.patch.object(chaos.Restarter, "_victim", lambda *a: victim), \
-                mock.patch.object(chaos.Restarter, "_replacement", lambda *a: "simplyblock-pnfs-mds-x-0"), \
+                mock.patch.object(chaos.Restarter, "_replacement",
+                                  lambda *a: ("simplyblock-pnfs-mds-x-0", "")), \
                 mock.patch.object(kube, "run", run), \
                 mock.patch.object(chaos.subprocess, "Popen", Proc):
             r.bind_namespaces(ctx)

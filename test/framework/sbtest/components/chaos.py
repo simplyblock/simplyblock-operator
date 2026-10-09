@@ -93,6 +93,8 @@ class _Record:
     ready: datetime | None = None
     replacement: str = ""
     log: str = ""
+    ip: str = ""
+    replacement_ip: str = ""
 
 
 @component
@@ -191,7 +193,7 @@ class Restarter(Component):
             return
         uid = _uid(self.opt("namespace"), victim.name)
         record = _Record(target=target, pod=victim.name, node=kube.short(victim.node),
-                         deleted=datetime.now(UTC))
+                         deleted=datetime.now(UTC), ip=victim.ip)
         with self._lock:
             self._records.append(record)
             record.log = f"restart-{len(self._records)}-{target}-{victim.name}.txt"
@@ -205,11 +207,12 @@ class Restarter(Component):
         ctx.log.info(f"{self.name}: restarting {target} {victim.name} on {record.node}")
         deadline = time.monotonic() + float(self.opt("ready_timeout_s"))
         while time.monotonic() < deadline:
-            replacement = self._replacement(target, victim, uid)
+            replacement, ip = self._replacement(target, victim, uid)
             if replacement:
                 ready = datetime.now(UTC)
                 with self._lock:
                     record.ready, record.replacement = ready, replacement
+                    record.replacement_ip = ip
                 ctx.log.info(f"{self.name}: {target} back as {replacement} after "
                              f"{(ready - record.deleted).total_seconds():.0f}s")
                 _finish(follower)
@@ -233,12 +236,13 @@ class Restarter(Component):
             return None
         return proc, fh
 
-    def _replacement(self, target: str, victim: kube.Pod, old_uid: str) -> str:
-        """The Ready pod that replaced the victim, or "" while there is none."""
+    def _replacement(self, target: str, victim: kube.Pod, old_uid: str) -> tuple[str, str]:
+        """The Ready pod that replaced the victim and its IP, both empty while there is
+        none."""
         prefix, same_name = _TARGETS[target]
         cp = kube.run(["-n", self.opt("namespace"), "get", "pods", "-o", "json"], check=False)
         if cp.returncode != 0:
-            return ""
+            return "", ""
         for it in json.loads(cp.stdout or "{}").get("items", []):
             meta, spec = it.get("metadata", {}), it.get("spec", {})
             name = str(meta.get("name", ""))
@@ -248,10 +252,11 @@ class Restarter(Component):
                 continue
             if not same_name and spec.get("nodeName") != victim.node:
                 continue
+            status = it.get("status", {})
             if any(c.get("type") == "Ready" and c.get("status") == "True"
-                   for c in it.get("status", {}).get("conditions", [])):
-                return name
-        return ""
+                   for c in status.get("conditions", [])):
+                return name, str(status.get("podIP") or "")
+        return "", ""
 
     def stop(self, ctx: RunContext) -> None:
         # Only the scheduler stops. A restart still waiting for its replacement keeps
@@ -272,7 +277,8 @@ class Restarter(Component):
         ctx.save_json("restarts.json", {"seed": self._seed, "restarts": [{
             "target": r.target, "pod": r.pod, "node": r.node,
             "deleted": _iso(r.deleted), "ready": _iso(r.ready) if r.ready else None,
-            "replacement": r.replacement, "log": r.log} for r in records]})
+            "replacement": r.replacement, "log": r.log, "ip": r.ip,
+            "replacement_ip": r.replacement_ip} for r in records]})
         back = sum(1 for r in records if r.ready)
         ctx.log.info(f"{self.name}: {len(records)} restart(s), {back} came back "
                      f"(seed {self._seed})")

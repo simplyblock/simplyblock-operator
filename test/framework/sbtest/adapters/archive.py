@@ -40,6 +40,7 @@ from ..core import (
     AnaSample,
     BlockSample,
     ChurnPod,
+    ConntrackSample,
     ControlEvent,
     DeployedImage,
     Fence,
@@ -400,6 +401,30 @@ class ArchiveEvidence:
         out.sort(key=lambda x: (x.ts, x.instance))
         return out
 
+    def conntrack(self) -> list[ConntrackSample]:
+        p = os.path.join(self.outdir, "conntrack.csv")
+        out: list[ConntrackSample] = []
+        try:
+            with open(p, newline="") as fh:
+                for r in csv.DictReader(fh):
+                    t = _dt(r.get("ts"))
+                    if t is None:
+                        continue
+                    try:
+                        out.append(ConntrackSample(
+                            ts=t, node=r.get("node", ""), state=r.get("state", ""),
+                            orig_src=r.get("orig_src", ""),
+                            orig_sport=int(r.get("orig_sport") or 0),
+                            orig_dst=r.get("orig_dst", ""),
+                            orig_dport=int(r.get("orig_dport") or 0),
+                            reply_src=r.get("reply_src", "")))
+                    except ValueError:
+                        continue
+        except OSError:
+            return []
+        out.sort(key=lambda x: (x.ts, x.node))
+        return out
+
     def versions(self) -> Versions | None:
         p = os.path.join(self.outdir, "versions.json")
         try:
@@ -468,7 +493,9 @@ class ArchiveEvidence:
                                node=str(r.get("node", "")), deleted=deleted,
                                ready=_dt(r.get("ready")),
                                replacement=str(r.get("replacement", "")),
-                               log=str(r.get("log") or "")))
+                               log=str(r.get("log") or ""),
+                               ip=str(r.get("ip") or ""),
+                               replacement_ip=str(r.get("replacement_ip") or "")))
         out.sort(key=lambda r: r.deleted)
         return out
 

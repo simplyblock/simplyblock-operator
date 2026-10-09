@@ -23,6 +23,7 @@ from sbtest.core import (  # noqa: E402
     Attribution,
     BlockSample,
     ChurnPod,
+    ConntrackSample,
     ControlEvent,
     Fence,
     FenceWrite,
@@ -86,6 +87,7 @@ class FakeEvidence:
         reservations_post: list[NamespaceReservation] | None = None,
         versions: Versions | None = None,
         timeline: list[NfsSample] | None = None,
+        conntrack: list[ConntrackSample] | None = None,
     ) -> None:
         self.run_id = run_id
         self.outdir = outdir
@@ -110,6 +112,7 @@ class FakeEvidence:
         self._resv_post = reservations_post or []
         self._versions = versions
         self._timeline = timeline or []
+        self._conntrack = conntrack or []
 
     def migrations(self) -> list[Migration]:
         return list(self._migrations)
@@ -168,6 +171,9 @@ class FakeEvidence:
 
     def nfs_timeline(self) -> list[NfsSample]:
         return list(self._timeline)
+
+    def conntrack(self) -> list[ConntrackSample]:
+        return list(self._conntrack)
 
     def cluster_uuid(self) -> str:
         return self._cluster
@@ -1614,4 +1620,63 @@ class PnfsFence(unittest.TestCase):
     def test_a_run_without_the_scenario_is_skipped(self):
         with self.assertRaises(SkipDetector):
             self.found(None)
+
+
+class ConntrackPinned(unittest.TestCase):
+    """A client flow to the export still translated to the deleted MDS pod's address after
+    the replacement is Ready: the reconnect reused its source port and so its conntrack
+    entry (pnfs-1791525621, finding 2)."""
+
+    OLD, NEW = "10.244.3.118", "10.244.3.123"
+    MDS = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(100), ready=ts(130),
+                  ip=OLD, replacement_ip=NEW)
+
+    @staticmethod
+    def flow(sec: int, reply: str, node: str = "w1", sport: int = 835,
+             state: str = "ESTABLISHED") -> ConntrackSample:
+        return ConntrackSample(ts=ts(sec), node=node, state=state, orig_src="10.10.10.11",
+                               orig_sport=sport, orig_dst="10.108.41.72", orig_dport=2049,
+                               reply_src=reply)
+
+    def found(self, samples: list[ConntrackSample],
+              restarts: list[Restart] | None = None) -> list[Finding]:
+        ev = FakeEvidence(conntrack=samples,
+                          restarts=[self.MDS] if restarts is None else restarts)
+        return list(build_detector("pnfs.conntrack-pinned").detect(ev))
+
+    def test_a_flow_still_on_the_old_pod_after_ready_is_pinned(self):
+        found = self.found([self.flow(90, self.OLD), self.flow(160, self.OLD),
+                            self.flow(220, self.OLD)])
+        self.assertEqual([f.severity for f in found], [Severity.CRITICAL])
+        ev = found[0].evidence
+        self.assertEqual((ev["node"], ev["flow"]), ("w1", "10.10.10.11:835 -> 10.108.41.72"))
+        self.assertEqual(ev["pinned_after_ready_s"], 90)
+
+    def test_the_same_flow_on_the_new_pod_is_not_pinned(self):
+        found = self.found([self.flow(90, self.OLD), self.flow(160, self.NEW)])
+        self.assertEqual([f.severity for f in found], [Severity.INFO])
+        self.assertIn("ruled out", found[0].title)
+
+    def test_the_old_pod_inside_the_grace_after_ready_is_not_pinned(self):
+        # Ready at 130: the client may still be finishing its reconnect at 140.
+        found = self.found([self.flow(140, self.OLD), self.flow(160, self.NEW)])
+        self.assertEqual([f.severity for f in found], [Severity.INFO])
+
+    def test_a_closed_entry_that_lingers_is_not_pinned(self):
+        found = self.found([self.flow(160, self.OLD, state="TIME_WAIT"),
+                            self.flow(160, "", node="w2", state="NONE")])
+        self.assertEqual([f.severity for f in found], [Severity.INFO])
+
+    def test_a_restart_the_samples_never_reach_after_is_not_judged(self):
+        with self.assertRaises(SkipDetector):
+            self.found([self.flow(90, self.OLD)])
+
+    def test_a_restart_without_recorded_addresses_is_skipped(self):
+        bare = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(100), ready=ts(130))
+        with self.assertRaises(SkipDetector):
+            self.found([self.flow(160, self.OLD)], restarts=[bare])
+
+    def test_a_run_without_samples_is_skipped(self):
+        with self.assertRaises(SkipDetector):
+            self.found([])
 

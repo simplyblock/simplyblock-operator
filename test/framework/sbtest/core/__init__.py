@@ -7,6 +7,7 @@ from .evidence import (
     AnaSample,
     BlockSample,
     ChurnPod,
+    ConntrackSample,
     ControlEvent,
     DeployedImage,
     Evidence,
@@ -43,7 +44,7 @@ from .plugin import (
 from .runner import Runner, findings_by_subject_table
 
 __all__ = [
-    "AnaSample", "Attribution", "BlockSample", "ChurnPod", "Component", "Config",
+    "AnaSample", "Attribution", "BlockSample", "ChurnPod", "Component", "Config", "ConntrackSample",
     "DeployedImage", "Detector", "Event", "Evidence", "Fence", "FenceWrite", "KERNEL_CLOCK_PROBE",
     "NamespaceReservation", "NfsSample", "NodeVersion", "PnfsVolume", "Registrant", "Restart",
     "Versions",

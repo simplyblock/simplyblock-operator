@@ -38,6 +38,7 @@ class Pod:
     node: str
     containers: tuple[str, ...]
     phase: str = ""
+    ip: str = ""
 
 
 def list_pods(namespace: str, name_contains: list[str] | None = None) -> list[Pod]:
@@ -51,7 +52,8 @@ def list_pods(namespace: str, name_contains: list[str] | None = None) -> list[Po
             name=name, namespace=namespace,
             node=it.get("spec", {}).get("nodeName", "") or "",
             containers=tuple(c["name"] for c in it.get("spec", {}).get("containers", [])),
-            phase=it.get("status", {}).get("phase", "") or ""))
+            phase=it.get("status", {}).get("phase", "") or "",
+            ip=it.get("status", {}).get("podIP", "") or ""))
     return out
 
 
