@@ -1219,41 +1219,25 @@ class ConntrackSampling(unittest.TestCase):
         with mock.patch.object(kube, "list_pods", lambda *a, **k: pods), \
                 mock.patch.object(kube, "run", run):
             s.setup(RunContext(run_id="r", outdir="/tmp", log=Logger(None)))
-        docs = json.loads(applied[0])["items"]
+        # One document per pod, never a v1 List: kubectl cannot validate a List on a
+        # cluster whose metrics API publishes OpenAPI names with slashes in them.
+        docs = [json.loads(d) for d in applied[0].split("\n---\n")]
+        self.assertTrue(all(d["kind"] == "Pod" for d in docs))
         self.assertEqual(sorted(d["spec"]["nodeName"] for d in docs), ["w1.lab", "w2.lab"])
         self.assertTrue(all(d["spec"]["hostNetwork"] for d in docs))
         self.assertEqual(sorted(s._helpers), ["w1", "w2"])
 
 
-class KubectlSchemaRetry(unittest.TestCase):
-    """kubectl validates a manifest against the cluster's whole OpenAPI document. For a
-    minute or more after the operator restarts, its metrics API is published with a
-    dangling reference, and every apply fails before anything is sent (pnfs-1791554843,
-    nfs.conntrack setup). Such a failure is retried, and any other is not."""
+class KubectlStream(unittest.TestCase):
+    """Objects are applied as a stream of documents, not wrapped in a v1 List. kubectl's
+    client-side validation of a List loads every model the cluster publishes, and the
+    operator's metrics API publishes names like github.com/simplyblock/.../v1alpha2.X whose
+    references kubectl cannot resolve. Every List apply failed on lab-talos while single
+    objects validated (pnfs-1791554843 and pnfs-1791556484, nfs.conntrack setup)."""
 
-    SCHEMA = ('error: error validating "STDIN": error validating data: SchemaError(github.com/'
-              'x.LogicalVolumeMetrics.capacity): unknown model in reference')
-
-    def calls(self, results: list[tuple[int, str]]) -> tuple[Any, list[int]]:
-        seen: list[int] = []
-
-        def fake(cmd: list[str], **_: object) -> Any:
-            rc, err = results[min(len(seen), len(results) - 1)]
-            seen.append(rc)
-            return argparse.Namespace(stdout="", stderr=err, returncode=rc)
-        return fake, seen
-
-    def test_a_schema_error_is_retried_until_the_apply_succeeds(self):
-        fake, seen = self.calls([(1, self.SCHEMA), (1, self.SCHEMA), (0, "")])
-        with mock.patch.object(kube.subprocess, "run", fake), \
-                mock.patch.object(kube.time, "sleep", lambda s: None):
-            kube.run(["apply", "-f", "-"], stdin="{}")
-        self.assertEqual(seen, [1, 1, 0])
-
-    def test_another_error_is_not_retried(self):
-        fake, seen = self.calls([(1, "error: the server doesn't have a resource type")])
-        with mock.patch.object(kube.subprocess, "run", fake), \
-                mock.patch.object(kube.time, "sleep", lambda s: None), \
-                self.assertRaises(kube.KubectlError):
-            kube.run(["apply", "-f", "-"], stdin="{}")
-        self.assertEqual(seen, [1])
+    def test_documents_are_separate_and_none_is_a_list(self):
+        docs = [{"apiVersion": "v1", "kind": "Pod", "metadata": {"name": n}} for n in ("a", "b")]
+        stream = kube.document_stream(docs)
+        parts = stream.split("\n---\n")
+        self.assertEqual([json.loads(p)["metadata"]["name"] for p in parts], ["a", "b"])
+        self.assertNotIn('"List"', stream)

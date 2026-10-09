@@ -18,7 +18,6 @@ helper pod per node to do so.
 from __future__ import annotations
 
 import concurrent.futures
-import json
 import re
 import threading
 from datetime import datetime
@@ -149,7 +148,7 @@ class ConntrackSampler(Component):
                         "securityContext": {"privileged": True}}],
                 }})
         kube.run(["-n", str(self.opt("namespace")), "apply", "-f", "-"],
-                 stdin=json.dumps({"apiVersion": "v1", "kind": "List", "items": docs}))
+                 stdin=kube.document_stream(docs))
         # Only once they exist: a helper that was never created reads as a node with no
         # flows, which is the one thing this component must not claim without looking.
         self._helpers = helpers

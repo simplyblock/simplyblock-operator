@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-import time
 from dataclasses import dataclass
 
 
@@ -18,29 +17,24 @@ class KubectlError(RuntimeError):
     pass
 
 
-#: How long a command that failed kubectl's client-side validation with a SchemaError is
-#: retried. The error comes from the cluster's OpenAPI document, not the manifest: after the
-#: operator restarts, its aggregated metrics API is published with a dangling reference for
-#: a minute or more, and every apply fails before anything is sent to the cluster.
-SCHEMA_RETRY_S = 180.0
-
-
 def run(args: list[str], timeout: int = 60, check: bool = True,
         stdin: str | None = None) -> subprocess.CompletedProcess[str]:
-    deadline = time.monotonic() + SCHEMA_RETRY_S
-    delay = 2.0
-    while True:
-        cp = subprocess.run(["kubectl", *args], input=stdin, capture_output=True,
-                            text=True, timeout=timeout, check=False)
-        if cp.returncode == 0 or "SchemaError(" not in (cp.stderr or ""):
-            break
-        if time.monotonic() + delay > deadline:
-            break
-        time.sleep(delay)
-        delay = min(delay * 2, 30.0)
+    cp = subprocess.run(["kubectl", *args], input=stdin, capture_output=True,
+                        text=True, timeout=timeout, check=False)
     if check and cp.returncode != 0:
         raise KubectlError(f"kubectl {' '.join(args)}: {cp.stderr.strip() or cp.returncode}")
     return cp
+
+
+def document_stream(docs: list[dict]) -> str:
+    """Objects for `kubectl apply -f -` as one document each, not wrapped in a v1 List.
+
+    kubectl validates a List against every model the cluster publishes, and the operator's
+    metrics API publishes names with slashes in them, whose references kubectl cannot
+    resolve: every List apply fails while each object alone validates. JSON is YAML, so
+    the documents are JSON between YAML separators.
+    """
+    return "\n---\n".join(json.dumps(d) for d in docs)
 
 
 def run_bytes(args: list[str], timeout: int = 300) -> bytes:
