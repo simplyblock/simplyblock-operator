@@ -1201,6 +1201,31 @@ ramen:
   nodeSelector: {}
   tolerations: []
 
+# Scrape config for a prometheus-operator the customer already runs, instead of
+# the bundled `prometheus` subchart above. Off by default. Turning it on
+# without also setting `prometheus.enabled: false` scrapes every target twice,
+# from two separate Prometheus instances.
+prometheusOperator:
+  enabled: false
+  # The labels the customer's `Prometheus` CR selects on, via its
+  # serviceMonitorSelector/podMonitorSelector/ruleSelector (kube-prometheus-stack's
+  # own default is `release: <its release name>`). The ServiceMonitor, PodMonitor,
+  # and PrometheusRule objects below all carry these. Set them to whatever that
+  # selector actually matches, or nothing here is ever scraped or evaluated.
+  additionalLabels: {}
+  interval: 30s
+  # The ServiceAccount the customer's Prometheus pod itself runs as (not the
+  # selector above): webappapi does a TokenReview on every scrape's bearer
+  # token and otherwise trusts only the bundled `prometheus` subchart's own
+  # account, so every scrape from this Prometheus gets a 401 until its
+  # identity is named here. kube-prometheus-stack's default is name
+  # "<release>-kube-prometheus-stack-prometheus" in the "monitoring" namespace;
+  # check `kubectl get prometheus -A -o jsonpath='{.items[0].spec.serviceAccountName}'`
+  # against the actual release rather than assuming it.
+  serviceAccount:
+    name: ""
+    namespace: ""
+
 tls:
   # On by default. Everything this chart deploys reaches the control plane over
   # the pod network, and the control plane holds every cluster definition, node

@@ -1,0 +1,144 @@
+# ServiceMonitor and PodMonitor objects for a prometheus-operator the customer
+# already runs, as the discovery-side alternative to the static scrape config
+# the bundled `prometheus` subchart reads from controlplane_configmap.yaml.
+# Nothing here replaces that subchart. `prometheusOperator.enabled` and
+# `prometheus.enabled` are meant to be mutually exclusive.
+{{- if .Values.prometheusOperator.enabled }}
+{{- if and .Values.prometheus.enabled .Values.prometheusOperator.enabled }}
+{{ fail "prometheus.enabled and prometheusOperator.enabled are both true: pick one Prometheus to scrape these targets, not both, or every target is scraped twice." }}
+{{- end }}
+{{- if not (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor") }}
+{{ fail "prometheusOperator.enabled is true, but this cluster has no monitoring.coreos.com/v1 ServiceMonitor CRD. Install prometheus-operator (or kube-prometheus-stack) first, or set prometheusOperator.enabled to false." }}
+{{- end }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: simplyblock-webappapi
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml .Values.prometheusOperator.additionalLabels | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    # Mirrors ComponentWebAPI in
+    # operator/internal/controllers/controlplane/names.go, which builds the
+    # Service this matches. That file is authoritative. Helm renders before
+    # the operator binary exists to read it, so this copy has to be kept in
+    # sync by hand.
+    matchLabels:
+      app: simplyblock-webappapi
+  endpoints:
+    - port: http
+      path: /api/v2/metrics
+      interval: {{ .Values.prometheusOperator.interval }}
+      scrapeTimeout: 30s
+      # The webappapi job's own identity, read off the scraping pod rather than
+      # a minted Secret: it is Prometheus's own in-cluster token, the same one
+      # the static scrape config points `credentials_file` at.
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      {{- if .Values.tls.enabled }}
+      scheme: https
+      tlsConfig:
+        ca:
+          secret:
+            name: simplyblock-ca-bundle-tls
+            key: ca.crt
+        serverName: simplyblock-webappapi
+        {{- if .Values.tls.mutual_enabled }}
+        cert:
+          secret:
+            name: simplyblock-prometheus-client-tls
+            key: tls.crt
+        keySecret:
+          name: simplyblock-prometheus-client-tls
+          key: tls.key
+        {{- end }}
+      {{- end }}
+{{- if .Values.controlplane.foundationdb.exporter.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: simplyblock-fdb-exporter
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml .Values.prometheusOperator.additionalLabels | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    # Mirrors ComponentFDBExporter in names.go, same reasoning as the
+    # webappapi ServiceMonitor above.
+    matchLabels:
+      app: simplyblock-fdb-exporter
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.prometheusOperator.interval }}
+      honorLabels: true
+      # No namespace relabeling here: unlike the static target in
+      # controlplane_configmap.yaml, a ServiceMonitor-discovered target already
+      # carries a real `namespace` label from the Service it was found through.
+{{- end }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: simplyblock-rebalancer
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml .Values.prometheusOperator.additionalLabels | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    # This label is set on the pod by sbcli's storage_deploy_spdk.yaml.j2, not
+    # by this operator or this chart. operator/internal/utils/constants.go's
+    # LabelRole/LabelSpdkProxyRole reads it back to find these same pods. This
+    # is a third independent copy, matched here for the same reason. Change
+    # sbcli's template first if this ever needs to change.
+    matchLabels:
+      role: simplyblock-storage-node
+  podMetricsEndpoints:
+    - port: latency-metrics
+      path: /metrics
+      interval: {{ .Values.prometheusOperator.interval }}
+      # Storage node pods that have no rebalancer sidecar simply have no port
+      # of this name. prometheus-operator drops them from the target list
+      # rather than scraping nothing.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: simplyblock-spdk-proxy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml .Values.prometheusOperator.additionalLabels | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    # Same label as the rebalancer PodMonitor above, sbcli-applied and
+    # independently matched here.
+    matchLabels:
+      role: simplyblock-storage-node
+  podMetricsEndpoints:
+    - port: proxy-http
+      path: /_meta/metrics
+      interval: {{ .Values.prometheusOperator.interval }}
+      # proxy-http is the same port the JSON-RPC proxy answers RPCs on, named
+      # rather than numbered because each pod binds its own RPC_PORT on the
+      # host network. No basicAuth here: unlike the RPC path, /_meta/metrics
+      # on this port is unauthenticated.
+      #
+      # The name itself has no Go constant behind it at all: sbcli's
+      # storage_deploy_spdk.yaml.j2 is the sole place it is declared
+      # (spdk-proxy-container's containerPort), and this is the only other
+      # copy. Keep them in sync by hand.
+{{- end }}

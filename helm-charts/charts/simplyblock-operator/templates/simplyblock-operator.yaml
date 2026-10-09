@@ -104,6 +104,14 @@ spec:
             - name: SB_EXTRA_ADMIN_SERVICE_ACCOUNTS
               value: {{ . | quote }}
             {{- end }}
+            {{- with include "simplyblock.extraMetricsServiceAccount" . }}
+            # A bring-your-own prometheus-operator's Prometheus pod scrapes as
+            # its own ServiceAccount, not simplyblock-prometheus's
+            # (prometheusOperator.serviceAccount). The management API trusts it
+            # next to the bundled subchart's account.
+            - name: SB_EXTRA_METRICS_SERVICE_ACCOUNTS
+              value: {{ . | quote }}
+            {{- end }}
             {{- include "simplyblock.tlsEnv" . | nindent 12 }}
           resources:
             limits:
