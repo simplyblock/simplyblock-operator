@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+// Package atlas.conntrack.v1 asks a node to forget the connection-tracking
+// entries translated to one dead backend.
+//
+// The operator is the caller and the CSI node plugin serves it, on the host's
+// network. It is a separate service from atlas.storage.v1, which is read-only
+// by construction: this one changes the host's state, so a credential can be
+// granted the reading and not this.
+package atlas.conntrack.v1;
+
+option go_package = "github.com/simplyblock/atlas/conntrack/conntrackrpc/conntrackv1;conntrackv1";
+
+// FlowService forgets flows on the node it runs on.
+service FlowService {
+  // ForgetFlows deletes the host's conntrack entries of one protocol and
+  // original destination port whose reply source is one address. Nothing
+  // matching is success with a count of zero, because the caller repeats the
+  // call and the entries may already have expired.
+  rpc ForgetFlows(ForgetFlowsRequest) returns (ForgetFlowsResponse);
+}
+
+// ForgetFlowsRequest names the flows, and nothing broader.
+message ForgetFlowsRequest {
+  // IP protocol number: 6 for TCP, 17 for UDP.
+  uint32 protocol = 1;
+  // Destination port the client connected to, before translation.
+  uint32 dst_port = 2;
+  // Address the flows were translated to: the dead backend.
+  string reply_source = 3;
+}
+
+// ForgetFlowsResponse says how many entries were deleted.
+message ForgetFlowsResponse {
+  uint64 deleted = 1;
+}
