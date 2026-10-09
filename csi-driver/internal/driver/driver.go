@@ -37,6 +37,8 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/klog"
 
+	"github.com/simplyblock/atlas/conntrack"
+	"github.com/simplyblock/atlas/conntrack/conntrackrpc"
 	"github.com/simplyblock/atlas/link"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/storage"
@@ -206,13 +208,21 @@ func startLink(ctx context.Context, conf *config.Config) error {
 		if err != nil {
 			return fmt.Errorf("node storage: %w", err)
 		}
+		// The node forgets the connection-tracking entries translated to a dead
+		// pNFS metadata server pod when the operator asks. It runs on the host's
+		// network, so the table it reaches is the host's.
+		flows, err := conntrackrpc.NewServer(conntrack.Forget)
+		if err != nil {
+			return fmt.Errorf("node flows: %w", err)
+		}
 		// No export service: exports are assembled in the metadata server's
 		// guest, never on a node.
 		cfg.ID = link.NodePeer(conf.NodeID)
 		cfg.Register = func(r grpc.ServiceRegistrar) {
 			srv.Register(r)
+			flows.Register(r)
 		}
-		cfg.Capabilities = storagerpc.Capabilities()
+		cfg.Capabilities = append(storagerpc.Capabilities(), conntrackrpc.Capabilities()...)
 
 	case conf.IsControllerServer:
 		if conf.PodName == "" {
