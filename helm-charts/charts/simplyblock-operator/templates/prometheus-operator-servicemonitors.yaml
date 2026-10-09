@@ -1,12 +1,7 @@
-# ServiceMonitor and PodMonitor objects for a prometheus-operator the customer
-# already runs, as the discovery-side alternative to the static scrape config
-# the bundled `prometheus` subchart reads from controlplane_configmap.yaml.
-# Nothing here replaces that subchart. `prometheusOperator.enabled` and
-# `prometheus.enabled` are meant to be mutually exclusive.
+# ServiceMonitor, PodMonitor, and ScrapeConfig objects for the
+# prometheus-operator the customer runs. This chart deploys no Prometheus of
+# its own, so a prometheus-operator install is the only way to scrape it.
 {{- if .Values.prometheusOperator.enabled }}
-{{- if and .Values.prometheus.enabled .Values.prometheusOperator.enabled }}
-{{ fail "prometheus.enabled and prometheusOperator.enabled are both true: pick one Prometheus to scrape these targets, not both, or every target is scraped twice." }}
-{{- end }}
 {{- if not (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor") }}
 {{ fail "prometheusOperator.enabled is true, but this cluster has no monitoring.coreos.com/v1 ServiceMonitor CRD. Install prometheus-operator (or kube-prometheus-stack) first, or set prometheusOperator.enabled to false." }}
 {{- end }}
@@ -70,9 +65,7 @@ spec:
 # this target is the opposite shape: one answer for the whole cluster,
 # wherever it lands. staticConfigs is a literal address rather than pod
 # discovery, which is what keeps it to the one target this needs regardless of
-# how many webappapi replicas are running, the same shape the bundled
-# `prometheus` subchart's own static scrape config (controlplane_configmap.yaml)
-# already uses for this job, for the same reason.
+# how many webappapi replicas are running.
 apiVersion: monitoring.coreos.com/v1alpha1
 kind: ScrapeConfig
 metadata:
