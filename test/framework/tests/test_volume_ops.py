@@ -201,6 +201,22 @@ class Expand(unittest.TestCase):
             self.assertIn("df", rec["error"], bad)
             self.assertIsNone(rec["client_seen_at"], bad)
 
+    # pnfs-1791556484: the MDS restart chaos scheduled 5 s after the patch made one df
+    # during the outage come back empty, and that one read failed the whole expansion.
+    def test_a_failed_read_while_polling_is_retried(self):
+        fake = FakeCluster()
+        fake.df = [20 * GI, "", 21 * GI]
+        rec = run_op(fake, "expand", grow_gb=1)
+        self.assertEqual(rec["error"], "")
+        self.assertIsNotNone(rec["client_seen_at"])
+
+    def test_reads_that_never_recover_name_the_last_failure(self):
+        fake = FakeCluster()
+        fake.df = [20 * GI, ""]
+        rec = run_op(fake, "expand", grow_gb=1, expand_timeout_s=1)
+        self.assertIsNone(rec["client_seen_at"])
+        self.assertIn("df", rec["error"])
+
     def test_df_does_no_arithmetic_in_awk(self):
         # busybox awk formats %d as 32 bits (pnfs-1791554843: -2147483648 for 22.5 GB),
         # so the KiB field is printed as it is and multiplied in Python.
