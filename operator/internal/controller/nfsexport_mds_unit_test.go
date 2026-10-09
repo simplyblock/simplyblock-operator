@@ -342,6 +342,87 @@ func TestPodHostedStateDiskRefusesAClassThatIsNotSimplyblock(t *testing.T) {
 	}
 }
 
+// mdsTemplateHashKey is the annotation the operator records the metadata
+// server's pod template under, spelled out so the tests do not depend on the
+// constant they check.
+const mdsTemplateHashKey = "storage.simplyblock.io/mds-template-hash"
+
+// staleMDSStatefulSet is the StatefulSet an earlier operator release created:
+// another runner image, no template hash, and a state disk class the current
+// lookup would not pick.
+func staleMDSStatefulSet(t *testing.T) *appsv1.StatefulSet {
+	t.Helper()
+	old := mdsDriver()
+	old.Spec.PNFS.MDS.Image = "quay.io/simplyblock-io/spdkcsi:pnfs-mds-v26.2.0"
+	_, sts, err := driver.MDSObjects(old, testExportClusterID, "old-state-class")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(sts.Annotations, mdsTemplateHashKey)
+	return sts
+}
+
+func loadMDSStatefulSet(t *testing.T, cl client.Client) *appsv1.StatefulSet {
+	t.Helper()
+	var sts appsv1.StatefulSet
+	key := client.ObjectKey{Namespace: testOperatorNS, Name: driver.MDSStatefulSetName(mdsDriver(), testExportClusterID)}
+	if err := cl.Get(context.Background(), key, &sts); err != nil {
+		t.Fatalf("reading the metadata server StatefulSet: %v", err)
+	}
+	return &sts
+}
+
+// Regression: 2026-10-09-mds-statefulset-never-updated. An operator upgrade
+// moved the CSI plugins to a new image and left the metadata server on the old
+// one, because an existing StatefulSet was never written again. The pod
+// template follows the driver. The claim templates, which Kubernetes does not
+// let change, stay as they were.
+func TestPendingPodHostedUpdatesAnOutdatedMDSStatefulSet(t *testing.T) {
+	r, cl, events := newPodHostedReconciler(t, testExport(nil), mdsDriver(), staleMDSStatefulSet(t))
+
+	reconcileExport(t, r)
+
+	sts := loadMDSStatefulSet(t, cl)
+	if got, want := sts.Spec.Template.Spec.Containers[0].Image, mdsDriver().Spec.PNFS.MDS.Image; got != want {
+		t.Errorf("runner image = %q, want %q", got, want)
+	}
+	if sts.Annotations[mdsTemplateHashKey] == "" {
+		t.Errorf("annotations = %v, want the template hash recorded", sts.Annotations)
+	}
+	if got := ptr.Deref(sts.Spec.VolumeClaimTemplates[0].Spec.StorageClassName, ""); got != "old-state-class" {
+		t.Errorf("state disk class = %q, want the existing claim template kept", got)
+	}
+	if !slices.Contains(events.reasons, "MDSUpdated") {
+		t.Errorf("events = %v, want MDSUpdated", events.reasons)
+	}
+}
+
+// A StatefulSet already matching the driver is not written, so a reconcile
+// restarts no guest.
+func TestPendingPodHostedLeavesAnUpToDateMDSStatefulSet(t *testing.T) {
+	r, cl, _ := newPodHostedReconciler(t, testExport(nil), mdsDriver())
+	reconcileExport(t, r)
+	before := loadMDSStatefulSet(t, cl).ResourceVersion
+
+	reconcileExport(t, r)
+
+	if after := loadMDSStatefulSet(t, cl).ResourceVersion; after != before {
+		t.Errorf("resourceVersion %s -> %s: an unchanged StatefulSet was written", before, after)
+	}
+}
+
+// A new StatefulSet carries the hash of its template, so the next release can
+// tell whether it is current.
+func TestPendingPodHostedCreatesTheMDSStatefulSetWithItsTemplateHash(t *testing.T) {
+	r, cl, _ := newPodHostedReconciler(t, testExport(nil), mdsDriver())
+
+	reconcileExport(t, r)
+
+	if sts := loadMDSStatefulSet(t, cl); sts.Annotations[mdsTemplateHashKey] == "" {
+		t.Errorf("annotations = %v, want the template hash", sts.Annotations)
+	}
+}
+
 // The first export of a storage cluster brings its metadata server up: the
 // StatefulSet and its ServiceAccount, owned by the driver so that turning
 // pNFS off removes them.

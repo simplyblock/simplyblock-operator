@@ -20,6 +20,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -86,7 +87,13 @@ func (r *NFSExportReconciler) bindMDS(
 			fmt.Sprintf("volumeRef %q names no storage cluster", export.Spec.VolumeRef))
 	}
 
-	if err := r.ensureMDS(ctx, d, handle.ClusterID); err != nil {
+	updated, err := r.ensureMDS(ctx, d, handle.ClusterID)
+	if updated {
+		r.event(export, corev1.EventTypeNormal, "MDSUpdated",
+			fmt.Sprintf("updated the metadata server StatefulSet %s to this release's pod template, "+
+				"which restarts its guest", driver.MDSStatefulSetName(d, handle.ClusterID)))
+	}
+	if err != nil {
 		var wait *mdsWaitError
 		if errors.As(err, &wait) {
 			// Not retried hot: nothing changes until somebody acts on the
@@ -102,7 +109,7 @@ func (r *NFSExportReconciler) bindMDS(
 
 	podName := driver.MDSPodName(d, handle.ClusterID)
 	var pod corev1.Pod
-	err := r.Get(ctx, client.ObjectKey{Namespace: r.OperatorNamespace, Name: podName}, &pod)
+	err = r.Get(ctx, client.ObjectKey{Namespace: r.OperatorNamespace, Name: podName}, &pod)
 	switch {
 	case apierrors.IsNotFound(err):
 		return r.waitForMDS(ctx, export, fmt.Sprintf("waiting for the metadata server pod %s", podName),
@@ -129,13 +136,18 @@ func (r *NFSExportReconciler) bindMDS(
 
 // ensureMDS creates the storage cluster's metadata server ServiceAccount and
 // StatefulSet when they are absent, owned by the driver so that removing it
-// removes them. An existing one is left alone: changing the StatefulSet
-// restarts the guest, which costs every export of the cluster an outage.
-// That includes its state disk's class, which is chosen only here, before the
-// StatefulSet exists, because a claim template cannot be changed afterward.
+// removes them, and reports whether it rewrote an existing StatefulSet.
+//
+// An existing StatefulSet whose pod template is not the one this release
+// builds, by MDSTemplateHash, gets the current template. That restarts the
+// guest, and every export of the cluster rides out the restart through the
+// guest's grace period. Without it, an upgrade leaves the metadata server on
+// the image of the release that created it. The state disk's class is chosen
+// only on create: a claim template cannot be changed afterward, so the
+// existing one is kept.
 func (r *NFSExportReconciler) ensureMDS(
 	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver, clusterID string,
-) error {
+) (updated bool, err error) {
 	var existing appsv1.StatefulSet
 	key := client.ObjectKey{Namespace: r.OperatorNamespace, Name: driver.MDSStatefulSetName(d, clusterID)}
 	switch err := r.Get(ctx, key, &existing); {
@@ -144,35 +156,72 @@ func (r *NFSExportReconciler) ensureMDS(
 		// StatefulSet here is all but impossible, and binding to it would
 		// serve this cluster's exports from the other cluster's guest.
 		if owner := existing.Labels[driver.MDSClusterLabel]; owner != clusterID {
-			return &mdsWaitError{reason: "MDSNameCollision", message: fmt.Sprintf(
+			return false, &mdsWaitError{reason: "MDSNameCollision", message: fmt.Sprintf(
 				"StatefulSet %s belongs to storage cluster %q, not %s", key.Name, owner, clusterID)}
 		}
-		return nil
+		return r.updateMDS(ctx, d, clusterID, &existing)
 	case !apierrors.IsNotFound(err):
-		return fmt.Errorf("reading the metadata server StatefulSet %s: %w", key.Name, err)
+		return false, fmt.Errorf("reading the metadata server StatefulSet %s: %w", key.Name, err)
 	}
 
 	// Enforced here as well as at admission, which ignores its own failures.
 	if problem := driver.MDSResourcesProblem(d.Spec.PNFS.MDS); problem != "" {
-		return &mdsWaitError{reason: "MDSResourcesInvalid", message: problem}
+		return false, &mdsWaitError{reason: "MDSResourcesInvalid", message: problem}
 	}
 	stateClass, err := r.mdsStateClass(ctx, d, clusterID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	sa, sts, err := driver.MDSObjects(d, clusterID, stateClass)
 	if err != nil {
-		return err
+		return false, err
 	}
 	for _, obj := range []client.Object{sa, sts} {
 		if err := controllerutil.SetControllerReference(d, obj, r.Scheme); err != nil {
-			return fmt.Errorf("owning %s by the driver: %w", obj.GetName(), err)
+			return false, fmt.Errorf("owning %s by the driver: %w", obj.GetName(), err)
 		}
 		if err := r.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("creating %T %s: %w", obj, obj.GetName(), err)
+			return false, fmt.Errorf("creating %T %s: %w", obj, obj.GetName(), err)
 		}
 	}
-	return nil
+	return false, nil
+}
+
+// updateMDS gives an existing metadata server StatefulSet the pod template this
+// release builds, when its recorded hash says it has another one. Only the
+// template and the hash are written: the selector and the claim templates
+// cannot be changed, and the claim template's class is read from the existing
+// object rather than looked up again.
+func (r *NFSExportReconciler) updateMDS(
+	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver, clusterID string,
+	existing *appsv1.StatefulSet,
+) (bool, error) {
+	// Enforced on an update as on a create: limits the runner refuses would
+	// replace a running guest with one that never boots.
+	if problem := driver.MDSResourcesProblem(d.Spec.PNFS.MDS); problem != "" {
+		return false, &mdsWaitError{reason: "MDSResourcesInvalid", message: problem}
+	}
+	stateClass := ""
+	if len(existing.Spec.VolumeClaimTemplates) > 0 {
+		stateClass = ptr.Deref(existing.Spec.VolumeClaimTemplates[0].Spec.StorageClassName, "")
+	}
+	_, desired, err := driver.MDSObjects(d, clusterID, stateClass)
+	if err != nil {
+		return false, err
+	}
+	want := desired.Annotations[driver.MDSTemplateHashAnnotation]
+	if existing.Annotations[driver.MDSTemplateHashAnnotation] == want {
+		return false, nil
+	}
+	existing.Spec.Template = desired.Spec.Template
+	if existing.Annotations == nil {
+		existing.Annotations = map[string]string{}
+	}
+	existing.Annotations[driver.MDSTemplateHashAnnotation] = want
+	if err := r.Update(ctx, existing); err != nil {
+		return false, fmt.Errorf("updating the metadata server StatefulSet %s: %w", existing.Name, err)
+	}
+	return true, nil
 }
 
 // mdsWaitError is a reason the metadata server cannot be created that no
