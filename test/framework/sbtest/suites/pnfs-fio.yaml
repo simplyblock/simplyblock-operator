@@ -54,6 +54,13 @@ components:
     max_life_s: 120
     quiet_tail_s: 180
 
+  # Namespace operations on the shared volumes beside fio, one worker per client node at a
+  # low rate, each checked from another node every five minutes and once more at the end.
+  workload.pnfs-metadata:
+    rate: 2
+    verify_interval_s: 300
+    quiet_tail_s: 120
+
   # The NFS client's own counters over the run, per fio instance: when data went through the
   # metadata server, and how long a client took to get its layouts back after a restart.
   nfs.mountstats:
