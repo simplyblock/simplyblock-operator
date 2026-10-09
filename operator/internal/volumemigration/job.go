@@ -58,6 +58,10 @@ type JobParams struct {
 	// disconnect them. JobPlacement reads the cluster's own tolerations, which
 	// are the taints this deployment was told about.
 	Tolerations []corev1.Toleration
+
+	// TerminationMessagePath is where the container writes the result the
+	// operator reads back, and empty for a mode that reports none.
+	TerminationMessagePath string
 }
 
 // JobPlacement is what the cluster says about running a Job against one of its
@@ -121,12 +125,13 @@ func BuildJob(p JobParams) *batchv1.Job {
 					},
 					Containers: []corev1.Container{
 						{
-							Name:            p.ContainerName,
-							Image:           p.Image,
-							ImagePullPolicy: corev1.PullAlways,
-							Command:         []string{"simplyblock-rebalancer", "--mode=" + p.Mode},
-							Env:             p.Env,
-							SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
+							Name:                   p.ContainerName,
+							Image:                  p.Image,
+							ImagePullPolicy:        corev1.PullAlways,
+							Command:                []string{"simplyblock-rebalancer", "--mode=" + p.Mode},
+							Env:                    p.Env,
+							SecurityContext:        &corev1.SecurityContext{Privileged: &privileged},
+							TerminationMessagePath: p.TerminationMessagePath,
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "host-dev", MountPath: "/dev"},
 								{Name: "host-sys", MountPath: "/host/sys", ReadOnly: readOnly},

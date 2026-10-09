@@ -15046,8 +15046,10 @@ webhooks:
   failurePolicy: Fail
   matchConditions:
   - expression: has(object.metadata.annotations) && ('simplyblock.io/selected-storage-node'
-      in object.metadata.annotations || 'simplyblock.io/host-id' in object.metadata.annotations
-      || 'simplybk/host-id' in object.metadata.annotations)
+      in object.metadata.annotations || 'storage.simplyblock.io/selected-storage-node'
+      in object.metadata.annotations || 'storage.simplyblock.io/host-id' in object.metadata.annotations
+      || 'simplyblock.io/host-id' in object.metadata.annotations || 'simplybk/host-id'
+      in object.metadata.annotations)
     name: has-pinned-volume-annotation
   name: pinned-volume-validator.simplyblock.io
   rules:

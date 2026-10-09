@@ -162,7 +162,16 @@ func ReplicationClient(_ context.Context, clusterID string) (*atlascp.Client, er
 	if err != nil {
 		return nil, err
 	}
-	return atlascp.New(atlascp.Config{Endpoint: clusterConfig.ClusterEndpoint, Token: credential})
+	// Share Client's TLS resolution: the endpoint scheme and the transport (CA
+	// pool, server name, client certificate) come from the same place, so the
+	// replication path reaches a TLS control plane exactly as every other RPC
+	// does. Without this a sync-cluster DeleteVolume fails its replica-chain
+	// cleanup on every call.
+	endpoint, transport, err := controlplane.TLSConnect(clusterConfig.ClusterEndpoint)
+	if err != nil {
+		return nil, err
+	}
+	return atlascp.New(atlascp.Config{Endpoint: endpoint, Token: credential, Transport: transport})
 }
 
 // resolve looks up the named cluster's endpoint and credential in the driver's
