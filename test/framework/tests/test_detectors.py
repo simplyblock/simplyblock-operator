@@ -410,6 +410,25 @@ class FioJobError(unittest.TestCase):
         ev = FakeEvidence(jobs=[FioJob(pod="fio-0", error=121)])
         self.assertEqual(list(build_detector("fio.job-error", ignore_errnos=[121]).detect(ev)), [])
 
+    # An error inside a restart the run caused is still the application seeing it, so it
+    # stays critical. What changes is where to look: pnfs-1791525621's EIO and EACCES all
+    # ended within 35 s of an MDS deletion, and the finding has to say so.
+    def test_an_error_during_a_restart_names_the_restart(self):
+        mds = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(100), ready=ts(120))
+        job = FioJob(pod="fio-churn-5", error=5, start=ts(0), runtime_s=135)
+        found = list(build_detector("fio.job-error").detect(
+            FakeEvidence(jobs=[job], restarts=[mds])))
+        self.assertEqual(found[0].severity, Severity.CRITICAL)
+        self.assertIn("mds restart", found[0].note)
+        self.assertEqual(found[0].evidence["restart"], "mds/mds-0")
+
+    def test_an_error_long_after_a_restart_does_not_name_it(self):
+        mds = Restart(target="mds", pod="mds-0", node="w3", deleted=ts(100), ready=ts(120))
+        job = FioJob(pod="fio-0", error=5, start=ts(0), runtime_s=1000)
+        found = list(build_detector("fio.job-error").detect(
+            FakeEvidence(jobs=[job], restarts=[mds])))
+        self.assertNotIn("restart", found[0].evidence)
+
 
 class FioOutage(unittest.TestCase):
     def series(self, pattern: str) -> list[IopsSample]:
@@ -626,6 +645,35 @@ class LogPattern(unittest.TestCase):
     def test_skips_without_logs(self):
         with self.assertRaises(SkipDetector):
             list(build_detector("logs.pattern").detect(FakeEvidence()))
+
+    # SPDK prints status 01/82 under the I/O command's name whatever the command was. On a
+    # Fabric Connect, which always runs on queue 0, it means the subsystem is gone, not that
+    # a write landed on a frozen range (pnfs-1791525621: 28 such lines, no write among them).
+    _REFUSED_CONNECT = [
+        "[2026-10-09 06:12:01.180571] ctrlr.c:1041:nvmf_ctrlr_cmd_connect: *NOTICE*: Invalid "
+        "subsystem...1...target nqn.2023-02.io.simplyblock:c:lvol:194db54b host nqn.h\n",
+        "[2026-10-09 06:12:01.180653] nvme_qpair.c: 291:nvme_admin_qpair_print_command_s: "
+        "*NOTICE*: FABRIC CONNECT qid:0 cid:49152 SGL DATA BLOCK OFFSET 0x0 len:0x400\n",
+        "[2026-10-09 06:12:01.180672] nvme_qpair.c: 547:spdk_nvme_print_completion_s: "
+        "*NOTICE*: WRITE TO RO RANGE (01/82) qid:0 cid:49152 cdw0:10100 sqhd:0000 p:0 m:0 "
+        "dnr:0\n",
+    ]
+
+    def _subjects(self, lines: list[str]) -> list[str]:
+        ev = FakeEvidence(logs={"spdk-4420": lines})
+        return [f.subject for f in build_detector("logs.pattern").detect(ev)]
+
+    def test_a_refused_connect_is_not_a_write_to_a_readonly_range(self):
+        self.assertNotIn("nvme.write-to-readonly", self._subjects(self._REFUSED_CONNECT))
+
+    def test_a_write_on_an_io_queue_is_still_a_write_to_a_readonly_range(self):
+        line = ("[2026-10-09 06:12:01.1] nvme_qpair.c: 547:spdk_nvme_print_completion_s: "
+                "*NOTICE*: WRITE TO RO RANGE (01/82) qid:3 cid:12 cdw0:0 sqhd:0000 p:0 m:0 "
+                "dnr:0\n")
+        self.assertIn("nvme.write-to-readonly", self._subjects([line]))
+
+    def test_a_host_connecting_to_a_removed_subsystem_is_reported(self):
+        self.assertIn("nvme.connect-to-removed-subsystem", self._subjects(self._REFUSED_CONNECT))
 
 
 class MigrationOutcomes(unittest.TestCase):
@@ -1023,6 +1071,20 @@ class EvidenceCoverage(unittest.TestCase):
         ev = FakeEvidence(window=(self.START, self.END), spans=[
             LogSpan("operator", self.START, self.END, 100)])
         self.assertEqual(list(build_detector("evidence.log-coverage").detect(ev)), [])
+
+    # A pod the run restarted has nothing to say before its replacement existed, and the
+    # follow of the victim begins at its deletion (pnfs-1791525621: mds-runner and
+    # restart-2-mds-... were reported as missing the first 8-9 minutes).
+    def test_a_log_that_begins_with_a_restart_the_run_caused_is_not_short(self):
+        deleted = self.START + timedelta(minutes=60)
+        mds = Restart(target="mds", pod="mds-0", node="w3", deleted=deleted,
+                      ready=deleted + timedelta(seconds=20))
+        ev = FakeEvidence(window=(self.START, self.END), restarts=[mds], spans=[
+            LogSpan("mds-runner", deleted + timedelta(seconds=3), self.END, 100),
+            LogSpan("restart-1-mds-mds-0", deleted, deleted + timedelta(seconds=5), 10),
+            LogSpan("spdk-4424", self.START + timedelta(minutes=90), self.END, 100)])
+        found = list(build_detector("evidence.log-coverage").detect(ev))
+        self.assertEqual(sorted(found[0].evidence["logs"]), ["spdk-4424"])
 
     def test_skips_without_a_run_window(self):
         ev = FakeEvidence(spans=[LogSpan("x", self.START, self.END, 1)])

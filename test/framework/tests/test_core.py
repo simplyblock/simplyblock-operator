@@ -364,6 +364,18 @@ class Archive(unittest.TestCase):
             self.assertEqual(len(ev.fio_timeseries("fiomig-test-fio-0")), 2)
             self.assertIn("spdk-4420", ev.container_logs())
 
+    def test_a_followed_log_is_placed_in_time_through_its_pod_prefix(self):
+        # chaos.restart follows a victim with `kubectl logs --prefix --timestamps`, which
+        # puts the pod and container in front of the stamp. Unparsed, the whole restart log
+        # counted as carrying no timestamp, and nothing in it could be placed in time.
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "restart-1-mds-mds-0.txt"), "w") as fh:
+                fh.write("[pod/mds-0/mds-runner] 2026-10-09T06:07:43.860630989Z booting\n"
+                         "[pod/mds-0/mds-runner] 2026-10-09T06:08:11.000000000Z ready\n")
+            span = {s.name: s for s in ArchiveEvidence(d).log_spans()}["restart-1-mds-mds-0"]
+            self.assertEqual(span.first, datetime(2026, 10, 9, 6, 7, 43, tzinfo=UTC))
+            self.assertEqual(span.last, datetime(2026, 10, 9, 6, 8, 11, tzinfo=UTC))
+
     def test_missing_files_yield_empty_not_an_exception(self):
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "state.json"), "w") as fh:

@@ -13,6 +13,7 @@ that exists, opens fine, and is missing the two hours you needed.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import timedelta
 
 from ..core import Detector, Evidence, Finding, SkipDetector, detector, info, warning
 
@@ -53,6 +54,10 @@ class LogCoverage(Detector):
 
         min_gap = float(self.opt("min_gap_s"))
         ignore = set(self.opt("ignore") or [])
+        # A log that begins while a pod the run restarted was coming back belongs to the
+        # replacement, which had nothing to say before it existed.
+        restarted = [(r.deleted, (r.ready or r.deleted) + timedelta(seconds=min_gap))
+                     for r in ev.restarts()]
         short: list[tuple[str, float, float]] = []  # name, missing-at-start, covered fraction
         empty: list[str] = []
         total = (end - start).total_seconds() if end else 0.0
@@ -62,6 +67,8 @@ class LogCoverage(Detector):
                 continue
             if not sp.first or not sp.last:
                 empty.append(sp.name)
+                continue
+            if any(lo <= sp.first <= hi for lo, hi in restarted):
                 continue
             missing = (sp.first - start).total_seconds()
             covered = max(0.0, (sp.last - max(sp.first, start)).total_seconds())

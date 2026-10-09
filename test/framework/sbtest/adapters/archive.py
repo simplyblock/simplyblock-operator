@@ -74,6 +74,8 @@ def _dt(v: object) -> datetime | None:
 _TS_PATTERNS = (
     # CRI container log: 2026-08-19T22:23:18.994807954Z stderr F <msg>
     (re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})"), "%Y-%m-%dT%H:%M:%S"),
+    # kubectl logs --prefix --timestamps: [pod/NAME/CONTAINER] 2026-10-09T06:07:43.86Z <msg>
+    (re.compile(r"^\[pod/[^\]]+\] (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})"), "%Y-%m-%dT%H:%M:%S"),
     # dmesg -T: [Thu Aug 20 05:46:57 2026]
     (re.compile(r"^\[(\w{3} \w{3}\s+\d+ \d{2}:\d{2}:\d{2} \d{4})\]"),
      "%a %b %d %H:%M:%S %Y"),
