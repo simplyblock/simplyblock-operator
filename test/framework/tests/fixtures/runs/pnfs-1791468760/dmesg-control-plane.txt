@@ -1,0 +1,157 @@
+2026-10-08T12:07:48,010486+00:00 sbtest-clock-probe wall=2026-10-08T12:10:50+00:00
+2026-10-08T13:40:24,260072+00:00 sbtest-clock-probe wall=2026-10-08T13:43:26
+2026-10-08T13:40:28,202532+00:00 sbtest-clock-probe wall=2026-10-08T13:43:30+00:00
+2026-10-08T14:07:59,702498+00:00 cni0: port 9(veth1c66b54b) entered disabled state
+2026-10-08T14:07:59,703216+00:00 veth1c66b54b (unregistering): left allmulticast mode
+2026-10-08T14:07:59,703228+00:00 veth1c66b54b (unregistering): left promiscuous mode
+2026-10-08T14:07:59,703254+00:00 cni0: port 9(veth1c66b54b) entered disabled state
+2026-10-08T14:07:59,976046+00:00 cni0: port 8(vethe72dca3b) entered disabled state
+2026-10-08T14:07:59,976532+00:00 vethe72dca3b (unregistering): left allmulticast mode
+2026-10-08T14:07:59,976545+00:00 vethe72dca3b (unregistering): left promiscuous mode
+2026-10-08T14:07:59,976570+00:00 cni0: port 8(vethe72dca3b) entered disabled state
+2026-10-08T14:08:00,125477+00:00 nvme nvme7: Removing ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:62a413e3-d36b-413f-b172-f6f2f943af02"
+2026-10-08T14:08:00,220047+00:00 cni0: port 10(veth75cc6e5b) entered disabled state
+2026-10-08T14:08:00,220859+00:00 veth75cc6e5b (unregistering): left allmulticast mode
+2026-10-08T14:08:00,220870+00:00 veth75cc6e5b (unregistering): left promiscuous mode
+2026-10-08T14:08:00,220886+00:00 cni0: port 10(veth75cc6e5b) entered disabled state
+2026-10-08T14:08:00,238888+00:00 nvme nvme3: Removing ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:62a413e3-d36b-413f-b172-f6f2f943af02"
+2026-10-08T14:08:00,405409+00:00 nvme nvme5: Removing ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:cab910f8-2a50-451b-9f5c-ca77e4e0e102"
+2026-10-08T14:08:00,510958+00:00 nvme nvme2: Removing ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:cab910f8-2a50-451b-9f5c-ca77e4e0e102"
+2026-10-08T14:08:00,725271+00:00 nvme nvme6: Removing ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:5a103a29-c48d-4546-95f3-594b4c1e4935"
+2026-10-08T14:08:00,826287+00:00 nvme nvme4: Removing ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:5a103a29-c48d-4546-95f3-594b4c1e4935"
+2026-10-08T14:09:01,421067+00:00 mds-br0: port 1(mds-tap0) entered disabled state
+2026-10-08T14:09:01,601135+00:00 cni0: port 6(vethac8d43b7) entered disabled state
+2026-10-08T14:09:01,601548+00:00 vethac8d43b7 (unregistering): left allmulticast mode
+2026-10-08T14:09:01,601558+00:00 vethac8d43b7 (unregistering): left promiscuous mode
+2026-10-08T14:09:01,601575+00:00 cni0: port 6(vethac8d43b7) entered disabled state
+2026-10-08T14:09:01,678666+00:00 mds-tap0: left allmulticast mode
+2026-10-08T14:09:01,678681+00:00 mds-tap0: left promiscuous mode
+2026-10-08T14:09:01,678733+00:00 mds-br0: port 1(mds-tap0) entered disabled state
+2026-10-08T14:09:01,933019+00:00 nvme nvme1: Removing ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:e500a6c4-a0dc-4413-b0a4-8db8df45c070"
+2026-10-08T14:09:02,038087+00:00 nvme nvme0: Removing ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:e500a6c4-a0dc-4413-b0a4-8db8df45c070"
+2026-10-08T14:09:10,605907+00:00 nvme nvme0: creating 3 I/O queues.
+2026-10-08T14:09:10,634307+00:00 nvme nvme0: mapped 3/0/0 default/read/poll queues.
+2026-10-08T14:09:10,635351+00:00 nvme nvme0: new ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:e500a6c4-a0dc-4413-b0a4-8db8df45c070", addr 10.10.10.142:4428, hostnqn: nqn.2014-08.io.simplyblock:uuid:913d3d9f-8a85-4ec1-8503-6f2a83039d59
+2026-10-08T14:09:10,658898+00:00 nvme nvme1: creating 3 I/O queues.
+2026-10-08T14:09:10,687417+00:00 nvme nvme1: mapped 3/0/0 default/read/poll queues.
+2026-10-08T14:09:10,688471+00:00 nvme nvme1: new ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:e500a6c4-a0dc-4413-b0a4-8db8df45c070", addr 10.10.10.143:4428, hostnqn: nqn.2014-08.io.simplyblock:uuid:913d3d9f-8a85-4ec1-8503-6f2a83039d59
+2026-10-08T14:09:10,818249+00:00 loop2: detected capacity change from 0 to 2097152
+2026-10-08T14:09:11,047761+00:00 cni0: port 6(veth11b0f46e) entered blocking state
+2026-10-08T14:09:11,047772+00:00 cni0: port 6(veth11b0f46e) entered disabled state
+2026-10-08T14:09:11,047790+00:00 veth11b0f46e: entered allmulticast mode
+2026-10-08T14:09:11,047871+00:00 veth11b0f46e: entered promiscuous mode
+2026-10-08T14:09:11,061756+00:00 cni0: port 6(veth11b0f46e) entered blocking state
+2026-10-08T14:09:11,061766+00:00 cni0: port 6(veth11b0f46e) entered forwarding state
+2026-10-08T14:09:20,696772+00:00 mds-br0: port 1(mds-tap0) entered blocking state
+2026-10-08T14:09:20,696788+00:00 mds-br0: port 1(mds-tap0) entered disabled state
+2026-10-08T14:09:20,696808+00:00 mds-tap0: entered allmulticast mode
+2026-10-08T14:09:20,696881+00:00 mds-tap0: entered promiscuous mode
+2026-10-08T14:09:20,762982+00:00 mds-br0: port 1(mds-tap0) entered blocking state
+2026-10-08T14:09:20,762994+00:00 mds-br0: port 1(mds-tap0) entered forwarding state
+2026-10-08T14:09:51,488320+00:00 nvme nvme3: creating 3 I/O queues.
+2026-10-08T14:09:51,516555+00:00 nvme nvme3: mapped 3/0/0 default/read/poll queues.
+2026-10-08T14:09:51,517628+00:00 nvme nvme3: new ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:4d50cb8f-dcd9-445d-9796-377c48966f2b", addr 10.10.10.142:4428, hostnqn: nqn.2014-08.io.simplyblock:uuid:913d3d9f-8a85-4ec1-8503-6f2a83039d59
+2026-10-08T14:09:51,532633+00:00 nvme nvme5: creating 3 I/O queues.
+2026-10-08T14:09:51,560301+00:00 nvme nvme5: mapped 3/0/0 default/read/poll queues.
+2026-10-08T14:09:51,561344+00:00 nvme nvme5: new ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:cf1385ca-d9f3-4f71-baef-d5a9b980c020", addr 10.10.10.143:4430, hostnqn: nqn.2014-08.io.simplyblock:uuid:913d3d9f-8a85-4ec1-8503-6f2a83039d59
+2026-10-08T14:09:51,564185+00:00 nvme_log_error: 1 callbacks suppressed
+2026-10-08T14:09:51,564188+00:00 nvme5c5n1: I/O Cmd(0x2) @ LBA 0, 1 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T14:09:51,564204+00:00 blk_print_req_error: 1 callbacks suppressed
+2026-10-08T14:09:51,564205+00:00 reservation conflict error, dev nvme5c5n1, sector 0 op 0x0:(READ) flags 0x2000000 phys_seg 1 prio class 2
+2026-10-08T14:09:51,564223+00:00 Buffer I/O error on dev nvme5n1, logical block 0, async page read
+2026-10-08T14:09:51,565538+00:00 nvme5c5n1: I/O Cmd(0x2) @ LBA 0, 1 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T14:09:51,565551+00:00 reservation conflict error, dev nvme5c5n1, sector 0 op 0x0:(READ) flags 0x2000000 phys_seg 1 prio class 2
+2026-10-08T14:09:51,565562+00:00 Buffer I/O error on dev nvme5n1, logical block 0, async page read
+2026-10-08T14:09:51,566870+00:00 nvme5c5n1: I/O Cmd(0x2) @ LBA 0, 1 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T14:09:51,566882+00:00 reservation conflict error, dev nvme5c5n1, sector 0 op 0x0:(READ) flags 0x2000000 phys_seg 1 prio class 2
+2026-10-08T14:09:51,566892+00:00 Buffer I/O error on dev nvme5n1, logical block 0, async page read
+2026-10-08T14:09:51,568201+00:00 nvme5c5n1: I/O Cmd(0x2) @ LBA 0, 1 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T14:09:51,568213+00:00 reservation conflict error, dev nvme5c5n1, sector 0 op 0x0:(READ) flags 0x2000000 phys_seg 1 prio class 2
+2026-10-08T14:09:51,568223+00:00 Buffer I/O error on dev nvme5n1, logical block 0, async page read
+2026-10-08T14:09:51,569619+00:00 nvme5c5n1: I/O Cmd(0x2) @ LBA 0, 1 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T14:09:51,569631+00:00 reservation conflict error, dev nvme5c5n1, sector 0 op 0x0:(READ) flags 0x2000000 phys_seg 1 prio class 2
+2026-10-08T14:09:51,569640+00:00 Buffer I/O error on dev nvme5n1, logical block 0, async page read
+2026-10-08T14:09:51,571227+00:00 nvme5c5n1: I/O Cmd(0x2) @ LBA 0, 1 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T14:09:51,571239+00:00 reservation conflict error, dev nvme5c5n1, sector 0 op 0x0:(READ) flags 0x2000000 phys_seg 1 prio class 2
+2026-10-08T14:09:51,571248+00:00 Buffer I/O error on dev nvme5n1, logical block 0, async page read
+2026-10-08T14:09:51,571279+00:00 Dev nvme5n1: unable to read RDB block 0
+2026-10-08T14:09:51,572569+00:00 nvme5c5n1: I/O Cmd(0x2) @ LBA 0, 1 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T14:09:51,572579+00:00 reservation conflict error, dev nvme5c5n1, sector 0 op 0x0:(READ) flags 0x2000000 phys_seg 1 prio class 2
+2026-10-08T14:09:51,572589+00:00 Buffer I/O error on dev nvme5n1, logical block 0, async page read
+2026-10-08T14:09:51,573110+00:00 nvme nvme6: creating 3 I/O queues.
+2026-10-08T14:09:51,573852+00:00 nvme5c5n1: I/O Cmd(0x2) @ LBA 0, 1 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T14:09:51,573861+00:00 reservation conflict error, dev nvme5c5n1, sector 0 op 0x0:(READ) flags 0x2000000 phys_seg 1 prio class 2
+2026-10-08T14:09:51,573869+00:00 Buffer I/O error on dev nvme5n1, logical block 0, async page read
+2026-10-08T14:09:51,573894+00:00  nvme5n1: unable to read partition table
+2026-10-08T14:09:51,576275+00:00 nvme5c5n1: I/O Cmd(0x2) @ LBA 0, 1 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T14:09:51,576286+00:00 reservation conflict error, dev nvme5c5n1, sector 0 op 0x0:(READ) flags 0x2000000 phys_seg 1 prio class 2
+2026-10-08T14:09:51,576294+00:00 Buffer I/O error on dev nvme5n1, logical block 0, async page read
+2026-10-08T14:09:51,600264+00:00 nvme nvme6: mapped 3/0/0 default/read/poll queues.
+2026-10-08T14:09:51,601296+00:00 nvme nvme6: new ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:4d50cb8f-dcd9-445d-9796-377c48966f2b", addr 10.10.10.143:4428, hostnqn: nqn.2014-08.io.simplyblock:uuid:913d3d9f-8a85-4ec1-8503-6f2a83039d59
+2026-10-08T14:09:51,615965+00:00 nvme nvme7: creating 3 I/O queues.
+2026-10-08T14:09:51,622435+00:00 nvme5c5n1: I/O Cmd(0x2) @ LBA 0, 32 blocks, I/O Error (sct 0x0 / sc 0x83) 
+2026-10-08T14:09:51,622448+00:00 reservation conflict error, dev nvme5c5n1, sector 0 op 0x0:(READ) flags 0x2080700 phys_seg 32 prio class 2
+2026-10-08T14:09:51,623842+00:00 Buffer I/O error on dev nvme5n1, logical block 0, async page read
+2026-10-08T14:09:51,644462+00:00 nvme nvme7: mapped 3/0/0 default/read/poll queues.
+2026-10-08T14:09:51,645599+00:00 nvme nvme7: new ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:cf1385ca-d9f3-4f71-baef-d5a9b980c020", addr 10.10.10.144:4430, hostnqn: nqn.2014-08.io.simplyblock:uuid:913d3d9f-8a85-4ec1-8503-6f2a83039d59
+2026-10-08T14:09:51,678587+00:00 SUNRPC: reached max allowed number (1) did not add transport to server: 10.98.1.40
+2026-10-08T14:09:51,857129+00:00 cni0: port 8(vethb4b0cff8) entered blocking state
+2026-10-08T14:09:51,857149+00:00 cni0: port 8(vethb4b0cff8) entered disabled state
+2026-10-08T14:09:51,857174+00:00 vethb4b0cff8: entered allmulticast mode
+2026-10-08T14:09:51,857261+00:00 vethb4b0cff8: entered promiscuous mode
+2026-10-08T14:09:51,864992+00:00 cni0: port 8(vethb4b0cff8) entered blocking state
+2026-10-08T14:09:51,865004+00:00 cni0: port 8(vethb4b0cff8) entered forwarding state
+2026-10-08T14:09:51,936647+00:00 cni0: port 9(veth0f6ae29f) entered blocking state
+2026-10-08T14:09:51,936658+00:00 cni0: port 9(veth0f6ae29f) entered disabled state
+2026-10-08T14:09:51,936675+00:00 veth0f6ae29f: entered allmulticast mode
+2026-10-08T14:09:51,936804+00:00 veth0f6ae29f: entered promiscuous mode
+2026-10-08T14:09:51,947221+00:00 cni0: port 9(veth0f6ae29f) entered blocking state
+2026-10-08T14:09:51,947227+00:00 cni0: port 9(veth0f6ae29f) entered forwarding state
+2026-10-08T14:10:01,591802+00:00 nvme nvme8: creating 3 I/O queues.
+2026-10-08T14:10:01,619255+00:00 nvme nvme8: mapped 3/0/0 default/read/poll queues.
+2026-10-08T14:10:01,621267+00:00 nvme nvme8: new ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:619f6bc1-deb6-4a7e-b8a5-1544bd1e149a", addr 10.10.10.143:4430, hostnqn: nqn.2014-08.io.simplyblock:uuid:913d3d9f-8a85-4ec1-8503-6f2a83039d59
+2026-10-08T14:10:01,656675+00:00 nvme nvme9: creating 3 I/O queues.
+2026-10-08T14:10:01,684834+00:00 nvme nvme9: mapped 3/0/0 default/read/poll queues.
+2026-10-08T14:10:01,692743+00:00 nvme nvme9: new ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:619f6bc1-deb6-4a7e-b8a5-1544bd1e149a", addr 10.10.10.144:4430, hostnqn: nqn.2014-08.io.simplyblock:uuid:913d3d9f-8a85-4ec1-8503-6f2a83039d59
+2026-10-08T14:10:05,722065+00:00 SUNRPC: reached max allowed number (1) did not add transport to server: 10.98.1.40
+2026-10-08T14:10:07,699316+00:00 cni0: port 10(veth6101622b) entered blocking state
+2026-10-08T14:10:07,699328+00:00 cni0: port 10(veth6101622b) entered disabled state
+2026-10-08T14:10:07,699347+00:00 veth6101622b: entered allmulticast mode
+2026-10-08T14:10:07,699482+00:00 veth6101622b: entered promiscuous mode
+2026-10-08T14:10:07,714141+00:00 cni0: port 10(veth6101622b) entered blocking state
+2026-10-08T14:10:07,714158+00:00 cni0: port 10(veth6101622b) entered forwarding state
+2026-10-08T14:11:29,981501+00:00 mds-br0: port 1(mds-tap0) entered disabled state
+2026-10-08T14:11:30,180904+00:00 cni0: port 6(veth11b0f46e) entered disabled state
+2026-10-08T14:11:30,182204+00:00 veth11b0f46e (unregistering): left allmulticast mode
+2026-10-08T14:11:30,182219+00:00 veth11b0f46e (unregistering): left promiscuous mode
+2026-10-08T14:11:30,182245+00:00 cni0: port 6(veth11b0f46e) entered disabled state
+2026-10-08T14:11:30,276298+00:00 mds-tap0: left allmulticast mode
+2026-10-08T14:11:30,276313+00:00 mds-tap0: left promiscuous mode
+2026-10-08T14:11:30,276377+00:00 mds-br0: port 1(mds-tap0) entered disabled state
+2026-10-08T14:11:30,560912+00:00 nvme nvme1: Removing ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:e500a6c4-a0dc-4413-b0a4-8db8df45c070"
+2026-10-08T14:11:30,686401+00:00 nvme nvme0: Removing ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:e500a6c4-a0dc-4413-b0a4-8db8df45c070"
+2026-10-08T14:11:33,587127+00:00 nvme nvme0: creating 3 I/O queues.
+2026-10-08T14:11:33,613346+00:00 nvme nvme0: mapped 3/0/0 default/read/poll queues.
+2026-10-08T14:11:33,617607+00:00 nvme nvme0: new ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:e500a6c4-a0dc-4413-b0a4-8db8df45c070", addr 10.10.10.142:4428, hostnqn: nqn.2014-08.io.simplyblock:uuid:913d3d9f-8a85-4ec1-8503-6f2a83039d59
+2026-10-08T14:11:33,696742+00:00 nvme nvme1: creating 3 I/O queues.
+2026-10-08T14:11:33,724421+00:00 nvme nvme1: mapped 3/0/0 default/read/poll queues.
+2026-10-08T14:11:33,726024+00:00 nvme nvme1: new ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:e500a6c4-a0dc-4413-b0a4-8db8df45c070", addr 10.10.10.143:4428, hostnqn: nqn.2014-08.io.simplyblock:uuid:913d3d9f-8a85-4ec1-8503-6f2a83039d59
+2026-10-08T14:11:33,916565+00:00 loop2: detected capacity change from 0 to 2097152
+2026-10-08T14:11:34,226325+00:00 cni0: port 6(vethf98ebd17) entered blocking state
+2026-10-08T14:11:34,226338+00:00 cni0: port 6(vethf98ebd17) entered disabled state
+2026-10-08T14:11:34,226357+00:00 vethf98ebd17: entered allmulticast mode
+2026-10-08T14:11:34,226475+00:00 vethf98ebd17: entered promiscuous mode
+2026-10-08T14:11:34,241591+00:00 cni0: port 6(vethf98ebd17) entered blocking state
+2026-10-08T14:11:34,241597+00:00 cni0: port 6(vethf98ebd17) entered forwarding state
+2026-10-08T14:11:35,204819+00:00 mds-br0: port 1(mds-tap0) entered blocking state
+2026-10-08T14:11:35,204833+00:00 mds-br0: port 1(mds-tap0) entered disabled state
+2026-10-08T14:11:35,204853+00:00 mds-tap0: entered allmulticast mode
+2026-10-08T14:11:35,204960+00:00 mds-tap0: entered promiscuous mode
+2026-10-08T14:11:35,205274+00:00 mds-br0: port 1(mds-tap0) entered blocking state
+2026-10-08T14:11:35,205284+00:00 mds-br0: port 1(mds-tap0) entered forwarding state
+2026-10-08T14:11:35,228081+00:00 mds-br0: port 1(mds-tap0) entered disabled state
+2026-10-08T14:11:35,271426+00:00 mds-br0: port 1(mds-tap0) entered blocking state
+2026-10-08T14:11:35,271441+00:00 mds-br0: port 1(mds-tap0) entered forwarding state
+2026-10-08T14:11:47,658597+00:00 NFSv4: state recovery failed for open file /pnfs-1791468760-7-c0.fio, error = -116
+2026-10-08T14:11:47,659103+00:00 NFSv4: state recovery failed for open file /pnfs-1791468760-7-c1.fio, error = -116
+2026-10-08T14:16:15,939024+00:00 sbtest-clock-probe wall=2026-10-08T14:19:18+00:00

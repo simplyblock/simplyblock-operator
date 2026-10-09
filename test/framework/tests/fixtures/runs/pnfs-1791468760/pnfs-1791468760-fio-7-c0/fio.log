@@ -1,0 +1,11 @@
+[pod] 2026-10-08T14:13:10Z installing fio
+[pod] 2026-10-08T14:13:11Z starting fio
+fio: io_u error on file /data/pnfs-1791468760-7-c0.fio: Bad file descriptor: read offset=465690624, buflen=4096
+fio: io_u error on file /data/pnfs-1791468760-7-c0.fio: Bad file descriptor: read offset=203038720, buflen=4096
+fio: io_u error on file /data/pnfs-1791468760-7-c0.fio: Bad file descriptor: write offset=655867904, buflen=4096
+fio: io_u error on file /data/pnfs-1791468760-7-c0.fio: Bad file descriptor: write offset=885125120, buflen=4096
+fio: io_u error on file /data/pnfs-1791468760-7-c0.fio: Bad file descriptor: read offset=494686208, buflen=4096
+fio: io_u error on file /data/pnfs-1791468760-7-c0.fio: Bad file descriptor: read offset=802304000, buflen=4096
+fio: io_u error on file /data/pnfs-1791468760-7-c0.fio: Bad file descriptor: write offset=614436864, buflen=4096
+fio: io_u error on file /data/pnfs-1791468760-7-c0.fio: Bad file descriptor: read offset=844099584, buflen=4096
+[pod] 2026-10-08T14:14:50Z fio exited rc=1

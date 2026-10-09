@@ -1,0 +1,146 @@
+2026-10-08T14:12:40Z [INFO    ] components disabled: ana.sample, cluster.events, logs.stream, migration.driver, workload.fio
+2026-10-08T14:12:40Z [INFO    ] detectors disabled: ana.cutover-pause, ana.freeze-count, ana.path-churn, ana.split-brain, ana.unserved-after-cutover, evidence.blind-spot, migration.errors, migration.outcomes
+2026-10-08T14:12:40Z [INFO    ] components enabled (5): host.dmesg, logs.collect, nvme.iostat, nvme.snapshot, workload.pnfs
+2026-10-08T14:12:40Z [INFO    ] detectors enabled (23): control.node-agent, control.node-flap, control.retry-storm, control.task-stuck, control.volume-health, evidence.inventory, evidence.log-coverage, fio.checksum, fio.job-error, fio.outage, fio.throughput-outlier, kernel.fabric-errors, kernel.filesystem-shutdown, kernel.path-loss, logs.pattern, nvme.controller-churn, nvme.dirty-start, nvme.foreign-cluster, nvme.loss-timeout, nvme.stale-controllers, pnfs.device-io, pnfs.layout, security.secret-exposure
+2026-10-08T14:12:40Z [INFO    ] run pnfs-1791468760 -> ./runs/pnfs-1791468760 (duration 300s, keep=True)
+2026-10-08T14:12:44Z [INFO    ] nvme.snapshot (pre): 2 lvol controller(s), 0 connecting, 0 live-with-no-namespace
+2026-10-08T14:12:44Z [INFO    ] workload.pnfs: fio runtime 300s, from the run's duration
+2026-10-08T14:12:44Z [INFO    ] workload.pnfs: StorageClass sbtest-pnfs-1791468760-pnfs, cloned from simplyblock-simplyblock-discovered-initial-discovery-d33c047a-cluster as pNFS
+2026-10-08T14:12:44Z [INFO    ] workload.pnfs: 8 pod(s) on 4 pNFS volume(s), 16 fio instance(s)
+2026-10-08T14:13:15Z [INFO    ] workload.pnfs: all 8 fio pod(s) Running
+2026-10-08T14:13:15Z [INFO    ] workload.pnfs: waiting for fio to finish layout and enter the timed run in 16 instance(s)
+2026-10-08T14:14:00Z [INFO    ] workload.pnfs: fio timed run active in every instance
+2026-10-08T14:14:02Z [INFO    ] workload.pnfs: pnfs-1791468760-pnfs-shared-0 (lvol cf1385ca-d9f3-4f71-baef-d5a9b980c020): 3 pod(s) on control-plane, worker-1, worker-4
+2026-10-08T14:14:02Z [INFO    ] workload.pnfs: pnfs-1791468760-pnfs-shared-1 (lvol 4d50cb8f-dcd9-445d-9796-377c48966f2b): 3 pod(s) on control-plane, worker-1, worker-2
+2026-10-08T14:14:02Z [INFO    ] nvme.iostat: sampling every 5.0s on 5 node(s)
+2026-10-08T14:19:02Z [INFO    ] workload.pnfs: waiting up to 178s for fio to finish its runtime in every instance
+2026-10-08T14:19:13Z [INFO    ] workload.pnfs: every fio instance has exited
+2026-10-08T14:19:29Z [INFO    ] logs.collect: csi-attacher.txt (0.2 MiB)
+2026-10-08T14:19:34Z [INFO    ] logs.collect: csi-controller.txt (10.1 MiB)
+2026-10-08T14:19:36Z [INFO    ] logs.collect: csi-health-monitor.txt (4.0 MiB)
+2026-10-08T14:19:38Z [INFO    ] logs.collect: csi-node-control-plane.txt (0.2 MiB)
+2026-10-08T14:19:38Z [INFO    ] logs.collect: csi-node-worker-1.txt (0.2 MiB)
+2026-10-08T14:19:39Z [INFO    ] logs.collect: csi-node-worker-2.txt (0.1 MiB)
+2026-10-08T14:19:40Z [INFO    ] logs.collect: csi-node-worker-3.txt (0.0 MiB)
+2026-10-08T14:19:40Z [INFO    ] logs.collect: csi-node-worker-4.txt (0.1 MiB)
+2026-10-08T14:19:48Z [INFO    ] logs.collect: csi-provisioner.txt (11.3 MiB)
+2026-10-08T14:19:49Z [INFO    ] logs.collect: csi-resizer.txt (0.2 MiB)
+2026-10-08T14:19:50Z [INFO    ] logs.collect: csi-snapshotter.txt (0.1 MiB)
+2026-10-08T14:19:51Z [INFO    ] logs.collect: operator.txt (0.3 MiB)
+2026-10-08T14:19:52Z [INFO    ] logs.collect: tasks-node-add-runner.txt (0.3 MiB)
+2026-10-08T14:19:53Z [INFO    ] logs.collect: tasks-runner-backup.txt (0.0 MiB)
+2026-10-08T14:19:53Z [INFO    ] logs.collect: tasks-runner-backup-merge.txt (0.0 MiB)
+2026-10-08T14:19:54Z [INFO    ] logs.collect: tasks-runner-batch-migration.txt (0.0 MiB)
+2026-10-08T14:19:54Z [INFO    ] logs.collect: tasks-runner-cluster-expand.txt (0.0 MiB)
+2026-10-08T14:20:00Z [INFO    ] logs.collect: tasks-runner-cluster-status.txt (5.7 MiB)
+2026-10-08T14:20:01Z [INFO    ] logs.collect: tasks-runner-failed-migration.txt (0.0 MiB)
+2026-10-08T14:20:01Z [INFO    ] logs.collect: tasks-runner-jc-comp-resume.txt (0.0 MiB)
+2026-10-08T14:20:02Z [INFO    ] logs.collect: tasks-runner-lvol-migration.txt (0.0 MiB)
+2026-10-08T14:20:02Z [INFO    ] logs.collect: tasks-runner-migration.txt (0.0 MiB)
+2026-10-08T14:20:03Z [INFO    ] logs.collect: tasks-runner-new-device-migration.txt (0.0 MiB)
+2026-10-08T14:20:03Z [INFO    ] logs.collect: tasks-runner-node-removal.txt (0.0 MiB)
+2026-10-08T14:20:04Z [INFO    ] logs.collect: tasks-runner-port-allow.txt (0.0 MiB)
+2026-10-08T14:20:04Z [INFO    ] logs.collect: tasks-runner-replication-final.txt (0.0 MiB)
+2026-10-08T14:20:05Z [INFO    ] logs.collect: tasks-runner-restart.txt (0.0 MiB)
+2026-10-08T14:20:05Z [INFO    ] logs.collect: tasks-runner-snapshot-replication.txt (0.0 MiB)
+2026-10-08T14:20:06Z [INFO    ] logs.collect: tasks-runner-sync-lvol-del.txt (0.0 MiB)
+2026-10-08T14:20:09Z [INFO    ] logs.collect: webappapi.txt (6.0 MiB)
+2026-10-08T14:20:09Z [INFO    ] nvme.iostat: 333 reading(s) from 5 node(s)
+2026-10-08T14:20:13Z [INFO    ] nvme.snapshot (post): 18 lvol controller(s), 0 connecting, 0 live-with-no-namespace
+2026-10-08T14:20:55Z [INFO    ] workload.pnfs: collected 16 fio instance(s) from 8 pod(s)
+2026-10-08T14:20:55Z [INFO    ] workload.pnfs: keep set; leaving 8 pod(s), their claims and the StorageClasses in place
+2026-10-08T14:20:59Z [INFO    ] ==============================================================================
+2026-10-08T14:20:59Z [INFO    ] FINDINGS
+2026-10-08T14:20:59Z [INFO    ] ==============================================================================
+2026-10-08T14:20:59Z [INFO    ] CRITICAL (9):
+2026-10-08T14:20:59Z [CRITICAL]     pnfs-1791468760-fio-7-c0: fio job ended in error 9
+2026-10-08T14:20:59Z [CRITICAL]     pnfs-1791468760-fio-7-c1: fio job ended in error 9
+2026-10-08T14:20:59Z [CRITICAL]     pnfs-1791468760-pnfs-shared-0@control-plane: writes to the namespace stopped and never resumed (194s before the run ended)
+2026-10-08T14:20:59Z [CRITICAL]         control-plane: no sector written from 14:14:54 to 14:18:08 while the run was going
+2026-10-08T14:20:59Z [CRITICAL]         note: the client lost the direct path and did not get it back, so its I/O went through the metadata server from then on; after an MDS restart this is a device lookup made from the pod's mount namespace
+2026-10-08T14:20:59Z [CRITICAL]     pnfs-1791468760-pnfs-shared-0@worker-1: writes to the namespace stopped and never resumed (161s before the run ended)
+2026-10-08T14:20:59Z [CRITICAL]         worker-1: no sector written from 14:15:37 to 14:18:18 while the run was going
+2026-10-08T14:20:59Z [CRITICAL]         note: the client lost the direct path and did not get it back, so its I/O went through the metadata server from then on; after an MDS restart this is a device lookup made from the pod's mount namespace
+2026-10-08T14:20:59Z [CRITICAL]     pnfs-1791468760-pnfs-shared-0@worker-4: writes to the namespace stopped and never resumed (193s before the run ended)
+2026-10-08T14:20:59Z [CRITICAL]         worker-4: no sector written from 14:14:56 to 14:18:09 while the run was going
+2026-10-08T14:20:59Z [CRITICAL]         note: the client lost the direct path and did not get it back, so its I/O went through the metadata server from then on; after an MDS restart this is a device lookup made from the pod's mount namespace
+2026-10-08T14:20:59Z [CRITICAL]     pnfs-1791468760-pnfs-shared-1@control-plane: writes to the namespace stopped and never resumed (194s before the run ended)
+2026-10-08T14:20:59Z [CRITICAL]         control-plane: no sector written from 14:14:54 to 14:18:08 while the run was going
+2026-10-08T14:20:59Z [CRITICAL]         note: the client lost the direct path and did not get it back, so its I/O went through the metadata server from then on; after an MDS restart this is a device lookup made from the pod's mount namespace
+2026-10-08T14:20:59Z [CRITICAL]     pnfs-1791468760-pnfs-shared-1@worker-1: writes to the namespace stopped and never resumed (161s before the run ended)
+2026-10-08T14:20:59Z [CRITICAL]         worker-1: no sector written from 14:15:37 to 14:18:18 while the run was going
+2026-10-08T14:20:59Z [CRITICAL]         note: the client lost the direct path and did not get it back, so its I/O went through the metadata server from then on; after an MDS restart this is a device lookup made from the pod's mount namespace
+2026-10-08T14:20:59Z [CRITICAL]     pnfs-1791468760-pnfs-shared-1@worker-2: writes to the namespace stopped and never resumed (160s before the run ended)
+2026-10-08T14:20:59Z [CRITICAL]         worker-2: no sector written from 14:15:35 to 14:18:15 while the run was going
+2026-10-08T14:20:59Z [CRITICAL]         note: the client lost the direct path and did not get it back, so its I/O went through the metadata server from then on; after an MDS restart this is a device lookup made from the pod's mount namespace
+2026-10-08T14:20:59Z [CRITICAL]     pnfs-1791468760-pnfs-solo-0@worker-1: writes to the namespace stopped and never resumed (177s before the run ended)
+2026-10-08T14:20:59Z [CRITICAL]         worker-1: no sector written from 14:15:03 to 14:18:00 while the run was going
+2026-10-08T14:20:59Z [CRITICAL]         note: the client lost the direct path and did not get it back, so its I/O went through the metadata server from then on; after an MDS restart this is a device lookup made from the pod's mount namespace
+2026-10-08T14:20:59Z [INFO    ] WARNING (22):
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-1-c0: 798 IOPS against a median of 2306
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-1-c1: 799 IOPS against a median of 2306
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-2-c0: 886 IOPS against a median of 2306
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-2-c1: 888 IOPS against a median of 2306
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-4-c0: 1041 IOPS against a median of 2306
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-4-c1: 1035 IOPS against a median of 2306
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-0-c0: 101358 data operation(s) through the metadata server beside layouts
+2026-10-08T14:20:59Z [WARN    ]         LAYOUTGET 24, READ 98274, WRITE 3084
+2026-10-08T14:20:59Z [WARN    ]         note: layouts were issued but some I/O fell back to the server, e.g. after a recall or for a range the layout did not cover
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-0-c1: 101358 data operation(s) through the metadata server beside layouts
+2026-10-08T14:20:59Z [WARN    ]         LAYOUTGET 24, READ 98274, WRITE 3084
+2026-10-08T14:20:59Z [WARN    ]         note: layouts were issued but some I/O fell back to the server, e.g. after a recall or for a range the layout did not cover
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-1-c0: 64800 data operation(s) through the metadata server beside layouts
+2026-10-08T14:20:59Z [WARN    ]         LAYOUTGET 37, READ 47710, WRITE 17090
+2026-10-08T14:20:59Z [WARN    ]         note: layouts were issued but some I/O fell back to the server, e.g. after a recall or for a range the layout did not cover
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-1-c1: 64800 data operation(s) through the metadata server beside layouts
+2026-10-08T14:20:59Z [WARN    ]         LAYOUTGET 37, READ 47710, WRITE 17090
+2026-10-08T14:20:59Z [WARN    ]         note: layouts were issued but some I/O fell back to the server, e.g. after a recall or for a range the layout did not cover
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-2-c0: 126447 data operation(s) through the metadata server beside layouts
+2026-10-08T14:20:59Z [WARN    ]         LAYOUTGET 37, READ 93379, WRITE 33068
+2026-10-08T14:20:59Z [WARN    ]         note: layouts were issued but some I/O fell back to the server, e.g. after a recall or for a range the layout did not cover
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-2-c1: 126447 data operation(s) through the metadata server beside layouts
+2026-10-08T14:20:59Z [WARN    ]         LAYOUTGET 37, READ 93379, WRITE 33068
+2026-10-08T14:20:59Z [WARN    ]         note: layouts were issued but some I/O fell back to the server, e.g. after a recall or for a range the layout did not cover
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-3-c0: 92139 data operation(s) through the metadata server beside layouts
+2026-10-08T14:20:59Z [WARN    ]         LAYOUTGET 20, READ 88672, WRITE 3467
+2026-10-08T14:20:59Z [WARN    ]         note: layouts were issued but some I/O fell back to the server, e.g. after a recall or for a range the layout did not cover
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-3-c1: 92139 data operation(s) through the metadata server beside layouts
+2026-10-08T14:20:59Z [WARN    ]         LAYOUTGET 20, READ 88672, WRITE 3467
+2026-10-08T14:20:59Z [WARN    ]         note: layouts were issued but some I/O fell back to the server, e.g. after a recall or for a range the layout did not cover
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-4-c0: 59464 data operation(s) through the metadata server beside layouts
+2026-10-08T14:20:59Z [WARN    ]         LAYOUTGET 39, READ 41395, WRITE 18069
+2026-10-08T14:20:59Z [WARN    ]         note: layouts were issued but some I/O fell back to the server, e.g. after a recall or for a range the layout did not cover
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-4-c1: 59464 data operation(s) through the metadata server beside layouts
+2026-10-08T14:20:59Z [WARN    ]         LAYOUTGET 39, READ 41395, WRITE 18069
+2026-10-08T14:20:59Z [WARN    ]         note: layouts were issued but some I/O fell back to the server, e.g. after a recall or for a range the layout did not cover
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-5-c0: 200720 data operation(s) through the metadata server beside layouts
+2026-10-08T14:20:59Z [WARN    ]         LAYOUTGET 28, READ 166839, WRITE 33881
+2026-10-08T14:20:59Z [WARN    ]         note: layouts were issued but some I/O fell back to the server, e.g. after a recall or for a range the layout did not cover
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-5-c1: 200720 data operation(s) through the metadata server beside layouts
+2026-10-08T14:20:59Z [WARN    ]         LAYOUTGET 28, READ 166839, WRITE 33881
+2026-10-08T14:20:59Z [WARN    ]         note: layouts were issued but some I/O fell back to the server, e.g. after a recall or for a range the layout did not cover
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-6-c0: 81839 data operation(s) through the metadata server beside layouts
+2026-10-08T14:20:59Z [WARN    ]         LAYOUTGET 20, READ 81837, WRITE 2
+2026-10-08T14:20:59Z [WARN    ]         note: layouts were issued but some I/O fell back to the server, e.g. after a recall or for a range the layout did not cover
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-6-c1: 81839 data operation(s) through the metadata server beside layouts
+2026-10-08T14:20:59Z [WARN    ]         LAYOUTGET 20, READ 81837, WRITE 2
+2026-10-08T14:20:59Z [WARN    ]         note: layouts were issued but some I/O fell back to the server, e.g. after a recall or for a range the layout did not cover
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-7-c0: 1 data operation(s) through the metadata server beside layouts
+2026-10-08T14:20:59Z [WARN    ]         LAYOUTGET 7, READ 0, WRITE 1
+2026-10-08T14:20:59Z [WARN    ]         note: layouts were issued but some I/O fell back to the server, e.g. after a recall or for a range the layout did not cover
+2026-10-08T14:20:59Z [WARN    ]     pnfs-1791468760-fio-7-c1: 1 data operation(s) through the metadata server beside layouts
+2026-10-08T14:20:59Z [WARN    ]         LAYOUTGET 7, READ 0, WRITE 1
+2026-10-08T14:20:59Z [WARN    ]         note: layouts were issued but some I/O fell back to the server, e.g. after a recall or for a range the layout did not cover
+2026-10-08T14:20:59Z [INFO    ] INFO (2):
+2026-10-08T14:20:59Z [INFO    ]     evidence: fio_pods=16, fio_jobs=16, container_logs=35, nvme_controllers=18
+2026-10-08T14:20:59Z [INFO    ]         run window 14:12:40..14:20:55 UTC
+2026-10-08T14:20:59Z [INFO    ]     fabric: 10 created / 8 removed
+2026-10-08T14:20:59Z [INFO    ] skipped (5) — not judged on these dimensions:
+2026-10-08T14:20:59Z [WARN    ]     control.node-agent: no node-agent logs collected (enable the storage-node DaemonSet target in logs.collect)
+2026-10-08T14:20:59Z [WARN    ]     control.node-flap: no control-plane event log collected
+2026-10-08T14:20:59Z [WARN    ]     control.retry-storm: no control-plane event log collected
+2026-10-08T14:20:59Z [WARN    ]     control.task-stuck: no control-plane event log collected
+2026-10-08T14:20:59Z [WARN    ]     control.volume-health: no control-plane event log collected
+2026-10-08T14:20:59Z [INFO    ] ==============================================================================
+2026-10-08T14:20:59Z [INFO    ] RESULT: FAIL   (9 critical, 22 warning) -> ./runs/pnfs-1791468760/findings.json
+2026-10-08T14:20:59Z [INFO    ] ==============================================================================
