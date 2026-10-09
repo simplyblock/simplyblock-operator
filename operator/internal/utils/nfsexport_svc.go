@@ -76,6 +76,16 @@ func BuildNFSExportEndpointSlice(namespace, exportName, mdsNodeIP string) *disco
 	portName := "nfs"
 	ready := true
 
+	// No address is an EndpointSlice with no endpoint: the metadata server is
+	// going away and kube-proxy refuses new connections rather than sending them
+	// to a pod that will not answer (design-pnfs-mds-vm.md §8.1).
+	var endpoints []discoveryv1.Endpoint
+	if mdsNodeIP != "" {
+		endpoints = []discoveryv1.Endpoint{{
+			Addresses:  []string{mdsNodeIP},
+			Conditions: discoveryv1.EndpointConditions{Ready: &ready},
+		}}
+	}
 	return &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      NFSExportEndpointSliceName(exportName),
@@ -85,12 +95,7 @@ func BuildNFSExportEndpointSlice(namespace, exportName, mdsNodeIP string) *disco
 			},
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
-		Endpoints: []discoveryv1.Endpoint{
-			{
-				Addresses:  []string{mdsNodeIP},
-				Conditions: discoveryv1.EndpointConditions{Ready: &ready},
-			},
-		},
+		Endpoints:   endpoints,
 		Ports: []discoveryv1.EndpointPort{
 			{
 				Name:     &portName,

@@ -40,9 +40,20 @@ func (r *NFSExportReconciler) resyncAfterRestart(
 	switch err := r.Get(ctx, client.ObjectKey{Namespace: r.OperatorNamespace, Name: name}, &pod); {
 	case apierrors.IsNotFound(err):
 		// The StatefulSet brings it back, and its event wakes this export.
+		if err := r.withdrawAddress(ctx, export); err != nil {
+			return ctrl.Result{}, true, err
+		}
 		return ctrl.Result{RequeueAfter: nfsExportNoSessionRequeue}, true, nil
 	case err != nil:
 		return ctrl.Result{}, true, fmt.Errorf("reading metadata server pod %s: %w", name, err)
+	}
+	if !pod.DeletionTimestamp.IsZero() {
+		// Going away: its address stops taking connections now, not when the
+		// replacement has one.
+		if err := r.withdrawAddress(ctx, export); err != nil {
+			return ctrl.Result{}, true, err
+		}
+		return ctrl.Result{RequeueAfter: nfsExportNoSessionRequeue}, true, nil
 	}
 	if mdsInstance(&pod) == export.Status.AssembledBy {
 		return ctrl.Result{}, false, nil
@@ -51,6 +62,7 @@ func (r *NFSExportReconciler) resyncAfterRestart(
 	// The address first, so that a client retrying against the Service
 	// reaches the new guest as soon as it serves.
 	if ip := pod.Status.PodIP; ip != "" && ip != export.Status.MDSNodeIP {
+		old := export.Status.MDSNodeIP
 		if _, err := r.reconcileExportService(ctx, export, ip); err != nil {
 			return ctrl.Result{}, true, fmt.Errorf("repointing the Service for %s: %w", export.Name, err)
 		}
@@ -61,6 +73,12 @@ func (r *NFSExportReconciler) resyncAfterRestart(
 		}
 		r.event(export, corev1.EventTypeNormal, "MDSAddressChanged",
 			fmt.Sprintf("metadata server pod %s moved to %s", name, ip))
+		// A connection that reached the old address before it was withdrawn
+		// stays translated to it, so the nodes forget it once more now.
+		if old == "" {
+			old = r.takeWithdrawn(export)
+		}
+		r.forget(old)
 	}
 
 	host := mdsHost(export)
@@ -129,4 +147,60 @@ func (r *NFSExportReconciler) exportsBoundToPod(ctx context.Context, pod *corev1
 		}
 	}
 	return requests
+}
+
+// withdrawAddress takes the metadata server's address out of the export's
+// EndpointSlice and has the nodes forget the connections translated to it
+// (design-pnfs-mds-vm.md §8.1). Clients reconnect within a second of the guest
+// shutting down, and a connection translated to the dead pod is kept alive in
+// conntrack by its own SYN retries, for up to two minutes after the
+// replacement serves. With no endpoint, kube-proxy refuses the connection
+// instead. An address already withdrawn is left as it is.
+func (r *NFSExportReconciler) withdrawAddress(ctx context.Context, export *simplyblockv1alpha2.NFSExport) error {
+	old := export.Status.MDSNodeIP
+	if old == "" {
+		return nil
+	}
+	if err := r.reconcileExportEndpointSlice(ctx, export, ""); err != nil {
+		return fmt.Errorf("withdrawing the address of %s: %w", export.Name, err)
+	}
+	if err := r.writeStatus(ctx, export, func(s *simplyblockv1alpha2.NFSExportStatus) {
+		s.MDSNodeIP = ""
+	}); err != nil {
+		return err
+	}
+	r.rememberWithdrawn(export, old)
+	r.event(export, corev1.EventTypeNormal, "MDSAddressWithdrawn",
+		fmt.Sprintf("metadata server pod %s is going away, %s withdrawn until its replacement has an address",
+			export.Status.MDSPodName, old))
+	r.forget(old)
+	return nil
+}
+
+func (r *NFSExportReconciler) forget(ip string) {
+	if ip != "" && r.Flows != nil {
+		r.Flows.Forget(ip)
+	}
+}
+
+// rememberWithdrawn keeps the address an export's withdrawal took away, so the
+// move to the replacement can have the nodes forget it a second time. It lives
+// in memory only: an operator restart in between loses the second flush, and
+// the first one has already run.
+func (r *NFSExportReconciler) rememberWithdrawn(export *simplyblockv1alpha2.NFSExport, ip string) {
+	r.withdrawnMu.Lock()
+	defer r.withdrawnMu.Unlock()
+	if r.withdrawn == nil {
+		r.withdrawn = map[client.ObjectKey]string{}
+	}
+	r.withdrawn[client.ObjectKeyFromObject(export)] = ip
+}
+
+func (r *NFSExportReconciler) takeWithdrawn(export *simplyblockv1alpha2.NFSExport) string {
+	r.withdrawnMu.Lock()
+	defer r.withdrawnMu.Unlock()
+	key := client.ObjectKeyFromObject(export)
+	ip := r.withdrawn[key]
+	delete(r.withdrawn, key)
+	return ip
 }
