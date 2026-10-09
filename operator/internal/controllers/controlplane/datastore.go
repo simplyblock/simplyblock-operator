@@ -87,6 +87,30 @@ func objectStoreConfig(namespace string) *corev1.ConfigMap {
 	}
 }
 
+// objectStoreResources is what the object store's server asks for, or what the
+// spec states. A stated block replaces the default as a whole, as the management
+// API's does: merging would make a request below the default impossible to
+// state. The default is small because a base deployment holds little, and a
+// deployment that runs several backups at once states a larger memory limit.
+func objectStoreResources(local *simplyblockv1alpha2.LocalControlPlane) corev1.ResourceRequirements {
+	if local != nil && local.ObjectStore != nil {
+		stated := local.ObjectStore.Resources
+		if len(stated.Requests) > 0 || len(stated.Limits) > 0 {
+			return stated
+		}
+	}
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("100m"),
+			corev1.ResourceMemory: resource.MustParse("256Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("500m"),
+			corev1.ResourceMemory: resource.MustParse("1Gi"),
+		},
+	}
+}
+
 // minioStatefulSet is the store: one server with a volume, and a sidecar that
 // makes the bucket once the server answers.
 //
@@ -114,16 +138,7 @@ func minioStatefulSet(cp *simplyblockv1alpha2.ControlPlane) *appsv1.StatefulSet 
 					{Name: "console", ContainerPort: minioConsolePort},
 				},
 				VolumeMounts: []corev1.VolumeMount{{Name: minioDataVolume, MountPath: "/data"}},
-				Resources: corev1.ResourceRequirements{
-					Requests: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("100m"),
-						corev1.ResourceMemory: resource.MustParse("256Mi"),
-					},
-					Limits: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("500m"),
-						corev1.ResourceMemory: resource.MustParse("1Gi"),
-					},
-				},
+				Resources:    objectStoreResources(cp.Spec.Source.Local),
 			},
 			{
 				// The sidecar waits for the server in the same pod, makes the

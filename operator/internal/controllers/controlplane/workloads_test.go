@@ -16,6 +16,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -487,15 +488,15 @@ func TestTheControlPlanesAccountKeepsTheGrantsItCannotWorkWithout(t *testing.T) 
 
 	want := map[string]bool{"pods/exec": false, "tokenreviews": false, "nodes": false}
 	for _, rule := range role.Rules {
-		for _, resource := range rule.Resources {
-			if _, tracked := want[resource]; tracked {
-				want[resource] = true
+		for _, name := range rule.Resources {
+			if _, tracked := want[name]; tracked {
+				want[name] = true
 			}
 		}
 	}
-	for resource, granted := range want {
+	for name, granted := range want {
 		if !granted {
-			t.Errorf("the control plane's role does not grant %s", resource)
+			t.Errorf("the control plane's role does not grant %s", name)
 		}
 	}
 }
@@ -518,6 +519,100 @@ func TestTheObjectStoreTakesTheSameStorageClassAsTheDatabase(t *testing.T) {
 	if claim.Spec.StorageClassName == nil || *claim.Spec.StorageClassName != "fast-local" {
 		t.Errorf("storageClassName = %v, want the database's fast-local",
 			claim.Spec.StorageClassName)
+	}
+}
+
+// minioServer returns the object store's server container, which is the one the
+// store's resources are for. The bucket-making sidecar beside it is not.
+func minioServer(t *testing.T, store *appsv1.StatefulSet) corev1.Container {
+	t.Helper()
+	for _, container := range store.Spec.Template.Spec.Containers {
+		if container.Name == "minio" {
+			return container
+		}
+	}
+	t.Fatalf("the object store has no minio container")
+	return corev1.Container{}
+}
+
+// A deployment that runs several backups at once needs a larger server than the
+// default, and the server is killed at its memory limit, so the limit has to be
+// the deployment's to set.
+func TestTheObjectStoreRunsInTheResourcesTheSpecStates(t *testing.T) {
+	cp := localControlPlane()
+	want := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("500m"),
+			corev1.ResourceMemory: resource.MustParse("2Gi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("2"),
+			corev1.ResourceMemory: resource.MustParse("4Gi"),
+		},
+	}
+	cp.Spec.Source.Local.ObjectStore = &simplyblockv1alpha2.ObjectStoreSpec{Resources: want}
+
+	got := minioServer(t, minioStatefulSet(cp)).Resources
+	if got.Limits.Memory().Cmp(*want.Limits.Memory()) != 0 {
+		t.Errorf("memory limit = %s, want the spec's %s",
+			got.Limits.Memory(), want.Limits.Memory())
+	}
+	if got.Limits.Cpu().Cmp(*want.Limits.Cpu()) != 0 {
+		t.Errorf("cpu limit = %s, want the spec's %s", got.Limits.Cpu(), want.Limits.Cpu())
+	}
+	if got.Requests.Memory().Cmp(*want.Requests.Memory()) != 0 {
+		t.Errorf("memory request = %s, want the spec's %s",
+			got.Requests.Memory(), want.Requests.Memory())
+	}
+	if got.Requests.Cpu().Cmp(*want.Requests.Cpu()) != 0 {
+		t.Errorf("cpu request = %s, want the spec's %s",
+			got.Requests.Cpu(), want.Requests.Cpu())
+	}
+}
+
+// A spec that says nothing about the store keeps the defaults every existing
+// deployment already runs with, whether the block is absent or present and empty.
+func TestTheObjectStoreKeepsItsDefaultResourcesWhenTheSpecStatesNone(t *testing.T) {
+	cases := map[string]*simplyblockv1alpha2.ObjectStoreSpec{
+		"no objectStore block": nil,
+		"an empty block":       {},
+	}
+	for name, spec := range cases {
+		t.Run(name, func(t *testing.T) {
+			cp := localControlPlane()
+			cp.Spec.Source.Local.ObjectStore = spec
+
+			got := minioServer(t, minioStatefulSet(cp)).Resources
+			if got.Limits.Memory().Cmp(resource.MustParse("1Gi")) != 0 {
+				t.Errorf("memory limit = %s, want the default 1Gi", got.Limits.Memory())
+			}
+			if got.Requests.Memory().Cmp(resource.MustParse("256Mi")) != 0 {
+				t.Errorf("memory request = %s, want the default 256Mi", got.Requests.Memory())
+			}
+		})
+	}
+}
+
+// A stated value replaces the default as a whole, as the management API's does.
+// Merging would make a lower request than the default impossible to state, and
+// would leave the reader unable to tell the limit from the spec alone.
+func TestAStatedObjectStoreLimitReplacesTheDefaults(t *testing.T) {
+	cp := localControlPlane()
+	cp.Spec.Source.Local.ObjectStore = &simplyblockv1alpha2.ObjectStoreSpec{
+		Resources: corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("3Gi")},
+		},
+	}
+
+	got := minioServer(t, minioStatefulSet(cp)).Resources
+	if got.Limits.Memory().Cmp(resource.MustParse("3Gi")) != 0 {
+		t.Errorf("memory limit = %s, want the spec's 3Gi", got.Limits.Memory())
+	}
+	if len(got.Requests) != 0 {
+		t.Errorf("requests = %v, want none: the spec stated only a limit", got.Requests)
+	}
+	if _, merged := got.Limits[corev1.ResourceCPU]; merged {
+		t.Errorf("limits = %v: the default cpu limit was merged into a stated block", got.Limits)
 	}
 }
 
