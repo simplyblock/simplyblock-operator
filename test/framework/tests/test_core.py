@@ -649,8 +649,10 @@ class LogNamespaces(unittest.TestCase):
 
 
 class NamespaceFlags(unittest.TestCase):
-    """A flag beats the suite's run block, which beats the default. The cluster namespace
-    defaults to the operator's, since most clusters are deployed into it."""
+    """A flag beats the suite's run block, which beats the default. Today, the operator and
+    the cluster both run in simplyblock. The planned layout moves the operator and control
+    plane to simplyblock-system and keeps the initial cluster in simplyblock, so the two
+    defaults are independent."""
 
     def args(self, **kw: object) -> argparse.Namespace:
         base: dict[str, object] = {"operator_namespace": None, "cluster_namespace": None,
@@ -664,13 +666,17 @@ class NamespaceFlags(unittest.TestCase):
         self.assertEqual(cli.namespaces(self.args(), cfg),
                          ("simplyblock", "simplyblock", "default"))
 
-    def test_the_cluster_namespace_follows_the_operator_namespace_unless_set(self):
+    def test_moving_the_operator_leaves_the_cluster_in_simplyblock(self):
         from sbtest import cli
         cfg = load(None, list(known_components()), list(known_detectors()))
-        cfg.run["operator_namespace"] = "sb-op"
-        self.assertEqual(cli.namespaces(self.args(), cfg), ("sb-op", "sb-op", "default"))
-        cfg.run["cluster_namespace"] = "sb-cluster"
-        self.assertEqual(cli.namespaces(self.args(), cfg), ("sb-op", "sb-cluster", "default"))
+        cfg.run["operator_namespace"] = "simplyblock-system"
+        self.assertEqual(cli.namespaces(self.args(), cfg),
+                         ("simplyblock-system", "simplyblock", "default"))
+
+    def test_an_unset_run_context_puts_the_cluster_in_simplyblock(self):
+        ctx = RunContext(run_id="t", outdir="/tmp", log=Logger(None),
+                         operator_namespace="simplyblock-system")
+        self.assertEqual(ctx.namespace("cluster"), "simplyblock")
 
     def test_a_flag_beats_the_suite(self):
         from sbtest import cli

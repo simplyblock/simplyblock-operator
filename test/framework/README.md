@@ -278,14 +278,17 @@ Where things run is a property of the deployment, so a run names three namespace
 the suite's `run:` block or with the matching flag, and every component takes its own from
 them:
 
-| Run setting          | Flag                   | What lives there                                                   | Default                |
-|----------------------|------------------------|--------------------------------------------------------------------|------------------------|
-| `operator_namespace` | `--operator-namespace` | the operator, the control plane, the CSI driver, the pNFS MDS      | `simplyblock`          |
-| `cluster_namespace`  | `--cluster-namespace`  | the storage cluster's own pods: SPDK and the node agents           | the operator namespace |
-| `test_namespace`     | `--test-namespace`     | what the run creates: client pods, migration CRs, log grabber pods | `default`              |
+| Run setting          | Flag                   | What lives there                                                   | Default       |
+|----------------------|------------------------|--------------------------------------------------------------------|---------------|
+| `operator_namespace` | `--operator-namespace` | the operator, the control plane, the CSI driver, the pNFS MDS      | `simplyblock` |
+| `cluster_namespace`  | `--cluster-namespace`  | the storage cluster's own pods: SPDK and the node agents           | `simplyblock` |
+| `test_namespace`     | `--test-namespace`     | what the run creates: client pods, migration CRs, log grabber pods | `default`     |
 
-A flag beats the suite, which beats the default. Clusters can each be deployed into a
-namespace of their own, and a run tests one. A component option naming a namespace still
+A flag beats the suite, which beats the default. Today, the operator and the cluster share
+`simplyblock`. The planned layout moves the operator and control plane to
+`simplyblock-system` and keeps the initial cluster in `simplyblock`, which is one setting:
+`operator_namespace: simplyblock-system`. Clusters can each be deployed into a namespace of
+their own, and a run tests one. A component option naming a namespace still
 wins when set, and a `logs.collect` target, `logs.stream`, and `host.dmesg` pick theirs by
 `plane` (`cluster` or `operator`).
 

@@ -11,9 +11,6 @@ description: >-
 run:
   id_prefix: fiomig
   outdir: ./runs
-  # These runs target clusters whose storage plane was deployed apart from the operator,
-  # into default.
-  cluster_namespace: default
 
 components:
   workload.fio:

@@ -48,11 +48,13 @@ def _cfg(args: argparse.Namespace, known_c: list[str], known_d: list[str]) -> Co
 
 def namespaces(args: argparse.Namespace, cfg: Config) -> tuple[str, str, str]:
     """The run's operator, cluster, and test namespaces: a flag beats the suite's run
-    block, which beats the default. The cluster namespace defaults to the operator's."""
+    block, which beats the default. The defaults are independent: today the operator and
+    the cluster share simplyblock, and the operator is to move to simplyblock-system while
+    the initial cluster stays."""
     def pick(key: str, default: str) -> str:
         return str(getattr(args, key, None) or cfg.run.get(key) or default)
-    operator = pick("operator_namespace", "simplyblock")
-    return operator, pick("cluster_namespace", operator), pick("test_namespace", "default")
+    return (pick("operator_namespace", "simplyblock"), pick("cluster_namespace", "simplyblock"),
+            pick("test_namespace", "default"))
 
 
 def _context(args: argparse.Namespace, cfg: Config, run_id: str, outdir: str,
@@ -226,7 +228,7 @@ def build_parser() -> argparse.ArgumentParser:
                              "(default: the suite's run.operator_namespace, else simplyblock)")
         sp.add_argument("--cluster-namespace",
                         help="where the storage cluster's SPDK and node-agent pods run "
-                             "(default: the suite's, else the operator namespace)")
+                             "(default: the suite's run.cluster_namespace, else simplyblock)")
         sp.add_argument("--test-namespace",
                         help="where the run creates its client pods and helpers "
                              "(default: the suite's run.test_namespace, else default)")

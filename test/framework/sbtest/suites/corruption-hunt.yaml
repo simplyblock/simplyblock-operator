@@ -8,11 +8,6 @@
 description: >-
   Narrowed to the data-integrity question, for a bisect or a quick verdict.
 
-run:
-  # These runs target clusters whose storage plane was deployed apart from the operator,
-  # into default.
-  cluster_namespace: default
-
 components:
   ana.sample:
     # 1s rather than 2: the freeze count is only as sharp as the interval measuring it, and
