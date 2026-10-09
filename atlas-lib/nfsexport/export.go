@@ -363,9 +363,18 @@ func (a *Assembler) addToRoot(spec Spec) error {
 // restart.
 func (a *Assembler) rootFile() (string, error) {
 	link := filepath.Join(a.cfg.ExportsDir, rootDropInName)
+	fi, err := os.Lstat(link)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return link, nil // none yet
+	case err != nil:
+		return "", fmt.Errorf("inspecting the root file: %w", err)
+	case fi.Mode()&os.ModeSymlink == 0:
+		return link, nil
+	}
 	target, err := os.Readlink(link)
 	if err != nil {
-		return link, nil // a regular file, or none yet
+		return "", fmt.Errorf("reading the root file's link: %w", err)
 	}
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(a.cfg.ExportsDir, target)
