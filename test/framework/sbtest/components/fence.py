@@ -439,10 +439,17 @@ class Fencer(Component):
             return
         if self._rules:
             self._remove_rules(ctx)
-            healed = _ms(kube.exec_sh(ns, self._net_pod, "date +%s%3N"))
-            rec["healed"] = _iso(healed or datetime.now(UTC))
-            ctx.log.event(f"{self.name}: partition healed")
-            self._abort.wait(float(self.opt("heal_tail_s")))
+            if self._rules:
+                # Still partitioned: a heal recorded now would have the detector judge
+                # the writes that follow as after it.
+                rec["heal_error"] = (f"{len(self._rules)} partition rule(s) could not be "
+                                     "removed, so the victim may still be cut off")
+                ctx.log.error(f"{self.name}: {rec['heal_error']}")
+            else:
+                healed = _ms(kube.exec_sh(ns, self._net_pod, "date +%s%3N"))
+                rec["healed"] = _iso(healed or datetime.now(UTC))
+                ctx.log.event(f"{self.name}: partition healed")
+                self._abort.wait(float(self.opt("heal_tail_s")))
         writer = rec.get("victim_pod", "")
         kube.exec_sh(ns, writer, "touch /logs/stop")
         for _ in range(20):

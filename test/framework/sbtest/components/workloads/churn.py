@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import random
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -246,17 +247,31 @@ class ChurnWorkload(Component):
         fio.collect_instance(ctx, ns, inst, [])
 
     def _leave(self, ctx: RunContext, ns: str, inst: fio.FioInstance, record: _Record) -> None:
-        """Delete the pod, and an own volume's claim after it, recording when."""
-        kube.run(["-n", ns, "delete", "pod", inst.pod, "--ignore-not-found",
-                  "--grace-period=5", "--timeout=120s"], check=False, timeout=150)
+        """Delete the pod, and an own volume's claim after it, recording when each delete
+        succeeded. A pod whose delete failed is still running and still holds its slot, and
+        a claim whose delete failed starts no cleanup clock."""
+        cp = kube.run(["-n", ns, "delete", "pod", inst.pod, "--ignore-not-found",
+                       "--grace-period=5", "--timeout=120s"], check=False, timeout=150)
+        if cp.returncode != 0:
+            self._delete_failed(ctx, record, f"pod {inst.pod}", cp)
+            return
         record.deleted = datetime.now(UTC)
         if not record.own_volume:
             return
         record.pv, record.lvol = _volume_of(ns, record.claim)
-        kube.run(["-n", ns, "delete", "pvc", record.claim, "--ignore-not-found",
-                  "--wait=false"], check=False, timeout=60)
+        cp = kube.run(["-n", ns, "delete", "pvc", record.claim, "--ignore-not-found",
+                       "--wait=false"], check=False, timeout=60)
+        if cp.returncode != 0:
+            self._delete_failed(ctx, record, f"claim {record.claim}", cp)
+            return
         record.pvc_deleted = datetime.now(UTC)
         ctx.log.info(f"{self.name}: {inst.pod} left, deleting its volume {record.claim}")
+
+    def _delete_failed(self, ctx: RunContext, record: _Record, what: str,
+                       cp: subprocess.CompletedProcess[str]) -> None:
+        error = f"deleting {what} failed: {cp.stderr.strip() or f'exit {cp.returncode}'}"
+        record.error = f"{record.error}; {error}" if record.error else error
+        ctx.log.warn(f"{self.name}: {error}")
 
     # ── what churn creates ───────────────────────────────────────────────────────────
 

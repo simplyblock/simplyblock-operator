@@ -1097,6 +1097,23 @@ class EvidenceCoverage(unittest.TestCase):
         with self.assertRaises(SkipDetector):
             list(build_detector("evidence.log-coverage").detect(ev))
 
+    def test_a_restart_excuses_only_the_restarted_pods_logs(self):
+        """An SPDK log that rotated through the first half of the run is still short when its
+        first surviving line falls inside an MDS restart (review on #698)."""
+        deleted = self.START + timedelta(minutes=60)
+        mds = Restart(target="mds", pod="mds-0", node="w3", deleted=deleted,
+                      ready=deleted + timedelta(seconds=20))
+        node = Restart(target="csi-node", pod="csi-node-abc", node="w1",
+                       deleted=deleted, ready=deleted + timedelta(seconds=20))
+        first = deleted + timedelta(seconds=5)
+        ev = FakeEvidence(window=(self.START, self.END), restarts=[mds, node], spans=[
+            LogSpan("spdk-4424", first, self.END, 100),
+            LogSpan("csi-node-w2", first, self.END, 100),
+            LogSpan("csi-node-w1", first, self.END, 100),
+            LogSpan("mds-runner", first, self.END, 100)])
+        found = list(build_detector("evidence.log-coverage").detect(ev))
+        self.assertEqual(sorted(found[0].evidence["logs"]), ["csi-node-w2", "spdk-4424"])
+
     def test_a_migration_no_log_covers_is_a_blind_spot(self):
         """The real case: the corrupting migration ended six seconds before a log began."""
         mig_start = self.START + timedelta(minutes=110)
@@ -1604,6 +1621,14 @@ class PnfsFence(unittest.TestCase):
         writes = [(50, True), (150, False)]
         self.assertEqual(self.severities(fenced(writes, truncate_returned=None)),
                          [Severity.CRITICAL])
+
+    def test_a_failed_truncate_proves_no_fence(self):
+        """An exit status other than timeout's still records when the truncate returned,
+        but nothing was recalled, so later writes are not split brain (review on #698)."""
+        writes = [(50, True), (150, False), (250, True), (260, True)]
+        found = self.found(fenced(writes, truncate_error="exit 1: Permission denied"))
+        self.assertNotIn(Severity.CRITICAL, [f.severity for f in found])
+        self.assertTrue(any("truncate failed" in f.title for f in found))
 
     def test_a_victim_whose_writes_never_failed_proved_nothing(self):
         """Its writes went through the metadata server, or the partition did not take, so

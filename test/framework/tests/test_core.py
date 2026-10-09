@@ -901,6 +901,84 @@ class GrabberReuse(unittest.TestCase):
         self.assertLess(order.index("collect.collect"), order.index("stream.teardown"))
 
 
+class RestartDeleteFailure(unittest.TestCase):
+    """A restart whose delete failed did not happen. Recorded as one, chaos.recovery
+    reported the untouched pod as never coming back (review on #698)."""
+
+    def test_a_failed_delete_is_not_a_restart(self):
+        import subprocess
+
+        from sbtest.components import chaos
+
+        def run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            rc = 1 if "delete" in args else 0
+            return subprocess.CompletedProcess(args, rc, "", "forbidden" if rc else "")
+
+        r = chaos.Restarter(ready_timeout_s=1)
+        victim = kube.Pod(name="mds-0", namespace="simplyblock", node="w3", containers=(),
+                          phase="Running", ip="10.244.3.118")
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(kube, "run", run), \
+                mock.patch.object(chaos, "_uid", return_value="u1"), \
+                mock.patch.object(r, "_victim", return_value=victim), \
+                mock.patch.object(r, "_follow", return_value=None):
+            ctx = RunContext(run_id="r1", outdir=d, log=Logger(os.path.join(d, "run.log")))
+            r.bind_namespaces(ctx)
+            r._restart(ctx, "mds")
+            r.collect(ctx)
+            ctx.log.close()
+            with open(os.path.join(d, "restarts.json")) as fh:
+                saved = json.load(fh)
+        self.assertEqual(saved["restarts"], [])
+        self.assertEqual([f["pod"] for f in saved["failed"]], ["mds-0"])
+        self.assertIn("forbidden", saved["failed"][0]["error"])
+
+
+class ChurnLeave(unittest.TestCase):
+    """A churn pod has left only when its delete succeeded. Counted as gone after a failed
+    delete, it freed a slot under the concurrency cap while still running, and a claim
+    whose delete failed started the cleanup clock (review on #698)."""
+
+    def leave(self, pod_rc: int, pvc_rc: int):
+        import subprocess
+        from datetime import UTC, datetime
+
+        from sbtest.components.workloads import churn, fio
+
+        def run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            rc = pod_rc if "pod" in args else pvc_rc if "pvc" in args else 0
+            return subprocess.CompletedProcess(args, rc, "", "forbidden" if rc else "")
+
+        w = churn.ChurnWorkload()
+        inst = fio.FioInstance(pod="r1-fio-churn-1", container="fio-0", filename="/data/f",
+                               logdir="/logs", evidence="r1-fio-churn-1")
+        record = churn._Record(pod=inst.pod, claim="r1-churn-1", own_volume=True,
+                               created=datetime.now(UTC))
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(kube, "run", run), \
+                mock.patch.object(churn, "_volume_of", return_value=("pv-1", "lvol-1")):
+            ctx = RunContext(run_id="r1", outdir=d, log=Logger(os.path.join(d, "run.log")))
+            w._leave(ctx, "default", inst, record)
+            ctx.log.close()
+        return record
+
+    def test_a_failed_pod_delete_has_not_left(self):
+        record = self.leave(pod_rc=1, pvc_rc=0)
+        self.assertIsNone(record.deleted)
+        self.assertIsNone(record.pvc_deleted)
+        self.assertIn("forbidden", record.error)
+
+    def test_a_failed_claim_delete_starts_no_cleanup_clock(self):
+        record = self.leave(pod_rc=0, pvc_rc=1)
+        self.assertIsNotNone(record.deleted)
+        self.assertIsNone(record.pvc_deleted)
+        self.assertIn("forbidden", record.error)
+
+    def test_both_deleted_is_a_clean_leave(self):
+        record = self.leave(pod_rc=0, pvc_rc=0)
+        self.assertIsNotNone(record.deleted)
+        self.assertIsNotNone(record.pvc_deleted)
+        self.assertEqual(record.error, "")
+
+
 class RestartSchedule(unittest.TestCase):
     """When chaos.restart restarts what: at least `guaranteed` times inside the window,
     otherwise by a low chance per tick, never after the window, reproducibly per seed."""

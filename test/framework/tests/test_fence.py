@@ -211,5 +211,39 @@ class FenceTeardown(unittest.TestCase):
         self.assertIn(" ".join(rules[0]), text)
 
 
+class FenceHeal(unittest.TestCase):
+    """A partition counts as healed only when every rule is gone. Marked healed with a
+    rule left, the detector judges later writes as after the heal while the host is still
+    cut off from NFS (review on #698)."""
+
+    def end(self, rc: int) -> dict:
+        def run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            code = rc if "iptables" in args else 0
+            return subprocess.CompletedProcess(args, code, "", "permission denied" if code else "")
+
+        f = fence.Fencer(heal_tail_s=0)
+        f._rules = [list(r) for r in fence.partition_rules("sbtest-fence-r1", ["10.244.3.7"])]
+        f._net_pod = "r1-fence-net"
+        f._pods = ["r1-fence-writer", "r1-fence-recaller", "r1-fence-net"]
+        f._record = {"victim_pod": "r1-fence-writer", "victim_node": "w1"}
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(kube, "run", run), \
+                mock.patch.object(kube, "exec_sh", return_value="1791525621000"):
+            ctx = RunContext(run_id="r1", outdir=d, log=Logger(os.path.join(d, "run.log")))
+            f.bind_namespaces(ctx)
+            f._end(ctx)
+            ctx.log.close()
+        return f._record
+
+    def test_a_rule_left_in_place_is_not_a_heal(self):
+        rec = self.end(rc=1)
+        self.assertNotIn("healed", rec)
+        self.assertIn("heal_error", rec)
+
+    def test_every_rule_removed_is_a_heal(self):
+        rec = self.end(rc=0)
+        self.assertIn("healed", rec)
+        self.assertNotIn("heal_error", rec)
+
+
 if __name__ == "__main__":
     unittest.main()

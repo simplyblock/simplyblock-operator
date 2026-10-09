@@ -63,7 +63,18 @@ class FenceDetector(Detector):
                           "recaller_node": f.recaller_node},
                 note="nfsd fences after two lease periods; a recall that outlasts that holds "
                      "every client of the file")
-        if f.truncate_returned is not None:
+        if f.truncate_returned is not None and f.truncate_error:
+            # It returned, but failed: nothing was recalled, so nothing was fenced.
+            yield warning(
+                self.name, title="the truncate failed, so fencing went untested",
+                subject=subject,
+                detail=f"truncate from {f.recaller_node} returned {_t(f.truncate_returned)}: "
+                       f"{f.truncate_error}",
+                evidence={"truncate_error": f.truncate_error,
+                          "recaller_node": f.recaller_node},
+                note="a recall needs a size change that succeeds; writes after it prove "
+                     "nothing about the reservation")
+        elif f.truncate_returned is not None:
             after = [w for w in during if w.ok and w.ts > f.truncate_returned]
             if after:
                 yield critical(

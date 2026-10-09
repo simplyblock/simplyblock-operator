@@ -126,6 +126,10 @@ class Restarter(Component):
     def __init__(self, **options: Any) -> None:
         super().__init__(**options)
         self._records: list[_Record] = []
+        #: Restarts whose delete failed, which therefore did not happen.
+        self._failed: list[dict[str, str]] = []
+        #: Numbers each attempt's log, failed ones included, so no two share a file.
+        self._attempts = 0
         self._workers: list[threading.Thread] = []
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -196,14 +200,25 @@ class Restarter(Component):
                          deleted=datetime.now(UTC), ip=victim.ip)
         with self._lock:
             self._records.append(record)
-            record.log = f"restart-{len(self._records)}-{target}-{victim.name}.txt"
+            self._attempts += 1
+            record.log = f"restart-{self._attempts}-{target}-{victim.name}.txt"
         follower = self._follow(ctx, victim.name, record.log)
         args = ["-n", self.opt("namespace"), "delete", "pod", victim.name, "--wait=false"]
         if self.opt("grace_period_s") is not None:
             args.append(f"--grace-period={int(self.opt('grace_period_s'))}")
         cp = kube.run(args, check=False)
         if cp.returncode != 0:
-            ctx.log.warn(f"{self.name}: deleting {victim.name} failed: {cp.stderr.strip()}")
+            # Nothing restarted: as a record it would read as a pod that never came back.
+            error = cp.stderr.strip() or f"kubectl exited {cp.returncode}"
+            with self._lock:
+                self._records.remove(record)
+                self._failed.append({"target": target, "pod": victim.name,
+                                     "node": record.node, "at": _iso(record.deleted),
+                                     "error": error})
+            _finish(follower)
+            ctx.log.warn(f"{self.name}: deleting {victim.name} failed, so {target} was not "
+                         f"restarted: {error}")
+            return
         ctx.log.info(f"{self.name}: restarting {target} {victim.name} on {record.node}")
         deadline = time.monotonic() + float(self.opt("ready_timeout_s"))
         while time.monotonic() < deadline:
@@ -274,7 +289,8 @@ class Restarter(Component):
             worker.join(timeout=float(self.opt("ready_timeout_s")))
         with self._lock:
             records = list(self._records)
-        ctx.save_json("restarts.json", {"seed": self._seed, "restarts": [{
+            failed = list(self._failed)
+        ctx.save_json("restarts.json", {"seed": self._seed, "failed": failed, "restarts": [{
             "target": r.target, "pod": r.pod, "node": r.node,
             "deleted": _iso(r.deleted), "ready": _iso(r.ready) if r.ready else None,
             "replacement": r.replacement, "log": r.log, "ip": r.ip,
