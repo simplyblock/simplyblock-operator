@@ -867,6 +867,11 @@ type StorageClusterSpec struct {
 	// VolumeAutoPlacement configures automatic, latency-driven rebalancing.
 	// +optional
 	VolumeAutoPlacement *VolumeAutoPlacementSettings `json:"volumeAutoPlacement,omitempty"`
+
+	// TwoNode configures the control plane's arbitration for a cluster of
+	// exactly two storage nodes (an edge site). Ignored for larger clusters.
+	// +optional
+	TwoNode *TwoNodeSpec `json:"twoNode,omitempty"`
 }
 
 // StorageClusterStatus is the observed state of one backend cluster.
@@ -1021,6 +1026,11 @@ type StorageClusterStatus struct {
 	// ObservedGeneration is the generation the rest of this status was computed
 	// from, so a stale status can be told from a current one.
 	// +optional
+	// Arbitration is the two-node arbiter's record as the operator last read
+	// it; set only when spec.twoNode.arbitration is on.
+	// +optional
+	Arbitration *ArbitrationStatus `json:"arbitration,omitempty"`
+
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 

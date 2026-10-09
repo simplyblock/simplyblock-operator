@@ -559,6 +559,11 @@ type StorageNodeStatus struct {
 	// ObservedGeneration is the generation the rest of this status was computed
 	// from, so a stale status can be told from a current one.
 	// +optional
+	// Remediation is what Kubernetes knows about this node's host, reported
+	// for the two-node arbiter as positive fencing evidence.
+	// +optional
+	Remediation *NodeRemediationStatus `json:"remediation,omitempty"`
+
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
