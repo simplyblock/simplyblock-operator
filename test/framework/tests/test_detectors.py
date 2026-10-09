@@ -787,6 +787,25 @@ class PnfsVolumeOps(unittest.TestCase):
     def test_a_snapshot_left_behind_is_a_warning(self):
         self.assertEqual(self.severities([snapped(snapshot_deleted=None)]), [Severity.WARNING])
 
+    # Review on #704: a failed deletion also set the error, and the warning was given only
+    # without one, so no real leftover was ever reported.
+    def test_a_snapshot_whose_deletion_failed_is_still_left_behind(self):
+        op = snapped(snapshot_deleted=None, error="deleting volumesnapshot r-volops-1: timed out")
+        self.assertIn(Severity.WARNING, self.severities([op]))
+
+    def test_a_snapshot_never_created_is_not_left_behind(self):
+        op = snapped(snapshot="", ready_at=None, restored_at=None, restore_md5="",
+                     restore_claim="", snapshot_deleted=None, error="creating the snapshot refused")
+        self.assertNotIn(Severity.WARNING, self.severities([op]))
+
+    # Review on #704: an expansion with no client to observe it passed on the claim's half.
+    def test_an_expansion_no_client_observed_is_critical(self):
+        found = [f for f in self.found([expanded(client_pod="", client_before_b=0,
+                                                 client_after_b=0, client_seen_at=None)])
+                 if f.severity == Severity.CRITICAL]
+        self.assertEqual(len(found), 1)
+        self.assertIn("client", found[0].title)
+
     def test_an_operation_not_attempted_is_information(self):
         self.assertEqual(self.severities([snapped(skipped="no VolumeSnapshotClass",
                                                   ready_at=None, restored_at=None)]), [])

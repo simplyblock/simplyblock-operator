@@ -12,6 +12,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from datetime import UTC, datetime
 from typing import Any
@@ -53,19 +55,43 @@ class VolumeOpsSchedule(unittest.TestCase):
     def test_a_window_with_no_room_schedules_nothing(self):
         self.assertEqual(self.plan(end=100.0).schedule, [])
 
+    # Review on #704: only the start used to be inside the window, so a snapshot started
+    # near its end restored after fio exited. Each operation now finishes, worst case,
+    # before the next starts and before the window ends.
+    def test_every_operation_finishes_before_the_next_and_before_the_window_ends(self):
+        budgets = {"expand": 100.0, "snapshot": 200.0}
+        for seed in range(30):
+            p = self.plan(seed=seed, start=0.0, end=400.0,
+                          counts={"expand": 1, "snapshot": 1}, budgets=budgets)
+            self.assertEqual(sorted(op for _, op in p.schedule), ["expand", "snapshot"])
+            ends = [t + budgets[op] for t, op in p.schedule]
+            for (t_next, _), end in zip(p.schedule[1:], ends, strict=False):
+                self.assertLessEqual(end, t_next, f"seed {seed}: {p.schedule}")
+            self.assertLessEqual(ends[-1], 400.0, f"seed {seed}: {p.schedule}")
+
+    def test_an_operation_that_cannot_finish_in_the_window_is_dropped(self):
+        p = self.plan(start=0.0, end=300.0, counts={"expand": 1, "snapshot": 1},
+                      budgets={"expand": 100.0, "snapshot": 500.0})
+        self.assertEqual([op for _, op in p.schedule], ["expand"])
+        self.assertEqual(p.dropped, ["snapshot"])
+
 
 class FakeCluster:
     """kubectl for one pNFS claim, a fio pod mounting it, and whatever the test changes."""
 
     def __init__(self) -> None:
         self.capacity = "20Gi"
-        self.df = [20 * GI, 21 * GI]   # what df reports, call by call, the last repeating
+        # What df reports, call by call, the last repeating. A string is output that is
+        # not a byte count.
+        self.df: list[int | str] = [20 * GI, 21 * GI]
         self.patch_rc = 0
         self.snapshot_classes = [{"metadata": {"name": "sb-snap"}, "driver": "csi.simplyblock.io"}]
         self.snapshot_ready = True
         self.marker = "0123456789abcdef0123456789abcdef"
         self.restored = self.marker
         self.delete_rc = 0
+        self.stuck = False      # a deletion accepted but held by a finalizer
+        self.pods = True        # whether a fio pod mounts r1-shared-0
         self.calls: list[str] = []
 
     def run(self, args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
@@ -79,6 +105,8 @@ class FakeCluster:
         elif "get pvc" in line:
             out = json.dumps({"spec": {"resources": {"requests": {"storage": "20Gi"}}},
                               "status": {"capacity": {"storage": self.capacity}}})
+        elif "get pods" in line and not self.pods:
+            out = json.dumps({"items": []})
         elif "get pods" in line:
             out = json.dumps({"items": [{
                 "metadata": {"name": "r1-pnfs-0"}, "status": {"phase": "Running"},
@@ -95,6 +123,9 @@ class FakeCluster:
             out = "Running"
         elif "delete" in line:
             rc = self.delete_rc
+            # Held by a finalizer: accepted at once, but a delete that waits times out.
+            if self.stuck and "--wait=false" not in line:
+                return subprocess.CompletedProcess(args, 1, "", "timed out waiting for the condition")
         return subprocess.CompletedProcess(args, rc, out, "forbidden" if rc else "")
 
     def exec_sh(self, _ns: str, _pod: str, script: str, **_: object) -> str:
@@ -108,15 +139,22 @@ class FakeCluster:
         return ""
 
 
-def run_op(fake: FakeCluster, op: str, **opts: Any) -> dict:
-    c = volume_ops.VolumeOps(poll_s=0, expand_timeout_s=1, snapshot_timeout_s=1,
-                             restore_timeout_s=1, **opts)
+def run_op(fake: FakeCluster, op: str, shared: dict | None = None,
+           run_end_in_s: float | None = None, **opts: Any) -> dict:
+    args: dict[str, Any] = {"poll_s": 0, "expand_timeout_s": 1, "snapshot_timeout_s": 1,
+                            "restore_timeout_s": 1}
+    args.update(opts)
+    c = volume_ops.VolumeOps(**args)
     with tempfile.TemporaryDirectory() as d, mock.patch.object(kube, "run", fake.run), \
             mock.patch.object(kube, "exec_sh", fake.exec_sh):
         ctx = RunContext(run_id="r1", outdir=d, log=Logger(os.path.join(d, "run.log")))
         c.bind_namespaces(ctx)
         ctx.shared["pnfs.claims"] = ["r1-shared-0"]
+        ctx.shared["pnfs.shared_claims"] = ["r1-shared-0"]
         ctx.shared["pnfs.storageclass"] = "sbtest-r1-pnfs"
+        ctx.shared.update(shared or {})
+        if run_end_in_s is not None:
+            c._run_end = time.monotonic() + run_end_in_s
         c._run_op(ctx, op)
         c.collect(ctx)
         ctx.log.close()
@@ -143,12 +181,61 @@ class Expand(unittest.TestCase):
         self.assertIsNotNone(rec["capacity_at"])
         self.assertIsNone(rec["client_seen_at"])
 
+    # Review on #704: with no client to ask, the expansion counted as complete on the
+    # claim's half alone.
+    def test_an_expansion_no_client_can_observe_fails(self):
+        fake = FakeCluster()
+        fake.pods = False
+        rec = run_op(fake, "expand", grow_gb=1)
+        self.assertIn("no running pod", rec["error"])
+
+    # Review on #704: a failed df read as 0 bytes, so the next normal read looked like the
+    # client seeing the new size.
+    def test_a_df_that_returns_no_byte_count_fails_the_expansion(self):
+        for bad in ("", "2.14748e+10", "df: /data: No such file or directory"):
+            fake = FakeCluster()
+            fake.df = [bad, 21 * GI]
+            rec = run_op(fake, "expand", grow_gb=1)
+            self.assertIn("df", rec["error"], bad)
+            self.assertIsNone(rec["client_seen_at"], bad)
+
+    def test_df_prints_an_integer_byte_count(self):
+        fake = FakeCluster()
+        run_op(fake, "expand", grow_gb=1)
+        df = next(c for c in fake.calls if c.startswith("exec df"))
+        self.assertIn('printf "%d', df)
+
+    # Review on #704: an operation must finish while fio still runs.
+    def test_an_operation_that_would_end_after_fio_is_skipped(self):
+        fake = FakeCluster()
+        rec = run_op(fake, "expand", run_end_in_s=10, expand_timeout_s=600)
+        self.assertIn("before fio ends", rec["skipped"])
+        self.assertFalse(any("patch pvc" in c for c in fake.calls))
+
     def test_a_refused_patch_is_an_error_and_nothing_after_it(self):
         fake = FakeCluster()
         fake.patch_rc = 1
         rec = run_op(fake, "expand", grow_gb=1)
         self.assertIn("forbidden", rec["error"])
         self.assertIsNone(rec["capacity_at"])
+
+
+class SharedClaims(unittest.TestCase):
+    """Review on #704: pnfs.claims holds the solo claims too, so half the operations missed
+    the volume several clients share."""
+
+    def test_operations_pick_only_a_shared_claim(self):
+        solo = [f"r1-solo-{i}" for i in range(10)]
+        rec = run_op(FakeCluster(), "expand", shared={
+            "pnfs.claims": [*solo, "r1-shared-0"], "pnfs.shared_claims": ["r1-shared-0"]})
+        self.assertEqual(rec["claim"], "r1-shared-0")
+
+    def test_without_shared_claims_nothing_is_attempted(self):
+        fake = FakeCluster()
+        rec = run_op(fake, "expand", shared={"pnfs.claims": ["r1-solo-0"],
+                                              "pnfs.shared_claims": []})
+        self.assertIn("shared", rec["skipped"])
+        self.assertFalse(any("patch pvc" in c for c in fake.calls))
 
 
 class Snapshot(unittest.TestCase):
@@ -186,7 +273,45 @@ class Snapshot(unittest.TestCase):
         fake.delete_rc = 1
         rec = run_op(fake, "snapshot")
         self.assertIsNone(rec["snapshot_deleted"])
-        self.assertIn("forbidden", rec["error"])
+        self.assertIn("forbidden", rec["cleanup_error"])
+
+    # Review on #704: a delete with --wait=false returns once accepted, so a snapshot held
+    # by a finalizer was recorded as deleted.
+    def test_a_deletion_that_does_not_finish_is_not_recorded_as_one(self):
+        fake = FakeCluster()
+        fake.stuck = True
+        rec = run_op(fake, "snapshot")
+        self.assertIsNone(rec["snapshot_deleted"])
+        self.assertIsNone(rec["restore_deleted"])
+        self.assertIn("timed out", rec["cleanup_error"])
+        self.assertEqual(rec["error"], "")
+
+
+class CollectWaitsForTheWorker(unittest.TestCase):
+    """Review on #704: collect gave the worker a fixed budget, then serialized its records
+    and let teardown run whether or not it had exited."""
+
+    def test_a_worker_still_running_is_recorded_and_kept(self):
+        c = volume_ops.VolumeOps(ops={"expand": 1}, expand_timeout_s=0.1, join_margin_s=0,
+                                 op_overhead_s=0)
+        release = threading.Event()
+        running = volume_ops._Op(op="expand", claim="r1-shared-0", requested=datetime.now(UTC))
+        c._ops.append(running)
+        c._current = running
+        c._loop = threading.Thread(target=release.wait, daemon=True)
+        c._loop.start()
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                ctx = RunContext(run_id="r1", outdir=d, log=Logger(os.path.join(d, "run.log")))
+                c.bind_namespaces(ctx)
+                c.collect(ctx)
+                ctx.log.close()
+                with open(os.path.join(d, "volume-ops.json")) as fh:
+                    saved = json.load(fh)
+            self.assertIsNotNone(c._loop, "the live worker was forgotten")
+            self.assertIn("still running", saved["ops"][0]["error"])
+        finally:
+            release.set()
 
 
 class VolumeOpsArchive(unittest.TestCase):

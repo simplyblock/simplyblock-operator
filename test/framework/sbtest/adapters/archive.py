@@ -560,7 +560,8 @@ class ArchiveEvidence:
                 restored_at=_dt(o.get("restored_at")),
                 restore_md5=str(o.get("restore_md5") or ""),
                 restore_deleted=_dt(o.get("restore_deleted")),
-                snapshot_deleted=_dt(o.get("snapshot_deleted"))))
+                snapshot_deleted=_dt(o.get("snapshot_deleted")),
+                cleanup_error=str(o.get("cleanup_error") or "")))
         out.sort(key=lambda o: o.requested)
         return out
 

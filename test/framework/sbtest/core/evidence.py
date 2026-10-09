@@ -337,7 +337,9 @@ class VolumeOp:
     `client_before_b`. For a snapshot, `marker_md5` is the checksum of a file a client wrote
     just before it, `ready_at` when the snapshot was ready to use, and `restore_md5` what a
     pod read back from `restore_claim`, a block volume restored from it, at `restored_at`.
-    A deletion is recorded only when it succeeded.
+    `snapshot` is set only once the VolumeSnapshot was created. A deletion is recorded only
+    when the object was gone, and a deletion that failed or did not finish is in
+    `cleanup_error`, apart from `error`, which is the operation itself failing.
     """
 
     op: str
@@ -360,6 +362,7 @@ class VolumeOp:
     restore_md5: str = ""
     restore_deleted: datetime | None = None
     snapshot_deleted: datetime | None = None
+    cleanup_error: str = ""
 
 
 @dataclass(frozen=True)

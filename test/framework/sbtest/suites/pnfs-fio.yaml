@@ -81,9 +81,18 @@ components:
   # One expansion and one snapshot of a shared claim under load. The snapshot is restored
   # into a block XFS volume and a marker written before it is read back. A clone into a
   # pNFS claim is refused by the driver, so it is not attempted.
+  # Each operation has to finish while fio runs, worst case included: the expansion's
+  # budget is 300 s here and the snapshot's 720 s, so both fit after the start delay and
+  # before the quiet tail of a 1800 s run. A run too short for one records it as skipped.
   chaos.volume-ops:
     ops: {expand: 1, snapshot: 1}
     grow_gb: 1
+    quiet_tail_s: 120
+    expand_timeout_s: 240
+    snapshot_timeout_s: 180
+    restore_timeout_s: 300
+    delete_timeout_s: 60
+    op_overhead_s: 60
 
   # The SPDK containers outrun kubelet rotation within minutes, so they are followed live
   # for the whole run, as the migration suites do. They are where a restarted metadata

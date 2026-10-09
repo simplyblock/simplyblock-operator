@@ -70,9 +70,13 @@ class VolumeOps(Detector):
             for title, detail in problems:
                 yield critical(self.name, title=title, subject=subject, detail=detail,
                                evidence=_evidence(op))
-            if op.op == "snapshot" and op.snapshot and op.snapshot_deleted is None and not op.error:
+            # `snapshot` is set only once the snapshot was created, so this is a snapshot
+            # left behind whatever else failed, and none when creating it was what failed.
+            if op.op == "snapshot" and op.snapshot and op.snapshot_deleted is None:
                 yield warning(self.name, title="the snapshot was not deleted afterward",
-                              subject=subject, detail=f"VolumeSnapshot {op.snapshot}",
+                              subject=subject,
+                              detail=f"VolumeSnapshot {op.snapshot}"
+                                     + (f": {op.cleanup_error}" if op.cleanup_error else ""),
                               evidence=_evidence(op),
                               note="the operation left its snapshot behind on the cluster")
             if problems:
@@ -89,7 +93,12 @@ class VolumeOps(Detector):
                 yield ("the claim never reached its new size",
                        f"{op.claim} asked for {op.target_bytes} bytes at {_t(op.requested)}, "
                        f"and its status did not show it {limit}")
-            elif op.client_pod and op.client_seen_at is None:
+            elif not op.client_pod:
+                # Without a client the export half, the one a pNFS claim adds, is unknown.
+                yield ("no client observed the expansion",
+                       f"{op.claim} reached its new size at {_t(op.capacity_at)}, and no "
+                       "running pod mounted it to show whether the export grew")
+            elif op.client_seen_at is None:
                 yield ("a client never saw the expansion",
                        f"{op.client_pod} still reported {op.client_before_b} bytes {limit} of "
                        f"the request, though the claim showed the new size at "

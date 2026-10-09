@@ -6,10 +6,12 @@ claim address the lvol and work without knowing an export is in front of it. Exp
 second half that only the export host can do: the operator re-assembles the export, which
 grows XFS in the metadata server's guest, and every client's node plugin re-takes its layout
 (csi-driver/internal/csi/node/expand.go). `chaos.volume-ops` exercises the two operations a
-pNFS claim supports, under the run's load:
+pNFS claim supports, under the run's load, on the claims several pods share
+(`pnfs.shared_claims`):
 
-- An **expand** grows one of the long-lived shared claims by `grow_gb`, and records when the
-  claim's status reached the new size and when `df` in a fio pod mounting it saw it.
+- An **expand** grows a shared claim by `grow_gb`, and records when the claim's status
+  reached the new size and when `df` in a fio pod mounting it saw it. With no fio pod to
+  ask, the expansion fails: its client half would go unobserved.
 - A **snapshot** has a fio pod write a marker file of known checksum to a shared claim, takes
   a VolumeSnapshot, and records when it was ready. With `restore` on, the snapshot is restored
   into a block volume formatted XFS, the filesystem the export carries. A pod reads the marker
@@ -19,9 +21,14 @@ A clone or restore into a pNFS claim is not attempted: the driver refuses it
 (csi-driver/internal/csi/controller/pnfsunsupported.go, test plan U-33). Neither is a
 snapshot when no VolumeSnapshotClass names the driver, which is recorded as skipped.
 
-The operations run one at a time, each at a seeded time inside the run, and none in the last
-`quiet_tail_s`, so each is observed before fio ends. A deletion is recorded only when it
-succeeded. Everything lands in `volume-ops.json`, which `pnfs.volume-ops` judges.
+The operations run one at a time, each at a seeded time inside the run, and each has to
+finish while fio runs. Every operation has a worst-case budget (its timeouts, its
+deletions, and `op_overhead_s`), and the schedule fits them one after another before the
+last `quiet_tail_s`. An operation that does not fit, or that would still be running when fio
+ends, is recorded as skipped rather than run against an idle volume. A deletion is recorded
+only once the object is gone, and one that failed or did not finish is a cleanup error, apart
+from the operation's own. Everything lands in `volume-ops.json`, which `pnfs.volume-ops`
+judges.
 """
 
 from __future__ import annotations
@@ -48,17 +55,40 @@ class VolumeOpsPlan:
     """When each operation runs. Pure: it never touches a cluster, so it is testable alone.
 
     Times are seconds on any monotonic scale shared by `start`, `end`, and the `now` passed
-    to `due`. Each operation counted in `counts` gets one time drawn uniformly from the
-    window.
+    to `due`. Each operation counted in `counts` runs once. `budgets` is how long an
+    operation can take at worst, and the operations are placed one after another so each
+    has its whole budget before the next starts and before `end`. The time left over is
+    spread at random between them. An operation that does not fit is in `dropped` instead.
     """
 
-    def __init__(self, *, seed: int, start: float, end: float, counts: dict[str, int]) -> None:
+    def __init__(self, *, seed: int, start: float, end: float, counts: dict[str, int],
+                 budgets: dict[str, float] | None = None) -> None:
         rng = random.Random(seed)
+        budgets = budgets or {}
+        wanted = [op for op in sorted(counts) for _ in range(int(counts[op]))]
         self.schedule: list[tuple[float, str]] = []
-        if end > start:
-            self.schedule = sorted((rng.uniform(start, end), op)
-                                   for op in sorted(counts) for _ in range(int(counts[op])))
+        self.dropped: list[str] = []
         self._next = 0
+        if end <= start:
+            self.dropped = wanted
+            return
+        rng.shuffle(wanted)
+        kept: list[str] = []
+        total = 0.0
+        for op in wanted:
+            need = float(budgets.get(op, 0.0))
+            if total + need <= end - start:
+                kept.append(op)
+                total += need
+            else:
+                self.dropped.append(op)
+        # Sorted cut points in the time left over: each operation starts after the one before it
+        # has had its full budget, and the last one ends by `end`.
+        cuts = sorted(rng.uniform(0.0, end - start - total) for _ in kept)
+        used = 0.0
+        for cut, op in zip(cuts, kept, strict=True):
+            self.schedule.append((start + cut + used, op))
+            used += float(budgets.get(op, 0.0))
 
     def due(self, now: float) -> list[str]:
         """The operations whose time has come, each returned once."""
@@ -91,9 +121,13 @@ class _Op:
     restore_md5: str = ""
     restore_deleted: datetime | None = None
     snapshot_deleted: datetime | None = None
+    cleanup_error: str = ""
 
     def fail(self, message: str) -> None:
         self.error = f"{self.error}; {message}" if self.error else message
+
+    def cleanup_failed(self, message: str) -> None:
+        self.cleanup_error = f"{self.cleanup_error}; {message}" if self.cleanup_error else message
 
 
 @component
@@ -120,6 +154,9 @@ class VolumeOps(Component):
             "expand_timeout_s": 300.0,
             "snapshot_timeout_s": 300.0,
             "restore_timeout_s": 600.0,
+            "delete_timeout_s": 120.0,   # for each object an operation deletes
+            "op_overhead_s": 120.0,      # an operation's exec and kubectl calls
+            "join_margin_s": 60.0,       # what collect waits beyond the operations' budgets
             "poll_s": 5.0,
             "seed": None,                # random, and logged, when unset
         }
@@ -127,11 +164,33 @@ class VolumeOps(Component):
     def __init__(self, **options: Any) -> None:
         super().__init__(**options)
         self._ops: list[_Op] = []
+        self._current: _Op | None = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._loop: threading.Thread | None = None
         self._seed = 0
         self._restore_sc = ""
+        #: When the operations have to be done by, on time.monotonic(): fio's end less the
+        #: quiet tail. None until start, which leaves operations unbounded in tests.
+        self._run_end: float | None = None
+
+    def _budget(self, op: str) -> float:
+        """How long op can take at worst: its timeouts, its deletions, and its calls."""
+        overhead = float(self.opt("op_overhead_s"))
+        delete = float(self.opt("delete_timeout_s"))
+        if op == "expand":
+            return float(self.opt("expand_timeout_s")) + overhead
+        if op == "snapshot":
+            if self.opt("restore"):
+                return (float(self.opt("snapshot_timeout_s")) + float(self.opt("restore_timeout_s"))
+                        + 3 * delete + overhead)
+            return float(self.opt("snapshot_timeout_s")) + delete + overhead
+        return overhead
+
+    def _deadline(self, timeout_s: float) -> float:
+        """The end of a step's timeout, and never after the run's end."""
+        deadline = time.monotonic() + timeout_s
+        return min(deadline, self._run_end) if self._run_end is not None else deadline
 
     # ── the schedule ─────────────────────────────────────────────────────────────────
 
@@ -143,15 +202,23 @@ class VolumeOps(Component):
         seed = self.opt("seed")
         self._seed = int(seed) if seed is not None else random.SystemRandom().randrange(2**31)
         t0 = time.monotonic()
+        counts = dict(self.opt("ops") or {})
+        self._run_end = t0 + duration - float(self.opt("quiet_tail_s"))
         plan = VolumeOpsPlan(seed=self._seed, start=t0 + float(self.opt("min_delay_s")),
-                             end=t0 + duration - float(self.opt("quiet_tail_s")),
-                             counts=dict(self.opt("ops") or {}))
+                             end=self._run_end, counts=counts,
+                             budgets={op: self._budget(op) for op in counts})
+        for op in plan.dropped:
+            with self._lock:
+                self._ops.append(_Op(op=op, claim="", requested=datetime.now(UTC),
+                                     skipped=f"its worst case of {self._budget(op):.0f}s does "
+                                             "not fit in the run before fio ends"))
         if not plan.schedule:
             ctx.log.warn(f"{self.name}: a {duration:.0f}s run leaves no window for volume "
                          "operations")
             return
         ctx.log.info(f"{self.name}: seed {self._seed}, " + ", ".join(
-            f"{op} at {t - t0:.0f}s" for t, op in plan.schedule))
+            f"{op} at {t - t0:.0f}s" for t, op in plan.schedule)
+            + (f"; dropped {', '.join(plan.dropped)}" if plan.dropped else ""))
 
         def loop() -> None:
             while not self._stop.is_set() and not ctx.stopping.is_set():
@@ -165,14 +232,20 @@ class VolumeOps(Component):
     def _run_op(self, ctx: RunContext, op: str) -> None:
         with self._lock:
             n = len(self._ops) + 1
-        claims = sorted(ctx.shared.get("pnfs.claims") or [])
+        claims = sorted(ctx.shared.get("pnfs.shared_claims") or [])
         record = _Op(op=op, claim="", requested=datetime.now(UTC))
         with self._lock:
             self._ops.append(record)
         if not claims:
-            record.skipped = "workload.pnfs published no claims"
+            record.skipped = "workload.pnfs published no shared claims"
             return
         record.claim = random.Random(self._seed + n).choice(claims)
+        if self._run_end is not None and time.monotonic() + self._budget(op) > self._run_end:
+            record.skipped = (f"its worst case of {self._budget(op):.0f}s would not finish "
+                              "before fio ends")
+            return
+        with self._lock:
+            self._current = record
         try:
             if op == "expand":
                 self._expand(ctx, record)
@@ -182,6 +255,9 @@ class VolumeOps(Component):
                 record.skipped = f"unknown operation {op!r}"
         except Exception as e:  # noqa: BLE001
             record.fail(str(e))
+        finally:
+            with self._lock:
+                self._current = None
         ctx.log.info(f"{self.name}: {op} of {record.claim} "
                      + (f"skipped: {record.skipped}" if record.skipped
                         else f"failed: {record.error}" if record.error
@@ -192,14 +268,16 @@ class VolumeOps(Component):
     def _expand(self, ctx: RunContext, record: _Op) -> None:
         ns = str(self.opt("namespace"))
         record.timeout_s = float(self.opt("expand_timeout_s"))
+        client = self._client(ns, record.claim)
+        if not client:
+            record.fail(f"no running pod mounts {record.claim} to observe the expansion")
+            return
         claim = _get_json(ns, "pvc", record.claim)
         request = _bytes(claim.get("spec", {}).get("resources", {}).get("requests", {})
                          .get("storage", ""))
         record.target_bytes = request + int(self.opt("grow_gb")) * GI
-        client = self._client(ns, record.claim)
-        if client:
-            record.client_pod = client[0]
-            record.client_before_b = self._df(ns, client)
+        record.client_pod = client[0]
+        record.client_before_b = self._df(ns, client)
         record.requested = datetime.now(UTC)
         patch = {"spec": {"resources": {"requests": {"storage": str(record.target_bytes)}}}}
         cp = kube.run(["-n", ns, "patch", "pvc", record.claim, "--type=merge", "-p",
@@ -207,13 +285,13 @@ class VolumeOps(Component):
         if cp.returncode != 0:
             record.fail(f"patching {record.claim}: {cp.stderr.strip() or cp.returncode}")
             return
-        deadline = time.monotonic() + record.timeout_s
-        while record.capacity_at is None or (client and record.client_seen_at is None):
+        deadline = self._deadline(record.timeout_s)
+        while record.capacity_at is None or record.client_seen_at is None:
             if record.capacity_at is None:
                 status = _get_json(ns, "pvc", record.claim).get("status", {})
                 if _bytes(status.get("capacity", {}).get("storage", "")) >= record.target_bytes:
                     record.capacity_at = datetime.now(UTC)
-            if client and record.client_seen_at is None:
+            if record.client_seen_at is None:
                 size = self._df(ns, client)
                 if size > record.client_before_b:
                     record.client_after_b, record.client_seen_at = size, datetime.now(UTC)
@@ -237,9 +315,15 @@ class VolumeOps(Component):
         return None
 
     def _df(self, ns: str, client: tuple[str, str]) -> int:
-        out = kube.exec_sh(ns, client[0], f"df -k {self.opt('mount')} | awk 'NR==2{{print $2*1024}}'",
+        """The size of the client's mount in bytes. Anything but a byte count fails: read as
+        0, a failed read would make the next good one look like the client seeing growth."""
+        out = kube.exec_sh(ns, client[0],
+                           f"df -kP {self.opt('mount')} | awk 'NR==2{{printf \"%d\\n\", $2*1024}}'",
                            container=client[1], timeout=60).strip()
-        return int(out) if out.isdigit() else 0
+        if not out.isdigit() or int(out) <= 0:
+            raise RuntimeError(f"df of {self.opt('mount')} in {client[0]} returned no byte "
+                               f"count: {out!r}")
+        return int(out)
 
     # ── snapshot ─────────────────────────────────────────────────────────────────────
 
@@ -256,22 +340,27 @@ class VolumeOps(Component):
             return
         marker = f"{ctx.run_id}-volops-{n}.marker"
         path = f"{self.opt('mount')}/{marker}"
-        record.marker_md5 = kube.exec_sh(
-            ns, client[0], f"head -c {int(self.opt('marker_mb'))}M /dev/urandom > {path}.tmp "
-            f"&& mv {path}.tmp {path} && sync && md5sum {path} | cut -d' ' -f1",
-            container=client[1], timeout=120).strip()
-        if not record.marker_md5:
-            record.fail(f"writing the marker in {client[0]} returned no checksum")
-            return
-        record.snapshot = f"{ctx.run_id}-volops-{n}"
-        record.requested = datetime.now(UTC)
-        kube.run(["-n", ns, "apply", "-f", "-"], stdin=json.dumps({
-            "apiVersion": "snapshot.storage.k8s.io/v1", "kind": "VolumeSnapshot",
-            "metadata": {"name": record.snapshot, "labels": {LABEL: ctx.run_id}},
-            "spec": {"volumeSnapshotClassName": snapclass,
-                     "source": {"persistentVolumeClaimName": record.claim}}}))
         try:
-            deadline = time.monotonic() + record.timeout_s
+            record.marker_md5 = kube.exec_sh(
+                ns, client[0], f"head -c {int(self.opt('marker_mb'))}M /dev/urandom > {path}.tmp "
+                f"&& mv {path}.tmp {path} && sync && md5sum {path} | cut -d' ' -f1",
+                container=client[1], timeout=120).strip()
+            if not record.marker_md5:
+                record.fail(f"writing the marker in {client[0]} returned no checksum")
+                return
+            name = f"{ctx.run_id}-volops-{n}"
+            record.requested = datetime.now(UTC)
+            cp = kube.run(["-n", ns, "apply", "-f", "-"], check=False, stdin=json.dumps({
+                "apiVersion": "snapshot.storage.k8s.io/v1", "kind": "VolumeSnapshot",
+                "metadata": {"name": name, "labels": {LABEL: ctx.run_id}},
+                "spec": {"volumeSnapshotClassName": snapclass,
+                         "source": {"persistentVolumeClaimName": record.claim}}}))
+            if cp.returncode != 0:
+                record.fail(f"creating VolumeSnapshot {name}: {cp.stderr.strip() or cp.returncode}")
+                return
+            # Only now: a snapshot that was never created cannot be left behind.
+            record.snapshot = name
+            deadline = self._deadline(record.timeout_s)
             while True:
                 cp = kube.run(["-n", ns, "get", "volumesnapshot", record.snapshot, "-o",
                                "jsonpath={.status.readyToUse}"], check=False)
@@ -284,8 +373,9 @@ class VolumeOps(Component):
             if self.opt("restore"):
                 self._restore(ctx, record, marker)
         finally:
-            kube.exec_sh(ns, client[0], f"rm -f {path}", container=client[1], timeout=60)
-            if _delete(ns, "volumesnapshot", record.snapshot, record):
+            kube.exec_sh(ns, client[0], f"rm -f {path} {path}.tmp", container=client[1],
+                         timeout=60)
+            if record.snapshot and self._delete(ns, "volumesnapshot", record.snapshot, record):
                 record.snapshot_deleted = datetime.now(UTC)
 
     def _snapshot_class(self) -> str:
@@ -326,7 +416,7 @@ class VolumeOps(Component):
                      "volumes": [{"name": "data", "persistentVolumeClaim": {
                          "claimName": record.restore_claim}}]}}))
         try:
-            deadline = time.monotonic() + float(self.opt("restore_timeout_s"))
+            deadline = self._deadline(float(self.opt("restore_timeout_s")))
             while True:
                 cp = kube.run(["-n", ns, "get", "pod", reader, "-o",
                                "jsonpath={.status.phase}"], check=False)
@@ -339,8 +429,8 @@ class VolumeOps(Component):
                                               timeout=120).strip()
             record.restored_at = datetime.now(UTC)
         finally:
-            _delete(ns, "pod", reader, record)
-            if _delete(ns, "pvc", record.restore_claim, record):
+            self._delete(ns, "pod", reader, record)
+            if self._delete(ns, "pvc", record.restore_claim, record):
                 record.restore_deleted = datetime.now(UTC)
 
     def _restore_class(self, ctx: RunContext) -> str:
@@ -365,7 +455,24 @@ class VolumeOps(Component):
         self._restore_sc = name
         return name
 
+    def _delete(self, ns: str, kind: str, name: str, record: _Op) -> bool:
+        """Delete one object and wait until it is gone. True only then: a deletion that was
+        refused or that a finalizer still holds is a cleanup error on the record."""
+        timeout = float(self.opt("delete_timeout_s"))
+        cp = kube.run(["-n", ns, "delete", kind, name, "--ignore-not-found", "--wait=true",
+                       f"--timeout={int(timeout)}s"], check=False, timeout=int(timeout) + 30)
+        if cp.returncode != 0:
+            record.cleanup_failed(f"deleting {kind} {name}: {cp.stderr.strip() or cp.returncode}")
+            return False
+        return True
+
     # ── the end of the run ───────────────────────────────────────────────────────────
+
+    def _join_budget(self) -> float:
+        """How long the worker can still need: every configured operation's worst case."""
+        counts = dict(self.opt("ops") or {})
+        return (sum(int(n) * self._budget(op) for op, n in counts.items())
+                + float(self.opt("join_margin_s")))
 
     def stop(self, ctx: RunContext) -> None:
         # Only the schedule stops. An operation under way finishes, and collect waits for it.
@@ -373,10 +480,16 @@ class VolumeOps(Component):
 
     def collect(self, ctx: RunContext) -> None:
         if self._loop:
-            budget = (float(self.opt("snapshot_timeout_s")) + float(self.opt("restore_timeout_s"))
-                      + float(self.opt("expand_timeout_s")) + 300)
-            self._loop.join(timeout=budget)
-            self._loop = None
+            self._loop.join(timeout=self._join_budget())
+            if self._loop.is_alive():
+                # Kept, so teardown waits for it too rather than deleting under it.
+                with self._lock:
+                    if self._current is not None:
+                        self._current.fail("still running when the run was collected")
+                ctx.log.warn(f"{self.name}: an operation was still running after "
+                             f"{self._join_budget():.0f}s")
+            else:
+                self._loop = None
         with self._lock:
             ops = list(self._ops)
         ctx.save_json("volume-ops.json", {"seed": self._seed, "ops": [{
@@ -388,13 +501,19 @@ class VolumeOps(Component):
             "snapshot": o.snapshot, "marker_md5": o.marker_md5, "ready_at": _iso(o.ready_at),
             "restore_claim": o.restore_claim, "restored_at": _iso(o.restored_at),
             "restore_md5": o.restore_md5, "restore_deleted": _iso(o.restore_deleted),
-            "snapshot_deleted": _iso(o.snapshot_deleted)} for o in ops]})
+            "snapshot_deleted": _iso(o.snapshot_deleted),
+            "cleanup_error": o.cleanup_error} for o in ops]})
         ctx.log.info(f"{self.name}: {len(ops)} volume operation(s) (seed {self._seed})")
 
     def teardown(self, ctx: RunContext) -> None:
         # Whatever an operation created and did not delete, a failed run included.
         ns, selector = str(self.opt("namespace")), f"{LABEL}={ctx.run_id}"
         self._stop.set()
+        if self._loop and self._loop.is_alive():
+            self._loop.join(timeout=self._join_budget())
+            if self._loop.is_alive():
+                ctx.log.warn(f"{self.name}: deleting the operations' objects while one is "
+                             "still running")
         for kind in ("pod", "pvc", "volumesnapshot"):
             kube.run(["-n", ns, "delete", kind, "-l", selector, "--ignore-not-found"],
                      check=False, timeout=300)
@@ -403,7 +522,7 @@ class VolumeOps(Component):
 
 def _complete(o: _Op) -> bool:
     if o.op == "expand":
-        return o.capacity_at is not None and (not o.client_pod or o.client_seen_at is not None)
+        return o.capacity_at is not None and o.client_seen_at is not None
     return o.ready_at is not None and (not o.restore_claim or o.restored_at is not None)
 
 
@@ -412,17 +531,6 @@ def _get_json(ns: str, kind: str, name: str) -> dict:
     if cp.returncode != 0 or not cp.stdout:
         return {}
     return dict(json.loads(cp.stdout))
-
-
-def _delete(ns: str, kind: str, name: str, record: _Op) -> bool:
-    """Delete one object. True only when the delete succeeded, and an error on the record
-    otherwise."""
-    cp = kube.run(["-n", ns, "delete", kind, name, "--ignore-not-found", "--wait=false"],
-                  check=False, timeout=120)
-    if cp.returncode != 0:
-        record.fail(f"deleting {kind} {name}: {cp.stderr.strip() or cp.returncode}")
-        return False
-    return True
 
 
 def _bytes(quantity: object) -> int:
