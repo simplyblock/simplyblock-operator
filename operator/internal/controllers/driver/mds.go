@@ -12,6 +12,9 @@
 package driver
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -43,6 +46,11 @@ const KVMCapableValue = "true"
 // MDSClusterLabel carries the storage cluster's full ID on the metadata server
 // pod and its StatefulSet. The name only carries a prefix of it.
 const MDSClusterLabel = "storage.simplyblock.io/cluster-id"
+
+// MDSTemplateHashAnnotation records MDSTemplateHash on the metadata server
+// StatefulSet, so an operator release can tell whether the pod template is the
+// one it would build.
+const MDSTemplateHashAnnotation = "storage.simplyblock.io/mds-template-hash"
 
 const (
 	// MDSContainerName is the runner container. Its ID changes every time
@@ -333,7 +341,26 @@ func MDSObjects(
 			}},
 		},
 	}
+	hash, err := MDSTemplateHash(sts)
+	if err != nil {
+		return nil, nil, err
+	}
+	sts.Annotations = map[string]string{MDSTemplateHashAnnotation: hash}
 	return sa, sts, nil
+}
+
+// MDSTemplateHash is the hash of a metadata server StatefulSet's pod template,
+// which is what tells a StatefulSet built by another operator release from a
+// current one. It is taken over the template as built, not as read back:
+// Kubernetes fills in defaults on the way in, so a comparison of templates
+// would always differ.
+func MDSTemplateHash(sts *appsv1.StatefulSet) (string, error) {
+	raw, err := json.Marshal(sts.Spec.Template)
+	if err != nil {
+		return "", fmt.Errorf("encoding the metadata server pod template: %w", err)
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])[:16], nil
 }
 
 // mdsRunnerContainer runs mds-runner. It is privileged because it opens
