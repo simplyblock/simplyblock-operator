@@ -70,6 +70,13 @@ type Volume struct {
 	// the same one, because the control plane moves a subsystem as a whole.
 	StorageNodeID string
 
+	// ConsistencyGroup is the identifier of the consistency group the volume
+	// belongs to, and empty for a volume outside any group. A member is
+	// snapshotted with the rest of its group in one frozen cut, so an operation
+	// that would snapshot it alone has to refuse rather than take a cut that
+	// disagrees with its siblings.
+	ConsistencyGroup string
+
 	// Status is the control plane's own lifecycle string for the volume, in the
 	// control plane's spelling and therefore not an enum here. It is what
 	// separates a volume that exists from one that is usable: a volume restored

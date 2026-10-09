@@ -1,6 +1,6 @@
 // PersistentVolumeOps: one imperative operation performed against one
 // PersistentVolume, which today means moving its backing logical volume to
-// another storage node.
+// another storage node, or backing it up.
 //
 // It is the one Ops kind in this group whose target is a core Kubernetes type
 // rather than a kind this group defines, and almost everything unusual about it
@@ -85,16 +85,19 @@ const PersistentVolumeOpsTargetNodeLabel = "storage.simplyblock.io/target-node"
 const PinnedVolumeLabel = "storage.simplyblock.io/pinned-volume-pv"
 
 // PersistentVolumeOpsAction is the operation a PersistentVolumeOps performs.
-// The kind is named for its target rather than for the action so that carrying
-// a second one later would not rename it. It carries one, and no second one is
-// planned.
-// +kubebuilder:validation:Enum=Migrate
+// +kubebuilder:validation:Enum=Migrate;Backup
 type PersistentVolumeOpsAction string
 
 const (
 	// PersistentVolumeOpsActionMigrate moves the volume's backing logical
 	// volume to a different storage node.
 	PersistentVolumeOpsActionMigrate PersistentVolumeOpsAction = "Migrate"
+	// PersistentVolumeOpsActionBackup takes a snapshot of the volume and backs
+	// it up into the storage cluster's backup store. It needs no parameters.
+	// A volume that belongs to a consistency group is refused, because its
+	// group is snapshotted as one unit and a backup of one member alone would
+	// not agree with the others.
+	PersistentVolumeOpsActionBackup PersistentVolumeOpsAction = "Backup"
 )
 
 // PersistentVolumeOpsPhase is the operation's own progress. Succeeded rather
@@ -124,7 +127,7 @@ const (
 // registered kind merges these with the phases above into one enum, so that
 // Validating sits beside Completed and neither can be read without the other's
 // values in mind.
-// +kubebuilder:validation:Enum=Validating;Migrating;Verifying
+// +kubebuilder:validation:Enum=Validating;Migrating;Verifying;Snapshotting;BackingUp;AwaitingBackup
 type PersistentVolumeOpsStep string
 
 const (
@@ -143,6 +146,17 @@ const (
 	// restart into it: paths that outlived their Jobs poisoned the data path
 	// and blocked every later migration of the volume.
 	PersistentVolumeOpsStepVerifying PersistentVolumeOpsStep = "Verifying"
+
+	// PersistentVolumeOpsStepSnapshotting is the first working step of a
+	// Backup: it takes the snapshot that the backup is made from.
+	PersistentVolumeOpsStepSnapshotting PersistentVolumeOpsStep = "Snapshotting"
+	// PersistentVolumeOpsStepBackingUp asks the storage cluster to back the
+	// snapshot up. Once it has been asked, the backup cannot be taken back.
+	PersistentVolumeOpsStepBackingUp PersistentVolumeOpsStep = "BackingUp"
+	// PersistentVolumeOpsStepAwaitingBackup waits until the storage cluster
+	// reports the backup complete, which for a first full copy of a large
+	// volume can take hours.
+	PersistentVolumeOpsStepAwaitingBackup PersistentVolumeOpsStep = "AwaitingBackup"
 )
 
 // StorageNodeReference locates a StorageNode from a cluster-scoped object.
@@ -212,7 +226,7 @@ type CreatorReference struct {
 // PersistentVolume.
 //
 // The action and its parameter block have to agree: Migrate requires
-// spec.migrate, and no other action accepts it.
+// spec.migrate, and no other action accepts it. Backup takes no parameters.
 // +kubebuilder:validation:XValidation:rule="self.action == 'Migrate' ? has(self.migrate) : !has(self.migrate)",message="migrate is required for action Migrate and must be absent otherwise"
 type PersistentVolumeOpsSpec struct {
 	// PersistentVolumeName names the PersistentVolume this operation acts on.
@@ -231,10 +245,12 @@ type PersistentVolumeOpsSpec struct {
 	// +k8s:immutable
 	Action PersistentVolumeOpsAction `json:"action"`
 
-	// Abort asks a running operation to stop at its next step and unwind. It is
-	// expressible from Validating and Migrating and not from Verifying, which
-	// the action's graph declares rather than this field: once the copy has
-	// finished, the volume has moved and there is nothing to undo.
+	// Abort asks a running operation to stop at its next step and unwind. For a
+	// Migrate it is accepted until the copy has finished, because from then on
+	// the volume has moved and there is nothing to undo. For a Backup it is
+	// accepted until the backup has been requested, and a snapshot the
+	// operation already took is deleted. Once the backup has been requested,
+	// the operation runs on, because the storage cluster cannot cancel it.
 	// +optional
 	Abort bool `json:"abort,omitempty"`
 
@@ -380,6 +396,38 @@ type MigrationStatus struct {
 	ValidationJobs []ValidationJob `json:"validationJobs,omitempty"`
 }
 
+// VolumeBackupStatus is everything about the backup rather than about the
+// operation. It is durable working state: an operation that restarts partway
+// reads it to find the snapshot it took and the backup it asked for, instead of
+// taking or requesting them a second time.
+type VolumeBackupStatus struct {
+	// ClusterUUID, PoolUUID, and VolumeUUID are the storage cluster's
+	// identifiers for the volume being backed up, recorded so that later steps
+	// address it without reading the PersistentVolume again.
+	// +optional
+	ClusterUUID string `json:"clusterUUID,omitempty"`
+	// +optional
+	PoolUUID string `json:"poolUUID,omitempty"`
+	// +optional
+	VolumeUUID string `json:"volumeUUID,omitempty"`
+
+	// SnapshotName is the name the snapshot is requested under. It derives from
+	// the operation, so a snapshot taken by an earlier attempt can be found by
+	// name and reused.
+	// +optional
+	SnapshotName string `json:"snapshotName,omitempty"`
+
+	// SnapshotID is the storage cluster's identifier for the snapshot the
+	// backup is made from.
+	// +optional
+	SnapshotID string `json:"snapshotID,omitempty"`
+
+	// BackupID is the storage cluster's identifier for the backup. The backup
+	// appears as a StorageBackup named after it, beside the StorageCluster.
+	// +optional
+	BackupID string `json:"backupID,omitempty"`
+}
+
 // PersistentVolumeOpsStatus is the observed state of one volume operation.
 type PersistentVolumeOpsStatus struct {
 	// Phase is the operation's own progress.
@@ -389,7 +437,7 @@ type PersistentVolumeOpsStatus struct {
 	// Step is the position of the running action's state machine. It is
 	// persisted before the side effect that step performs, so a step reported
 	// here is a step that started.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Migrating','Verifying']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Migrating','Verifying','Snapshotting','BackingUp','AwaitingBackup']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
@@ -397,6 +445,10 @@ type PersistentVolumeOpsStatus struct {
 	// operation.
 	// +optional
 	Migration *MigrationStatus `json:"migration,omitempty"`
+
+	// Backup is everything about the backup of a Backup operation.
+	// +optional
+	Backup *VolumeBackupStatus `json:"backup,omitempty"`
 
 	// DeferredSince is when the operation was first held — behind another
 	// operation's lock, or behind a control plane that is not accepting
@@ -432,6 +484,7 @@ type PersistentVolumeOpsStatus struct {
 // +kubebuilder:printcolumn:name="Volume",type=string,JSONPath=".spec.persistentVolumeName"
 // +kubebuilder:printcolumn:name="Action",type=string,JSONPath=".spec.action"
 // +kubebuilder:printcolumn:name="Target",type=string,JSONPath=".spec.migrate.targetNodeRef.name"
+// +kubebuilder:printcolumn:name="Backup",type=string,JSONPath=".status.backup.backupID",priority=1
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Step",type=string,JSONPath=".status.step.state"
 // +kubebuilder:printcolumn:name="Message",type=string,JSONPath=".status.message",priority=1

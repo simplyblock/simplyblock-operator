@@ -124,6 +124,9 @@ type PersistentVolumeOpsReconciler struct {
 	Recorder events.EventRecorder
 	API      MigrationClient
 
+	// Backups is the control-plane surface the Backup action calls.
+	Backups BackupClient
+
 	// Reader is uncached, and the consumer lookup is what it is for: a stale
 	// informer cache can miss a pod that is genuinely running, and a volume
 	// whose consumer was missed is one whose host never gets the target's
@@ -134,7 +137,7 @@ type PersistentVolumeOpsReconciler struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=persistentvolumeops,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=persistentvolumeops/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=persistentvolumeops/finalizers,verbs=update
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters;storagenodes;simplyblockdrivers,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters;storagenodes;simplyblockdrivers;storagepools,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=patch
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
@@ -246,6 +249,10 @@ func (r *PersistentVolumeOpsReconciler) Reconcile(
 	if !controllerutil.ContainsFinalizer(&ops, opsFinalizer) {
 		controllerutil.AddFinalizer(&ops, opsFinalizer)
 		return ctrl.Result{}, r.Update(ctx, &ops)
+	}
+
+	if ops.Spec.Action == simplyblockv1alpha2.PersistentVolumeOpsActionBackup {
+		return r.reconcileBackup(ctx, &ops)
 	}
 
 	subject, err := r.resolve(ctx, &ops)

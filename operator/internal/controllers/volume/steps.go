@@ -410,6 +410,10 @@ func (r *PersistentVolumeOpsReconciler) verify(
 func (r *PersistentVolumeOpsReconciler) discardMigration(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject,
 ) error {
+	if ops.Spec.Action == simplyblockv1alpha2.PersistentVolumeOpsActionBackup {
+		return r.discardSnapshot(ctx, ops)
+	}
+
 	migration := ops.Status.Migration
 	if migration == nil || migration.MigrationUUID == "" {
 		// Nothing was ever created, which is the state being asked for.

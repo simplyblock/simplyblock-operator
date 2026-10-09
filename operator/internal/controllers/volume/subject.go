@@ -46,7 +46,7 @@ type subject struct {
 func (s *subject) namespace() string      { return s.cluster.Namespace }
 func (s *subject) targetNodeName() string { return s.targetRef.Name }
 
-// resolve reads the operation's world, or says why it cannot.
+// resolve reads a Migrate's world, or says why it cannot.
 //
 // Three outcomes are distinguished, because the operation does something
 // different with each. errVolumeGone ends the operation without it having gone
@@ -55,13 +55,34 @@ func (s *subject) targetNodeName() string { return s.targetRef.Name }
 func (r *PersistentVolumeOpsReconciler) resolve(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps,
 ) (*subject, error) {
+	resolved, err := r.resolveVolume(ctx, ops.Spec.PersistentVolumeName)
+	if err != nil {
+		return nil, err
+	}
+
+	target, err := r.targetNode(ctx, ops, resolved.cluster)
+	if err != nil {
+		return nil, err
+	}
+
+	resolved.targetRef = ops.Spec.Migrate.TargetNodeRef
+	resolved.targetUUID = target
+	return resolved, nil
+}
+
+// resolveVolume reads the volume an operation names and the cluster that owns
+// it, with the same three outcomes as resolve. It is the half every action
+// needs, and it names no target node, which is why a Backup can use it.
+func (r *PersistentVolumeOpsReconciler) resolveVolume(
+	ctx context.Context, name string,
+) (*subject, error) {
 	var pv corev1.PersistentVolume
-	err := r.Get(ctx, types.NamespacedName{Name: ops.Spec.PersistentVolumeName}, &pv)
+	err := r.Get(ctx, types.NamespacedName{Name: name}, &pv)
 	switch {
 	case apierrors.IsNotFound(err):
-		return nil, fmt.Errorf("%w: %s", errVolumeGone, ops.Spec.PersistentVolumeName)
+		return nil, fmt.Errorf("%w: %s", errVolumeGone, name)
 	case err != nil:
-		return nil, fmt.Errorf("read volume %s: %w", ops.Spec.PersistentVolumeName, err)
+		return nil, fmt.Errorf("read volume %s: %w", name, err)
 	case !pv.DeletionTimestamp.IsZero():
 		// A volume being deleted is one whose backing logical volume the driver
 		// is about to remove, so moving it is work nobody will read.
@@ -78,18 +99,11 @@ func (r *PersistentVolumeOpsReconciler) resolve(
 		return nil, err
 	}
 
-	target, err := r.targetNode(ctx, ops, cluster)
-	if err != nil {
-		return nil, err
-	}
-
 	return &subject{
 		pv:          &pv,
 		handle:      handle,
 		cluster:     cluster,
 		clusterUUID: handle.ClusterID,
-		targetRef:   ops.Spec.Migrate.TargetNodeRef,
-		targetUUID:  target,
 	}, nil
 }
 

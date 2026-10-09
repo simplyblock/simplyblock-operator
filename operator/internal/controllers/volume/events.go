@@ -77,3 +77,20 @@ const (
 	// volume, and has.
 	ReasonCleanupBlocked = "CleanupBlocked"
 )
+
+// The reasons a Backup owes an event.
+const (
+	// ReasonConsistencyGroupMember is a backup refused because the volume
+	// belongs to a consistency group.
+	ReasonConsistencyGroupMember = "ConsistencyGroupMember"
+
+	// ReasonBackupStoreMissing is a backup refused because the cluster has no
+	// backup store to write to.
+	ReasonBackupStoreMissing = "BackupStoreMissing"
+
+	// ReasonSnapshotTaken is the snapshot the backup is made from.
+	ReasonSnapshotTaken = "SnapshotTaken"
+
+	// ReasonBackupRequested is the control plane having accepted the backup.
+	ReasonBackupRequested = "BackupRequested"
+)

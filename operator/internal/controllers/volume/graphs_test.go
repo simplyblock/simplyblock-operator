@@ -30,7 +30,9 @@ import (
 // than derived so that the assertion below compares two independent statements
 // of the same set: deriving it from the graph would make the test agree with
 // itself.
-var everyStep = []string{"Migrating", "Validating", "Verifying"}
+var everyStep = []string{
+	"Migrating", "Validating", "Verifying", "Snapshotting", "BackingUp", "AwaitingBackup",
+}
 
 func TestTheStepEnumCoversEveryDeclaredState(t *testing.T) {
 	declared := statemachine.DeclaredMultiStates(graphs(0))
@@ -74,7 +76,8 @@ func celRuleValues(rule string) []string {
 // stepCELRule is the rule as the type declares it. Keeping a copy here is the
 // cost of a rule living in a struct tag; the test above is what makes the copy
 // worth having.
-const stepCELRule = "!has(self.state) || self.state in ['Validating','Migrating','Verifying']"
+const stepCELRule = "!has(self.state) || self.state in " +
+	"['Validating','Migrating','Verifying','Snapshotting','BackingUp','AwaitingBackup']"
 
 // Every action the API accepts needs a graph, or an operation of that action
 // fails at its first pass with ErrUnknownAction rather than doing anything.
@@ -82,10 +85,34 @@ func TestEveryActionDeclaresAGraph(t *testing.T) {
 	declared := graphs(0)
 	for _, a := range []simplyblockv1alpha2.PersistentVolumeOpsAction{
 		simplyblockv1alpha2.PersistentVolumeOpsActionMigrate,
+		simplyblockv1alpha2.PersistentVolumeOpsActionBackup,
 	} {
 		if _, ok := declared[statemachine.Action(a)]; !ok {
 			t.Errorf("action %q has no graph", a)
 		}
+	}
+}
+
+// TestTheBackupIsALine. The four steps run in one order and nothing branches:
+// the request is validated, the snapshot is taken, the backup is requested, and
+// the transfer is waited on.
+func TestTheBackupIsALine(t *testing.T) {
+	machine, err := graphs(0).New(context.Background(), actionBackup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer machine.Close()
+
+	if got := machine.CurrentState(); got != stepValidating {
+		t.Fatalf("the machine starts at %q, want Validating", got)
+	}
+	for _, next := range []step{stepSnapshotting, stepBackingUp, stepAwaitingBackup} {
+		if err := machine.TransitionTo(context.Background(), next); err != nil {
+			t.Fatalf("entering %s: %v", next, err)
+		}
+	}
+	if !machine.IsTerminal() {
+		t.Error("AwaitingBackup is not terminal, so the operation has somewhere left to go after the copy")
 	}
 }
 
@@ -112,15 +139,19 @@ func TestTheMigrationIsALine(t *testing.T) {
 	}
 }
 
-// TestOnlyVerifyingRefusesAnAbort. Before the copy finishes there is a backend
-// migration to cancel and paths to take back. After it, the volume has already
-// moved: there is nothing to undo, and the operation is what finishes the work.
+// TestAbortIsRefusedOnlyPastEachActionsPointOfNoReturn. Before a migration's
+// copy finishes there is a backend migration to cancel and paths to take back.
+// After it, the volume has already moved: there is nothing to undo, and the
+// operation is what finishes the work. A backup is the same shape one step
+// earlier: until the backup is requested the only thing created is a snapshot,
+// which an abort deletes, and from the request on the control plane cannot
+// cancel it.
 //
 // The same graph answers for a delete, which is the point of asking it here
 // rather than in two places: a deletion may never express a stop that
 // spec.abort could not (design-crd-model.md §3.1).
-func TestOnlyVerifyingRefusesAnAbort(t *testing.T) {
-	want := []step{stepVerifying}
+func TestAbortIsRefusedOnlyPastEachActionsPointOfNoReturn(t *testing.T) {
+	want := []step{stepAwaitingBackup, stepBackingUp, stepVerifying}
 	if diff := cmp.Diff(want, UnabortableSteps()); diff != "" {
 		t.Errorf("the steps an abort cannot be honored from (-want +got):\n%s", diff)
 	}

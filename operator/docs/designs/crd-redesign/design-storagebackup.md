@@ -135,8 +135,7 @@ bucket, including the ones another cluster wrote.
 
 **`StorageBackup` is an observation, not a request.** It records that a copy exists,
 which is why the operator is the only thing that creates one and the only thing that
-deletes one (§5.1). What decides that a copy is *taken* is `StorageBackupPolicy`, and
-what the copy can be turned back into is a restore.
+deletes one (§5.1). What decides that a copy is *taken* is `StorageBackupPolicy`, and what the copy can be turned back into is a restore.
 
 **The operation is a separate kind because it is a different category.** A policy and a
 backup are things that are, while a restore is a thing that happens, with a phase, a step
@@ -282,6 +281,11 @@ built from what is on the wire, and it would be the wrong lifetime in any case: 
 object goes when the store stops reporting the copy, not when a policy is deleted.
 What a policy governs is what is taken rather than what is kept, which is the same
 reading §9 gives retention.
+
+**A one-off backup is requested of a volume.** It is the `Backup` action of
+`PersistentVolumeOps` ([`design-persistentvolumeops.md`](design-persistentvolumeops.md)
+§5.2). The mirror creates the `StorageBackup` in the `StorageCluster`'s namespace, and
+the operation's `status.backup.backupID` is its name.
 
 ### 5.2 Status, in three groups
 
@@ -771,16 +775,6 @@ snapshot lineage §5.2 publishes are read from. A prefix convention plus a metad
 object per backup is the obvious shape and the control plane owns the format, so this is
 a question for whoever writes it rather than one this document can settle. Until it is
 settled, `status.source` and `status.backup` are fields with no stated source.
-
-**Q4: How a one-off backup is requested.** §5.1 makes every `StorageBackup` a discovery,
-so nothing in this design takes a backup on demand: a policy schedules them and the
-control plane performs them. Somebody wanting one copy of one claim right now has a
-policy with a schedule they do not want, or nothing. The candidates are an action on
-`StorageBackupOps` whose target is a claim rather than a backup, which breaks the rule
-that an `Ops` kind names one kind of target; a `StorageBackupPolicy` with a one-shot
-schedule, which makes the policy a request object; and a field on the claim, which puts
-storage policy in an application's object. None is obviously right, and the gap is real
-enough to name.
 
 **Q5: Whether the backup is the right thing a restore locks.** §6 puts
 `activeOpsRef` on `StorageBackup` because that is the target `spec.backupRef` names

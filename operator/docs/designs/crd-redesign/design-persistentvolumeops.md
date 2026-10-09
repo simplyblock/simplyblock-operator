@@ -502,6 +502,27 @@ The object stays, `status.message` says which cleanup is outstanding, and
 it. Leaving a visibly stuck object is the intended outcome: a path connected with
 nothing tracking it blocks every later migration on the volume, and has.
 
+### 5.2 The Backup Graph
+
+`action: Backup` snapshots one volume and asks the storage cluster to back the
+snapshot up. It takes no parameters, locks only the named volume, and moves nothing.
+`status.backup` records the snapshot and backup identifiers, and when the operation
+finishes `status.backup.backupID` is the name of the `StorageBackup` the mirror creates.
+
+| Step             | What it does                                                           | Abortable |
+|------------------|------------------------------------------------------------------------|-----------|
+| `Validating`     | Refuses a cluster with no `spec.backup` and a consistency-group member | Yes       |
+| `Snapshotting`   | Takes the snapshot, named from the operation's UID                     | Yes       |
+| `BackingUp`      | Requests the backup, found again through its snapshot after a restart  | No        |
+| `AwaitingBackup` | Waits for the control plane to report the backup complete              | No        |
+
+The snapshot is requested without the control plane's `backup` flag, which logs a failed
+backup and answers as if the call succeeded. The backup is a second call, so a refusal
+reaches the user in the operation's message. Once the backup is requested the control
+plane cannot cancel it, so the graph has no abort edge there and the delete guard (§5.1)
+refuses a delete. A consistency-group member is refused because a group is snapshotted
+as one unit.
+
 ---
 
 ## 6. Mutual Exclusion Through an Annotation on the Subsystem's Volumes

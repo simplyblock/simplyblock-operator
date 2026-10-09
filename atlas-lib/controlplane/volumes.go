@@ -37,6 +37,8 @@ func (c *Client) Volume(ctx context.Context, h lvol.VolumeHandle) (lvol.Volume, 
 		NQN:           d.Nqn,
 		StorageNodeID: nodeID(d.StorageNodeId),
 		Status:        d.Status,
+
+		ConsistencyGroup: groupOf(d.GroupId),
 	}, nil
 }
 
@@ -168,6 +170,15 @@ func (c *Client) ListVolumes(ctx context.Context, clusterID, poolID string) ([]l
 // nodeID renders a node UUID the control plane reported, and the empty string
 // for the zero value a missing field decodes to: a volume reported on no node
 // is not a volume on the node whose UUID is all zeros.
+// groupOf is the consistency group a volume record names, and empty when the
+// record names none.
+func groupOf(id *string) string {
+	if id == nil {
+		return ""
+	}
+	return *id
+}
+
 func nodeID(id openapi_types.UUID) string {
 	if id == (openapi_types.UUID{}) {
 		return ""

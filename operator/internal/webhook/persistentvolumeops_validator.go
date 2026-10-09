@@ -62,7 +62,16 @@ type PersistentVolumeOpsValidator struct {
 var undeletableVolumeSteps = map[simplyblockv1alpha2.PersistentVolumeOpsStep]string{
 	simplyblockv1alpha2.PersistentVolumeOpsStepVerifying: "the copy has finished and the volume " +
 		"has already moved, so what is left is the cleanup that makes the move safe: the " +
-		"validation Jobs and the paths they connected on every consuming host",
+		"validation Jobs and the paths they connected on every consuming host. Deleting the " +
+		"record would not undo the move, it would remove the only thing naming those paths, " +
+		"and a path left connected with nothing tracking it blocks every later migration of " +
+		"the volume",
+	simplyblockv1alpha2.PersistentVolumeOpsStepBackingUp: "the control plane is being asked to " +
+		"back the snapshot up, and a backup it has accepted cannot be cancelled. Deleting the " +
+		"record would leave the backup running with nothing naming the snapshot it reads",
+	simplyblockv1alpha2.PersistentVolumeOpsStepAwaitingBackup: "the control plane is copying the " +
+		"backup into the store and cannot cancel it. Deleting the record would leave nothing " +
+		"recording which backup this operation asked for",
 }
 
 func (v *PersistentVolumeOpsValidator) Handle(
@@ -95,15 +104,20 @@ func (v *PersistentVolumeOpsValidator) admitCreate(
 	if denied != nil {
 		return *denied
 	}
+	// A backup names the volume and nothing else, so there is no target to
+	// check. Whether the volume's cluster has a backup store is deliberately
+	// not asked here: an administrator can add one, so it is a fact about now
+	// and the controller reports it.
 	return v.targetInTheVolumesCluster(ctx, &ops, handle)
 }
 
-// addressableVolume refuses a volume this operator has no means to move, and
+// addressableVolume refuses a volume this operator has no means to act on, and
 // returns the handle the cluster is read out of when it can.
 func (v *PersistentVolumeOpsValidator) addressableVolume(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps,
 ) (lvol.Handle, *admission.Response) {
 	name := ops.Spec.PersistentVolumeName
+	verb := verbOf(ops.Spec.Action)
 
 	var pv corev1.PersistentVolume
 	err := v.Client.Get(ctx, types.NamespacedName{Name: name}, &pv)
@@ -111,16 +125,16 @@ func (v *PersistentVolumeOpsValidator) addressableVolume(
 	case apierrors.IsNotFound(err):
 		// Nothing creates an operation before its volume, so this is a typo.
 		return lvol.Handle{}, denied(
-			"there is no PersistentVolume %s to move. spec.persistentVolumeName names the "+
+			"there is no PersistentVolume %s to %s. spec.persistentVolumeName names the "+
 				"volume rather than the claim, because a claim can be deleted while its volume "+
-				"is retained.", name)
+				"is retained.", name, verb)
 	case err != nil:
 		return lvol.Handle{}, errored(err)
 	}
 
 	if pv.Spec.CSI == nil {
 		return lvol.Handle{}, denied(
-			"volume %s has no CSI source, so it has no logical volume to move.", name)
+			"volume %s has no CSI source, so it has no logical volume to %s.", name, verb)
 	}
 
 	// The check that earns this webhook. Every other refusal here is a
@@ -137,8 +151,8 @@ func (v *PersistentVolumeOpsValidator) addressableVolume(
 	}
 	if !ours[pv.Spec.CSI.Driver] {
 		return lvol.Handle{}, denied(
-			"volume %s was provisioned by driver %s, and this operator can only move volumes of "+
-				"%s.", name, pv.Spec.CSI.Driver, joined(ours))
+			"volume %s was provisioned by driver %s, and this operator can only %s volumes of "+
+				"%s.", name, pv.Spec.CSI.Driver, verb, joined(ours))
 	}
 
 	if volume.IsPNFS(&pv) {
@@ -152,6 +166,15 @@ func (v *PersistentVolumeOpsValidator) addressableVolume(
 				"there is nothing to address the backend with.", name, pv.Spec.CSI.VolumeHandle)
 	}
 	return handle, nil
+}
+
+// verbOf is what the operation does to the volume, for the sentences that
+// refuse it.
+func verbOf(action simplyblockv1alpha2.PersistentVolumeOpsAction) string {
+	if action == simplyblockv1alpha2.PersistentVolumeOpsActionBackup {
+		return "back up"
+	}
+	return "move"
 }
 
 // targetInTheVolumesCluster refuses a target node that does not exist and one
@@ -261,11 +284,9 @@ func (v *PersistentVolumeOpsValidator) admitDelete(req admission.Request) admiss
 	}
 
 	return *denied(
-		"PersistentVolumeOps %s is at step %s, where %s. Deleting the record would not undo the "+
-			"move, it would remove the only thing naming those paths, and a path left connected "+
-			"with nothing tracking it blocks every later migration of volume %s. Set spec.abort "+
-			"to stop an operation that can still be stopped, and delete the record once it is "+
-			"terminal.", ops.Name, step, doing, ops.Spec.PersistentVolumeName)
+		"PersistentVolumeOps %s is at step %s, where %s. Set spec.abort to stop an operation "+
+			"that can still be stopped, and delete the record once it is terminal.",
+		ops.Name, step, doing)
 }
 
 // denied builds a refusal, as a pointer so a helper can return "no refusal."

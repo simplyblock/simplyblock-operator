@@ -387,3 +387,88 @@ func TestPersistentVolumeOpsIgnoresEverythingButCreateAndDelete(t *testing.T) {
 		t.Errorf("an update was refused: %s", got.Result.Message)
 	}
 }
+
+// pvopsBackup is a well-formed Backup, which names the volume and nothing else.
+func pvopsBackup() *simplyblockv1alpha2.PersistentVolumeOps {
+	return &simplyblockv1alpha2.PersistentVolumeOps{
+		ObjectMeta: metav1.ObjectMeta{Name: "backup-1"},
+		Spec: simplyblockv1alpha2.PersistentVolumeOpsSpec{
+			PersistentVolumeName: pvopsVolume,
+			Action:               simplyblockv1alpha2.PersistentVolumeOpsActionBackup,
+		},
+	}
+}
+
+// TestPersistentVolumeOpsAdmitsAWellFormedBackup is the positive half of the
+// Backup cases: a volume this operator can act on and nothing else, which is
+// all a backup is told.
+func TestPersistentVolumeOpsAdmitsAWellFormedBackup(t *testing.T) {
+	v := pvopsValidator(t, simplyblockVolume(), pvopsClusterObject())
+
+	got := v.Handle(context.Background(), pvopsCreateRequest(t, pvopsBackup()))
+	if !got.Allowed {
+		t.Fatalf("a well-formed backup was refused: %s", got.Result.Message)
+	}
+}
+
+// TestPersistentVolumeOpsAdmitsABackupOfAClusterWithNoStoreYet. A cluster
+// without a backup store is a fact about now, since an administrator can add
+// one, so the controller holds the operation at its first step and reports it
+// rather than the webhook refusing for good a request that the next edit of the
+// cluster would make valid.
+func TestPersistentVolumeOpsAdmitsABackupOfAClusterWithNoStoreYet(t *testing.T) {
+	cluster := pvopsClusterObject()
+	cluster.Spec.Backup = nil
+	v := pvopsValidator(t, simplyblockVolume(), cluster)
+
+	got := v.Handle(context.Background(), pvopsCreateRequest(t, pvopsBackup()))
+	if !got.Allowed {
+		t.Fatalf("a backup of a cluster with no store yet was refused: %s", got.Result.Message)
+	}
+}
+
+// TestPersistentVolumeOpsRefusesABackupOfAVolumeThatIsNotThere. The refusal
+// says what the operation was going to do, not what a migration would have.
+func TestPersistentVolumeOpsRefusesABackupOfAVolumeThatIsNotThere(t *testing.T) {
+	v := pvopsValidator(t, pvopsClusterObject())
+
+	got := v.Handle(context.Background(), pvopsCreateRequest(t, pvopsBackup()))
+	if got.Allowed {
+		t.Fatal("a backup of a volume that does not exist was admitted")
+	}
+	if !strings.Contains(got.Result.Message, "back up") {
+		t.Errorf("the refusal speaks of the wrong action: %s", got.Result.Message)
+	}
+}
+
+// TestPersistentVolumeOpsRefusesADeleteOnceTheBackupIsRequested. From the
+// request on, the control plane is reading the snapshot and cannot cancel, so
+// the record is what names it.
+func TestPersistentVolumeOpsRefusesADeleteOnceTheBackupIsRequested(t *testing.T) {
+	v := pvopsValidator(t, simplyblockVolume(), pvopsClusterObject())
+
+	for _, tc := range []struct {
+		step    simplyblockv1alpha2.PersistentVolumeOpsStep
+		refused bool
+	}{
+		{step: simplyblockv1alpha2.PersistentVolumeOpsStepValidating},
+		{step: simplyblockv1alpha2.PersistentVolumeOpsStepSnapshotting},
+		{step: simplyblockv1alpha2.PersistentVolumeOpsStepBackingUp, refused: true},
+		{step: simplyblockv1alpha2.PersistentVolumeOpsStepAwaitingBackup, refused: true},
+	} {
+		t.Run(string(tc.step), func(t *testing.T) {
+			ops := pvopsBackup()
+			ops.Status.Phase = simplyblockv1alpha2.PersistentVolumeOpsPhaseRunning
+			ops.Status.Step = statemachine.KubeSnapshot{State: string(tc.step)}
+
+			got := v.Handle(context.Background(), pvopsDeleteRequest(t, ops))
+			if got.Allowed == tc.refused {
+				t.Fatalf("a delete at %s: allowed = %t, want %t (%s)",
+					tc.step, got.Allowed, !tc.refused, got.Result.Message)
+			}
+			if tc.refused && !strings.Contains(got.Result.Message, "abort") {
+				t.Errorf("the refusal does not say what to do instead: %s", got.Result.Message)
+			}
+		})
+	}
+}

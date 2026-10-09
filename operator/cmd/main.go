@@ -743,6 +743,7 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("persistentvolumeops-controller"),
 		API:      backupAPI,
+		Backups:  backupAPI,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PersistentVolumeOps")
 		os.Exit(1)

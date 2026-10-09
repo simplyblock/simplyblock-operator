@@ -75,6 +75,46 @@ func TestPersistentVolumeOpsCELRequiresTheActionsParameterBlock(t *testing.T) {
 	})
 }
 
+// backupOperation is a well-formed Backup, which carries no parameter block.
+func backupOperation() *simplyblockv1alpha2.PersistentVolumeOps {
+	return &simplyblockv1alpha2.PersistentVolumeOps{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "cel-backup-"},
+		Spec: simplyblockv1alpha2.PersistentVolumeOpsSpec{
+			PersistentVolumeName: "pvc-0001",
+			Action:               simplyblockv1alpha2.PersistentVolumeOpsActionBackup,
+		},
+	}
+}
+
+// TestPersistentVolumeOpsCELAcceptsABackupWithNoParameterBlock. A backup of a
+// volume needs nothing beyond the volume, so it has no block of its own, and
+// the rule that ties an action to its block must neither demand one nor let the
+// Migrate block ride along on an action that has no use for it.
+func TestPersistentVolumeOpsCELAcceptsABackupWithNoParameterBlock(t *testing.T) {
+	apiClient := apiServer(t)
+
+	t.Run("Backup alone is accepted", func(t *testing.T) {
+		ops := backupOperation()
+		if err := apiClient.Create(context.Background(), ops); err != nil {
+			t.Fatalf("a well-formed backup was rejected: %v", err)
+		}
+		t.Cleanup(func() { _ = apiClient.Delete(context.Background(), ops) })
+	})
+
+	t.Run("Backup carrying the Migrate block is rejected", func(t *testing.T) {
+		ops := backupOperation()
+		ops.Spec.Migrate = migrateOperation().Spec.Migrate
+
+		err := apiClient.Create(context.Background(), ops)
+		if err == nil {
+			t.Fatal("the apiserver accepted a Backup that names a target node")
+		}
+		if !strings.Contains(err.Error(), "must be absent otherwise") {
+			t.Fatalf("rejected for the wrong reason: %v", err)
+		}
+	})
+}
+
 // TestPersistentVolumeOpsCELFreezesEverythingButAbort. An operation that
 // changed what it was doing halfway through would have a status describing
 // neither, and the one field a user is meant to change after the fact is the
@@ -162,6 +202,9 @@ func TestPersistentVolumeOpsCELRejectsAnUndeclaredStep(t *testing.T) {
 		{step: "Validating"},
 		{step: "Migrating"},
 		{step: "Verifying"},
+		{step: "Snapshotting"},
+		{step: "BackingUp"},
+		{step: "AwaitingBackup"},
 		{step: "Suspending", wantDenied: true},
 	} {
 		t.Run(tc.step, func(t *testing.T) {

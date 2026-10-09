@@ -127,10 +127,14 @@ func (r *PersistentVolumeOpsReconciler) observeStep(
 // dropping: an operation that failed for that reason is exactly the kind
 // somebody wants a rate of.
 func clusterOf(ops *simplyblockv1alpha2.PersistentVolumeOps) string {
-	if ops.Status.Migration == nil {
+	switch {
+	case ops.Status.Migration != nil:
+		return ops.Status.Migration.ClusterUUID
+	case ops.Status.Backup != nil:
+		return ops.Status.Backup.ClusterUUID
+	default:
 		return ""
 	}
-	return ops.Status.Migration.ClusterUUID
 }
 
 // resultOf is the metric label for a terminal phase, lowercased because a label

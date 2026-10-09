@@ -376,6 +376,43 @@ func (c *Client) RestoreBackup(
 	return restored.LvolID, nil
 }
 
+// backupIDHeader carries the new backup's identifier on a successful create,
+// which declares no response model.
+const backupIDHeader = "X-Backup-Id"
+
+// CreateBackup asks the control plane to back one snapshot up into the
+// cluster's store, and returns the backup's identifier.
+//
+// The call returns once the backup is accepted. The transfer runs afterward,
+// and BackupByID reports how far it has got. A refusal, such as a cluster with
+// no backup store configured, answers 400 with the reason, and the reason is
+// kept in the returned error.
+func (c *Client) CreateBackup(ctx context.Context, clusterID, snapshotID string) (string, error) {
+	cluster, err := parseUUID("cluster id", clusterID)
+	if err != nil {
+		return "", err
+	}
+
+	what := "back up snapshot " + snapshotID
+	resp, err := c.api.ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostWithResponse(
+		ctx, cluster, nil, cpapi.UnderscoreBackupSnapshotParams{SnapshotId: snapshotID})
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", what, err)
+	}
+	if code := resp.StatusCode(); code < 200 || code >= 300 {
+		return "", respError(what, code, resp.Body)
+	}
+	if resp.HTTPResponse == nil {
+		return "", fmt.Errorf("%s: the response carried no headers: %w", what, errs.ErrInvalidResponse)
+	}
+	backupID := resp.HTTPResponse.Header.Get(backupIDHeader)
+	if backupID == "" {
+		return "", fmt.Errorf("%s: the response carried no %s header: %w",
+			what, backupIDHeader, errs.ErrInvalidResponse)
+	}
+	return backupID, nil
+}
+
 // okOrGone accepts a success and a 404 alike, which is what makes a delete
 // idempotent: the caller asked for the resource to be absent, and it is.
 func okOrGone(what string, code int, body []byte) error {

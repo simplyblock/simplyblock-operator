@@ -3395,6 +3395,10 @@ spec:
     - jsonPath: .spec.migrate.targetNodeRef.name
       name: Target
       type: string
+    - jsonPath: .status.backup.backupID
+      name: Backup
+      priority: 1
+      type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
@@ -3443,14 +3447,16 @@ spec:
               PersistentVolume.
 
               The action and its parameter block have to agree: Migrate requires
-              spec.migrate, and no other action accepts it.
+              spec.migrate, and no other action accepts it. Backup takes no parameters.
             properties:
               abort:
                 description: |-
-                  Abort asks a running operation to stop at its next step and unwind. It is
-                  expressible from Validating and Migrating and not from Verifying, which
-                  the action's graph declares rather than this field: once the copy has
-                  finished, the volume has moved and there is nothing to undo.
+                  Abort asks a running operation to stop at its next step and unwind. For a
+                  Migrate it is accepted until the copy has finished, because from then on
+                  the volume has moved and there is nothing to undo. For a Backup it is
+                  accepted until the backup has been requested, and a snapshot the
+                  operation already took is deleted. Once the backup has been requested,
+                  the operation runs on, because the storage cluster cannot cancel it.
                 type: boolean
               action:
                 description: |-
@@ -3458,6 +3464,7 @@ spec:
                   what it was doing halfway through would have a status describing neither.
                 enum:
                 - Migrate
+                - Backup
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -3554,6 +3561,36 @@ spec:
             description: PersistentVolumeOpsStatus is the observed state of one volume
               operation.
             properties:
+              backup:
+                description: Backup is everything about the backup of a Backup operation.
+                properties:
+                  backupID:
+                    description: |-
+                      BackupID is the storage cluster's identifier for the backup. The backup
+                      appears as a StorageBackup named after it, beside the StorageCluster.
+                    type: string
+                  clusterUUID:
+                    description: |-
+                      ClusterUUID, PoolUUID, and VolumeUUID are the storage cluster's
+                      identifiers for the volume being backed up, recorded so that later steps
+                      address it without reading the PersistentVolume again.
+                    type: string
+                  poolUUID:
+                    type: string
+                  snapshotID:
+                    description: |-
+                      SnapshotID is the storage cluster's identifier for the snapshot the
+                      backup is made from.
+                    type: string
+                  snapshotName:
+                    description: |-
+                      SnapshotName is the name the snapshot is requested under. It derives from
+                      the operation, so a snapshot taken by an earlier attempt can be found by
+                      name and reused.
+                    type: string
+                  volumeUUID:
+                    type: string
+                type: object
               completedAt:
                 description: CompletedAt is when it reached a terminal phase.
                 format: date-time
@@ -3779,7 +3816,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Validating'',''Migrating'',''Verifying'']'
+                  rule: '!has(self.state) || self.state in [''Validating'',''Migrating'',''Verifying'',''Snapshotting'',''BackingUp'',''AwaitingBackup'']'
             type: object
         type: object
     served: true

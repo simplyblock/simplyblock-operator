@@ -33,10 +33,17 @@ const (
 	stepValidating = simplyblockv1alpha2.PersistentVolumeOpsStepValidating
 	stepMigrating  = simplyblockv1alpha2.PersistentVolumeOpsStepMigrating
 	stepVerifying  = simplyblockv1alpha2.PersistentVolumeOpsStepVerifying
+
+	stepSnapshotting   = simplyblockv1alpha2.PersistentVolumeOpsStepSnapshotting
+	stepBackingUp      = simplyblockv1alpha2.PersistentVolumeOpsStepBackingUp
+	stepAwaitingBackup = simplyblockv1alpha2.PersistentVolumeOpsStepAwaitingBackup
 )
 
 // actionMigrate is the MultiConfig key for the one action this kind carries.
 const actionMigrate = statemachine.Action(simplyblockv1alpha2.PersistentVolumeOpsActionMigrate)
+
+// actionBackup is the MultiConfig key of the Backup action.
+const actionBackup = statemachine.Action(simplyblockv1alpha2.PersistentVolumeOpsActionBackup)
 
 // How long each step may take before the operation is reported as stuck.
 //
@@ -71,6 +78,14 @@ const (
 	// with nothing tracking it blocks every later migration of the volume, and
 	// has.
 	verifyingDeadline = 10 * time.Minute
+
+	// snapshottingDeadline and backingUpDeadline each bound one control-plane
+	// call. awaitingBackupDeadline bounds the transfer to the object store,
+	// which for a first full copy of a large volume is hours, so it is a limit
+	// on the pathological case and not on the slow one.
+	snapshottingDeadline   = 10 * time.Minute
+	backingUpDeadline      = 10 * time.Minute
+	awaitingBackupDeadline = 24 * time.Hour
 )
 
 // deadline is the entry hook every state here carries: it sets the step's
@@ -118,6 +133,27 @@ func graphs(members int32) statemachine.MultiConfig[step] {
 				// safe — so stopping here would leave exactly the state this
 				// step exists to prevent.
 				stepVerifying: {OnEnter: deadline(verifyingDeadline)},
+			},
+		},
+		// A Backup can be abandoned until the control plane has been asked for
+		// the backup, because up to then the only thing it created is a
+		// snapshot, which the abort deletes. The request cannot be taken back,
+		// so no edge leaves BackingUp or AwaitingBackup.
+		actionBackup: {
+			Initial: stepValidating,
+			States: map[step]statemachine.StateDef[step]{
+				stepValidating: {
+					To:        []step{stepSnapshotting},
+					Abortable: true,
+					OnEnter:   deadline(validatingDeadline),
+				},
+				stepSnapshotting: {
+					To:        []step{stepBackingUp},
+					Abortable: true,
+					OnEnter:   deadline(snapshottingDeadline),
+				},
+				stepBackingUp:      {To: []step{stepAwaitingBackup}, OnEnter: deadline(backingUpDeadline)},
+				stepAwaitingBackup: {OnEnter: deadline(awaitingBackupDeadline)},
 			},
 		},
 	}
