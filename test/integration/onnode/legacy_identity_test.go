@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/volstack"
@@ -214,33 +215,53 @@ func TestTheHostNamesARawBlockVolumeFromItsDeviceFile(t *testing.T) {
 	}
 }
 
+// byIDLinkTimeout bounds the wait for udev to publish a namespace's by-id link
+// after the connect.
+const byIDLinkTimeout = 15 * time.Second
+
 // byIDLink is the /dev/disk/by-id link pointing at device, which is the path
 // the previous node service mounted a volume from.
+//
+// udev creates each link under a temporary ".#" name and renames it into place,
+// so right after a connect the temporary name can be the only match, and gone by
+// the time mkfs opens it. The lookup waits for the stable name, and a link that
+// never appears fails the case rather than skipping it: the case exists to
+// exercise that link.
 func byIDLink(t *testing.T, devicePath string) string {
 	t.Helper()
 
 	const byID = "/dev/disk/by-id"
-	entries, err := os.ReadDir(byID)
-	if err != nil {
+	if _, err := os.Stat(byID); err != nil {
 		t.Skipf("no %s on this node, and the case is about the link it holds: %v", byID, err)
 	}
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".#") {
-			// udev creates each link under a temporary name and renames it into
-			// place, so this name may be gone by the time mkfs opens it.
-			continue
+	deadline := time.Now().Add(byIDLinkTimeout)
+	for {
+		if link, ok := stableByIDLink(byID, devicePath); ok {
+			return link
 		}
-		link := filepath.Join(byID, entry.Name())
-		resolved, err := filepath.EvalSymlinks(link)
-		if err != nil || resolved != devicePath {
-			continue
+		if time.Now().After(deadline) {
+			t.Fatalf("udev published no by-id link to %s within %s", devicePath, byIDLinkTimeout)
 		}
-		if strings.Contains(entry.Name(), "part") {
-			// A partition of the namespace rather than the namespace.
-			continue
-		}
-		return link
+		time.Sleep(200 * time.Millisecond)
 	}
-	t.Skipf("udev linked no by-id name to %s, and the case is about that link", devicePath)
-	return ""
+}
+
+// stableByIDLink is byIDLink's single look: a link in dir that resolves to
+// devicePath, is not udev's temporary name, and is not a partition's.
+func stableByIDLink(dir, devicePath string) (string, bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", false
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".#") || strings.Contains(name, "part") {
+			continue
+		}
+		link := filepath.Join(dir, name)
+		if resolved, err := filepath.EvalSymlinks(link); err == nil && resolved == devicePath {
+			return link, true
+		}
+	}
+	return "", false
 }
