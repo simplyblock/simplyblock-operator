@@ -240,6 +240,42 @@ func TestCreateIsIdempotent(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-09-pnfs-mds-restart-eacces (run pnfs-1791525621). A host
+// whose exports directory does not survive a restart links the root file to one
+// that does. nfsd then starts with every client's address already in an export,
+// instead of rejecting each request as an unknown client until the exports are
+// reassembled. The update has to land in the link's target and leave the link in
+// place, or the next restart starts without it again.
+func TestCreateWritesTheRootThroughALinkAndKeepsTheLink(t *testing.T) {
+	h := newHarness(t)
+	spec := h.spec()
+
+	target := filepath.Join(t.TempDir(), "state", rootDropInName)
+	link := filepath.Join(h.exportsDir, rootDropInName)
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.assembler.Create(context.Background(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	fi, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("root file in the exports directory: %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("root file in the exports directory is no longer a link (mode %v)", fi.Mode())
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("link target not written: %v", err)
+	}
+	if want := entry(filepath.Dir(spec.Path), spec.Clients, rootOptions); string(got) != want {
+		t.Errorf("link target = %q, want %q", got, want)
+	}
+}
+
 func TestCreateRefusesAnEmptyClientSet(t *testing.T) {
 	h := newHarness(t)
 	spec := h.spec()
@@ -390,5 +426,23 @@ func TestNewRefusesAConfigItCannotWorkWith(t *testing.T) {
 				t.Fatalf("New error = %v, want ErrInvalidSpec", err)
 			}
 		})
+	}
+}
+
+// Not being able to tell whether the root file is a link is an error, not a
+// regular file: writing in its place would replace a link with a file, which is
+// the restart failure the link exists to prevent.
+func TestRootFileReportsARootItCannotInspect(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory whatever its mode")
+	}
+	h := newHarness(t)
+	if err := os.Chmod(h.exportsDir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(h.exportsDir, 0o755) })
+
+	if got, err := h.assembler.rootFile(); err == nil {
+		t.Errorf("rootFile = %q, nil: want the inspection's error", got)
 	}
 }
