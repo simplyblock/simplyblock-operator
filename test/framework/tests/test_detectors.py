@@ -42,6 +42,7 @@ from sbtest.core import (  # noqa: E402
     Severity,
     SkipDetector,
     Versions,
+    VolumeOp,
     attribute_window,
     build_detector,
     freeze_windows,
@@ -88,6 +89,7 @@ class FakeEvidence:
         versions: Versions | None = None,
         timeline: list[NfsSample] | None = None,
         conntrack: list[ConntrackSample] | None = None,
+        volume_ops: list[VolumeOp] | None = None,
     ) -> None:
         self.run_id = run_id
         self.outdir = outdir
@@ -113,6 +115,7 @@ class FakeEvidence:
         self._versions = versions
         self._timeline = timeline or []
         self._conntrack = conntrack or []
+        self._volume_ops = volume_ops or []
 
     def migrations(self) -> list[Migration]:
         return list(self._migrations)
@@ -174,6 +177,9 @@ class FakeEvidence:
 
     def conntrack(self) -> list[ConntrackSample]:
         return list(self._conntrack)
+
+    def volume_ops(self) -> list[VolumeOp]:
+        return list(self._volume_ops)
 
     def cluster_uuid(self) -> str:
         return self._cluster
@@ -704,6 +710,105 @@ class MigrationOutcomes(unittest.TestCase):
         self.assertEqual(len(found), 1)  # three messages, one shape
         self.assertEqual(found[0].evidence["count"], 3)
 
+
+
+def expanded(**kw: object) -> VolumeOp:
+    """An expansion of r-shared-0 requested at 100s, on the claim at 110s, and seen by its
+    client at 130s, unless kw says otherwise."""
+    base: dict[str, object] = {"op": "expand", "claim": "r-shared-0", "requested": ts(100),
+                               "timeout_s": 300.0, "target_bytes": 21, "capacity_at": ts(110),
+                               "client_pod": "r-pnfs-0", "client_before_b": 20,
+                               "client_after_b": 21, "client_seen_at": ts(130)}
+    base.update(kw)
+    return VolumeOp(**base)  # type: ignore[arg-type]
+
+
+def snapped(**kw: object) -> VolumeOp:
+    """A snapshot of r-shared-0 requested at 100s, ready at 120s, restored and read back at
+    200s, and deleted, unless kw says otherwise."""
+    base: dict[str, object] = {"op": "snapshot", "claim": "r-shared-0", "requested": ts(100),
+                               "timeout_s": 300.0, "snapshot": "r-volops-1",
+                               "marker_md5": "aa", "ready_at": ts(120),
+                               "restore_claim": "r-volops-1-restore", "restored_at": ts(200),
+                               "restore_md5": "aa", "snapshot_deleted": ts(210),
+                               "restore_deleted": ts(205)}
+    base.update(kw)
+    return VolumeOp(**base)  # type: ignore[arg-type]
+
+
+class PnfsVolumeOps(unittest.TestCase):
+    """An expansion or a snapshot of a pNFS volume under load has to complete, reach the
+    clients, and leave fio running."""
+
+    VOL = PnfsVolume(claim="r-shared-0", lvol="lv1", shared=True, nodes=["w1"])
+
+    def found(self, ops: list[VolumeOp], pnfs: list[PnfsVolume] | None = None,
+              blocks: list[BlockSample] | None = None) -> list[Finding]:
+        ev = FakeEvidence(volume_ops=ops, pnfs=pnfs, blocks=blocks)
+        return list(build_detector("pnfs.volume-ops").detect(ev))
+
+    def severities(self, ops: list[VolumeOp], pnfs: list[PnfsVolume] | None = None,
+                   blocks: list[BlockSample] | None = None) -> list[Severity]:
+        return [f.severity for f in self.found(ops, pnfs, blocks) if f.severity != Severity.INFO]
+
+    def test_completed_operations_are_information(self):
+        self.assertEqual(self.severities([expanded(), snapped()]), [])
+        self.assertTrue(self.found([expanded(), snapped()]))
+
+    def test_an_expansion_the_claim_never_showed_is_critical(self):
+        self.assertEqual(self.severities([expanded(capacity_at=None, client_seen_at=None)]),
+                         [Severity.CRITICAL])
+
+    def test_an_expansion_no_client_saw_is_critical(self):
+        found = [f for f in self.found([expanded(client_seen_at=None)])
+                 if f.severity == Severity.CRITICAL]
+        self.assertEqual(len(found), 1)
+        self.assertIn("client", found[0].title)
+
+    def test_a_snapshot_that_never_became_ready_is_critical(self):
+        self.assertEqual(self.severities([snapped(ready_at=None, restored_at=None,
+                                                  restore_md5="")]), [Severity.CRITICAL])
+
+    def test_a_restore_that_read_other_data_is_critical(self):
+        found = [f for f in self.found([snapped(restore_md5="bb")])
+                 if f.severity == Severity.CRITICAL]
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].evidence["restore_md5"], "bb")
+
+    def test_a_restore_that_never_read_back_is_critical(self):
+        self.assertEqual(self.severities([snapped(restored_at=None, restore_md5="")]),
+                         [Severity.CRITICAL])
+
+    def test_an_operation_that_failed_is_critical(self):
+        self.assertEqual(self.severities([expanded(error="patch refused", capacity_at=None,
+                                                   client_seen_at=None)]),
+                         [Severity.CRITICAL])
+
+    def test_a_snapshot_left_behind_is_a_warning(self):
+        self.assertEqual(self.severities([snapped(snapshot_deleted=None)]), [Severity.WARNING])
+
+    def test_an_operation_not_attempted_is_information(self):
+        self.assertEqual(self.severities([snapped(skipped="no VolumeSnapshotClass",
+                                                  ready_at=None, restored_at=None)]), [])
+
+    def test_fio_stalling_across_an_operation_is_a_warning(self):
+        # Writes stop after 100s and the counter stands still through 190s: a 90s stall,
+        # measured as pnfs.device-io measures it, across the 100-130s expansion.
+        blocks = [blk("w1", t, 1, w) for t, w in
+                  ((60, 1), (80, 2), (100, 3), (130, 3), (160, 3), (190, 3), (220, 4))]
+        found = [f for f in self.found([expanded()], pnfs=[self.VOL], blocks=blocks)
+                 if f.severity == Severity.WARNING]
+        self.assertEqual(len(found), 1)
+        self.assertIn("stall", found[0].title)
+
+    def test_a_stall_outside_the_operation_is_not_its_warning(self):
+        blocks = [blk("w1", t, 1, w) for t, w in
+                  ((300, 1), (320, 1), (400, 1), (420, 2))]
+        self.assertEqual(self.severities([expanded()], pnfs=[self.VOL], blocks=blocks), [])
+
+    def test_a_run_without_volume_operations_is_skipped(self):
+        with self.assertRaises(SkipDetector):
+            self.found([])
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
