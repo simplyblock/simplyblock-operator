@@ -41,7 +41,7 @@ const nfsExportMDSBootRequeue = 10 * time.Second
 
 // The metadata server's workload, applied on a storage cluster's first export,
 // and the driver that configures it.
-// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=validatingadmissionpolicies;validatingadmissionpolicybindings,verbs=get;create
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;create
@@ -99,11 +99,11 @@ func (r *NFSExportReconciler) bindMDS(
 			// Not retried hot: nothing changes until somebody acts on the
 			// reason, so the export waits and looks again later.
 			r.event(export, corev1.EventTypeWarning, wait.reason,
-				fmt.Sprintf("cannot create the metadata server for storage cluster %s: %v", handle.ClusterID, err))
+				fmt.Sprintf("cannot bring up the metadata server for storage cluster %s: %v", handle.ClusterID, err))
 			return r.waitForMDS(ctx, export, err.Error(), nfsExportNoHostRequeue)
 		}
 		r.event(export, corev1.EventTypeWarning, "MDSUnavailable",
-			fmt.Sprintf("cannot create the metadata server for storage cluster %s: %v", handle.ClusterID, err))
+			fmt.Sprintf("cannot bring up the metadata server for storage cluster %s: %v", handle.ClusterID, err))
 		return ctrl.Result{}, err
 	}
 

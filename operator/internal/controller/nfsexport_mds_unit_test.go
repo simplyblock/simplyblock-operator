@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strconv"
@@ -32,10 +33,11 @@ import (
 
 // reasonRecorder keeps the reason of every event, so a test can assert that
 // a refusal to act said why.
-type reasonRecorder struct{ reasons []string }
+type reasonRecorder struct{ reasons, messages []string }
 
-func (r *reasonRecorder) Eventf(_ runtime.Object, _ runtime.Object, _, reason, _, _ string, _ ...interface{}) {
+func (r *reasonRecorder) Eventf(_ runtime.Object, _ runtime.Object, _, reason, _, note string, args ...interface{}) {
 	r.reasons = append(r.reasons, reason)
+	r.messages = append(r.messages, fmt.Sprintf(note, args...))
 }
 
 // The storage cluster in testExport's volumeRef.
@@ -350,9 +352,11 @@ func TestPodHostedStateDiskRefusesAClassThatIsNotSimplyblock(t *testing.T) {
 const mdsTemplateHashKey = "storage.simplyblock.io/mds-template-hash"
 
 // staleMDSStatefulSet is the StatefulSet an earlier operator release created:
-// another runner image, no template hash, and a state disk class the current
-// lookup would not pick.
-func staleMDSStatefulSet(t *testing.T) *appsv1.StatefulSet {
+// another runner image and a state disk class the current lookup would not
+// pick. With keepHash it carries that release's own template hash, as one
+// written by a hash-aware release does. Without it, it has none, as one
+// written before the hash existed.
+func staleMDSStatefulSet(t *testing.T, keepHash bool) *appsv1.StatefulSet {
 	t.Helper()
 	old := mdsDriver()
 	old.Spec.PNFS.MDS.Image = "quay.io/simplyblock-io/spdkcsi:pnfs-mds-v26.2.0"
@@ -360,8 +364,20 @@ func staleMDSStatefulSet(t *testing.T) *appsv1.StatefulSet {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delete(sts.Annotations, mdsTemplateHashKey)
+	if !keepHash {
+		delete(sts.Annotations, mdsTemplateHashKey)
+	}
 	return sts
+}
+
+// currentMDSHash is the template hash the current driver's StatefulSet carries.
+func currentMDSHash(t *testing.T) string {
+	t.Helper()
+	_, sts, err := driver.MDSObjects(mdsDriver(), testExportClusterID, "old-state-class")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sts.Annotations[mdsTemplateHashKey]
 }
 
 func loadMDSStatefulSet(t *testing.T, cl client.Client) *appsv1.StatefulSet {
@@ -380,7 +396,9 @@ func loadMDSStatefulSet(t *testing.T, cl client.Client) *appsv1.StatefulSet {
 // template follows the driver. The claim templates, which Kubernetes does not
 // let change, stay as they were.
 func TestPendingPodHostedUpdatesAnOutdatedMDSStatefulSet(t *testing.T) {
-	r, cl, events := newPodHostedReconciler(t, testExport(nil), mdsDriver(), staleMDSStatefulSet(t))
+	// The previous release's own hash, not none: a comparison that only
+	// noticed a missing hash would leave this one alone.
+	r, cl, events := newPodHostedReconciler(t, testExport(nil), mdsDriver(), staleMDSStatefulSet(t, true))
 
 	reconcileExport(t, r)
 
@@ -388,8 +406,8 @@ func TestPendingPodHostedUpdatesAnOutdatedMDSStatefulSet(t *testing.T) {
 	if got, want := sts.Spec.Template.Spec.Containers[0].Image, mdsDriver().Spec.PNFS.MDS.Image; got != want {
 		t.Errorf("runner image = %q, want %q", got, want)
 	}
-	if sts.Annotations[mdsTemplateHashKey] == "" {
-		t.Errorf("annotations = %v, want the template hash recorded", sts.Annotations)
+	if got, want := sts.Annotations[mdsTemplateHashKey], currentMDSHash(t); got != want {
+		t.Errorf("template hash = %q, want the current %q", got, want)
 	}
 	if got := ptr.Deref(sts.Spec.VolumeClaimTemplates[0].Spec.StorageClassName, ""); got != "old-state-class" {
 		t.Errorf("state disk class = %q, want the existing claim template kept", got)
@@ -437,7 +455,8 @@ func readyMDSExport() *simplyblockv1alpha2.NFSExport {
 // A Ready export updates it and stays Ready: the guest restart that follows is
 // what the restart resync handles.
 func TestReadyExportUpdatesAnOutdatedMDSStatefulSet(t *testing.T) {
-	r, cl, events := newPodHostedReconciler(t, readyMDSExport(), mdsDriver(), mdsPod(), staleMDSStatefulSet(t))
+	// No hash at all: the StatefulSet a release before the hash wrote.
+	r, cl, events := newPodHostedReconciler(t, readyMDSExport(), mdsDriver(), mdsPod(), staleMDSStatefulSet(t, false))
 
 	reconcileExport(t, r)
 
@@ -445,8 +464,8 @@ func TestReadyExportUpdatesAnOutdatedMDSStatefulSet(t *testing.T) {
 	if got, want := sts.Spec.Template.Spec.Containers[0].Image, mdsDriver().Spec.PNFS.MDS.Image; got != want {
 		t.Errorf("runner image = %q, want %q", got, want)
 	}
-	if sts.Annotations[mdsTemplateHashKey] == "" {
-		t.Errorf("annotations = %v, want the template hash recorded", sts.Annotations)
+	if got, want := sts.Annotations[mdsTemplateHashKey], currentMDSHash(t); got != want {
+		t.Errorf("template hash = %q, want the current %q", got, want)
 	}
 	if !slices.Contains(events.reasons, "MDSUpdated") {
 		t.Errorf("events = %v, want MDSUpdated", events.reasons)
@@ -520,7 +539,7 @@ func (c *conflictingUpdates) Update(ctx context.Context, obj client.Object, opts
 // loses the update finds the current hash on a re-read and is done, rather
 // than failing its reconcile.
 func TestAnMDSUpdateThatLostTheRaceToTheCurrentTemplateSucceeds(t *testing.T) {
-	r, cl, _ := newPodHostedReconciler(t, readyMDSExport(), mdsDriver(), mdsPod(), staleMDSStatefulSet(t))
+	r, cl, _ := newPodHostedReconciler(t, readyMDSExport(), mdsDriver(), mdsPod(), staleMDSStatefulSet(t, false))
 	_, current, err := driver.MDSObjects(mdsDriver(), testExportClusterID, "old-state-class")
 	if err != nil {
 		t.Fatal(err)
@@ -755,5 +774,61 @@ func TestPendingPodHostedRefusesAnMDSMemoryLimitUnder512Mi(t *testing.T) {
 	}
 	if res.RequeueAfter == 0 {
 		t.Error("no requeue: a corrected limit would never be noticed")
+	}
+}
+
+// Limits the runner refuses stop a Ready export's update as they stop a
+// create, and the guest already running keeps serving: the StatefulSet is not
+// written, the export stays Ready, and the reconcile does not fail.
+func TestReadyExportWithInvalidLimitsLeavesTheMDSStatefulSet(t *testing.T) {
+	d := mdsDriver()
+	d.Spec.PNFS.MDS.Resources.Limits = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("256Mi")}
+	r, cl, events := newPodHostedReconciler(t, readyMDSExport(), d, mdsPod(), staleMDSStatefulSet(t, true))
+	before := loadMDSStatefulSet(t, cl)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{
+		Namespace: testExportNS, Name: testExportName}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	after := loadMDSStatefulSet(t, cl)
+	if after.ResourceVersion != before.ResourceVersion {
+		t.Errorf("resourceVersion %s -> %s: the StatefulSet was written", before.ResourceVersion, after.ResourceVersion)
+	}
+	if !slices.Contains(events.reasons, "MDSResourcesInvalid") {
+		t.Errorf("events = %v, want MDSResourcesInvalid", events.reasons)
+	}
+	if got := loadExport(t, cl).Status.Phase; got != simplyblockv1alpha2.NFSExportPhaseReady {
+		t.Errorf("phase = %q, want it left Ready", got)
+	}
+}
+
+// failingUpdates fails every StatefulSet update, as an API server outage does.
+type failingUpdates struct{ client.Client }
+
+func (c *failingUpdates) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	if _, ok := obj.(*appsv1.StatefulSet); ok {
+		return errors.New("the server is currently unable to handle the request")
+	}
+	return c.Client.Update(ctx, obj, opts...)
+}
+
+// A Pending export whose metadata server could not be updated says so rather
+// than that it could not be created: the StatefulSet exists, and the event is
+// what an operator reads first (review on #707).
+func TestPendingEventsDoNotCallAFailedUpdateACreate(t *testing.T) {
+	r, cl, events := newPodHostedReconciler(t, testExport(nil), mdsDriver(), staleMDSStatefulSet(t, true))
+	r.Client = &failingUpdates{Client: cl}
+
+	_, _ = r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{
+		Namespace: testExportNS, Name: testExportName}})
+
+	if len(events.messages) == 0 {
+		t.Fatal("no event for the failed update")
+	}
+	for _, m := range events.messages {
+		if strings.Contains(m, "cannot create") {
+			t.Errorf("event %q calls the failed update a create", m)
+		}
 	}
 }
