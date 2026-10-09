@@ -23,6 +23,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/simplyblock/atlas/controlplane"
@@ -73,14 +74,14 @@ func (r *StorageBackupOpsReconciler) validate(
 
 	clusterID, err := r.clusterIDFor(ctx, ops)
 	if err != nil {
-		return false, fmt.Errorf("resolve cluster %s: %w", ops.Spec.ClusterRef, err)
+		return false, fmt.Errorf("resolve cluster %s: %w", ops.Spec.ClusterRef.Name, err)
 	}
 
 	var backup simplyblockv1alpha2.StorageBackup
 	if err := r.Get(ctx,
-		client.ObjectKey{Name: ops.Spec.BackupRef, Namespace: ops.Namespace}, &backup); err != nil {
+		backupKey(ops), &backup); err != nil {
 		if apierrors.IsNotFound(err) {
-			return false, fatalf("StorageBackup %s does not exist", ops.Spec.BackupRef)
+			return false, fatalf("StorageBackup %s does not exist", ops.Spec.BackupRef.Name)
 		}
 		return false, err
 	}
@@ -96,12 +97,12 @@ func (r *StorageBackupOpsReconciler) validate(
 		return false, nil
 	}
 
-	poolUUID, err := utils.ResolvePoolUUID(ctx, r.Client, ops.Namespace, ops.Spec.ClusterRef, restore.TargetPool)
+	poolUUID, err := utils.ResolvePoolUUID(ctx, r.Client, clusterKey(ops).Namespace, ops.Spec.ClusterRef.Name, restore.TargetPool)
 	if err != nil {
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, ReasonPoolNotFound, ReasonPoolNotFound,
 			"The target pool %s could not be resolved: %v", restore.TargetPool, err)
 		return false, fatalf("the target pool %s is not a pool of cluster %s: %v",
-			restore.TargetPool, ops.Spec.ClusterRef, err)
+			restore.TargetPool, ops.Spec.ClusterRef.Name, err)
 	}
 
 	if err := r.refuseExistingClaim(ctx, ops, restore.ClaimName); err != nil {
@@ -110,9 +111,9 @@ func (r *StorageBackupOpsReconciler) validate(
 
 	return true, r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageBackupOpsStatus) {
 		status.ClusterID = clusterID
-		status.BackupID = backup.Spec.BackupID
+		status.BackupID = backup.BackupID()
 		status.PoolUUID = poolUUID
-		status.Message = fmt.Sprintf("Restoring backup %s into pool %s", backup.Spec.BackupID, restore.TargetPool)
+		status.Message = fmt.Sprintf("Restoring backup %s into pool %s", backup.BackupID(), restore.TargetPool)
 	})
 }
 
@@ -453,7 +454,7 @@ func (r *StorageBackupOpsReconciler) restoreStorageClassName(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
 ) (string, error) {
 	name, err := pool.ConsumingClassName(ctx, r.Client,
-		ops.Namespace, ops.Spec.ClusterRef, ops.Spec.Restore.TargetPool)
+		clusterKey(ops).Namespace, ops.Spec.ClusterRef.Name, ops.Spec.Restore.TargetPool)
 	if err != nil {
 		return "", fatalf("the target pool %s has no StorageClass to restore into: %v",
 			ops.Spec.Restore.TargetPool, err)
@@ -492,6 +493,26 @@ func claimRefMatches(ref *corev1.ObjectReference, ops *simplyblockv1alpha2.Stora
 		ref.Namespace == ops.Namespace
 }
 
+// clusterKey is where the operation's cluster, and so its pool, is read from.
+func clusterKey(ops *simplyblockv1alpha2.StorageBackupOps) types.NamespacedName {
+	return ops.Spec.ClusterRef.In(ops.Namespace)
+}
+
+// backupKey is the StorageBackup the operation acts on.
+func backupKey(ops *simplyblockv1alpha2.StorageBackupOps) types.NamespacedName {
+	return ops.Spec.BackupRef.In(ops.Namespace)
+}
+
+// lockHolder is the name an operation holds its backup's lock under. It is the
+// operation's name, qualified by its namespace when the backup is in another,
+// because operations of one name in different namespaces can name one backup.
+func lockHolder(ops *simplyblockv1alpha2.StorageBackupOps) string {
+	if backupKey(ops).Namespace == ops.Namespace {
+		return ops.Name
+	}
+	return ops.Namespace + "/" + ops.Name
+}
+
 // backupOf reads the operation's target, which the Binding step needs for the
 // size and the filesystem the copy was taken with.
 func (r *StorageBackupOpsReconciler) backupOf(
@@ -499,7 +520,7 @@ func (r *StorageBackupOpsReconciler) backupOf(
 ) (*simplyblockv1alpha2.StorageBackup, error) {
 	var backup simplyblockv1alpha2.StorageBackup
 	if err := r.Get(ctx,
-		client.ObjectKey{Name: ops.Spec.BackupRef, Namespace: ops.Namespace}, &backup); err != nil {
+		backupKey(ops), &backup); err != nil {
 		return nil, err
 	}
 	return &backup, nil

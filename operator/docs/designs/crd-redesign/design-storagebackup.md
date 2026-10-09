@@ -226,26 +226,23 @@ Appendix B.
 
 ### 5.1 A backup object is discovered, not declared
 
-**Every `StorageBackup` is created by the operator from what the control plane
-reports the store holds.** The operator mirrors the cluster's backup stream and one
-object appears per backup on it. Nothing about a backup is a request, so the spec
-is identity and nothing else:
+**Every `StorageBackup` that records a copy is created by the operator from what the
+control plane reports the store holds.** A person may also create one to request a
+backup (§5.3). The operator mirrors the cluster's backup stream and one record
+appears per backup on it, and a record's spec names the cluster:
 
 ```go
-// ClusterRef names the StorageCluster whose store this backup was found in. With
-// BackupID it is the whole of this object's identity.
-// +kubebuilder:validation:Required
+// ClusterRef names the StorageCluster whose store this backup was found in.
+// +kubebuilder:validation:MaxLength=63
 // +k8s:immutable
-ClusterRef string `json:"clusterRef"`
-
-// BackupID is the identifier the store holds the backup under, and what a
-// restore addresses.
-// +kubebuilder:validation:Required
-// +k8s:immutable
-BackupID string `json:"backupID"`
+ClusterRef string `json:"clusterRef,omitempty"`
 ```
 
-**A user creates none and deletes none.** A validating webhook refuses both from every
+The backup's identifier is in `status.backup.backupID`, for a record and a request
+alike. It is observed, not asked for: the control plane assigns it and a request has
+none until the backup exists. `StorageBackup.BackupID()` reads it.
+
+**A user creates no record and deletes none.** A validating webhook refuses both from every
 identity except a service account in the operator's namespace, which is the same rule
 [`design-storagedevice.md`](design-storagedevice.md) §5.3 applies to a device object and
 for the same reason: the object is an observation of something the operator did not
@@ -328,6 +325,31 @@ the terminal success, and it is not called `Succeeded` because a backup is not a
 operation: what matters afterward is that the copy can be restored, not that the
 copying finished.
 
+### 5.3 A backup can be requested
+
+A person who wants one backup of one claim creates a `StorageBackup` with
+`spec.source.claimName`, the way a `VolumeSnapshot` is created. A CEL rule admits
+exactly one of `source` (a request) and `clusterRef` (a record).
+
+The request reconciler snapshots the claim's volume, then asks the control plane to
+back the snapshot up. They are two calls because the control plane reports a failed
+inline backup only in its log. The cluster is the one whose UUID is in the volume's
+handle, found in any namespace, so the request sits beside its claim. The snapshot is
+named from the request's UID and the backup is the one that names the snapshot, so a
+retry repeats neither call. A claim that is not bound, or a cluster with no
+`spec.backup`, holds the request in `Pending`.
+
+A requested backup has one object, the request. The mirror finds the owner through an
+index on `status.backup.backupID` and records no second object for it. A record made
+before the request learned the ID is removed. When the store stops reporting the copy
+the mirror marks the request `Failed`, because a request is a person's object and is not
+deleted the way a record is. When the request is deleted the copy stays in the store, and
+the deletion queues the backup so the mirror records it. The write guard leaves a request
+alone, and deleting one does not delete the copy. A restore names the request or a record
+and reads the identifier from status either way.
+
+---
+
 ---
 
 ## 6. StorageBackupOps
@@ -344,9 +366,9 @@ type StorageBackupOpsAction string
 
 | Action    | Steps                                                     | Target                              |
 |-----------|-----------------------------------------------------------|-------------------------------------|
-| `Restore` | `Validating` → `Restoring` → `AwaitingVolume` → `Binding` | A `StorageBackup` in this namespace |
+| `Restore` | `Validating` → `Restoring` → `AwaitingVolume` → `Binding` | A `StorageBackup`, in its namespace |
 
-**`spec.backupRef` is required, and names a `StorageBackup` in this namespace.** Every
+**`spec.backupRef` is required, and names a `StorageBackup`.** Every
 backup in the cluster's store has an object (§5.1), so a restore always has one to
 address and the reference is never optional.
 
@@ -403,9 +425,9 @@ and rejects the create when it does not resolve.
 |--------------------------------------------|---------------------------------------------|------------------------------------------|
 | `StorageBackupPolicy.spec.clusterRef`      | a `StorageCluster` in this namespace        | No such object                           |
 | `StorageBackup.spec.clusterRef`            | a `StorageCluster` in this namespace        | No such object                           |
-| `StorageBackupOps.spec.clusterRef`         | a `StorageCluster` in this namespace        | No such object                           |
-| `StorageBackupOps.spec.backupRef`          | a `StorageBackup` in this namespace         | No such object, or its phase is `Failed` |
-| `StorageBackupOps.spec.restore.targetPool` | a `StoragePool` in this namespace           | No such object                           |
+| `StorageBackupOps.spec.clusterRef`         | a `StorageCluster`, in its namespace        | No such object, or no read access        |
+| `StorageBackupOps.spec.backupRef`          | a `StorageBackup`, in its namespace         | No such object, or its phase is `Failed` |
+| `StorageBackupOps.spec.restore.targetPool` | a `StoragePool` in the cluster's namespace  | No such object                           |
 | `StorageBackupOps.spec.restore.claimName`  | a claim to create, which must not exist yet | A claim of that name already exists (§8) |
 
 **Existence is the webhook's and shape is the type's**, which is the division
@@ -419,6 +441,21 @@ is a fact about a different object that CEL cannot see.
 `StorageBackup` whose phase is `Failed` has no copy behind it, so a restore naming it
 is naming a record of something that does not exist. That is decided once and stays
 decided: a backup does not recover from `Failed`, it is replaced by another backup.
+
+**A restore can reach across namespaces.** `spec.backupRef` and `spec.clusterRef` are
+`{name, namespace}` references whose namespace defaults to the operation's. The backup is
+read from its namespace and the cluster and its pool from the cluster's, and the claim is
+always created beside the operation. A team restores into its own namespace by creating
+the operation there, whether the backup and the cluster are in that namespace or in
+others.
+
+The operator reads what the restore needs with its own rights, so a reference that leaves
+the operation's namespace is checked against the requester. The webhook runs a
+`SubjectAccessReview` for the requesting user before it resolves anything: `get` on the
+backup in its namespace, and `get` on the cluster and on the pool in the cluster's
+namespace. A reference that stays put asks nothing. The backup's lock names its holder
+`namespace/name` when the operation is in another namespace, because operations of one
+name in different namespaces can name one backup.
 
 **`spec.restore.claimName` is the one row where admission narrows a race it cannot
 close.** A claim can be created between the operation's admission and its
@@ -772,16 +809,6 @@ object per backup is the obvious shape and the control plane owns the format, so
 a question for whoever writes it rather than one this document can settle. Until it is
 settled, `status.source` and `status.backup` are fields with no stated source.
 
-**Q4: How a one-off backup is requested.** §5.1 makes every `StorageBackup` a discovery,
-so nothing in this design takes a backup on demand: a policy schedules them and the
-control plane performs them. Somebody wanting one copy of one claim right now has a
-policy with a schedule they do not want, or nothing. The candidates are an action on
-`StorageBackupOps` whose target is a claim rather than a backup, which breaks the rule
-that an `Ops` kind names one kind of target; a `StorageBackupPolicy` with a one-shot
-schedule, which makes the policy a request object; and a field on the claim, which puts
-storage policy in an application's object. None is obviously right, and the gap is real
-enough to name.
-
 **Q5: Whether the backup is the right thing a restore locks.** §6 puts
 `activeOpsRef` on `StorageBackup` because that is the target `spec.backupRef` names
 and because every entity with an `Ops` companion carries the field
@@ -1030,24 +1057,19 @@ type BackupCopy struct {
 	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
 }
 
-// StorageBackupSpec is the identity of one backup the operator found in a
-// cluster's store, and nothing else. The object is created by the operator and by
-// nobody else (§5.1), so there is no request here to carry: what the backup is of,
-// how big it is, and where it came from are all observations and live in status.
+// StorageBackupSpec is a record of a copy the store holds (clusterRef) or a
+// request for a new one (source). The identifier is in status.backup.backupID.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.source) != has(self.clusterRef)",message="set exactly one of source (to request a backup) or clusterRef (to record one the store holds)"
 type StorageBackupSpec struct {
-	// ClusterRef names the StorageCluster whose store this backup was found in.
-	// With BackupID it is the whole of this object's identity.
-	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
 	// +k8s:immutable
-	ClusterRef string `json:"clusterRef"`
+	ClusterRef string `json:"clusterRef,omitempty"`
 
-	// BackupID is the identifier the store holds the backup under, and what a
-	// restore addresses. It is the store's identifier rather than a name this
-	// operator assigns, so the same backup is the same object however many
-	// clusters have the location configured.
-	// +kubebuilder:validation:Required
+	// +optional
 	// +k8s:immutable
-	BackupID string `json:"backupID"`
+	Source *BackupRequest `json:"source,omitempty"`
 }
 
 // StorageBackupStatus is the observed state of one backup, in three groups: the
@@ -1164,8 +1186,7 @@ const (
 // RestoreSpec parameterizes the Restore action and is ignored by the other.
 type RestoreSpec struct {
 	// ClaimName is the PersistentVolumeClaim to create. It must not already
-	// exist: a restore that adopted an existing claim would replace a running
-	// workload's data with the backup's.
+	// exist: a restore that adopted an existing claim would replace a running workload's data with the backup's.
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
 	ClaimName string `json:"claimName"`
@@ -1190,17 +1211,17 @@ type RestoreSpec struct {
 
 // StorageBackupOpsSpec is one operation to perform against a backup.
 type StorageBackupOpsSpec struct {
-	// ClusterRef names the StorageCluster the operation runs against.
+	// ClusterRef names the StorageCluster the operation runs against. Its
+	// namespace defaults to the operation's.
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
-	ClusterRef string `json:"clusterRef"`
+	ClusterRef StorageClusterReference `json:"clusterRef"`
 
-	// BackupRef names the StorageBackup this operation acts on. Required, since
-	// Restore is the only action and every backup in the store has an object
-	// (§5.1).
+	// BackupRef names the StorageBackup this operation acts on. Its namespace
+	// defaults to the operation's.
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
-	BackupRef string `json:"backupRef"`
+	BackupRef NamespacedReference `json:"backupRef"`
 
 	// Action is the operation to perform.
 	// +kubebuilder:validation:Required
@@ -1262,7 +1283,7 @@ type StorageBackupOpsStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=sbops
-// +kubebuilder:printcolumn:name="Backup",type=string,JSONPath=".spec.backupRef"
+// +kubebuilder:printcolumn:name="Backup",type=string,JSONPath=".spec.backupRef.name"
 // +kubebuilder:printcolumn:name="Action",type=string,JSONPath=".spec.action"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Step",type=string,JSONPath=".status.step.state"

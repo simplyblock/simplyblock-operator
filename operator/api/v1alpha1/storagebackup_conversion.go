@@ -98,10 +98,7 @@ func (src *StorageBackup) ConvertTo(dstRaw conversion.Hub) error {
 	// API server handed in.
 	dst.ObjectMeta = *src.ObjectMeta.DeepCopy()
 
-	dst.Spec = v1alpha2.StorageBackupSpec{
-		ClusterRef: src.Spec.ClusterName,
-		BackupID:   src.Status.BackupID,
-	}
+	dst.Spec = src.hubSpec()
 
 	dst.Status = v1alpha2.StorageBackupStatus{
 		Phase: v1alpha2.StorageBackupPhase(
@@ -139,6 +136,18 @@ func (src *StorageBackup) ConvertTo(dstRaw conversion.Hub) error {
 	}
 
 	return nil
+}
+
+// hubSpec is a request when the object names a claim in its own namespace and
+// has no backup yet, and a record otherwise. A claim in another namespace has no
+// form in the hub, so it stays a record and the mirror reconciles it away.
+func (src *StorageBackup) hubSpec() v1alpha2.StorageBackupSpec {
+	ref := src.Spec.PVCRef
+	sameNamespace := ref != nil && (ref.Namespace == "" || ref.Namespace == src.Namespace)
+	if src.Status.BackupID == "" && sameNamespace {
+		return v1alpha2.StorageBackupSpec{Source: &v1alpha2.BackupRequest{ClaimName: ref.Name}}
+	}
+	return v1alpha2.StorageBackupSpec{ClusterRef: src.Spec.ClusterName}
 }
 
 // backupCopy is the status.backup group, or nil when nothing in it is set. An
@@ -201,13 +210,16 @@ func (dst *StorageBackup) ConvertFrom(srcRaw conversion.Hub) error {
 	dst.ObjectMeta = *src.ObjectMeta.DeepCopy()
 
 	dst.Spec = StorageBackupSpec{ClusterName: src.Spec.ClusterRef}
+	if src.Spec.Source != nil {
+		dst.Spec.PVCRef = &PersistentVolumeClaimRef{Name: src.Spec.Source.ClaimName}
+	}
 
 	dst.Status = StorageBackupStatus{
 		Phase:       mapOrPassThrough(storageBackupPhaseFromHub, string(src.Status.Phase)),
 		APIStatus:   src.Status.APIStatus,
 		Message:     src.Status.Message,
 		ClusterUUID: src.Status.ClusterID,
-		BackupID:    src.Spec.BackupID,
+		BackupID:    src.BackupID(),
 	}
 
 	// This version's own fields, taken back out of the stash the hub carried
@@ -235,11 +247,7 @@ func (dst *StorageBackup) ConvertFrom(srcRaw conversion.Hub) error {
 	}
 
 	if backup := src.Status.Backup; backup != nil {
-		// spec.backupID and status.backup.backupID are the same identifier by
-		// construction, and the spec is the one that is required, so it is the
-		// one read above. This keeps the group's copy honest where an older
-		// object carries only one of them.
-		dst.Status.BackupID = firstNonEmpty(src.Spec.BackupID, backup.BackupID)
+		dst.Status.BackupID = backup.BackupID
 		dst.Status.S3ID = backup.S3ID
 		dst.Status.PrevBackupID = backup.PreviousBackupID
 		dst.Status.Size = ptr.FromOrZero(backup.Size)

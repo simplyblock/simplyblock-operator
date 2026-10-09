@@ -168,6 +168,26 @@ foreign backup is asserted here about a discovered one.
 | U-72 | A backup in the store this cluster did not write: one `StorageBackup` is created, carrying the writing cluster's UUID in `status.source` | Positive | —    |
 | U-73 | A discovered foreign backup restores through the ordinary `Restore` action                                                               | Positive | —    |
 
+### Backup Requests (design §5.3)
+
+| #    | Scenario                                                                                                        | Type     | Test                                                           |
+|------|-----------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------------------|
+| U-75 | A request takes a snapshot and a backup, then follows the copy to its end                                       | Positive | `TestRequestSnapshotsThenBacksUpAndFollowsTheCopy`             |
+| U-76 | A retry after a lost status write repeats neither call                                                          | Positive | `TestRequestRetryRepeatsNeitherCall`                           |
+| U-77 | No cluster with a backup location: `Pending` with a reason, no call                                             | Negative | `TestRequestWaitsForAClusterWithABackupLocation`               |
+| U-78 | The mirror leaves a request alone                                                                               | Negative | `TestMirrorLeavesABackupRequestAlone`                          |
+| U-79 | The type admits a record or a request, and rejects both or neither                                              | Negative | `TestStorageBackupSpecIsEitherARecordOrARequest`               |
+| U-80 | A user may create and delete a request, and not a record                                                        | Positive | `TestAUserMayCreateAndDeleteABackupRequest`                    |
+| U-81 | A restore of a requested backup sends the identifier from status                                                | Positive | `TestRestoreOfARequestedBackupUsesTheIdentifierInStatus`       |
+| U-82 | A v1alpha1 backup with a claim and no backup ID converts to a request                                           | Positive | `TestStorageBackupRequestConvertsToTheHubsRequestAndBack`      |
+| U-83 | A backup a request owns gets no record, a record made earlier is removed, and a pruned copy fails the request   | Positive | `TestMirrorDefersToARequestThatOwnsTheBackup`                  |
+| U-84 | Deleting a request queues the record of its backup                                                              | Positive | `TestDeletingARequestQueuesTheRecordOfItsBackup`               |
+| U-85 | A restore reads its backup, cluster, and pool where they are and creates its claim beside the operation         | Positive | `TestRestoreReachesAcrossNamespaces`                           |
+| U-86 | A reference that leaves the operation's namespace needs the requester's access, and one that stays asks nothing | Negative | `TestARestoreReachingAcrossNamespacesNeedsTheRequestersAccess` |
+| U-87 | Operations of one name in different namespaces take turns on one backup                                         | Negative | `TestRestoresOfOneBackupFromTwoNamespacesTakeTurns`            |
+
+---
+
 ---
 
 ## 2. Integration Tests

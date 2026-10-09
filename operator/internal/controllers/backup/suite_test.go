@@ -40,6 +40,7 @@ const (
 	testBackupID     = "44444444-4444-4444-4444-444444444444"
 	testRestoreID    = "55555555-5555-5555-5555-555555555555"
 	testStorageClass = "simplyblock-production-pool-a"
+	testClaim        = "claim-1"
 )
 
 func testScope() cpinformer.Scope { return cpinformer.Scope{testClusterID} }
@@ -73,6 +74,7 @@ func testClient(t *testing.T, objs ...client.Object) client.Client {
 			&simplyblockv1alpha2.StorageBackupOps{},
 		).
 		WithIndex(&corev1.PersistentVolume{}, PersistentVolumeLvolIDIndex, IndexPersistentVolumeLvolID).
+		WithIndex(&simplyblockv1alpha2.StorageBackup{}, RequestedBackupIndex, IndexRequestedBackup).
 		WithObjects(objs...).
 		Build()
 }
@@ -145,6 +147,7 @@ type fakeControlPlane struct {
 	attaches    []string
 	detaches    []string
 	restores    int
+	restored    []controlplane.RestoreBackupParams
 	volumeReads int
 
 	// pool is what ListVolumes answers with, which is how a test puts a volume a
@@ -204,9 +207,10 @@ func (f *fakeControlPlane) DetachBackupPolicy(_ context.Context, _, _, volumeID 
 }
 
 func (f *fakeControlPlane) RestoreBackup(
-	context.Context, string, controlplane.RestoreBackupParams,
+	_ context.Context, _ string, params controlplane.RestoreBackupParams,
 ) (string, error) {
 	f.restores++
+	f.restored = append(f.restored, params)
 	if f.restoreErr != nil {
 		return "", f.restoreErr
 	}

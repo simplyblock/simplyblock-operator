@@ -26,6 +26,8 @@ import (
 	"github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
+const testClaimName = "claim-1"
+
 func TestStorageBackupConvertToRegroupsTheStatus(t *testing.T) {
 	created := metav1.Now()
 
@@ -33,7 +35,7 @@ func TestStorageBackupConvertToRegroupsTheStatus(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "backup-1", Namespace: "sb"},
 		Spec: StorageBackupSpec{
 			ClusterName: testCluster,
-			PVCRef:      &PersistentVolumeClaimRef{Name: "claim-1", Namespace: "apps"},
+			PVCRef:      &PersistentVolumeClaimRef{Name: testClaimName, Namespace: "apps"},
 		},
 		Status: StorageBackupStatus{
 			Phase:             BackupPhaseDone,
@@ -67,10 +69,9 @@ func TestStorageBackupConvertToRegroupsTheStatus(t *testing.T) {
 	if got := dst.Spec.ClusterRef; got != testCluster {
 		t.Errorf("spec.clusterRef = %q, want %q", got, testCluster)
 	}
-	// The store's identifier is the object's identity in the hub, and v1alpha1
-	// only ever held it in status.
-	if got := dst.Spec.BackupID; got != "backup-uuid" {
-		t.Errorf("spec.backupID = %q, want %q", got, "backup-uuid")
+	// The store's identifier is in status in both versions.
+	if got := dst.BackupID(); got != "backup-uuid" {
+		t.Errorf("status.backup.backupID = %q, want %q", got, "backup-uuid")
 	}
 	if got := dst.Status.Phase; got != v1alpha2.StorageBackupPhaseAvailable {
 		t.Errorf("status.phase = %q, want %q", got, v1alpha2.StorageBackupPhaseAvailable)
@@ -89,7 +90,7 @@ func TestStorageBackupConvertToRegroupsTheStatus(t *testing.T) {
 	}
 
 	wantSource := &v1alpha2.BackupSource{
-		ClaimName:            "claim-1",
+		ClaimName:            testClaimName,
 		ClaimNamespace:       "apps",
 		PersistentVolumeName: "pv-1",
 		PoolName:             "pool-1",
@@ -127,12 +128,12 @@ func TestStorageBackupConvertToLeavesEmptyGroupsAbsent(t *testing.T) {
 
 func TestStorageBackupConvertFromFlattensTheStatus(t *testing.T) {
 	src := &v1alpha2.StorageBackup{
-		Spec: v1alpha2.StorageBackupSpec{ClusterRef: testCluster, BackupID: "backup-uuid"},
+		Spec: v1alpha2.StorageBackupSpec{ClusterRef: testCluster},
 		Status: v1alpha2.StorageBackupStatus{
 			Phase:     v1alpha2.StorageBackupPhaseCreating,
 			ClusterID: "cluster-uuid",
 			Backup:    &v1alpha2.BackupCopy{BackupID: "backup-uuid", Size: ptr.To(int64(99))},
-			Source:    &v1alpha2.BackupSource{ClaimName: "claim-1", ClaimNamespace: "apps", PoolName: "pool-1"},
+			Source:    &v1alpha2.BackupSource{ClaimName: testClaimName, ClaimNamespace: "apps", PoolName: "pool-1"},
 		},
 	}
 
@@ -144,7 +145,7 @@ func TestStorageBackupConvertFromFlattensTheStatus(t *testing.T) {
 	if got := dst.Spec.ClusterName; got != testCluster {
 		t.Errorf("spec.clusterName = %q, want %q", got, testCluster)
 	}
-	if dst.Spec.PVCRef == nil || dst.Spec.PVCRef.Name != "claim-1" {
+	if dst.Spec.PVCRef == nil || dst.Spec.PVCRef.Name != testClaimName {
 		t.Errorf("spec.pvcRef = %+v, want claim-1 in apps", dst.Spec.PVCRef)
 	}
 	if got := dst.Status.Phase; got != BackupPhaseInProgress {
@@ -368,7 +369,7 @@ func storedBackup() *StorageBackup {
 		ObjectMeta: metav1.ObjectMeta{Name: "backup-1", Namespace: "sb"},
 		Spec: StorageBackupSpec{
 			ClusterName:       testCluster,
-			PVCRef:            &PersistentVolumeClaimRef{Name: "claim-1", Namespace: "apps"},
+			PVCRef:            &PersistentVolumeClaimRef{Name: testClaimName, Namespace: "apps"},
 			SnapshotName:      "snap-1",
 			SourceClusterUUID: "source-cluster-uuid",
 		},
@@ -396,5 +397,30 @@ func storedBackup() *StorageBackup {
 			CreatedAt:         &created,
 			CompletedAt:       &created,
 		},
+	}
+}
+
+// A v1alpha1 backup that names a claim and has no backup yet is a request in the
+// hub, and converts back to its claim reference.
+func TestStorageBackupRequestConvertsToTheHubsRequestAndBack(t *testing.T) {
+	src := &StorageBackup{
+		ObjectMeta: metav1.ObjectMeta{Name: "nightly", Namespace: "apps"},
+		Spec:       StorageBackupSpec{ClusterName: testCluster, PVCRef: &PersistentVolumeClaimRef{Name: testClaimName}},
+	}
+
+	var hub v1alpha2.StorageBackup
+	if err := src.ConvertTo(&hub); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+	if hub.Spec.Source == nil || hub.Spec.Source.ClaimName != testClaimName || hub.Spec.ClusterRef != "" {
+		t.Errorf("spec = %+v, want a request for the claim and no clusterRef", hub.Spec)
+	}
+
+	var back StorageBackup
+	if err := back.ConvertFrom(&hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	if back.Spec.PVCRef == nil || back.Spec.PVCRef.Name != testClaimName {
+		t.Errorf("spec.pvcRef = %+v, want the claim back", back.Spec.PVCRef)
 	}
 }

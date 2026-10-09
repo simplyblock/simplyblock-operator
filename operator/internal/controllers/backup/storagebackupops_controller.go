@@ -131,17 +131,17 @@ func (r *StorageBackupOpsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// operationsOn enqueues every operation naming this backup.
+// operationsOn enqueues every operation naming this backup, in any namespace.
 func (r *StorageBackupOpsReconciler) operationsOn(
 	ctx context.Context, backup client.Object,
 ) []reconcile.Request {
 	var operations simplyblockv1alpha2.StorageBackupOpsList
-	if err := r.List(ctx, &operations, client.InNamespace(backup.GetNamespace())); err != nil {
+	if err := r.List(ctx, &operations); err != nil {
 		return nil
 	}
 	var requests []reconcile.Request
 	for i := range operations.Items {
-		if operations.Items[i].Spec.BackupRef != backup.GetName() {
+		if backupKey(&operations.Items[i]) != client.ObjectKeyFromObject(backup) {
 			continue
 		}
 		requests = append(requests, reconcile.Request{
@@ -280,7 +280,7 @@ func (r *StorageBackupOpsReconciler) enterInitialStep(
 	}
 	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal,
 		ReasonOperationStarted, ReasonOperationStarted,
-		"The operation acquired the lock on backup %s and started", ops.Spec.BackupRef)
+		"The operation acquired the lock on backup %s and started", ops.Spec.BackupRef.Name)
 	return ctrl.Result{RequeueAfter: opsAdvance}, nil
 }
 
@@ -449,10 +449,10 @@ func (r *StorageBackupOpsReconciler) observeOperation(
 	ops *simplyblockv1alpha2.StorageBackupOps, phase simplyblockv1alpha2.StorageBackupOpsPhase,
 ) {
 	action := string(ops.Spec.Action)
-	backupOperationsTotal.WithLabelValues(ops.Spec.ClusterRef, action, resultOf(phase)).Inc()
+	backupOperationsTotal.WithLabelValues(ops.Spec.ClusterRef.Name, action, resultOf(phase)).Inc()
 
 	if started := ops.Status.StartedAt; started != nil {
-		backupOperationDurationSeconds.WithLabelValues(ops.Spec.ClusterRef, action).
+		backupOperationDurationSeconds.WithLabelValues(ops.Spec.ClusterRef.Name, action).
 			Observe(time.Since(started.Time).Seconds())
 	}
 }
@@ -517,19 +517,19 @@ func (r *StorageBackupOpsReconciler) acquireLock(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
 ) (bool, error) {
 	var backup simplyblockv1alpha2.StorageBackup
-	err := r.Get(ctx, client.ObjectKey{Name: ops.Spec.BackupRef, Namespace: ops.Namespace}, &backup)
+	err := r.Get(ctx, backupKey(ops), &backup)
 	if apierrors.IsNotFound(err) {
 		// The target went while the operation was waiting. That is the operation
 		// stopping without going wrong, which is what Aborted means.
 		_, err := r.finish(ctx, ops, simplyblockv1alpha2.StorageBackupOpsPhaseAborted,
-			fmt.Sprintf("StorageBackup %s no longer exists", ops.Spec.BackupRef))
+			fmt.Sprintf("StorageBackup %s no longer exists", ops.Spec.BackupRef.Name))
 		return false, err
 	}
 	if err != nil {
 		return false, err
 	}
 
-	if held := backup.Status.ActiveOpsRef; held != "" && held != ops.Name {
+	if held := backup.Status.ActiveOpsRef; held != "" && held != lockHolder(ops) {
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal,
 			ReasonOperationQueued, ReasonOperationQueued,
 			"Backup %s is held by operation %s; this one is waiting", backup.Name, held)
@@ -537,9 +537,9 @@ func (r *StorageBackupOpsReconciler) acquireLock(
 			held, backup.Name))
 	}
 
-	if backup.Status.ActiveOpsRef != ops.Name {
+	if backup.Status.ActiveOpsRef != lockHolder(ops) {
 		patch := client.MergeFromWithOptions(backup.DeepCopy(), client.MergeFromWithOptimisticLock{})
-		backup.Status.ActiveOpsRef = ops.Name
+		backup.Status.ActiveOpsRef = lockHolder(ops)
 		if err := r.Status().Patch(ctx, &backup, patch); err != nil {
 			if apierrors.IsConflict(err) {
 				// Somebody else moved the object between the read and the write.
@@ -575,14 +575,14 @@ func (r *StorageBackupOpsReconciler) releaseLock(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
 ) error {
 	var backup simplyblockv1alpha2.StorageBackup
-	err := r.Get(ctx, client.ObjectKey{Name: ops.Spec.BackupRef, Namespace: ops.Namespace}, &backup)
+	err := r.Get(ctx, backupKey(ops), &backup)
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if backup.Status.ActiveOpsRef != ops.Name {
+	if backup.Status.ActiveOpsRef != lockHolder(ops) {
 		return nil
 	}
 
@@ -736,5 +736,5 @@ func (r *StorageBackupOpsReconciler) clusterIDFor(
 	if recorded := ops.Status.ClusterID; recorded != "" {
 		return recorded, nil
 	}
-	return utils.ResolveClusterUUID(ctx, r.Client, ops.Namespace, ops.Spec.ClusterRef)
+	return utils.ResolveClusterUUID(ctx, r.Client, clusterKey(ops).Namespace, ops.Spec.ClusterRef.Name)
 }

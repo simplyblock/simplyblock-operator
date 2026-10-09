@@ -23,8 +23,11 @@ import (
 	"net/http"
 
 	admissionv1 "k8s.io/api/admission/v1"
+	authenticationv1 "k8s.io/api/authentication/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -73,6 +76,10 @@ var undeletableSteps = map[simplyblockv1alpha2.StorageBackupOpsStep]string{
 // advances a restore anyway.
 type StorageBackupOpsValidator struct {
 	Client client.Client
+
+	// Access checks the requester's rights on what leaves the operation's
+	// namespace. Nil asks the API server.
+	Access AccessChecker
 }
 
 func (v *StorageBackupOpsValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
@@ -104,17 +111,21 @@ func (v *StorageBackupOpsValidator) admitCreate(
 		return admission.Allowed("a record of work already done")
 	}
 
-	if denied := clusterMustExist(ctx, v.Client, ops.Namespace, ops.Spec.ClusterRef); denied != nil {
+	if denied := v.requesterMayReach(ctx, req.UserInfo, &ops); denied != nil {
+		return *denied
+	}
+
+	if denied := clusterMustExist(ctx, v.Client, clusterKey(&ops).Namespace, ops.Spec.ClusterRef.Name); denied != nil {
 		return *denied
 	}
 
 	var backup simplyblockv1alpha2.StorageBackup
 	err := v.Client.Get(ctx,
-		client.ObjectKey{Name: ops.Spec.BackupRef, Namespace: ops.Namespace}, &backup)
+		backupKey(&ops), &backup)
 	if apierrors.IsNotFound(err) {
 		return admission.Denied(fmt.Sprintf(
 			"spec.backupRef %q does not name a StorageBackup in namespace %q",
-			ops.Spec.BackupRef, ops.Namespace))
+			ops.Spec.BackupRef.Name, backupKey(&ops).Namespace))
 	}
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, err)
@@ -126,7 +137,7 @@ func (v *StorageBackupOpsValidator) admitCreate(
 	// replaced by another backup.
 	if backup.Status.Phase == simplyblockv1alpha2.StorageBackupPhaseFailed {
 		return admission.Denied(fmt.Sprintf(
-			"StorageBackup %q failed and has no copy to restore", ops.Spec.BackupRef))
+			"StorageBackup %q failed and has no copy to restore", ops.Spec.BackupRef.Name))
 	}
 
 	if ops.Spec.Restore == nil {
@@ -140,6 +151,58 @@ func (v *StorageBackupOpsValidator) admitCreate(
 		return *denied
 	}
 	return v.claimMustNotExist(ctx, &ops)
+}
+
+// clusterKey is where the operation's cluster, and so its pool, is read from.
+func clusterKey(ops *simplyblockv1alpha2.StorageBackupOps) types.NamespacedName {
+	return ops.Spec.ClusterRef.In(ops.Namespace)
+}
+
+// backupKey is the StorageBackup the operation acts on.
+func backupKey(ops *simplyblockv1alpha2.StorageBackupOps) types.NamespacedName {
+	return ops.Spec.BackupRef.In(ops.Namespace)
+}
+
+// requesterMayReach refuses a restore whose references leave its namespace unless
+// the requester may do there what the restore will do for them: read the backup,
+// the cluster, and its pool. It runs before anything is resolved, so a
+// refusal reveals nothing about a namespace the requester cannot see.
+func (v *StorageBackupOpsValidator) requesterMayReach(
+	ctx context.Context, user authenticationv1.UserInfo, ops *simplyblockv1alpha2.StorageBackupOps,
+) *admission.Response {
+	type need struct{ verb, resource, namespace, name string }
+	var needs []need
+	if ns := backupKey(ops).Namespace; ns != ops.Namespace {
+		needs = append(needs, need{"get", "storagebackups", ns, ops.Spec.BackupRef.Name})
+	}
+	if ns := clusterKey(ops).Namespace; ns != ops.Namespace {
+		needs = append(needs, need{"get", "storageclusters", ns, ops.Spec.ClusterRef.Name})
+		if ops.Spec.Restore != nil {
+			needs = append(needs, need{"get", "storagepools", ns, ops.Spec.Restore.TargetPool})
+		}
+	}
+
+	access := v.Access
+	if access == nil {
+		access = reviewer{client: v.Client}
+	}
+	for _, n := range needs {
+		ok, err := access.Allowed(ctx, user, authorizationv1.ResourceAttributes{
+			Verb: n.verb, Group: simplyblockv1alpha2.GroupVersion.Group, Resource: n.resource,
+			Namespace: n.namespace, Name: n.name,
+		})
+		if err != nil {
+			errored := admission.Errored(http.StatusInternalServerError, err)
+			return &errored
+		}
+		if !ok {
+			denied := admission.Denied(fmt.Sprintf(
+				"%s may not %s %s in namespace %q, which this restore needs because it reaches there",
+				user.Username, n.verb, n.resource, n.namespace))
+			return &denied
+		}
+	}
+	return nil
 }
 
 // poolMustExist resolves spec.restore.targetPool.
@@ -156,11 +219,11 @@ func (v *StorageBackupOpsValidator) poolMustExist(
 	// cluster has.
 	var pool simplyblockv1alpha2.StoragePool
 	err := v.Client.Get(ctx,
-		client.ObjectKey{Name: ops.Spec.Restore.TargetPool, Namespace: ops.Namespace}, &pool)
+		client.ObjectKey{Name: ops.Spec.Restore.TargetPool, Namespace: clusterKey(ops).Namespace}, &pool)
 	if apierrors.IsNotFound(err) {
 		denied := admission.Denied(fmt.Sprintf(
 			"spec.restore.targetPool %q does not name a StoragePool in namespace %q",
-			ops.Spec.Restore.TargetPool, ops.Namespace))
+			ops.Spec.Restore.TargetPool, clusterKey(ops).Namespace))
 		return &denied
 	}
 	if err != nil {

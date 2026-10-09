@@ -358,7 +358,7 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 
 	if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
 		s.ClusterUUID = clusterUUID
-		s.BackupID = backup.Spec.BackupID
+		s.BackupID = backup.BackupID()
 		s.SourceLvolID = backup.Source().LvolID
 		s.FSType = backup.Source().FSType
 		s.SourceClusterUUID = backup.Source().ClusterUUID

@@ -17,6 +17,7 @@ import (
 
 	admissionv1 "k8s.io/api/admission/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -31,6 +32,9 @@ import (
 // cluster's namespace and deliberately not the operator's: the identity check is
 // about who the caller is, not about where the object sits.
 const backupNamespace = "sb"
+
+// appNamespace is an application's, where its restore operation is created.
+const appNamespace = "app"
 
 func backupValidator(t *testing.T, objs ...client.Object) *StorageBackupValidator {
 	t.Helper()
@@ -198,8 +202,8 @@ func restoreOpsObject() *simplyblockv1alpha2.StorageBackupOps {
 	return &simplyblockv1alpha2.StorageBackupOps{
 		ObjectMeta: metav1.ObjectMeta{Name: "restore-1", Namespace: backupNamespace},
 		Spec: simplyblockv1alpha2.StorageBackupOpsSpec{
-			ClusterRef: "production",
-			BackupRef:  "backup-1",
+			ClusterRef: simplyblockv1alpha2.StorageClusterReference{Name: "production"},
+			BackupRef:  simplyblockv1alpha2.NamespacedReference{Name: "backup-1"},
 			Action:     simplyblockv1alpha2.StorageBackupOpsActionRestore,
 			Restore: &simplyblockv1alpha2.RestoreSpec{
 				ClaimName:  "restored-claim",
@@ -323,5 +327,95 @@ func TestDeletingARestoreThatCreatedNothingIsAdmitted(t *testing.T) {
 	finished.Status.Step.State = string(simplyblockv1alpha2.StorageBackupOpsStepBinding)
 	if resp := v.Handle(context.Background(), deleteOpsRequest(t, finished)); !resp.Allowed {
 		t.Errorf("deleting a terminal operation was refused: %q", resp.Result.Message)
+	}
+}
+
+// A request for a backup is a person's to create and to withdraw, and is told
+// apart from a record by spec.source.
+func TestAUserMayCreateAndDeleteABackupRequest(t *testing.T) {
+	v := backupValidator(t, liveBackupNamespace())
+	raw, _ := json.Marshal(simplyblockv1alpha2.StorageBackup{
+		Spec: simplyblockv1alpha2.StorageBackupSpec{Source: &simplyblockv1alpha2.BackupRequest{ClaimName: "claim-1"}},
+	})
+	create := backupRequest(admissionv1.Create, "kubernetes-admin")
+	create.Object = runtime.RawExtension{Raw: raw}
+	remove := backupRequest(admissionv1.Delete, "kubernetes-admin")
+	remove.OldObject = runtime.RawExtension{Raw: raw}
+
+	for _, req := range []admission.Request{create, remove} {
+		if resp := v.Handle(context.Background(), req); !resp.Allowed {
+			t.Errorf("a user was refused a %s of their backup request: %q", req.Operation, resp.Result.Message)
+		}
+	}
+}
+
+// fakeAccess refuses the listed "verb resource namespace" triples, and records
+// what it was asked.
+type fakeAccess struct {
+	refused map[string]bool
+	asked   []string
+}
+
+func (f *fakeAccess) Allowed(
+	_ context.Context, _ authenticationv1.UserInfo, attrs authorizationv1.ResourceAttributes,
+) (bool, error) {
+	key := attrs.Verb + " " + attrs.Resource + " " + attrs.Namespace
+	f.asked = append(f.asked, key)
+	return !f.refused[key], nil
+}
+
+// A restore may name a backup and a cluster in other namespaces, and the requester
+// has to be allowed to read them there. The operator would otherwise read for them
+// what they could not.
+func TestARestoreReachingAcrossNamespacesNeedsTheRequestersAccess(t *testing.T) {
+	inCluster := func() *simplyblockv1alpha2.StorageBackupOps { // the application's operation
+		o := restoreOpsObject()
+		o.Namespace = appNamespace
+		o.Spec.ClusterRef.Namespace = backupNamespace
+		return o
+	}
+	backup := availableBackupObject()
+	backup.Namespace = appNamespace
+	fromElsewhere := func() *simplyblockv1alpha2.StorageBackupOps { // the backup is the cluster's
+		o := inCluster()
+		o.Spec.BackupRef.Namespace = backupNamespace
+		return o
+	}
+
+	for name, tc := range map[string]struct {
+		ops     *simplyblockv1alpha2.StorageBackupOps
+		backup  *simplyblockv1alpha2.StorageBackup
+		refused string // in the form verb resource namespace, empty to allow everything
+		want    string // a word the refusal must contain, or empty for admitted
+		asks    bool   // whether any access check is expected
+	}{
+		"the requester may read the cluster": {ops: inCluster(), backup: backup, asks: true},
+		"the requester may not read the cluster": {
+			ops: inCluster(), backup: backup, refused: "get storageclusters " + backupNamespace,
+			want: "storageclusters", asks: true,
+		},
+		"the requester may not read the backup": {
+			ops: fromElsewhere(), backup: availableBackupObject(), refused: "get storagebackups " + backupNamespace,
+			want: "storagebackups", asks: true,
+		},
+		"references that stay put ask nothing": {ops: restoreOpsObject(), backup: availableBackupObject()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			access := &fakeAccess{refused: map[string]bool{tc.refused: true}}
+			v := opsValidator(t, clusterObject(), tc.backup, poolObject())
+			v.Access = access
+
+			resp := v.Handle(context.Background(), createRequest(t, tc.ops))
+
+			switch {
+			case tc.want == "" && !resp.Allowed:
+				t.Errorf("refused: %q", resp.Result.Message)
+			case tc.want != "" && (resp.Allowed || !strings.Contains(resp.Result.Message, tc.want)):
+				t.Errorf("allowed = %v, message = %q, want a refusal mentioning %q", resp.Allowed, resp.Result.Message, tc.want)
+			}
+			if tc.asks != (len(access.asked) > 0) {
+				t.Errorf("asked %v, want an access check = %v", access.asked, tc.asks)
+			}
+		})
 	}
 }

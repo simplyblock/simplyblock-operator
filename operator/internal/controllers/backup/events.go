@@ -66,6 +66,10 @@ const (
 	ReasonBackupFailed        = "BackupFailed"
 	ReasonBackupTargetMissing = "BackupTargetMissing"
 
+	// ReasonBackupRequestBlocked is a request waiting on something that may
+	// exist later, such as an unbound claim.
+	ReasonBackupRequestBlocked = "BackupRequestBlocked"
+
 	// ReasonStoreUnreachable and ReasonBackupGone go on the StorageCluster. The
 	// first is about the store rather than about any one backup, and the second
 	// is about an object that is being deleted as the event is written.

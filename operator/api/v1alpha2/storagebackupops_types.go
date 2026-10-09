@@ -102,9 +102,9 @@ const (
 // controller reads the size off status.backup.size and mounts the filesystem
 // status.source.fsType records.
 type RestoreSpec struct {
-	// ClaimName is the PersistentVolumeClaim to create. It must not already
-	// exist: a restore that adopted an existing claim would replace a running
-	// workload's data with the backup's.
+	// ClaimName is the PersistentVolumeClaim to create, in this operation's
+	// namespace. It must not already exist: a restore that adopted an existing
+	// claim would replace a running workload's data with the backup's.
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Claim Name"
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
@@ -138,23 +138,22 @@ type RestoreSpec struct {
 
 // StorageBackupOpsSpec is one operation to perform against a backup.
 type StorageBackupOpsSpec struct {
-	// ClusterRef names the StorageCluster the operation runs against.
+	// ClusterRef names the StorageCluster the operation runs against. Its
+	// namespace defaults to this operation's. The cluster's StoragePool, which
+	// spec.restore.targetPool names, is read from the cluster's namespace.
 	//
-	// Bounded at what a StorageCluster name may be, since a longer value names
-	// nothing that can exist.
-	// +kubebuilder:validation:MaxLength=63
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Ref"
+	// A cluster in another namespace needs the requesting user to be allowed to
+	// read it there.
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
-	ClusterRef string `json:"clusterRef"`
+	ClusterRef StorageClusterReference `json:"clusterRef"`
 
-	// BackupRef names the StorageBackup this operation acts on, in this
-	// namespace. Required, since Restore is the only action and every backup in
-	// the store has an object.
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Backup Ref"
+	// BackupRef names the StorageBackup this operation acts on. Its namespace
+	// defaults to this operation's. A backup in another namespace needs the
+	// requesting user to be allowed to read it there.
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
-	BackupRef string `json:"backupRef"`
+	BackupRef NamespacedReference `json:"backupRef"`
 
 	// Action is the operation to perform.
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Action"
@@ -251,7 +250,7 @@ type StorageBackupOpsStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=sbops
-// +kubebuilder:printcolumn:name="Backup",type=string,JSONPath=".spec.backupRef"
+// +kubebuilder:printcolumn:name="Backup",type=string,JSONPath=".spec.backupRef.name"
 // +kubebuilder:printcolumn:name="Action",type=string,JSONPath=".spec.action"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Step",type=string,JSONPath=".status.step.state"
