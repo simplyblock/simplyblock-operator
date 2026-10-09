@@ -30,17 +30,16 @@ charts drops capabilities.
 
 ## What does not need it
 
-Four privileged containers do no host-device work. Each is a sidecar or an agent
+Three privileged containers do no host-device work. Each is a sidecar or an agent
 whose upstream examples run unprivileged.
 
-| Container              | Where                                           | What it actually does                                                                                       |
-|------------------------|-------------------------------------------------|-------------------------------------------------------------------------------------------------------------|
-| `csi-snapshotter`      | `controller.yaml:79`                            | watches VolumeSnapshot objects and calls the CSI socket. No host access at all                              |
-| `csi-registrar`        | `node.yaml:53`                                  | writes one socket into the registration directory                                                           |
-| `fluent-bit`           | `fluentbit-daemonset.yaml:85`                   | reads `/var/log` and `/var/lib/docker/containers`, which needs read access, not privilege                   |
-| the `csi-hostpath` set | `controlplane_csi-hostpath.yaml` (4 containers) | the upstream hostpath example driver. Whether it belongs in a production chart at all is the prior question |
+| Container         | Where                         | What it actually does                                                                     |
+|-------------------|-------------------------------|-------------------------------------------------------------------------------------------|
+| `csi-snapshotter` | `controller.yaml:79`          | watches VolumeSnapshot objects and calls the CSI socket. No host access at all            |
+| `csi-registrar`   | `node.yaml:53`                | writes one socket into the registration directory                                         |
+| `fluent-bit`      | `fluentbit-daemonset.yaml:85` | reads `/var/log` and `/var/lib/docker/containers`, which needs read access, not privilege |
 
-For the first three the narrowing is the same shape: drop `privileged: true`, drop
+For all three the narrowing is the same shape: drop `privileged: true`, drop
 `ALL` capabilities, add back only what fails, and make the host mounts
 `readOnly: true` where nothing is written. For a log shipper reading host paths,
 read-only mounts plus `runAsNonRoot` is usually the whole answer.

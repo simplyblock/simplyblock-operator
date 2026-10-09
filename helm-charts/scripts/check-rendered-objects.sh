@@ -98,34 +98,6 @@ render() {
     "$@" 2>/dev/null | objects
 }
 
-# checkPair asserts that a StorageClass and the provisioner it names are
-# rendered together.
-#
-# A class naming a provisioner nothing installed is worse than no class: it is
-# advertised by `kubectl get storageclass`, a PVC can be pointed at it, and that
-# PVC then waits for a provisioner that is never coming, with nothing in the
-# cluster saying why.
-checkPair() {
-  local present
-
-  present="$(render standalone)"
-  if grep -qxF "StorageClass/local-hostpath" <<<"$present"; then
-    echo "  hostpath: StorageClass/local-hostpath is rendered while its provisioner is not installed"
-    fail=1
-  else
-    echo "  hostpath: no StorageClass without its provisioner"
-  fi
-
-  present="$(render standalone --set controlplane.csiHostpathDriver.enabled=true)"
-  local want
-  for want in "StorageClass/local-hostpath" "CSIDriver/hostpath.csi.k8s.io"; do
-    if ! grep -qxF "$want" <<<"$present"; then
-      echo "  hostpath: MISSING ${want} with the driver enabled"
-      fail=1
-    fi
-  done
-}
-
 # checkVendoredCRDs asserts that the CRDs the chart carries for FoundationDB and
 # for MongoDB are rendered by default, and that each one's value drops its own
 # and leaves the other alone.
@@ -254,7 +226,6 @@ checkLogCollector() {
     "${CAPABILITIES[@]}" \
     --set deployment.profile=standalone \
     --set controlplane.observability.enabled=true \
-    --set controlplane.csiHostpathDriver.enabled=true \
     --set snapshotcontroller.create=true)"; then
     echo "  log collector: RENDER FAILED"
     fail=1
@@ -286,7 +257,6 @@ check standalone "${COMMON[@]}"
 check managed "${COMMON[@]}"
 check empty "${OPERATOR[@]}"
 checkEmpty
-checkPair
 checkVendoredCRDs
 checkLogCollector
 
