@@ -69,11 +69,12 @@ func TestControlPlaneInfoOverridesTheLocalContext(t *testing.T) {
 	}
 }
 
-// Regression (pnfs-1791525621): the external provisioner deletes a pNFS volume
-// as soon as its claim goes, while kubelet may still be unstaging it on a
-// node. Detach then got "volume not found" from the control plane, failed on
-// every retry, and the node's controllers kept reconnecting to the removed
-// subsystem. A volume the control plane no longer knows is released locally.
+// Regression: 2026-10-09-pnfs-unstage-deleted-volume (run pnfs-1791525621). The
+// external provisioner deletes a pNFS volume as soon as its claim goes, while
+// kubelet may still be unstaging it on a node. Detach then got "volume not found"
+// from the control plane, failed on every retry, and the node's controllers kept
+// reconnecting to the removed subsystem. A volume the control plane no longer
+// knows is released locally.
 func TestDetachReleasesAVolumeTheControlPlaneNoLongerKnows(t *testing.T) {
 	spec := export.Spec{VolumeUUID: testVolume, ClusterID: "cluster-1"}
 	var released []export.Spec
