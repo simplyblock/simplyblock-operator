@@ -702,11 +702,12 @@ func adminServiceAccounts(namespace string) string {
 
 // extraMetricsAccountsEnv names the operator's own environment variable
 // listing the service accounts the management API trusts as metrics
-// scrapers. This chart deploys no Prometheus of its own, so there is no
-// account to trust by default: a bring-your-own prometheus-operator's
-// Prometheus pod presents its own ServiceAccount's token, and the chart sets
-// this from the Helm value prometheus.serviceAccount. An install without it
-// trusts no metrics scraper at all, and every scrape gets a 401.
+// scrapers. There is no account this operator could trust on its own
+// authority, unlike adminServiceAccounts trusting itself: the Prometheus
+// pod presents its own ServiceAccount's token, and the chart names it here
+// from the Helm value prometheus.serviceAccount, whether that Prometheus is
+// the one the chart bundles or one the customer already runs. An install
+// without it trusts no metrics scraper at all, and every scrape gets a 401.
 const extraMetricsAccountsEnv = "SB_EXTRA_METRICS_SERVICE_ACCOUNTS"
 
 // metricsServiceAccounts is every account named in extraMetricsAccountsEnv,

@@ -5,8 +5,11 @@ dependencies:
 - name: opensearch
   repository: https://opensearch-project.github.io/helm-charts
   version: 2.9.0
+- name: kube-prometheus-stack
+  repository: https://prometheus-community.github.io/helm-charts
+  version: 92.2.0
 - name: reloader
   repository: https://stakater.github.io/stakater-charts
   version: 1.3.0
-digest: sha256:0f9b1865e7d6f8a49f0f62a61533c5b2d9af4d9bcc573b76878063105de8c704
-generated: "2026-10-09T14:17:13.450963729+02:00"
+digest: sha256:d6dfa270e582c6ebdf126044c4b665d797b59cf38026a1286ef59545fc240d44
+generated: "2026-10-09T15:28:13.053325201+02:00"

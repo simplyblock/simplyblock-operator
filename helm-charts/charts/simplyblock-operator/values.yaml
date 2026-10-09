@@ -1082,36 +1082,116 @@ ramen:
   nodeSelector: {}
   tolerations: []
 
-# Scrape config for a prometheus-operator the customer already runs. This
-# chart deploys no Prometheus of its own, so this is the only way anything it
-# runs gets scraped at all; off by default means no monitoring wiring, not an
-# alternative to one.
+# Monitoring: on, this chart scrapes itself with a prometheus-operator,
+# bundled by default (the kube-prometheus-stack dependency below) so nothing
+# needs installing beforehand. Off by default means no monitoring wiring at
+# all, not a choice between two kinds of it.
 prometheus:
   enabled: false
-  # The labels the customer's `Prometheus` CR selects on, via its
-  # serviceMonitorSelector/podMonitorSelector/ruleSelector (kube-prometheus-stack's
-  # own default is `release: <its release name>`). The ServiceMonitor, PodMonitor,
-  # and PrometheusRule objects below all carry these. Set them to whatever that
-  # selector actually matches, or nothing here is ever scraped or evaluated.
+  # The labels the selected `Prometheus` CR matches on, via its
+  # serviceMonitorSelector/podMonitorSelector/ruleSelector/
+  # scrapeConfigSelector. The ServiceMonitor, PodMonitor, ScrapeConfig, and
+  # PrometheusRule objects below all carry these. The bundled
+  # kube-prometheus-stack's own Prometheus is configured below to select
+  # everything regardless of label, so this is only worth setting when
+  # pointed at a prometheus-operator the customer already runs and its
+  # selector is narrower than that.
   additionalLabels: {}
   interval: 30s
-  # The ServiceAccount the customer's Prometheus pod itself runs as (not the
+  # The ServiceAccount the scraping Prometheus pod itself runs as (not the
   # selector above): webappapi does a TokenReview on every scrape's bearer
-  # token and otherwise trusts no identity at all, so every scrape from this
-  # Prometheus gets a 401 until its identity is named here.
-  # kube-prometheus-stack's default is name
-  # "<release>-kube-prometheus-stack-prometheus" in the "monitoring" namespace;
-  # check `kubectl get prometheus -A -o jsonpath='{.items[0].spec.serviceAccountName}'`
-  # against the actual release rather than assuming it.
+  # token and otherwise trusts no identity at all, so every scrape gets a 401
+  # until its identity is named here. Defaults to the bundled
+  # kube-prometheus-stack's own Prometheus, whose ServiceAccount name is
+  # fixed below (kube-prometheus-stack.prometheus.serviceAccount.name) rather
+  # than left to its usual release-derived default, precisely so this can
+  # name it without having to predict it. Pointed at a prometheus-operator
+  # the customer already runs instead, set this to that Prometheus's own
+  # ServiceAccount: `kubectl get prometheus -A
+  # -o jsonpath='{.items[0].spec.serviceAccountName}'`.
   serviceAccount:
-    name: ""
+    name: simplyblock-prometheus-operator
     namespace: ""
   # Fallback for Control Center's own Prometheus link, when
-  # controlCenter.prometheusUrl is unset — empty is simply "unknown" rather
-  # than a host this chart ever promises to stand up.
+  # controlCenter.prometheusUrl is unset. prometheus-operator always names its
+  # governing Service "prometheus-operated" in the Prometheus CR's own
+  # namespace, regardless of the CR's name or which release created it, so
+  # this resolves correctly for the bundled Prometheus and for a
+  # same-namespace one the customer already runs alike. Only a
+  # prometheus-operator in another namespace needs this overridden.
   simplyblock:
-    prometheusURL: ""
+    prometheusURL: "prometheus-operated"
     prometheusPORT: 9090
+
+# The prometheus-operator this chart bundles when prometheus.enabled is true
+# (see prometheus-operator-servicemonitors.yaml) — CRDs, the controller, one
+# Prometheus, and Alertmanager (for the PrometheusRule/AlertmanagerConfig
+# objects that file also renders). Grafana, node-exporter, and
+# kube-state-metrics stay off: this is a scrape target for the customer's own
+# dashboards, not a second monitoring stack to look at.
+#
+# To use a prometheus-operator the customer already runs instead, every
+# component kube-prometheus-stack would otherwise render has to be turned
+# off, not only the four below: its default cluster-component scrapers
+# (kubelet, kubeApiServer, kubeControllerManager, kubeScheduler, kubeProxy,
+# kubeEtcd, coreDns) and its default alerting rules (defaultRules) are
+# separate toggles that do not follow prometheusOperator.enabled or
+# prometheus.enabled, and are left on at their own chart defaults here
+# because they are genuinely useful cluster-health signal with nothing
+# redundant about them when this is the only prometheus-operator present.
+# Also point prometheus.serviceAccount at the existing installation's own
+# Prometheus:
+#
+#   --set kube-prometheus-stack.crds.enabled=false
+#   --set kube-prometheus-stack.prometheusOperator.enabled=false
+#   --set kube-prometheus-stack.prometheus.enabled=false
+#   --set kube-prometheus-stack.alertmanager.enabled=false
+#   --set kube-prometheus-stack.defaultRules.create=false
+#   --set kube-prometheus-stack.kubelet.enabled=false
+#   --set kube-prometheus-stack.kubeApiServer.enabled=false
+#   --set kube-prometheus-stack.kubeControllerManager.enabled=false
+#   --set kube-prometheus-stack.kubeScheduler.enabled=false
+#   --set kube-prometheus-stack.kubeProxy.enabled=false
+#   --set kube-prometheus-stack.kubeEtcd.enabled=false
+#   --set kube-prometheus-stack.coreDns.enabled=false
+#   --set prometheus.serviceAccount.name=<its Prometheus's own ServiceAccount>
+#   --set prometheus.serviceAccount.namespace=<its namespace>
+#
+# Left on with monitoring.coreos.com CRDs already present from elsewhere —
+# whether or not every override above was remembered — the chart refuses to
+# install rather than risk two prometheus-operators fighting over the same
+# CRDs (prometheus-operator-servicemonitors.yaml).
+kube-prometheus-stack:
+  crds:
+    enabled: true
+  prometheusOperator:
+    enabled: true
+  prometheus:
+    enabled: true
+    serviceAccount:
+      # Fixed rather than left to the chart's own release-derived default, so
+      # prometheus.serviceAccount.name above can name it without having to
+      # predict it.
+      name: simplyblock-prometheus-operator
+    prometheusSpec:
+      # kube-prometheus-stack's own default is nil-uses-Helm-values, which
+      # restricts these to objects carrying this release's own `release:`
+      # label. The ServiceMonitor/PodMonitor/ScrapeConfig/PrometheusRule
+      # objects this chart renders carry no such label by default
+      # (prometheus.additionalLabels above), so without this they are
+      # discovered and then immediately filtered back out.
+      serviceMonitorSelectorNilUsesHelmValues: false
+      podMonitorSelectorNilUsesHelmValues: false
+      ruleSelectorNilUsesHelmValues: false
+      scrapeConfigSelectorNilUsesHelmValues: false
+  alertmanager:
+    enabled: true
+  grafana:
+    enabled: false
+  nodeExporter:
+    enabled: false
+  kubeStateMetrics:
+    enabled: false
 
 tls:
   # On by default. Everything this chart deploys reaches the control plane over

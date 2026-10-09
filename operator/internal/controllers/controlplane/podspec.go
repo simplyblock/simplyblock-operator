@@ -39,11 +39,11 @@ const (
 	lvolNVMfPortStart = "9110"
 
 	// prometheusHost and prometheusPort are where the control plane pushes the
-	// metrics it collects. The chart no longer deploys a Prometheus of its own
-	// (prometheus.enabled, against a prometheus-operator the customer runs, is
-	// the only supported way to scrape this install), so this Service name is
-	// not one anything in the chart creates. It only still matters if
-	// something answers to it.
+	// metrics it collects. Even where prometheus.enabled bundles a
+	// prometheus-operator (prometheus-operator-servicemonitors.yaml), that
+	// Prometheus is named by kube-prometheus-stack's own chart, never this
+	// literal Service name, so nothing in this chart creates it. It only
+	// still matters if something answers to it.
 	prometheusHost = "simplyblock-prometheus"
 	prometheusPort = "9090"
 
