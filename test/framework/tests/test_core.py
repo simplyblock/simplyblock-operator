@@ -385,6 +385,26 @@ class Archive(unittest.TestCase):
                 json.dump({"volumes": [{"claim": "c", "lvol": "l", "cluster": cluster}]}, fh)
             self.assertEqual(ArchiveEvidence(d).cluster_uuid(), cluster)
 
+    def test_reads_the_reservation_snapshots(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "state.json"), "w") as fh:
+                json.dump({"run_id": "r", "migrations": []}, fh)
+            with open(os.path.join(d, "reservations-post.json"), "w") as fh:
+                json.dump({"namespaces": [
+                    {"node": "w1", "device": "nvme3n1", "uuid": "lv1", "rtype": 4,
+                     "generation": 4, "registrants": [
+                         {"hostid": "8d2a", "rkey": 72057594037927936, "holder": True},
+                         {"hostid": "913d", "rkey": 7694384339219550510,
+                          "holder": False}]}]}, fh)
+            ev = ArchiveEvidence(d)
+            post, pre = ev.reservations_post(), ev.reservations_pre()
+        self.assertEqual(pre, [])
+        self.assertEqual(len(post), 1)
+        self.assertEqual((post[0].uuid, post[0].rtype), ("lv1", 4))
+        self.assertEqual([(r.hostid, r.holder) for r in post[0].registrants],
+                         [("8d2a", True), ("913d", False)])
+        self.assertEqual(post[0].registrants[1].rkey, 7694384339219550510)
+
     def test_reads_the_restarts_a_run_made(self):
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "state.json"), "w") as fh:

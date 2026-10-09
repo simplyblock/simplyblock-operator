@@ -42,8 +42,10 @@ from ..core import (
     IopsSample,
     LogSpan,
     Migration,
+    NamespaceReservation,
     NvmeController,
     PnfsVolume,
+    Registrant,
     Restart,
 )
 
@@ -337,6 +339,31 @@ class ArchiveEvidence:
         except OSError:
             return []
         out.sort(key=lambda b: (b.ts, b.node, b.device))
+        return out
+
+    def reservations_pre(self) -> list[NamespaceReservation]:
+        return self._reservations("reservations-pre.json")
+
+    def reservations_post(self) -> list[NamespaceReservation]:
+        return self._reservations("reservations-post.json")
+
+    def _reservations(self, name: str) -> list[NamespaceReservation]:
+        try:
+            with open(os.path.join(self.outdir, name)) as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return []
+        out = []
+        for n in raw.get("namespaces", []) if isinstance(raw, dict) else []:
+            if not isinstance(n, dict):
+                continue
+            regs = tuple(Registrant(hostid=str(r.get("hostid", "")), rkey=int(r.get("rkey", 0)),
+                                    holder=bool(r.get("holder")))
+                         for r in n.get("registrants") or [] if isinstance(r, dict))
+            out.append(NamespaceReservation(
+                node=str(n.get("node", "")), device=str(n.get("device", "")),
+                uuid=str(n.get("uuid", "")), rtype=int(n.get("rtype", 0)),
+                generation=int(n.get("generation", 0)), registrants=regs))
         return out
 
     def restarts(self) -> list[Restart]:

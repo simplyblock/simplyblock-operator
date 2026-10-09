@@ -5,8 +5,8 @@ Each module groups checks by the evidence they read, not by the subsystem they b
 snapshot, `logs` reads collected container logs, `migration` reads the timeline, `kernel` reads
 dmesg — the only source for what the *host* did about a fabric event — `control` reads the
 control plane's own event log, `pnfs` reads the NFS client's counters and the client nodes'
-NVMe counters, `security` scans whatever was collected, and `meta` judges the evidence itself
-rather than the system.
+NVMe counters, `reservations` reads the namespaces' NVMe reservations, `security` scans
+whatever was collected, and `meta` judges the evidence itself rather than the system.
 """
 
 from . import (  # noqa: F401
@@ -20,8 +20,9 @@ from . import (  # noqa: F401
     migration,
     nvme,
     pnfs,
+    reservations,
     security,
 )
 
 __all__ = ["ana", "chaos", "control", "fio", "kernel", "logs", "meta", "migration", "nvme", "pnfs",
-           "security"]
+           "reservations", "security"]
