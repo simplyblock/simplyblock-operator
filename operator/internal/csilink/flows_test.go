@@ -60,7 +60,10 @@ func wait(t *testing.T, rec *recordedForgets) {
 	}
 }
 
-var oldPod = "10.244.3.215"
+var (
+	oldPod    = "10.244.3.215"
+	exportSvc = "10.102.100.19"
+)
 
 // Every node that can forget is asked, for NFS's port and the old address only.
 func TestEveryCapableNodeForgetsTheOldAddress(t *testing.T) {
@@ -70,10 +73,13 @@ func TestEveryCapableNodeForgetsTheOldAddress(t *testing.T) {
 		{Name: "worker-2", CanForget: true},
 		{Name: "worker-3", CanForget: false},
 	}
-	newTestFlows(peers, rec).Forget(oldPod)
+	newTestFlows(peers, rec).Forget(exportSvc, oldPod)
 	wait(t, rec)
 
-	want := conntrack.Selector{Protocol: conntrack.TCP, DstPort: 2049, ReplySource: netip.MustParseAddr(oldPod)}
+	want := conntrack.Selector{
+		Protocol: conntrack.TCP, OrigDst: netip.MustParseAddr(exportSvc), DstPort: 2049,
+		ReplySource: netip.MustParseAddr(oldPod),
+	}
 	nodes := make([]string, 0, len(rec.calls))
 	for _, c := range rec.calls {
 		nodes = append(nodes, c.node)
@@ -94,7 +100,7 @@ func TestRequestsForOneAddressCollapse(t *testing.T) {
 	f := newTestFlows([]NodePeer{{Name: "worker-1", CanForget: true}}, rec)
 	f.delay = 50 * time.Millisecond
 	for range 5 {
-		f.Forget(oldPod)
+		f.Forget(exportSvc, oldPod)
 	}
 	wait(t, rec)
 	time.Sleep(100 * time.Millisecond)
@@ -108,7 +114,7 @@ func TestRequestsForOneAddressCollapse(t *testing.T) {
 // One node failing does not stop the others.
 func TestANodeFailingDoesNotStopTheOthers(t *testing.T) {
 	rec := &recordedForgets{done: make(chan struct{}), want: 2, fail: "worker-1"}
-	newTestFlows([]NodePeer{{Name: "worker-1", CanForget: true}, {Name: "worker-2", CanForget: true}}, rec).Forget(oldPod)
+	newTestFlows([]NodePeer{{Name: "worker-1", CanForget: true}, {Name: "worker-2", CanForget: true}}, rec).Forget(exportSvc, oldPod)
 	wait(t, rec)
 }
 
@@ -116,10 +122,51 @@ func TestANodeFailingDoesNotStopTheOthers(t *testing.T) {
 func TestAnInvalidAddressAsksNobody(t *testing.T) {
 	rec := &recordedForgets{done: make(chan struct{}), want: 1}
 	f := newTestFlows([]NodePeer{{Name: "worker-1", CanForget: true}}, rec)
-	f.Forget("not-an-ip")
-	f.Forget("")
+	f.Forget(exportSvc, "not-an-ip")
+	f.Forget(exportSvc, "")
+	f.Forget("", oldPod)
+	f.Forget("not-an-ip", oldPod)
 	time.Sleep(50 * time.Millisecond)
 	if len(rec.calls) != 0 {
 		t.Errorf("asked %v for an invalid address", rec.calls)
+	}
+}
+
+// Review on #711: exports behind different Services that move off the same pod
+// are separate requests, one selector each, because a flow is only matched
+// with the Service it was sent to.
+func TestOneRequestPerServiceAndAddress(t *testing.T) {
+	rec := &recordedForgets{done: make(chan struct{}), want: 2}
+	f := newTestFlows([]NodePeer{{Name: "worker-1", CanForget: true}}, rec)
+	f.Forget(exportSvc, oldPod)
+	f.Forget("10.96.57.128", oldPod)
+	f.Forget(exportSvc, oldPod)
+	wait(t, rec)
+	time.Sleep(50 * time.Millisecond)
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	dsts := make([]string, 0, len(rec.calls))
+	for _, c := range rec.calls {
+		dsts = append(dsts, c.sel.OrigDst.String())
+	}
+	slices.Sort(dsts)
+	if !slices.Equal(dsts, []string{exportSvc, "10.96.57.128"}) {
+		t.Errorf("asked for %v, want one request per Service", dsts)
+	}
+}
+
+// Review on #711: a request canceled while it waits out its delay is never
+// sent, so a replacement that got the old address back keeps its flows.
+func TestACanceledRequestIsNotSent(t *testing.T) {
+	rec := &recordedForgets{done: make(chan struct{}), want: 1}
+	f := newTestFlows([]NodePeer{{Name: "worker-1", CanForget: true}}, rec)
+	f.delay = 50 * time.Millisecond
+	f.Forget(exportSvc, oldPod)
+	f.Cancel(exportSvc, oldPod)
+	time.Sleep(150 * time.Millisecond)
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.calls) != 0 {
+		t.Errorf("a canceled request was sent: %v", rec.calls)
 	}
 }

@@ -14,6 +14,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net/netip"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -24,6 +25,7 @@ import (
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // resyncAfterRestart reassembles a Ready export whose metadata server pod is
@@ -74,11 +76,18 @@ func (r *NFSExportReconciler) resyncAfterRestart(
 		r.event(export, corev1.EventTypeNormal, "MDSAddressChanged",
 			fmt.Sprintf("metadata server pod %s moved to %s", name, ip))
 		// A connection that reached the old address before it was withdrawn
-		// stays translated to it, so the nodes forget it once more now.
+		// stays translated to it, so the nodes forget it once more now. When
+		// the CNI gave the replacement the same address, those flows reach the
+		// live pod: nothing more is forgotten, and the withdrawal's request,
+		// if it is still waiting, is dropped.
 		if old == "" {
 			old = r.takeWithdrawn(export)
 		}
-		r.forget(old)
+		if old == ip {
+			r.cancelForget(ctx, export, old)
+		} else {
+			r.forget(ctx, export, old)
+		}
 	}
 
 	host := mdsHost(export)
@@ -173,14 +182,47 @@ func (r *NFSExportReconciler) withdrawAddress(ctx context.Context, export *simpl
 	r.event(export, corev1.EventTypeNormal, "MDSAddressWithdrawn",
 		fmt.Sprintf("metadata server pod %s is going away, %s withdrawn until its replacement has an address",
 			export.Status.MDSPodName, old))
-	r.forget(old)
+	r.forget(ctx, export, old)
 	return nil
 }
 
-func (r *NFSExportReconciler) forget(ip string) {
-	if ip != "" && r.Flows != nil {
-		r.Flows.Forget(ip)
+// forget has the nodes forget the flows to the export's Service translated to
+// the given address. Without the Service's ClusterIP nothing is asked: a
+// request naming only the address would also take the flows of any pod that
+// inherited it.
+func (r *NFSExportReconciler) forget(ctx context.Context, export *simplyblockv1alpha2.NFSExport, ip string) {
+	if ip == "" || r.Flows == nil {
+		return
 	}
+	if svc := r.exportServiceIP(ctx, export); svc != "" {
+		r.Flows.Forget(svc, ip)
+	}
+}
+
+func (r *NFSExportReconciler) cancelForget(ctx context.Context, export *simplyblockv1alpha2.NFSExport, ip string) {
+	if ip == "" || r.Flows == nil {
+		return
+	}
+	if svc := r.exportServiceIP(ctx, export); svc != "" {
+		r.Flows.Cancel(svc, ip)
+	}
+}
+
+// exportServiceIP is the ClusterIP of the export's Service: the status records
+// it, and the Service itself answers when the status does not yet.
+func (r *NFSExportReconciler) exportServiceIP(ctx context.Context, export *simplyblockv1alpha2.NFSExport) string {
+	if a, err := netip.ParseAddr(export.Status.ServiceAddress); err == nil {
+		return a.String()
+	}
+	var svc corev1.Service
+	key := client.ObjectKey{Namespace: export.Namespace, Name: utils.NFSExportServiceName(export.Name)}
+	if err := r.Get(ctx, key, &svc); err != nil {
+		return ""
+	}
+	if a, err := netip.ParseAddr(svc.Spec.ClusterIP); err == nil {
+		return a.String()
+	}
+	return ""
 }
 
 // rememberWithdrawn keeps the address an export's withdrawal took away, so the

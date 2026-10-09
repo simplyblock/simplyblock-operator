@@ -121,10 +121,12 @@ type NFSExportReconciler struct {
 }
 
 // FlowForgetter asks every node to drop its connection-tracking entries for
-// NFS traffic translated to the given address. It returns at once, because the
-// work happens in the background and never holds a reconcile.
+// NFS traffic to an export Service's ClusterIP that was translated to the given
+// address. It returns at once, because the work happens in the background and
+// never holds a reconcile. Cancel drops a request still waiting to run.
 type FlowForgetter interface {
-	Forget(ip string)
+	Forget(serviceIP, ip string)
+	Cancel(serviceIP, ip string)
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=nfsexports,verbs=get;list;watch;create;update;patch;delete

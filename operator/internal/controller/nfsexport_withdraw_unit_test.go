@@ -20,9 +20,29 @@ import (
 )
 
 // fakeFlows records the addresses the reconciler asked the nodes to forget.
-type fakeFlows struct{ forgotten []string }
+// fakeFlows records each request in the form `service>address`.
+type fakeFlows struct{ forgotten, canceled []string }
 
-func (f *fakeFlows) Forget(ip string) { f.forgotten = append(f.forgotten, ip) }
+func (f *fakeFlows) Forget(serviceIP, ip string) {
+	f.forgotten = append(f.forgotten, serviceIP+">"+ip)
+}
+
+func (f *fakeFlows) Cancel(serviceIP, ip string) {
+	f.canceled = append(f.canceled, serviceIP+">"+ip)
+}
+
+// testServiceIP is the export Service's ClusterIP the flows were sent to.
+const testServiceIP = "10.96.5.5"
+
+// oldFlows is the request to forget the flows to the replaced pod.
+const oldFlows = testServiceIP + ">" + testMDSPodIP
+
+// readyWithService is a Ready export whose Service has its ClusterIP.
+func readyWithService() *simplyblockv1alpha2.NFSExport {
+	e := readyPodHosted()
+	e.Status.ServiceAddress = testServiceIP
+	return e
+}
 
 func exportEndpoints(t *testing.T, cl client.Client) []discoveryv1.Endpoint {
 	t.Helper()
@@ -66,7 +86,7 @@ func newWithdrawReconciler(t *testing.T, objects ...client.Object) (
 // terminating pod's address leaves the EndpointSlice at once, so new
 // connections are refused rather than sent to it.
 func TestATerminatingMDSPodsAddressIsWithdrawn(t *testing.T) {
-	r, cl, events, flows := newWithdrawReconciler(t, readyPodHosted(), terminatingMDSPod())
+	r, cl, events, flows := newWithdrawReconciler(t, readyWithService(), terminatingMDSPod())
 
 	reconcileExport(t, r)
 
@@ -83,13 +103,13 @@ func TestATerminatingMDSPodsAddressIsWithdrawn(t *testing.T) {
 	if !slices.Contains(events.reasons, "MDSAddressWithdrawn") {
 		t.Errorf("events = %v, want MDSAddressWithdrawn", events.reasons)
 	}
-	if !slices.Equal(flows.forgotten, []string{testMDSPodIP}) {
-		t.Errorf("forgotten = %v, want the old pod IP %s", flows.forgotten, testMDSPodIP)
+	if !slices.Equal(flows.forgotten, []string{oldFlows}) {
+		t.Errorf("forgotten = %v, want the flows from %s to the old pod IP", flows.forgotten, testServiceIP)
 	}
 }
 
 func TestAGoneMDSPodsAddressIsWithdrawn(t *testing.T) {
-	r, cl, events, flows := newWithdrawReconciler(t, readyPodHosted())
+	r, cl, events, flows := newWithdrawReconciler(t, readyWithService())
 
 	reconcileExport(t, r)
 
@@ -99,15 +119,15 @@ func TestAGoneMDSPodsAddressIsWithdrawn(t *testing.T) {
 	if !slices.Contains(events.reasons, "MDSAddressWithdrawn") {
 		t.Errorf("events = %v, want MDSAddressWithdrawn", events.reasons)
 	}
-	if !slices.Equal(flows.forgotten, []string{testMDSPodIP}) {
-		t.Errorf("forgotten = %v, want the old pod IP %s", flows.forgotten, testMDSPodIP)
+	if !slices.Equal(flows.forgotten, []string{oldFlows}) {
+		t.Errorf("forgotten = %v, want the flows from %s to the old pod IP", flows.forgotten, testServiceIP)
 	}
 }
 
 // A withdrawn address stays withdrawn: a second pass over the same terminating
 // pod writes nothing and asks for no second flush.
 func TestAWithdrawnAddressIsWithdrawnOnce(t *testing.T) {
-	r, _, events, flows := newWithdrawReconciler(t, readyPodHosted(), terminatingMDSPod())
+	r, _, events, flows := newWithdrawReconciler(t, readyWithService(), terminatingMDSPod())
 
 	reconcileExport(t, r)
 	reconcileExport(t, r)
@@ -128,7 +148,7 @@ func TestAWithdrawnAddressIsWithdrawnOnce(t *testing.T) {
 // address before the withdrawal took effect is pinned to it too.
 func TestTheReplacementsAddressFollowsAWithdrawal(t *testing.T) {
 	const newIP = "10.244.7.4"
-	r, cl, events, flows := newWithdrawReconciler(t, readyPodHosted(), terminatingMDSPod())
+	r, cl, events, flows := newWithdrawReconciler(t, readyWithService(), terminatingMDSPod())
 	reconcileExport(t, r)
 
 	// The StatefulSet replaces the pod under the same name.
@@ -154,7 +174,7 @@ func TestTheReplacementsAddressFollowsAWithdrawal(t *testing.T) {
 	if !slices.Contains(events.reasons, "MDSAddressChanged") {
 		t.Errorf("events = %v, want MDSAddressChanged", events.reasons)
 	}
-	if !slices.Equal(flows.forgotten, []string{testMDSPodIP, testMDSPodIP}) {
+	if !slices.Equal(flows.forgotten, []string{oldFlows, oldFlows}) {
 		t.Errorf("forgotten = %v, want the old pod IP at the withdrawal and again at the move", flows.forgotten)
 	}
 }
@@ -163,11 +183,65 @@ func TestTheReplacementsAddressFollowsAWithdrawal(t *testing.T) {
 // replaced when it looked) still has the nodes forget the old address.
 func TestAMoveWithoutAWithdrawalForgetsTheOldAddress(t *testing.T) {
 	const newIP = "10.244.7.4"
-	r, _, _, flows := newWithdrawReconciler(t, readyPodHosted(), runningMDSPod(restartedPodUID, newIP))
+	r, _, _, flows := newWithdrawReconciler(t, readyWithService(), runningMDSPod(restartedPodUID, newIP))
 
 	reconcileExport(t, r)
 
-	if !slices.Equal(flows.forgotten, []string{testMDSPodIP}) {
-		t.Errorf("forgotten = %v, want the old pod IP %s", flows.forgotten, testMDSPodIP)
+	if !slices.Equal(flows.forgotten, []string{oldFlows}) {
+		t.Errorf("forgotten = %v, want the flows from %s to the old pod IP", flows.forgotten, testServiceIP)
+	}
+}
+
+// Review on #711: the CNI can hand the replacement the old pod's IP. The flows
+// translated to it then reach the live pod, so the move asks for no second
+// flush, and the withdrawal's flush, still waiting out its delay, is canceled
+// rather than run against the replacement's fresh connections.
+func TestAReplacementWithTheSameAddressForgetsNothingMore(t *testing.T) {
+	r, cl, _, flows := newWithdrawReconciler(t, readyWithService(), terminatingMDSPod())
+	reconcileExport(t, r)
+
+	if err := cl.Delete(context.Background(), terminatingMDSPod()); err != nil {
+		t.Fatal(err)
+	}
+	old := &corev1.Pod{}
+	if err := cl.Get(context.Background(), client.ObjectKey{Namespace: testOperatorNS, Name: testMDSPod}, old); err == nil {
+		old.Finalizers = nil
+		if err := cl.Update(context.Background(), old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := cl.Create(context.Background(), runningMDSPod(restartedPodUID, testMDSPodIP)); err != nil {
+		t.Fatal(err)
+	}
+	reconcileExport(t, r)
+
+	if got := exportEndpoints(t, cl); len(got) != 1 || got[0].Addresses[0] != testMDSPodIP {
+		t.Errorf("EndpointSlice endpoints = %+v, want the replacement at %s", got, testMDSPodIP)
+	}
+	if !slices.Equal(flows.forgotten, []string{oldFlows}) {
+		t.Errorf("forgotten = %v, want only the withdrawal's request", flows.forgotten)
+	}
+	if !slices.Equal(flows.canceled, []string{oldFlows}) {
+		t.Errorf("canceled = %v, want the withdrawal's pending request canceled", flows.canceled)
+	}
+}
+
+// Without status.serviceAddress the ClusterIP is read from the Service.
+func TestTheServiceIPIsReadFromTheServiceWhenTheStatusLacksIt(t *testing.T) {
+	r, cl, _, flows := newWithdrawReconciler(t, readyPodHosted(), terminatingMDSPod())
+	svc := &corev1.Service{}
+	key := client.ObjectKey{Namespace: testExportNS, Name: utils.NFSExportServiceName(testExportName)}
+	if err := cl.Get(context.Background(), key, svc); err != nil {
+		t.Fatal(err)
+	}
+	svc.Spec.ClusterIP = "10.96.7.7"
+	if err := cl.Update(context.Background(), svc); err != nil {
+		t.Fatal(err)
+	}
+
+	reconcileExport(t, r)
+
+	if want := "10.96.7.7>" + testMDSPodIP; !slices.Equal(flows.forgotten, []string{want}) {
+		t.Errorf("forgotten = %v, want [%s]", flows.forgotten, want)
 	}
 }

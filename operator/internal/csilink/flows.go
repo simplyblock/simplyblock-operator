@@ -63,8 +63,12 @@ type Flows struct {
 	forget func(ctx context.Context, node string, conn grpc.ClientConnInterface, sel conntrack.Selector) (uint, error)
 
 	mu      sync.Mutex
-	pending map[netip.Addr]bool
+	pending map[flowKey]bool
 }
+
+// flowKey is one request: the Service's ClusterIP the flows were sent to, and
+// the address they were translated to.
+type flowKey struct{ service, backend netip.Addr }
 
 // NewFlows returns Flows over the given peer listing.
 func NewFlows(peers func() []NodePeer) *Flows {
@@ -74,38 +78,71 @@ func NewFlows(peers func() []NodePeer) *Flows {
 		forget: func(ctx context.Context, _ string, conn grpc.ClientConnInterface, sel conntrack.Selector) (uint, error) {
 			return conntrackrpc.Remote(conn).Forget(ctx, sel)
 		},
-		pending: map[netip.Addr]bool{},
+		pending: map[flowKey]bool{},
 	}
 }
 
 // Forget asks every capable node, after a short delay, to forget the TCP flows
-// to the NFS port translated to the given address. It returns at once. A
-// request for an address already waiting is folded into that one.
-func (f *Flows) Forget(ip string) {
-	addr, err := netip.ParseAddr(ip)
-	if err != nil {
+// to serviceIP's NFS port that were translated to the given address. It
+// returns at once. A request for the same pair already waiting is folded into
+// that one, and a
+// request whose addresses do not parse is dropped: one naming no Service would
+// also take the flows of any pod that inherited the address.
+func (f *Flows) Forget(serviceIP, ip string) {
+	key, ok := parseFlowKey(serviceIP, ip)
+	if !ok {
 		return
 	}
-	addr = addr.Unmap()
 	f.mu.Lock()
-	if f.pending[addr] {
+	if f.pending[key] {
 		f.mu.Unlock()
 		return
 	}
-	f.pending[addr] = true
+	f.pending[key] = true
 	f.mu.Unlock()
 
 	go func() {
 		time.Sleep(f.delay)
 		f.mu.Lock()
-		delete(f.pending, addr)
+		waiting := f.pending[key]
+		delete(f.pending, key)
 		f.mu.Unlock()
-		f.fanOut(conntrack.Selector{Protocol: conntrack.TCP, DstPort: nfsPort, ReplySource: addr})
+		if !waiting {
+			return // canceled while it waited
+		}
+		f.fanOut(conntrack.Selector{
+			Protocol: conntrack.TCP, OrigDst: key.service, DstPort: nfsPort, ReplySource: key.backend,
+		})
 	}()
 }
 
+// Cancel drops a request still waiting out its delay. A request already sent is
+// not undone.
+func (f *Flows) Cancel(serviceIP, ip string) {
+	key, ok := parseFlowKey(serviceIP, ip)
+	if !ok {
+		return
+	}
+	f.mu.Lock()
+	delete(f.pending, key)
+	f.mu.Unlock()
+}
+
+func parseFlowKey(serviceIP, ip string) (flowKey, bool) {
+	svc, err := netip.ParseAddr(serviceIP)
+	if err != nil {
+		return flowKey{}, false
+	}
+	backend, err := netip.ParseAddr(ip)
+	if err != nil {
+		return flowKey{}, false
+	}
+	return flowKey{service: svc.Unmap(), backend: backend.Unmap()}, true
+}
+
 func (f *Flows) fanOut(sel conntrack.Selector) {
-	log := ctrl.Log.WithName("csi-link").WithValues("address", sel.ReplySource.String())
+	log := ctrl.Log.WithName("csi-link").WithValues(
+		"service", sel.OrigDst.String(), "address", sel.ReplySource.String())
 	var wg sync.WaitGroup
 	for _, p := range f.peers() {
 		if !p.CanForget {
