@@ -293,3 +293,22 @@ func TestReleaseDeletedVolume_ReportsAResolverFailure(t *testing.T) {
 		t.Errorf("err = %v, disconnected = %v, want the resolver's error and nothing done", err, c.disconnected)
 	}
 }
+
+// A live controller that cannot answer whether the subsystem is shared leaves
+// the question open, and an open question keeps the subsystem: only a missing
+// live controller means no co-tenant can be served.
+func TestReleaseDeletedVolume_RefusesWhenSharingCannotBeAsked(t *testing.T) {
+	boom := errors.New("identify failed")
+	stubMultiNamespace(t, false, boom)
+	c := &recordingConnector{}
+	subs := resolving(nvme.Subsystem{
+		NQN:         ownNQN,
+		Controllers: []nvme.Controller{{ID: "nvme5", State: "live", DevicePath: "/dev/nvme5"}},
+		Namespaces:  []nvme.Namespace{{ID: 1, Name: "nvme5n1", UUID: deletedVolume}},
+	})
+
+	_, err := ReleaseDeletedVolume(context.Background(), c, subs, ownNQN, deletedVolume)
+	if !errors.Is(err, boom) || len(c.disconnected) != 0 {
+		t.Errorf("err = %v, disconnected = %v, want the error and nothing disconnected", err, c.disconnected)
+	}
+}

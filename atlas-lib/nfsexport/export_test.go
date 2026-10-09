@@ -240,11 +240,12 @@ func TestCreateIsIdempotent(t *testing.T) {
 	}
 }
 
-// A host whose exports directory does not survive a restart links the root file
-// to one that does. nfsd then starts with every client's address already in an
-// export, instead of rejecting each request as an unknown client until the
-// exports are reassembled. The update has to land in the link's target and
-// leave the link in place, or the next restart starts without it again.
+// Regression: 2026-10-09-pnfs-mds-restart-eacces (run pnfs-1791525621). A host
+// whose exports directory does not survive a restart links the root file to one
+// that does. nfsd then starts with every client's address already in an export,
+// instead of rejecting each request as an unknown client until the exports are
+// reassembled. The update has to land in the link's target and leave the link in
+// place, or the next restart starts without it again.
 func TestCreateWritesTheRootThroughALinkAndKeepsTheLink(t *testing.T) {
 	h := newHarness(t)
 	spec := h.spec()
@@ -425,5 +426,23 @@ func TestNewRefusesAConfigItCannotWorkWith(t *testing.T) {
 				t.Fatalf("New error = %v, want ErrInvalidSpec", err)
 			}
 		})
+	}
+}
+
+// Not being able to tell whether the root file is a link is an error, not a
+// regular file: writing in its place would replace a link with a file, which is
+// the restart failure the link exists to prevent.
+func TestRootFileReportsARootItCannotInspect(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory whatever its mode")
+	}
+	h := newHarness(t)
+	if err := os.Chmod(h.exportsDir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(h.exportsDir, 0o755) })
+
+	if got, err := h.assembler.rootFile(); err == nil {
+		t.Errorf("rootFile = %q, nil: want the inspection's error", got)
 	}
 }
