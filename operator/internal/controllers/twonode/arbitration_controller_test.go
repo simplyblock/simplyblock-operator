@@ -38,7 +38,8 @@ func setup(t *testing.T, api *fakeAPI, extraTaint *corev1.Taint) (*ArbitrationRe
 	t.Helper()
 	cluster := testsupport.Cluster(ns, "edge", "c-uuid")
 	cluster.Spec.TwoNode = &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true, PreferredNode: "worker-a"}
-	objs := []client.Object{cluster}
+	objs := make([]client.Object, 0, 5)
+	objs = append(objs, cluster)
 	for _, w := range []struct{ sn, worker, id string }{{"sn-a", "worker-a", "id-a"}, {"sn-b", "worker-b", "id-b"}} {
 		objs = append(objs, &simplyblockv1alpha2.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{Name: w.sn, Namespace: ns},
