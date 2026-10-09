@@ -198,6 +198,57 @@ controller_of() {
     esac
 }
 
+# Prints the NFSExports, in any namespace, that serve a volume of a storage
+# cluster in this namespace, one per line as `namespace name`. An export lives in
+# the namespace of the claim it serves, not the cluster's, and its volumeRef
+# begins with its cluster's UUID.
+nfsexports_of_this_cluster() {
+    local uuids exports
+    uuids=$($KUBECTL get "storageclusters.$CRD_GROUP" -n "$NAMESPACE" \
+        -o jsonpath='{.items[*].status.uuid}' 2>/dev/null) || return 1
+    [[ -z "$uuids" ]] && return 0
+    exports=$($KUBECTL get "nfsexports.$CRD_GROUP" -A -o json 2>/dev/null) || return 1
+    EXPORTS="$exports" UUIDS="$uuids" python3 -c '
+import json, os
+uuids = os.environ["UUIDS"].split()
+for e in json.loads(os.environ["EXPORTS"])["items"]:
+    if e["spec"].get("volumeRef", "").split(":")[0] in uuids:
+        print(e["metadata"]["namespace"], e["metadata"]["name"])
+'
+}
+
+# ---------------------------------------------------------------------------
+# 0a. Remove this cluster's NFSExports while the operator still runs
+# ---------------------------------------------------------------------------
+section "Removing NFSExports of the storage clusters in '$NAMESPACE'"
+
+# The operator's finalizer tears each export down on the metadata server, so
+# they go first, while the operator, the metadata server, and the CSI driver
+# all still run. Step 2 covers only this namespace, and an export left in
+# another one keeps its finalizer with no operator to clear it, and its CRD.
+if ! $KUBECTL get crd "nfsexports.$CRD_GROUP" >/dev/null 2>&1; then
+    info "No NFSExport CRD installed."
+elif ! exports=$(nfsexports_of_this_cluster); then
+    warn "Could not list the storage clusters or NFSExports; step 5 reports any left."
+elif [[ -z "$exports" ]]; then
+    info "No NFSExport serves a volume of a storage cluster in '$NAMESPACE'."
+else
+    while read -r ns name; do
+        info "Deleting NFSExport $ns/$name..."
+        $KUBECTL delete "nfsexports.$CRD_GROUP" "$name" -n "$ns" --ignore-not-found \
+            --wait=false >/dev/null 2>&1 || warn "  Could not delete NFSExport $ns/$name"
+    done <<< "$exports"
+    while read -r ns name; do
+        if ! $KUBECTL wait "nfsexports.$CRD_GROUP" "$name" -n "$ns" --for=delete \
+            --timeout=120s >/dev/null 2>&1; then
+            warn "  NFSExport $ns/$name was not torn down within 120s; clearing its finalizer."
+            $KUBECTL patch "nfsexports.$CRD_GROUP" "$name" -n "$ns" \
+                --type=merge -p '{"metadata":{"finalizers":[]}}' >/dev/null 2>&1 || \
+                warn "  Could not clear the finalizer of NFSExport $ns/$name"
+        fi
+    done <<< "$exports"
+fi
+
 # ---------------------------------------------------------------------------
 # 0. Release simplyblock volumes while the CSI node plugin still runs
 # ---------------------------------------------------------------------------
