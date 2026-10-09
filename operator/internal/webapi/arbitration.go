@@ -17,6 +17,11 @@ type ClusterArbitration struct {
 	PreferredNode string                 `json:"preferred_node"`
 	LVS           []ArbitrationLVS       `json:"lvs"`
 	Leases        map[string]interface{} `json:"leases,omitempty"`
+	// TaintRequests are the node ids the arbiter asks the operator to taint
+	// as storage-fenced; it clears the list once healing is done.
+	TaintRequests []string `json:"taint_requests"`
+	// Enabled is the cluster's two_node_arbitration flag.
+	Enabled bool `json:"enabled"`
 }
 
 // ArbitrationLVS is the arbiter's state of one logical volume store.
@@ -38,19 +43,19 @@ const (
 	ArbitrationHealing     = "healing"
 )
 
-// FencedNodes returns the control-plane node ids the arbiter currently holds
-// fenced. A node stays fenced through healing: the arbiter clears the taint
-// only once the cluster is steady again.
+// FencedNodes returns the control-plane node ids the arbiter asks the operator
+// to taint (taint_requests). The arbiter keeps a node in the list through
+// healing and clears it once the cluster is steady again.
 func (a *ClusterArbitration) FencedNodes() []string {
-	if a == nil || a.State == ArbitrationSteady || a.State == "" {
+	if a == nil {
 		return nil
 	}
 	seen := map[string]bool{}
 	var out []string
-	for _, l := range a.LVS {
-		if l.FencedNode != "" && !seen[l.FencedNode] {
-			seen[l.FencedNode] = true
-			out = append(out, l.FencedNode)
+	for _, id := range a.TaintRequests {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
 		}
 	}
 	return out
@@ -65,7 +70,8 @@ func (c *Client) GetClusterArbitration(ctx context.Context, clusterUUID string) 
 	if err != nil {
 		return nil, fmt.Errorf("get arbitration for cluster %s: %w", clusterUUID, err)
 	}
-	if status == http.StatusNotFound {
+	// 404: no record; 409: not a two-node cluster, so there is none to follow.
+	if status == http.StatusNotFound || status == http.StatusConflict {
 		return nil, nil
 	}
 	if status >= 300 {
@@ -88,6 +94,21 @@ func (c *Client) SetArbitrationPreferredNode(ctx context.Context, clusterUUID, n
 	}
 	if status >= 300 {
 		return fmt.Errorf("set preferred node for cluster %s: status %d: %s", clusterUUID, status, string(body))
+	}
+	return nil
+}
+
+// ReportArbitrationRemediation reports positive fencing evidence for a node
+// (BMC fence done, node.kubernetes.io/out-of-service present), or clears it.
+// The arbiter only lets the non-preferred node run alone after such evidence.
+func (c *Client) ReportArbitrationRemediation(ctx context.Context, clusterUUID, nodeUUID string, fenced bool) error {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/arbitration/remediation", clusterUUID)
+	body, status, err := c.Do(ctx, http.MethodPut, endpoint, map[string]any{"node_id": nodeUUID, "fenced": fenced})
+	if err != nil {
+		return fmt.Errorf("report remediation for cluster %s: %w", clusterUUID, err)
+	}
+	if status >= 300 {
+		return fmt.Errorf("report remediation for cluster %s: status %d: %s", clusterUUID, status, string(body))
 	}
 	return nil
 }

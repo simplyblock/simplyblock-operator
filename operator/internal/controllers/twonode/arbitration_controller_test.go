@@ -23,6 +23,20 @@ type fakeAPI struct {
 	rec       *Record
 	err       error
 	preferred string
+	reports   []string // "<node>=<fenced>" per ReportFencing call
+	reportErr error
+}
+
+func (f *fakeAPI) ReportFencing(_ context.Context, _ *simplyblockv1alpha2.StorageCluster, id string, fenced bool) error {
+	if f.reportErr != nil {
+		return f.reportErr
+	}
+	v := "false"
+	if fenced {
+		v = "true"
+	}
+	f.reports = append(f.reports, id+"="+v)
+	return nil
 }
 
 func (f *fakeAPI) Get(context.Context, *simplyblockv1alpha2.StorageCluster) (*Record, error) {
@@ -189,5 +203,41 @@ func TestArbitrationOffRemovesTaints(t *testing.T) {
 	reconcile(t, r)
 	if fencedTaint(t, c, "worker-b") != nil {
 		t.Fatal("arbitration off must withdraw the taint")
+	}
+}
+
+func TestFencingEvidenceIsReportedOnChangeOnly(t *testing.T) {
+	oos := &corev1.Taint{Key: simplyblockv1alpha2.TaintOutOfService, Value: "nodeshutdown", Effect: corev1.TaintEffectNoExecute}
+	api := &fakeAPI{rec: &Record{State: "degraded", Epoch: 4, PreferredNode: "id-a"}}
+	r, _ := setup(t, api, oos)
+	reconcile(t, r)
+	if !testsupport.Contains(api.reports, "id-b=true") || !testsupport.Contains(api.reports, "id-a=false") {
+		t.Fatalf("first pass reports %v", api.reports)
+	}
+	api.reports = nil
+	reconcile(t, r)
+	if len(api.reports) != 0 {
+		t.Fatalf("unchanged evidence was reported again: %v", api.reports)
+	}
+}
+
+func TestFailedFencingReportIsRetried(t *testing.T) {
+	oos := &corev1.Taint{Key: simplyblockv1alpha2.TaintOutOfService, Value: "nodeshutdown", Effect: corev1.TaintEffectNoExecute}
+	api := &fakeAPI{rec: &Record{State: "degraded", Epoch: 4, PreferredNode: "id-a"}, reportErr: errors.New("503")}
+	r, c := setup(t, api, oos)
+	reconcile(t, r)
+	var sn simplyblockv1alpha2.StorageNode
+	_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "sn-b"}, &sn)
+	if sn.Status.Remediation == nil || sn.Status.Remediation.ReportedFenced != nil {
+		t.Fatalf("a failed report must not be recorded: %+v", sn.Status.Remediation)
+	}
+	api.reportErr = nil
+	reconcile(t, r)
+	if !testsupport.Contains(api.reports, "id-b=true") {
+		t.Fatalf("the report was not retried: %v", api.reports)
+	}
+	_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "sn-b"}, &sn)
+	if rf := sn.Status.Remediation.ReportedFenced; rf == nil || !*rf {
+		t.Fatalf("reportedFenced %v", rf)
 	}
 }

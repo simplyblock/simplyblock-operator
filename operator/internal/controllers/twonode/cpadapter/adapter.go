@@ -48,6 +48,14 @@ func (a *Adapter) SetPreferred(ctx context.Context, cluster *simplyblockv1alpha2
 	return a.client(ctx).SetArbitrationPreferredNode(ctx, cluster.Status.UUID, nodeUUID)
 }
 
+// ReportFencing sends positive fencing evidence for a node, or clears it.
+func (a *Adapter) ReportFencing(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, nodeUUID string, fenced bool,
+) error {
+	ctx = a.authenticate(ctx, cluster)
+	return a.client(ctx).ReportArbitrationRemediation(ctx, cluster.Status.UUID, nodeUUID, fenced)
+}
+
 // authenticate scopes the call to the cluster's own secret, the only
 // credential that reaches a control plane on another Kubernetes cluster.
 func (a *Adapter) authenticate(ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster) context.Context {

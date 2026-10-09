@@ -102,6 +102,13 @@ type NodeRemediationStatus struct {
 	// +optional
 	StorageFencedEpoch int64 `json:"storageFencedEpoch,omitempty"`
 
+	// ReportedFenced is the fencing evidence the control plane last accepted
+	// for this node (PUT .../arbitration/remediation): true while the node is
+	// out of service. Unset until the first report succeeds; a failed report
+	// leaves it unchanged, so the next reconcile retries.
+	// +optional
+	ReportedFenced *bool `json:"reportedFenced,omitempty"`
+
 	// ObservedAt is when the operator last looked at the node.
 	// +optional
 	ObservedAt *metav1.Time `json:"observedAt,omitempty"`

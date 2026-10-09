@@ -37,6 +37,9 @@ type Record struct {
 type API interface {
 	Get(ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster) (*Record, error)
 	SetPreferred(ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, nodeUUID string) error
+	// ReportFencing sends positive fencing evidence for a node, or clears it
+	// (PUT .../arbitration/remediation).
+	ReportFencing(ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, nodeUUID string, fenced bool) error
 }
 
 const (
@@ -121,18 +124,18 @@ func (r *ArbitrationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
+	// taint_requests is the arbiter's list: kept through healing, cleared once
+	// the cluster is steady again.
 	fenced := map[string]bool{}
-	if rec.State != stateSteady {
-		for _, id := range rec.FencedNodes {
-			if w, ok := byUUID[id]; ok && w != "" {
-				fenced[w] = true
-			}
+	for _, id := range rec.FencedNodes {
+		if w, ok := byUUID[id]; ok && w != "" {
+			fenced[w] = true
 		}
 	}
 	if err := r.applyTaints(ctx, nodes, fenced, rec.Epoch); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.reportRemediation(ctx, nodes); err != nil {
+	if err := r.reportRemediation(ctx, &cluster, nodes); err != nil {
 		return ctrl.Result{}, err
 	}
 

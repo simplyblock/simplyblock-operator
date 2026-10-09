@@ -70,7 +70,7 @@ func (r *ArbitrationReconciler) applyTaints(
 // reportRemediation writes what Kubernetes knows about each node's host onto
 // its StorageNode, for the arbiter to read as fencing evidence.
 func (r *ArbitrationReconciler) reportRemediation(
-	ctx context.Context, nodes []simplyblockv1alpha2.StorageNode,
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, nodes []simplyblockv1alpha2.StorageNode,
 ) error {
 	for i := range nodes {
 		sn := &nodes[i]
@@ -93,8 +93,22 @@ func (r *ArbitrationReconciler) reportRemediation(
 				rem.StorageFencedEpoch, _ = strconv.ParseInt(t.Value, 10, 64)
 			}
 		}
-		if prev := sn.Status.Remediation; prev != nil && prev.OutOfService == rem.OutOfService &&
-			prev.NodeNotReady == rem.NodeNotReady && prev.StorageFencedEpoch == rem.StorageFencedEpoch {
+		// Positive fencing evidence is out-of-service only: NotReady is also what
+		// a partition looks like, and the storage-fenced taint is the arbiter's
+		// own verdict. Reported when it changes; a failed report keeps the last
+		// accepted value, so the next reconcile retries.
+		prev := sn.Status.Remediation
+		if prev != nil {
+			rem.ReportedFenced = prev.ReportedFenced
+		}
+		if sn.Status.UUID != "" && (rem.ReportedFenced == nil || *rem.ReportedFenced != rem.OutOfService) {
+			if err := r.API.ReportFencing(ctx, cluster, sn.Status.UUID, rem.OutOfService); err == nil {
+				v := rem.OutOfService
+				rem.ReportedFenced = &v
+			}
+		}
+		if prev != nil && prev.OutOfService == rem.OutOfService && prev.NodeNotReady == rem.NodeNotReady &&
+			prev.StorageFencedEpoch == rem.StorageFencedEpoch && boolPtrEq(prev.ReportedFenced, rem.ReportedFenced) {
 			continue
 		}
 		now := metav1.NewTime(r.now())
@@ -140,6 +154,13 @@ func withoutTaint(taints []corev1.Taint, key string) []corev1.Taint {
 		}
 	}
 	return out
+}
+
+func boolPtrEq(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func nodeReady(n *corev1.Node) bool {

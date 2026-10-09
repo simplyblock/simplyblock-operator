@@ -168,6 +168,11 @@ type service struct {
 	// the image's working directory.
 	module string
 
+	// command, when set, replaces "python3 <module>": for a service the image
+	// ships as a binary rather than a Python module (the two-node event
+	// collector).
+	command []string
+
 	// extraEnv is what this one service needs that the shared set does not
 	// carry. Most of them need nothing.
 	extraEnv []corev1.EnvVar
@@ -190,11 +195,19 @@ func (s service) container(
 		Name:            s.name,
 		Image:           image,
 		ImagePullPolicy: pullPolicy,
-		Command:         []string{"python3", s.module},
+		Command:         s.cmd(),
 		Env:             env,
 		VolumeMounts:    append([]corev1.VolumeMount{clusterFileMount()}, tlsMount(local)...),
 		Resources:       serviceResources(),
 	}
+}
+
+// cmd is the container's command: the binary when one is named, else the module.
+func (s service) cmd() []string {
+	if len(s.command) > 0 {
+		return append([]string{}, s.command...)
+	}
+	return []string{"python3", s.module}
 }
 
 // containers builds every service of a pool, in the order they are declared, so
