@@ -1,12 +1,26 @@
-# ServiceMonitor, PodMonitor, and ScrapeConfig objects for the
-# prometheus-operator the customer runs. This chart deploys no Prometheus of
-# its own, so a prometheus-operator install is the only way to scrape it.
+# ServiceMonitor, PodMonitor, and ScrapeConfig objects for a prometheus-operator.
+# prometheus.enabled alone brings one: the kube-prometheus-stack dependency
+# below is on by default, so this chart needs nothing installed beforehand.
+# Set the kube-prometheus-stack.* values below to false instead, and point
+# prometheus.serviceAccount at the existing one, to scrape with a
+# prometheus-operator the customer already runs rather than this one.
 {{- if .Values.prometheus.enabled }}
+{{- if eq (include "simplyblock.bundlesPrometheusOperator" .) "true" }}
+{{- $existing := lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "servicemonitors.monitoring.coreos.com" }}
+{{- if $existing }}
+{{- $owner := get (get $existing "metadata") "annotations" | default dict }}
+{{- $ownerRelease := get $owner "meta.helm.sh/release-name" }}
+{{- if ne $ownerRelease .Release.Name }}
+{{ fail "prometheus.enabled is true, and this chart bundles its own prometheus-operator by default, but monitoring.coreos.com CRDs already exist on this cluster from somewhere else. Installing another prometheus-operator would conflict with it. Set kube-prometheus-stack.crds.enabled, kube-prometheus-stack.prometheusOperator.enabled, kube-prometheus-stack.prometheus.enabled, and kube-prometheus-stack.alertmanager.enabled all to false, and point prometheus.serviceAccount.name/namespace at the existing Prometheus's own ServiceAccount, to scrape with it instead." }}
+{{- end }}
+{{- end }}
+{{- else }}
 {{- if not (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor") }}
-{{ fail "prometheus.enabled is true, but this cluster has no monitoring.coreos.com/v1 ServiceMonitor CRD. Install prometheus-operator (or kube-prometheus-stack) first, or set prometheus.enabled to false." }}
+{{ fail "prometheus.enabled is true and kube-prometheus-stack.crds.enabled/.prometheusOperator.enabled are not both true, but this cluster has no monitoring.coreos.com/v1 ServiceMonitor CRD either. Point prometheus.serviceAccount at the prometheus-operator the customer already runs, install one first, or set prometheus.enabled to false." }}
 {{- end }}
 {{- if not (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1alpha1/ScrapeConfig") }}
-{{ fail "prometheus.enabled is true, but this cluster has no monitoring.coreos.com/v1alpha1 ScrapeConfig CRD. Upgrade prometheus-operator (or kube-prometheus-stack) to a version that ships it, or set prometheus.enabled to false." }}
+{{ fail "prometheus.enabled is true and kube-prometheus-stack.crds.enabled/.prometheusOperator.enabled are not both true, but this cluster has no monitoring.coreos.com/v1alpha1 ScrapeConfig CRD either. Upgrade the existing prometheus-operator to a version that ships it, or set prometheus.enabled to false." }}
+{{- end }}
 {{- end }}
 ---
 apiVersion: monitoring.coreos.com/v1

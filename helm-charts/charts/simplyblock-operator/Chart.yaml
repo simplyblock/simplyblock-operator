@@ -29,3 +29,7 @@ dependencies:
     version: 2.9.0
     repository: https://opensearch-project.github.io/helm-charts
     condition: controlplane.observability.enabled
+  - name: kube-prometheus-stack
+    version: 92.2.0
+    repository: https://prometheus-community.github.io/helm-charts
+    condition: prometheus.enabled

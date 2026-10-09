@@ -1,22 +1,25 @@
-# PrometheusRule and AlertmanagerConfig objects for a prometheus-operator the
-# customer already runs: the Alertmanager-routed equivalent of the Grafana
-# alerting rules and contact points in controlplane_configmap.yaml
-# (simplyblock-grafana-alerting). The eleven rules below are a hand
-# translation of that ConfigMap's eleven, from Grafana's threshold-evaluator
-# shape into plain PromQL comparisons. Nothing checks the two stay in step,
-# so a new rule needs adding in both places until that ConfigMap is retired.
-# Separate from prometheus-operator-servicemonitors.yaml because a customer
-# may want these rules evaluated without taking an opinion on routing, or may
-# already have their own routing in place. Both still require
-# `prometheus.enabled`.
+# PrometheusRule and AlertmanagerConfig objects for a prometheus-operator,
+# bundled by default or the customer's own (see
+# prometheus-operator-servicemonitors.yaml): the Alertmanager-routed
+# equivalent of the Grafana alerting rules and contact points in
+# controlplane_configmap.yaml (simplyblock-grafana-alerting). The eleven
+# rules below are a hand translation of that ConfigMap's eleven, from
+# Grafana's threshold-evaluator shape into plain PromQL comparisons. Nothing
+# checks the two stay in step, so a new rule needs adding in both places
+# until that ConfigMap is retired. Separate from
+# prometheus-operator-servicemonitors.yaml because a customer may want these
+# rules evaluated without taking an opinion on routing, or may already have
+# their own routing in place. Both still require `prometheus.enabled`.
 #
 # AlertmanagerConfig's schema has moved between prometheus-operator releases
 # (v1alpha1 promoted toward v1beta1). What follows targets v1alpha1, the
 # longest-supported version. Check it against the cluster's installed CRD
 # before relying on it, the msteamsConfigs block in particular.
 {{- if .Values.prometheus.enabled }}
+{{- if ne (include "simplyblock.bundlesPrometheusOperator" .) "true" }}
 {{- if not (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PrometheusRule") }}
-{{ fail "prometheus.enabled is true, but this cluster has no monitoring.coreos.com/v1 PrometheusRule CRD. Install prometheus-operator (or kube-prometheus-stack) first, or set prometheus.enabled to false." }}
+{{ fail "prometheus.enabled is true and kube-prometheus-stack.crds.enabled/.prometheusOperator.enabled are not both true, but this cluster has no monitoring.coreos.com/v1 PrometheusRule CRD either. Point prometheus.serviceAccount at the prometheus-operator the customer already runs, install one first, or set prometheus.enabled to false." }}
+{{- end }}
 {{- end }}
 ---
 apiVersion: monitoring.coreos.com/v1
