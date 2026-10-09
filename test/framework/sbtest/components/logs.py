@@ -59,6 +59,18 @@ def dump_script(namespace: str, pod: str, container: str) -> str:
             + 'for f in $(ls -1tr "$d" 2>/dev/null); do ' + _CAT_ONE + 'done')
 
 
+#: Where the storage plane's pods run: the operator deploys them into simplyblock, older
+#: deployments into default. Both are searched, since a target looking in the wrong one
+#: finds nothing and the log is simply missing.
+STORAGE_NAMESPACES = ["simplyblock", "default"]
+
+
+def pods_in(namespaces: str | list[str], matching: list[str]) -> list[kube.Pod]:
+    """The pods matching any of `matching` in one namespace or several."""
+    names = [namespaces] if isinstance(namespaces, str) else list(namespaces)
+    return [p for ns in names for p in kube.list_pods(ns, matching)]
+
+
 def stream_script(namespace: str, pod: str, container: str, poll_s: int = 5) -> str:
     """Retained segments, then follow the live one for as long as this runs.
 
@@ -187,10 +199,13 @@ class LogStream(_GrabberBase):
 
     def defaults(self) -> dict[str, Any]:
         return {
+            # Where the grabber pods run.
             "namespace": "default",
             "image": DEFAULT_GRABBER_IMAGE,
-            # Pods to follow, matched by substring, and the containers within them.
+            # Pods to follow, matched by substring, where to look for them, and the
+            # containers within them.
             "pods_matching": ["snode-spdk"],
+            "pod_namespaces": STORAGE_NAMESPACES,
             "containers": ["spdk-container", "spdk-proxy-container"],
             # Artifact name: "spdk-<port>" and "spdk-<port>-proxy" for the SPDK pods.
             "name_from": "snode-port",
@@ -218,10 +233,10 @@ class LogStream(_GrabberBase):
 
     # -- lifecycle ------------------------------------------------------------------
     def setup(self, ctx: RunContext) -> None:
-        self._pods = kube.list_pods(self.opt("namespace"), self.opt("pods_matching"))
+        self._pods = pods_in(self.opt("pod_namespaces"), self.opt("pods_matching"))
         if not self._pods:
-            ctx.log.warn(f"{self.name}: no pods matching {self.opt('pods_matching')}; "
-                         "nothing to follow")
+            ctx.log.warn(f"{self.name}: no pods matching {self.opt('pods_matching')} in "
+                         f"{self.opt('pod_namespaces')}; nothing to follow")
             return
         nodes = {p.node for p in self._pods if p.node}
         self._grabbers = self._start_grabbers(ctx, sorted(nodes), int(self.opt("ttl_s")))
@@ -331,7 +346,7 @@ class LogCollect(_GrabberBase):
             #: [{pods: [substr], containers: [name]|"all", name_from: ..., namespace: ...}]
             "targets": [
                 {"pods": ["snode-spdk"], "containers": ["spdk-container", "spdk-proxy-container"],
-                 "name_from": "snode-port"},
+                 "namespace": STORAGE_NAMESPACES, "name_from": "snode-port"},
                 {"pods": ["operator", "webappapi"], "containers": "all",
                  "namespace": "simplyblock", "name_from": "pod-key"},
                 # One artifact per container, not per pod. The tasks pod runs seventeen
@@ -353,7 +368,7 @@ class LogCollect(_GrabberBase):
                 # every "the node went offline" event — including the liveness check that
                 # concluded SPDK was dead because a Kubernetes API call blipped.
                 {"pods": ["simplyblock-storage-node-ds"], "containers": "all",
-                 "namespace": "default", "name_from": "pod-node", "name": "snode-api"},
+                 "namespace": STORAGE_NAMESPACES, "name_from": "pod-node", "name": "snode-api"},
                 {"pods": ["simplyblock-csi-controller"], "containers": "all",
                  "namespace": "simplyblock", "name_from": "container"},
                 # The pNFS metadata server: the runner, whose log carries the guest's
@@ -376,7 +391,12 @@ class LogCollect(_GrabberBase):
         plan: list[tuple[kube.Pod, str, str]] = []
         for target in self.opt("targets"):
             ns = target.get("namespace", self.opt("namespace"))
-            for p in kube.list_pods(ns, target["pods"]):
+            pods = pods_in(ns, target["pods"])
+            if not pods:
+                # Said, because the detectors reading this log can only report themselves
+                # skipped, which does not say the target looked in the wrong place.
+                ctx.log.warn(f"{self.name}: no pods matching {target['pods']} in {ns}")
+            for p in pods:
                 wanted = (list(p.containers) if target.get("containers") == "all"
                           else [c for c in target["containers"] if c in p.containers])
                 for c in wanted:

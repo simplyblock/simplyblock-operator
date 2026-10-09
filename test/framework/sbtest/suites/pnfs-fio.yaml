@@ -45,6 +45,14 @@ components:
     guaranteed: 1
     chance: 0.02
 
+  # The SPDK containers outrun kubelet rotation within minutes, so they are followed live
+  # for the whole run, as the migration suites do. They are where a restarted metadata
+  # server's reservation preempts and reconnects land.
+  logs.stream:
+    containers:
+      - spdk-container
+      - spdk-proxy-container
+    ttl_s: 21600
   logs.collect: true
   # The clients' kernels are the ones a pNFS run is about: layouts, NVMe-oF paths,
   # blocklayout errors. The CSI node plugin runs privileged on every node, so it reads them.

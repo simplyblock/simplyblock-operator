@@ -547,6 +547,55 @@ class GrabberNaming(unittest.TestCase):
         self.assertIn("logs-collect", name2)
 
 
+class LogNamespaces(unittest.TestCase):
+    """Where the storage plane runs depends on how it was deployed: older clusters put the
+    SPDK and node-agent pods in default, the operator puts them in simplyblock. A target
+    looking in one namespace found nothing in the other and said nothing, so pNFS runs on
+    an operator-deployed cluster collected neither log."""
+
+    PODS = {"simplyblock": [kube.Pod(name="snode-spdk-pod-4420-06075e", namespace="simplyblock",
+                                     node="vm02", containers=("spdk-container",))]}
+
+    def _list(self, ns: str, *a: object, **k: object) -> list[kube.Pod]:
+        return list(self.PODS.get(ns, []))
+
+    def test_the_storage_targets_look_in_both_namespaces(self):
+        from sbtest.components import logs as logs_mod
+        for t in logs_mod.LogCollect().opt("targets"):
+            if "snode-spdk" in t["pods"] or "simplyblock-storage-node-ds" in t["pods"]:
+                self.assertEqual(set(t["namespace"]), {"simplyblock", "default"}, t)
+
+    def test_collect_finds_the_spdk_pods_in_simplyblock(self):
+        from sbtest.components import logs as logs_mod
+
+        class Probe(logs_mod.LogCollect):
+            def _start_grabbers(self, ctx, nodes, ttl_s):
+                return {n: f"own-{n}" for n in nodes}
+
+        c = Probe(targets=[{"pods": ["snode-spdk"], "containers": ["spdk-container"],
+                            "namespace": ["simplyblock", "default"], "name_from": "snode-port"}])
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(kube, "list_pods", self._list), \
+                mock.patch.object(kube, "run_bytes", lambda *a, **k: b"log line\n"):
+            ctx = RunContext(run_id="r", outdir=d, log=Logger(None))
+            c.collect(ctx)
+            self.assertTrue(os.path.exists(os.path.join(d, "spdk-4420.txt")))
+
+    def test_stream_follows_the_spdk_pods_in_simplyblock(self):
+        from sbtest.components import logs as logs_mod
+
+        class Probe(logs_mod.LogStream):
+            def _start_grabbers(self, ctx, nodes, ttl_s):
+                return {n: f"stream-{n}" for n in nodes}
+
+        s = Probe()
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(kube, "list_pods", self._list):
+            ctx = RunContext(run_id="r", outdir=d, log=Logger(None))
+            s.setup(ctx)
+        self.assertEqual([p.name for p in s._pods], ["snode-spdk-pod-4420-06075e"])
+
+
 class GrabberReuse(unittest.TestCase):
     """logs.collect must reuse logs.stream's grabbers, and must not delete them.
 
