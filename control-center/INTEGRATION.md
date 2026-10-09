@@ -129,7 +129,7 @@ the environment, into the writable scratch mount. Nothing is baked in.
 | `SB_GRAYLOG_TOKEN_FILE` | empty | a Graylog access token instead (sent as `<token>:token`); wins over the password |
 | `SB_GRAYLOG_CA_FILE` | empty | CA to verify an https Graylog |
 | `SB_HELM_URL` | `http://simplyblock-operator:8080` | Helm release view; empty disables it |
-| `SB_PROMETHEUS_URL` | `http://simplyblock-prometheus:9090` | metrics; empty disables it |
+| `SB_PROMETHEUS_URL` | empty | metrics, from `prometheus.simplyblock.prometheusURL`/`prometheusPORT` when set — the chart deploys no Prometheus of its own; empty disables it |
 | `SB_LOGO_URL` | `vendor/logo-white.svg` | brand mark, vendored into the image |
 | `SB_MOCK` | `false` | `true` runs on fixtures (needs a `KEEP_MOCKS=1` image) |
 | `SB_TOKEN_REFRESH_SECONDS` | `600` | how often the proxied token is re-read |

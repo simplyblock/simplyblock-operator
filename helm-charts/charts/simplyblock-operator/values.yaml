@@ -821,146 +821,16 @@ reloader:
       nodeSelector: {}
       tolerations: []
 
+# This chart no longer deploys a Prometheus of its own: prometheusOperator
+# below, against a prometheus-operator the customer already runs, is the only
+# supported way to scrape this install. What is left here is not a monitoring
+# stack of any kind, only the fallback Control Center's own Prometheus link
+# resolves to when controlCenter.prometheusUrl is unset -- empty is simply
+# "unknown" rather than a host this chart ever promises to stand up.
 prometheus:
-  # Where the control plane pushes what it measures. A managed deployment
-  # reports to the control plane administering it, so it can turn this off.
-  enabled: true
   simplyblock:
-    prometheusURL: simplyblock-prometheus
-    prometheusPORT: 9090   
-  server:
-    image:
-      repository: quay.io/simplyblock-io/prometheus
-      tag: v2.51.0
-    fullnameOverride: simplyblock-prometheus
-    enabled: true
-    statefulSet:
-      enabled: true
-    name: simplyblock-prometheus
-    replicaCount: 1
-    podLabels:
-      app: simplyblock-prometheus
-    podAnnotations:
-      log-collector/enabled: "true"
-      reloader.stakater.com/auto: "true"
-      reloader.stakater.com/configmap: "simplyblock-prometheus-config"
-    nodeSelector: {}
-    tolerations: []
-    affinity:
-      podAntiAffinity:
-        requiredDuringSchedulingIgnoredDuringExecution:
-          - labelSelector:
-              matchExpressions:
-                - key: app.kubernetes.io/component
-                  operator: In
-                  values:
-                    - simplyblock-prometheus
-            topologyKey: "kubernetes.io/hostname"
-    service:
-      servicePort: 9090
-      type: ClusterIP
-      gRPC:
-        enabled: true
-        servicePort: 10901
-      additionalPorts:
-        - name: http-thanos
-          port: 10902
-          targetPort: 10902
-          protocol: TCP
-    securityContext:
-      fsGroup: 65534
-    persistentVolume:
-      enabled: true
-      size: 20Gi
-      storageClass:
-    extraArgs:
-      storage.tsdb.min-block-duration: 2h
-      storage.tsdb.max-block-duration: 2h
-    sidecarContainers:
-      thanos-sidecar:
-        image: quay.io/simplyblock-io/thanos:v0.31.0
-        args:
-          - sidecar
-          - --tsdb.path=/prometheus
-          - --prometheus.url=http://localhost:9090
-          - --objstore.config-file=/etc/thanos/objstore.yml
-        ports:
-          - name: grpc
-            containerPort: 10901
-          - name: http
-            containerPort: 10902
-        volumeMounts:
-          - name: storage-volume
-            mountPath: /prometheus
-          - name: objstore-config
-            mountPath: /etc/thanos
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "256Mi"
-          limits:
-            cpu: "250m"
-            memory: "1Gi"
-    resources:
-      requests:
-        cpu: "100m"
-        memory: "512Mi"
-      limits:
-        cpu: "500m"
-        memory: "1Gi"
-    configPath: /etc/simplyblock-config/prometheus.yml
-    extraVolumes:
-      - name: simplyblock-prometheus-config
-        configMap:
-          name: simplyblock-prometheus-config
-      - name: objstore-config
-        configMap:
-          name: simplyblock-objstore-config
-      - name: prometheus-client-tls
-        secret:
-          secretName: simplyblock-prometheus-client-tls
-          optional: true
-      # The CA the control plane's certificate is verified against. It is its
-      # own volume because the client certificate above is issued only for
-      # mutual TLS, and a scrape that encrypts without verifying is one an
-      # in-cluster impersonator answers.
-      - name: prometheus-ca-tls
-        secret:
-          secretName: simplyblock-ca-bundle-tls
-          optional: true
-    extraVolumeMounts:
-      - name: simplyblock-prometheus-config
-        mountPath: /etc/simplyblock-config
-      - name: prometheus-client-tls
-        mountPath: /etc/prometheus/certs
-        readOnly: true
-      - name: prometheus-ca-tls
-        mountPath: /etc/prometheus/ca
-        readOnly: true
-  alertmanager:
-    enabled: false
-
-  prometheus-pushgateway:
-    enabled: false
-
-  prometheus-node-exporter:
-    enabled: false
-
-  kube-state-metrics:
-    enabled: false
-  configmapReload:
-    prometheus:
-      image:
-        repository: quay.io/simplyblock-io/prometheus-config-reloader
-        tag: v0.72.0
-
-  defaultBackend:
-    enabled: false
-    name: defaultbackend
-    image:
-      registry: "quay.io/simplyblock-io"
-      image: defaultbackend-amd64
-      tag: "1.5"
+    prometheusURL: ""
+    prometheusPORT: 9090
 # The Control Center — the simplyblock web console (control-center/ in the
 # monorepo). Off by default: it proxies the Kubernetes API with the pod's
 # ServiceAccount token, so enabling it is a deliberate decision about who may
@@ -1021,8 +891,10 @@ controlCenter:
   kubernetesApiHost: kubernetes.default.svc
   kubernetesApiCaFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
   # Empty defaults resolve to this chart's own services: the operator API on
-  # http://simplyblock-operator:8080 and Prometheus per
-  # prometheus.simplyblock.prometheusURL/prometheusPORT.
+  # http://simplyblock-operator:8080, and Prometheus per
+  # prometheus.simplyblock.prometheusURL/prometheusPORT when that is set —
+  # this chart deploys no Prometheus of its own, so there is nothing to
+  # resolve to otherwise.
   operatorUrl: ""
   helmUrl: ""
   prometheusUrl: ""
@@ -1220,10 +1092,10 @@ ramen:
   nodeSelector: {}
   tolerations: []
 
-# Scrape config for a prometheus-operator the customer already runs, instead of
-# the bundled `prometheus` subchart above. Off by default. Turning it on
-# without also setting `prometheus.enabled: false` scrapes every target twice,
-# from two separate Prometheus instances.
+# Scrape config for a prometheus-operator the customer already runs. This
+# chart deploys no Prometheus of its own, so this is the only way anything it
+# runs gets scraped at all; off by default means no monitoring wiring, not an
+# alternative to one.
 prometheusOperator:
   enabled: false
   # The labels the customer's `Prometheus` CR selects on, via its
@@ -1235,9 +1107,9 @@ prometheusOperator:
   interval: 30s
   # The ServiceAccount the customer's Prometheus pod itself runs as (not the
   # selector above): webappapi does a TokenReview on every scrape's bearer
-  # token and otherwise trusts only the bundled `prometheus` subchart's own
-  # account, so every scrape from this Prometheus gets a 401 until its
-  # identity is named here. kube-prometheus-stack's default is name
+  # token and otherwise trusts no identity at all, so every scrape from this
+  # Prometheus gets a 401 until its identity is named here.
+  # kube-prometheus-stack's default is name
   # "<release>-kube-prometheus-stack-prometheus" in the "monitoring" namespace;
   # check `kubectl get prometheus -A -o jsonpath='{.items[0].spec.serviceAccountName}'`
   # against the actual release rather than assuming it.

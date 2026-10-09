@@ -276,7 +276,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 		// trust before anything else works: every controller in this process
 		// authenticates with its token.
 		{Name: "SB_K8S_ADMIN_SERVICE_ACCOUNTS", Value: adminServiceAccounts(cp.Namespace)},
-		{Name: "SB_K8S_METRICS_SERVICE_ACCOUNTS", Value: metricsServiceAccounts(cp.Namespace)},
+		{Name: "SB_K8S_METRICS_SERVICE_ACCOUNTS", Value: metricsServiceAccounts()},
 	}
 	if ref := managed.AdminTokenSecretRef; ref != nil && ref.Name != "" {
 		// Sourced from the Secret directly rather than read and copied in here,
@@ -701,19 +701,21 @@ func adminServiceAccounts(namespace string) string {
 }
 
 // extraMetricsAccountsEnv names the operator's own environment variable
-// listing further service accounts the management API must trust as metrics
-// scrapers. A bring-your-own prometheus-operator's Prometheus pod presents its
-// own ServiceAccount's token, never the bundled `prometheus` subchart's, so
-// without this a customer's Prometheus gets a 401 on every scrape. The chart
-// sets this from prometheusOperator's configured account. An operator without
-// it trusts only the bundled subchart's account, as before.
+// listing the service accounts the management API trusts as metrics
+// scrapers. This chart deploys no Prometheus of its own, so there is no
+// account to trust by default: a bring-your-own prometheus-operator's
+// Prometheus pod presents its own ServiceAccount's token, and the chart sets
+// this from prometheusOperator's configured account. An install without it
+// trusts no metrics scraper at all, and every scrape gets a 401.
 const extraMetricsAccountsEnv = "SB_EXTRA_METRICS_SERVICE_ACCOUNTS"
 
-// metricsServiceAccounts is the bundled `prometheus` subchart's own account
-// followed by the extra ones, filtered the same way adminServiceAccounts
-// filters its list.
-func metricsServiceAccounts(namespace string) string {
-	accounts := []string{"system:serviceaccount:" + namespace + ":simplyblock-prometheus"}
+// metricsServiceAccounts is every account named in extraMetricsAccountsEnv,
+// filtered the same way adminServiceAccounts filters its list. Empty unless
+// the chart set something, by design: there is no account this operator
+// could trust on its own authority the way adminServiceAccounts trusts
+// itself, since it does not run the Prometheus doing the scraping.
+func metricsServiceAccounts() string {
+	var accounts []string
 	for _, a := range strings.Split(os.Getenv(extraMetricsAccountsEnv), ",") {
 		a = strings.TrimSpace(a)
 		if strings.Count(a, ":") == 3 && strings.HasPrefix(a, "system:serviceaccount:") && !slices.Contains(accounts, a) {

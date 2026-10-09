@@ -39,8 +39,11 @@ const (
 	lvolNVMfPortStart = "9110"
 
 	// prometheusHost and prometheusPort are where the control plane pushes the
-	// metrics it collects. The chart deploys that Prometheus as a subchart and
-	// still does, so the install names the same Service.
+	// metrics it collects. The chart no longer deploys a Prometheus of its own
+	// (prometheusOperator.enabled, against a prometheus-operator the customer
+	// runs, is the only supported way to scrape this install), so this Service
+	// name is not one anything in the chart creates. It only still matters if
+	// something answers to it.
 	prometheusHost = "simplyblock-prometheus"
 	prometheusPort = "9090"
 

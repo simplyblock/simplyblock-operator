@@ -191,11 +191,6 @@ spec:
             - --http-address=0.0.0.0:9091
             - --query.replica-label=replica
             - --store=simplyblock-thanos:10901
-            {{- $replicas := int .Values.prometheus.server.replicaCount }}
-            {{- $ns := .Release.Namespace }}
-            {{- range $i := until $replicas }}
-            - --store=simplyblock-prometheus-{{ $i }}.simplyblock-prometheus-headless.{{ $ns }}.svc.cluster.local:10901
-            {{- end }}
           ports:
             - containerPort: 9091
               name: query-http
