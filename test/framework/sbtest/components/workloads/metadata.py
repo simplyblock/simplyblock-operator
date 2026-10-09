@@ -77,7 +77,9 @@ class Diff:
 
 def compare(manifest: dict[str, Any], listing: dict[str, Any]) -> Diff:
     """The manifest against a listing. A path whose last operation failed, and anything
-    under it, is left out: it may or may not have changed, and only the error says so."""
+    under it, is left out: it may or may not have changed, and only the error says so. A
+    root the listing could not find is missing, as the path `.`, even when the manifest is
+    empty."""
     uncertain = list(manifest.get("uncertain") or [])
 
     def judged(p: str) -> bool:
@@ -90,7 +92,10 @@ def compare(manifest: dict[str, Any], listing: dict[str, Any]) -> Diff:
     changed = [p for p in set(mfiles) & set(lfiles)
                if (mfiles[p].get("size"), mfiles[p].get("md5"))
                != (lfiles[p].get("size"), lfiles[p].get("md5"))]
-    return Diff(missing=tuple(sorted((set(mfiles) - set(lfiles)) | (mdirs - ldirs))),
+    # An empty directory lists as nothing whether it exists or not, so a root the other
+    # client cannot see is reported as such, as the path `.`.
+    root = set() if listing.get("root_exists", True) else {"."}
+    return Diff(missing=tuple(sorted((set(mfiles) - set(lfiles)) | (mdirs - ldirs) | root)),
                 extra=tuple(sorted((set(lfiles) - set(mfiles)) | (ldirs - mdirs))),
                 mismatched=tuple(sorted(changed)))
 
@@ -140,6 +145,11 @@ class MetadataWorkload(Component):
         self._stop = threading.Event()
         self._loop: threading.Thread | None = None
         self._seed = 0
+        #: When the workers stop, in epoch seconds: the run's end less the quiet tail.
+        self._stop_at = 0.0
+        #: Why a worker's pods were never released to start, by worker pod.
+        self._start_errors: dict[str, str] = {}
+        self._releases: list[threading.Thread] = []
 
     # ── the run ──────────────────────────────────────────────────────────────────────
 
@@ -155,6 +165,9 @@ class MetadataWorkload(Component):
             return
         seed = self.opt("seed")
         self._seed = int(seed) if seed is not None else random.SystemRandom().randrange(2**31)
+        # Fixed now, when the run's clock starts, so the time the pods take to come up
+        # shortens the work and never the quiet tail.
+        self._stop_at = time.time() + span
         ns = str(self.opt("namespace"))
         for a in plan:
             w = _Worker(a=a, pod=f"{ctx.run_id}-meta-{a.index}",
@@ -164,9 +177,13 @@ class MetadataWorkload(Component):
                 ctx.log.warn(f"{self.name}: {w.pod} is verified from its own node {a.node}, "
                              "so its checks are not cross-node")
             kube.run(["-n", ns, "apply", "-f", "-"],
-                     stdin=json.dumps(self._worker_pod(ctx, w, span)))
+                     stdin=json.dumps(self._worker_pod(ctx, w, self._stop_at)))
             kube.run(["-n", ns, "apply", "-f", "-"], stdin=json.dumps(self._verifier_pod(ctx, w)))
             self._workers.append(w)
+            release = threading.Thread(target=self._release, args=(ctx, w),
+                                       name=f"metadata-release-{a.index}", daemon=True)
+            self._releases.append(release)
+            release.start()
         ctx.log.info(f"{self.name}: seed {self._seed}, {len(plan)} worker(s) at "
                      f"{self.opt('rate')} op/s for {span:.0f}s")
         interval = float(self.opt("verify_interval_s"))
@@ -179,6 +196,39 @@ class MetadataWorkload(Component):
             self._loop = threading.Thread(target=loop, name="metadata-verify", daemon=True)
             self._loop.start()
 
+    def _release(self, ctx: RunContext, w: _Worker) -> None:
+        """Let the worker start once both of its pods can work: Ready, and Python installed
+        in each. Pods that do not get there within `ready_timeout_s` are recorded, and the
+        worker never starts."""
+        ns = str(self.opt("namespace"))
+        timeout = float(self.opt("ready_timeout_s"))
+        deadline = time.monotonic() + timeout
+        cp = kube.run(["-n", ns, "wait", "--for=condition=Ready", f"pod/{w.pod}",
+                       f"pod/{w.verifier}", f"--timeout={max(1, int(timeout))}s"],
+                      check=False, timeout=int(timeout) + 30)
+        if cp.returncode != 0:
+            self._not_started(ctx, w, f"pods not ready within {timeout:.0f}s: "
+                                      f"{cp.stderr.strip() or cp.returncode}")
+            return
+        pending = [w.pod, w.verifier]
+        while pending:
+            pending = [p for p in pending
+                       if kube.run(["-n", ns, "exec", p, "--", "test", "-f",
+                                    f"{LOGDIR}/installed"], check=False, timeout=30).returncode]
+            if not pending:
+                break
+            if time.monotonic() > deadline:
+                self._not_started(ctx, w, f"Python not installed in {', '.join(pending)} "
+                                          f"within {timeout:.0f}s")
+                return
+            time.sleep(2)
+        kube.exec_sh(ns, w.pod, f"touch {LOGDIR}/go", timeout=30)
+
+    def _not_started(self, ctx: RunContext, w: _Worker, why: str) -> None:
+        with self._lock:
+            self._start_errors[w.pod] = why
+        ctx.log.warn(f"{self.name}: {w.pod} never started: {why}")
+
     def _check(self, ctx: RunContext, w: _Worker) -> None:
         """Pause the worker, list its directory from the verifier, and compare."""
         ns = str(self.opt("namespace"))
@@ -186,6 +236,13 @@ class MetadataWorkload(Component):
                                   "worker_node": kube.short(w.a.node),
                                   "verifier_node": kube.short(w.a.verifier_node),
                                   "missing": [], "extra": [], "mismatched": [], "error": ""}
+        with self._lock:
+            not_started = self._start_errors.get(w.pod, "")
+        if not_started:
+            record["error"] = f"the worker never started: {not_started}"
+            with self._lock:
+                self._checks.append(record)
+            return
         paused = False
         try:
             kube.exec_sh(ns, w.pod, f"touch {LOGDIR}/pause", timeout=30)
@@ -212,7 +269,12 @@ class MetadataWorkload(Component):
             record["error"] = str(e)
         finally:
             if paused:
-                kube.exec_sh(ns, w.pod, f"rm -f {LOGDIR}/pause", timeout=30)
+                # A failure here must not lose the record, nor end the periodic loop.
+                try:
+                    kube.exec_sh(ns, w.pod, f"rm -f {LOGDIR}/pause", timeout=30)
+                except Exception as e:  # noqa: BLE001
+                    resume = f"resuming the worker failed: {e}"
+                    record["error"] = f"{record['error']}; {resume}" if record["error"] else resume
         with self._lock:
             self._checks.append(record)
         state = record["error"] or ("clean" if not (record["missing"] or record["extra"]
@@ -227,21 +289,37 @@ class MetadataWorkload(Component):
 
     def collect(self, ctx: RunContext) -> None:
         ns = str(self.opt("namespace"))
+        collect_errors: dict[str, str] = {}
         for w in self._workers:
             # The worker stops by itself a quiet tail before the end. The stop file covers a
             # run cut short.
-            kube.exec_sh(ns, w.pod, f"touch {LOGDIR}/stop", timeout=30)
+            try:
+                kube.exec_sh(ns, w.pod, f"touch {LOGDIR}/stop", timeout=30)
+            except Exception as e:  # noqa: BLE001
+                ctx.log.warn(f"{self.name}: could not stop {w.pod}: {e}")
             self._check(ctx, w)
-            log = kube.run(["-n", ns, "exec", w.pod, "--", "cat", f"{LOGDIR}/ops.log"],
-                           check=False, timeout=300).stdout
+            cp = kube.run(["-n", ns, "exec", w.pod, "--", "cat", f"{LOGDIR}/ops.log"],
+                          check=False, timeout=300)
+            if cp.returncode != 0:
+                # No file rather than an empty one: an empty log reads as a worker that never
+                # failed, and the error says what is missing.
+                collect_errors[w.pod] = (f"reading {LOGDIR}/ops.log failed: "
+                                         f"{cp.stderr.strip() or cp.returncode}")
+                ctx.log.warn(f"{self.name}: {w.pod}: {collect_errors[w.pod]}")
+                continue
             with open(ctx.path(f"metadata-{w.pod}.log"), "w") as fh:
-                fh.write(log or "")
+                fh.write(cp.stdout or "")
         with self._lock:
             checks = list(self._checks)
+            start_errors = dict(self._start_errors)
+        stop_at = _iso(datetime.fromtimestamp(self._stop_at, tz=UTC)) if self._stop_at else None
         ctx.save_json("metadata.json", {"seed": self._seed, "workers": [{
             "worker": w.pod, "node": kube.short(w.a.node), "claim": w.a.claim,
             "verifier": w.verifier, "verifier_node": kube.short(w.a.verifier_node),
-            "root": w.root} for w in self._workers], "checks": checks})
+            "root": w.root, "stop_at": stop_at,
+            "start_error": start_errors.get(w.pod, ""),
+            "collect_error": collect_errors.get(w.pod, "")} for w in self._workers],
+            "checks": checks})
         bad = sum(1 for c in checks if c["missing"] or c["extra"] or c["mismatched"])
         ctx.log.info(f"{self.name}: {len(checks)} check(s), {bad} with a difference "
                      f"(seed {self._seed})")
@@ -277,12 +355,16 @@ class MetadataWorkload(Component):
             },
         }
 
-    def _worker_pod(self, ctx: RunContext, w: _Worker, span_s: float) -> dict[str, Any]:
+    def _worker_pod(self, ctx: RunContext, w: _Worker, stop_at: float) -> dict[str, Any]:
+        """The worker installs Python, then waits for `go`, which _release writes once both
+        of its pods can work, and runs until the run's `stop_at`, not a span of its own."""
         args = (f"worker --root {w.root} --logdir {LOGDIR} --seed {self._seed + w.a.index} "
-                f"--rate {float(self.opt('rate'))} --duration {span_s:.0f} "
+                f"--rate {float(self.opt('rate'))} --until {stop_at:.0f} "
                 f"--manifest-interval {float(self.opt('manifest_interval_s'))} "
                 f"--mix '{json.dumps(self.opt('mix'))}'")
-        script = (_INSTALL + f'python3 -c "$META_AGENT" {args}\n'
+        script = (_INSTALL
+                  + f"while [ ! -f {LOGDIR}/go ] && [ ! -f {LOGDIR}/stop ]; do sleep 1; done\n"
+                  + f'[ -f {LOGDIR}/go ] && python3 -c "$META_AGENT" {args}\n'
                   f'echo "$?" > {LOGDIR}/agent.rc\nsleep 100000\n')
         return self._pod(ctx, w.pod, w.a.node, w.a.claim, script,
                          [{"name": "META_AGENT", "value": agent_source()}])
@@ -293,7 +375,8 @@ class MetadataWorkload(Component):
 
 
 _INSTALL = ("apk add --no-cache python3 >/dev/null 2>&1 || "
-            '{ echo "[pod] apk add python3 FAILED"; exit 90; }\n')
+            '{ echo "[pod] apk add python3 FAILED"; exit 90; }\n'
+            f"touch {LOGDIR}/installed\n")
 
 
 def _iso(t: datetime) -> str:

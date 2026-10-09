@@ -50,6 +50,7 @@ from ..core import (
     LogSpan,
     MetadataCheck,
     MetadataOp,
+    MetadataWorker,
     Migration,
     NamespaceReservation,
     NfsSample,
@@ -420,6 +421,24 @@ class ArchiveEvidence:
                 except (ValueError, KeyError, TypeError):
                     continue
         out.sort(key=lambda o: o.ts)
+        return out
+
+    def metadata_workers(self) -> list[MetadataWorker]:
+        """Each worker's entry in metadata.json: its stop time and its errors."""
+        p = os.path.join(self.outdir, "metadata.json")
+        try:
+            with open(p) as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return []
+        out: list[MetadataWorker] = []
+        for w in raw.get("workers", []) if isinstance(raw, dict) else []:
+            if not isinstance(w, dict) or not w.get("worker"):
+                continue
+            out.append(MetadataWorker(
+                worker=str(w["worker"]), node=str(w.get("node") or ""),
+                stop_at=_dt(w.get("stop_at")), start_error=str(w.get("start_error") or ""),
+                collect_error=str(w.get("collect_error") or "")))
         return out
 
     def metadata_checks(self) -> list[MetadataCheck]:

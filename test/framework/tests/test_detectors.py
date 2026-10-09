@@ -33,6 +33,7 @@ from sbtest.core import (  # noqa: E402
     LogSpan,
     MetadataCheck,
     MetadataOp,
+    MetadataWorker,
     Migration,
     NamespaceReservation,
     NfsSample,
@@ -93,6 +94,7 @@ class FakeEvidence:
         conntrack: list[ConntrackSample] | None = None,
         metadata_ops: list[MetadataOp] | None = None,
         metadata_checks: list[MetadataCheck] | None = None,
+        metadata_workers: list[MetadataWorker] | None = None,
         volume_ops: list[VolumeOp] | None = None,
     ) -> None:
         self.run_id = run_id
@@ -121,6 +123,7 @@ class FakeEvidence:
         self._conntrack = conntrack or []
         self._metadata_ops = metadata_ops or []
         self._metadata_checks = metadata_checks or []
+        self._metadata_workers = metadata_workers or []
         self._volume_ops = volume_ops or []
 
     def migrations(self) -> list[Migration]:
@@ -189,6 +192,9 @@ class FakeEvidence:
 
     def metadata_checks(self) -> list[MetadataCheck]:
         return list(self._metadata_checks)
+
+    def metadata_workers(self) -> list[MetadataWorker]:
+        return list(self._metadata_workers)
     def volume_ops(self) -> list[VolumeOp]:
         return list(self._volume_ops)
 
@@ -806,6 +812,42 @@ class PnfsMetadata(unittest.TestCase):
     def test_a_run_without_the_workload_is_skipped(self):
         with self.assertRaises(SkipDetector):
             self.found()
+
+    # Review on #705: a worker whose last op hangs, or that stops making ops, has no later
+    # completion, so the gap after its last one was never judged.
+    def test_a_worker_that_stopped_before_its_stop_time_is_a_stall(self):
+        found = self.found(metadata_ops=steady(100), metadata_workers=[
+            MetadataWorker(worker="r-meta-0", stop_at=ts(300))])
+        warn = self.by(found, Severity.WARNING)
+        self.assertEqual(len(warn), 1)
+        self.assertGreaterEqual(warn[0].evidence["stall_s"], 190)
+
+    def test_a_worker_that_ran_until_its_stop_time_is_not_a_stall(self):
+        found = self.found(metadata_ops=steady(300), metadata_workers=[
+            MetadataWorker(worker="r-meta-0", stop_at=ts(300))])
+        self.assertEqual(self.by(found, Severity.WARNING), [])
+
+    def test_a_worker_with_no_ops_at_all_is_reported(self):
+        found = self.found(metadata_checks=[
+            MetadataCheck(ts=ts(10), worker="r-meta-0", worker_node="w1", verifier_node="w2")],
+            metadata_workers=[MetadataWorker(worker="r-meta-0", stop_at=ts(300))])
+        self.assertEqual(len(self.by(found, Severity.WARNING)), 1)
+
+    def test_a_worker_whose_ops_could_not_be_collected_is_a_warning(self):
+        """Missing ops are not clean ops: an unread log hides every error and stall."""
+        found = self.found(metadata_ops=steady(300), metadata_workers=[
+            MetadataWorker(worker="r-meta-0", stop_at=ts(300),
+                           collect_error="container gone")])
+        warn = self.by(found, Severity.WARNING)
+        self.assertEqual(len(warn), 1)
+        self.assertIn("container gone", warn[0].detail)
+
+    def test_a_worker_that_never_started_is_a_warning(self):
+        found = self.found(metadata_workers=[
+            MetadataWorker(worker="r-meta-0", start_error="pods not ready within 300s")])
+        warn = self.by(found, Severity.WARNING)
+        self.assertEqual(len(warn), 1)
+        self.assertIn("not ready", warn[0].detail)
 
 
 def expanded(**kw: object) -> VolumeOp:

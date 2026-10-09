@@ -10,7 +10,11 @@ checks each worker's directory from another node. `pnfs.metadata` judges three t
   a restart's window is a warning naming the restart, because the application still saw it,
   and how often a restart costs one is worth tracking.
 * **Stalls.** No operation completing for longer than `max_stall_s` is a warning, naming the
-  restart that overlaps it when there is one.
+  restart that overlaps it when there is one. That includes the time between a worker's last
+  completed operation and the time it was due to stop, which is where a worker whose final
+  operation hangs, or that stops making any, shows.
+* **Gaps in the evidence.** A worker that never started, or whose operation log could not be
+  read, is a warning: its operations are missing, not clean.
 
 A summary of the rate and the latency by operation is reported as information.
 """
@@ -26,6 +30,7 @@ from ..core import (
     Evidence,
     Finding,
     MetadataOp,
+    MetadataWorker,
     Restart,
     SkipDetector,
     critical,
@@ -49,8 +54,8 @@ class PnfsMetadata(Detector):
         }
 
     def detect(self, ev: Evidence) -> Iterable[Finding]:
-        ops, checks = ev.metadata_ops(), ev.metadata_checks()
-        if not ops and not checks:
+        ops, checks, workers = ev.metadata_ops(), ev.metadata_checks(), ev.metadata_workers()
+        if not ops and not checks and not workers:
             raise SkipDetector("no metadata workload ran; enable workload.pnfs-metadata")
         restarts = ev.restarts()
         window = timedelta(seconds=float(self.opt("restart_window_s")))
@@ -80,6 +85,8 @@ class PnfsMetadata(Detector):
         for worker, wops in sorted(by_worker.items()):
             yield from self._errors(worker, [o for o in wops if not o.ok], restarts, window)
             yield from self._stalls(worker, wops, restarts, window)
+        for w in workers:
+            yield from self._worker(w, by_worker.get(w.worker, []), restarts, window)
         if ops:
             yield self._summary(ops)
 
@@ -129,6 +136,49 @@ class PnfsMetadata(Detector):
                           if r else ", with no restart to explain it"),
                 evidence=evidence,
                 note="every client of the metadata server waited this long on the namespace")
+
+    def _worker(self, w: MetadataWorker, wops: list[MetadataOp], restarts: list[Restart],
+                window: timedelta) -> Iterable[Finding]:
+        """What the worker's own record says: that it never started, that its log is
+        missing, or that it stopped making progress before it was due to stop."""
+        if w.start_error:
+            yield warning(self.name, title=f"{w.worker} never started", subject=w.worker,
+                          detail=w.start_error,
+                          note="no namespace operations ran from this worker")
+            return
+        if w.collect_error:
+            yield warning(self.name, title=f"{w.worker}'s operations could not be collected",
+                          subject=w.worker, detail=w.collect_error,
+                          note="its errors and stalls are unknown, not absent")
+            return
+        if w.stop_at is None:
+            return
+        if not wops:
+            yield warning(self.name, title=f"{w.worker} completed no namespace operation",
+                          subject=w.worker,
+                          detail=f"due to run until {w.stop_at:%H:%M:%S}, and its log holds "
+                                 "no operation",
+                          note="the worker was released but never made progress")
+            return
+        last = max(o.ended for o in wops)
+        gap = (w.stop_at - last).total_seconds()
+        if gap <= float(self.opt("max_stall_s")):
+            return
+        r = next((r for r in restarts if r.deleted <= w.stop_at and last <= r.deleted + window),
+                 None)
+        evidence: dict = {"stall_s": round(gap, 1), "from": f"{last:%H:%M:%S}",
+                          "to": f"{w.stop_at:%H:%M:%S}"}
+        if r is not None:
+            evidence["restart"] = f"{r.target}/{r.pod}"
+        yield warning(
+            self.name, title=f"no namespace operation completed in the last {gap:.0f}s",
+            subject=w.worker,
+            detail=f"the last completed at {last:%H:%M:%S} and the worker was due to stop at "
+                   f"{w.stop_at:%H:%M:%S}"
+                   + (f", after the {r.target} restart of {r.pod} at {r.deleted:%H:%M:%S}"
+                      if r else ", with no restart to explain it"),
+            evidence=evidence,
+            note="an operation that never returned, or a worker that stopped working")
 
     def _summary(self, ops: list[MetadataOp]) -> Finding:
         span = (max(o.ended for o in ops) - min(o.ts for o in ops)).total_seconds() or 1.0

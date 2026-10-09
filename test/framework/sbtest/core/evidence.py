@@ -374,6 +374,24 @@ class MetadataCheck:
 
 
 @dataclass(frozen=True)
+class MetadataWorker:
+    """One workload.pnfs-metadata worker: when it was due to stop, and what kept it from
+    running or from being read.
+
+    `stop_at` is the run-relative deadline the worker was given, so a worker whose last
+    operation completed long before it stopped making progress. `start_error` says why its
+    pods were never released to start, and `collect_error` why its operation log could not
+    be read, in which case its operations are missing, not clean.
+    """
+
+    worker: str
+    node: str = ""
+    stop_at: datetime | None = None
+    start_error: str = ""
+    collect_error: str = ""
+
+
+@dataclass(frozen=True)
 class VolumeOp:
     """One operation chaos.volume-ops performed on a live pNFS volume, and how far it got.
 
@@ -562,6 +580,10 @@ class Evidence(Protocol):
 
     def metadata_checks(self) -> list[MetadataCheck]:
         """Each comparison of a worker's directory with its manifest, oldest first."""
+        ...
+
+    def metadata_workers(self) -> list[MetadataWorker]:
+        """Each metadata worker's stop time and start and collection errors."""
         ...
 
     def volume_ops(self) -> list[VolumeOp]:

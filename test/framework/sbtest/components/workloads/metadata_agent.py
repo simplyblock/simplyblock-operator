@@ -257,7 +257,10 @@ def main(argv: list[str]) -> int:
     w.add_argument("--logdir", required=True)
     w.add_argument("--seed", type=int, default=0)
     w.add_argument("--rate", type=float, default=2.0)
-    w.add_argument("--duration", type=float, required=True)
+    w.add_argument("--duration", type=float, default=0.0)
+    # The run's own stop time, in epoch seconds. A worker that starts late still stops
+    # when the run needs it to, which a duration counted from its start cannot promise.
+    w.add_argument("--until", type=float, default=0.0)
     w.add_argument("--manifest-interval", type=float, default=30.0)
     w.add_argument("--max-ops", type=int, default=0)
     w.add_argument("--mix", default="")
@@ -267,9 +270,14 @@ def main(argv: list[str]) -> int:
     if args.cmd == "list":
         json.dump(listing(args.root), sys.stdout)
         return 0
+    if not args.duration and not args.until:
+        ap.error("worker needs --duration or --until")
+    duration = args.duration or float("inf")
+    if args.until:
+        duration = min(duration, max(0.0, args.until - time.time()))
     mix: dict[str, float] = json.loads(args.mix) if args.mix else DEFAULT_MIX
     Worker(args.root, args.logdir, args.seed, args.rate, mix).run(
-        args.duration, args.manifest_interval, args.max_ops)
+        duration, args.manifest_interval, args.max_ops)
     return 0
 
 

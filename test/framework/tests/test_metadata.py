@@ -14,12 +14,16 @@ import sys
 import tempfile
 import time
 import unittest
+from collections.abc import Callable
 from datetime import UTC, datetime
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sbtest.adapters import ArchiveEvidence  # noqa: E402
+from sbtest.components import kube  # noqa: E402
 from sbtest.components.workloads import metadata, metadata_agent  # noqa: E402
+from sbtest.core import Logger, RunContext  # noqa: E402
 
 AGENT = metadata_agent.__file__
 
@@ -103,6 +107,18 @@ class Worker(unittest.TestCase):
                 proc.wait(timeout=30)
 
 
+class WorkerDeadline(unittest.TestCase):
+    def test_the_worker_stops_at_an_absolute_deadline(self):
+        """The stop time is the run's, not the worker's own start plus a duration: a worker
+        that starts late still stops a quiet tail before the run ends (review on #705)."""
+        with tempfile.TemporaryDirectory() as d:
+            start = time.monotonic()
+            cp = run_worker(os.path.join(d, "data"), os.path.join(d, "logs"), seconds=30,
+                            extra=["--until", str(time.time() + 1.0)])
+            self.assertEqual(cp.returncode, 0, cp.stderr)
+            self.assertLess(time.monotonic() - start, 10, "ran past --until")
+
+
 class Compare(unittest.TestCase):
     def files(self, **kw: tuple[int, str]) -> dict:
         return {k: {"size": s, "md5": m} for k, (s, m) in kw.items()}
@@ -125,6 +141,16 @@ class Compare(unittest.TestCase):
                "dirs": ["d", "u"]}
         self.assertTrue(metadata.compare(man, got).clean)
 
+    def test_a_root_the_other_client_cannot_see_is_missing_even_when_empty(self):
+        """An empty directory lists as nothing whether or not it exists, so the missing root
+        has to be reported on its own (review on #705)."""
+        man: dict = {"files": {}, "dirs": [], "uncertain": []}
+        diff = metadata.compare(man, {"files": {}, "dirs": [], "root_exists": False})
+        self.assertEqual(diff.missing, (".",))
+        self.assertTrue(metadata.compare(man, {"files": {}, "dirs": [],
+                                               "root_exists": True}).clean)
+
+
 
 class Assign(unittest.TestCase):
     """Where each worker runs, on which volume, and which node checks it."""
@@ -141,6 +167,105 @@ class Assign(unittest.TestCase):
     def test_nothing_to_assign_without_nodes_or_claims(self):
         self.assertEqual(metadata.assign([], ["c0"], workers=0), [])
         self.assertEqual(metadata.assign(["w1"], [], workers=0), [])
+
+
+def context(d: str) -> RunContext:
+    return RunContext(run_id="r1", outdir=d, log=Logger(os.path.join(d, "run.log")))
+
+
+def workload(**opts: object) -> metadata.MetadataWorkload:
+    return metadata.MetadataWorkload(namespace="default", **opts)
+
+
+def a_worker() -> metadata._Worker:
+    a = metadata.Assignment(index=0, node="w1", claim="c0", verifier_node="w2")
+    return metadata._Worker(a=a, pod="r1-meta-0", verifier="r1-metaverify-0",
+                            root="/data/r1-meta/r1-meta-0")
+
+
+def completed(rc: int = 0, out: str = "", err: str = "") -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess([], rc, out, err)
+
+
+def recorder(execs: list[str]) -> Callable[..., str]:
+    """An exec_sh stand-in that records each command and returns no output."""
+    def exec_sh(ns: str, pod: str, cmd: str, **_: object) -> str:
+        execs.append(cmd)
+        return ""
+    return exec_sh
+
+
+class Gating(unittest.TestCase):
+    """The agents start only when both pods can work, and stop at the run's time (review on
+    #705)."""
+
+    def test_the_worker_waits_for_go_and_stops_at_the_runs_deadline(self):
+        w = workload()
+        pod = w._worker_pod(context(tempfile.mkdtemp()), a_worker(), 1791540000.0)
+        cmd = pod["spec"]["containers"][0]["command"][2]
+        self.assertIn(f"{metadata.LOGDIR}/go", cmd)
+        self.assertIn("--until 1791540000", cmd)
+
+    def test_pods_that_never_become_ready_are_recorded_and_never_released(self):
+        w = workload(ready_timeout_s=0.2)
+        worker = a_worker()
+        execs: list[str] = []
+        with mock.patch.object(kube, "run", return_value=completed(1, err="timed out")), \
+                mock.patch.object(kube, "exec_sh", side_effect=recorder(execs)):
+            w._release(context(tempfile.mkdtemp()), worker)
+        self.assertIn("ready", w._start_errors[worker.pod])
+        self.assertFalse(any("/go" in c for c in execs))
+
+    def test_ready_pods_are_released(self):
+        w = workload(ready_timeout_s=5)
+        worker = a_worker()
+        execs: list[str] = []
+        with mock.patch.object(kube, "run", return_value=completed(0)), \
+                mock.patch.object(kube, "exec_sh", side_effect=recorder(execs)):
+            w._release(context(tempfile.mkdtemp()), worker)
+        self.assertNotIn(worker.pod, w._start_errors)
+        self.assertIn(f"touch {metadata.LOGDIR}/go", execs)
+
+
+class CheckErrors(unittest.TestCase):
+    def test_a_failing_cleanup_is_recorded_and_the_check_kept(self):
+        """A cleanup that failed after a check error escaped, the record was lost, and the
+        periodic verifier thread died with it (review on #705)."""
+        def exec_sh(ns: str, pod: str, cmd: str, **_: object) -> str:
+            if cmd.startswith("rm -f"):
+                raise RuntimeError("exec into the worker failed")
+            if cmd.startswith("ls "):
+                return "paused"
+            if cmd.startswith("cat "):
+                return "{}"
+            return ""
+
+        w = workload(settle_s=0)
+        with mock.patch.object(kube, "exec_sh", side_effect=exec_sh), \
+                mock.patch.object(kube, "run", return_value=completed(1, err="no python")):
+            w._check(context(tempfile.mkdtemp()), a_worker())
+        self.assertEqual(len(w._checks), 1)
+        self.assertIn("no python", w._checks[0]["error"])
+        self.assertIn("exec into the worker failed", w._checks[0]["error"])
+
+
+class Collection(unittest.TestCase):
+    def test_an_op_log_that_could_not_be_read_is_recorded(self):
+        """An empty log file read like a worker that never failed (review on #705)."""
+        w = workload(settle_s=0)
+        worker = a_worker()
+        w._workers.append(worker)
+        w._stop_at = 1791540000.0
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(kube, "exec_sh", return_value=""), \
+                mock.patch.object(kube, "run", return_value=completed(1, err="container gone")), \
+                mock.patch.object(w, "_check"):
+            w.collect(context(d))
+            with open(os.path.join(d, "metadata.json")) as fh:
+                saved = json.load(fh)
+        entry = saved["workers"][0]
+        self.assertIn("container gone", entry["collect_error"])
+        self.assertEqual(entry["stop_at"], "2026-10-09T10:00:00Z")
 
 
 class MetadataArchive(unittest.TestCase):
@@ -170,6 +295,17 @@ class MetadataArchive(unittest.TestCase):
             self.assertEqual(len(checks), 1)
             self.assertEqual(checks[0].missing, ("a",))
             self.assertTrue(checks[0].cross_node)
+
+    def test_reads_each_workers_stop_and_its_errors(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "metadata.json"), "w") as fh:
+                json.dump({"seed": 1, "checks": [], "workers": [
+                    {"worker": "r-meta-0", "node": "w1", "stop_at": "2026-10-09T10:00:00Z",
+                     "start_error": "", "collect_error": "container gone"}]}, fh)
+            got = ArchiveEvidence(d).metadata_workers()
+        self.assertEqual([(g.worker, g.collect_error) for g in got],
+                         [("r-meta-0", "container gone")])
+        self.assertEqual(got[0].stop_at, datetime(2026, 10, 9, 10, 0, tzinfo=UTC))
 
     def test_a_run_without_the_workload_has_none(self):
         with tempfile.TemporaryDirectory() as d:
