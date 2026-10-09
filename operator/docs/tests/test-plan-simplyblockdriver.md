@@ -73,6 +73,9 @@ File: `operator/internal/controllers/driver/simplyblockdriver_controller_unit_te
 | U-98  | `enableTLS` alone mounts the CA bundle only, at the provider's shape                 | Positive | `TestTLSVolumeShape`                                   |
 | U-99  | `enableMutualTLS` mounts each plugin's own client-certificate Secret, by name        | Positive | `TestTLSVolumeShape`                                   |
 | U-100 | `enableMutualTLS` with `enableTLS` unset is ignored, the same as the chart           | Boundary | `TestTLSConnectMode`                                   |
+| U-108 | The cluster serves no snapshot API: `status.snapshotSupport` is `Missing`            | Positive | `TestACrdlessClusterReportsMissing`                    |
+| U-109 | `Missing` becomes `Detected` when the API appears                                    | Boundary | `TestMissingBecomesDetectedWhenTheAPIAppears`          |
+| U-110 | A deployment that disabled snapshots reports nothing                                 | Negative | `TestSnapshotsDisabledReportsNothing`                  |
 
 `U-44` holds the boundary design §4.1 draws. The `csi-snapshotter` sidecar is part
 of this driver's controller plugin, and the detection applies to the cluster's
@@ -466,8 +469,9 @@ reconcile with a live cache.
 |                   | Driver older                           | U-31, U-32                      |
 |                   | Driver newer                           | U-22, E-05, M-01                |
 |                   | Unknown                                | U-25                            |
-| Snapshot support  | Detected                               | U-04, U-39                      |
+| Snapshot support  | Detected                               | U-04, U-39, U-109               |
 |                   | Installed                              | U-05, U-40, E-08                |
+|                   | Missing                                | U-108, U-109                    |
 | Control plane     | Present and `Ready`                    | U-26, E-01                      |
 |                   | Absent                                 | U-29                            |
 |                   | Present, not `Ready`                   | U-30                            |

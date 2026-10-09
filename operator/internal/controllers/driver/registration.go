@@ -97,9 +97,9 @@ type SnapshotAPI interface {
 // snapshotOrigin is what status.snapshotSupport should read, and the empty
 // string for a deployment that asked for no snapshots.
 //
-// Only Detected is reachable today. Installed is what the apply above would
-// record, and recording it before that apply exists would say this deployment
-// brought snapshot support to a cluster where nothing did.
+// Detected and Missing are reachable today. Installed is what the apply above
+// would record, and recording it before that apply exists would say this
+// deployment brought snapshot support to a cluster where nothing did.
 func (r *SimplyblockDriverReconciler) snapshotOrigin(
 	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
 ) (simplyblockv1alpha2.SnapshotSupportOrigin, error) {
@@ -111,7 +111,7 @@ func (r *SimplyblockDriverReconciler) snapshotOrigin(
 		return "", err
 	}
 	if !served {
-		return "", nil
+		return simplyblockv1alpha2.SnapshotSupportOriginMissing, nil
 	}
 	return simplyblockv1alpha2.SnapshotSupportOriginDetected, nil
 }
