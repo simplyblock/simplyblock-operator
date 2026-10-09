@@ -8,15 +8,15 @@
 # Separate from prometheus-operator-servicemonitors.yaml because a customer
 # may want these rules evaluated without taking an opinion on routing, or may
 # already have their own routing in place. Both still require
-# `prometheusOperator.enabled`.
+# `prometheus.enabled`.
 #
 # AlertmanagerConfig's schema has moved between prometheus-operator releases
 # (v1alpha1 promoted toward v1beta1). What follows targets v1alpha1, the
 # longest-supported version. Check it against the cluster's installed CRD
 # before relying on it, the msteamsConfigs block in particular.
-{{- if .Values.prometheusOperator.enabled }}
+{{- if .Values.prometheus.enabled }}
 {{- if not (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PrometheusRule") }}
-{{ fail "prometheusOperator.enabled is true, but this cluster has no monitoring.coreos.com/v1 PrometheusRule CRD. Install prometheus-operator (or kube-prometheus-stack) first, or set prometheusOperator.enabled to false." }}
+{{ fail "prometheus.enabled is true, but this cluster has no monitoring.coreos.com/v1 PrometheusRule CRD. Install prometheus-operator (or kube-prometheus-stack) first, or set prometheus.enabled to false." }}
 {{- end }}
 ---
 apiVersion: monitoring.coreos.com/v1
@@ -25,7 +25,7 @@ metadata:
   name: simplyblock
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- toYaml .Values.prometheusOperator.additionalLabels | nindent 4 }}
+    {{- toYaml .Values.prometheus.additionalLabels | nindent 4 }}
 spec:
   groups:
     - name: simplyblock
@@ -187,7 +187,7 @@ metadata:
   name: simplyblock
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- toYaml .Values.prometheusOperator.additionalLabels | nindent 4 }}
+    {{- toYaml .Values.prometheus.additionalLabels | nindent 4 }}
 spec:
   route:
     receiver: simplyblock-alerts
