@@ -147,8 +147,7 @@ class ConntrackSampler(Component):
                         # Reading the host's table needs CAP_NET_ADMIN in its namespace.
                         "securityContext": {"privileged": True}}],
                 }})
-        kube.run(["-n", str(self.opt("namespace")), "apply", "-f", "-"],
-                 stdin=kube.document_stream(docs))
+        kube.apply_each(str(self.opt("namespace")), docs)
         # Only once they exist: a helper that was never created reads as a node with no
         # flows, which is the one thing this component must not claim without looking.
         self._helpers = helpers

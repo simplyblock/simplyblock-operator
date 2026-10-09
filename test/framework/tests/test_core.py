@@ -1219,25 +1219,29 @@ class ConntrackSampling(unittest.TestCase):
         with mock.patch.object(kube, "list_pods", lambda *a, **k: pods), \
                 mock.patch.object(kube, "run", run):
             s.setup(RunContext(run_id="r", outdir="/tmp", log=Logger(None)))
-        # One document per pod, never a v1 List: kubectl cannot validate a List on a
-        # cluster whose metrics API publishes OpenAPI names with slashes in them.
-        docs = [json.loads(d) for d in applied[0].split("\n---\n")]
+        # One apply per pod: neither a v1 List nor a stream of documents (see
+        # KubectlApplyEach).
+        docs = [json.loads(d) for d in applied]
         self.assertTrue(all(d["kind"] == "Pod" for d in docs))
         self.assertEqual(sorted(d["spec"]["nodeName"] for d in docs), ["w1.lab", "w2.lab"])
         self.assertTrue(all(d["spec"]["hostNetwork"] for d in docs))
         self.assertEqual(sorted(s._helpers), ["w1", "w2"])
 
 
-class KubectlStream(unittest.TestCase):
-    """Objects are applied as a stream of documents, not wrapped in a v1 List. kubectl's
-    client-side validation of a List loads every model the cluster publishes, and the
-    operator's metrics API publishes names like github.com/simplyblock/.../v1alpha2.X whose
-    references kubectl cannot resolve. Every List apply failed on lab-talos while single
-    objects validated (pnfs-1791554843 and pnfs-1791556484, nfs.conntrack setup)."""
+class KubectlApplyEach(unittest.TestCase):
+    """Objects are applied one kubectl call each. A v1 List fails client-side validation on
+    a cluster whose metrics API publishes OpenAPI names with slashes in them
+    (pnfs-1791554843, pnfs-1791556484), and a stream of JSON documents between YAML
+    separators panicked kubectl 1.33's decoder (pnfs-1791557763: slice bounds out of range
+    [-5:] in StreamReader.Consume). One object per call has no wrapper and no stream."""
 
-    def test_documents_are_separate_and_none_is_a_list(self):
+    def test_each_object_is_applied_alone(self):
+        stdins: list[str] = []
+
+        def run(args: list[str], stdin: str | None = None, **_: object) -> Any:
+            stdins.append(stdin or "")
+            return _cp()
         docs = [{"apiVersion": "v1", "kind": "Pod", "metadata": {"name": n}} for n in ("a", "b")]
-        stream = kube.document_stream(docs)
-        parts = stream.split("\n---\n")
-        self.assertEqual([json.loads(p)["metadata"]["name"] for p in parts], ["a", "b"])
-        self.assertNotIn('"List"', stream)
+        with mock.patch.object(kube, "run", run):
+            kube.apply_each("ns", docs)
+        self.assertEqual([json.loads(s)["metadata"]["name"] for s in stdins], ["a", "b"])
