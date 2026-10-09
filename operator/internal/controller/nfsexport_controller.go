@@ -322,6 +322,9 @@ func (r *NFSExportReconciler) reconcileReady(
 	if result, handled, err := r.resyncAfterRestart(ctx, export); handled || err != nil {
 		return result, err
 	}
+	if err := r.refreshMDS(ctx, export); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	host := mdsHost(export)
 

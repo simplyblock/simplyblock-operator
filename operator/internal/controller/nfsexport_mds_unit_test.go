@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"slices"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -420,6 +422,117 @@ func TestPendingPodHostedCreatesTheMDSStatefulSetWithItsTemplateHash(t *testing.
 
 	if sts := loadMDSStatefulSet(t, cl); sts.Annotations[mdsTemplateHashKey] == "" {
 		t.Errorf("annotations = %v, want the template hash", sts.Annotations)
+	}
+}
+
+// readyMDSExport is an export bound to its cluster's metadata server, the
+// state every export is in on a stable cluster when the operator is upgraded.
+func readyMDSExport() *simplyblockv1alpha2.NFSExport {
+	return testExport(bound(simplyblockv1alpha2.NFSExportPhaseReady))
+}
+
+// Regression: 2026-10-09-mds-statefulset-never-updated, the Ready half. Only a
+// Pending export ever looked at the StatefulSet, and after an upgrade on a
+// stable cluster every export is Ready, so the template stayed old for good.
+// A Ready export updates it and stays Ready: the guest restart that follows is
+// what the restart resync handles.
+func TestReadyExportUpdatesAnOutdatedMDSStatefulSet(t *testing.T) {
+	r, cl, events := newPodHostedReconciler(t, readyMDSExport(), mdsDriver(), mdsPod(), staleMDSStatefulSet(t))
+
+	reconcileExport(t, r)
+
+	sts := loadMDSStatefulSet(t, cl)
+	if got, want := sts.Spec.Template.Spec.Containers[0].Image, mdsDriver().Spec.PNFS.MDS.Image; got != want {
+		t.Errorf("runner image = %q, want %q", got, want)
+	}
+	if sts.Annotations[mdsTemplateHashKey] == "" {
+		t.Errorf("annotations = %v, want the template hash recorded", sts.Annotations)
+	}
+	if !slices.Contains(events.reasons, "MDSUpdated") {
+		t.Errorf("events = %v, want MDSUpdated", events.reasons)
+	}
+	if got := loadExport(t, cl).Status.Phase; got != simplyblockv1alpha2.NFSExportPhaseReady {
+		t.Errorf("phase = %q, want it left Ready", got)
+	}
+}
+
+// A Ready reconcile of a current StatefulSet writes nothing, and a Ready export
+// whose StatefulSet is gone does not create one: creating is the Pending
+// path's, which also picks the state disk class.
+func TestReadyExportLeavesTheMDSStatefulSetAsItIs(t *testing.T) {
+	t.Run("up to date", func(t *testing.T) {
+		_, current, err := driver.MDSObjects(mdsDriver(), testExportClusterID, testStateClass)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, cl, events := newPodHostedReconciler(t, readyMDSExport(), mdsDriver(), mdsPod(), current)
+		before := loadMDSStatefulSet(t, cl).ResourceVersion
+
+		reconcileExport(t, r)
+
+		if after := loadMDSStatefulSet(t, cl).ResourceVersion; after != before {
+			t.Errorf("resourceVersion %s -> %s: an unchanged StatefulSet was written", before, after)
+		}
+		if slices.Contains(events.reasons, "MDSUpdated") {
+			t.Errorf("events = %v, want no MDSUpdated", events.reasons)
+		}
+	})
+	t.Run("absent", func(t *testing.T) {
+		r, cl, _ := newPodHostedReconciler(t, readyMDSExport(), mdsDriver(), mdsPod())
+
+		reconcileExport(t, r)
+
+		var sts appsv1.StatefulSet
+		key := client.ObjectKey{Namespace: testOperatorNS, Name: driver.MDSStatefulSetName(mdsDriver(), testExportClusterID)}
+		if err := cl.Get(context.Background(), key, &sts); !apierrors.IsNotFound(err) {
+			t.Errorf("Get = %v, want NotFound: a Ready export created the StatefulSet", err)
+		}
+	})
+}
+
+// conflictingUpdates fails the first StatefulSet update with a conflict after
+// writing current in its place, which is another export of the same cluster
+// winning the race.
+type conflictingUpdates struct {
+	client.Client
+	current *appsv1.StatefulSet
+	fired   bool
+}
+
+func (c *conflictingUpdates) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	if sts, ok := obj.(*appsv1.StatefulSet); ok && !c.fired {
+		c.fired = true
+		var live appsv1.StatefulSet
+		if err := c.Get(ctx, client.ObjectKeyFromObject(sts), &live); err != nil {
+			return err
+		}
+		live.Spec.Template = c.current.Spec.Template
+		live.Annotations = c.current.Annotations
+		if err := c.Client.Update(ctx, &live); err != nil {
+			return err
+		}
+		return apierrors.NewConflict(appsv1.Resource("statefulsets"), sts.Name, errors.New("modified"))
+	}
+	return c.Client.Update(ctx, obj, opts...)
+}
+
+// Two exports of one cluster can both find the template old. The one that
+// loses the update finds the current hash on a re-read and is done, rather
+// than failing its reconcile.
+func TestAnMDSUpdateThatLostTheRaceToTheCurrentTemplateSucceeds(t *testing.T) {
+	r, cl, _ := newPodHostedReconciler(t, readyMDSExport(), mdsDriver(), mdsPod(), staleMDSStatefulSet(t))
+	_, current, err := driver.MDSObjects(mdsDriver(), testExportClusterID, "old-state-class")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Client = &conflictingUpdates{Client: cl, current: current}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{
+		Namespace: testExportNS, Name: testExportName}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := loadMDSStatefulSet(t, cl).Annotations[mdsTemplateHashKey]; got != current.Annotations[mdsTemplateHashKey] {
+		t.Errorf("hash = %q, want the current one", got)
 	}
 }
 
