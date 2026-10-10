@@ -104,6 +104,8 @@ class PnfsRwxWorkload(FioWorkload):
         ctx.shared["pnfs.client_nodes"] = sorted(set(nodes.values()))
         # The long-lived claims, which workload.pnfs-churn's pods join and leave.
         ctx.shared["pnfs.claims"] = sorted(set(self._claim_of.values()))
+        # Only the claims several pods mount, for chaos.volume-ops, which exercises those.
+        ctx.shared["pnfs.shared_claims"] = sorted(self._shared)
         # Which fio instance runs in which pod and container, for nfs.mountstats.
         ctx.shared["pnfs.instances"] = [
             {"evidence": i.evidence, "pod": i.pod, "container": i.container}

@@ -48,6 +48,9 @@ from ..core import (
     FioJob,
     IopsSample,
     LogSpan,
+    MetadataCheck,
+    MetadataOp,
+    MetadataWorker,
     Migration,
     NamespaceReservation,
     NfsSample,
@@ -57,6 +60,7 @@ from ..core import (
     Registrant,
     Restart,
     Versions,
+    VolumeOp,
 )
 
 
@@ -401,6 +405,65 @@ class ArchiveEvidence:
         out.sort(key=lambda x: (x.ts, x.instance))
         return out
 
+    def metadata_ops(self) -> list[MetadataOp]:
+        """Every worker's op log, `metadata-<worker>.log`, one JSON object per line. A line
+        that does not parse is skipped: the worker may have been cut off mid-write."""
+        out: list[MetadataOp] = []
+        for p in sorted(glob.glob(os.path.join(self.outdir, "metadata-*.log"))):
+            worker = os.path.basename(p)[len("metadata-"):-len(".log")]
+            for line in self._lines(p):
+                try:
+                    o = json.loads(line)
+                    out.append(MetadataOp(
+                        ts=datetime.fromtimestamp(float(o["t"]), tz=UTC), worker=worker,
+                        op=str(o["op"]), path=str(o.get("path", "")), ok=bool(o["ok"]),
+                        ms=float(o.get("ms") or 0.0), error=str(o.get("err") or "")))
+                except (ValueError, KeyError, TypeError):
+                    continue
+        out.sort(key=lambda o: o.ts)
+        return out
+
+    def metadata_workers(self) -> list[MetadataWorker]:
+        """Each worker's entry in metadata.json: its stop time and its errors."""
+        p = os.path.join(self.outdir, "metadata.json")
+        try:
+            with open(p) as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return []
+        out: list[MetadataWorker] = []
+        for w in raw.get("workers", []) if isinstance(raw, dict) else []:
+            if not isinstance(w, dict) or not w.get("worker"):
+                continue
+            out.append(MetadataWorker(
+                worker=str(w["worker"]), node=str(w.get("node") or ""),
+                stop_at=_dt(w.get("stop_at")), start_error=str(w.get("start_error") or ""),
+                collect_error=str(w.get("collect_error") or "")))
+        return out
+
+    def metadata_checks(self) -> list[MetadataCheck]:
+        p = os.path.join(self.outdir, "metadata.json")
+        try:
+            with open(p) as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return []
+        out: list[MetadataCheck] = []
+        for c in raw.get("checks", []) if isinstance(raw, dict) else []:
+            t = _dt(c.get("ts")) if isinstance(c, dict) else None
+            if t is None:
+                continue
+            out.append(MetadataCheck(
+                ts=t, worker=str(c.get("worker", "")),
+                worker_node=str(c.get("worker_node") or ""),
+                verifier_node=str(c.get("verifier_node") or ""),
+                missing=tuple(str(x) for x in c.get("missing") or []),
+                extra=tuple(str(x) for x in c.get("extra") or []),
+                mismatched=tuple(str(x) for x in c.get("mismatched") or []),
+                error=str(c.get("error") or "")))
+        out.sort(key=lambda c: c.ts)
+        return out
+
     def conntrack(self) -> list[ConntrackSample]:
         p = os.path.join(self.outdir, "conntrack.csv")
         out: list[ConntrackSample] = []
@@ -525,6 +588,43 @@ class ArchiveEvidence:
                 gone_s=float(gone) if isinstance(gone, int | float) else None,
                 error=str(c.get("error") or "")))
         out.sort(key=lambda c: c.created)
+        return out
+
+    def volume_ops(self) -> list[VolumeOp]:
+        p = os.path.join(self.outdir, "volume-ops.json")
+        try:
+            with open(p) as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return []
+        out = []
+        for o in raw.get("ops", []) if isinstance(raw, dict) else []:
+            requested = _dt(o.get("requested")) if isinstance(o, dict) else None
+            if requested is None:
+                continue
+
+            def num(key: str, o: dict = o) -> int:
+                v = o.get(key)
+                return int(v) if isinstance(v, int | float) else 0
+
+            timeout = o.get("timeout_s")
+            out.append(VolumeOp(
+                op=str(o.get("op", "")), claim=str(o.get("claim", "")), requested=requested,
+                timeout_s=float(timeout) if isinstance(timeout, int | float) else 0.0,
+                skipped=str(o.get("skipped") or ""), error=str(o.get("error") or ""),
+                target_bytes=num("target_bytes"), capacity_at=_dt(o.get("capacity_at")),
+                client_pod=str(o.get("client_pod") or ""),
+                client_before_b=num("client_before_b"), client_after_b=num("client_after_b"),
+                client_seen_at=_dt(o.get("client_seen_at")),
+                snapshot=str(o.get("snapshot") or ""), marker_md5=str(o.get("marker_md5") or ""),
+                ready_at=_dt(o.get("ready_at")),
+                restore_claim=str(o.get("restore_claim") or ""),
+                restored_at=_dt(o.get("restored_at")),
+                restore_md5=str(o.get("restore_md5") or ""),
+                restore_deleted=_dt(o.get("restore_deleted")),
+                snapshot_deleted=_dt(o.get("snapshot_deleted")),
+                cleanup_error=str(o.get("cleanup_error") or "")))
+        out.sort(key=lambda o: o.requested)
         return out
 
     def pnfs_volumes(self) -> list[PnfsVolume]:

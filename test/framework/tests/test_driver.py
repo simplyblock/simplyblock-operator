@@ -867,6 +867,23 @@ class WorkloadPnfs(unittest.TestCase):
         self.assertEqual(applied[0]["parameters"]["pool_name"], "p1")
         self.assertEqual(applied[0]["volumeBindingMode"], "Immediate")
 
+    # Review on #704: chaos.volume-ops promised the shared multi-client volume and picked
+    # from pnfs.claims, which holds the solo claims too.
+    def test_the_shared_claims_are_published_on_their_own(self):
+        w, _ = self._plan(shared_volumes=2, pods_per_shared=2, solo_pods=2,
+                          containers_per_pod=1)
+        with _Ctx() as ctx, \
+                mock.patch.object(w, "_resolve_lvols", return_value=({}, {})), \
+                mock.patch.object(w, "_nodes", return_value={}), \
+                mock.patch.object(w, "_write_volume_map"), \
+                mock.patch.object(w, "_report_spread"):
+            w.after_running(ctx)
+            shared = ctx.shared["pnfs.shared_claims"]
+            everything = ctx.shared["pnfs.claims"]
+        self.assertEqual(shared, sorted(w._shared))
+        self.assertEqual(len(shared), 2)
+        self.assertEqual(len(everything), 4)
+
     def test_the_volume_map_names_every_consumer_node(self):
         """The device check needs to know, per volume, which client nodes should be writing
         to its namespace; the scheduler decides the nodes, so they are read back."""

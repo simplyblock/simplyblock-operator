@@ -29,6 +29,10 @@ components:
     solo_pods: 2
     containers_per_pod: 2
     spread: true
+    # One reader per shared volume, never on its writer's node, verifies each round a
+    # writer published: data written through one client's layout has to read back
+    # through another's. fio.cross-read judges it.
+    cross_readers: 1
     # Three pods x two containers x 1G per shared volume, plus headroom.
     volume_size_gb: 20
     file_size_gb: 1
@@ -54,6 +58,13 @@ components:
     max_life_s: 120
     quiet_tail_s: 180
 
+  # Namespace operations on the shared volumes beside fio, one worker per client node at a
+  # low rate, each checked from another node every five minutes and once more at the end.
+  workload.pnfs-metadata:
+    rate: 2
+    verify_interval_s: 300
+    quiet_tail_s: 120
+
   # The NFS client's own counters over the run, per fio instance: when data went through the
   # metadata server, and how long a client took to get its layouts back after a restart.
   nfs.mountstats:
@@ -77,6 +88,22 @@ components:
   chaos.restart:
     guaranteed: 1
     chance: 0.02
+
+  # One expansion and one snapshot of a shared claim under load. The snapshot is restored
+  # into a block XFS volume and a marker written before it is read back. A clone into a
+  # pNFS claim is refused by the driver, so it is not attempted.
+  # Each operation has to finish while fio runs, worst case included: the expansion's
+  # budget is 300 s here and the snapshot's 720 s, so both fit after the start delay and
+  # before the quiet tail of a 1800 s run. A run too short for one records it as skipped.
+  chaos.volume-ops:
+    ops: {expand: 1, snapshot: 1}
+    grow_gb: 1
+    quiet_tail_s: 120
+    expand_timeout_s: 240
+    snapshot_timeout_s: 180
+    restore_timeout_s: 300
+    delete_timeout_s: 60
+    op_overhead_s: 60
 
   # The SPDK containers outrun kubelet rotation within minutes, so they are followed live
   # for the whole run, as the migration suites do. They are where a restarted metadata

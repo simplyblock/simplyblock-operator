@@ -332,8 +332,7 @@ class Fencer(Component):
                 pod(rec["recaller_pod"], recaller, _RECALLER, True),
                 pod(self._net_pod, victim, _NET, False, hostNetwork=True,
                     container={"securityContext": {"privileged": True}})]
-        kube.run(["-n", str(self.opt("namespace")), "apply", "-f", "-"],
-                 stdin=json.dumps({"apiVersion": "v1", "kind": "List", "items": docs}))
+        kube.apply_each(str(self.opt("namespace")), docs)
 
     def _wait_ready(self, ns: str, pod: str, test: str) -> bool:
         deadline = time.monotonic() + float(self.opt("setup_s"))

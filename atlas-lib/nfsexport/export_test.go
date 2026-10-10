@@ -446,3 +446,34 @@ func TestRootFileReportsARootItCannotInspect(t *testing.T) {
 		t.Errorf("rootFile = %q, nil: want the inspection's error", got)
 	}
 }
+
+// Regression: 2026-10-09-pnfs-empty-root-file-panic (run pnfs-1791537846). The
+// MDS guest creates the root file empty on its state disk, so the first export
+// after a fresh install finds a root file with no line in it. Reading the
+// clients of that file panicked the agent (slice bounds out of range [1:0]).
+func TestCreateWritesTheRootIntoAnEmptyRootFile(t *testing.T) {
+	h := newHarness(t)
+	spec := h.spec()
+
+	target := filepath.Join(t.TempDir(), "state", rootDropInName)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(h.exportsDir, rootDropInName)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.assembler.Create(context.Background(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := entry(filepath.Dir(spec.Path), spec.Clients, rootOptions); string(got) != want {
+		t.Errorf("root file = %q, want %q", got, want)
+	}
+}
