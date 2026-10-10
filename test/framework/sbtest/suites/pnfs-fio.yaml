@@ -29,6 +29,10 @@ components:
     solo_pods: 2
     containers_per_pod: 2
     spread: true
+    # One reader per shared volume, never on its writer's node, verifies each round a
+    # writer published: data written through one client's layout has to read back
+    # through another's. fio.cross-read judges it.
+    cross_readers: 1
     # Three pods x two containers x 1G per shared volume, plus headroom.
     volume_size_gb: 20
     file_size_gb: 1
@@ -82,7 +86,10 @@ components:
   # Restarts during the timed run: the metadata server most often, a client's node plugin
   # next, the controller rarely. At least one per run, and a low chance of more.
   chaos.restart:
+    # Every run restarts the metadata server at least once, so every run tests a client's
+    # recovery from it. The chance-based restarts on top still draw any target.
     guaranteed: 1
+    guaranteed_targets: [mds]
     chance: 0.02
 
   # One expansion and one snapshot of a shared claim under load. The snapshot is restored

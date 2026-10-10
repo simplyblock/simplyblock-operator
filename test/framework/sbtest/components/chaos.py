@@ -51,7 +51,8 @@ class RestartPlan:
     """
 
     def __init__(self, *, seed: int, weights: dict[str, float], start: float, end: float,
-                 guaranteed: int, chance: float, overlap_chance: float) -> None:
+                 guaranteed: int, chance: float, overlap_chance: float,
+                 guaranteed_targets: list[str] | None = None) -> None:
         self._rng = random.Random(seed)
         self._targets = [t for t, w in weights.items() if w > 0]
         self._weights = [weights[t] for t in self._targets]
@@ -59,16 +60,21 @@ class RestartPlan:
         self._chance = chance
         self._overlap = overlap_chance
         span = max(0.0, end - start)
+        # Named targets go to the guaranteed restarts in order, so a run can promise to test
+        # one in particular, whatever the weights say. The chance-based ones keep drawing by
+        # weight, so with every weight at zero only the named restarts happen.
+        named = list(guaranteed_targets or [])
         self._pending = sorted(
-            (start + self._rng.random() * span, self._pick()) for _ in range(guaranteed)
-        ) if self._targets else []
+            (start + self._rng.random() * span, named[i % len(named)] if named else self._pick())
+            for i in range(guaranteed)
+        ) if named or self._targets else []
 
     def _pick(self) -> str:
         return self._rng.choices(self._targets, weights=self._weights)[0]
 
     def due(self, now: float, in_flight: int) -> list[str]:
         """The targets to restart at `now`, given how many restarts are still in flight."""
-        if not self._targets or now > self._end:
+        if now > self._end:
             return []
         out: list[str] = []
         while self._pending and self._pending[0][0] <= now:
@@ -78,7 +84,7 @@ class RestartPlan:
             if busy and now < self._end and self._rng.random() >= self._overlap:
                 break
             out.append(self._pending.pop(0)[1])
-        if (self._chance and self._rng.random() < self._chance
+        if (self._targets and self._chance and self._rng.random() < self._chance
                 and (in_flight + len(out) == 0 or self._rng.random() < self._overlap)):
             out.append(self._pick())
         return out
@@ -113,6 +119,8 @@ class Restarter(Component):
             # provisions volumes mid-flight.
             "weights": {"mds": 3.0, "csi-node": 2.0, "csi-controller": 1.0},
             "guaranteed": 1,
+            # Targets for the guaranteed restarts, in order. Empty draws them by weight.
+            "guaranteed_targets": [],
             "chance": 0.02,          # per tick
             "overlap_chance": 0.1,
             "tick_s": 10.0,
@@ -152,7 +160,8 @@ class Restarter(Component):
         plan = RestartPlan(seed=self._seed, weights=dict(self.opt("weights")), start=start,
                            end=end, guaranteed=int(self.opt("guaranteed")),
                            chance=float(self.opt("chance")),
-                           overlap_chance=float(self.opt("overlap_chance")))
+                           overlap_chance=float(self.opt("overlap_chance")),
+                           guaranteed_targets=self._guaranteed_targets())
         ctx.log.info(f"{self.name}: seed {self._seed}, {self.opt('guaranteed')} guaranteed "
                      f"restart(s) between {start - t0:.0f}s and {end - t0:.0f}s, chance "
                      f"{self.opt('chance')} per {self.opt('tick_s')}s tick")
@@ -170,6 +179,14 @@ class Restarter(Component):
 
         self._loop = threading.Thread(target=loop, name="chaos-restart", daemon=True)
         self._loop.start()
+
+    def _guaranteed_targets(self) -> list[str]:
+        targets = [str(t) for t in self.opt("guaranteed_targets") or []]
+        unknown = [t for t in targets if t not in _TARGETS]
+        if unknown:
+            raise ValueError(f"{self.name}: guaranteed_targets names unknown target(s) "
+                             f"{unknown}; known: {sorted(_TARGETS)}")
+        return targets
 
     def _in_flight(self) -> int:
         with self._lock:

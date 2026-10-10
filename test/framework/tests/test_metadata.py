@@ -240,9 +240,15 @@ class CheckErrors(unittest.TestCase):
                 return "{}"
             return ""
 
+        def run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            # The agent wrote its op log, and the listing from the verifier fails.
+            if "test" in args:
+                return completed(0)
+            return completed(1, err="no python")
+
         w = workload(settle_s=0)
         with mock.patch.object(kube, "exec_sh", side_effect=exec_sh), \
-                mock.patch.object(kube, "run", return_value=completed(1, err="no python")):
+                mock.patch.object(kube, "run", side_effect=run):
             w._check(context(tempfile.mkdtemp()), a_worker())
         self.assertEqual(len(w._checks), 1)
         self.assertIn("no python", w._checks[0]["error"])
@@ -266,6 +272,77 @@ class Collection(unittest.TestCase):
         entry = saved["workers"][0]
         self.assertIn("container gone", entry["collect_error"])
         self.assertEqual(entry["stop_at"], "2026-10-09T10:00:00Z")
+
+
+class FinalCollection(unittest.TestCase):
+    """pnfs-1791616895: meta-0 was released but its agent never wrote ops.log, so each check
+    waited out the 120 s pause timeout, the final checks ran one worker after another, and
+    nothing said why the agent did not run."""
+
+    def test_the_pause_wait_defaults_to_thirty_seconds(self):
+        self.assertEqual(workload().opt("pause_timeout_s"), 30.0)
+
+    def test_a_worker_whose_agent_never_ran_is_a_start_failure_not_a_pause_wait(self):
+        execs: list[str] = []
+
+        def run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            if "test" in args and f"{metadata.LOGDIR}/ops.log" in args:
+                return completed(1)
+            return completed(0)
+        w = workload(settle_s=0)
+        worker = a_worker()
+        started = time.monotonic()
+        with mock.patch.object(kube, "run", side_effect=run), \
+                mock.patch.object(kube, "exec_sh", side_effect=recorder(execs)):
+            w._check(context(tempfile.mkdtemp()), worker)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertFalse(any("/pause" in c for c in execs), execs)
+        self.assertIn("never started", w._checks[0]["error"])
+        self.assertIn("ops.log", w._start_errors[worker.pod])
+
+    def test_final_checks_run_in_parallel_and_keep_the_workers_order(self):
+        import threading
+        lock, now, peak = threading.Lock(), [0], [0]
+
+        def check(ctx: object, worker: metadata._Worker) -> None:
+            with lock:
+                now[0] += 1
+                peak[0] = max(peak[0], now[0])
+            time.sleep(0.1)
+            with lock:
+                now[0] -= 1
+        w = workload(settle_s=0)
+        for i in range(3):
+            a = metadata.Assignment(index=i, node=f"w{i}", claim="c0", verifier_node="wx")
+            w._workers.append(metadata._Worker(a=a, pod=f"r1-meta-{i}", verifier=f"r1-mv-{i}",
+                                               root=f"/data/r1-meta/r1-meta-{i}"))
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(kube, "exec_sh", return_value=""), \
+                mock.patch.object(kube, "run", return_value=completed(0, out="{}\n")), \
+                mock.patch.object(w, "_check", side_effect=check):
+            w.collect(context(d))
+            with open(os.path.join(d, "metadata.json")) as fh:
+                saved = json.load(fh)
+        self.assertGreater(peak[0], 1)
+        self.assertEqual([x["worker"] for x in saved["workers"]],
+                         ["r1-meta-0", "r1-meta-1", "r1-meta-2"])
+
+    def test_each_worker_pods_log_is_collected(self):
+        def run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            if "logs" in args:
+                return completed(0, out="Traceback: the agent died\n")
+            return completed(0, out="{}\n")
+        w = workload(settle_s=0)
+        worker = a_worker()
+        w._workers.append(worker)
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(kube, "exec_sh", return_value=""), \
+                mock.patch.object(kube, "run", side_effect=run), \
+                mock.patch.object(w, "_check"):
+            w.collect(context(d))
+            with open(os.path.join(d, f"metadata-{worker.pod}-pod.log")) as fh:
+                text = fh.read()
+        self.assertIn("the agent died", text)
 
 
 class MetadataArchive(unittest.TestCase):

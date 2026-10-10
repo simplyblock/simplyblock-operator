@@ -17,6 +17,12 @@ NFS client and its single connection to the namespace, so the multi-writer case 
 running is the multi-node one. The spread is preferred rather than required, so a cluster
 with fewer nodes than sharing pods still runs, and the volume map says where each pod landed.
 
+**Cross-client reads are opt-in** (`cross_readers`). Each instance above verifies what its
+own client wrote, which a client cache can satisfy without the data ever crossing to another
+node. With cross_readers set, every shared volume also gets a writer pod that writes a new
+file per round and publishes a marker after closing it, and that many reader pods, never on
+the writer's node, that verify each published round with fio. `fio.cross-read` judges them.
+
 What it leaves for the detectors: the per-instance fio evidence every fio workload leaves, the
 NFS mount's own per-operation counts (`pnfs.layout` reads them), and `pnfs.json`, the volume
 to consuming-node map `pnfs.device-io` checks the client-side NVMe counters against.
@@ -61,6 +67,15 @@ class PnfsRwxWorkload(FioWorkload):
             "file_size_gb": 1,        # per fio instance
             "direct": True,
             "ready_timeout_s": 600,
+            # Reader pods per shared volume that verify, from other nodes, the rounds a
+            # writer pod of that volume publishes. 0 adds neither.
+            "cross_readers": 0,
+            # Each round's file. Up to ROUND_KEEP + 1 + cross_readers of them on the volume.
+            "round_size_mb": 256,
+            "round_s": 30,          # a writer starts a round at most this often
+            # How long a reader waits for the next round before logging a timeout. Below
+            # stop_timeout_s, so a reader has exited before stop() gives up on it.
+            "round_wait_s": 120,
         }
 
     def __init__(self, **options: Any) -> None:
@@ -69,6 +84,7 @@ class PnfsRwxWorkload(FioWorkload):
         self._shared: set[str] = set()          # claims several pods mount
         self._lvol_of: dict[str, str] = {}      # claim -> lvol UUID
         self._cluster_of: dict[str, str] = {}   # claim -> cluster UUID
+        self._round_names: set[str] = set()     # the cross-read writers and readers
 
     # ── the layout ──────────────────────────────────────────────────────────────────
 
@@ -142,6 +158,13 @@ class PnfsRwxWorkload(FioWorkload):
             raise RuntimeError(f"{self.name}: no pods or no containers, so the run would have "
                                "no I/O and could not detect anything")
 
+        readers = int(self.opt("cross_readers")) if shared else 0
+        if readers and int(self.opt("round_wait_s")) >= int(self.opt("stop_timeout_s")):
+            raise RuntimeError(
+                f"{self.name}: round_wait_s {self.opt('round_wait_s')} must be below "
+                f"stop_timeout_s {self.opt('stop_timeout_s')}, or a reader still waiting "
+                "for a round when stop() gives up never writes its exit code")
+
         file_gb, volume_gb = int(self.opt("file_size_gb")), int(self.opt("volume_size_gb"))
         busiest = max(per_shared if shared else 0, 1 if solo else 0) * containers
         if busiest * file_gb + HEADROOM_GB > volume_gb:
@@ -149,6 +172,17 @@ class PnfsRwxWorkload(FioWorkload):
                 f"{self.name}: a volume carries {busiest} fio file(s) of {file_gb}G, which "
                 f"with {HEADROOM_GB}G of headroom does not fit {volume_gb}G; raise "
                 "volume_size_gb or lower file_size_gb")
+        # The writer removes a round only after publishing the one ROUND_KEEP after it, so
+        # the round being written and the ROUND_KEEP before it exist at once. A reader still
+        # reading a removed round keeps it open, and the server frees it only at the close.
+        round_files = fio.ROUND_KEEP + 1 + readers
+        rounds_gb = round_files * int(self.opt("round_size_mb")) / 1024 if readers else 0
+        if readers and per_shared * containers * file_gb + rounds_gb + HEADROOM_GB > volume_gb:
+            raise RuntimeError(
+                f"{self.name}: a shared volume carries {per_shared * containers} fio file(s) "
+                f"of {file_gb}G and up to {round_files} round file(s) of "
+                f"{self.opt('round_size_mb')}M, which with {HEADROOM_GB}G of headroom does "
+                f"not fit {volume_gb}G; raise volume_size_gb or lower round_size_mb")
 
         plan: list[tuple[str, bool]] = []    # (claim, shared) per pod
         for v in range(shared):
@@ -166,6 +200,8 @@ class PnfsRwxWorkload(FioWorkload):
             if is_shared:
                 self._shared.add(claim)
             docs.append(self._pod(ctx, pod, i, claim, is_shared, containers, file_gb))
+        for v in range(shared if readers else 0):
+            docs += self._round_pods(ctx, v, f"{ctx.run_id}-pnfs-shared-{v}", readers)
         return docs
 
     def _claim(self, ctx: RunContext, claim: str, sc: str, shared: bool) -> dict:
@@ -205,14 +241,74 @@ class PnfsRwxWorkload(FioWorkload):
             "volumes": self.pod_volumes(claim),
         }
         if shared and self.opt("spread"):
-            spec["affinity"] = {"podAntiAffinity": {
-                "preferredDuringSchedulingIgnoredDuringExecution": [{
-                    "weight": 100,
-                    "podAffinityTerm": {
-                        "labelSelector": {"matchLabels": {"pnfs-shared": claim}},
-                        "topologyKey": "kubernetes.io/hostname"}}]}}
+            spec["affinity"] = {"podAntiAffinity": self._spread(claim)}
         return {"apiVersion": "v1", "kind": "Pod",
                 "metadata": {"name": pod, "labels": labels}, "spec": spec}
+
+    @staticmethod
+    def _spread(claim: str) -> dict[str, Any]:
+        return {"preferredDuringSchedulingIgnoredDuringExecution": [{
+            "weight": 100,
+            "podAffinityTerm": {
+                "labelSelector": {"matchLabels": {"pnfs-shared": claim}},
+                "topologyKey": "kubernetes.io/hostname"}}]}
+
+    def _round_pods(self, ctx: RunContext, v: int, claim: str, readers: int) -> list[dict]:
+        """One shared volume's round writer and its readers, each a pod of one container.
+
+        The readers' anti-affinity to the writer is required, not preferred: a reader on the
+        writer's node reads through the writer's own NFS client and proves nothing about
+        another one. A cluster with one schedulable node therefore leaves the readers
+        Pending, and setup says so.
+        """
+        rounds = fio.Rounds(base=f"{MOUNT}/{ctx.run_id}-xw-{v}",
+                            size_mb=int(self.opt("round_size_mb")),
+                            round_s=int(self.opt("round_s")),
+                            wait_s=int(self.opt("round_wait_s")),
+                            runtime_s=int(self.opt("runtime_s")),
+                            # As long as setup() can take to reach the timed run, and a
+                            # minute for the exec that releases the pod.
+                            start_wait_s=int(self.opt("ready_timeout_s"))
+                            + int(self.opt("io_timeout_s")) + 60)
+        direct = bool(self.opt("direct"))
+        plan = [(f"{ctx.run_id}-pnfs-xw-{v}", "xwrite", "/logs/xw",
+                 f"{ctx.run_id}-fio-xw-{v}", "pnfs-xwriter",
+                 fio.round_writer_script(self.options, rounds, "/logs/xw", direct))]
+        plan += [(f"{ctx.run_id}-pnfs-xr-{v}-{r}", "xread", "/logs/xr",
+                  f"{ctx.run_id}-fio-xr-{v}-{r}", "pnfs-xreader",
+                  fio.round_reader_script(self.options, rounds, "/logs/xr", direct))
+                 for r in range(readers)]
+        docs = []
+        for pod, container, logdir, evidence, role, script in plan:
+            inst = fio.FioInstance(pod=pod, container=container, filename=rounds.base,
+                                   logdir=logdir, evidence=evidence)
+            self._instances.append(inst)
+            self._pods.append(pod)
+            self._claim_of[pod] = claim
+            self._round_names.add(pod)
+            anti: dict[str, Any] = self._spread(claim) if self.opt("spread") else {}
+            if role == "pnfs-xreader":
+                anti["requiredDuringSchedulingIgnoredDuringExecution"] = [{
+                    "labelSelector": {"matchLabels": {"pnfs-xwriter": claim}},
+                    "topologyKey": "kubernetes.io/hostname"}]
+            spec: dict[str, Any] = {
+                "restartPolicy": "Never",
+                "terminationGracePeriodSeconds": 5,
+                "containers": [self.fio_container(inst, script, MOUNT)],
+                "volumes": self.pod_volumes(claim),
+            }
+            if anti:
+                spec["affinity"] = {"podAntiAffinity": anti}
+            docs.append({"apiVersion": "v1", "kind": "Pod", "metadata": {
+                "name": pod, "labels": {"sbtest": ctx.run_id, "sbtest-run": "true",
+                                        "app": "fio", "pnfs-shared": claim, role: claim}},
+                         "spec": spec})
+        return docs
+
+    def timed_instances(self) -> list[fio.FioInstance]:
+        # A round writer writes sequentially and a reader runs fio only once a round is
+        # published, so neither prints the randrw timed-run status the wait looks for.
+        return [i for i in self._instances if i.pod not in self._round_names]
 
     # ── what the cluster decided ────────────────────────────────────────────────────
 
@@ -249,7 +345,13 @@ class PnfsRwxWorkload(FioWorkload):
     def _write_volume_map(self, ctx: RunContext, nodes: dict[str, str]) -> None:
         volumes = []
         for claim in sorted(set(self._claim_of.values())):
-            pods = sorted(p for p, c in self._claim_of.items() if c == claim)
+            # The round pods stay out of pods, nodes, and instances, which pnfs.device-io
+            # reads: a reader-only node writes nothing to the namespace, and a writer idles
+            # between rounds, so either reads as a client that bypassed it.
+            pods = sorted(p for p, c in self._claim_of.items()
+                          if c == claim and p not in self._round_names)
+            rounds = [i for i in self._instances
+                      if i.pod in self._round_names and self._claim_of[i.pod] == claim]
             volumes.append({
                 "claim": claim, "lvol": self._lvol_of.get(claim, ""),
                 # The run's cluster, which nothing else in a run without migrations records.
@@ -260,6 +362,8 @@ class PnfsRwxWorkload(FioWorkload):
                 # Which instance ran where, so a node is judged while its own fio ran.
                 "instances": {i.evidence: nodes[i.pod] for i in self._instances
                               if i.pod in pods and nodes.get(i.pod)},
+                **({"cross_read": {i.evidence: nodes.get(i.pod, "") for i in rounds}}
+                   if rounds else {}),
             })
         ctx.save_json("pnfs.json", {"volumes": volumes})
 

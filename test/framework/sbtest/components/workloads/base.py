@@ -10,6 +10,7 @@ therefore a new layout, never a new way of driving fio or of leaving evidence be
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import time
 from typing import Any
@@ -17,6 +18,9 @@ from typing import Any
 from ...core import Component, RunContext
 from .. import kube
 from . import fio
+
+#: How many fio instances are collected at once.
+COLLECT_PARALLEL = 8
 
 
 class FioWorkload(Component):
@@ -74,6 +78,11 @@ class FioWorkload(Component):
     def after_collect(self, ctx: RunContext) -> None:
         """Collect what is specific to the workload, after every instance's evidence."""
 
+    def timed_instances(self) -> list[fio.FioInstance]:
+        """The instances setup() waits for to enter fio's timed run. All of them unless a
+        subclass runs instances that never print a timed-run status."""
+        return list(self._instances)
+
     def selector(self, ctx: RunContext) -> str:
         """The label selector teardown deletes pods and claims by."""
         return f"sbtest={ctx.run_id}"
@@ -104,10 +113,29 @@ class FioWorkload(Component):
                          float(self.opt("ready_timeout_s")))
         # The runtime clock starts with the timed run, not with the pods: fio's runtime
         # does not count the layout before it.
-        fio.wait_io_flowing(ctx, self.name, self.opt("namespace"), self._instances,
+        fio.wait_io_flowing(ctx, self.name, self.opt("namespace"), self.timed_instances(),
                             float(self.opt("io_timeout_s")))
         self._io_started = time.time()
+        self._release_untimed(ctx)
         self.after_running(ctx)
+
+    def _release_untimed(self, ctx: RunContext) -> None:
+        """Tell every instance setup() did not wait for that the timed run has started.
+
+        Such an instance, a cross-read round pod, waits for <logdir>/start before it starts
+        its own clock, so it runs alongside the timed run rather than from its pod's start.
+        One that is not told starts on its own once its wait is up.
+        """
+        ns = self.opt("namespace")
+        timed = {(i.pod, i.container) for i in self.timed_instances()}
+        for inst in self._instances:
+            if (inst.pod, inst.container) in timed:
+                continue
+            out = kube.exec_sh(ns, inst.pod, f"touch {inst.logdir}/start && echo released",
+                               container=inst.container, timeout=30)
+            if "released" not in out:
+                ctx.log.warn(f"{self.name}: could not release {inst.pod}/{inst.container} "
+                             "for the timed run; it starts on its own when its wait is up")
 
     def stop(self, ctx: RunContext) -> None:
         """Wait for every fio instance to finish its runtime, and interrupt only stragglers.
@@ -160,8 +188,14 @@ class FioWorkload(Component):
     def collect(self, ctx: RunContext) -> None:
         ns = self.opt("namespace")
         migs = ctx.shared.get("migrations") or []
-        for inst in self._instances:
-            fio.collect_instance(ctx, ns, inst, migs)
+        # Each instance is a few kubectl calls of its own, and one after another they took
+        # 40-47 s for 16 instances. In parallel, bounded so the API server is not flooded.
+        # An instance's failure still surfaces after the others have been collected.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=COLLECT_PARALLEL) as pool:
+            futures = [pool.submit(fio.collect_instance, ctx, ns, inst, migs)
+                       for inst in self._instances]
+        for future in futures:
+            future.result()
         self.after_collect(ctx)
         ctx.log.info(f"{self.name}: collected {len(self._instances)} fio instance(s) from "
                      f"{len(self._pods)} pod(s)")

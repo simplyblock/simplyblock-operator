@@ -85,6 +85,11 @@ def _pinned(window: list[ConntrackSample], old_ip: str) -> dict[tuple[str, str],
     for s in window:
         if s.state in _CLOSED or s.reply_src != old_ip:
             continue
+        # Addressed to the pod itself, so nothing translated it: the record the old pod's
+        # node keeps of a connection that arrived there. It outlives the pod and routes
+        # nothing, while a pinned flow is one sent to the Service and translated to the pod.
+        if s.orig_dst == old_ip:
+            continue
         flow = f"{s.orig_src}:{s.orig_sport} -> {s.orig_dst}"
         out.setdefault((s.node, flow), []).append(s)
     return out
