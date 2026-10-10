@@ -1009,6 +1009,19 @@ class RestartSchedule(unittest.TestCase):
         self.assertTrue(fired)
         self.assertTrue(all(t <= 300.0 for t, _ in fired))
 
+    # pnfs-1791616895 and pnfs-1791619063 drew a csi-node for their one guaranteed restart,
+    # so neither tested the metadata server's recovery it was meant to.
+    def test_guaranteed_targets_name_what_the_guaranteed_restarts_restart(self):
+        for seed in range(20):
+            fired = self.fire(self.plan(seed=seed, guaranteed=3,
+                                        guaranteed_targets=["mds", "csi-node"]))
+            self.assertEqual(sorted(t for _, t in fired), ["csi-node", "mds", "mds"], seed)
+
+    def test_without_guaranteed_targets_the_weights_decide(self):
+        targets = {t for seed in range(30)
+                   for _, t in self.fire(self.plan(seed=seed, guaranteed=1))}
+        self.assertGreater(len(targets), 1)
+
     def test_the_same_seed_gives_the_same_schedule(self):
         a = self.fire(self.plan(guaranteed=2, chance=0.1))
         b = self.fire(self.plan(guaranteed=2, chance=0.1))
