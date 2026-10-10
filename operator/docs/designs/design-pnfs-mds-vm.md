@@ -286,6 +286,8 @@ The kernel configures the guest's address from `ip=` on its command line before 
 
 The kernel command line is `root=/dev/vda ro console=hvc0 panic=-1 ip=<guest>::<gateway>:<netmask>:<hostname>:eth0:off`, with `acpi=on` added on ARM64. The hostname is the pod name. nfsd derives its server owner and scope from it, and NFSv4.1 clients reclaim their state after a restart only from a server whose identity did not change, so the StatefulSet's stable pod name is what lets a restarted guest keep its clients. `panic=-1` turns a guest panic into a reboot, which QEMU's `-no-reboot` turns into QEMU exiting.
 
+The command line also carries `xfs.pnfs_zeroed_layouts`, `0` unless the runner is started with `-zeroed-layouts`. It is a parameter of the guest kernel's patch 0005 (pnfs-os). Without it, XFS hands out a write layout over unwritten blocks, and only the client's LAYOUTCOMMIT converts them to written. The Linux client never resends a LAYOUTCOMMIT that a restarted server lost: it encodes no reclaim, ignores `NFS4ERR_GRACE` and `NFS4ERR_BADLAYOUT` on the commit, and drops its layouts when the server reboots. Data a client wrote between its last commit and a server restart is then on the device, but reads back as zeros everywhere except the writer's own page cache. With the parameter set, the blocks of a write layout are zeroed and written when they are allocated, so a client's write is durable once it completes on the device. Each allocation costs one WRITE ZEROES on the volume. The file size still travels only in LAYOUTCOMMIT, so an append whose size update was lost is still cut off.
+
 ---
 
 ## 7. Control Channel and Reconciliation

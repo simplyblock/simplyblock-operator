@@ -171,6 +171,7 @@ restarted rather than migrated (design §13).
 |------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | U-67 | QEMU always runs under KVM, and an architecture and firmware mismatch is refused                                                                                                     | Positive + Negative            | `TestGuestAlwaysRunsUnderKVM`, `TestARM64WithoutFirmwareIsRefused`, `TestAMD64WithFirmwareIsRefused`, `TestUnknownArchitectureIsRefused`                                   |
 | U-68 | The kernel command line carries the static address and the nfsd layout hold parameters                                                                                               | Positive                       | `TestKernelCmdlineCarriesTheStaticAddress`                                                                                                                                 |
+| U-92 | The kernel command line states whether write layouts are zeroed: off unless the runner asks, on when it does                                                                         | Positive + Negative            | `TestKernelCmdlineCarriesTheStaticAddress`, `TestKernelCmdlineEnablesZeroedLayoutsOnRequest`                                                                               |
 | U-69 | The root disk is first and read-only, and the state disk carries its serial                                                                                                          | Positive                       | `TestRootDiskIsFirstAndReadOnlyStateDiskCarriesItsSerial`                                                                                                                  |
 | U-70 | A guest panic, a missed boot deadline, and an ignored power button all end QEMU                                                                                                      | Negative                       | `TestGuestPanicEndsQEMU`, `TestMissedBootDeadlineKillsQEMU`, `TestGuestIgnoringThePowerButtonIsKilledAfterTheGrace`                                                        |
 | U-71 | Guest memory leaves QEMU its allowance, and limits too small or unset are refused                                                                                                    | Boundary                       | `TestGuestResourcesLeaveTheAllowanceToQEMU`, `TestGuestResourcesRefuseLimitsTooSmallOrUnset`                                                                               |
@@ -468,7 +469,7 @@ Struck rows are not counted.
 
 | Class                    | Scenarios | Covered | Not covered |
 |--------------------------|-----------|---------|-------------|
-| Unit (`U-`)              | 62        | 62      | 0           |
+| Unit (`U-`)              | 63        | 63      | 0           |
 | Operator (`O-`)          | 36        | 34      | 2           |
 | Sanity (`SAN-`)          | 2         | 0       | 2           |
 | Integration (`I-`)       | 3         | 3       | 0           |
@@ -476,7 +477,7 @@ Struck rows are not counted.
 | Failure injection (`F-`) | 13        | 4       | 9           |
 | Security (`SEC-`)        | 8         | 0       | 8           |
 | Load and soak (`L-`)     | 6         | 0       | 6           |
-| **Total**                | **148**   | **115** | **33**      |
+| **Total**                | **149**   | **116** | **33**      |
 
 Unit and operator coverage follows the code. The live classes are the gaps: four
 `F-` rows rest on a recorded run with a manual pod delete rather than on a suite

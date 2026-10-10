@@ -52,6 +52,7 @@ type config struct {
 	cpuLimitMilli          int64
 	memoryLimitMiB         int64
 	vhostNet               bool
+	zeroedLayouts          bool
 	bootDeadline           time.Duration
 	shutdownGrace          time.Duration
 
@@ -85,6 +86,9 @@ func parseFlags() config {
 	flag.Int64Var(&c.memoryLimitMiB, "memory-limit-mib", envInt("MDS_MEMORY_LIMIT_MIB"),
 		"Pod memory limit in MiB (downward API limits.memory, divisor 1Mi)")
 	flag.BoolVar(&c.vhostNet, "vhost-net", false, "Use vhost-net for the guest NIC; needs /dev/vhost-net")
+	flag.BoolVar(&c.zeroedLayouts, "zeroed-layouts", false,
+		"Zero and write the blocks of a pNFS write layout at allocation, so data a client wrote "+
+			"survives a server restart that lost its LAYOUTCOMMIT; costs a WRITE ZEROES per allocation")
 	flag.StringVar(&c.probeAddress, "probe-address", ":8080", "Address serving /readyz and /healthz")
 	flag.DurationVar(&c.bootDeadline, "boot-deadline", 120*time.Second,
 		"Time the guest has to turn healthy before the pod restarts")
@@ -173,6 +177,7 @@ func run(ctx context.Context, c config) error {
 		Gateway:       plan.Gateway.Addr(),
 		Hostname:      c.hostname,
 		QMPSocket:     qmpSocket,
+		ZeroedLayouts: c.zeroedLayouts,
 	}
 	agentAddress := net.JoinHostPort(plan.Guest.String(), strconv.Itoa(netsetup.AgentPort))
 	binary, err := guest.Binary()
