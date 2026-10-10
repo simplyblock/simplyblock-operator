@@ -12,6 +12,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -23,11 +24,16 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2ekubectl "k8s.io/kubernetes/test/e2e/framework/kubectl"
+
+	"github.com/simplyblock/atlas/kube"
 )
 
 const (
@@ -43,6 +49,7 @@ const (
 
 var _ = ginkgo.Describe("SPDKCSI-PNFS", func() {
 	f := newTestFramework("spdkcsi")
+	ginkgo.BeforeEach(func() { failWithoutPNFSPrerequisites(f) })
 
 	ginkgo.It("a pNFS volume mounts ReadWriteMany over NFSv4.1", func() {
 		ns := f.Namespace.Name
@@ -459,4 +466,71 @@ func createClonedRWXPVC(c kubernetes.Interface, ns, pvcName, scName, sourcePVC s
 		},
 	}, metav1.CreateOptions{})
 	return err
+}
+
+// simplyblockDriverGVR is the resource the pNFS prerequisites read spec.pnfs.mds from.
+var simplyblockDriverGVR = schema.GroupVersionResource{
+	Group: "storage.simplyblock.io", Version: "v1alpha2", Resource: "simplyblockdrivers",
+}
+
+// pnfsPrerequisites reports what keeps this cluster from serving a pNFS
+// volume at all: no SimplyblockDriver configuring spec.pnfs.mds, and no node
+// labeled kvm-capable=true for the metadata server's QEMU guest. Both are
+// reported together, so one run names everything that has to change.
+//
+// The label is read rather than /dev/kvm probed, because the label is what the
+// metadata server's node selector matches.
+func pnfsPrerequisites(c kubernetes.Interface, dyn dynamic.Interface) error {
+	ctx := context.Background()
+	var problems []string
+
+	drivers, err := dyn.Resource(simplyblockDriverGVR).Namespace(metav1.NamespaceAll).
+		List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("list SimplyblockDrivers: %w", err)
+	}
+	configured := false
+	for i := range drivers.Items {
+		if _, found, _ := unstructured.NestedMap(drivers.Items[i].Object, "spec", "pnfs", "mds"); found {
+			configured = true
+			break
+		}
+	}
+	if !configured {
+		problems = append(problems, "no SimplyblockDriver sets spec.pnfs.mds, so every export waits "+
+			"in Pending and no claim binds")
+	}
+
+	nodes, err := c.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("list nodes: %w", err)
+	}
+	answers := make([]string, 0, len(nodes.Items))
+	capable := false
+	for i := range nodes.Items {
+		value := nodes.Items[i].Labels[kube.LabelKVMCapable]
+		capable = capable || value == trueStr
+		answers = append(answers, fmt.Sprintf("%s=%q", nodes.Items[i].Name, value))
+	}
+	if !capable {
+		problems = append(problems, fmt.Sprintf("no node is labeled %s=true, so the metadata server's "+
+			"QEMU guest can be scheduled nowhere; the node plugins' \"kvm probe:\" log lines say why "+
+			"each node could not open /dev/kvm. Nodes: %v", kube.LabelKVMCapable, answers))
+	}
+
+	if len(problems) == 0 {
+		return nil
+	}
+	return errors.New("this cluster cannot serve a pNFS volume: " + strings.Join(problems, "; "))
+}
+
+// failWithoutPNFSPrerequisites ends the spec before it creates anything when
+// the cluster cannot serve a pNFS volume.
+//
+// A failure and not a skip, unlike the VDO suite's kernel check: both
+// prerequisites are deployment configuration the suite's own setup is
+// responsible for, and a skip would have reported the GCP runs green when that
+// setup stopped matching the operator.
+func failWithoutPNFSPrerequisites(f *framework.Framework) {
+	framework.ExpectNoError(pnfsPrerequisites(f.ClientSet, f.DynamicClient))
 }
