@@ -57,37 +57,16 @@ func (r *NFSExportReconciler) resyncAfterRestart(
 		}
 		return ctrl.Result{RequeueAfter: nfsExportNoSessionRequeue}, true, nil
 	}
+	// The address first, and on every reconcile rather than only after a
+	// restart: an export bound while its pod was being replaced records the old
+	// pod's address and is then assembled by the new one, so its instance
+	// matches while its address does not. A client retrying against the
+	// Service reaches the running guest as soon as it serves.
+	if err := r.followAddress(ctx, export, &pod); err != nil {
+		return ctrl.Result{}, true, err
+	}
 	if mdsInstance(&pod) == export.Status.AssembledBy {
 		return ctrl.Result{}, false, nil
-	}
-
-	// The address first, so that a client retrying against the Service
-	// reaches the new guest as soon as it serves.
-	if ip := pod.Status.PodIP; ip != "" && ip != export.Status.MDSNodeIP {
-		old := export.Status.MDSNodeIP
-		if _, err := r.reconcileExportService(ctx, export, ip); err != nil {
-			return ctrl.Result{}, true, fmt.Errorf("repointing the Service for %s: %w", export.Name, err)
-		}
-		if err := r.writeStatus(ctx, export, func(s *simplyblockv1alpha2.NFSExportStatus) {
-			s.MDSNodeIP = ip
-		}); err != nil {
-			return ctrl.Result{}, true, err
-		}
-		r.event(export, corev1.EventTypeNormal, "MDSAddressChanged",
-			fmt.Sprintf("metadata server pod %s moved to %s", name, ip))
-		// A connection that reached the old address before it was withdrawn
-		// stays translated to it, so the nodes forget it once more now. When
-		// the CNI gave the replacement the same address, those flows reach the
-		// live pod: nothing more is forgotten, and the withdrawal's request,
-		// if it is still waiting, is dropped.
-		if old == "" {
-			old = r.takeWithdrawn(export)
-		}
-		if old == ip {
-			r.cancelForget(ctx, export, old)
-		} else {
-			r.forget(ctx, export, old)
-		}
 	}
 
 	host := mdsHost(export)
@@ -106,6 +85,41 @@ func (r *NFSExportReconciler) resyncAfterRestart(
 	r.event(export, corev1.EventTypeNormal, "MDSResynced",
 		fmt.Sprintf("metadata server pod %s restarted, export reassembled", name))
 	return ctrl.Result{RequeueAfter: nfsExportHealthCheckInterval}, true, nil
+}
+
+// followAddress points the export's Service and status at the running pod's
+// address when they name another one, and has the nodes forget their flows to
+// the old address.
+func (r *NFSExportReconciler) followAddress(
+	ctx context.Context, export *simplyblockv1alpha2.NFSExport, pod *corev1.Pod,
+) error {
+	if ip := pod.Status.PodIP; ip != "" && ip != export.Status.MDSNodeIP {
+		old := export.Status.MDSNodeIP
+		if _, err := r.reconcileExportService(ctx, export, ip); err != nil {
+			return fmt.Errorf("repointing the Service for %s: %w", export.Name, err)
+		}
+		if err := r.writeStatus(ctx, export, func(s *simplyblockv1alpha2.NFSExportStatus) {
+			s.MDSNodeIP = ip
+		}); err != nil {
+			return err
+		}
+		r.event(export, corev1.EventTypeNormal, "MDSAddressChanged",
+			fmt.Sprintf("metadata server pod %s moved to %s", pod.Name, ip))
+		// A connection that reached the old address before it was withdrawn
+		// stays translated to it, so the nodes forget it once more now. When
+		// the CNI gave the replacement the same address, those flows reach the
+		// live pod: nothing more is forgotten, and the withdrawal's request,
+		// if it is still waiting, is dropped.
+		if old == "" {
+			old = r.takeWithdrawn(export)
+		}
+		if old == ip {
+			r.cancelForget(ctx, export, old)
+		} else {
+			r.forget(ctx, export, old)
+		}
+	}
+	return nil
 }
 
 // assemblingInstance is the metadata server instance an export bound to a pod

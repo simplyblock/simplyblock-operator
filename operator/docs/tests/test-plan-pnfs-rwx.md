@@ -295,6 +295,7 @@ through the control plane's API.
 | O-43 | Regression (2026-10-09-pnfs-mds-conntrack-pinning): a terminating or gone metadata server pod's address leaves every bound export's EndpointSlice at once, the export stays Ready, and the nodes are asked to forget the address                                                                                                           | Regression                     | `TestATerminatingMDSPodsAddressIsWithdrawn`, `TestAGoneMDSPodsAddressIsWithdrawn`                                                                                                                                                                             |
 | O-44 | An address is withdrawn once. The replacement's address follows, and the nodes forget the old address again at the move, also when no withdrawal was seen. A replacement that receives the old address forgets nothing more and cancels the waiting request, and the Service's ClusterIP is read from the Service when the status lacks it | Positive + Boundary            | `TestAWithdrawnAddressIsWithdrawnOnce`, `TestTheReplacementsAddressFollowsAWithdrawal`, `TestAMoveWithoutAWithdrawalForgetsTheOldAddress`, `TestAReplacementWithTheSameAddressForgetsNothingMore`, `TestTheServiceIPIsReadFromTheServiceWhenTheStatusLacksIt` |
 | O-45 | Every node advertising the flow service is asked, for TCP port 2049 to the export's ClusterIP and the old address only. One request per Service and address, duplicates collapse, a canceled request is never sent, one node failing does not stop the others, and an invalid address asks nobody                                          | Positive + Negative + Boundary | `TestEveryCapableNodeForgetsTheOldAddress`, `TestRequestsForOneAddressCollapse`, `TestANodeFailingDoesNotStopTheOthers`, `TestAnInvalidAddressAsksNobody`, `TestOneRequestPerServiceAndAddress`, `TestACanceledRequestIsNotSent`                              |
+| O-46 | Regression (run `pnfs-1791627120`): an export assembled by the running pod but recording another pod's address has its EndpointSlice and status repointed, without reassembly                                                                                                                                                              | Regression                     | `TestAnExportAssembledByTheRunningPodFollowsItsAddress`                                                                                                                                                                                                       |
 
 ---
 
@@ -477,14 +478,14 @@ Struck rows are not counted.
 | Class                    | Scenarios | Covered | Not covered |
 |--------------------------|-----------|---------|-------------|
 | Unit (`U-`)              | 64        | 64      | 0           |
-| Operator (`O-`)          | 36        | 34      | 2           |
+| Operator (`O-`)          | 37        | 35      | 2           |
 | Sanity (`SAN-`)          | 2         | 0       | 2           |
 | Integration (`I-`)       | 3         | 3       | 0           |
 | End-to-end (`E-`)        | 18        | 12      | 6           |
 | Failure injection (`F-`) | 14        | 4       | 10          |
 | Security (`SEC-`)        | 8         | 0       | 8           |
 | Load and soak (`L-`)     | 6         | 0       | 6           |
-| **Total**                | **151**   | **117** | **34**      |
+| **Total**                | **152**   | **118** | **34**      |
 
 Unit and operator coverage follows the code. The live classes are the gaps: four
 `F-` rows rest on a recorded run with a manual pod delete rather than on a suite

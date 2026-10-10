@@ -189,3 +189,34 @@ func TestAnMDSPodEventEnqueuesTheExportsBoundToIt(t *testing.T) {
 		t.Errorf("an unrelated pod enqueued %v", got)
 	}
 }
+
+// Regression: 2026-10-10-nfsexport-stale-mds-address (pnfs-1791627120). An
+// export bound while its metadata server was being replaced recorded the old
+// pod's address, and was then assembled by the replacement. Its instance
+// matched, so nothing compared the address, and every client mount went to
+// the dead pod. The address follows the running pod on every Ready reconcile.
+func TestAnExportAssembledByTheRunningPodFollowsItsAddress(t *testing.T) {
+	const newIP = "10.244.7.4"
+	asm := &fakeAssembler{}
+	r, cl, events := newResyncReconciler(t, asm,
+		readyPodHosted(), runningMDSPod(testMDSPodUID, newIP))
+
+	reconcileExport(t, r)
+
+	if got := loadExport(t, cl); got.Status.MDSNodeIP != newIP {
+		t.Errorf("mdsNodeIP = %q, want the running pod's %q", got.Status.MDSNodeIP, newIP)
+	}
+	var eps discoveryv1.EndpointSlice
+	key := client.ObjectKey{Name: utils.NFSExportEndpointSliceName(testExportName), Namespace: testExportNS}
+	if err := cl.Get(context.Background(), key, &eps); err != nil {
+		t.Errorf("reading the EndpointSlice: %v", err)
+	} else if len(eps.Endpoints) != 1 || eps.Endpoints[0].Addresses[0] != newIP {
+		t.Errorf("EndpointSlice endpoints = %+v, want the running pod's IP %s", eps.Endpoints, newIP)
+	}
+	if !slices.Contains(events.reasons, "MDSAddressChanged") {
+		t.Errorf("events = %v, want MDSAddressChanged", events.reasons)
+	}
+	if len(asm.created) != 0 {
+		t.Errorf("CreateExport reached %v, want no reassembly: the running pod assembled it", asm.created)
+	}
+}
