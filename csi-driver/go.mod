@@ -11,6 +11,7 @@ require (
 	github.com/simplyblock/atlas v0.0.0-00010101000000-000000000000
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
+	golang.org/x/crypto v0.57.0
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
 	k8s.io/api v0.36.2
@@ -63,7 +64,6 @@ require (
 	go.uber.org/mock v0.5.2 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93 // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect

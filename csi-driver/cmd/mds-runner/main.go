@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -53,6 +54,7 @@ type config struct {
 	memoryLimitMiB         int64
 	vhostNet               bool
 	zeroedLayouts          bool
+	debugSSH               bool
 	bootDeadline           time.Duration
 	shutdownGrace          time.Duration
 
@@ -86,9 +88,13 @@ func parseFlags() config {
 	flag.Int64Var(&c.memoryLimitMiB, "memory-limit-mib", envInt("MDS_MEMORY_LIMIT_MIB"),
 		"Pod memory limit in MiB (downward API limits.memory, divisor 1Mi)")
 	flag.BoolVar(&c.vhostNet, "vhost-net", false, "Use vhost-net for the guest NIC; needs /dev/vhost-net")
-	flag.BoolVar(&c.zeroedLayouts, "zeroed-layouts", false,
+	flag.BoolVar(&c.zeroedLayouts, "zeroed-layouts", true,
 		"Zero and write the blocks of a pNFS write layout at allocation, so data a client wrote "+
-			"survives a server restart that lost its LAYOUTCOMMIT; costs a WRITE ZEROES per allocation")
+			"survives a server restart that lost its LAYOUTCOMMIT; costs a WRITE ZEROES per allocation. "+
+			"--zeroed-layouts=false turns it off")
+	flag.BoolVar(&c.debugSSH, "debug-ssh", false,
+		"Run an SSH server in the guest, reachable with `kubectl exec -it <pod> -- ssh` through a "+
+			"key this runner generates at every boot")
 	flag.StringVar(&c.probeAddress, "probe-address", ":8080", "Address serving /readyz and /healthz")
 	flag.DurationVar(&c.bootDeadline, "boot-deadline", 120*time.Second,
 		"Time the guest has to turn healthy before the pod restarts")
@@ -181,6 +187,14 @@ func run(ctx context.Context, c config) error {
 		Hostname:      c.hostname,
 		QMPSocket:     qmpSocket,
 		ZeroedLayouts: c.zeroedLayouts,
+	}
+	if c.debugSSH {
+		keys, err := runner.PrepareDebugSSH(filepath.Join(c.runDir, "ssh"))
+		if err != nil {
+			return fmt.Errorf("preparing debug SSH: %w", err)
+		}
+		guest.SSHAuthorizedKeysPath = keys
+		klog.Infof("debug SSH is on: kubectl exec -it %s -- ssh", c.hostname)
 	}
 	agentAddress := net.JoinHostPort(plan.Guest.String(), strconv.Itoa(netsetup.AgentPort))
 	binary, err := guest.Binary()

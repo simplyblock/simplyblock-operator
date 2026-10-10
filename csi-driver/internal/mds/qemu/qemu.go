@@ -88,6 +88,11 @@ type Guest struct {
 	// wrote through a layout survives a server restart that lost its
 	// LAYOUTCOMMIT. Each allocation costs a WRITE ZEROES on the volume.
 	ZeroedLayouts bool
+
+	// SSHAuthorizedKeysPath, when set, turns on the guest's debug SSH server
+	// and hands it this authorized_keys file through fw_cfg. Empty, the guest
+	// runs no SSH server.
+	SSHAuthorizedKeysPath string
 }
 
 // Binary returns the QEMU system emulator for the guest's architecture.
@@ -146,11 +151,23 @@ func (g Guest) Args() ([]string, error) {
 		"-netdev", g.netdev(),
 		"-device", "virtio-net-pci,netdev=net0,mac="+g.MAC.String(),
 
+		// The guest reports the pages it frees, and QEMU returns them to the
+		// node, so the pod uses about what the guest does. Under memory
+		// pressure the balloon deflates rather than the guest being killed.
+		"-device", "virtio-balloon-pci,deflate-on-oom=on,free-page-reporting=on",
+
 		"-kernel", g.KernelPath,
 		"-append", g.KernelCmdline(),
 	)
+	if g.SSHAuthorizedKeysPath != "" {
+		args = append(args, "-fw_cfg", "name="+sshKeysFwCfg+",file="+g.SSHAuthorizedKeysPath)
+	}
 	return args, nil
 }
+
+// sshKeysFwCfg is the fw_cfg item the guest reads its debug SSH key from, at
+// /sys/firmware/qemu_fw_cfg/by_name/<this>/raw.
+const sshKeysFwCfg = "opt/io.simplyblock/ssh_authorized_keys"
 
 // layoutHoldSeconds is how long the guest's nfsd holds a client's layouts past
 // its grace period until the client's CSI node has taken one on the layout
@@ -176,6 +193,9 @@ func (g Guest) KernelCmdline() string {
 		"nfsd.pnfs_probe_name=" + export.LayoutProbeName,
 		fmt.Sprintf("nfsd.pnfs_layout_hold=%d", layoutHoldSeconds),
 		"xfs.pnfs_zeroed_layouts=" + boolParam(g.ZeroedLayouts),
+	}
+	if g.SSHAuthorizedKeysPath != "" {
+		parts = append(parts, "simplyblock.debug_ssh=1")
 	}
 	if g.Arch == ArchARM64 {
 		parts = append(parts, "acpi=on")

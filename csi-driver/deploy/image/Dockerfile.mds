@@ -63,7 +63,11 @@ RUN set -eu; \
         arm64) apk add --no-cache qemu-system-aarch64 aavmf ;; \
         *) echo "unsupported architecture ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
-    apk add --no-cache iptables
+    apk add --no-cache iptables bash openssh-client-default
+
+# `kubectl exec -it <pod> -- ssh` reaches the guest when the runner runs with
+# --debug-ssh: the wrapper uses the key the runner generates at every boot.
+COPY --chmod=0755 csi-driver/deploy/image/mds-ssh.sh /usr/local/bin/ssh
 
 COPY --from=guest /vmlinuz /mds/kernel/vmlinuz
 COPY --from=disk /work/disk.qcow2 /mds/disk.qcow2

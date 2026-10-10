@@ -291,3 +291,40 @@ func TestInvalidInputIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// The guest hands the memory it frees back to the node, so the pod's memory
+// request can stay well under its limit; and under memory pressure on the
+// node the balloon gives way rather than the guest being killed.
+func TestGuestHasAFreePageReportingBalloon(t *testing.T) {
+	for _, arch := range []Arch{ArchAMD64, ArchARM64} {
+		args := mustArgs(t, validGuest(arch))
+		if !slices.Contains(values(args, "-device"), "virtio-balloon-pci,deflate-on-oom=on,free-page-reporting=on") {
+			t.Errorf("%s: no free page reporting balloon among %v", arch, values(args, "-device"))
+		}
+	}
+}
+
+// SSH into the guest is a debug feature: off unless a key is given, and then
+// both the key and the switch reach the guest.
+func TestDebugSSHIsOffWithoutAKey(t *testing.T) {
+	g := validGuest(ArchAMD64)
+	if fw := values(mustArgs(t, g), "-fw_cfg"); len(fw) != 0 {
+		t.Errorf("fw_cfg items without debug SSH: %v", fw)
+	}
+	if strings.Contains(g.KernelCmdline(), "simplyblock.debug_ssh") {
+		t.Errorf("cmdline %q turns SSH on without a key", g.KernelCmdline())
+	}
+}
+
+func TestDebugSSHHandsTheKeyToTheGuestAndTurnsItOn(t *testing.T) {
+	g := validGuest(ArchAMD64)
+	g.SSHAuthorizedKeysPath = "/run/mds/ssh/authorized_keys"
+	fw := values(mustArgs(t, g), "-fw_cfg")
+	want := "name=opt/io.simplyblock/ssh_authorized_keys,file=/run/mds/ssh/authorized_keys"
+	if !slices.Equal(fw, []string{want}) {
+		t.Errorf("fw_cfg = %v, want [%s]", fw, want)
+	}
+	if !slices.Contains(strings.Fields(g.KernelCmdline()), "simplyblock.debug_ssh=1") {
+		t.Errorf("cmdline %q does not turn SSH on", g.KernelCmdline())
+	}
+}
