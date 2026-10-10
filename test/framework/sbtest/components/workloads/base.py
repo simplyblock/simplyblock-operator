@@ -10,6 +10,7 @@ therefore a new layout, never a new way of driving fio or of leaving evidence be
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import time
 from typing import Any
@@ -17,6 +18,9 @@ from typing import Any
 from ...core import Component, RunContext
 from .. import kube
 from . import fio
+
+#: How many fio instances are collected at once.
+COLLECT_PARALLEL = 8
 
 
 class FioWorkload(Component):
@@ -160,8 +164,14 @@ class FioWorkload(Component):
     def collect(self, ctx: RunContext) -> None:
         ns = self.opt("namespace")
         migs = ctx.shared.get("migrations") or []
-        for inst in self._instances:
-            fio.collect_instance(ctx, ns, inst, migs)
+        # Each instance is a few kubectl calls of its own, and one after another they took
+        # 40-47 s for 16 instances. In parallel, bounded so the API server is not flooded.
+        # An instance's failure still surfaces after the others have been collected.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=COLLECT_PARALLEL) as pool:
+            futures = [pool.submit(fio.collect_instance, ctx, ns, inst, migs)
+                       for inst in self._instances]
+        for future in futures:
+            future.result()
         self.after_collect(ctx)
         ctx.log.info(f"{self.name}: collected {len(self._instances)} fio instance(s) from "
                      f"{len(self._pods)} pod(s)")

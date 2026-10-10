@@ -23,6 +23,7 @@ workload.pnfs's, which publishes them once its pods run.
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import random
 import threading
@@ -130,7 +131,7 @@ class MetadataWorkload(Component):
             "verify_interval_s": 300.0,  # 0 checks only once, after the workers stop
             "quiet_tail_s": 120.0,       # the workers stop this long before the run ends
             "manifest_interval_s": 30.0,
-            "pause_timeout_s": 120.0,    # for a worker to hold still for a check
+            "pause_timeout_s": 30.0,     # for a worker to hold still for a check
             "settle_s": 2.0,             # between the pause and the listing
             "ready_timeout_s": 300.0,
             "image": FIO_IMAGE,
@@ -150,6 +151,9 @@ class MetadataWorkload(Component):
         #: Why a worker's pods were never released to start, by worker pod.
         self._start_errors: dict[str, str] = {}
         self._releases: list[threading.Thread] = []
+        #: The release thread of each worker, by worker pod: while it runs, a worker without
+        #: an op log is still on its way, not one whose agent never ran.
+        self._release_of: dict[str, threading.Thread] = {}
 
     # ── the run ──────────────────────────────────────────────────────────────────────
 
@@ -183,6 +187,7 @@ class MetadataWorkload(Component):
             release = threading.Thread(target=self._release, args=(ctx, w),
                                        name=f"metadata-release-{a.index}", daemon=True)
             self._releases.append(release)
+            self._release_of[w.pod] = release
             release.start()
         ctx.log.info(f"{self.name}: seed {self._seed}, {len(plan)} worker(s) at "
                      f"{self.opt('rate')} op/s for {span:.0f}s")
@@ -238,6 +243,8 @@ class MetadataWorkload(Component):
                                   "missing": [], "extra": [], "mismatched": [], "error": ""}
         with self._lock:
             not_started = self._start_errors.get(w.pod, "")
+        if not not_started and not self._agent_ran(w):
+            not_started = self._agent_never_ran(ctx, w)
         if not_started:
             record["error"] = f"the worker never started: {not_started}"
             with self._lock:
@@ -281,6 +288,22 @@ class MetadataWorkload(Component):
                                                      or record["mismatched"]) else "DIFFERS")
         ctx.log.info(f"{self.name}: {w.pod} checked from {w.verifier}: {state}")
 
+    def _agent_ran(self, w: _Worker) -> bool:
+        """Whether the worker's agent has written its op log, or may still be about to."""
+        release = self._release_of.get(w.pod)
+        if release is not None and release.is_alive():
+            return True
+        cp = kube.run(["-n", str(self.opt("namespace")), "exec", w.pod, "--", "test", "-f",
+                       f"{LOGDIR}/ops.log"], check=False, timeout=30)
+        return cp.returncode == 0
+
+    def _agent_never_ran(self, ctx: RunContext, w: _Worker) -> str:
+        """Record a released worker with no op log as never started. Waiting for it to
+        pause would only wait out pause_timeout_s, at every check (pnfs-1791616895)."""
+        why = f"released, but its agent never wrote {LOGDIR}/ops.log"
+        self._not_started(ctx, w, why)
+        return why
+
     def stop(self, ctx: RunContext) -> None:
         self._stop.set()
         if self._loop:
@@ -288,29 +311,13 @@ class MetadataWorkload(Component):
             self._loop = None
 
     def collect(self, ctx: RunContext) -> None:
-        ns = str(self.opt("namespace"))
-        collect_errors: dict[str, str] = {}
-        for w in self._workers:
-            # The worker stops by itself a quiet tail before the end. The stop file covers a
-            # run cut short.
-            try:
-                kube.exec_sh(ns, w.pod, f"touch {LOGDIR}/stop", timeout=30)
-            except Exception as e:  # noqa: BLE001
-                ctx.log.warn(f"{self.name}: could not stop {w.pod}: {e}")
-            self._check(ctx, w)
-            cp = kube.run(["-n", ns, "exec", w.pod, "--", "cat", f"{LOGDIR}/ops.log"],
-                          check=False, timeout=300)
-            if cp.returncode != 0:
-                # No file rather than an empty one: an empty log reads as a worker that never
-                # failed, and the error says what is missing.
-                collect_errors[w.pod] = (f"reading {LOGDIR}/ops.log failed: "
-                                         f"{cp.stderr.strip() or cp.returncode}")
-                ctx.log.warn(f"{self.name}: {w.pod}: {collect_errors[w.pod]}")
-                continue
-            with open(ctx.path(f"metadata-{w.pod}.log"), "w") as fh:
-                fh.write(cp.stdout or "")
+        # Each worker's final check and collection is independent, and one after another
+        # they added up to minutes when a worker did not answer.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(self._workers))) as pool:
+            errors = list(pool.map(lambda w: self._collect_worker(ctx, w), self._workers))
+        collect_errors = {w.pod: e for w, e in zip(self._workers, errors, strict=True) if e}
         with self._lock:
-            checks = list(self._checks)
+            checks = sorted(self._checks, key=lambda c: (c["ts"], c["worker"]))
             start_errors = dict(self._start_errors)
         stop_at = _iso(datetime.fromtimestamp(self._stop_at, tz=UTC)) if self._stop_at else None
         ctx.save_json("metadata.json", {"seed": self._seed, "workers": [{
@@ -323,6 +330,36 @@ class MetadataWorkload(Component):
         bad = sum(1 for c in checks if c["missing"] or c["extra"] or c["mismatched"])
         ctx.log.info(f"{self.name}: {len(checks)} check(s), {bad} with a difference "
                      f"(seed {self._seed})")
+
+    def _collect_worker(self, ctx: RunContext, w: _Worker) -> str:
+        """Stop one worker, check it once more, and collect its op log and its pod's own
+        log. Returns why the op log could not be read, or an empty string."""
+        ns = str(self.opt("namespace"))
+        # The worker stops by itself a quiet tail before the end. The stop file covers a run
+        # cut short.
+        try:
+            kube.exec_sh(ns, w.pod, f"touch {LOGDIR}/stop", timeout=30)
+        except Exception as e:  # noqa: BLE001
+            ctx.log.warn(f"{self.name}: could not stop {w.pod}: {e}")
+        self._check(ctx, w)
+        # The pod's own log carries the agent's traceback when it died, which nothing else
+        # in the run records.
+        pod_log = kube.run(["-n", ns, "logs", w.pod, "--all-containers"], check=False,
+                           timeout=120)
+        if pod_log.stdout:
+            with open(ctx.path(f"metadata-{w.pod}-pod.log"), "w") as fh:
+                fh.write(pod_log.stdout)
+        cp = kube.run(["-n", ns, "exec", w.pod, "--", "cat", f"{LOGDIR}/ops.log"],
+                      check=False, timeout=300)
+        if cp.returncode != 0:
+            # No file rather than an empty one: an empty log reads as a worker that never
+            # failed, and the error says what is missing.
+            error = f"reading {LOGDIR}/ops.log failed: {cp.stderr.strip() or cp.returncode}"
+            ctx.log.warn(f"{self.name}: {w.pod}: {error}")
+            return error
+        with open(ctx.path(f"metadata-{w.pod}.log"), "w") as fh:
+            fh.write(cp.stdout or "")
+        return ""
 
     def teardown(self, ctx: RunContext) -> None:
         self._stop.set()

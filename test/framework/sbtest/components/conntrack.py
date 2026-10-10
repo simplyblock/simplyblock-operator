@@ -20,6 +20,7 @@ from __future__ import annotations
 import concurrent.futures
 import re
 import threading
+import time
 from datetime import datetime
 from typing import Any
 
@@ -31,6 +32,9 @@ NFS_PORT = 2049
 
 #: What the helper prints when neither conntrack(8) nor the procfs table can be read.
 UNAVAILABLE = "SBTEST-CONNTRACK-UNAVAILABLE"
+
+#: A helper is ready once it has either reader _READ uses.
+_HELPER_READY = "command -v conntrack >/dev/null 2>&1 || test -r /proc/net/nf_conntrack"
 
 _CSI_NODE_PREFIX = "simplyblock-csi-node-"
 
@@ -106,6 +110,9 @@ class ConntrackSampler(Component):
             "timeout_s": 20,
             "ttl_s": 86400,          # the helpers end by themselves after this
             "image": "alpine:3.20",
+            # How long sampling waits for the helpers to install conntrack-tools. Sampled
+            # before that, every node reads as unreadable for no reason of its own.
+            "helper_ready_s": 120.0,
         }
 
     def __init__(self, **options: Any) -> None:
@@ -181,6 +188,10 @@ class ConntrackSampler(Component):
                     ctx.log.warn(f"{self.name}: cannot read {node}'s connection tracking "
                                  "table; its flows are not recorded")
                 continue
+            if node in self._unreadable:
+                self._unreadable.discard(node)
+                ctx.log.info(f"{self.name}: {node}'s connection tracking table is readable "
+                             "again")
             flows = parse_conntrack(text, ts, node)
             batch.extend(flows or [ConntrackSample(ts=ts, node=node, state="NONE")])
         with self._lock:
@@ -192,6 +203,7 @@ class ConntrackSampler(Component):
         interval = float(self.opt("interval_s"))
 
         def loop() -> None:
+            self._wait_for_helpers(ctx)
             while not self._stop.is_set() and not ctx.stopping.is_set():
                 self._sample(ctx)
                 self._stop.wait(interval)
@@ -199,6 +211,25 @@ class ConntrackSampler(Component):
         self._thread = threading.Thread(target=loop, name="nfs-conntrack", daemon=True)
         self._thread.start()
         ctx.log.info(f"{self.name}: sampling every {interval}s")
+
+    def _wait_for_helpers(self, ctx: RunContext) -> list[str]:
+        """Wait, up to helper_ready_s, for each helper to have a way to read its table, and
+        return the nodes whose helper does. Sampling starts either way: a helper that never
+        gets there is reported by the first sample, as before."""
+        deadline = time.monotonic() + float(self.opt("helper_ready_s"))
+        pending = dict(self._helpers)
+        while pending and not self._stop.is_set():
+            pending = {node: pod for node, pod in pending.items()
+                       if kube.run(["-n", str(self.opt("namespace")), "exec", pod, "--", "sh",
+                                    "-c", _HELPER_READY], check=False,
+                                   timeout=int(self.opt("timeout_s"))).returncode != 0}
+            if not pending or time.monotonic() >= deadline:
+                break
+            time.sleep(2)
+        if pending:
+            ctx.log.warn(f"{self.name}: helper(s) on {', '.join(sorted(pending))} not ready "
+                         f"within {self.opt('helper_ready_s')}s; sampling anyway")
+        return sorted(set(self._helpers) - set(pending))
 
     def stop(self, ctx: RunContext) -> None:
         self._stop.set()
