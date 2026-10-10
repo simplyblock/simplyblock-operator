@@ -35,6 +35,11 @@ service ExportService {
   // that could repair what it finds broken would be a second, undeclared path
   // to the same mutations CreateExport already owns.
   rpc CheckExport(CheckExportRequest) returns (CheckExportResponse);
+
+  // Reports what a byte range of one file in an export is made of: data,
+  // unwritten, delalloc, or hole. Read-only, for diagnosing a range that read
+  // back as zeros.
+  rpc FileExtents(FileExtentsRequest) returns (FileExtentsResponse);
 }
 
 // ExportSpec is one export: which device, where it goes, and who may mount it.
@@ -134,4 +139,28 @@ message CheckExportResponse {
   // actually being served. reason says which.
   bool healthy = 1;
   string reason = 2;
+}
+
+message FileExtentsRequest {
+  // The export's path, as in ExportSpec.path.
+  string export_path = 1;
+  // A file directly inside the export, by name.
+  string file = 2;
+  uint64 offset = 3;
+  uint64 length = 4;
+}
+
+message FileExtentsResponse {
+  // The file's size as the server knows it.
+  uint64 size = 1;
+  repeated ExtentPiece pieces = 2;
+}
+
+message ExtentPiece {
+  uint64 offset = 1;
+  uint64 length = 2;
+  // written, unwritten, delalloc, or hole.
+  string kind = 3;
+  // Device offset of the first byte of the piece. Zero for a hole or delalloc.
+  uint64 physical = 4;
 }

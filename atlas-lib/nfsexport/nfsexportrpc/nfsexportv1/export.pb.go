@@ -634,6 +634,199 @@ func (x *CheckExportResponse) GetReason() string {
 	return ""
 }
 
+type FileExtentsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The export's path, as in ExportSpec.path.
+	ExportPath string `protobuf:"bytes,1,opt,name=export_path,json=exportPath,proto3" json:"export_path,omitempty"`
+	// A file directly inside the export, by name.
+	File          string `protobuf:"bytes,2,opt,name=file,proto3" json:"file,omitempty"`
+	Offset        uint64 `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
+	Length        uint64 `protobuf:"varint,4,opt,name=length,proto3" json:"length,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FileExtentsRequest) Reset() {
+	*x = FileExtentsRequest{}
+	mi := &file_export_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileExtentsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileExtentsRequest) ProtoMessage() {}
+
+func (x *FileExtentsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_export_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileExtentsRequest.ProtoReflect.Descriptor instead.
+func (*FileExtentsRequest) Descriptor() ([]byte, []int) {
+	return file_export_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *FileExtentsRequest) GetExportPath() string {
+	if x != nil {
+		return x.ExportPath
+	}
+	return ""
+}
+
+func (x *FileExtentsRequest) GetFile() string {
+	if x != nil {
+		return x.File
+	}
+	return ""
+}
+
+func (x *FileExtentsRequest) GetOffset() uint64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *FileExtentsRequest) GetLength() uint64 {
+	if x != nil {
+		return x.Length
+	}
+	return 0
+}
+
+type FileExtentsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The file's size as the server knows it.
+	Size          uint64         `protobuf:"varint,1,opt,name=size,proto3" json:"size,omitempty"`
+	Pieces        []*ExtentPiece `protobuf:"bytes,2,rep,name=pieces,proto3" json:"pieces,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FileExtentsResponse) Reset() {
+	*x = FileExtentsResponse{}
+	mi := &file_export_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileExtentsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileExtentsResponse) ProtoMessage() {}
+
+func (x *FileExtentsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_export_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileExtentsResponse.ProtoReflect.Descriptor instead.
+func (*FileExtentsResponse) Descriptor() ([]byte, []int) {
+	return file_export_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *FileExtentsResponse) GetSize() uint64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *FileExtentsResponse) GetPieces() []*ExtentPiece {
+	if x != nil {
+		return x.Pieces
+	}
+	return nil
+}
+
+type ExtentPiece struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Offset uint64                 `protobuf:"varint,1,opt,name=offset,proto3" json:"offset,omitempty"`
+	Length uint64                 `protobuf:"varint,2,opt,name=length,proto3" json:"length,omitempty"`
+	// written, unwritten, delalloc, or hole.
+	Kind string `protobuf:"bytes,3,opt,name=kind,proto3" json:"kind,omitempty"`
+	// Device offset of the first byte of the piece. Zero for a hole or delalloc.
+	Physical      uint64 `protobuf:"varint,4,opt,name=physical,proto3" json:"physical,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExtentPiece) Reset() {
+	*x = ExtentPiece{}
+	mi := &file_export_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExtentPiece) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExtentPiece) ProtoMessage() {}
+
+func (x *ExtentPiece) ProtoReflect() protoreflect.Message {
+	mi := &file_export_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExtentPiece.ProtoReflect.Descriptor instead.
+func (*ExtentPiece) Descriptor() ([]byte, []int) {
+	return file_export_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ExtentPiece) GetOffset() uint64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *ExtentPiece) GetLength() uint64 {
+	if x != nil {
+		return x.Length
+	}
+	return 0
+}
+
+func (x *ExtentPiece) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *ExtentPiece) GetPhysical() uint64 {
+	if x != nil {
+		return x.Physical
+	}
+	return 0
+}
+
 var File_export_proto protoreflect.FileDescriptor
 
 const file_export_proto_rawDesc = "" +
@@ -688,11 +881,26 @@ const file_export_proto_rawDesc = "" +
 	"\x04spec\x18\x01 \x01(\v2\x1e.atlas.nfsexport.v1.ExportSpecR\x04spec\"G\n" +
 	"\x13CheckExportResponse\x12\x18\n" +
 	"\ahealthy\x18\x01 \x01(\bR\ahealthy\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason2\xb5\x02\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"y\n" +
+	"\x12FileExtentsRequest\x12\x1f\n" +
+	"\vexport_path\x18\x01 \x01(\tR\n" +
+	"exportPath\x12\x12\n" +
+	"\x04file\x18\x02 \x01(\tR\x04file\x12\x16\n" +
+	"\x06offset\x18\x03 \x01(\x04R\x06offset\x12\x16\n" +
+	"\x06length\x18\x04 \x01(\x04R\x06length\"b\n" +
+	"\x13FileExtentsResponse\x12\x12\n" +
+	"\x04size\x18\x01 \x01(\x04R\x04size\x127\n" +
+	"\x06pieces\x18\x02 \x03(\v2\x1f.atlas.nfsexport.v1.ExtentPieceR\x06pieces\"m\n" +
+	"\vExtentPiece\x12\x16\n" +
+	"\x06offset\x18\x01 \x01(\x04R\x06offset\x12\x16\n" +
+	"\x06length\x18\x02 \x01(\x04R\x06length\x12\x12\n" +
+	"\x04kind\x18\x03 \x01(\tR\x04kind\x12\x1a\n" +
+	"\bphysical\x18\x04 \x01(\x04R\bphysical2\x95\x03\n" +
 	"\rExportService\x12a\n" +
 	"\fCreateExport\x12'.atlas.nfsexport.v1.CreateExportRequest\x1a(.atlas.nfsexport.v1.CreateExportResponse\x12a\n" +
 	"\fDeleteExport\x12'.atlas.nfsexport.v1.DeleteExportRequest\x1a(.atlas.nfsexport.v1.DeleteExportResponse\x12^\n" +
-	"\vCheckExport\x12&.atlas.nfsexport.v1.CheckExportRequest\x1a'.atlas.nfsexport.v1.CheckExportResponseBMZKgithub.com/simplyblock/atlas/nfsexport/nfsexportrpc/nfsexportv1;nfsexportv1b\x06proto3"
+	"\vCheckExport\x12&.atlas.nfsexport.v1.CheckExportRequest\x1a'.atlas.nfsexport.v1.CheckExportResponse\x12^\n" +
+	"\vFileExtents\x12&.atlas.nfsexport.v1.FileExtentsRequest\x1a'.atlas.nfsexport.v1.FileExtentsResponseBMZKgithub.com/simplyblock/atlas/nfsexport/nfsexportrpc/nfsexportv1;nfsexportv1b\x06proto3"
 
 var (
 	file_export_proto_rawDescOnce sync.Once
@@ -706,7 +914,7 @@ func file_export_proto_rawDescGZIP() []byte {
 	return file_export_proto_rawDescData
 }
 
-var file_export_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_export_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_export_proto_goTypes = []any{
 	(*ExportSpec)(nil),           // 0: atlas.nfsexport.v1.ExportSpec
 	(*Connection)(nil),           // 1: atlas.nfsexport.v1.Connection
@@ -717,24 +925,30 @@ var file_export_proto_goTypes = []any{
 	(*DeleteExportResponse)(nil), // 6: atlas.nfsexport.v1.DeleteExportResponse
 	(*CheckExportRequest)(nil),   // 7: atlas.nfsexport.v1.CheckExportRequest
 	(*CheckExportResponse)(nil),  // 8: atlas.nfsexport.v1.CheckExportResponse
+	(*FileExtentsRequest)(nil),   // 9: atlas.nfsexport.v1.FileExtentsRequest
+	(*FileExtentsResponse)(nil),  // 10: atlas.nfsexport.v1.FileExtentsResponse
+	(*ExtentPiece)(nil),          // 11: atlas.nfsexport.v1.ExtentPiece
 }
 var file_export_proto_depIdxs = []int32{
-	1, // 0: atlas.nfsexport.v1.ExportSpec.connection:type_name -> atlas.nfsexport.v1.Connection
-	2, // 1: atlas.nfsexport.v1.Connection.endpoints:type_name -> atlas.nfsexport.v1.Endpoint
-	0, // 2: atlas.nfsexport.v1.CreateExportRequest.spec:type_name -> atlas.nfsexport.v1.ExportSpec
-	0, // 3: atlas.nfsexport.v1.DeleteExportRequest.spec:type_name -> atlas.nfsexport.v1.ExportSpec
-	0, // 4: atlas.nfsexport.v1.CheckExportRequest.spec:type_name -> atlas.nfsexport.v1.ExportSpec
-	3, // 5: atlas.nfsexport.v1.ExportService.CreateExport:input_type -> atlas.nfsexport.v1.CreateExportRequest
-	5, // 6: atlas.nfsexport.v1.ExportService.DeleteExport:input_type -> atlas.nfsexport.v1.DeleteExportRequest
-	7, // 7: atlas.nfsexport.v1.ExportService.CheckExport:input_type -> atlas.nfsexport.v1.CheckExportRequest
-	4, // 8: atlas.nfsexport.v1.ExportService.CreateExport:output_type -> atlas.nfsexport.v1.CreateExportResponse
-	6, // 9: atlas.nfsexport.v1.ExportService.DeleteExport:output_type -> atlas.nfsexport.v1.DeleteExportResponse
-	8, // 10: atlas.nfsexport.v1.ExportService.CheckExport:output_type -> atlas.nfsexport.v1.CheckExportResponse
-	8, // [8:11] is the sub-list for method output_type
-	5, // [5:8] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	1,  // 0: atlas.nfsexport.v1.ExportSpec.connection:type_name -> atlas.nfsexport.v1.Connection
+	2,  // 1: atlas.nfsexport.v1.Connection.endpoints:type_name -> atlas.nfsexport.v1.Endpoint
+	0,  // 2: atlas.nfsexport.v1.CreateExportRequest.spec:type_name -> atlas.nfsexport.v1.ExportSpec
+	0,  // 3: atlas.nfsexport.v1.DeleteExportRequest.spec:type_name -> atlas.nfsexport.v1.ExportSpec
+	0,  // 4: atlas.nfsexport.v1.CheckExportRequest.spec:type_name -> atlas.nfsexport.v1.ExportSpec
+	11, // 5: atlas.nfsexport.v1.FileExtentsResponse.pieces:type_name -> atlas.nfsexport.v1.ExtentPiece
+	3,  // 6: atlas.nfsexport.v1.ExportService.CreateExport:input_type -> atlas.nfsexport.v1.CreateExportRequest
+	5,  // 7: atlas.nfsexport.v1.ExportService.DeleteExport:input_type -> atlas.nfsexport.v1.DeleteExportRequest
+	7,  // 8: atlas.nfsexport.v1.ExportService.CheckExport:input_type -> atlas.nfsexport.v1.CheckExportRequest
+	9,  // 9: atlas.nfsexport.v1.ExportService.FileExtents:input_type -> atlas.nfsexport.v1.FileExtentsRequest
+	4,  // 10: atlas.nfsexport.v1.ExportService.CreateExport:output_type -> atlas.nfsexport.v1.CreateExportResponse
+	6,  // 11: atlas.nfsexport.v1.ExportService.DeleteExport:output_type -> atlas.nfsexport.v1.DeleteExportResponse
+	8,  // 12: atlas.nfsexport.v1.ExportService.CheckExport:output_type -> atlas.nfsexport.v1.CheckExportResponse
+	10, // 13: atlas.nfsexport.v1.ExportService.FileExtents:output_type -> atlas.nfsexport.v1.FileExtentsResponse
+	10, // [10:14] is the sub-list for method output_type
+	6,  // [6:10] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_export_proto_init() }
@@ -749,7 +963,7 @@ func file_export_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_export_proto_rawDesc), len(file_export_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

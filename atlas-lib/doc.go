@@ -38,6 +38,8 @@
 //	kube            Map a logical volume to the Kubernetes objects representing it.
 //	controlplane    Client for the simplyblock control-plane API.
 //	nfsexport       Publish a pNFS export on its metadata-server host.
+//	fiemap          What a byte range of a file is made of on disk: data,
+//	                unwritten, delalloc, or hole.
 //	nfsclient       What the kernel's NFS client says about its mounts:
 //	                per-operation counts, layout types, and reconnects.
 //	link            gRPC between the operator and the CSI driver, over

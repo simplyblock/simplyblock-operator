@@ -34,6 +34,7 @@ const (
 	ExportService_CreateExport_FullMethodName = "/atlas.nfsexport.v1.ExportService/CreateExport"
 	ExportService_DeleteExport_FullMethodName = "/atlas.nfsexport.v1.ExportService/DeleteExport"
 	ExportService_CheckExport_FullMethodName  = "/atlas.nfsexport.v1.ExportService/CheckExport"
+	ExportService_FileExtents_FullMethodName  = "/atlas.nfsexport.v1.ExportService/FileExtents"
 )
 
 // ExportServiceClient is the client API for ExportService service.
@@ -58,6 +59,10 @@ type ExportServiceClient interface {
 	// that could repair what it finds broken would be a second, undeclared path
 	// to the same mutations CreateExport already owns.
 	CheckExport(ctx context.Context, in *CheckExportRequest, opts ...grpc.CallOption) (*CheckExportResponse, error)
+	// Reports what a byte range of one file in an export is made of: data,
+	// unwritten, delalloc, or hole. Read-only, for diagnosing a range that read
+	// back as zeros.
+	FileExtents(ctx context.Context, in *FileExtentsRequest, opts ...grpc.CallOption) (*FileExtentsResponse, error)
 }
 
 type exportServiceClient struct {
@@ -98,6 +103,16 @@ func (c *exportServiceClient) CheckExport(ctx context.Context, in *CheckExportRe
 	return out, nil
 }
 
+func (c *exportServiceClient) FileExtents(ctx context.Context, in *FileExtentsRequest, opts ...grpc.CallOption) (*FileExtentsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FileExtentsResponse)
+	err := c.cc.Invoke(ctx, ExportService_FileExtents_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ExportServiceServer is the server API for ExportService service.
 // All implementations must embed UnimplementedExportServiceServer
 // for forward compatibility.
@@ -120,6 +135,10 @@ type ExportServiceServer interface {
 	// that could repair what it finds broken would be a second, undeclared path
 	// to the same mutations CreateExport already owns.
 	CheckExport(context.Context, *CheckExportRequest) (*CheckExportResponse, error)
+	// Reports what a byte range of one file in an export is made of: data,
+	// unwritten, delalloc, or hole. Read-only, for diagnosing a range that read
+	// back as zeros.
+	FileExtents(context.Context, *FileExtentsRequest) (*FileExtentsResponse, error)
 	mustEmbedUnimplementedExportServiceServer()
 }
 
@@ -138,6 +157,9 @@ func (UnimplementedExportServiceServer) DeleteExport(context.Context, *DeleteExp
 }
 func (UnimplementedExportServiceServer) CheckExport(context.Context, *CheckExportRequest) (*CheckExportResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CheckExport not implemented")
+}
+func (UnimplementedExportServiceServer) FileExtents(context.Context, *FileExtentsRequest) (*FileExtentsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method FileExtents not implemented")
 }
 func (UnimplementedExportServiceServer) mustEmbedUnimplementedExportServiceServer() {}
 func (UnimplementedExportServiceServer) testEmbeddedByValue()                       {}
@@ -214,6 +236,24 @@ func _ExportService_CheckExport_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ExportService_FileExtents_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FileExtentsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ExportServiceServer).FileExtents(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ExportService_FileExtents_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ExportServiceServer).FileExtents(ctx, req.(*FileExtentsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ExportService_ServiceDesc is the grpc.ServiceDesc for ExportService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -232,6 +272,10 @@ var ExportService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CheckExport",
 			Handler:    _ExportService_CheckExport_Handler,
+		},
+		{
+			MethodName: "FileExtents",
+			Handler:    _ExportService_FileExtents_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

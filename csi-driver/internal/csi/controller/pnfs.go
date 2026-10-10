@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/simplyblock/atlas/lvol"
+	export "github.com/simplyblock/atlas/nfsexport"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
@@ -83,7 +84,7 @@ func isPNFSRequest(caps []*csi.VolumeCapability) (bool, error) {
 // exportRootDir is where every export is mounted on its host, and must match
 // the operator's exportRoot: the operator mounts the directory into the node
 // plugin, and a path outside it would be one the host never sees.
-const exportRootDir = "/var/lib/simplyblock/exports"
+const exportRootDir = export.ExportsRoot
 
 // exportPathFor builds the server-side mount point. It carries the namespace
 // and a suffix of the volume id, because a PVC name is unique only within a

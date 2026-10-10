@@ -122,6 +122,9 @@ func envInt(name string) int64 {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "extents" {
+		os.Exit(runExtents(os.Args[2:]))
+	}
 	c := parseFlags()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()

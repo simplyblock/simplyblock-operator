@@ -12,6 +12,7 @@ package nfsexportrpc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"reflect"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/simplyblock/atlas/errs"
+	"github.com/simplyblock/atlas/fiemap"
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nfsexport"
 	"github.com/simplyblock/atlas/ptr"
@@ -239,5 +241,89 @@ func TestCapabilityNameIsStable(t *testing.T) {
 	caps := Capabilities()
 	if len(caps) != 1 || caps[0] != "atlas.nfsexport.v1.ExportService" {
 		t.Errorf("capabilities = %v, want the ExportService name", caps)
+	}
+}
+
+// fakeExtents answers FileExtents with a fixed map and records what it was asked.
+type fakeExtents struct {
+	asked []string
+	err   error
+}
+
+func (f *fakeExtents) FileExtents(
+	_ context.Context, exportPath, file string, offset, length uint64,
+) (nfsexport.FileExtents, error) {
+	f.asked = append(f.asked, exportPath+"|"+file)
+	if f.err != nil {
+		return nfsexport.FileExtents{}, f.err
+	}
+	return nfsexport.FileExtents{Size: 3 * 1 << 20, Pieces: []fiemap.Piece{
+		{Offset: offset, Length: length / 2, Kind: fiemap.Written, Physical: 4096},
+		{Offset: offset + length/2, Length: length - length/2, Kind: fiemap.Hole},
+	}}, nil
+}
+
+func serveWith(t *testing.T, opts ...Option) *Client {
+	t.Helper()
+	srv, err := NewServer(&recordingAssembler{}, opts...)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	lis := bufconn.Listen(1 << 20)
+	grpcServer := grpc.NewServer()
+	srv.Register(grpcServer)
+	go func() { _ = grpcServer.Serve(lis) }()
+	t.Cleanup(grpcServer.Stop)
+	conn, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dialing: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return Remote(conn)
+}
+
+// The map crosses the wire intact: size, and every piece's kind and offsets.
+func TestFileExtentsRoundTripsTheMap(t *testing.T) {
+	reader := &fakeExtents{}
+	client := serveWith(t, WithExtentReader(reader))
+
+	got, err := client.FileExtents(context.Background(), "/var/lib/simplyblock/exports/a", "f.r1", 1<<20, 8192)
+	if err != nil {
+		t.Fatalf("FileExtents: %v", err)
+	}
+	want := nfsexport.FileExtents{Size: 3 * 1 << 20, Pieces: []fiemap.Piece{
+		{Offset: 1 << 20, Length: 4096, Kind: fiemap.Written, Physical: 4096},
+		{Offset: 1<<20 + 4096, Length: 4096, Kind: fiemap.Hole},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("FileExtents = %+v, want %+v", got, want)
+	}
+	if !reflect.DeepEqual(reader.asked, []string{"/var/lib/simplyblock/exports/a|f.r1"}) {
+		t.Errorf("reader asked %v", reader.asked)
+	}
+}
+
+// A server built without a reader says so, rather than answering with an empty map
+// that would read as "nothing there."
+func TestFileExtentsWithoutAReaderIsUnimplemented(t *testing.T) {
+	client := serveWith(t)
+	_, err := client.FileExtents(context.Background(), "/x", "f", 0, 4096)
+	if err == nil || !strings.Contains(err.Error(), "Unimplemented") {
+		t.Errorf("FileExtents without a reader = %v, want Unimplemented", err)
+	}
+}
+
+// A refused path is an error carrying its reason, never an empty map that would
+// read as "nothing there."
+func TestARefusedFileArrivesWithItsReason(t *testing.T) {
+	client := serveWith(t, WithExtentReader(&fakeExtents{
+		err: fmt.Errorf("%w: /etc is not an export", nfsexport.ErrInvalidSpec)}))
+	got, err := client.FileExtents(context.Background(), "/etc", "passwd", 0, 4096)
+	if err == nil || !strings.Contains(err.Error(), "/etc is not an export") {
+		t.Errorf("FileExtents of a refused path = %+v, %v; want the reason", got, err)
 	}
 }

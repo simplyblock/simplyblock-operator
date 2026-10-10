@@ -33,6 +33,10 @@ const NFSDProcDir = "/proc/fs/nfsd"
 // needs to hand out block layouts.
 const FSType = "xfs"
 
+// ExportsRoot is the directory every export is mounted directly under on its
+// metadata server, and the only place the extent diagnostic reads.
+const ExportsRoot = "/var/lib/simplyblock/exports"
+
 // LayoutProbeName is the file a pNFS client's node agent writes in an export to
 // take the first layout itself. The client resolves a layout's device in the
 // mount namespace of the task that asked for it, and only the agent has the

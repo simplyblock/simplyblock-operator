@@ -29,6 +29,7 @@ import (
 	"k8s.io/klog"
 	mountutils "k8s.io/mount-utils"
 
+	atlasexport "github.com/simplyblock/atlas/nfsexport"
 	"github.com/simplyblock/atlas/nfsexport/nfsexportrpc"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/storage"
@@ -71,7 +72,8 @@ func run(ctx context.Context, listen, stateDir string, watchdog time.Duration) e
 	if err != nil {
 		return err
 	}
-	exports, err := nfsexportrpc.NewServer(nfsexport.WithNFSD(assembler))
+	exports, err := nfsexportrpc.NewServer(nfsexport.WithNFSD(assembler),
+		nfsexportrpc.WithExtentReader(&atlasexport.ExtentReader{Root: atlasexport.ExportsRoot}))
 	if err != nil {
 		return err
 	}
