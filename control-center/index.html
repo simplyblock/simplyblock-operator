@@ -508,12 +508,15 @@ button.rbit{cursor:pointer}button.rbit:hover{border-color:var(--accent)}.rbit.on
 .schedrow.rgrid>*{min-width:0}
 .schedrow.rgrid>.finput,.schedrow.rgrid>select.finput,.schedrow.rgrid>input.finput{width:100%;min-width:0;flex:none}
 .schedrow.rgrid.head{align-items:end;margin-bottom:4px}
-.schedrow.rgrid.head .sl{white-space:normal;overflow-wrap:anywhere;line-height:1.25}
+.schedrow.rgrid.head .sl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25}
 .rocell{display:block;font-size:11.5px;line-height:1.35;padding:4px 2px;color:var(--text);overflow-wrap:anywhere}
 .rmulti{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
-.rmulti>.radd{flex:1 1 96px;min-width:96px;width:auto}
+.rmulti>.radd{flex:none;width:auto;max-width:130px;height:22px;padding:0 4px;font-size:10.5px;border-style:dashed;color:var(--dim)}
+.rmulti .chip{padding:1px 4px 1px 6px}
+.rempty{font-size:10.5px;color:var(--dim2);white-space:nowrap}
 .rmove{display:flex;gap:2px}
-.schedrow.rgrid>.rowact{width:100%;justify-content:center}
+.schedrow.rgrid>.rowact{width:100%;justify-content:center;height:22px;padding:0 6px;font-size:10.5px}
+.rmove .kebab{width:22px;height:22px}
 .rnote{margin:0 0 6px 2px}
 @media(max-width:640px){.modal.wide{width:100%}}
 .chipbox{display:flex;gap:6px;flex-wrap:wrap;align-items:center;border:1px solid var(--line2);border-radius:6px;background:var(--panel2);padding:6px;min-height:40px}

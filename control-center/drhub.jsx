@@ -722,10 +722,10 @@ const proposePathsDialog = plans => ({
 // chosen from what the source site reports, with match counts.
 const TIER_EDITOR_HINT = "Tiers restore in order (↑↓ to reorder); the next starts when every gate of the previous holds. Labels and gates are chosen from what the site reports.";
 const tierCols = (disc, cluster, nss) => [
-  {k: "name", label: "Tier", placeholder: "db", flex: 0.7},
-  {k: "kinds", label: "Resource types", type: "multi", options: RESOURCE_TYPE_OPTIONS, addLabel: "+ type", flex: 1.6},
-  {k: "labels", label: "Labels", type: "multi", options: r => tierLabelOptions(disc, cluster, nss, r), addLabel: "+ label", empty: "no labels reported", flex: 1.8},
-  {k: "ready", label: "Ready when", type: "multi", options: GATE_TYPE_OPTIONS, addLabel: "+ gate", flex: 1.4}
+  {k: "name", label: "Tier", placeholder: "db", flex: 0.6, min: 70},
+  {k: "kinds", label: "Resource types", type: "multi", options: RESOURCE_TYPE_OPTIONS, addLabel: "+ type", flex: 1.5},
+  {k: "labels", label: "Labels", type: "multi", options: r => tierLabelOptions(disc, cluster, nss, r), addLabel: "+ label", empty: "no labels reported", flex: 1.6},
+  {k: "ready", label: "Ready when", type: "multi", options: GATE_TYPE_OPTIONS, addLabel: "+ gate", flex: 1.3}
 ];
 const GATE_TEMPLATES = [{v: "tcp", l: "TCP connect (nc -z)"}, {v: "http", l: "HTTP GET (wget)"}, {v: "custom", l: "custom command"}];
 const gateCols = (disc, cluster, nss, tierNames) => [
@@ -810,9 +810,15 @@ const protectAppDialogDR = (plans, cfg) => ({
       {k: "plan", label: "Protection plan", type: "select", required: true, options: plans.map(p => ({v: p.name, l: p.name})), empty: "Create a protection plan first."},
       {k: "appKind", label: "Application kind", type: "select", required: true, options: [{v: "discovered", l: "discovered — no OCM Placement, protected by namespace + PVC selector"}, {v: "managed", l: "managed — deployed through an OCM Placement"}]},
       {k: "name", label: "Name", type: "text", required: true, placeholder: "shop",
-        validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label: lower-case letters, digits and \"-\"." : x && (apps || []).some(a => a.name === x && a.namespace === (v.namespace || opsNs)) ? `${x} is protected already.` : null},
-      {k: "namespace", label: "Namespace of the ProtectedApplication", type: discovered ? "select" : "text", required: true, def: discovered ? opsNs : "",
-        options: discovered ? [{v: opsNs, l: `${opsNs} (Ramen's ops namespace)`}] : undefined, placeholder: "the Placement's namespace"},
+        validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label: lower-case letters, digits and \"-\"." : x && (apps || []).some(a => a.name === x && a.namespace === (v.appKind === "managed" ? v.namespace : opsNs)) ? `${x} is protected already.` : null},
+      // A discovered application's DR objects (ProtectedApplication, DRPC) live
+      // in the hub's Ramen operations namespace, which the hub's configuration
+      // names: no choice to make. A managed application's live next to its
+      // OCM Placement.
+      discovered
+        ? {k: "nOps", type: "note", icon: "check", label: `Its DR objects are kept in the hub namespace ${opsNs} (Ramen operations namespace).`}
+        : {k: "namespace", label: "Placement namespace — where the application's OCM Placement lives", type: "text", required: true, def: "", placeholder: "the Placement's namespace",
+          validate: x => x && !DNS_LABEL_RE.test(x) ? "A namespace name." : null},
       {k: "source", label: "Source site", type: "select", required: true, options: sites},
       {k: "target", label: "Target site", type: "select", required: true, options: sites.filter(s => s.v !== v.source)},
       methods.length > 1 && {k: "method", label: "Method", type: "select", required: true, options: methods},
@@ -858,7 +864,8 @@ const protectAppDialogDR = (plans, cfg) => ({
       v.method ? {method: v.method} : {}, tiers.length ? {tiers} : {}, probes.length ? {health: {probes}} : {},
       v.appKind === "managed" ? {managed: {placementRef: {name: v.placement.trim()}, pvcSelector: sel}}
         : {discovered: Object.assign({protectedNamespaces: nss, pvcSelector: sel}, v.recipe && v.recipe.trim() ? {recipeRef: {name: v.recipe.trim()}} : {})});
-    return drhub.createApp({name: v.name.trim(), namespace: v.namespace.trim(), spec});
+    const opsNs = (cfg && cfg.ramen && cfg.ramen.opsNamespace) || DR_NS();
+    return drhub.createApp({name: v.name.trim(), namespace: v.appKind === "managed" ? (v.namespace || "").trim() : opsNs, spec});
   }
 });
 const editTiersDialog = a => {
@@ -903,8 +910,8 @@ const rplanFields = (v, paths, apps, fixedPath) => {
     !fixedPath && {k: "path", label: "DR path", type: "select", required: true, options: paths.map(p => ({v: p.name, l: `${p.name} (${p.from} → ${p.to})`}))},
     {k: "nNs", type: "note", icon: nss.length === 1 || chosenNs.length === 1 ? "check" : "alert",
       label: !items.length ? `No protected application is on ${path ? path.name : "the path"} yet: protect applications along it first.`
-        : chosenNs.length === 1 ? `Namespace of the protected applications (RecoveryPlan namespace): ${chosenNs[0]}`
-        : nss.length === 1 ? `Namespace of the protected applications (RecoveryPlan namespace): ${nss[0]}`
+        : chosenNs.length === 1 ? `Kept in the hub namespace of the DR objects (Ramen operations namespace): ${chosenNs[0]}`
+        : nss.length === 1 ? `Kept in the hub namespace of the DR objects (Ramen operations namespace): ${nss[0]}`
         : `The applications on this path are in ${nss.join(", ")}: a recovery plan holds applications of one namespace, which it is created in.`},
     {k: "apps", label: "Applications by priority — lane 1 moves first", type: "lanes", required: true, def: [], items,
       empty: path ? `No protected application is on ${path.name}.` : "Choose the DR path first.", addLabel: "— add an application —",
@@ -969,7 +976,11 @@ const dhcpAnswerOf = (st, servers, found) => {
   });
   return {status: lines.some(l => l.status === "ok") ? "ok" : "warn", text: `${st.offers.length} DHCP server${st.offers.length === 1 ? "" : "s"} answered`, lines};
 };
-const editBindingsDialog = s => ({
+const editBindingsDialog = s => {
+  // the single registered server preselected as the site default while the
+  // default field is not shown: saving uses it when no default was chosen
+  let lastOnlyOne = "";
+  return {
   title: `Bindings of ${s.name}`, confirm: "Save", done: "SiteProfile updated",
   desc: "How this site's networks map for recovered VMs (ADR 0020): the NAD each logical role is on here, the guest subnet of each role with the host ids never handed out, and the DHCP server the reservations are rendered to. Proposals come from what the site's dr-agent reports.",
   prepare: () => Promise.all([drhub.dhcpServers(), drhub.discovery(), drhub.siteProfiles().catch(() => []), drhub.paths().catch(() => [])])
@@ -996,7 +1007,20 @@ const editBindingsDialog = s => ({
     const roles = uniqSorted(others.flatMap(p => ((p.spec || {}).logicalNetworks || []).map(l => l.role)).concat(((s.spec || {}).logicalNetworks || []).map(l => l.role), (v.lnets || []).map(l => l.role), ["app"]));
     const roleNad = role => ((v.lnets || []).find(l => l.role === role) || {}).nad || "";
     const pairs = proposeRoles(disc, s.name, others.map(p => ({name: p.name, spec: p.spec})));
-    const found = (d && d.dhcpServers) || [];
+    const foundAll = (d && d.dhcpServers) || [];
+    // test-network (bubble) servers serve the isolated test network, never a
+    // guest network: not offered here
+    const found = foundAll.filter(f => !isBubbleServer(disc, s.name, f, testNads));
+    const bubbles = foundAll.length - found.length;
+    const registeredFor = f => servers.find(x => x.dnsmasq && f && x.dnsmasq.namespace === f.namespace && x.dnsmasq.configMap === f.hostsConfigMap);
+    // with one registered server on the guest networks' segment (or nothing
+    // reported to tell), that server is the site default; the default field
+    // only matters with several servers, several guest networks, or a single
+    // server that serves another segment
+    const onlyOne = servers.length === 1 && (prop.registered ? prop.registered === servers[0].name : !d) ? servers[0].name : "";
+    lastOnlyOne = onlyOne;
+    const showDefault = servers.length > 1 || gnetsNow.length > 1 || (servers.length === 1 && !onlyOne);
+    const siteDefault = (v.dhcp !== undefined ? v.dhcp : dhcpDef) || onlyOne;
     const proposedGuest = (role, nad) => {
       const sub = nadSubnet(disc, s.name, nad);
       const srv = dhcpServersOn(disc, s.name, nad).map(f => servers.find(x => x.dnsmasq && x.dnsmasq.namespace === f.namespace && x.dnsmasq.configMap === f.hostsConfigMap)).find(Boolean);
@@ -1022,7 +1046,9 @@ const editBindingsDialog = s => ({
       {k: "gnets", label: "Guest networks — the subnet of each role here", type: "rows", max: 8, addLabel: "Add subnet", def: gnetRows(s.spec || {}),
         cols: v.bindOverride ? gnetCols(servers) : [{k: "role", label: "Role", type: "select", blank: "— role —", options: (v.lnets || []).map(l => ({v: l.role, l: l.role})), flex: 0.7},
           {k: "cidr", label: "Guest subnet", placeholder: "proposed from the NAD", flex: 1.3}, {k: "reservedHostIDs", label: "Reserved host ids", placeholder: "1, 2", flex: 0.9},
-          {k: "dhcpServerRef", label: "DHCP server", type: "select", blank: "— the site's default —", options: servers.map(x => ({v: x.name, l: x.name})), unknown: x => `${x} (not registered)`, flex: 1.1}],
+          servers.length > 0 && {k: "dhcpServerRef", label: "DHCP server", type: "select", blank: `site default (${siteDefault || "none"})`,
+            options: servers.filter(x => !(servers.length === 1 && x.name === siteDefault)).map(x => ({v: x.name, l: x.name})),
+            unknown: x => `${x} (not registered)`, flex: 1.1}].filter(Boolean),
         sync: x => {
           if (v.bindOverride || !x) return undefined;
           let changed = false;
@@ -1038,7 +1064,9 @@ const editBindingsDialog = s => ({
           if (!nad) throw new Error(`Bind role ${r.role} to a NAD first.`);
           return drhub.probeDHCP({cluster: s.name, nad}).then(st => dhcpAnswerOf(st, servers, found));
         }},
-        hint: `The DHCP servers registered for ${s.name}: ${servers.map(x => x.name).join(", ") || "none"}. "Ask" finds servers outside the cluster too; those cannot take reservations from the hub.`},
+        hint: servers.length
+          ? `A role's own DHCP server wins over the site default. Registered for ${s.name}: ${servers.map(x => x.name).join(", ")}. "Ask" finds servers outside the cluster too; those cannot take reservations from the hub.`
+          : `No DHCP server registered for ${s.name}: guest addresses are not reserved until one is registered and used (below). "Ask" finds servers outside the cluster too; those cannot take reservations from the hub.`},
       // stays after it registered the server, so its answer stays readable
       ((!prop.registered && prop.discovered && !served) || v._regUsed) && {k: "regUse", type: "apply", refresh: true, label: "Proposed DHCP server", button: v._regUsed ? "Registered" : "Register and use",
         disabled: vv => !!vv._regUsed,
@@ -1051,29 +1079,46 @@ const editBindingsDialog = s => ({
           // rows that named an unregistered server fall back to the site default
           return {_regUsed: name, dhcp: name, gnets: (vv.gnets || []).map(g => g.dhcpServerRef && g.dhcpServerRef !== name && unregistered(g.dhcpServerRef) ? Object.assign({}, g, {dhcpServerRef: ""}) : g)};
         }, done: "Registered and set as the site's DHCP server; review the bindings, then save."},
-      found.length > 0 && {k: "found", label: `DHCP servers found on ${s.name}'s networks`, type: "rows", fixed: true, def: found.map(f => ({pod: `${f.namespace}/${f.owner || f.pod}`, nad: (f.nads || []).map(n => `${n.nad}${(n.ips || []).length ? ` @${n.ips[0]}` : ""}`).join(", "),
+      found.length > 0 && {k: "found", label: `DHCP servers found on ${s.name}'s networks${bubbles ? ` (${bubbles} test-network server${bubbles > 1 ? "s" : ""} not shown)` : ""}`, type: "rows", fixed: true, def: found.map(f => ({pod: `${f.namespace}/${f.owner || f.pod}`, nad: (f.nads || []).map(n => `${n.nad}${(n.ips || []).length ? ` @${n.ips[0]}` : ""}`).join(", "),
           ranges: (f.ranges || []).join("; "), hosts: f.hostsConfigMap ? `${f.namespace}/${f.hostsConfigMap}` : "", _f: f})),
         cols: [{k: "pod", label: "Server", readonly: true, flex: 1.3}, {k: "nad", label: "On", readonly: true, flex: 1.6}, {k: "ranges", label: "Ranges", readonly: true, flex: 1.4}, {k: "hosts", label: "Reservations ConfigMap", readonly: true, flex: 1.2}],
         rowInfo: r => {
           const reg = servers.find(x => x.dnsmasq && r._f && x.dnsmasq.namespace === r._f.namespace && x.dnsmasq.configMap === r._f.hostsConfigMap);
-          const bubble = r._f && isBubbleServer(disc, s.name, r._f, testNads) ? "test network (bubble) server: it serves the isolated test network, not a guest network" : null;
-          return [bubble, reg ? `registered as ${reg.name}` : r._f && !r._f.hostsConfigMap ? "reads no hosts file from a ConfigMap: the hub cannot render reservations to it" : null].filter(Boolean).join("; ") || null;
+          return reg ? `registered as ${reg.name}` : r._f && !r._f.hostsConfigMap ? "reads no hosts file from a ConfigMap: the hub cannot render reservations to it" : null;
         },
-        rowAction: {label: "Register", title: "Register this server for the site: dr-hub renders the reservations into its ConfigMap", run: r => {
-          const f = r._f;
-          if (!f || !f.hostsConfigMap) throw new Error("This server reads no hosts file from a ConfigMap.");
-          if (servers.some(x => x.dnsmasq && x.dnsmasq.namespace === f.namespace && x.dnsmasq.configMap === f.hostsConfigMap)) return {status: "ok", text: "registered already"};
-          const name = dns63(`${s.name}-${(f.owner || f.pod).split("/").pop()}`);
-          return drhub.createDHCPServer({name, site: s.name, namespace: f.namespace, configMap: f.hostsConfigMap}).then(() => ({status: "ok", text: `registered as ${name}; reopen the bindings to choose it`}));
-        }}},
+        rowAction: {label: r => registeredFor(r._f) ? "Use" : "Register and use", width: 118,
+          title: "Register this server for the site (dr-hub renders the reservations into its ConfigMap) and select it for the guest networks",
+          run: async (r, vv, i, ctx) => {
+            const f = r._f;
+            if (!f || !f.hostsConfigMap) throw new Error("This server reads no hosts file from a ConfigMap.");
+            const known = registeredFor(f);
+            const name = known ? known.name : dns63(`${s.name}-${(f.owner || f.pod).split("/").pop()}`);
+            if (!known) await drhub.createDHCPServer({name, site: s.name, namespace: f.namespace, configMap: f.hostsConfigMap});
+            // the dialog's server list was loaded when it opened: load it again
+            // so the selects offer the new server, then select it
+            if (ctx && ctx.reprepare) await ctx.reprepare();
+            const onNads = (f.nads || []).map(n => n.nad);
+            const def = vv.dhcp || name;
+            if (ctx && ctx.setAll) ctx.setAll({dhcp: def,
+              gnets: (vv.gnets || []).map(g => !g.dhcpServerRef && def !== name && onNads.includes(roleNad(g.role)) ? Object.assign({}, g, {dhcpServerRef: name}) : g)});
+            return {status: "ok", text: known ? `${name} selected` : `registered as ${name} and selected`};
+          }}},
       unregistered(cur) && {k: "nCur", type: "note", label: `This profile names the DHCP server ${cur}, which is not registered for ${s.name}: its reservations are rendered nowhere. ${prop.discovered && !prop.registered ? "Register and use the proposed server above (it keeps the name " + cur + "), or choose a registered one." : "Choose a registered server, or register one."}`},
-      {k: "dhcp", label: "DHCP server of the site (default for every guest network)", type: "select", def: dhcpDef,
+      !servers.length && !unregistered(cur) && {k: "nNoSrv", type: "note", icon: "alert",
+        label: found.length ? `No DHCP server registered for ${s.name}: "Register and use" one of the servers found above.` : `No DHCP server registered for ${s.name}, and none found on its networks: register one under Disaster recovery → DHCP servers.`},
+      servers.length > 0 && !showDefault && !unregistered(cur) && {k: "nOne", type: "note", icon: "check", label: `Guest networks without their own server use ${siteDefault}, the site's DHCP server.`},
+      (servers.length > 0 || unregistered(cur)) && (showDefault || unregistered(cur)) && {k: "dhcp", label: "DHCP server of the site (default for every guest network)", type: "select", def: dhcpDef || onlyOne,
+        hint: "A role's own DHCP server wins over this default. Registering a server does not use it: select it here or for a role.",
         options: [{v: "", l: "— none —"}].concat(servers.map(x => ({v: x.name, l: `${x.name} (${x.target || x.type})`})), unregistered(cur) ? [{v: cur, l: `${cur} (not registered)`}] : []),
         validate: x => unregistered(x) ? `DHCP server ${x} is not registered for ${s.name}.` : null}
     ].filter(Boolean);
   },
-  run: v => drhub.patchSiteProfile(s, bindingsSpec(Object.assign({}, v, {dhcp: v.dhcp && v.dhcp.trim() ? v.dhcp.trim() : ""})))
-});
+  run: v => {
+    const chosen = v.dhcp && v.dhcp.trim() ? v.dhcp.trim() : "";
+    return drhub.patchSiteProfile(s, bindingsSpec(Object.assign({}, v, {dhcp: chosen || lastOnlyOne})));
+  }
+  };
+};
 
 const newDHCPServerDialog = (sites, profiles) => ({
   title: "Register a DHCP server", confirm: "Create", done: "DHCPServer created",
