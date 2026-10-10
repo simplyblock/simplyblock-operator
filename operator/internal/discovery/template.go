@@ -263,7 +263,8 @@ func stripeNote(scheme erasurecoding.Scheme, nodes int) string {
 		return fmt.Sprintf(
 			"stripe is %s, which protects nothing: every redundant scheme needs at least "+
 				"three storage nodes and this fleet has %d, so a third worker is what makes "+
-				"1+1 possible. A cluster's stripe cannot be changed afterward",
+				"1+1 possible; a fleet of exactly two can instead run 1+1 as a two-node "+
+				"cluster (spec.cluster.twoNode). A cluster's stripe cannot be changed afterward",
 			scheme, nodes)
 	}
 

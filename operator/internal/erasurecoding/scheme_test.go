@@ -129,3 +129,21 @@ func TestTheSupportedSetRendersAsAPhrase(t *testing.T) {
 		t.Errorf("SupportedNotation() = %q", got)
 	}
 }
+
+func TestMinimumNodesFor(t *testing.T) {
+	for _, tc := range []struct {
+		s       Scheme
+		twoNode bool
+		want    int
+	}{
+		{Scheme{1, 1}, true, 2},
+		{Scheme{1, 1}, false, 3},
+		{Scheme{1, 0}, true, 1},
+		{Scheme{2, 1}, true, 4},
+		{Scheme{2, 2}, true, 6},
+	} {
+		if got := tc.s.MinimumNodesFor(tc.twoNode); got != tc.want {
+			t.Errorf("%s twoNode=%v: %d, want %d", tc.s, tc.twoNode, got, tc.want)
+		}
+	}
+}

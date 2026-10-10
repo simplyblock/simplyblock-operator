@@ -141,10 +141,39 @@ func TestTheActivationNodeCountRule(t *testing.T) {
 		scheme := simplyblockv1alpha2.StripeSpec{
 			DataChunks: ptr.To(testCase.data), ParityChunks: ptr.To(testCase.parity),
 		}
-		reason := ActivationNodeCountViolation(&scheme, testCase.nodes)
+		reason := ActivationNodeCountViolation(&scheme, false, testCase.nodes)
 		if held := reason != ""; held != testCase.held {
 			t.Errorf("%d+%d with %d nodes: held = %v, want %v (%s)",
 				testCase.data, testCase.parity, testCase.nodes, held, testCase.held, reason)
+		}
+	}
+}
+
+// A declared two-node cluster activates 1+1 on its two nodes; without the
+// declaration, and for every other scheme, the minimum is unchanged.
+func TestTwoNodeActivationGate(t *testing.T) {
+	stripe := func(d, p int32) *simplyblockv1alpha2.StripeSpec {
+		return &simplyblockv1alpha2.StripeSpec{DataChunks: ptr.To(d), ParityChunks: ptr.To(p)}
+	}
+	for _, tc := range []struct {
+		name    string
+		stripe  *simplyblockv1alpha2.StripeSpec
+		twoNode bool
+		nodes   int
+		held    bool
+	}{
+		{"1+0 one node", stripe(1, 0), false, 1, false},
+		{"1+1 two-node, 1 node", stripe(1, 1), true, 1, true},
+		{"1+1 two-node, 2 nodes", stripe(1, 1), true, 2, false},
+		{"1+1 two-node, 3 nodes", stripe(1, 1), true, 3, false},
+		{"1+1 undeclared, 2 nodes", stripe(1, 1), false, 2, true},
+		{"1+1 undeclared, 3 nodes", stripe(1, 1), false, 3, false},
+		{"unstated stripe two-node, 2 nodes", nil, true, 2, false},
+		{"2+1 two-node, 2 nodes", stripe(2, 1), true, 2, true},
+	} {
+		reason := ActivationNodeCountViolation(tc.stripe, tc.twoNode, tc.nodes)
+		if held := reason != ""; held != tc.held {
+			t.Errorf("%s: held = %v, want %v (%s)", tc.name, held, tc.held, reason)
 		}
 	}
 }

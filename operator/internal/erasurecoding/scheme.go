@@ -85,6 +85,26 @@ func (s Scheme) MinimumNodes() int {
 	return s.DataChunks + 2*s.ParityChunks
 }
 
+// MinimumNodesFor is MinimumNodes, except for a declared two-node cluster
+// (StorageCluster spec.twoNode): 1+1 then runs on exactly its two nodes, one
+// copy each, with no spare to rebuild onto. The control plane activates that
+// shape (sbcli cluster_ops.cluster_activate: no node floor for HA, device
+// minimum ndcs+npcs+1, anti-affinity labels off at two nodes) and the journal
+// runs in dual-node mode by membership; a lost node is survived by the peer,
+// and the two-node arbiter decides which one continues on a partition.
+//
+// It is an explicit declaration rather than "the cluster has two nodes": the
+// activation gate counts StorageNode objects as they appear, so a 1+1 cluster
+// planned for three nodes would otherwise activate on its first two and become
+// a two-node cluster nobody asked for. Every other scheme is unchanged, so is
+// 1+0 on one node.
+func (s Scheme) MinimumNodesFor(twoNode bool) int {
+	if twoNode && s.DataChunks == 1 && s.ParityChunks == 1 {
+		return 2
+	}
+	return s.MinimumNodes()
+}
+
 // String is the k+m notation the documentation, the control plane's Mod column,
 // and StorageCluster.status.erasureCodingScheme all use.
 func (s Scheme) String() string {

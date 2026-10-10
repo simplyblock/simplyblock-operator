@@ -606,6 +606,50 @@ spec:
                       type: object
                     maxItems: 32
                     type: array
+                  twoNode:
+                    description: |-
+                      TwoNode declares a two-node cluster: 1+1 then runs on exactly two
+                      storage nodes, and the control plane's arbitration settings are carried
+                      to the cluster's spec.twoNode. Every other scheme still needs its usual
+                      minimum.
+                    properties:
+                      arbitration:
+                        description: |-
+                          Arbitration turns the control plane's two-node arbitration on for this
+                          cluster: nodes hold writes when they lose their peer, and only a node the
+                          arbiter grants may continue alone. Off, the cluster keeps today's
+                          behaviour (dual-node tolerance without arbitration).
+                        type: boolean
+                      holdMs:
+                        description: |-
+                          HoldMs is how long a node holds writes after losing its peer before it
+                          acts on its own. It must stay below the hosts' NVMe keep-alive timeout
+                          (5000 ms), or clients fail IO before the verdict arrives.
+                        format: int32
+                        maximum: 4500
+                        minimum: 500
+                        type: integer
+                      leaseTtlMs:
+                        description: |-
+                          LeaseTtlMs is how long a lease from the arbiter stays valid. It only
+                          matters while a node is holding; a healthy pair is never fenced by a
+                          late renewal.
+                        format: int32
+                        maximum: 10000
+                        minimum: 500
+                        type: integer
+                      preferredNode:
+                        description: |-
+                          PreferredNode is the Kubernetes node whose storage node continues alone
+                          when neither the control plane nor the peer is reachable. Empty leaves the
+                          choice to the arbiter.
+                        maxLength: 253
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: leaseTtlMs must be shorter than holdMs
+                      rule: '!has(self.holdMs) || !has(self.leaseTtlMs) || self.leaseTtlMs
+                        < self.holdMs'
                   vcpuCount:
                     description: |-
                       VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
