@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/simplyblock/atlas/nfsclient"
 )
@@ -142,5 +143,91 @@ func TestPrimeLayoutRespectsACanceledStage(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Error("priming touched the mount despite the cancellation")
+	}
+}
+
+// openProbeRecording replaces how the probe is opened for one test, recording
+// each open's flags and holding it until release is closed.
+func openProbeRecording(t *testing.T, release <-chan struct{}) (opened chan int) {
+	t.Helper()
+	opened = make(chan int, 8)
+	real := openProbe
+	openProbe = func(name string, flag int, perm os.FileMode) (*os.File, error) {
+		opened <- flag
+		<-release
+		return real(name, flag, perm)
+	}
+	t.Cleanup(func() { openProbe = real })
+	return opened
+}
+
+// Regression: 2026-10-10-pnfs-probe-truncate-self-recall (pnfs-1791629269). An
+// O_TRUNC open of a probe file this client already held a layout on sent a
+// SETATTR to size 0. The server breaks every layout on a size change, this
+// client's own included, and answered NFS4ERR_DELAY until it came back, which
+// it never did while the truncate held the inode. The probe writes one block
+// at offset 0 and never needs the file shorter.
+func TestPrimeLayoutNeverTruncatesTheProbe(t *testing.T) {
+	release := make(chan struct{})
+	close(release)
+	opened := openProbeRecording(t, release)
+
+	if err := primeLayout(context.Background(), t.TempDir()); err != nil {
+		t.Fatalf("primeLayout: %v", err)
+	}
+	if flag := <-opened; flag&os.O_TRUNC != 0 {
+		t.Errorf("the probe was opened with O_TRUNC (flags %#x)", flag)
+	}
+}
+
+// Regression: 2026-10-10-pnfs-probe-truncate-self-recall (pnfs-1791629269). A
+// stage's probe and the background loop's probed one mount at once: one held
+// the inode while the other's layout had to be returned. Probes of one mount
+// run one after the other.
+func TestProbesOfOneMountDoNotOverlap(t *testing.T) {
+	release := make(chan struct{})
+	opened := openProbeRecording(t, release)
+	staging := t.TempDir()
+
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() { errs <- primeLayout(context.Background(), staging) }()
+	}
+	<-opened
+	select {
+	case <-opened:
+		t.Error("a second probe of the same mount started while the first was running")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Errorf("primeLayout: %v", err)
+		}
+	}
+}
+
+// Different mounts are different servers' state, and one slow probe must not
+// hold up another mount's stage.
+func TestProbesOfDifferentMountsRunTogether(t *testing.T) {
+	release := make(chan struct{})
+	opened := openProbeRecording(t, release)
+
+	errs := make(chan error, 2)
+	for _, staging := range []string{t.TempDir(), t.TempDir()} {
+		go func() { errs <- primeLayout(context.Background(), staging) }()
+	}
+	for range 2 {
+		select {
+		case <-opened:
+		case <-time.After(2 * time.Second):
+			t.Fatal("a probe of one mount waited for a probe of another")
+		}
+	}
+	close(release)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Errorf("primeLayout: %v", err)
+		}
 	}
 }

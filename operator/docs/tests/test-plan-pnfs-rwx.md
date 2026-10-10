@@ -137,6 +137,8 @@ restarted rather than migrated (design §13).
 | U-50 | A probe still running is not started a second time                                                        | Boundary            | `TestAProbeStillRunningIsNotStartedTwice`                                          |
 | U-51 | A failed probe is retried on the next pass                                                                | Negative            | `TestAFailedProbeIsRetried`                                                        |
 | U-52 | A pod's bind of a staging mount, another driver's mount, and a mount without a SCSI layout are not probed | Negative            | `TestOnlyThisDriversPNFSStagingMountsArePrimed`                                    |
+| U-93 | Regression (run `pnfs-1791629269`): the probe is never opened with `O_TRUNC`                              | Regression          | `TestPrimeLayoutNeverTruncatesTheProbe`                                            |
+| U-94 | Regression (run `pnfs-1791629269`): one mount's probes never overlap, other mounts' run along             | Regression          | `TestProbesOfOneMountDoNotOverlap`, `TestProbesOfDifferentMountsRunTogether`       |
 
 #### NFS client mount statistics, in `atlas-lib/nfsclient/mountstats_test.go`, `csi-driver/e2e/mountstats_test.go`
 
@@ -477,7 +479,7 @@ Struck rows are not counted.
 
 | Class                    | Scenarios | Covered | Not covered |
 |--------------------------|-----------|---------|-------------|
-| Unit (`U-`)              | 64        | 64      | 0           |
+| Unit (`U-`)              | 66        | 66      | 0           |
 | Operator (`O-`)          | 37        | 35      | 2           |
 | Sanity (`SAN-`)          | 2         | 0       | 2           |
 | Integration (`I-`)       | 3         | 3       | 0           |
@@ -485,7 +487,7 @@ Struck rows are not counted.
 | Failure injection (`F-`) | 14        | 4       | 10          |
 | Security (`SEC-`)        | 8         | 0       | 8           |
 | Load and soak (`L-`)     | 6         | 0       | 6           |
-| **Total**                | **152**   | **118** | **34**      |
+| **Total**                | **154**   | **120** | **34**      |
 
 Unit and operator coverage follows the code. The live classes are the gaps: four
 `F-` rows rest on a recorded run with a manual pod delete rather than on a suite
