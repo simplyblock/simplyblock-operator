@@ -285,6 +285,7 @@ func (r *ClusterDeploymentConfigReconciler) buildCluster(
 			EnableAtomicity4K:        template.EnableAtomicity4K,
 			MinHugePagesSize:         template.MinHugePagesSize,
 			Stripe:                   template.Stripe,
+			TwoNode:                  template.TwoNode,
 			FabricType:               template.FabricType,
 			EnableFailureDomains:     template.EnableFailureDomains,
 			EnableNodeAffinity:       template.EnableNodeAffinity,

@@ -36,11 +36,19 @@ import (
 // An unstated stripe is 1+1, which is what the control plane defaults to, so a
 // cluster that says nothing about erasure coding is held to the three nodes 1+1
 // needs rather than to nothing.
-func ActivationNodeCountViolation(stripe *simplyblockv1alpha2.StripeSpec, nodes int) string {
+//
+// twoNode is a declared two-node cluster (spec.twoNode set), which may activate
+// 1+1 on exactly two nodes (erasurecoding.Scheme.MinimumNodesFor).
+func ActivationNodeCountViolation(stripe *simplyblockv1alpha2.StripeSpec, twoNode bool, nodes int) string {
 	scheme := erasurecoding.SchemeOf(stripe)
-	minimum := scheme.MinimumNodes()
+	minimum := scheme.MinimumNodesFor(twoNode)
 	if nodes >= minimum {
 		return ""
+	}
+	if minimum != scheme.MinimumNodes() {
+		return fmt.Sprintf(
+			"the cluster is a two-node cluster with stripe %s, which needs both of its "+
+				"%d storage nodes, and the cluster has %d", scheme, minimum, nodes)
 	}
 
 	if scheme.ParityChunks == 0 {
@@ -79,7 +87,7 @@ func (r *StorageClusterOpsReconciler) stripeNodesReady(
 		return false, err
 	}
 
-	reason := ActivationNodeCountViolation(cluster.Spec.Stripe, nodes)
+	reason := ActivationNodeCountViolation(cluster.Spec.Stripe, cluster.Spec.TwoNode != nil, nodes)
 	if reason == "" {
 		return true, nil
 	}

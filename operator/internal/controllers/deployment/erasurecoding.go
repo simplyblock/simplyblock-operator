@@ -94,7 +94,7 @@ func StripeChecks(
 	namespace string,
 	config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) ([]StripeCheck, error) {
-	scheme, subject, slots, total, known, err := stripeSubject(ctx, reader, namespace, config)
+	scheme, subject, twoNode, slots, total, known, err := stripeSubject(ctx, reader, namespace, config)
 	if err != nil || !known {
 		return nil, err
 	}
@@ -113,7 +113,7 @@ func StripeChecks(
 		}}, nil
 	}
 
-	minimum := scheme.MinimumNodes()
+	minimum := scheme.MinimumNodesFor(twoNode)
 	if total.nodes() < minimum {
 		return []StripeCheck{{
 			Reason: StripeBelowMinimumNodes,
@@ -167,13 +167,16 @@ func stripeSubject(
 	reader client.Reader,
 	namespace string,
 	config *simplyblockv1alpha2.ClusterDeploymentConfig,
-) (scheme erasurecoding.Scheme, subject string, slots int32, existing footprint, known bool, err error) {
+	//
+	// twoNode is a declared two-node cluster (spec.cluster.twoNode, or the
+	// referenced cluster's spec.twoNode), which may run 1+1 on two nodes.
+) (scheme erasurecoding.Scheme, subject string, twoNode bool, slots int32, existing footprint, known bool, err error) {
 	if config.Spec.ClusterRef == "" {
 		template := config.Spec.Cluster
 		if template == nil {
-			return scheme, "", 0, existing, false, nil
+			return scheme, "", false, 0, existing, false, nil
 		}
-		return erasurecoding.SchemeOf(template.Stripe), "spec.cluster.stripe",
+		return erasurecoding.SchemeOf(template.Stripe), "spec.cluster.stripe", template.TwoNode != nil,
 			slotsOf(template.SocketsToUse, template.NodesPerSocket), newFootprint(), true, nil
 	}
 
@@ -181,18 +184,18 @@ func stripeSubject(
 	key := client.ObjectKey{Namespace: namespace, Name: config.Spec.ClusterRef}
 	switch err := reader.Get(ctx, key, &cluster); {
 	case apierrors.IsNotFound(err):
-		return scheme, "", 0, existing, false, nil
+		return scheme, "", false, 0, existing, false, nil
 	case err != nil:
-		return scheme, "", 0, existing, false,
+		return scheme, "", false, 0, existing, false,
 			fmt.Errorf("reading StorageCluster %s: %w", config.Spec.ClusterRef, err)
 	}
 
 	held, err := existingFootprint(ctx, reader, namespace, cluster.Name)
 	if err != nil {
-		return scheme, "", 0, existing, false, err
+		return scheme, "", false, 0, existing, false, err
 	}
 	return erasurecoding.SchemeOf(cluster.Spec.Stripe),
-		fmt.Sprintf("the stripe of cluster %s", cluster.Name),
+		fmt.Sprintf("the stripe of cluster %s", cluster.Name), cluster.Spec.TwoNode != nil,
 		slotsPerWorker(&cluster), held, true, nil
 }
 

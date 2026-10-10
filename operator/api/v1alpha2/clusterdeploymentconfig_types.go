@@ -509,6 +509,13 @@ type ClusterTemplate struct {
 	// +optional
 	Stripe *StripeSpec `json:"stripe,omitempty"`
 
+	// TwoNode declares a two-node cluster: 1+1 then runs on exactly two
+	// storage nodes, and the control plane's arbitration settings are carried
+	// to the cluster's spec.twoNode. Every other scheme still needs its usual
+	// minimum.
+	// +optional
+	TwoNode *TwoNodeSpec `json:"twoNode,omitempty"`
+
 	// FabricType is the storage fabric.
 	// +kubebuilder:validation:MaxLength=32
 	// +optional
