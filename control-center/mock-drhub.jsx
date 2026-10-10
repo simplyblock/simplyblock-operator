@@ -286,6 +286,8 @@
       nads: [{namespace: "apps", name: "vlan210-backend", type: "macvlan", master: "bond0.210", vlan: 210, ipamType: "whereabouts", ipamRanges: ["192.168.210.0/24"]},
         {namespace: "apps", name: "vlan220-mgmt", type: "macvlan", master: "bond0.220", vlan: 220}, {namespace: "dr-test", name: "isolated", type: "bridge", bridge: "br-test", ipamType: "static"}],
       workloads: [nsw("crm-drtest-crm10051200", false, [], [], [])],
+      dhcp: [{namespace: "dhcp", pod: "dnsmasq-drtest-0", owner: "Deployment/dnsmasq-drtest", software: "dnsmasq", nads: [{nad: "dr-test/isolated", interface: "app0", ips: ["192.168.210.2"]}],
+        ranges: ["192.168.210.100,192.168.210.199,255.255.255.0,1h"], hostsConfigMap: "drtest-hosts", hostsKey: "sitemap.hosts", configMaps: ["drtest-hosts"]}],
       vms: [{namespace: "erp", name: "erp-db", running: false, networks: [{name: "backend", index: 1, networkName: "apps/vlan210-backend", nad: "apps/vlan210-backend", ips: []}]}]}),
     "stretch": agentStatus("stretch", {velero: "openshift-adp", zones: ["eu-central-1a", "eu-central-1c"], classes: [{name: "sb-stretch", driver: "csi.simplyblock.io", labels: {"simplyblock.io/stretch": "true"}}],
       nads: [], workloads: [nsw("erp", true, [], [], [pvc("erp-disk", {"kubevirt.io/domain": "erp"})])]})

@@ -12204,6 +12204,21 @@ window.SB_DR = {
         ipamType: "static"
       }],
       workloads: [nsw("crm-drtest-crm10051200", false, [], [], [])],
+      dhcp: [{
+        namespace: "dhcp",
+        pod: "dnsmasq-drtest-0",
+        owner: "Deployment/dnsmasq-drtest",
+        software: "dnsmasq",
+        nads: [{
+          nad: "dr-test/isolated",
+          interface: "app0",
+          ips: ["192.168.210.2"]
+        }],
+        ranges: ["192.168.210.100,192.168.210.199,255.255.255.0,1h"],
+        hostsConfigMap: "drtest-hosts",
+        hostsKey: "sitemap.hosts",
+        configMaps: ["drtest-hosts"]
+      }],
       vms: [{
         namespace: "erp",
         name: "erp-db",
