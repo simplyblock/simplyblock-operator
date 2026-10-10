@@ -83,6 +83,12 @@ const (
 	// the node.
 	mdsDefaultCPULimit    = "2"
 	mdsDefaultMemoryLimit = "2Gi"
+
+	// The memory a metadata server pod reserves when the spec states no
+	// request. The guest hands the memory it frees back to the node through its
+	// balloon's free page reporting, so the pod uses what the guest does and
+	// may grow to its limit. A pnfs-fio run peaked at 315Mi.
+	mdsDefaultMemoryRequest = "512Mi"
 )
 
 // MDSStatefulSetName is the StatefulSet serving a storage cluster's exports.
@@ -408,8 +414,8 @@ func mdsRunnerContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string) 
 	}
 }
 
-// mdsResources is the spec's requirements with a CPU and a memory limit
-// defaulted where the spec states none.
+// mdsResources is the spec's requirements with a CPU and a memory limit, and a
+// memory request, defaulted where the spec states none.
 func mdsResources(r corev1.ResourceRequirements) corev1.ResourceRequirements {
 	out := *r.DeepCopy()
 	if out.Limits == nil {
@@ -420,6 +426,16 @@ func mdsResources(r corev1.ResourceRequirements) corev1.ResourceRequirements {
 	}
 	if _, ok := out.Limits[corev1.ResourceMemory]; !ok {
 		out.Limits[corev1.ResourceMemory] = resource.MustParse(mdsDefaultMemoryLimit)
+	}
+	if out.Requests == nil {
+		out.Requests = corev1.ResourceList{}
+	}
+	if _, ok := out.Requests[corev1.ResourceMemory]; !ok {
+		request := resource.MustParse(mdsDefaultMemoryRequest)
+		if limit := out.Limits[corev1.ResourceMemory]; limit.Cmp(request) < 0 {
+			request = limit
+		}
+		out.Requests[corev1.ResourceMemory] = request
 	}
 	return out
 }

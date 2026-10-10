@@ -183,7 +183,10 @@ type DriverPNFSMDS struct {
 	// Resources are the pod's requests and limits. The guest's vCPUs are the
 	// whole cores the CPU limit covers, at least one, and its memory is the
 	// memory limit less 256Mi for QEMU, so the memory limit has to be at
-	// least 512Mi. A CPU or memory limit left unset defaults to 2 and 2Gi.
+	// least 512Mi. A CPU or memory limit left unset defaults to 2 and 2Gi,
+	// and a memory request left unset to 512Mi, or the limit when that is
+	// lower. The guest returns the memory it frees to the node, so the pod
+	// uses about what the guest does.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 

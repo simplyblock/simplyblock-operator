@@ -322,3 +322,32 @@ func TestMDSNamesKeepClustersSharingAPrefixApart(t *testing.T) {
 		t.Errorf("state disk class %s does not end in %s", MDSStateClassName(d, a), MDSStateClassSuffix)
 	}
 }
+
+// The guest returns the memory it frees to the node (free page reporting
+// through its balloon), so the pod reserves what a guest actually uses and may
+// grow to its limit. Measured on lab-talos: QEMU peaked at 315Mi over a
+// pnfs-fio run with a 1792Mi guest.
+func TestMDSPodRequestsLessMemoryThanItsLimit(t *testing.T) {
+	d := withMDS(testDriver("simplyblock"))
+	d.Spec.PNFS.MDS.Resources = corev1.ResourceRequirements{}
+	_, sts := mdsObjects(t, d)
+	r := runnerContainer(t, sts).Resources
+	if got := r.Requests[corev1.ResourceMemory]; !got.Equal(resource.MustParse("512Mi")) {
+		t.Errorf("memory request = %s, want 512Mi", got.String())
+	}
+	if got := r.Limits[corev1.ResourceMemory]; !got.Equal(resource.MustParse("2Gi")) {
+		t.Errorf("memory limit = %s, want 2Gi", got.String())
+	}
+}
+
+// A memory request the spec states is the user's, and is kept.
+func TestMDSPodKeepsTheMemoryRequestItIsGiven(t *testing.T) {
+	d := withMDS(testDriver("simplyblock"))
+	d.Spec.PNFS.MDS.Resources = corev1.ResourceRequirements{Requests: corev1.ResourceList{
+		corev1.ResourceMemory: resource.MustParse("1Gi"),
+	}}
+	_, sts := mdsObjects(t, d)
+	if got := runnerContainer(t, sts).Resources.Requests[corev1.ResourceMemory]; !got.Equal(resource.MustParse("1Gi")) {
+		t.Errorf("memory request = %s, want the spec's 1Gi", got.String())
+	}
+}
