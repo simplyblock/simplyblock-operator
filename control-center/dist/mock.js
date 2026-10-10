@@ -5611,6 +5611,30 @@ const RESOURCES = {
     namespaced: true,
     dr: true
   },
+  // AI-assisted discovery (dr-hub ADR 0023): the per-site dependency graph
+  // (its data in compressed ConfigMap shards in dr-hub's namespace), the
+  // proposal bundles and the discovery runs
+  DiscoveryGraph: {
+    plural: "discoverygraphs",
+    short: "dgraph",
+    core: DR_API_GROUP,
+    namespaced: false,
+    dr: true
+  },
+  DRProposal: {
+    plural: "drproposals",
+    short: "drprop",
+    core: DR_API_GROUP,
+    namespaced: true,
+    dr: true
+  },
+  DiscoveryRun: {
+    plural: "discoveryruns",
+    short: "drun",
+    core: DR_API_GROUP,
+    namespaced: true,
+    dr: true
+  },
   // what each site's dr-agent reports, read through the view dr-hub keeps
   // of it (<cluster>/dr-agent-status): the forms' discovered choices
   ManagedClusterView: {
@@ -5739,6 +5763,8 @@ const RESOURCES = {
 const NS = () => SB.namespace || "simplyblock";
 // Ramen's ops namespace on the hub: where discovered ProtectedApplications live
 const DR_NS = () => SB.drNamespace || "ramen-ops";
+// dr-hub's own namespace on the hub: where it keeps the discovery graph shards
+const DR_HUB_NS = () => SB.drHubNamespace || "dr-simplyblock";
 
 // Build the API server path for a kind. Core group is /api/v1, everything else
 // /apis/<group>/<version>. A namespaced kind is scoped to the console's
@@ -5984,7 +6010,8 @@ Object.assign(window, {
   opsRunning,
   OPS_TERMINAL,
   NS,
-  DR_NS
+  DR_NS,
+  DR_HUB_NS
 });
 })();
 // ---- mock-k8s.jsx ----
@@ -6950,6 +6977,8 @@ function readList(kind, params) {
     items = (DB2().deployment_configs || []).map(cdcToK8s);
   } else if (NS_KINDS_M[kind]) {
     items = nsResources(params.get("__ns")).filter(o => o.kind === kind);
+    // the DR hub's discovery graph shards live in dr-hub's namespace (mock-drhub.jsx)
+    if (kind === "ConfigMap" && window.DR_MOCK && window.DR_MOCK.configMaps) items = items.concat(window.DR_MOCK.configMaps(params.get("__ns")));
   } else if (window.DR_MOCK && window.DR_MOCK.has(kind)) {
     // the DR hub's kinds (mock-drhub.jsx): namespaced ones scoped when a namespace is in the path
     items = window.DR_MOCK.list(kind);
@@ -12865,21 +12894,669 @@ window.SB_DR = {
       requestedBy: (o.metadata.annotations || {})["dr.simplyblock.io/created-by"] || ""
     };
   });
+
+  // ---- AI-assisted discovery (ADR 0023) ------------------------------------------------
+  // One site graph (cluster-a) with its data in two gzip shards, bundles in
+  // every phase, finished and running runs. localStorage "sb.mock.gitops" =
+  // "off" drops the GitOps target (console approval fallback); "sb.mock.ai" =
+  // "on" adds a model provider (rules + AI runs).
+  const HUBNS = "dr-simplyblock";
+  const crcT = (() => {
+    const t = [];
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ c >>> 1 : c >>> 1;
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+  const crc32 = b => {
+    let c = 0xFFFFFFFF;
+    for (let i = 0; i < b.length; i++) c = crcT[(c ^ b[i]) & 0xFF] ^ c >>> 8;
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  };
+  // gzip with stored (uncompressed) deflate blocks: valid gzip any gunzip reads
+  const gzipStored = text => {
+    const data = new TextEncoder().encode(text),
+      out = [0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff];
+    for (let i = 0; i < data.length || i === 0; i += 65535) {
+      const chunk = data.subarray(i, Math.min(i + 65535, data.length)),
+        last = i + 65535 >= data.length;
+      out.push(last ? 1 : 0, chunk.length & 0xff, chunk.length >>> 8, ~chunk.length & 0xff, ~chunk.length >>> 8 & 0xff);
+      for (let j = 0; j < chunk.length; j++) out.push(chunk[j]);
+      if (!data.length) break;
+    }
+    const crc = crc32(data),
+      n = data.length;
+    out.push(crc & 0xff, crc >>> 8 & 0xff, crc >>> 16 & 0xff, crc >>> 24, n & 0xff, n >>> 8 & 0xff, n >>> 16 & 0xff, n >>> 24);
+    return new Uint8Array(out);
+  };
+  const b64 = bytes => {
+    let s = "";
+    for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return btoa(s);
+  };
+  const gnode = (kind, ns, name, extra) => Object.assign({
+    id: `${kind}/${ns ? ns + "/" : ""}${name}`,
+    kind,
+    namespace: ns || undefined,
+    name
+  }, extra || {});
+  const N = {
+    web: gnode("Workload", "shop", "web", {
+      role: "web",
+      labels: {
+        "app.kubernetes.io/name": "shop"
+      },
+      facts: {
+        kind: "Deployment",
+        image: "nginx:1.27"
+      }
+    }),
+    db: gnode("Workload", "shop", "db", {
+      role: "db",
+      labels: {
+        "app.kubernetes.io/name": "shop"
+      },
+      facts: {
+        kind: "StatefulSet",
+        image: "postgres:16",
+        fingerprint: "postgresql"
+      }
+    }),
+    svcWeb: gnode("Service", "shop", "web", {
+      facts: {
+        ports: "80"
+      }
+    }),
+    svcDb: gnode("Service", "shop", "db", {
+      facts: {
+        ports: "5432"
+      }
+    }),
+    pvcDb: gnode("PVC", "shop", "db-data", {
+      labels: {
+        app: "shop"
+      }
+    }),
+    pvcUp: gnode("PVC", "shop", "web-uploads"),
+    erpDb: gnode("VirtualMachine", "erp", "erp-db", {
+      role: "db",
+      facts: {
+        os: "rhel9",
+        fingerprint: "mariadb"
+      }
+    }),
+    erpApp: gnode("VirtualMachine", "erp", "erp-app", {
+      role: "app",
+      facts: {
+        os: "rhel9"
+      }
+    }),
+    svcErp: gnode("Service", "erp", "erp-app", {
+      facts: {
+        ports: "8080"
+      }
+    }),
+    pvcErpDb: gnode("PVC", "erp", "erp-db-disk"),
+    pvcErpApp: gnode("PVC", "erp", "erp-app-disk"),
+    nad: gnode("NAD", "apps", "backend", {
+      facts: {
+        vlan: "110"
+      }
+    }),
+    rep: gnode("Workload", "reporting", "report-runner", {
+      facts: {
+        kind: "Deployment",
+        image: "metabase:0.49"
+      }
+    }),
+    s3: gnode("External", "", "s3.eu-central-1.amazonaws.com:443")
+  };
+  const ev = (id, source, object, field, detail) => ({
+    id,
+    source,
+    object,
+    field,
+    detail,
+    observed: agoIso(9)
+  });
+  const EV = [ev("ev-own-web", "inventory", "Deployment shop/web", "spec.template", "owns 2 pods"), ev("ev-mnt-db", "inventory", "StatefulSet shop/db", "spec.volumeClaimTemplates[0]", "mounts db-data"), ev("ev-mnt-up", "inventory", "Deployment shop/web", "spec.template.spec.volumes[1]", "mounts web-uploads"), ev("ev-sel-web", "inventory", "Service shop/web", "spec.selector", "app.kubernetes.io/name=shop,component=web"), ev("ev-sel-db", "inventory", "Service shop/db", "spec.selector", "app.kubernetes.io/name=shop,component=db"), ev("ev-ref-db", "configScan", "Deployment shop/web", "env.DATABASE_URL", "postgres://db.shop.svc:5432 (host:port only)"), ev("ev-flow-db", "flows", "Deployment shop/web", "", "1,284 connections to db.shop:5432 in 7d"), ev("ev-fp-db", "fingerprint", "StatefulSet shop/db", "image", "postgres:16 → role db"), ev("ev-pkg-shop", "packaging", "Deployment shop/web", "metadata.labels", "app.kubernetes.io/part-of=shop"), ev("ev-flow-s3", "flows", "Deployment shop/web", "", "outbound to s3.eu-central-1.amazonaws.com:443"), ev("ev-erp-att", "inventory", "VirtualMachine erp/erp-db", "spec.template.spec.networks[1]", "multus apps/backend"), ev("ev-erp-att2", "inventory", "VirtualMachine erp/erp-app", "spec.template.spec.networks[1]", "multus apps/backend"), ev("ev-erp-mnt", "inventory", "VirtualMachine erp/erp-db", "spec.template.spec.volumes[0]", "dataVolume erp-db-disk"), ev("ev-erp-mnt2", "inventory", "VirtualMachine erp/erp-app", "spec.template.spec.volumes[0]", "dataVolume erp-app-disk"), ev("ev-erp-flow", "flows", "VirtualMachine erp/erp-app", "", "3,912 connections to 192.168.110.21:3306 (erp-db) in 7d"), ev("ev-erp-fp", "fingerprint", "VirtualMachine erp/erp-db", "guest", "mariadb listening on 3306 (guest agent)"), ev("ev-rep-flow", "flows", "Deployment reporting/report-runner", "", "214 connections to db.shop:5432 in 7d")];
+  const ge = (from, to, kind, weight, evidence, port) => Object.assign({
+    from: from.id,
+    to: to.id,
+    kind,
+    weight,
+    evidence
+  }, port ? {
+    port
+  } : {});
+  const EDGES = [ge(N.web, N.pvcUp, "mounts", 950, ["ev-mnt-up"]), ge(N.db, N.pvcDb, "mounts", 980, ["ev-mnt-db"]), ge(N.svcWeb, N.web, "selects", 900, ["ev-sel-web"], 80), ge(N.svcDb, N.db, "selects", 900, ["ev-sel-db"], 5432), ge(N.web, N.svcDb, "references", 820, ["ev-ref-db"], 5432), ge(N.web, N.svcDb, "connects", 870, ["ev-flow-db"], 5432), ge(N.web, N.db, "packagedWith", 600, ["ev-pkg-shop"]), ge(N.web, N.s3, "connects", 350, ["ev-flow-s3"], 443), ge(N.erpDb, N.nad, "attaches", 700, ["ev-erp-att"]), ge(N.erpApp, N.nad, "attaches", 700, ["ev-erp-att2"]), ge(N.erpDb, N.pvcErpDb, "mounts", 980, ["ev-erp-mnt"]), ge(N.erpApp, N.pvcErpApp, "mounts", 980, ["ev-erp-mnt2"]), ge(N.erpApp, N.erpDb, "connects", 810, ["ev-erp-flow", "ev-erp-fp"], 3306), ge(N.svcErp, N.erpApp, "selects", 880, []), ge(N.rep, N.svcDb, "connects", 420, ["ev-rep-flow"], 5432)];
+  const GRAPH = {
+    nodes: Object.values(N),
+    edges: EDGES,
+    evidence: EV
+  };
+  const gz = gzipStored(JSON.stringify(GRAPH)),
+    half = Math.ceil(gz.length / 2);
+  const SHARDS = [gz.subarray(0, half), gz.subarray(half)].map((b, i, all) => ({
+    apiVersion: "v1",
+    kind: "ConfigMap",
+    metadata: {
+      name: `dr-graph-cluster-a-${i}`,
+      namespace: HUBNS,
+      uid: uid(),
+      creationTimestamp: agoIso(9),
+      annotations: {
+        "dr.simplyblock.io/shard-generation": "",
+        "dr.simplyblock.io/shard-index": String(i),
+        "dr.simplyblock.io/shard-count": String(all.length)
+      }
+    },
+    binaryData: {
+      "data.gz": b64(b)
+    }
+  }));
+  store.DiscoveryGraph = [Object.assign(api("DiscoveryGraph"), {
+    metadata: meta("cluster-a"),
+    spec: {
+      site: "cluster-a"
+    },
+    status: {
+      observedReport: "a41f0c2e9b7d",
+      built: agoIso(9),
+      shards: SHARDS.map(s => s.metadata.name),
+      counts: {
+        nodes: GRAPH.nodes.length,
+        edges: EDGES.length,
+        evidence: EV.length,
+        candidates: 3
+      },
+      candidates: [{
+        id: "cand-shop",
+        name: "shop",
+        namespaces: ["shop"],
+        members: [N.web.id, N.db.id, N.svcWeb.id, N.svcDb.id, N.pvcDb.id, N.pvcUp.id],
+        score: 910,
+        adopted: `${OPS}/shop`
+      }, {
+        id: "cand-erp",
+        name: "erp",
+        namespaces: ["erp"],
+        members: [N.erpDb.id, N.erpApp.id, N.svcErp.id, N.pvcErpDb.id, N.pvcErpApp.id],
+        score: 840
+      }, {
+        id: "cand-reporting",
+        name: "reporting",
+        namespaces: ["reporting"],
+        members: [N.rep.id],
+        score: 420
+      }],
+      interApp: [ge(N.rep, N.svcDb, "connects", 420, ["ev-rep-flow"], 5432)],
+      conditions: [cond("Built", true, "Built", "graph built from the report of 9m ago", 9)]
+    }
+  }), Object.assign(api("DiscoveryGraph"), {
+    metadata: meta("cluster-b"),
+    spec: {
+      site: "cluster-b"
+    },
+    status: {
+      counts: {
+        truncated: ["workloads: 100 namespaces cap reached"]
+      },
+      conditions: [cond("Built", false, "WaitingForReport", "the site's discovery report is incomplete (chunk 3 of 4 missing)", 3)]
+    }
+  })];
+  const qs = (id, text, options, blocking, field) => Object.assign({
+    id,
+    text,
+    options
+  }, blocking ? {
+    blocking: true
+  } : {}, field ? {
+    field
+  } : {});
+  const fb = (evidence, confidence, note) => Object.assign({
+    evidence,
+    confidence
+  }, note ? {
+    note
+  } : {});
+  const dry = (verdict, checks) => ({
+    verdict,
+    checks,
+    lastTransitionTime: agoIso(8)
+  });
+  const prop = (name, spec, status) => Object.assign(api("DRProposal"), {
+    metadata: meta(name, OPS, {
+      creationTimestamp: agoIso(status.__age || 8)
+    }),
+    spec,
+    status: Object.assign({}, status, {
+      __age: undefined
+    })
+  });
+  const papp = (name, tiers, fields) => ({
+    apiVersion: "dr.simplyblock.io/v1alpha1",
+    kind: "ProtectedApplication",
+    name,
+    namespace: OPS,
+    operation: "create",
+    spec: {
+      planRef: "fra",
+      source: "fra-a",
+      target: "fra-b",
+      kind: "discovered",
+      discovered: {
+        protectedNamespaces: [name],
+        pvcSelector: {
+          matchLabels: {
+            app: name
+          }
+        }
+      },
+      tiers
+    },
+    fields
+  });
+  const gitopsOn = () => (localStorage.getItem("sb.mock.gitops") || "") !== "off";
+  const ghRef = (n, state) => ({
+    branch: `dr/bundles/${n}`,
+    pr: `https://github.com/acme/dr-gitops/pull/${n}`,
+    headCommit: "3f9c2d1",
+    state
+  });
+  store.DRProposal = [prop("shop-cluster-a-r1", {
+    scope: "Application",
+    site: "cluster-a",
+    candidate: "cand-shop",
+    source: "rules",
+    confidence: 900,
+    summary: "Adopts the hand-made protection of shop and adds the db → web boot order, a TCP check on db:5432 and the labels its volumes need.",
+    objects: [Object.assign(papp("shop", [{
+      name: "db",
+      selector: {
+        matchLabels: {
+          "dr.simplyblock.io/tier": "db"
+        }
+      }
+    }, {
+      name: "web",
+      selector: {
+        matchLabels: {
+          "dr.simplyblock.io/tier": "web"
+        }
+      }
+    }], {
+      "tiers[0]": fb(["ev-fp-db", "ev-mnt-db"], 950, "postgres fingerprint"),
+      "tiers[1].ready[0]": fb(["ev-ref-db", "ev-flow-db"], 880, "TCP check db:5432")
+    }), {
+      operation: "update"
+    })],
+    labels: [{
+      cluster: "cluster-a",
+      change: {
+        kind: "PersistentVolumeClaim",
+        namespace: "shop",
+        name: "web-uploads",
+        key: "app",
+        value: "shop"
+      },
+      reason: "member of shop",
+      evidence: ["ev-mnt-up"],
+      effect: "selects"
+    }, {
+      cluster: "cluster-a",
+      change: {
+        kind: "StatefulSet",
+        namespace: "shop",
+        name: "db",
+        key: "dr.simplyblock.io/tier",
+        value: "db"
+      },
+      reason: "data service",
+      evidence: ["ev-fp-db"],
+      effect: "tier"
+    }],
+    questions: [qs("q1", "Include the outbound S3 endpoint as an external dependency of shop?", ["yes", "no"], false)]
+  }, {
+    __age: 50,
+    phase: "PROpened",
+    gitOps: ghRef(41, "open"),
+    answers: [{
+      question: "q1",
+      option: "no",
+      by: "alice"
+    }],
+    dryRun: dry("Ready", [check("tiers-resolvable", "Pass", true, "Resolved", "2 tiers select 3 objects"), check("pvc-selector-matches", "Pass", true, "Matched", "2 PVCs")]),
+    diff: "--- ProtectedApplication ramen-ops/shop (current)\n+++ proposed\n@@ tiers @@\n+- name: db\n+  selector: {matchLabels: {dr.simplyblock.io/tier: db}}\n   - name: web\n+    ready: [{type: exec, command: [nc, -z, db, \"5432\"]}]"
+  }), prop("erp-cluster-a-r1", {
+    scope: "Application",
+    site: "cluster-a",
+    candidate: "cand-erp",
+    source: "rules",
+    confidence: 700,
+    summary: "Protects the two ERP VMs.",
+    objects: [papp("erp", [{
+      name: "vms",
+      selector: {
+        matchLabels: {
+          app: "erp"
+        }
+      }
+    }], {
+      "tiers[0]": fb(["ev-erp-mnt"], 700)
+    })]
+  }, {
+    __age: 140,
+    phase: "Superseded",
+    supersededBy: "erp-cluster-a-r2"
+  }), prop("erp-cluster-a-r2", {
+    scope: "Application",
+    site: "cluster-a",
+    candidate: "cand-erp",
+    source: "ai:discovery-cluster-a-ai",
+    baseline: "erp-cluster-a-r1",
+    confidence: 820,
+    summary: "Splits the ERP VMs into db and app tiers (MariaDB in erp-db, seen through the guest agent and 7 days of flows) and proposes a consistency group for both disks.",
+    objects: [papp("erp", [{
+      name: "db",
+      selector: {
+        matchLabels: {
+          "dr.simplyblock.io/tier": "db"
+        }
+      }
+    }, {
+      name: "app",
+      selector: {
+        matchLabels: {
+          "dr.simplyblock.io/tier": "app"
+        }
+      }
+    }], {
+      "tiers[0]": fb(["ev-erp-fp", "ev-erp-flow"], 860, "mariadb on 3306"),
+      "tiers[1]": fb(["ev-erp-flow"], 800)
+    })],
+    labels: [{
+      cluster: "cluster-a",
+      change: {
+        kind: "VirtualMachine",
+        namespace: "erp",
+        name: "erp-db",
+        key: "dr.simplyblock.io/tier",
+        value: "db"
+      },
+      reason: "database VM",
+      evidence: ["ev-erp-fp"],
+      effect: "tier"
+    }, {
+      cluster: "cluster-a",
+      change: {
+        kind: "PersistentVolumeClaim",
+        namespace: "erp",
+        name: "erp-db-disk",
+        key: "storage.simplyblock.io/consistency-group",
+        value: "erp"
+      },
+      reason: "ERP disks belong together",
+      evidence: ["ev-erp-flow"],
+      effect: "late-join-needs-migration"
+    }],
+    migrations: [{
+      cluster: "cluster-a",
+      namespace: "erp",
+      pvc: "erp-db-disk",
+      group: "erp",
+      reason: "bound volume; the group is fixed at creation"
+    }, {
+      cluster: "cluster-a",
+      namespace: "erp",
+      pvc: "erp-app-disk",
+      group: "erp",
+      reason: "bound volume; the group is fixed at creation"
+    }],
+    questions: [qs("q1", "Quiesce MariaDB in erp-db before each replication snapshot?", ["yes, FLUSH TABLES WITH READ LOCK", "no"], true, "tiers[0].hooks"), qs("q2", "Is erp-app stateless (its disk may be recreated)?", ["yes", "no"], false)]
+  }, {
+    __age: 6,
+    phase: "Proposed",
+    dryRun: dry("Degraded", [check("tiers-resolvable", "Pass", true, "Resolved", "2 tiers select 2 VMs"), check("pvc-selector-matches", "Fail", true, "NoMatch", "selector app=erp matches 0 PVCs before the labels are applied"), check("consistency-groups", "Warn", false, "LateJoin", "2 bound volumes listed only")])
+  }), prop("fra-recovery-r1", {
+    scope: "RecoveryPlan",
+    site: "cluster-a",
+    source: "rules",
+    confidence: 760,
+    dependsOn: ["shop-cluster-a-r1", "erp-cluster-a-r2"],
+    summary: "Orders shop before reporting (reporting reads shop's database).",
+    objects: [{
+      apiVersion: "dr.simplyblock.io/v1alpha1",
+      kind: "RecoveryPlan",
+      name: "fra-apps",
+      namespace: OPS,
+      operation: "create",
+      spec: {
+        pathRef: "fra-a-to-fra-b",
+        applications: [{
+          name: "shop",
+          priority: 1
+        }, {
+          name: "erp",
+          priority: 2
+        }]
+      },
+      fields: {
+        "applications[0].priority": fb(["ev-rep-flow"], 760, "reporting depends on shop")
+      }
+    }]
+  }, {
+    __age: 30,
+    phase: "WaitingForApplications",
+    gitOps: ghRef(39, "merged"),
+    approvedBy: "bob"
+  }), prop("sitemap-cluster-a-b", {
+    scope: "SiteMapping",
+    site: "cluster-a",
+    source: "rules",
+    confidence: 930,
+    summary: "Pairs apps/backend (VLAN 110) with apps/vlan210-backend.",
+    objects: [{
+      apiVersion: "sitemap.simplyblock.io/v1alpha1",
+      kind: "SiteProfile",
+      name: "cluster-a",
+      operation: "update",
+      spec: {
+        logicalNetworks: [{
+          role: "backend",
+          nad: "apps/backend"
+        }]
+      },
+      fields: {
+        "logicalNetworks[0]": fb(["ev-erp-att"], 930)
+      }
+    }]
+  }, {
+    __age: 300,
+    phase: "Applied",
+    gitOps: ghRef(35, "merged"),
+    approvedBy: "alice",
+    appliedAt: agoIso(280)
+  }), prop("reporting-cluster-a-r1", {
+    scope: "Application",
+    site: "cluster-a",
+    candidate: "cand-reporting",
+    source: "rules",
+    confidence: 420,
+    summary: "A single reporting job; low confidence.",
+    objects: [papp("reporting", [{
+      name: "app",
+      selector: {
+        matchLabels: {
+          "app.kubernetes.io/name": "metabase"
+        }
+      }
+    }], {})]
+  }, {
+    __age: 200,
+    phase: "Rejected"
+  })];
+  const tc = (mins, tool, summary, result) => ({
+    time: agoIso(mins),
+    tool,
+    summary,
+    result
+  });
+  store.DiscoveryRun = [Object.assign(api("DiscoveryRun"), {
+    metadata: meta("discovery-cluster-a-rules", OPS, {
+      creationTimestamp: agoIso(52)
+    }),
+    spec: {
+      scope: {
+        site: "cluster-a"
+      },
+      mode: "Rules"
+    },
+    status: {
+      phase: "Succeeded",
+      progress: "3 candidates, 4 bundles",
+      started: agoIso(52),
+      completed: agoIso(51),
+      proposals: ["shop-cluster-a-r1", "erp-cluster-a-r1", "fra-recovery-r1", "reporting-cluster-a-r1"]
+    }
+  }), Object.assign(api("DiscoveryRun"), {
+    metadata: meta("discovery-cluster-a-ai", OPS, {
+      creationTimestamp: agoIso(7)
+    }),
+    spec: {
+      scope: {
+        site: "cluster-a",
+        namespaces: ["erp"]
+      },
+      mode: "AI",
+      provider: "anthropic",
+      instructions: "check the ERP VMs"
+    },
+    status: {
+      phase: "Succeeded",
+      progress: "1 bundle revised",
+      started: agoIso(7),
+      completed: agoIso(6),
+      usage: {
+        inputTokens: 48210,
+        outputTokens: 3120,
+        toolCalls: 9,
+        costEstimate: "$0.31"
+      },
+      toolLog: [tc(7, "get_graph", "site cluster-a, namespace erp", "ok"), tc(7, "explain_edge", "erp-app → erp-db :3306", "ok"), tc(7, "search_logs", "erp-db: mysqld ready", "ok"), tc(6, "dry_run", "erp-cluster-a-r2", "ok · Degraded"), tc(6, "propose", "erp-cluster-a-r2", "ok")],
+      proposals: ["erp-cluster-a-r2"],
+      rejected: [{
+        proposal: "erp-cluster-a-r2-draft",
+        reason: "field tiers[2] cites ev-erp-missing, which is not in the graph"
+      }]
+    }
+  }), Object.assign(api("DiscoveryRun"), {
+    metadata: meta("discovery-cluster-b-rules", OPS, {
+      creationTimestamp: agoIso(2)
+    }),
+    spec: {
+      scope: {
+        site: "cluster-b"
+      },
+      mode: "Rules"
+    },
+    status: {
+      phase: "Running",
+      progress: "waiting for the site's complete report",
+      started: agoIso(2)
+    }
+  })];
+  const dcfg = store.DRConfig[0];
+  const discoveryCfg = () => Object.assign({
+    enabled: true,
+    flows: {
+      optOut: ["stretch"],
+      retention: "168h"
+    }
+  }, gitopsOn() ? {
+    gitOps: {
+      provider: "github",
+      url: "https://github.com/acme/dr-gitops",
+      baseBranch: "main",
+      path: "dr/bundles",
+      credentialsSecretRef: {
+        name: "dr-gitops"
+      }
+    }
+  } : {}, (localStorage.getItem("sb.mock.ai") || "") === "on" ? {
+    providers: [{
+      name: "anthropic",
+      type: "anthropic",
+      model: "claude-opus-5-5",
+      credentialsSecretRef: {
+        name: "anthropic-key"
+      }
+    }],
+    defaultProvider: "anthropic"
+  } : {});
+  // dr-hub, simulated: requests on bundles and created runs advance with age
+  const advanceDisc = () => {
+    dcfg.spec.discovery = discoveryCfg();
+    const t = Date.now();
+    store.DRProposal.forEach(p => {
+      const a = p.metadata.annotations || {},
+        req = a["dr.simplyblock.io/request"];
+      if (!req || t - (p.__reqAt || 0) < 1200) return;
+      if (req === "open-pr") {
+        p.status.phase = "PROpened";
+        p.status.gitOps = ghRef(42 + store.DRProposal.indexOf(p), "open");
+      }
+      if (req === "reject") {
+        p.status.phase = "Rejected";
+        p.status.conditions = [cond("Rejected", true, "ByUser", a["dr.simplyblock.io/request-reason"] || "", 0)];
+      }
+      if (req === "approve") {
+        p.status.phase = "Applied";
+        p.status.approvedBy = "you@example.com";
+        p.status.appliedAt = iso(t);
+      }
+      if (req === "rollback") p.status.phase = "RolledBack";
+      delete a["dr.simplyblock.io/request"];
+      delete a["dr.simplyblock.io/request-reason"];
+      delete p.__reqAt;
+    });
+    store.DiscoveryRun.filter(r => r.__sim).forEach(r => {
+      const age = t - Date.parse(r.metadata.creationTimestamp);
+      r.status = age < 1500 ? {
+        phase: "Pending"
+      } : age < 4000 ? {
+        phase: "Running",
+        progress: "building the graph",
+        started: r.metadata.creationTimestamp
+      } : {
+        phase: "Succeeded",
+        progress: "graph unchanged; no new bundle",
+        started: r.metadata.creationTimestamp,
+        completed: iso(t)
+      };
+    });
+  };
   const KINDS = Object.keys(store);
   const strip = o => {
     const c = JSON.parse(JSON.stringify(o));
     delete c.__sim;
+    delete c.__reqAt;
     return c;
   };
   window.DR_MOCK = {
     has: kind => KINDS.includes(kind),
     list: kind => {
       advance();
+      advanceDisc();
       answerProbes(Date.now());
       answerDHCP(Date.now());
       answerLabels(Date.now());
       return store[kind].map(strip);
-    }
+    },
+    // the discovery graph's data shards, in dr-hub's namespace
+    configMaps: ns => ns === HUBNS ? SHARDS.map(x => JSON.parse(JSON.stringify(x))) : []
   };
   const viewer = () => (localStorage.getItem("sb.viewas") || "").includes("reader") ? "viewer" : "admin";
   const findRef = (kind, ns, name) => store[kind].find(o => o.metadata.name === name && (!ns || o.metadata.namespace === ns));
@@ -13039,6 +13716,12 @@ window.SB_DR = {
       reservations: 0,
       conditions: []
     };
+    if (kind === "DiscoveryRun") {
+      obj.__sim = true;
+      obj.status = {
+        phase: "Pending"
+      };
+    }
     if (kind === "S3ProbeRequest" || kind === "HealthProbeRequest" || kind === "DHCPProbeRequest" || kind === "LabelRequest") obj.status = {
       phase: "Running"
     };
@@ -13073,6 +13756,8 @@ window.SB_DR = {
         o.status.message = `draft Expanding, StorageCluster ${(o.spec.sizing || {}).name || o.spec.cluster} not reported yet`;
       }
     }
+    // dr-hub (simulated) carries out a bundle request a moment after it lands
+    if (kind === "DRProposal" && body.metadata && body.metadata.annotations && body.metadata.annotations["dr.simplyblock.io/request"]) o.__reqAt = Date.now();
     if (body.metadata && body.metadata.annotations) {
       o.metadata.annotations = o.metadata.annotations || {};
       Object.entries(body.metadata.annotations).forEach(([k, v]) => {
@@ -14605,7 +15290,7 @@ const RB_ROLES = [{
   // the DR hub (dr-simplyblock): its chart's dr-admin role, held here at cluster scope
   {
     name: "sb:infra-admin-drhub",
-    rules: [rbRule(["*"], RB_RW.concat("override"), {
+    rules: [rbRule(["*"], RB_RW.concat("override", "approve", "rollback"), {
       apiGroups: ["dr.simplyblock.io"]
     }), rbRule(["siteprofiles", "dhcpservers"], RB_RW, {
       apiGroups: ["sitemap.simplyblock.io"]

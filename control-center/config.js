@@ -17,6 +17,9 @@ window.SB_CONFIG = {
   // Ramen's ops namespace on the DR hub: default namespace of discovered
   // ProtectedApplications and of the access review.
   drNamespace: "ramen-ops",
+  // dr-hub's own namespace on the hub: the discovery graph's data shards
+  // (ConfigMaps dr-graph-<site>-<n>) live there.
+  drHubNamespace: "dr-simplyblock",
   // The brand mark. In a pod this is the vendored copy — the CSP is
   // img-src 'self' and there is no egress to the public internet.
   logoUrl: "https://simplyblock.io/assets/images/Logo-white.svg",

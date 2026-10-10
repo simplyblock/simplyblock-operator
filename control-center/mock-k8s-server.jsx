@@ -52,6 +52,8 @@ function readList(kind, params) {
     items = (DB2().deployment_configs || []).map(cdcToK8s);
   } else if (NS_KINDS_M[kind]) {
     items = nsResources(params.get("__ns")).filter(o => o.kind === kind);
+    // the DR hub's discovery graph shards live in dr-hub's namespace (mock-drhub.jsx)
+    if (kind === "ConfigMap" && window.DR_MOCK && window.DR_MOCK.configMaps) items = items.concat(window.DR_MOCK.configMaps(params.get("__ns")));
   } else if (window.DR_MOCK && window.DR_MOCK.has(kind)) {
     // the DR hub's kinds (mock-drhub.jsx): namespaced ones scoped when a namespace is in the path
     items = window.DR_MOCK.list(kind);

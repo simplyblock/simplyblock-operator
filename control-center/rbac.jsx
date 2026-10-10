@@ -27,7 +27,7 @@ const ENTITY_OPS = {
   replicationpolicy: ["create", "read", "update", "delete"], backuppolicy: ["create", "read", "update", "delete"],
   drpolicy: ["create", "read", "update", "delete"], application: ["create", "read", "update", "delete", "failover", "failback", "fence"],
   role: ["read"], binding: ["create", "read", "delete"],
-  drhub: ["create", "read", "update", "delete", "failover", "relocate", "restart", "test", "override", "drrestore"]
+  drhub: ["create", "read", "update", "delete", "failover", "relocate", "restart", "test", "override", "drrestore", "approve", "rollback"]
 };
 // UI kind -> the main entity whose namespace governs it
 const KIND_ENTITY = {
@@ -41,7 +41,9 @@ const KIND_ENTITY = {
   // the DR hub's kinds (dr.simplyblock.io) — one entity, authorised by the
   // hub chart's dr-viewer / dr-operator / dr-admin roles
   pplan: "drhub", drpath: "drhub", papp: "drhub", rplan: "drhub", raction: "drhub", tbubble: "drhub", tsched: "drhub",
-  restore: "drhub", drconfig: "drhub", siteprofile: "drhub", dhcpserver: "drhub", sitedeploy: "drhub"
+  restore: "drhub", drconfig: "drhub", siteprofile: "drhub", dhcpserver: "drhub", sitedeploy: "drhub",
+  // AI-assisted discovery (ADR 0023)
+  dgraph: "drhub", drprop: "drhub", drun: "drhub"
 };
 // UI kind -> the CRD resource the API server checks (§3.5, the console's column)
 const KIND_RESOURCE = {
@@ -53,13 +55,14 @@ const KIND_RESOURCE = {
   plan: "protectionplans", method: "protectionplans", site: "drclusters", mpath: "protectionplans", appgroup: "protectionplans",
   protectedapp: "protectedapplications", role: "clusterroles", binding: "accessgrants", grant: "accessgrants",
   pplan: "protectionplans", drpath: "drpaths", papp: "protectedapplications", rplan: "recoveryplans", raction: "recoveryactions",
-  tbubble: "testbubbles", tsched: "testschedules", restore: "restoreactions", drconfig: "drconfigs", siteprofile: "siteprofiles", dhcpserver: "dhcpservers", sitedeploy: "storagesitedeployments"
+  tbubble: "testbubbles", tsched: "testschedules", restore: "restoreactions", drconfig: "drconfigs", siteprofile: "siteprofiles", dhcpserver: "dhcpservers", sitedeploy: "storagesitedeployments",
+  dgraph: "discoverygraphs", drprop: "drproposals", drun: "discoveryruns"
 };
 // UI kind -> API group, where it is not the default simplyblock group
 const KIND_GROUP = {pplan: "dr.simplyblock.io", drpath: "dr.simplyblock.io", papp: "dr.simplyblock.io", rplan: "dr.simplyblock.io",
   raction: "dr.simplyblock.io", tbubble: "dr.simplyblock.io", tsched: "dr.simplyblock.io", restore: "dr.simplyblock.io",
   drconfig: "dr.simplyblock.io", siteprofile: "sitemap.simplyblock.io", dhcpserver: "sitemap.simplyblock.io",
-  sitedeploy: "storage.simplyblock.io"};
+  sitedeploy: "storage.simplyblock.io", dgraph: "dr.simplyblock.io", drprop: "dr.simplyblock.io", drun: "dr.simplyblock.io"};
 const ENTITY_GROUP = {drhub: "dr.simplyblock.io", labelrequest: "dr.simplyblock.io"};
 // Without the operator API the Kubernetes clusters are the hub's OCM
 // ManagedClusters (cpapi.jsx hubK8s), so reading them is a question about
@@ -69,7 +72,9 @@ const ENTITY_RESOURCE = {k8scluster: "managedclusters", storagecluster: "storage
   replicationpolicy: "replicationpolicies", backuppolicy: "backuppolicies", drpolicy: "drpolicies", application: "protectedapplications", role: "clusterroles", binding: "accessgrants",
   drhub: "protectedapplications", labelrequest: "labelrequests"};
 const VERB_OF = {read: "get", create: "create", update: "update", delete: "delete", backup: "create", restoresource: "get",
-  failover: "create", relocate: "create", restart: "create", test: "create", drrestore: "create", override: "override"};
+  failover: "create", relocate: "create", restart: "create", test: "create", drrestore: "create", override: "override",
+  // a bundle's fallback approval and rollback: custom verbs dr-hub's webhook checks
+  approve: "approve", rollback: "rollback"};
 
 // ---- the store ---------------------------------------------------------------
 const AC_STATE = {ready: false, user: null, groups: [], initials: "??", label: "", rules: {cluster: [], ns: {}}, incomplete: false,

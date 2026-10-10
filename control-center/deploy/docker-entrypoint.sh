@@ -108,6 +108,7 @@ window.SB_CONFIG = {
   graylogOff: "${GL_OFF}",
   namespace: "${SB_NAMESPACE}",
   drNamespace: "${SB_DR_NAMESPACE}",
+  drHubNamespace: "${SB_DR_HUB_NAMESPACE:-dr-simplyblock}",
   mode: "${SB_MODE}",
   logoUrl: "${SB_LOGO_URL:-vendor/logo-white.svg}",
   authMode: "${SB_AUTH_MODE}",

@@ -79,6 +79,12 @@ const RESOURCES = {
   DHCPProbeRequest:     {plural: "dhcpproberequests",     short: "dhcpprobe", core: DR_API_GROUP, namespaced: true, dr: true},
   // DR's labels on a site's objects, applied by its dr-agent (labels.jsx)
   LabelRequest:         {plural: "labelrequests",         short: "labelreq", core: DR_API_GROUP, namespaced: true, dr: true},
+  // AI-assisted discovery (dr-hub ADR 0023): the per-site dependency graph
+  // (its data in compressed ConfigMap shards in dr-hub's namespace), the
+  // proposal bundles and the discovery runs
+  DiscoveryGraph:       {plural: "discoverygraphs",       short: "dgraph",   core: DR_API_GROUP, namespaced: false, dr: true},
+  DRProposal:           {plural: "drproposals",           short: "drprop",   core: DR_API_GROUP, namespaced: true, dr: true},
+  DiscoveryRun:         {plural: "discoveryruns",         short: "drun",     core: DR_API_GROUP, namespaced: true, dr: true},
   // what each site's dr-agent reports, read through the view dr-hub keeps
   // of it (<cluster>/dr-agent-status): the forms' discovered choices
   ManagedClusterView:    {plural: "managedclusterviews",    core: "view.open-cluster-management.io/v1beta1", namespaced: true},
@@ -115,6 +121,8 @@ const RESOURCES = {
 const NS = () => SB.namespace || "simplyblock";
 // Ramen's ops namespace on the hub: where discovered ProtectedApplications live
 const DR_NS = () => SB.drNamespace || "ramen-ops";
+// dr-hub's own namespace on the hub: where it keeps the discovery graph shards
+const DR_HUB_NS = () => SB.drHubNamespace || "dr-simplyblock";
 
 // Build the API server path for a kind. Core group is /api/v1, everything else
 // /apis/<group>/<version>. A namespaced kind is scoped to the console's
@@ -270,4 +278,4 @@ const OPS_TERMINAL = ["Succeeded", "Failed", "Aborted"];
 const opsRunning = o => o && o.status && !OPS_TERMINAL.includes(o.status.phase);
 
 Object.assign(window, {k8s, operator, helm, review, ApiError, RESOURCES, API_GROUP, GROUP, VERSION, DR_GROUP, DR_API_GROUP,
-  pathFor, apiVersionOf, ownedBy, inCluster, sel, submitOps, abortOps, opsKindFor, opsRunning, OPS_TERMINAL, NS, DR_NS});
+  pathFor, apiVersionOf, ownedBy, inCluster, sel, submitOps, abortOps, opsKindFor, opsRunning, OPS_TERMINAL, NS, DR_NS, DR_HUB_NS});

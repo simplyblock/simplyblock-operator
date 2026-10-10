@@ -138,6 +138,22 @@ rules:
   - apiGroups: ["dr.simplyblock.io"]
     resources: ["recoveryactions"]
     verbs: ["override"]
+  # AI-assisted discovery (dr-hub ADR 0023): the per-site dependency graph,
+  # the proposal bundles and the discovery runs. Its data shards are
+  # ConfigMaps in dr-hub's namespace, read with the configmaps rule above.
+  # dr-hub owns every status; the console asks for a pull request, a
+  # rejection or -- only without a GitOps target -- an approval or a rollback
+  # by annotating the bundle (dr.simplyblock.io/request), which dr-hub's
+  # webhook admits against the approve / rollback verbs.
+  - apiGroups: ["dr.simplyblock.io"]
+    resources: ["discoverygraphs", "drproposals", "discoveryruns"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["dr.simplyblock.io"]
+    resources: ["discoveryruns"]
+    verbs: ["create", "delete"]
+  - apiGroups: ["dr.simplyblock.io"]
+    resources: ["drproposals"]
+    verbs: ["patch", "approve", "rollback"]
   # the forms' Test buttons: dr-hub probes an S3 store, dr-agent health probes, on demand
   - apiGroups: ["dr.simplyblock.io"]
     resources: ["s3proberequests", "healthproberequests"]

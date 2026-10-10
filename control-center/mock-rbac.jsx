@@ -27,7 +27,7 @@ const RB_ROLES = [
       {name: "sb:infra-admin-allocations", rules: [rbRule(["nodepoolallocations", "managedclusters", "storageclusterclasses"], RB_RW)]},
       {name: "sb:infra-admin-grants", rules: [rbRule(["accessgrants"], RB_RW), rbRule(["clusterroles"], ["bind"], {apiGroups: [RB_RBAC], resourceNames: RB_ROLE_NAMES})]},
       // the DR hub (dr-simplyblock): its chart's dr-admin role, held here at cluster scope
-      {name: "sb:infra-admin-drhub", rules: [rbRule(["*"], RB_RW.concat("override"), {apiGroups: ["dr.simplyblock.io"]}), rbRule(["siteprofiles", "dhcpservers"], RB_RW, {apiGroups: ["sitemap.simplyblock.io"]}), rbRule(["storagesitedeployments"], RB_RW, {apiGroups: ["storage.simplyblock.io"]})]}]},
+      {name: "sb:infra-admin-drhub", rules: [rbRule(["*"], RB_RW.concat("override", "approve", "rollback"), {apiGroups: ["dr.simplyblock.io"]}), rbRule(["siteprofiles", "dhcpservers"], RB_RW, {apiGroups: ["sitemap.simplyblock.io"]}), rbRule(["storagesitedeployments"], RB_RW, {apiGroups: ["storage.simplyblock.io"]})]}]},
   {name: "sb:cluster-admin", boundAt: "sb-sc-<storage cluster>", description: "Runs one storage cluster: nodes, devices, operations. Binds cluster and pool roles inside its own namespace only.",
     parts: [
       {name: "sb:cluster-admin-storage", rules: [rbRule(RB_STORAGE, RB_RW)]},

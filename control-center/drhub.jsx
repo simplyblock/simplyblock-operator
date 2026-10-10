@@ -1641,6 +1641,7 @@ function PAppDetail({o: a, nav}) {
     <div>
       <DetailHead obj={a} title={a.name} sub={<><span className="mono" style={{color: "var(--dim)"}}>{a.namespace}</span><PathArrow from={a.source} to={a.target} /></>}
         badge={<><span className="badge">{a.appKind}</span>{a.method && <span className="badge">{a.method}</span>}{a.protected === false && <span className="badge" style={{color: "var(--bad)"}}>not protected</span>}</>} />
+      <ProposalLink kind="ProtectedApplication" name={a.name} namespace={a.namespace} nav={nav} />
       {!!running.length && <div className="banner" style={{color: "var(--info)", borderColor: "color-mix(in srgb,var(--info) 35%,transparent)", background: "color-mix(in srgb,var(--info) 8%,var(--panel))"}}><Icon n="refresh" s={15} />
         <span><b>{running.length} run{running.length === 1 ? "" : "s"} in progress:</b> {running.map(r => <Ref key={r.id} label={`${r.action || "Test"} ${r.name}`} onClick={() => nav.detail(r)} />)}</span></div>}
       {running.map(r => <RunEvents key={"ev" + r.id} run={r} nav={nav} />)}
@@ -1726,6 +1727,7 @@ function RPlanDetail({o: p, nav}) {
   return (
     <div>
       <DetailHead obj={p} title={p.name} sub={<><span className="mono" style={{color: "var(--dim)"}}>{p.namespace}</span><span className="mono">path {p.pathName}</span></>} badge={<span className="badge">RecoveryPlan</span>} />
+      <ProposalLink kind="RecoveryPlan" name={p.name} namespace={p.namespace} nav={nav} />
       <div className="stats">
         <Stat k="Readiness" v={<VerdictBadge v={p.verdict} />} s="aggregated over the applications" />
         <Stat k="Applications" v={p.counts.apps} s={`${p.counts.priorities} priorit${p.counts.priorities === 1 ? "y" : "ies"}`} />
@@ -1910,6 +1912,7 @@ function SiteProfileDetail({o: s, nav}) {
   return (
     <div>
       <DetailHead obj={s} title={s.name} sub={<span className="mono" style={{color: "var(--dim)"}}>SiteProfile · cluster {inv.clusterID || s.name}</span>} badge={<span className="badge k8s">managed cluster</span>} />
+      <ProposalLink kind="SiteProfile" name={s.name} nav={nav} />
       <div className="banner" style={{color: "var(--dim)", borderColor: "var(--line)", background: "var(--panel2)"}}><Icon n="refresh" s={15} /><span><b>Inventory is rewritten on every scan{s.reportedAt ? `, last ${fmtAgo(s.reportedAt)}` : ""}.</b> It is never edited; the bindings in the spec are what a dr-admin sets (Actions → Edit bindings).</span></div>
       {dhcp.data && missingServers(sp, dhcp.data).length > 0 && <div className="banner"><Icon n="alert" s={15} /><span><b>DHCP server {missingServers(sp, dhcp.data).join(", ")} is not registered for {s.name}.</b> The bindings name it, so no reservation is rendered for guests on those networks and a move here fails its guest-address check. Choose a registered server under Edit bindings, or register one with that name.</span></div>}
       <div className="stats">
@@ -2104,6 +2107,8 @@ function DrHubHome({nav}) {
 
       <div className="sech"><h2>More</h2><span className="ln"></span></div>
       <div className="navcards">
+        <NavCard icon="k8s" title="Discovery" sub="dependency graphs and application candidates per site" count="→" onClick={() => nav.drLayer("aidisc")} />
+        <NavCard icon="list" title="Proposals" sub="whole-application bundles awaiting approval" count="→" onClick={() => nav.drLayer("proposals")} />
         <NavCard icon="list" title="Recovery plans" sub="ordered sets of applications" count="→" onClick={() => nav.drLayer("rplans")} />
         <NavCard icon="cloud" title="Restores" sub="from S3 backups onto rebuilt sites" count="→" onClick={() => nav.drLayer("restores")} />
         <NavCard icon="k8s" title="Site profiles" sub="per-cluster inventory and bindings" count="→" onClick={() => nav.drLayer("siteprofiles")} />
@@ -2114,6 +2119,8 @@ function DrHubHome({nav}) {
   );
 }
 
+// shared with discover.jsx (AI-assisted discovery)
+Object.assign(window, {DrTable: Table, DrMono: Mono, DrCheckTable: CheckTable, DrConditions: Conditions, VerdictBadge});
 Object.assign(window, {DrHubHome, DRConfigView, PPlanTile, DRPathTile, PAppTile, RPlanTile, RActionTile, TBubbleTile, TSchedTile, RestoreTile, SiteProfileTile, DHCPServerTile, SiteDeployTile, SiteDeployDetail, deploySiteDialog,
   PPlanDetail, DRPathDetail, PAppDetail, RPlanDetail, RActionDetail, TBubbleDetail, TSchedDetail, RestoreDetail, SiteProfileDetail, DHCPServerDetail, MappingPanel,
   runActionDialog, runTestDialog, restoreDialog, newPPlanDialog: newPlanDialog, newPathDialog, proposePathsDialog, protectAppDialogDR, newRPlanDialog, editRPlanDialog, editTiersDialog, editPlanS3Dialog, newScheduleDialog, newDHCPServerDialog, ACTION_KIND_META, KIND_LABEL_DR,
