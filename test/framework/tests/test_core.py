@@ -1013,10 +1013,20 @@ class RestartSchedule(unittest.TestCase):
     # pnfs-1791616895 and pnfs-1791619063 drew a csi-node for their one guaranteed restart,
     # so neither tested the metadata server's recovery it was meant to.
     def test_guaranteed_targets_name_what_the_guaranteed_restarts_restart(self):
+        """Regression: 2026-10-09-guaranteed-restart-drew-csi-node (PR #713)."""
         for seed in range(20):
             fired = self.fire(self.plan(seed=seed, guaranteed=3,
                                         guaranteed_targets=["mds", "csi-node"]))
             self.assertEqual(sorted(t for _, t in fired), ["csi-node", "mds", "mds"], seed)
+
+    def test_named_restarts_happen_when_every_weight_is_zero(self):
+        fired = self.fire(self.plan(weights={"mds": 0.0, "csi-node": 0.0}, guaranteed=2,
+                                    guaranteed_targets=["mds"], chance=1.0))
+        self.assertEqual([t for _, t in fired], ["mds", "mds"])
+
+    def test_without_named_targets_zero_weights_restart_nothing(self):
+        fired = self.fire(self.plan(weights={"mds": 0.0}, guaranteed=2, chance=1.0))
+        self.assertEqual(fired, [])
 
     def test_without_guaranteed_targets_the_weights_decide(self):
         targets = {t for seed in range(30)

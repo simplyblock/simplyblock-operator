@@ -61,19 +61,20 @@ class RestartPlan:
         self._overlap = overlap_chance
         span = max(0.0, end - start)
         # Named targets go to the guaranteed restarts in order, so a run can promise to test
-        # one in particular. The chance-based ones keep drawing by weight.
+        # one in particular, whatever the weights say. The chance-based ones keep drawing by
+        # weight, so with every weight at zero only the named restarts happen.
         named = list(guaranteed_targets or [])
         self._pending = sorted(
             (start + self._rng.random() * span, named[i % len(named)] if named else self._pick())
             for i in range(guaranteed)
-        ) if self._targets else []
+        ) if named or self._targets else []
 
     def _pick(self) -> str:
         return self._rng.choices(self._targets, weights=self._weights)[0]
 
     def due(self, now: float, in_flight: int) -> list[str]:
         """The targets to restart at `now`, given how many restarts are still in flight."""
-        if not self._targets or now > self._end:
+        if now > self._end:
             return []
         out: list[str] = []
         while self._pending and self._pending[0][0] <= now:
@@ -83,7 +84,7 @@ class RestartPlan:
             if busy and now < self._end and self._rng.random() >= self._overlap:
                 break
             out.append(self._pending.pop(0)[1])
-        if (self._chance and self._rng.random() < self._chance
+        if (self._targets and self._chance and self._rng.random() < self._chance
                 and (in_flight + len(out) == 0 or self._rng.random() < self._overlap)):
             out.append(self._pick())
         return out
