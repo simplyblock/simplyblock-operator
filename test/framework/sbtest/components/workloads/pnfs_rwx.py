@@ -260,7 +260,11 @@ class PnfsRwxWorkload(FioWorkload):
                             size_mb=int(self.opt("round_size_mb")),
                             round_s=int(self.opt("round_s")),
                             wait_s=int(self.opt("round_wait_s")),
-                            runtime_s=int(self.opt("runtime_s")))
+                            runtime_s=int(self.opt("runtime_s")),
+                            # As long as setup() can take to reach the timed run, and a
+                            # minute for the exec that releases the pod.
+                            start_wait_s=int(self.opt("ready_timeout_s"))
+                            + int(self.opt("io_timeout_s")) + 60)
         direct = bool(self.opt("direct"))
         plan = [(f"{ctx.run_id}-pnfs-xw-{v}", "xwrite", "/logs/xw",
                  f"{ctx.run_id}-fio-xw-{v}", "pnfs-xwriter",

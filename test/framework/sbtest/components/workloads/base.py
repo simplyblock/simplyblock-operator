@@ -116,7 +116,26 @@ class FioWorkload(Component):
         fio.wait_io_flowing(ctx, self.name, self.opt("namespace"), self.timed_instances(),
                             float(self.opt("io_timeout_s")))
         self._io_started = time.time()
+        self._release_untimed(ctx)
         self.after_running(ctx)
+
+    def _release_untimed(self, ctx: RunContext) -> None:
+        """Tell every instance setup() did not wait for that the timed run has started.
+
+        Such an instance, a cross-read round pod, waits for <logdir>/start before it starts
+        its own clock, so it runs alongside the timed run rather than from its pod's start.
+        One that is not told starts on its own once its wait is up.
+        """
+        ns = self.opt("namespace")
+        timed = {(i.pod, i.container) for i in self.timed_instances()}
+        for inst in self._instances:
+            if (inst.pod, inst.container) in timed:
+                continue
+            out = kube.exec_sh(ns, inst.pod, f"touch {inst.logdir}/start && echo released",
+                               container=inst.container, timeout=30)
+            if "released" not in out:
+                ctx.log.warn(f"{self.name}: could not release {inst.pod}/{inst.container} "
+                             "for the timed run; it starts on its own when its wait is up")
 
     def stop(self, ctx: RunContext) -> None:
         """Wait for every fio instance to finish its runtime, and interrupt only stragglers.

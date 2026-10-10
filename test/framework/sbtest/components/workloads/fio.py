@@ -153,6 +153,9 @@ class Rounds:
     round_s: int     # a writer starts a round at most this often
     wait_s: int      # how long a reader waits for the next round before recording a timeout
     runtime_s: int   # how long the writer starts new rounds
+    #: How long a round pod waits for <logdir>/start, which the workload writes once the
+    #: timed run starts, before it starts without it. 0 starts at once.
+    start_wait_s: int = 0
 
 
 def round_marker(base: str) -> str:
@@ -183,12 +186,41 @@ def round_args(opts: Mapping[str, Any], rounds: Rounds, *, direct: bool) -> list
 
 # fio exits 0 after errors it continued past, so its JSON summary is what says a round
 # failed. Shared by both scripts: sets r to fio's exit code, or to 1 for such errors.
-_ROUND_RC = (
+_ROUND_R = (
     "r=$?\n"
-    '  if [ "$r" -eq 0 ] && grep -q \'"error" : [1-9]\' "$out" 2>/dev/null; then r=1; fi\n'
-    # result.json is the first failed round's summary, else the latest round's.
-    '  if [ "$rc" -eq 0 ]; then cp -f "$out" "$logs/result.json" 2>/dev/null; rc=$r; fi\n'
+    'if [ "$r" -eq 0 ] && grep -q \'"error" : [1-9]\' "$out" 2>/dev/null; then r=1; fi\n'
 )
+# Counts round r toward the script's rc. result.json is the first failed round's summary,
+# else the latest round's.
+_ROUND_RC = 'if [ "$rc" -eq 0 ]; then cp -f "$out" "$logs/result.json" 2>/dev/null; rc=$r; fi\n'
+
+
+def _indent(snippet: str, depth: int) -> str:
+    return "".join(" " * depth + ln + "\n" for ln in snippet.splitlines())
+
+
+def _await_start(tag: str, rounds: Rounds, logdir: str) -> str:
+    """Wait, bounded by start_wait_s, for the workload to say the timed run started.
+
+    A round pod starts with the other pods, and the randrw instances lay out their files
+    before their timed run. Without the wait, the rounds would start, and a reader's
+    deadline run out, that much earlier than the run they belong to.
+    """
+    if not rounds.start_wait_s:
+        return ""
+    return (
+        f"i=0; while [ ! -e {logdir}/start ] && [ \"$i\" -lt {rounds.start_wait_s} ]; do "
+        "sleep 1; i=$((i + 1)); done\n"
+        f'if [ -e {logdir}/start ]; then echo "[{tag}] $(date -u +%FT%TZ) the timed run '
+        'started"\n'
+        f'else echo "[{tag}] $(date -u +%FT%TZ) no start after {rounds.start_wait_s}s, '
+        'starting without it"; fi\n'
+    )
+
+
+def round_ledger(base: str) -> str:
+    """The file a writer appends `<round> <rc>` to for every round it publishes."""
+    return f"{base}.ledger"
 
 
 def round_writer_script(opts: Mapping[str, Any], rounds: Rounds, logdir: str,
@@ -196,23 +228,26 @@ def round_writer_script(opts: Mapping[str, Any], rounds: Rounds, logdir: str,
     """Write a new file each round, fsync it, and close it, then publish a marker.
 
     The marker is replaced with `mv`, which is atomic in one directory, so a reader never
-    reads a half-written marker. A round whose fio failed is published with its rc, and
-    readers skip it. Writes no IOPS log: rounds idle between files, which fio.outage reads
-    as an outage.
+    reads a half-written marker. Before the marker, the round and its rc go into the ledger,
+    so a reader that falls behind still knows how each round it missed ended. A round whose
+    fio failed is published with its rc, and readers skip it. Writes no IOPS log: rounds
+    idle between files, which fio.outage reads as an outage.
     """
     args = [*round_args(opts, rounds, direct=direct), "--do_verify=0", "--end_fsync=1",
             "--fsync_on_close=1"]
     marker = round_marker(rounds.base)
     return (
         _install(logdir)
+        + _await_start("xwrite", rounds, logdir)
         + f"logs={logdir}; base={rounds.base}; out=$logs/round.json\n"
         f"end=$(( $(date +%s) + {rounds.runtime_s} )); n=0; r=0; rc=0\n"
         f'echo "[xwrite] $(date -u +%FT%TZ) writing {rounds.size_mb}M rounds to $base.r<N>"\n'
         'while [ "$(date +%s)" -lt "$end" ]; do\n'
         '  n=$((n + 1)); f="$base.r$n"; t0=$(date +%s)\n'
         "  " + " ".join(args) + "\n"
-        "  " + _ROUND_RC
-        + f'  echo "$n $r more" > "{marker}.tmp" && mv -f "{marker}.tmp" "{marker}"\n'
+        + _indent(_ROUND_R + _ROUND_RC, 2)
+        + f'  echo "$n $r" >> "{round_ledger(rounds.base)}"\n'
+        f'  echo "$n $r more" > "{marker}.tmp" && mv -f "{marker}.tmp" "{marker}"\n'
         '  echo "[xwrite] $(date -u +%FT%TZ) round $n written rc=$r"\n'
         f'  rm -f "$base.r$((n - {ROUND_KEEP}))"\n'
         f"  pause=$(( t0 + {rounds.round_s} - $(date +%s) ))\n"
@@ -228,24 +263,34 @@ def round_writer_script(opts: Mapping[str, Any], rounds: Rounds, logdir: str,
 
 def round_reader_script(opts: Mapping[str, Any], rounds: Rounds, logdir: str,
                         direct: bool = True) -> str:
-    """Wait for each new round's marker, then verify that round with fio's verify_only.
+    """Wait for each new round's marker, then verify every round up to it, in order.
 
-    Verifies the newest round each time, so a reader slower than its writer skips rounds
-    rather than falling behind. Every wait is bounded: a wait longer than wait_s is logged
-    as a timeout and the reader waits again, and the reader stops at runtime_s + wait_s
-    whatever happened, so stop() always finds its exit code. One line per round names the
-    outcome, and the last line counts them, for fio.cross-read.
+    A reader slower than its writer works through the rounds it has not read yet, taking
+    each one's rc from the ledger. A round the writer has already removed, ROUND_KEEP
+    rounds after it, is logged as lapsed: this reader fell behind. A round the writer still
+    keeps whose file is gone is logged as missing, and fails the reader. Every wait is
+    bounded: a wait longer than wait_s is logged as a timeout and the reader waits again,
+    and the reader stops at runtime_s + wait_s whatever happened, so stop() always finds its
+    exit code. One line per round names the outcome, and the last line counts them, for
+    fio.cross-read.
     """
     args = [*round_args(opts, rounds, direct=direct), "--verify_only"]
+    marker = round_marker(rounds.base)
     return (
         _install(logdir)
+        + _await_start("xread", rounds, logdir)
         + f"logs={logdir}; base={rounds.base}; out=$logs/round.json\n"
+        # Whether the writer has removed round i: it does so once it publishes round
+        # i + ROUND_KEEP.
+        f'removed() {{ set -- $(cat "{marker}" 2>/dev/null); '
+        f'[ "${{1:-0}}" -ge $(( i + {ROUND_KEEP} )) ]; }}\n'
         f"deadline=$(( $(date +%s) + {rounds.runtime_s} + {rounds.wait_s} ))\n"
-        "last=0; rc=0; final=0; verified=0; failed=0; skipped=0; missing=0; timeouts=0\n"
+        "last=0; rc=0; final=0; verified=0; failed=0; skipped=0; missing=0; lapsed=0\n"
+        "timeouts=0\n"
         'while [ "$final" -eq 0 ] && [ "$(date +%s)" -lt "$deadline" ]; do\n'
         "  since=$(date +%s); n=0; w=0; st=more\n"
         "  while :; do\n"
-        f'    set -- $(cat "{round_marker(rounds.base)}" 2>/dev/null)\n'
+        f'    set -- $(cat "{marker}" 2>/dev/null)\n'
         '    n=${1:-0}; w=${2:-0}; st=${3:-more}\n'
         '    if [ "$n" -gt "$last" ] || [ "$st" = last ]; then break; fi\n'
         f'    if [ $(( $(date +%s) - since )) -ge {rounds.wait_s} ] || '
@@ -258,28 +303,52 @@ def round_reader_script(opts: Mapping[str, Any], rounds: Rounds, logdir: str,
         "    sleep 1\n"
         "  done\n"
         '  if [ "$st" = last ]; then final=1; fi\n'
-        '  if [ "$n" -le "$last" ]; then continue; fi\n'
-        '  last=$n; f="$base.r$n"\n'
-        '  if [ "$w" -ne 0 ]; then\n'
-        "    skipped=$((skipped + 1))\n"
-        '    echo "[xread] $(date -u +%FT%TZ) round $n skipped: its writer ended rc=$w"\n'
+        '  i=$last\n'
+        '  while [ "$i" -lt "$n" ]; do\n'
+        '    i=$((i + 1)); f="$base.r$i"; wi=$w\n'
+        '    if [ "$i" -lt "$n" ]; then\n'
+        f"      wi=$(awk -v i=\"$i\" '$1 == i {{ print $2 }}' \"{round_ledger(rounds.base)}\" "
+        "2>/dev/null); wi=${wi:-0}\n"
+        "    fi\n"
+        '    if [ "$wi" -ne 0 ]; then\n'
+        "      skipped=$((skipped + 1))\n"
+        '      echo "[xread] $(date -u +%FT%TZ) round $i skipped: its writer ended rc=$wi"\n'
         # Never let fio lay out a file that is not there: that would write the volume, and
         # verify the zeros it wrote.
-        '  elif [ ! -f "$f" ]; then\n'
-        "    missing=$((missing + 1))\n"
-        '    echo "[xread] $(date -u +%FT%TZ) round $n missing: $f is gone"\n'
-        "  else\n"
-        "    " + " ".join(args) + "\n"
-        "    " + _ROUND_RC.replace("\n  ", "\n    ")
-        + '    if [ "$r" -eq 0 ]; then verified=$((verified + 1)); '
-        'echo "[xread] $(date -u +%FT%TZ) round $n verified"\n'
-        '    else failed=$((failed + 1)); '
-        'echo "[xread] $(date -u +%FT%TZ) round $n failed rc=$r"; fi\n'
-        "  fi\n"
+        '    elif [ ! -f "$f" ] && removed; then\n'
+        "      lapsed=$((lapsed + 1))\n"
+        '      echo "[xread] $(date -u +%FT%TZ) round $i lapsed: removed before this reader '
+        'reached it"\n'
+        '    elif [ ! -f "$f" ]; then\n'
+        "      missing=$((missing + 1))\n"
+        '      echo "[xread] $(date -u +%FT%TZ) round $i missing: $f is gone"\n'
+        "    else\n"
+        "      " + " ".join(args) + "\n"
+        + _indent(_ROUND_R, 6)
+        + '      if [ "$r" -eq 0 ]; then\n'
+        + _indent(_ROUND_RC, 8)
+        + "        verified=$((verified + 1))\n"
+        '        echo "[xread] $(date -u +%FT%TZ) round $i verified"\n'
+        # The writer removed the file during the read: this reader was too slow, and the
+        # read proves nothing either way.
+        '      elif [ ! -f "$f" ] && removed; then\n'
+        "        lapsed=$((lapsed + 1))\n"
+        '        echo "[xread] $(date -u +%FT%TZ) round $i lapsed: removed while this reader '
+        'read it"\n'
+        "      else\n"
+        + _indent(_ROUND_RC, 8)
+        + "        failed=$((failed + 1))\n"
+        '        echo "[xread] $(date -u +%FT%TZ) round $i failed rc=$r"\n'
+        "      fi\n"
+        "    fi\n"
+        "  done\n"
+        '  if [ "$n" -gt "$last" ]; then last=$n; fi\n'
         "done\n"
+        # A published round that was gone fails the reader, though no fio failed.
+        'if [ "$missing" -gt 0 ] && [ "$rc" -eq 0 ]; then rc=1; fi\n'
         # The count before fio.rc: stop() and collection go ahead once fio.rc exists.
         'echo "[xread] $(date -u +%FT%TZ) done: verified=$verified failed=$failed '
-        'skipped=$skipped missing=$missing timeouts=$timeouts"\n'
+        'skipped=$skipped missing=$missing lapsed=$lapsed timeouts=$timeouts"\n'
         f'echo "$rc" > {logdir}/fio.rc\n'
         "sleep 100000\n"
     )

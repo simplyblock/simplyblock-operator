@@ -653,15 +653,21 @@ Every instance above verifies what its own client wrote, and a client can satisf
 its own cache. With `cross_readers` set, `workload.pnfs` also checks that another client sees
 the data. Each shared volume gets a writer pod that writes a new file of `round_size_mb` per
 round, at most every `round_s` seconds, with an md5 header in every block, and fsyncs and
-closes it. Only then does it publish the round in a marker file, replaced with `mv`. Each of
-the `cross_readers` reader pods, never on the writer's node, waits for the next marker and
-verifies the newest round with fio's `--verify_only` and the writer's parameters. NFS
-promises close-to-open consistency, so every block must match. A wrong block is reported by
-`fio.checksum` like any other, and each reader leaves `fio.job-error` its result. A wait
-longer than `round_wait_s` is logged as a timeout and the reader waits again. A reader stops
-`round_wait_s` after its runtime, so `round_wait_s` must stay below `stop_timeout_s`.
-`fio.cross-read` warns about a reader that verified no round, and fails a round a reader could
-not read. The writer keeps its last three rounds, which count against `volume_size_gb`. The
+closes it. Only then does it record the round and its exit code in a ledger and publish the
+round in a marker file, replaced with `mv`. Each of the `cross_readers` reader pods, never on
+the writer's node, waits for the next marker and verifies every round up to it, in order,
+with fio's `--verify_only` and the writer's parameters. NFS promises close-to-open
+consistency, so every block must match. A wrong block is reported by `fio.checksum` like any
+other, and each reader leaves `fio.job-error` its result. A wait longer than `round_wait_s` is
+logged as a timeout and the reader waits again. A reader stops `round_wait_s` after its
+runtime, so `round_wait_s` must stay below `stop_timeout_s`. The writer and the readers start
+when the timed run does: setup writes a start file into each round pod once every randrw
+instance is in its timed run, and a pod not told within `ready_timeout_s` + `io_timeout_s`
+starts on its own. `fio.cross-read` warns about a reader that verified no round, and fails a
+round a reader could not read. A round the writer still keeps whose file is gone fails the
+reader and the run. A round the writer removed before a slow reader reached it is logged as
+lapsed and warns. The writer keeps its last three rounds, which count against
+`volume_size_gb`. The
 round pods stay out of `pnfs.json`'s nodes: `pnfs.device-io` requires writes on every node
 listed there, and a reader-only node never writes to the namespace.
 
