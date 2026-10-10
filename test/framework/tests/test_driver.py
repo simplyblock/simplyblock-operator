@@ -1308,6 +1308,33 @@ class CrossReadScripts(unittest.TestCase):
             self.assertRegex(log, rf"\[xread\] \S+ round {last - 1} missing")
             self.assertRegex(log, rf"\[xread\] \S+ round {last} verified")
 
+    @unittest.skipUnless(shutil.which("fio"), "needs fio")
+    def test_a_reader_marks_a_round_it_failed_to_be_kept(self):
+        """A round that read back wrong is the evidence: the writer must not remove it before
+        the run asks the server what its bad ranges are made of (pnfs-1791632580)."""
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "data"))
+            opts, r = self._local(d, runtime_s=2)
+            last = self._rounds_written(d, r, opts)
+            with open(f"{r.base}.r{last}", "r+b") as fh:
+                fh.seek(8192)
+                fh.write(b"\0" * 4096)
+            self._run(d, fio.round_reader_script(opts, r, f"{d}/xr", direct=False), "xr")
+            self.assertNotEqual(self._rc(f"{d}/xr", 30), "0")
+            self.assertTrue(os.path.exists(f"{r.base}.r{last}.keep"),
+                            "the reader did not mark the round it failed")
+
+    @unittest.skipUnless(shutil.which("fio"), "needs fio")
+    def test_a_writer_never_removes_a_round_marked_to_be_kept(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "data"))
+            opts, r = self._local(d, runtime_s=6)
+            open(f"{r.base}.r1.keep", "w").close()  # noqa: SIM115
+            last = self._rounds_written(d, r, opts)
+            self.assertGreater(last, fio.ROUND_KEEP + 1, "too few rounds to show a removal")
+            self.assertTrue(os.path.exists(f"{r.base}.r1"), "a round marked to be kept was removed")
+            self.assertFalse(os.path.exists(f"{r.base}.r2"), "an unmarked old round was kept")
+
     def test_a_reader_with_no_writer_times_out_and_exits(self):
         with tempfile.TemporaryDirectory() as d:
             os.makedirs(os.path.join(d, "data"))
@@ -1318,6 +1345,60 @@ class CrossReadScripts(unittest.TestCase):
                 log = fh.read()
             self.assertIn("timed out", log)
             self.assertRegex(log, r"verified=0\b")
+
+
+class BadRangeExtents(unittest.TestCase):
+    """A round a reader failed is followed up on the server: the reader's bad blocks become
+    ranges, and the metadata server says what each range is made of (pnfs-1791632580)."""
+
+    LOG = [
+        "[xread] 2026-10-10T11:45:03Z the timed run started\n",
+        "verify: bad magic header 0, wanted acca at file /data/run1-xw-0.r1 offset 1048576, "
+        "length 4096 (requested block: offset=1048576, length=4096)\n",
+        "verify: bad magic header 0, wanted acca at file /data/run1-xw-0.r1 offset 1052672, "
+        "length 4096 (requested block: offset=1052672, length=4096)\n",
+        "verify: bad magic header 0, wanted acca at file /data/run1-xw-0.r1 offset 1048576, "
+        "length 4096 (requested block: offset=1048576, length=4096)\n",
+        "verify: bad magic header 0, wanted acca at file /data/run1-xw-0.r1 offset 9437184, "
+        "length 4096 (requested block: offset=9437184, length=4096)\n",
+        "[xread] 2026-10-10T11:50:35Z round 1 failed rc=1\n",
+    ]
+
+    def test_bad_blocks_become_ranges_per_file(self):
+        self.assertEqual(fio.bad_ranges(self.LOG),
+                         {"run1-xw-0.r1": [(1048576, 8192), (9437184, 4096)]})
+
+    def test_a_log_without_bad_blocks_has_no_ranges(self):
+        self.assertEqual(fio.bad_ranges(["[xread] round 1 verified\n"]), {})
+
+    def test_each_bad_range_is_asked_of_the_metadata_server(self):
+        report = {"export": "/var/lib/simplyblock/exports/default-c-6a32", "file": "run1-xw-0.r1",
+                  "offset": 1048576, "length": 8192, "size": 268435456,
+                  "pieces": [{"offset": 1048576, "length": 8192, "kind": "hole"}]}
+        fake = _FakeKube({
+            "get pvc": json.dumps({"spec": {"volumeName": "pv-1"}}),
+            "get pv": json.dumps({"spec": {"csi": {"volumeHandle": "c:p:6a32bdd8"}}}),
+            "get nfsexport": json.dumps({"spec": {"exportPath": report["export"]},
+                                         "status": {"mdsPodName": "mds-0"}}),
+            "mds-runner extents": json.dumps(report),
+        })
+        w = pnfs_rwx.PnfsRwxWorkload(shared_volumes=1, solo_pods=0, cross_readers=1,
+                                     namespace="default")
+        with _Ctx() as ctx, mock.patch.object(kube, "run", fake.run):
+            w._documents(ctx, "sc")
+            reader = next(i for i in w._instances if "-xr-" in i.pod)
+            with open(ctx.path(reader.evidence, "fio.log"), "w") as fh:
+                fh.writelines(self.LOG)
+            w.explain_bad_rounds(ctx)
+            with open(ctx.path(reader.evidence, "extents.json")) as fh:
+                saved = json.load(fh)
+        asks = [c for c in fake.calls if "exec" in c]
+        self.assertEqual(len(asks), 2, asks)
+        first = " ".join(asks[0])
+        self.assertIn("-n simplyblock exec mds-0 -c mds-runner", first)
+        self.assertIn("-export /var/lib/simplyblock/exports/default-c-6a32 -file run1-xw-0.r1 "
+                      "-offset 1048576 -length 8192", first)
+        self.assertEqual(saved[0]["pieces"][0]["kind"], "hole")
 
 
 class WorkloadStop(unittest.TestCase):

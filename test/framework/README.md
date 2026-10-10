@@ -672,6 +672,14 @@ removed it, so `volume_size_gb` has to fit all of them. The
 round pods stay out of `pnfs.json`'s nodes: `pnfs.device-io` requires writes on every node
 listed there, and a reader-only node never writes to the namespace.
 
+A round a reader fails is kept: the reader leaves `<round>.keep` beside it, and the writer
+never removes a round so marked, so each failure holds one more round file on the volume.
+After collection, every range the reader read wrong is asked of the metadata server with
+`mds-runner extents` in its pod. The server reports what the range is made of: written data
+with its device offset, an unwritten extent, a delayed allocation, or a hole. All but the
+first read back as zeros, and which one it is says where the write was lost. The answers are
+in the reader's `extents.json` and in one log line per range.
+
 ### Restarts during the run
 
 `chaos.restart` restarts what the data path depends on while fio runs, because the moments

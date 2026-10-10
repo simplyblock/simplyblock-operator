@@ -23,8 +23,10 @@ workload that broke one would produce a run whose verdict means less than it say
 from __future__ import annotations
 
 import json
+import os
+import re
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -223,6 +225,37 @@ def round_ledger(base: str) -> str:
     return f"{base}.ledger"
 
 
+#: fio's line for a block that read back wrong: its file and its offset.
+_BAD_BLOCK_RE = re.compile(r"^verify: .* at file (\S+) offset (\d+), length (\d+)")
+
+
+def bad_ranges(lines: Iterable[str]) -> dict[str, list[tuple[int, int]]]:
+    """A reader's bad blocks as (offset, length) ranges per file name, contiguous blocks
+    merged. fio may name one block more than once, and those count once."""
+    blocks: dict[str, set[tuple[int, int]]] = {}
+    for line in lines:
+        m = _BAD_BLOCK_RE.search(line)
+        if m:
+            blocks.setdefault(os.path.basename(m.group(1)), set()).add(
+                (int(m.group(2)), int(m.group(3))))
+    out: dict[str, list[tuple[int, int]]] = {}
+    for name, found in blocks.items():
+        ranges: list[tuple[int, int]] = []
+        for off, length in sorted(found):
+            if ranges and ranges[-1][0] + ranges[-1][1] >= off:
+                start, have = ranges[-1]
+                ranges[-1] = (start, max(have, off + length - start))
+            else:
+                ranges.append((off, length))
+        out[name] = ranges
+    return out
+
+
+def round_keep_marker(path: str) -> str:
+    """The file a reader leaves beside a round it failed, so its writer keeps the round."""
+    return f"{path}.keep"
+
+
 def round_writer_script(opts: Mapping[str, Any], rounds: Rounds, logdir: str,
                         direct: bool = True) -> str:
     """Write a new file each round, fsync it, and close it, then publish a marker.
@@ -249,7 +282,9 @@ def round_writer_script(opts: Mapping[str, Any], rounds: Rounds, logdir: str,
         + f'  echo "$n $r" >> "{round_ledger(rounds.base)}"\n'
         f'  echo "$n $r more" > "{marker}.tmp" && mv -f "{marker}.tmp" "{marker}"\n'
         '  echo "[xwrite] $(date -u +%FT%TZ) round $n written rc=$r"\n'
-        f'  rm -f "$base.r$((n - {ROUND_KEEP}))"\n'
+        # A round a reader failed is kept as evidence (round_keep_marker), however old.
+        f'  old="$base.r$((n - {ROUND_KEEP}))"\n'
+        '  if [ ! -e "$old.keep" ]; then rm -f "$old"; fi\n'
         f"  pause=$(( t0 + {rounds.round_s} - $(date +%s) ))\n"
         '  if [ "$pause" -gt 0 ]; then sleep "$pause"; fi\n'
         "done\n"
@@ -338,6 +373,8 @@ def round_reader_script(opts: Mapping[str, Any], rounds: Rounds, logdir: str,
         "      else\n"
         + _indent(_ROUND_RC, 8)
         + "        failed=$((failed + 1))\n"
+        # Marked before the writer can remove it, so the run can ask the server about it.
+        '        touch "$f.keep" 2>/dev/null\n'
         '        echo "[xread] $(date -u +%FT%TZ) round $i failed rc=$r"\n'
         "      fi\n"
         "    fi\n"

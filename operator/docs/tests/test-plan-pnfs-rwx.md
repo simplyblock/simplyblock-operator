@@ -211,9 +211,11 @@ restarted rather than migrated (design §13).
 
 #### Fault schedule: the restarts `chaos.restart` makes (sbtest), in `test/framework/tests/test_core.py`
 
-| #    | Scenario                                                                                                                                                                                             | Type       | Test                                                                                                                                                                                   |
-|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| U-91 | Regression (2026-10-09-guaranteed-restart-drew-csi-node): the guaranteed restarts restart the targets they name, in order, even when every weight is zero, and the weights decide only without names | Regression | `test_guaranteed_targets_name_what_the_guaranteed_restarts_restart`, `test_named_restarts_happen_when_every_weight_is_zero`, `test_without_named_targets_zero_weights_restart_nothing` |
+| #     | Scenario                                                                                                                                                                                             | Type       | Test                                                                                                                                                                                   |
+|-------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| U-91  | Regression (2026-10-09-guaranteed-restart-drew-csi-node): the guaranteed restarts restart the targets they name, in order, even when every weight is zero, and the weights decide only without names | Regression | `test_guaranteed_targets_name_what_the_guaranteed_restarts_restart`, `test_named_restarts_happen_when_every_weight_is_zero`, `test_without_named_targets_zero_weights_restart_nothing` |
+| U-100 | A reader marks a round it failed, and its writer never removes a marked round                                                                                                                        | Positive   | `test_a_reader_marks_a_round_it_failed_to_be_kept`, `test_a_writer_never_removes_a_round_marked_to_be_kept`                                                                            |
+| U-101 | A reader's bad blocks become ranges per file, and each range is asked of the metadata server                                                                                                         | Positive   | `test_bad_blocks_become_ranges_per_file`, `test_a_log_without_bad_blocks_has_no_ranges`, `test_each_bad_range_is_asked_of_the_metadata_server`                                         |
 
 ---
 
@@ -484,7 +486,7 @@ Struck rows are not counted.
 
 | Class                    | Scenarios | Covered | Not covered |
 |--------------------------|-----------|---------|-------------|
-| Unit (`U-`)              | 71        | 71      | 0           |
+| Unit (`U-`)              | 73        | 73      | 0           |
 | Operator (`O-`)          | 37        | 35      | 2           |
 | Sanity (`SAN-`)          | 2         | 0       | 2           |
 | Integration (`I-`)       | 3         | 3       | 0           |
@@ -492,7 +494,7 @@ Struck rows are not counted.
 | Failure injection (`F-`) | 14        | 4       | 10          |
 | Security (`SEC-`)        | 8         | 0       | 8           |
 | Load and soak (`L-`)     | 6         | 0       | 6           |
-| **Total**                | **159**   | **125** | **34**      |
+| **Total**                | **161**   | **127** | **34**      |
 
 Unit and operator coverage follows the code. The live classes are the gaps: four
 `F-` rows rest on a recorded run with a manual pod delete rather than on a suite

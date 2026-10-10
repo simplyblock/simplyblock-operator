@@ -379,7 +379,67 @@ class PnfsRwxWorkload(FioWorkload):
 
     # ── collection: the base collects every instance, this adds the mount ─────────
 
+    def explain_bad_rounds(self, ctx: RunContext) -> None:
+        """Ask the metadata server what every range a cross-reader read wrong is made of.
+
+        Zeros come from a hole, an unwritten extent, a delayed allocation, or written blocks
+        that never got the data, and each points at a different loss. The reader kept the
+        round (fio.round_keep_marker), and `mds-runner extents` in the server's pod reads
+        its extent map. The answers go into the reader's evidence as extents.json.
+        """
+        ns = self.opt("namespace")
+        readers = [i for i in self._instances if "-xr-" in i.pod]
+        bad = {}
+        for inst in readers:
+            try:
+                with open(ctx.path(inst.evidence, "fio.log")) as fh:
+                    ranges = fio.bad_ranges(fh)
+            except OSError:
+                continue
+            if ranges:
+                bad[inst] = ranges
+        if not bad:
+            return
+        _, lvols = self._resolve_lvols()
+        for inst, ranges in bad.items():
+            lvol = lvols.get(self._claim_of.get(inst.pod, ""), "")
+            cp = kube.run(["-n", ns, "get", "nfsexport", f"nfsexp-{lvol}", "-o", "json"],
+                          check=False)
+            export = json.loads(cp.stdout or "{}")
+            path = export.get("spec", {}).get("exportPath", "")
+            mds = export.get("status", {}).get("mdsPodName", "")
+            if not (lvol and path and mds):
+                ctx.log.warn(f"{self.name}: {inst.pod}: cannot ask the metadata server about "
+                             f"its bad ranges: no export found for lvol {lvol or '?'}")
+                continue
+            reports = []
+            for name, spans in ranges.items():
+                for offset, length in spans:
+                    out = kube.exec_sh(
+                        ctx.operator_namespace, mds,
+                        f"mds-runner extents -export {path} -file {name} "
+                        f"-offset {offset} -length {length}",
+                        container="mds-runner", timeout=60)
+                    try:
+                        report = json.loads(out)
+                    except json.JSONDecodeError:
+                        ctx.log.warn(f"{self.name}: {inst.pod}: {name} at {offset}: no extent "
+                                     f"report from {mds}: {out.strip()[:200]}")
+                        continue
+                    reports.append(report)
+                    kinds: dict[str, int] = {}
+                    for piece in report.get("pieces", []):
+                        kinds[piece["kind"]] = kinds.get(piece["kind"], 0) + piece["length"]
+                    ctx.log.warn(
+                        f"{self.name}: {inst.pod}: {name} {offset / 2**20:.2f}-"
+                        f"{(offset + length) / 2**20:.2f} MiB read wrong; on the server it is "
+                        + ", ".join(f"{k} {v / 2**20:.2f} MiB" for k, v in sorted(kinds.items()))
+                        + f" (file size {report.get('size', 0) / 2**20:.2f} MiB)")
+            with open(ctx.path(inst.evidence, "extents.json"), "w") as fh:
+                json.dump(reports, fh, indent=2)
+
     def after_collect(self, ctx: RunContext) -> None:
+        self.explain_bad_rounds(ctx)
         # One NFS mount per pod: every instance in the pod wrote through it, so every
         # instance's evidence carries the mount's counts.
         ns = self.opt("namespace")
