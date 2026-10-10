@@ -277,7 +277,7 @@ class CrossRead(Detector):
                                      "unread", subject=pod, detail=detail,
                     evidence=evidence, artifacts=[f"{pod}/fio.log"],
                     note="the writer removed these rounds before the reader reached them, "
-                         "so they were never checked across clients; a larger round_s "
+                         "so they were never checked across clients. A larger round_s "
                          "gives a reader more time per round")
             elif not counts["failed"] and not missing:
                 yield info(self.name, title=f"reader verified {counts['verified']} round(s)",
