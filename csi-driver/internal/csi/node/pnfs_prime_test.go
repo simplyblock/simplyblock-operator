@@ -6,11 +6,13 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/simplyblock/atlas/nfsclient"
+	export "github.com/simplyblock/atlas/nfsexport"
 )
 
 const (
@@ -161,22 +163,35 @@ func openProbeRecording(t *testing.T, release <-chan struct{}) (opened chan int)
 	return opened
 }
 
-// Regression: 2026-10-10-pnfs-probe-truncate-self-recall (pnfs-1791629269). An
-// O_TRUNC open of a probe file this client already held a layout on sent a
-// SETATTR to size 0. The server breaks every layout on a size change, this
+// Regression: 2026-10-10-pnfs-probe-truncate-self-recall (pnfs-1791629269). A
+// truncating open of a probe file this client already held a layout on sent a
+// SETATTR to size 0. The server recalls every layout on a size change, this
 // client's own included, and answered NFS4ERR_DELAY until it came back, which
-// it never did while the truncate held the inode. The probe writes one block
-// at offset 0 and never needs the file shorter.
-func TestPrimeLayoutNeverTruncatesTheProbe(t *testing.T) {
-	release := make(chan struct{})
-	close(release)
-	opened := openProbeRecording(t, release)
+// it never did while the truncate held the inode. So the probe must never
+// change the file's size. A probe another node left behind, larger than the
+// one block written here, is held open across the probe and keeps its size.
+func TestPrimeLayoutNeverChangesAnExistingProbesSize(t *testing.T) {
+	staging := t.TempDir()
+	const leftBehind = 8192
+	held, err := os.OpenFile(filepath.Join(staging, export.LayoutProbeName), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("creating the probe another node left behind: %v", err)
+	}
+	defer func() { _ = held.Close() }()
+	if _, err := held.Write(make([]byte, leftBehind)); err != nil {
+		t.Fatalf("writing it: %v", err)
+	}
 
-	if err := primeLayout(context.Background(), t.TempDir()); err != nil {
+	if err := primeLayout(context.Background(), staging); err != nil {
 		t.Fatalf("primeLayout: %v", err)
 	}
-	if flag := <-opened; flag&os.O_TRUNC != 0 {
-		t.Errorf("the probe was opened with O_TRUNC (flags %#x)", flag)
+
+	info, err := held.Stat()
+	if err != nil {
+		t.Fatalf("stat through the held handle: %v", err)
+	}
+	if info.Size() != leftBehind {
+		t.Errorf("the probe's size went from %d to %d: priming resized the file", leftBehind, info.Size())
 	}
 }
 
@@ -204,6 +219,39 @@ func TestProbesOfOneMountDoNotOverlap(t *testing.T) {
 		if err := <-errs; err != nil {
 			t.Errorf("primeLayout: %v", err)
 		}
+	}
+}
+
+// A stage that gives up while its probe waits behind another probe of the same
+// mount starts no I/O once the first is done.
+func TestAProbeCanceledWhileWaitingDoesNotStart(t *testing.T) {
+	release := make(chan struct{})
+	opened := openProbeRecording(t, release)
+	staging := t.TempDir()
+
+	first := make(chan error, 1)
+	go func() { first <- primeLayout(context.Background(), staging) }()
+	<-opened
+
+	ctx, cancel := context.WithCancel(context.Background())
+	second := make(chan error, 1)
+	go func() { second <- primeLayout(ctx, staging) }()
+	// The second probe is queued on the mount's lock by now; nothing it does
+	// before the lock can be observed from here.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	close(release)
+
+	if err := <-first; err != nil {
+		t.Errorf("first primeLayout: %v", err)
+	}
+	if err := <-second; !errors.Is(err, context.Canceled) {
+		t.Errorf("second primeLayout = %v, want context.Canceled", err)
+	}
+	select {
+	case <-opened:
+		t.Error("the canceled probe opened the probe file after the first finished")
+	default:
 	}
 }
 
