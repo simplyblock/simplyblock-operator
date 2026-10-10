@@ -1020,6 +1020,25 @@ class CrossReadLayout(unittest.TestCase):
                                      round_size_mb=1024)._documents(ctx, "sc")
         self.assertIn("round", str(e.exception))
 
+    def _fits(self, volume_gb: int) -> bool:
+        w = pnfs_rwx.PnfsRwxWorkload(shared_volumes=1, pods_per_shared=1, solo_pods=0,
+                                     containers_per_pod=1, file_size_gb=1,
+                                     volume_size_gb=volume_gb, cross_readers=2,
+                                     round_size_mb=1024)
+        with _Ctx() as ctx:
+            try:
+                w._documents(ctx, "sc")
+            except RuntimeError:
+                return False
+        return True
+
+    def test_the_round_being_written_and_those_readers_hold_count_too(self):
+        """Round n is written while the ROUND_KEEP before it are still there, and each
+        reader can hold one more open after the writer removed it."""
+        peak_gb = 1 + (fio.ROUND_KEEP + 1 + 2) + pnfs_rwx.HEADROOM_GB
+        self.assertFalse(self._fits(peak_gb - 1))
+        self.assertTrue(self._fits(peak_gb))
+
     def test_a_reader_wait_longer_than_the_stop_grace_is_refused(self):
         """stop() interrupts only fio, so a reader still waiting for a round when the grace
         ends would never write its exit code."""

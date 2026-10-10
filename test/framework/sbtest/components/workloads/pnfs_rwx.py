@@ -70,7 +70,8 @@ class PnfsRwxWorkload(FioWorkload):
             # Reader pods per shared volume that verify, from other nodes, the rounds a
             # writer pod of that volume publishes. 0 adds neither.
             "cross_readers": 0,
-            "round_size_mb": 256,   # each round's file, ROUND_KEEP of them on the volume
+            # Each round's file. Up to ROUND_KEEP + 1 + cross_readers of them on the volume.
+            "round_size_mb": 256,
             "round_s": 30,          # a writer starts a round at most this often
             # How long a reader waits for the next round before logging a timeout. Below
             # stop_timeout_s, so a reader has exited before stop() gives up on it.
@@ -171,11 +172,15 @@ class PnfsRwxWorkload(FioWorkload):
                 f"{self.name}: a volume carries {busiest} fio file(s) of {file_gb}G, which "
                 f"with {HEADROOM_GB}G of headroom does not fit {volume_gb}G; raise "
                 "volume_size_gb or lower file_size_gb")
-        rounds_gb = fio.ROUND_KEEP * int(self.opt("round_size_mb")) / 1024 if readers else 0
+        # The writer removes a round only after publishing the one ROUND_KEEP after it, so
+        # the round being written and the ROUND_KEEP before it exist at once. A reader still
+        # reading a removed round keeps it open, and the server frees it only at the close.
+        round_files = fio.ROUND_KEEP + 1 + readers
+        rounds_gb = round_files * int(self.opt("round_size_mb")) / 1024 if readers else 0
         if readers and per_shared * containers * file_gb + rounds_gb + HEADROOM_GB > volume_gb:
             raise RuntimeError(
                 f"{self.name}: a shared volume carries {per_shared * containers} fio file(s) "
-                f"of {file_gb}G and {fio.ROUND_KEEP} round file(s) of "
+                f"of {file_gb}G and up to {round_files} round file(s) of "
                 f"{self.opt('round_size_mb')}M, which with {HEADROOM_GB}G of headroom does "
                 f"not fit {volume_gb}G; raise volume_size_gb or lower round_size_mb")
 

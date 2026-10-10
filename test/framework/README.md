@@ -666,8 +666,9 @@ instance is in its timed run, and a pod not told within `ready_timeout_s` + `io_
 starts on its own. `fio.cross-read` warns about a reader that verified no round, and fails a
 round a reader could not read. A round the writer still keeps whose file is gone fails the
 reader and the run. A round the writer removed before a slow reader reached it is logged as
-lapsed and warns. The writer keeps its last three rounds, which count against
-`volume_size_gb`. The
+lapsed and warns. The writer keeps its last three rounds. The round being written and the
+three before it exist at once, and each reader can hold one more open after the writer
+removed it, so `volume_size_gb` has to fit all of them. The
 round pods stay out of `pnfs.json`'s nodes: `pnfs.device-io` requires writes on every node
 listed there, and a reader-only node never writes to the namespace.
 
