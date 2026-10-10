@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
@@ -107,6 +108,25 @@ type NFSExportReconciler struct {
 
 	// OperatorNamespace is where the metadata server pods run.
 	OperatorNamespace string
+
+	// Flows has the nodes forget the connections translated to a metadata
+	// server address the export no longer uses. Nil skips it, so the kind
+	// works without csi-link (design-pnfs-mds-vm.md §8.1).
+	Flows FlowForgetter
+
+	// withdrawn is each export's address withdrawn while its pod went away,
+	// until the replacement's address replaces it.
+	withdrawnMu sync.Mutex
+	withdrawn   map[client.ObjectKey]string
+}
+
+// FlowForgetter asks every node to drop its connection-tracking entries for
+// NFS traffic to an export Service's ClusterIP that was translated to the given
+// address. It returns at once, because the work happens in the background and
+// never holds a reconcile. Cancel drops a request still waiting to run.
+type FlowForgetter interface {
+	Forget(serviceIP, ip string)
+	Cancel(serviceIP, ip string)
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=nfsexports,verbs=get;list;watch;create;update;patch;delete
