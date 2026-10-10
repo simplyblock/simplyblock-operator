@@ -31,6 +31,8 @@ import (
 
 	"github.com/simplyblock/atlas/nfsclient"
 	export "github.com/simplyblock/atlas/nfsexport"
+
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
 // scsiLayout is the layout type mountstats reports for a pNFS SCSI mount.
@@ -41,6 +43,15 @@ const scsiLayout = "LAYOUT_SCSI"
 // period and a while after, so seconds are enough to be first.
 const primeInterval = 2 * time.Second
 
+// openProbe opens the probe file. A variable so the tests can see how.
+var openProbe = os.OpenFile
+
+// probeLocks runs one probe per staging mount at a time. Stage, expand, and
+// the reconnect loop all probe, and two probes of one mount share its probe
+// file: one would hold the inode while the server waited for the other's
+// layout to come back.
+var probeLocks = csicommon.NewVolumeLocks()
+
 // primeLayout triggers a LAYOUTGET from this process rather than a pod. See the
 // file comment.
 func primeLayout(ctx context.Context, stagingPath string) error {
@@ -50,8 +61,18 @@ func primeLayout(ctx context.Context, stagingPath string) error {
 		return fmt.Errorf("pnfs: not taking the layout for %s: %w", stagingPath, err)
 	}
 
+	unlock := probeLocks.Lock(stagingPath)
+	defer unlock()
+	// Looked at again: waiting for another probe can outlast the stage.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("pnfs: not taking the layout for %s: %w", stagingPath, err)
+	}
+
 	probe := filepath.Join(stagingPath, export.LayoutProbeName)
-	f, err := os.OpenFile(probe, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	// Never O_TRUNC. A probe another node left behind is overwritten in place,
+	// because a size change makes the server recall every layout on the file,
+	// this client's own included, and answer NFS4ERR_DELAY until they are back.
+	f, err := openProbe(probe, os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("pnfs: opening the layout probe at %s: %w", probe, err)
 	}

@@ -6,10 +6,13 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/simplyblock/atlas/nfsclient"
+	export "github.com/simplyblock/atlas/nfsexport"
 )
 
 const (
@@ -142,5 +145,137 @@ func TestPrimeLayoutRespectsACanceledStage(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Error("priming touched the mount despite the cancellation")
+	}
+}
+
+// openProbeRecording replaces how the probe is opened for one test, recording
+// each open's flags and holding it until release is closed.
+func openProbeRecording(t *testing.T, release <-chan struct{}) (opened chan int) {
+	t.Helper()
+	opened = make(chan int, 8)
+	real := openProbe
+	openProbe = func(name string, flag int, perm os.FileMode) (*os.File, error) {
+		opened <- flag
+		<-release
+		return real(name, flag, perm)
+	}
+	t.Cleanup(func() { openProbe = real })
+	return opened
+}
+
+// Regression: 2026-10-10-pnfs-probe-truncate-self-recall (pnfs-1791629269). A
+// truncating open of a probe file this client already held a layout on sent a
+// SETATTR to size 0. The server recalls every layout on a size change, this
+// client's own included, and answered NFS4ERR_DELAY until it came back, which
+// it never did while the truncate held the inode. So the probe must never
+// change the file's size. A probe another node left behind, larger than the
+// one block written here, is held open across the probe and keeps its size.
+func TestPrimeLayoutNeverChangesAnExistingProbesSize(t *testing.T) {
+	staging := t.TempDir()
+	const leftBehind = 8192
+	held, err := os.OpenFile(filepath.Join(staging, export.LayoutProbeName), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("creating the probe another node left behind: %v", err)
+	}
+	defer func() { _ = held.Close() }()
+	if _, err := held.Write(make([]byte, leftBehind)); err != nil {
+		t.Fatalf("writing it: %v", err)
+	}
+
+	if err := primeLayout(context.Background(), staging); err != nil {
+		t.Fatalf("primeLayout: %v", err)
+	}
+
+	info, err := held.Stat()
+	if err != nil {
+		t.Fatalf("stat through the held handle: %v", err)
+	}
+	if info.Size() != leftBehind {
+		t.Errorf("the probe's size went from %d to %d: priming resized the file", leftBehind, info.Size())
+	}
+}
+
+// Regression: 2026-10-10-pnfs-probe-truncate-self-recall (pnfs-1791629269). A
+// stage's probe and the background loop's probed one mount at once: one held
+// the inode while the other's layout had to be returned. Probes of one mount
+// run one after the other.
+func TestProbesOfOneMountDoNotOverlap(t *testing.T) {
+	release := make(chan struct{})
+	opened := openProbeRecording(t, release)
+	staging := t.TempDir()
+
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() { errs <- primeLayout(context.Background(), staging) }()
+	}
+	<-opened
+	select {
+	case <-opened:
+		t.Error("a second probe of the same mount started while the first was running")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Errorf("primeLayout: %v", err)
+		}
+	}
+}
+
+// A stage that gives up while its probe waits behind another probe of the same
+// mount starts no I/O once the first is done.
+func TestAProbeCanceledWhileWaitingDoesNotStart(t *testing.T) {
+	release := make(chan struct{})
+	opened := openProbeRecording(t, release)
+	staging := t.TempDir()
+
+	first := make(chan error, 1)
+	go func() { first <- primeLayout(context.Background(), staging) }()
+	<-opened
+
+	ctx, cancel := context.WithCancel(context.Background())
+	second := make(chan error, 1)
+	go func() { second <- primeLayout(ctx, staging) }()
+	// The second probe is queued on the mount's lock by now; nothing it does
+	// before the lock can be observed from here.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	close(release)
+
+	if err := <-first; err != nil {
+		t.Errorf("first primeLayout: %v", err)
+	}
+	if err := <-second; !errors.Is(err, context.Canceled) {
+		t.Errorf("second primeLayout = %v, want context.Canceled", err)
+	}
+	select {
+	case <-opened:
+		t.Error("the canceled probe opened the probe file after the first finished")
+	default:
+	}
+}
+
+// Different mounts are different servers' state, and one slow probe must not
+// hold up another mount's stage.
+func TestProbesOfDifferentMountsRunTogether(t *testing.T) {
+	release := make(chan struct{})
+	opened := openProbeRecording(t, release)
+
+	errs := make(chan error, 2)
+	for _, staging := range []string{t.TempDir(), t.TempDir()} {
+		go func() { errs <- primeLayout(context.Background(), staging) }()
+	}
+	for range 2 {
+		select {
+		case <-opened:
+		case <-time.After(2 * time.Second):
+			t.Fatal("a probe of one mount waited for a probe of another")
+		}
+	}
+	close(release)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Errorf("primeLayout: %v", err)
+		}
 	}
 }
