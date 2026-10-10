@@ -169,6 +169,7 @@ func TestKernelCmdlineCarriesTheStaticAddress(t *testing.T) {
 		"root=/dev/vda", "ro", "console=hvc0", "panic=-1",
 		"ip=169.254.100.2::169.254.100.1:255.255.255.252:pnfs-mds-0:eth0:off",
 		"nfsd.pnfs_probe_name=" + export.LayoutProbeName, "nfsd.pnfs_layout_hold=60",
+		"xfs.pnfs_zeroed_layouts=0",
 	}
 	cmdline := strings.Fields(validGuest(ArchAMD64).KernelCmdline())
 	if !slices.Equal(cmdline, want) {
@@ -178,6 +179,25 @@ func TestKernelCmdlineCarriesTheStaticAddress(t *testing.T) {
 	arm := strings.Fields(validGuest(ArchARM64).KernelCmdline())
 	if !slices.Equal(arm, append(slices.Clone(want), "acpi=on")) {
 		t.Errorf("arm64 cmdline = %q, want amd64's plus acpi=on", arm)
+	}
+}
+
+// Regression: 2026-10-10-pnfs-mds-restart-lost-layoutcommit (PR #714), the
+// command-line half only. F-20 in test-plan-pnfs-rwx.md is the live half.
+//
+// Zeroed layouts are the guest kernel's opt-in (pnfs-os patch 0005): blocks a
+// client writes through a layout are durable without its LAYOUTCOMMIT, which a
+// restarted server never receives. The command line states the choice either
+// way, so a guest's dmesg shows which one it booted with.
+func TestKernelCmdlineEnablesZeroedLayoutsOnRequest(t *testing.T) {
+	g := validGuest(ArchAMD64)
+	g.ZeroedLayouts = true
+	cmdline := strings.Fields(g.KernelCmdline())
+	if !slices.Contains(cmdline, "xfs.pnfs_zeroed_layouts=1") {
+		t.Errorf("cmdline = %q, want xfs.pnfs_zeroed_layouts=1", cmdline)
+	}
+	if slices.Contains(cmdline, "xfs.pnfs_zeroed_layouts=0") {
+		t.Errorf("cmdline = %q carries both settings", cmdline)
 	}
 }
 

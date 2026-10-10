@@ -82,6 +82,12 @@ type Guest struct {
 
 	// QMPSocket is the Unix socket the runner drives QEMU through.
 	QMPSocket string
+
+	// ZeroedLayouts has the guest's XFS hand out pNFS write layouts over
+	// zeroed, written blocks instead of unwritten ones, so data a client
+	// wrote through a layout survives a server restart that lost its
+	// LAYOUTCOMMIT. Each allocation costs a WRITE ZEROES on the volume.
+	ZeroedLayouts bool
 }
 
 // Binary returns the QEMU system emulator for the guest's architecture.
@@ -160,7 +166,8 @@ const layoutHoldSeconds = 60
 // init runs, on eth0, which the guest keeps by not renaming interfaces. panic=-1
 // turns a guest panic into an immediate reboot, which -no-reboot turns into
 // QEMU exiting. The nfsd parameters turn on the guest kernel's layout hold
-// (see layoutHoldSeconds).
+// (see layoutHoldSeconds), and the XFS one states whether write layouts are
+// zeroed (see Guest.ZeroedLayouts).
 func (g Guest) KernelCmdline() string {
 	parts := []string{
 		"root=/dev/vda", "ro", "console=hvc0", "panic=-1",
@@ -168,11 +175,20 @@ func (g Guest) KernelCmdline() string {
 			g.Address.Addr(), g.Gateway, netmask(g.Address), g.Hostname),
 		"nfsd.pnfs_probe_name=" + export.LayoutProbeName,
 		fmt.Sprintf("nfsd.pnfs_layout_hold=%d", layoutHoldSeconds),
+		"xfs.pnfs_zeroed_layouts=" + boolParam(g.ZeroedLayouts),
 	}
 	if g.Arch == ArchARM64 {
 		parts = append(parts, "acpi=on")
 	}
 	return strings.Join(parts, " ")
+}
+
+// boolParam renders a kernel boolean parameter.
+func boolParam(on bool) string {
+	if on {
+		return "1"
+	}
+	return "0"
 }
 
 func (g Guest) netdev() string {
