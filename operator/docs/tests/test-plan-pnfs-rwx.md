@@ -475,7 +475,7 @@ Struck rows are not counted.
 
 | Class                    | Scenarios | Covered | Not covered |
 |--------------------------|-----------|---------|-------------|
-| Unit (`U-`)              | 63        | 63      | 0           |
+| Unit (`U-`)              | 64        | 64      | 0           |
 | Operator (`O-`)          | 36        | 34      | 2           |
 | Sanity (`SAN-`)          | 2         | 0       | 2           |
 | Integration (`I-`)       | 3         | 3       | 0           |
@@ -483,7 +483,7 @@ Struck rows are not counted.
 | Failure injection (`F-`) | 13        | 4       | 9           |
 | Security (`SEC-`)        | 8         | 0       | 8           |
 | Load and soak (`L-`)     | 6         | 0       | 6           |
-| **Total**                | **149**   | **116** | **33**      |
+| **Total**                | **150**   | **117** | **33**      |
 
 Unit and operator coverage follows the code. The live classes are the gaps: four
 `F-` rows rest on a recorded run with a manual pod delete rather than on a suite
