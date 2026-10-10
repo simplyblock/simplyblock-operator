@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -1165,6 +1166,52 @@ class ConntrackSampling(unittest.TestCase):
         # The sampler execs through kube.run, and the pod follows "exec" in its arguments.
         return s, lambda args, **k: _cp(by_pod[args[args.index("exec") + 1]])
 
+    # pnfs-1791616895 warned for every node at the first sample, only because the helpers
+    # were still installing conntrack-tools, and never said the reads worked afterward.
+    def test_a_node_that_becomes_readable_again_is_said_once(self):
+        from sbtest.components.conntrack import UNAVAILABLE
+        outputs = {"w1": UNAVAILABLE + "\n"}
+        s, run = self._sampler(outputs)
+        with tempfile.TemporaryDirectory() as d:
+            log = os.path.join(d, "run.log")
+            ctx = RunContext(run_id="r", outdir=d, log=Logger(log))
+            with mock.patch.object(kube, "run", run):
+                s._sample(ctx)
+                outputs["w1"] = self.TOOLS
+                s2, run2 = self._sampler(outputs)
+            with mock.patch.object(kube, "run", run2):
+                s._sample(ctx)
+                s._sample(ctx)
+            ctx.log.close()
+            with open(log) as fh:
+                text = fh.read()
+        self.assertEqual(text.count("readable again"), 1, text)
+
+    def test_sampling_waits_for_the_helpers_to_be_ready(self):
+        from sbtest.components.conntrack import ConntrackSampler
+        s = ConntrackSampler(namespace="sb-test", csi_namespace="sb-op")
+        s._helpers = {"w1": "r-ct-w1", "w2": "r-ct-w2"}
+        tries: dict[str, int] = {}
+
+        def run(args: list[str], **_: object) -> Any:
+            pod = args[args.index("exec") + 1]
+            tries[pod] = tries.get(pod, 0) + 1
+            return _cp(rc=0 if tries[pod] >= 3 else 1)
+        with mock.patch.object(kube, "run", run), \
+                mock.patch("sbtest.components.conntrack.time.sleep", lambda s: None):
+            ready = s._wait_for_helpers(RunContext(run_id="r", outdir="/tmp", log=Logger(None)))
+        self.assertEqual(ready, ["w1", "w2"])
+        self.assertEqual(tries, {"r-ct-w1": 3, "r-ct-w2": 3})
+
+    def test_helpers_that_never_get_ready_do_not_hold_the_run(self):
+        from sbtest.components.conntrack import ConntrackSampler
+        s = ConntrackSampler(namespace="sb-test", csi_namespace="sb-op", helper_ready_s=0)
+        s._helpers = {"w1": "r-ct-w1"}
+        with mock.patch.object(kube, "run", lambda *a, **k: _cp(rc=1)), \
+                mock.patch("sbtest.components.conntrack.time.sleep", lambda s: None):
+            ready = s._wait_for_helpers(RunContext(run_id="r", outdir="/tmp", log=Logger(None)))
+        self.assertEqual(ready, [])
+
     def test_a_node_with_no_nfs_flows_is_still_recorded_as_sampled(self):
         # Otherwise "nothing pinned" and "never looked" read the same.
         s, exec_sh = self._sampler({"w1": self.TOOLS, "w2": ""})
@@ -1258,3 +1305,68 @@ class KubectlApplyEach(unittest.TestCase):
         with mock.patch.object(kube, "run", run):
             kube.apply_each("ns", docs)
         self.assertEqual([json.loads(s)["metadata"]["name"] for s in stdins], ["a", "b"])
+
+
+class ParallelCollection(unittest.TestCase):
+    """Collection did one kubectl call at a time: 40-47 s for 16 fio instances and 34-37 s
+    for 35 container logs in pnfs-1791616895 and pnfs-1791575321."""
+
+    @staticmethod
+    def concurrency() -> tuple[Any, list[int]]:
+        import threading
+        lock, now, peak = threading.Lock(), [0], [0]
+
+        def enter() -> None:
+            with lock:
+                now[0] += 1
+                peak[0] = max(peak[0], now[0])
+            time.sleep(0.05)
+            with lock:
+                now[0] -= 1
+        return enter, peak
+
+    def test_fio_instances_are_collected_in_parallel_and_in_order(self):
+        from sbtest.components.workloads import fio, pnfs_rwx
+        enter, peak = self.concurrency()
+        done: list[str] = []
+
+        def collect(ctx: Any, ns: str, inst: Any, migs: list) -> str:
+            enter()
+            done.append(inst.evidence)
+            return str(inst.evidence)
+        w = pnfs_rwx.PnfsRwxWorkload(namespace="default")
+        w._instances = [fio.FioInstance(pod=f"p{i}", container="c", filename="/f", logdir="/l",
+                                        evidence=f"r-fio-{i}-c0") for i in range(8)]
+        w._pods = [f"p{i}" for i in range(8)]
+        with mock.patch.object(fio, "collect_instance", collect), \
+                mock.patch.object(w, "after_collect", lambda ctx: None):
+            w.collect(RunContext(run_id="r", outdir=tempfile.mkdtemp(), log=Logger(None)))
+        self.assertGreater(peak[0], 1)
+        self.assertEqual(sorted(done), sorted(i.evidence for i in w._instances))
+
+    def test_container_logs_are_fetched_in_parallel_into_the_same_artifacts(self):
+        from sbtest.components import logs as logs_mod
+        enter, peak = self.concurrency()
+        pods = [kube.Pod(name=f"simplyblock-csi-node-{n}", namespace="sb", node=n,
+                         containers=("csi-node",), phase="Running") for n in ("w1", "w2", "w3")]
+
+        def run_bytes(args: list[str], **_: object) -> bytes:
+            enter()
+            return f"log of {args[args.index('exec') + 1]}\n".encode()
+        c = logs_mod.LogCollect(namespace="sb", targets=[
+            {"pods": ["simplyblock-csi-node"], "containers": ["csi-node"], "plane": "operator",
+             "name_from": "pod-node", "name": "csi-node"}])
+        with tempfile.TemporaryDirectory() as d:
+            ctx = RunContext(run_id="r", outdir=d, log=Logger(None))
+            ctx.shared["logs.grabbers"] = {n: f"grab-{n}" for n in ("w1", "w2", "w3")}
+            c.bind_namespaces(ctx)
+            with mock.patch.object(kube, "list_pods", lambda *a, **k: pods), \
+                    mock.patch.object(kube, "run_bytes", run_bytes):
+                c.collect(ctx)
+            got = {}
+            for f in sorted(os.listdir(d)):
+                if f.startswith("csi-node-"):
+                    with open(os.path.join(d, f)) as fh:
+                        got[f] = fh.read()
+        self.assertGreater(peak[0], 1)
+        self.assertEqual(got, {f"csi-node-{n}.txt": f"log of grab-{n}\n" for n in ("w1", "w2", "w3")})

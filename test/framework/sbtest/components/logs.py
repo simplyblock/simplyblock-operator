@@ -15,6 +15,7 @@ which containers it owns so the grab skips them.
 
 from __future__ import annotations
 
+import concurrent.futures
 import contextlib
 import os
 import subprocess
@@ -321,6 +322,10 @@ class LogStream(_GrabberBase):
         self._grabbers = {}
 
 
+#: How many container logs the collector fetches at once.
+COLLECT_PARALLEL = 6
+
+
 @component
 class LogCollect(_GrabberBase):
     """Grab container logs from the hosts at the end of the run.
@@ -419,26 +424,35 @@ class LogCollect(_GrabberBase):
         for p, c, artifact in plan:
             grouped.setdefault(artifact, []).append((p, c))
 
-        for artifact, items in sorted(grouped.items()):
-            path = ctx.path(f"{artifact}.txt")
-            with open(path, "wb") as fh:
-                for p, c in items:
-                    grab = self._grabbers.get(p.node)
-                    if not grab:
-                        continue
-                    if len(items) > 1:  # several containers share one artifact; header them
-                        fh.write(f"==================== {p.name} / {c} "
-                                 f"({kube.short(p.node)}) ====================\n".encode())
-                    data = kube.run_bytes(
-                        ["-n", self.opt("namespace"), "exec", grab, "--", "sh", "-c",
-                         dump_script(p.namespace, p.name, c)])
-                    fh.write(data)
-                    if not data:
-                        # The dump script swallows read errors, so an empty grab is
-                        # otherwise indistinguishable from "this container logged nothing".
-                        ctx.log.warn(f"{self.name}: empty grab for {p.name}/{c}")
-            ctx.log.info(f"{self.name}: {artifact}.txt "
-                         f"({os.path.getsize(path) / 1048576:.1f} MiB)")
+        # One artifact after another took 34-37 s for 35 logs. Each artifact is its own
+        # file, so they are fetched in parallel, a few at a time.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=COLLECT_PARALLEL) as pool:
+            futures = [pool.submit(self._grab_artifact, ctx, artifact, items)
+                       for artifact, items in sorted(grouped.items())]
+        for future in futures:
+            future.result()
+
+    def _grab_artifact(self, ctx: RunContext, artifact: str,
+                       items: list[tuple[kube.Pod, str]]) -> None:
+        path = ctx.path(f"{artifact}.txt")
+        with open(path, "wb") as fh:
+            for p, c in items:
+                grab = self._grabbers.get(p.node)
+                if not grab:
+                    continue
+                if len(items) > 1:  # several containers share one artifact, so header each
+                    fh.write(f"==================== {p.name} / {c} "
+                             f"({kube.short(p.node)}) ====================\n".encode())
+                data = kube.run_bytes(
+                    ["-n", self.opt("namespace"), "exec", grab, "--", "sh", "-c",
+                     dump_script(p.namespace, p.name, c)])
+                fh.write(data)
+                if not data:
+                    # The dump script swallows read errors, so an empty grab is
+                    # otherwise looks the same as a container that logged nothing.
+                    ctx.log.warn(f"{self.name}: empty grab for {p.name}/{c}")
+        ctx.log.info(f"{self.name}: {artifact}.txt "
+                     f"({os.path.getsize(path) / 1048576:.1f} MiB)")
 
     @staticmethod
     def _name_for(target: dict, pod: kube.Pod, container: str) -> str:
