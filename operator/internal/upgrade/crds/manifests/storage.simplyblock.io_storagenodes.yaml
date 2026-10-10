@@ -796,9 +796,6 @@ spec:
                     a node that is still being added reads why its own add is failing.
                   type: string
                 observedGeneration:
-                  description: |-
-                    ObservedGeneration is the generation the rest of this status was computed
-                    from, so a stale status can be told from a current one.
                   format: int64
                   type: integer
                 phase:
@@ -832,6 +829,41 @@ spec:
                     rpc:
                       description: Rpc is the RPC and management API port.
                       format: int32
+                      type: integer
+                  type: object
+                remediation:
+                  description: |-
+                    ObservedGeneration is the generation the rest of this status was computed
+                    from, so a stale status can be told from a current one.
+                    Remediation is what Kubernetes knows about this node's host, reported
+                    for the two-node arbiter as positive fencing evidence.
+                  properties:
+                    nodeNotReady:
+                      description: |-
+                        NodeNotReady is true when the Kubernetes node's Ready condition is not
+                        True (Node Health Check and remediation act on the same signal).
+                      type: boolean
+                    observedAt:
+                      description: ObservedAt is when the operator last looked at the node.
+                      format: date-time
+                      type: string
+                    outOfService:
+                      description: |-
+                        OutOfService is true when the Kubernetes node carries the
+                        node.kubernetes.io/out-of-service taint.
+                      type: boolean
+                    reportedFenced:
+                      description: |-
+                        ReportedFenced is the fencing evidence the control plane last accepted
+                        for this node (PUT .../arbitration/remediation): true while the node is
+                        out of service. Unset until the first report succeeds; a failed report
+                        leaves it unchanged, so the next reconcile retries.
+                      type: boolean
+                    storageFencedEpoch:
+                      description: |-
+                        StorageFencedEpoch is the epoch in the storage-fenced taint the operator
+                        set on the node, or zero when the node is not fenced.
+                      format: int64
                       type: integer
                   type: object
                 resources:

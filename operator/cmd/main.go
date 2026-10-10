@@ -68,6 +68,8 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	nodecontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/node"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/twonode"
+	twonodecp "github.com/simplyblock/simplyblock-operator/internal/controllers/twonode/cpadapter"
 	volumecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/volume"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -934,6 +936,16 @@ func main() {
 		EndpointResolver: controlPlaneEndpoint,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationPair")
+		os.Exit(1)
+	}
+	// Two-node arbitration (sbcli docs/design/two-node-arbitration.md §9): follows the
+	// arbiter's record and taints the Kubernetes node of a fenced storage node.
+	if err := (&twonode.ArbitrationReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		API:    &twonodecp.Adapter{Reader: mgr.GetClient(), EndpointResolver: controlPlaneEndpoint},
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "TwoNodeArbitration")
 		os.Exit(1)
 	}
 	if err := (&controller.ReplicationSlotReconciler{

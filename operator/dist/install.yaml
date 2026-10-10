@@ -7842,6 +7842,48 @@ spec:
                   rule: '[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks)
                     ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4, 1], [1,
                     2], [2, 2], [4, 2]]'
+              twoNode:
+                description: |-
+                  TwoNode configures the control plane's arbitration for a cluster of
+                  exactly two storage nodes (an edge site). Ignored for larger clusters.
+                properties:
+                  arbitration:
+                    description: |-
+                      Arbitration turns the control plane's two-node arbitration on for this
+                      cluster: nodes hold writes when they lose their peer, and only a node the
+                      arbiter grants may continue alone. Off, the cluster keeps today's
+                      behaviour (dual-node tolerance without arbitration).
+                    type: boolean
+                  holdMs:
+                    description: |-
+                      HoldMs is how long a node holds writes after losing its peer before it
+                      acts on its own. It must stay below the hosts' NVMe keep-alive timeout
+                      (5000 ms), or clients fail IO before the verdict arrives.
+                    format: int32
+                    maximum: 4500
+                    minimum: 500
+                    type: integer
+                  leaseTtlMs:
+                    description: |-
+                      LeaseTtlMs is how long a lease from the arbiter stays valid. It only
+                      matters while a node is holding; a healthy pair is never fenced by a
+                      late renewal.
+                    format: int32
+                    maximum: 10000
+                    minimum: 500
+                    type: integer
+                  preferredNode:
+                    description: |-
+                      PreferredNode is the Kubernetes node whose storage node continues alone
+                      when neither the control plane nor the peer is reachable. Empty leaves the
+                      choice to the arbiter.
+                    maxLength: 253
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: leaseTtlMs must be shorter than holdMs
+                  rule: '!has(self.holdMs) || !has(self.leaseTtlMs) || self.leaseTtlMs
+                    < self.holdMs'
               vcpuCount:
                 description: |-
                   VCPUCount is the number of vCPUs allocated to SPDK on each storage node,
@@ -8063,6 +8105,43 @@ spec:
                   ActiveOpsRef names the StorageClusterOps currently allowed to operate on
                   this cluster. Empty when none is running.
                 type: string
+              arbitration:
+                description: |-
+                  ObservedGeneration is the generation the rest of this status was computed
+                  from, so a stale status can be told from a current one.
+                  Arbitration is the two-node arbiter's record as the operator last read
+                  it; set only when spec.twoNode.arbitration is on.
+                properties:
+                  epoch:
+                    description: Epoch is the arbiter's current epoch.
+                    format: int64
+                    type: integer
+                  fencedNodes:
+                    description: |-
+                      FencedNodes are the Kubernetes nodes that carry the storage-fenced taint
+                      on the arbiter's request.
+                    items:
+                      type: string
+                    type: array
+                  message:
+                    description: Message explains why the record could not be read
+                      or applied.
+                    type: string
+                  observedAt:
+                    description: ObservedAt is when the operator last read the arbiter's
+                      record.
+                    format: date-time
+                    type: string
+                  preferredNode:
+                    description: PreferredNode is the Kubernetes node the arbiter
+                      treats as preferred.
+                    type: string
+                  state:
+                    description: |-
+                      State is the arbiter's state: steady, deciding, partitioned, degraded or
+                      healing.
+                    type: string
+                type: object
               clusterName:
                 description: ClusterName is the resolved backend name.
                 type: string
@@ -8140,9 +8219,6 @@ spec:
                 description: NQN is the cluster subsystem qualified name.
                 type: string
               observedGeneration:
-                description: |-
-                  ObservedGeneration is the generation the rest of this status was computed
-                  from, so a stale status can be told from a current one.
                 format: int64
                 type: integer
               phase:
@@ -10098,9 +10174,6 @@ spec:
                   a node that is still being added reads why its own add is failing.
                 type: string
               observedGeneration:
-                description: |-
-                  ObservedGeneration is the generation the rest of this status was computed
-                  from, so a stale status can be told from a current one.
                 format: int64
                 type: integer
               phase:
@@ -10134,6 +10207,42 @@ spec:
                   rpc:
                     description: Rpc is the RPC and management API port.
                     format: int32
+                    type: integer
+                type: object
+              remediation:
+                description: |-
+                  ObservedGeneration is the generation the rest of this status was computed
+                  from, so a stale status can be told from a current one.
+                  Remediation is what Kubernetes knows about this node's host, reported
+                  for the two-node arbiter as positive fencing evidence.
+                properties:
+                  nodeNotReady:
+                    description: |-
+                      NodeNotReady is true when the Kubernetes node's Ready condition is not
+                      True (Node Health Check and remediation act on the same signal).
+                    type: boolean
+                  observedAt:
+                    description: ObservedAt is when the operator last looked at the
+                      node.
+                    format: date-time
+                    type: string
+                  outOfService:
+                    description: |-
+                      OutOfService is true when the Kubernetes node carries the
+                      node.kubernetes.io/out-of-service taint.
+                    type: boolean
+                  reportedFenced:
+                    description: |-
+                      ReportedFenced is the fencing evidence the control plane last accepted
+                      for this node (PUT .../arbitration/remediation): true while the node is
+                      out of service. Unset until the first report succeeds; a failed report
+                      leaves it unchanged, so the next reconcile retries.
+                    type: boolean
+                  storageFencedEpoch:
+                    description: |-
+                      StorageFencedEpoch is the epoch in the storage-fenced taint the operator
+                      set on the node, or zero when the node is not fenced.
+                    format: int64
                     type: integer
                 type: object
               resources:
