@@ -447,6 +447,32 @@ class FioCrossRead(unittest.TestCase):
         checksum = list(build_detector("fio.checksum").detect(FakeEvidence(fio_logs=logs)))
         self.assertEqual([f.severity for f in checksum], [Severity.CRITICAL])
 
+    def test_a_verify_error_in_one_round_leaves_later_failed_rounds_critical(self):
+        found = self.detect({self.READER: [
+            FioChecksum.LINE.format(sec=10),
+            self.line(11, "round 1 failed rc=1"),
+            "fio: pid=12, err=116/file:io_u.c:1889, func=io_u error, error=Stale file handle",
+            self.line(41, "round 2 failed rc=1")]})
+        crit = [f for f in found if f.severity == Severity.CRITICAL]
+        self.assertEqual(len(crit), 1)
+        self.assertEqual(crit[0].evidence["failed_rounds"], [2])
+
+    def test_a_published_round_that_was_gone_is_critical_and_named(self):
+        found = self.detect({self.READER: [
+            self.line(1, "round 1 verified"),
+            self.line(31, "round 2 missing: /data/r-xw-0.r2 is gone"),
+            self.line(62, "round 3 verified")]})
+        crit = [f for f in found if f.severity == Severity.CRITICAL]
+        self.assertEqual(len(crit), 1)
+        self.assertEqual(crit[0].evidence["missing_rounds"], [2])
+
+    def test_a_round_removed_before_a_slow_reader_reached_it_warns(self):
+        found = self.detect({self.READER: [
+            self.line(1, "round 1 lapsed: removed before this reader reached it"),
+            self.line(31, "round 2 verified")]})
+        self.assertEqual([f.severity for f in found], [Severity.WARNING])
+        self.assertEqual(found[0].evidence["lapsed_rounds"], [1])
+
     def test_writers_and_randrw_instances_are_not_judged(self):
         found = self.detect({self.READER: [self.line(1, "round 1 verified")],
                              "r-fio-xw-0": ["[xwrite] 2026-08-19T22:00:01Z round 1 written rc=0"],

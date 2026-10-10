@@ -199,7 +199,8 @@ class Checksum(Detector):
 #: A cross-read reader's evidence directory (workload.pnfs, cross_readers).
 _READER_MARK = "-fio-xr-"
 #: What a reader logs per round, and its timeouts (fio.round_reader_script).
-_ROUND_RE = re.compile(r"\[xread\] \S+ round (\d+) (verified|failed|skipped|missing)")
+_ROUND_RE = re.compile(
+    r"\[xread\] \S+ round (\d+) (verified|failed|skipped|missing|lapsed)")
 _TIMEOUT_RE = re.compile(r"\[xread\] \S+ waiting for a round .* timed out")
 
 
@@ -209,10 +210,13 @@ class CrossRead(Detector):
 
     A reader on another node verifies each round its writer publishes after closing the
     file. A block that reads back wrong is fio.checksum's, which reports it with the blocks,
-    so this does not report it again. What is left is what checksum cannot see: a round
-    whose fio failed without a verify error (the file vanished or went stale under the read,
-    an I/O error), and a reader that never verified anything, which leaves the cross-client
-    case unproven rather than failed.
+    so this does not report that round again. fio prints its verify errors before the
+    reader's line for the round, so a verify error belongs to the next round line and to no
+    other. What is left is what checksum cannot see: a round whose fio failed without a
+    verify error (the file went stale under the read, an I/O error), a published round the
+    writer still kept whose file was gone, and a reader that never verified anything, which
+    leaves the cross-client case unproven rather than failed. A round the writer removed
+    before a slow reader reached it is a gap in the coverage, not a defect.
     """
 
     name = "fio.cross-read"
@@ -224,34 +228,58 @@ class CrossRead(Detector):
             raise SkipDetector("no cross-client readers; set workload.pnfs cross_readers")
         for pod in readers:
             rounds: dict[str, list[int]] = {}
-            timeouts, checksum = 0, False
+            corrupt: set[int] = set()       # failed rounds fio.checksum reports
+            timeouts, checksum = 0, False   # checksum: a verify error before the next round
             for line in ev.fio_log(pod):
                 m = _ROUND_RE.search(line)
                 if m:
-                    rounds.setdefault(m.group(2), []).append(int(m.group(1)))
+                    n, outcome = int(m.group(1)), m.group(2)
+                    rounds.setdefault(outcome, []).append(n)
+                    if outcome == "failed" and checksum:
+                        corrupt.add(n)
+                    checksum = False
                 elif _TIMEOUT_RE.search(line):
                     timeouts += 1
                 elif _VERIFY_RE.search(line):
                     checksum = True
             counts = {k: len(rounds.get(k, [])) for k in
-                      ("verified", "failed", "skipped", "missing")}
-            evidence = {**counts, "timeouts": timeouts,
-                        "failed_rounds": sorted(rounds.get("failed", []))}
-            detail = ", ".join(f"{k}={v}" for k, v in evidence.items() if k != "failed_rounds")
-            if counts["failed"] and not checksum:
+                      ("verified", "failed", "skipped", "missing", "lapsed")}
+            unread = sorted(n for n in rounds.get("failed", []) if n not in corrupt)
+            missing = sorted(rounds.get("missing", []))
+            lapsed = sorted(rounds.get("lapsed", []))
+            evidence = {**counts, "timeouts": timeouts, "failed_rounds": unread,
+                        "missing_rounds": missing, "lapsed_rounds": lapsed}
+            detail = ", ".join(f"{k}={v}" for k, v in evidence.items()
+                               if not k.endswith("_rounds"))
+            if unread:
                 yield critical(
-                    self.name, title=f"reader could not read {counts['failed']} round(s)",
+                    self.name, title=f"reader could not read {len(unread)} round(s)",
                     subject=pod, detail=detail, evidence=evidence,
                     artifacts=[f"{pod}/fio.log", f"{pod}/result.json"],
                     note="fio failed on a published round without a verify error: the file "
                          "another client had closed could not be read from this one")
+            if missing:
+                yield critical(
+                    self.name, title=f"{len(missing)} published round(s) were gone",
+                    subject=pod, detail=detail + f"; missing rounds: {missing}",
+                    evidence=evidence, artifacts=[f"{pod}/fio.log"],
+                    note="the writer had published these rounds and not yet removed them, "
+                         "and this client did not see the file another client had closed")
             if not counts["verified"]:
                 yield warning(
                     self.name, title="reader verified no round", subject=pod, detail=detail,
                     evidence=evidence, artifacts=[f"{pod}/fio.log"],
                     note="nothing was read across clients, so the run says nothing about "
                          "cross-client consistency on this volume")
-            elif not counts["failed"]:
+            elif lapsed:
+                yield warning(
+                    self.name, title=f"reader fell behind and left {len(lapsed)} round(s) "
+                                     "unread", subject=pod, detail=detail,
+                    evidence=evidence, artifacts=[f"{pod}/fio.log"],
+                    note="the writer removed these rounds before the reader reached them, "
+                         "so they were never checked across clients; a larger round_s "
+                         "gives a reader more time per round")
+            elif not counts["failed"] and not missing:
                 yield info(self.name, title=f"reader verified {counts['verified']} round(s)",
                            subject=pod, detail=detail, evidence=evidence)
 
