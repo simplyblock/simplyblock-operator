@@ -182,6 +182,9 @@ func TestKernelCmdlineCarriesTheStaticAddress(t *testing.T) {
 	}
 }
 
+// Regression: 2026-10-10-pnfs-mds-restart-lost-layoutcommit (PR #714), the
+// command-line half only. F-20 in test-plan-pnfs-rwx.md is the live half.
+//
 // Zeroed layouts are the guest kernel's opt-in (pnfs-os patch 0005): blocks a
 // client writes through a layout are durable without its LAYOUTCOMMIT, which a
 // restarted server never receives. The command line states the choice either

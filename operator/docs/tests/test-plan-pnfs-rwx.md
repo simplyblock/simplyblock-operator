@@ -171,7 +171,7 @@ restarted rather than migrated (design §13).
 |------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | U-67 | QEMU always runs under KVM, and an architecture and firmware mismatch is refused                                                                                                     | Positive + Negative            | `TestGuestAlwaysRunsUnderKVM`, `TestARM64WithoutFirmwareIsRefused`, `TestAMD64WithFirmwareIsRefused`, `TestUnknownArchitectureIsRefused`                                   |
 | U-68 | The kernel command line carries the static address and the nfsd layout hold parameters                                                                                               | Positive                       | `TestKernelCmdlineCarriesTheStaticAddress`                                                                                                                                 |
-| U-92 | The kernel command line states whether write layouts are zeroed: off unless the runner asks, on when it does                                                                         | Positive + Negative            | `TestKernelCmdlineCarriesTheStaticAddress`, `TestKernelCmdlineEnablesZeroedLayoutsOnRequest`                                                                               |
+| U-92 | Regression (run `pnfs-1791620302`): the kernel command line states whether write layouts are zeroed, off unless the runner asks and on when it does                                  | Regression                     | `TestKernelCmdlineCarriesTheStaticAddress`, `TestKernelCmdlineEnablesZeroedLayoutsOnRequest`                                                                               |
 | U-69 | The root disk is first and read-only, and the state disk carries its serial                                                                                                          | Positive                       | `TestRootDiskIsFirstAndReadOnlyStateDiskCarriesItsSerial`                                                                                                                  |
 | U-70 | A guest panic, a missed boot deadline, and an ignored power button all end QEMU                                                                                                      | Negative                       | `TestGuestPanicEndsQEMU`, `TestMissedBootDeadlineKillsQEMU`, `TestGuestIgnoringThePowerButtonIsKilledAfterTheGrace`                                                        |
 | U-71 | Guest memory leaves QEMU its allowance, and limits too small or unset are refused                                                                                                    | Boundary                       | `TestGuestResourcesLeaveTheAllowanceToQEMU`, `TestGuestResourcesRefuseLimitsTooSmallOrUnset`                                                                               |
@@ -407,6 +407,7 @@ on the direct path across a restart, not a unit test.
 | F-17 | Two restarts in quick succession, the second before grace ends                                                                                                                                                        | Boundary   | —                                                          |
 | F-18 | One client loses its paths to its namespace and heals: its I/O resumes direct, without a restage                                                                                                                      | Positive   | —                                                          |
 | F-19 | Regression (run `pnfs-1791575321`): once the replacement metadata server pod is Ready, no client's NFS flow is still translated to the deleted pod's address                                                          | Regression | —                                                          |
+| F-20 | Regression (run `pnfs-1791620302`): with zeroed layouts on, data written through a layout before an MDS restart reads back intact on another node                                                                     | Regression | —                                                          |
 
 ---
 
@@ -480,10 +481,10 @@ Struck rows are not counted.
 | Sanity (`SAN-`)          | 2         | 0       | 2           |
 | Integration (`I-`)       | 3         | 3       | 0           |
 | End-to-end (`E-`)        | 18        | 12      | 6           |
-| Failure injection (`F-`) | 13        | 4       | 9           |
+| Failure injection (`F-`) | 14        | 4       | 10          |
 | Security (`SEC-`)        | 8         | 0       | 8           |
 | Load and soak (`L-`)     | 6         | 0       | 6           |
-| **Total**                | **150**   | **117** | **33**      |
+| **Total**                | **151**   | **117** | **34**      |
 
 Unit and operator coverage follows the code. The live classes are the gaps: four
 `F-` rows rest on a recorded run with a manual pod delete rather than on a suite
@@ -502,6 +503,7 @@ that deletes the pod itself.
 | E-23            | `NoMetadataServer` in a live cluster                                                         | O-10 covers the decision, and no e2e spec provisions without `spec.pnfs.mds`                                                                                                                      |
 | F-15 … F-18     | Guest crash in place, restart with a client down, back-to-back restarts, client path loss    | Not run. F-16 and F-17 are the boundaries of the grace period the nfsd patches rely on                                                                                                            |
 | F-19            | Clients reaching the deleted pod's address after its replacement is Ready                    | The fix is unit-tested (O-43 … O-45). A `pnfs-fio` run with an MDS restart, judged clean by `pnfs.conntrack-pinned`, has not run against it yet                                                   |
+| F-20            | Data written through a layout surviving an MDS restart                                       | U-92 covers only the command line. Needs `pnfs-fio` with zeroed layouts, its guaranteed MDS restart, and cross-readers, judged clean by `fio.checksum`                                            |
 | SEC-01 … SEC-08 | Every security scenario                                                                      | No security suite exists for pNFS. SEC-07 is the known exposure of admitting pod CIDRs (MDS design §8.3)                                                                                          |
 | L-01 … L-08     | Load, scale, and soak                                                                        | No long-running pNFS suite exists                                                                                                                                                                 |
 | —               | Two storage clusters with exports in one run                                                 | Per-cluster names are unit-tested (O-15, O-32), but no live run has had two metadata servers                                                                                                      |
