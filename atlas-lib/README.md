@@ -137,6 +137,12 @@ atlas/
 │       ├── client.go       Remote(conn) + the nvme resolver interfaces, remoted
 │       ├── convert.go      nvme snapshot types ↔ wire form (total, both directions)
 │       └── storagev1/      SubsystemService + DeviceService (buf-generated, committed)
+├── conntrack/              Forget the host's conntrack entries translated to one dead backend
+│   ├── conntrack.go        Selector (protocol, port, reply source), Tuple, Matches, Forget
+│   ├── forget_linux.go     netlink delete, filtered by Selector.Matches (non-Linux: ErrUnsupported)
+│   └── conntrackrpc/       FlowService: served by the CSI node plugin, called by the operator
+│       ├── conntrackrpc.go NewServer(conntrack.Forget), Remote(conn).Forget
+│       └── conntrackv1/    the FlowService protocol (buf-generated, committed)
 ├── prometheus/             The telemetry simplyblock exports about itself (PromQL)
 │   ├── doc.go              Why this is not part of controlplane, and how fresh a value is
 │   ├── client.go           Provider, New, NewWithAPI (the test seam), query helpers
@@ -1403,6 +1409,34 @@ And the `nvmeof` composition helpers must not be assembled across a link:
 `WaitForDevice` resolves device symlinks against the filesystem it runs on, so
 in the operator it would consult the operator's `/dev`. Those belong on the node,
 behind their own RPC.
+
+#### Forget the flows translated to a dead backend
+
+A Service's ClusterIP is translated to a backend by the first packet of a
+connection, and conntrack keeps that translation for the life of the entry. When
+the backend goes away, a client that retries its SYN on the same tuple keeps the
+entry alive and keeps reaching the dead address, after the EndpointSlice has
+moved on. kube-proxy clears such entries for UDP only. The node forgets them when
+asked, for one protocol, one port, and one address, never more:
+
+```go
+// On the node (the CSI node plugin, host network, privileged):
+srv, err := conntrackrpc.NewServer(conntrack.Forget)
+cfg.Register = func(r grpc.ServiceRegistrar) { storageSrv.Register(r); srv.Register(r) }
+cfg.Capabilities = append(storagerpc.Capabilities(), conntrackrpc.Capabilities()...)
+
+// From the operator, per node peer:
+sel := conntrack.Selector{Protocol: conntrack.TCP, DstPort: 2049, ReplySource: oldPodIP}
+for _, p := range registry.PeersOfKind(link.PeerKindNode) {
+    if p.HasCapability(conntrackrpc.CapabilityFlows) {
+        n, err := conntrackrpc.Remote(p.Conn()).Forget(ctx, sel)
+    }
+}
+```
+
+*Today:* the operator's `NFSExport` reconciler asks for it when a pNFS metadata
+server pod goes away, through `operator/internal/csilink/flows.go`, and
+`csi-driver/internal/driver/driver.go` serves it on every node plugin.
 
 ### Cross-cutting
 

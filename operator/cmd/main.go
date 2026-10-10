@@ -489,6 +489,7 @@ func main() {
 	}
 	if csiPeers != nil {
 		nfsExportReconciler.Assembler = controller.NewLinkAssembler(csiPeers)
+		nfsExportReconciler.Flows = csilink.NewFlows(csilink.RegistryNodePeers(csiPeers))
 	}
 	if err := nfsExportReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NFSExport")

@@ -45,6 +45,8 @@
 //	storage         One node's storage as one value (Accessor);
 //	                storage/storagerpc serves it over a link and reaches
 //	                another node's.
+//	conntrack       Forget a host's connection-tracking entries for one dead
+//	                backend; conntrack/conntrackrpc serves it over a link.
 //	prometheus      Read the telemetry simplyblock exports about itself:
 //	                capacity, per-volume load, and node write latency.
 //	errs            Sentinel errors shared across atlas, matched with errors.Is.

@@ -185,6 +185,15 @@ restarted rather than migrated (design §13).
 | U-85 | Work arriving while no request is processed is a stall. Requests completing without threads woken are progress, and without RPC statistics nothing is judged                         | Positive + Negative + Boundary | `TestWorkArrivingWithNoRequestProcessedIsNotDraining`, `TestRequestsCompletingWithNoThreadWokenIsDraining`, `TestWithoutRPCStatisticsTheBacklogIsNotJudged`                |
 | U-86 | A stall dumps every nfsd thread's stack once, again only after five minutes, and logs its end. A summary is logged every fourth tick, and a guest without nfsd logs nothing alarming | Positive + Negative            | `TestStacksAreDumpedAtMostEveryFiveMinutesInAnEpisode`, `TestTheEndOfAnEpisodeIsLogged`, `TestASummaryIsLoggedEveryFourthTick`, `TestAGuestWithoutNFSDLogsNothingAlarming` |
 
+#### Forgetting a replaced pod's flows (MDS design §8.1), in `atlas-lib/conntrack/*_test.go`, `atlas-lib/conntrack/conntrackrpc/conntrackrpc_test.go`
+
+| #    | Scenario                                                                                                                                                                                                       | Type                | Test                                                                                                                                                                                            |
+|------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| U-87 | A selector matches the flows of its protocol, original destination, and destination port translated to its address, and nothing else, also when another Service's flows reach a pod that inherited the address | Positive + Negative | `TestAFlowTranslatedToTheOldAddressMatches`, `TestAnythingElseDoesNotMatch`                                                                                                                     |
+| U-88 | A selector missing its protocol, original destination, port, or address is refused, by Forget as well                                                                                                          | Negative            | `TestASelectorMissingAPartIsRefused`, `TestForgetRefusesAnInvalidSelector`                                                                                                                      |
+| U-89 | The netlink adapter takes the reply direction's source as the translated backend (Linux)                                                                                                                       | Positive + Negative | `TestTheAdapterReadsTheReplyDirectionsSource`                                                                                                                                                   |
+| U-90 | The flow service carries a selector intact and returns the count. An invalid selector, one without an original destination among them, is refused on both ends, and a node failure comes back as an error      | Positive + Negative | `TestASelectorReachesTheNodeIntactAndTheCountComesBack`, `TestAnInvalidSelectorIsRefusedOnBothEnds`, `TestANodeFailureComesBackAsAnError`, `TestARequestWithoutTheOriginalDestinationIsRefused` |
+
 #### Run judgment: the pNFS detectors (sbtest), in `test/framework/tests/test_detectors.py`
 
 | #    | Scenario                                                                                                                                                                                      | Type                           | Test           |
@@ -271,6 +280,14 @@ through the control plane's API.
 | O-38 | A PersistentVolumeOps migration of a pNFS volume is refused at admission                                                    | Negative            | `TestPersistentVolumeOpsRefusesWhatNoReconcileCouldFix` (`a pNFS volume`)                 |
 | O-39 | One admitted without the webhook fails without creating a migration, and a filesystem volume still migrates                 | Positive + Negative | `TestAPNFSVolumeFailsTheOperationWithoutAMigration`, `TestAFilesystemVolumeStillMigrates` |
 | O-40 | The rebalancer, pinning, latency, and node-removal movers skip pNFS volumes instead of raising operations admission refuses | Negative            | —                                                                                         |
+
+#### Address withdrawal and flow flush (MDS design §8.1), in `operator/internal/controller/nfsexport_withdraw_unit_test.go`, `operator/internal/csilink/flows_test.go`
+
+| #    | Scenario                                                                                                                                                                                                                                                                                                                                   | Type                           | Test                                                                                                                                                                                                                                                          |
+|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| O-43 | Regression (2026-10-09-pnfs-mds-conntrack-pinning): a terminating or gone metadata server pod's address leaves every bound export's EndpointSlice at once, the export stays Ready, and the nodes are asked to forget the address                                                                                                           | Regression                     | `TestATerminatingMDSPodsAddressIsWithdrawn`, `TestAGoneMDSPodsAddressIsWithdrawn`                                                                                                                                                                             |
+| O-44 | An address is withdrawn once. The replacement's address follows, and the nodes forget the old address again at the move, also when no withdrawal was seen. A replacement that receives the old address forgets nothing more and cancels the waiting request, and the Service's ClusterIP is read from the Service when the status lacks it | Positive + Boundary            | `TestAWithdrawnAddressIsWithdrawnOnce`, `TestTheReplacementsAddressFollowsAWithdrawal`, `TestAMoveWithoutAWithdrawalForgetsTheOldAddress`, `TestAReplacementWithTheSameAddressForgetsNothingMore`, `TestTheServiceIPIsReadFromTheServiceWhenTheStatusLacksIt` |
+| O-45 | Every node advertising the flow service is asked, for TCP port 2049 to the export's ClusterIP and the old address only. One request per Service and address, duplicates collapse, a canceled request is never sent, one node failing does not stop the others, and an invalid address asks nobody                                          | Positive + Negative + Boundary | `TestEveryCapableNodeForgetsTheOldAddress`, `TestRequestsForOneAddressCollapse`, `TestANodeFailingDoesNotStopTheOthers`, `TestAnInvalidAddressAsksNobody`, `TestOneRequestPerServiceAndAddress`, `TestACanceledRequestIsNotSent`                              |
 
 ---
 
@@ -382,6 +399,7 @@ on the direct path across a restart, not a unit test.
 | F-16 | A restart while one client node is down: grace runs its full length, and the other clients still recover                                                                                                              | Boundary   | —                                                          |
 | F-17 | Two restarts in quick succession, the second before grace ends                                                                                                                                                        | Boundary   | —                                                          |
 | F-18 | One client loses its paths to its namespace and heals: its I/O resumes direct, without a restage                                                                                                                      | Positive   | —                                                          |
+| F-19 | Regression (run `pnfs-1791575321`): once the replacement metadata server pod is Ready, no client's NFS flow is still translated to the deleted pod's address                                                          | Regression | —                                                          |
 
 ---
 
@@ -450,15 +468,15 @@ Struck rows are not counted.
 
 | Class                    | Scenarios | Covered | Not covered |
 |--------------------------|-----------|---------|-------------|
-| Unit (`U-`)              | 51        | 51      | 0           |
-| Operator (`O-`)          | 31        | 29      | 2           |
+| Unit (`U-`)              | 62        | 62      | 0           |
+| Operator (`O-`)          | 36        | 34      | 2           |
 | Sanity (`SAN-`)          | 2         | 0       | 2           |
 | Integration (`I-`)       | 3         | 3       | 0           |
-| End-to-end (`E-`)        | 18        | 11      | 7           |
-| Failure injection (`F-`) | 12        | 4       | 8           |
+| End-to-end (`E-`)        | 18        | 12      | 6           |
+| Failure injection (`F-`) | 13        | 4       | 9           |
 | Security (`SEC-`)        | 8         | 0       | 8           |
 | Load and soak (`L-`)     | 6         | 0       | 6           |
-| **Total**                | **131**   | **98**  | **33**      |
+| **Total**                | **148**   | **115** | **33**      |
 
 Unit and operator coverage follows the code. The live classes are the gaps: four
 `F-` rows rest on a recorded run with a manual pod delete rather than on a suite
@@ -476,6 +494,7 @@ that deletes the pod itself.
 | E-10, E-11      | Distros and kernels beyond Talos 6.18                                                        | The lab cluster is Talos, and RHEL- and Debian-family node pools are not part of any run                                                                                                          |
 | E-23            | `NoMetadataServer` in a live cluster                                                         | O-10 covers the decision, and no e2e spec provisions without `spec.pnfs.mds`                                                                                                                      |
 | F-15 … F-18     | Guest crash in place, restart with a client down, back-to-back restarts, client path loss    | Not run. F-16 and F-17 are the boundaries of the grace period the nfsd patches rely on                                                                                                            |
+| F-19            | Clients reaching the deleted pod's address after its replacement is Ready                    | The fix is unit-tested (O-43 … O-45). A `pnfs-fio` run with an MDS restart, judged clean by `pnfs.conntrack-pinned`, has not run against it yet                                                   |
 | SEC-01 … SEC-08 | Every security scenario                                                                      | No security suite exists for pNFS. SEC-07 is the known exposure of admitting pod CIDRs (MDS design §8.3)                                                                                          |
 | L-01 … L-08     | Load, scale, and soak                                                                        | No long-running pNFS suite exists                                                                                                                                                                 |
 | —               | Two storage clusters with exports in one run                                                 | Per-cluster names are unit-tested (O-15, O-32), but no live run has had two metadata servers                                                                                                      |
