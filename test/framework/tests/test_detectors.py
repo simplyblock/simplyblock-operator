@@ -2048,6 +2048,19 @@ class ConntrackPinned(unittest.TestCase):
                             self.flow(160, "", node="w2", state="NONE")])
         self.assertEqual([f.severity for f in found], [Severity.INFO])
 
+    def test_the_mds_nodes_record_of_an_inbound_flow_is_not_pinned(self):
+        """Regression: 2026-10-10-conntrack-inbound-entry-on-mds-node (pnfs-1791620302).
+
+        The node that hosted the old pod keeps its own entry for each client connection that
+        arrived there, addressed to the pod itself and never translated. Nothing refreshes or
+        removes it once the pod is gone, so it sits in ESTABLISHED while every client node
+        already reaches the replacement."""
+        inbound = ConntrackSample(ts=ts(220), node="w3", state="ESTABLISHED",
+                                  orig_src="10.244.0.0", orig_sport=758, orig_dst=self.OLD,
+                                  orig_dport=2049, reply_src=self.OLD)
+        found = self.found([self.flow(160, self.NEW), inbound])
+        self.assertEqual([f.severity for f in found], [Severity.INFO])
+
     def test_a_restart_the_samples_never_reach_after_is_not_judged(self):
         with self.assertRaises(SkipDetector):
             self.found([self.flow(90, self.OLD)])
