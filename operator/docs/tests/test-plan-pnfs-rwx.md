@@ -201,6 +201,12 @@ restarted rather than migrated (design §13).
 | U-78 | A mount that fetched no layout fails the run, data through the server beside layouts warns, and a run without NFS mounts is skipped                                                           | Positive + Negative            | `PnfsLayout`   |
 | U-79 | A client whose namespace stayed flat, was never attached, or stopped taking writes for good fails the run. A stall that ends warns, and a device quiet after its fio instances ended is clean | Positive + Negative + Boundary | `PnfsDeviceIO` |
 
+#### Fault schedule: the restarts `chaos.restart` makes (sbtest), in `test/framework/tests/test_core.py`
+
+| #    | Scenario                                                                                                                                                                                             | Type       | Test                                                                                                                                                                                   |
+|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| U-91 | Regression (2026-10-09-guaranteed-restart-drew-csi-node): the guaranteed restarts restart the targets they name, in order, even when every weight is zero, and the weights decide only without names | Regression | `test_guaranteed_targets_name_what_the_guaranteed_restarts_restart`, `test_named_restarts_happen_when_every_weight_is_zero`, `test_without_named_targets_zero_weights_restart_nothing` |
+
 ---
 
 ## 2. Operator Unit Tests
@@ -468,7 +474,7 @@ Struck rows are not counted.
 
 | Class                    | Scenarios | Covered | Not covered |
 |--------------------------|-----------|---------|-------------|
-| Unit (`U-`)              | 62        | 62      | 0           |
+| Unit (`U-`)              | 63        | 63      | 0           |
 | Operator (`O-`)          | 36        | 34      | 2           |
 | Sanity (`SAN-`)          | 2         | 0       | 2           |
 | Integration (`I-`)       | 3         | 3       | 0           |
@@ -476,7 +482,7 @@ Struck rows are not counted.
 | Failure injection (`F-`) | 13        | 4       | 9           |
 | Security (`SEC-`)        | 8         | 0       | 8           |
 | Load and soak (`L-`)     | 6         | 0       | 6           |
-| **Total**                | **148**   | **115** | **33**      |
+| **Total**                | **149**   | **116** | **33**      |
 
 Unit and operator coverage follows the code. The live classes are the gaps: four
 `F-` rows rest on a recorded run with a manual pod delete rather than on a suite
