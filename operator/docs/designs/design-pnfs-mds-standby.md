@@ -10,14 +10,16 @@
 
 ## Phase 0: External Prerequisites
 
-| #    | Prerequisite                                                                                                                                                           | Kind                    | Blocks                                 | Status                                                                                            |
-|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|----------------------------------------|---------------------------------------------------------------------------------------------------|
-| P0-1 | A guest kernel patch making the MDS reservation key a per-instance, runtime-writable `nfsd` parameter, with the four behaviors of §6.3                                 | Node OS (guest)         | Fencing (§6), and so every takeover    | Not started. A pnfs-os patch on top of 0001 to 0007, against the guest's 6.18.55 kernel           |
-| P0-2 | The control plane authorizes two host NQNs on every exported volume and on the state volume, and resolves a connection for either                                      | Control plane (`sbcli`) | The standby's promotion (§7.3)         | Unknown. `design-pnfs-mds-vm.md` P0-3 is the same question for one NQN                            |
-| P0-3 | The target accepts Reservation Register, Acquire with Preempt, and Report with the extended data structure (each registrant's host identifier) on a volume's namespace | Storage plane (SPDK)    | Fencing (§6.4) and the collision check | Register and plain Preempt are relied on today by pnfs-os 0002. The extended report is unverified |
-| P0-4 | At least two nodes carry `storage.simplyblock.io/kvm-capable=true`                                                                                                     | Node OS                 | A standby (§5.1)                       | Required of the deployer for HA, stated in the user docs                                          |
+| #    | Prerequisite                                                                                                                                                                                                                                                                                                                                                                                                                                              | Kind                                       | Blocks                                                                                          | Status                                                                                                                                                                                                                                |
+|------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------|-------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| P0-1 | A guest kernel patch making the MDS reservation key a per-instance, runtime-writable `nfsd` parameter, with the four behaviors of §6.3                                                                                                                                                                                                                                                                                                                    | Node OS (guest)                            | Fencing (§6), and so every takeover                                                             | Not started. A pnfs-os patch on top of 0001 to 0007, against the guest's 6.18.55 kernel                                                                                                                                               |
+| P0-2 | The operator adds every MDS pod's host NQN to the allowed hosts of each export volume and of the state volume, through the control plane's allowed-hosts API (`sbcli` `add_host_to_lvol`, `remove_host_from_lvol`), and gives each guest its own host's DH-CHAP secret for a volume that uses DH-CHAP                                                                                                                                                     | Operator, on an existing control-plane API | A standby's promotion (§7.3)                                                                    | The control-plane API exists and serves DH-CHAP's allowed hosts. `atlas-lib/controlplane` has no add-host call yet                                                                                                                    |
+| P0-3 | The target accepts Reservation Register, Replace, Acquire with Preempt, and Report with the extended data structure (each registrant's host identifier) on a volume's namespace                                                                                                                                                                                                                                                                           | Storage plane (SPDK)                       | Fencing (§6.4) and the collision check                                                          | Verified in the code of simplyblock's SPDK fork (`lib/nvmf/subsystem.c`): all are implemented, the Report requires the extended data structure, registrants are keyed by host identifier, and Preempt and Abort returns Invalid Field |
+| P0-4 | At least `1 + standbys` nodes carry `storage.simplyblock.io/kvm-capable=true`                                                                                                                                                                                                                                                                                                                                                                             | Node OS                                    | Each standby (§5.1)                                                                             | Required of the deployer for HA, stated in the user docs. A standby without a node stays `Pending`                                                                                                                                    |
+| P0-5 | A volume's reservation state is shared by every storage node serving the volume (primary, secondary, and tertiary) and survives the replacement of a storage node's SPDK pod. Today, each SPDK process keeps its own: a host sends reservation commands down one path, the secondaries' `non_optimized` listeners accept I/O with no reservation, and the persist-through-power-loss file `/mnt/ns_resv<id>.json` lives in the container's writable layer | Storage plane (SPDK, `sbcli`)              | Fencing across a change of the volume's primary node or an SPDK pod replacement (§6.1, §6.6)    | Not started. SPDK's `spdk_nvmf_set_custom_ns_reservation_ops` hook (`update`, `load`) exists and is unused                                                                                                                            |
+| P0-6 | SPDK accepts more than 16 registrants per namespace (`SPDK_NVMF_MAX_NUM_REGISTRANTS`). A client never unregisters on SPDK, which rejects the Replace with a zero key the Linux client sends on release, so every node that opened a volume keeps its slot                                                                                                                                                                                                 | Storage plane (SPDK)                       | RWX volumes on more than about 14 nodes, and a takeover's registration on a full namespace (§9) | Not started. A compile-time constant in the fork                                                                                                                                                                                      |
 
-Without P0-1 there is no fencing, and the design cannot ship: a takeover without it is the double mount `design-pnfs-rwx.md` §13.2 forbids. Without P0-2 the standby cannot connect any volume, its promotion fails on the first device, and the cluster runs as if `disableStandby` were set, with an `MDSFenceFailed` event naming the refusal. Without the extended report of P0-3 the collision check of §6.2 cannot run, and the agent refuses every promotion rather than skip it. Without P0-4 the standby stays `Pending`, the active serves as before, and an `MDSStandbyMissing` event says so.
+Without P0-1 there is no fencing, and the design cannot ship: a takeover without it is the double mount `design-pnfs-rwx.md` §13.2 forbids. Without P0-2 a standby cannot connect any volume, its promotion fails on the first device, and the cluster runs as if `standbys` were 0, with an `MDSFenceFailed` event naming the refusal. Without the extended report of P0-3 the collision check of §6.2 cannot run, and the agent refuses every promotion rather than skip it. Without P0-4 a standby stays `Pending`, the active serves as before, and an `MDSStandbyMissing` event says so while no standby runs. Without P0-5 a fence holds only on the volume's current primary storage node (§6.1). Without P0-6 a takeover on a namespace that already has 16 registrants cannot register the new key, which is a fence failure.
 
 ---
 
@@ -44,9 +46,9 @@ Appendices:
 
 ## Overview
 
-Each storage cluster runs two MDS guests on two nodes. One is active: it has the state volume and every export mounted, and its nfsd serves. The other is a standby: it has booted, its agent answers, and it holds no mount, no NVMe connection, and no running nfsd. When the active is lost, the operator promotes the standby. The standby fences every device first, by taking the persistent reservation away from every earlier MDS key, and only then mounts the state volume, starts nfsd, and reassembles the exports. To clients this is a server restart, which they recover from as `design-pnfs-rwx.md` §13.4 describes.
+Each storage cluster runs one active MDS guest and, by default, one standby, each on its own node. The active has the state volume and every export mounted, and its nfsd serves. A standby has booted, its agent answers, and it holds no mount, no NVMe connection, and no running nfsd. When the active is lost, the operator promotes a standby. The promoted guest fences every device first, by taking the persistent reservation away from every earlier MDS key, and only then mounts the state volume, starts nfsd, and reassembles the exports. To clients this is a server restart, which they recover from as `design-pnfs-rwx.md` §13.4 describes.
 
-The client-recovery database moves from a Kubernetes RWO volume to a simplyblock volume that the guest connects over NVMe-oF itself, as it does for export namespaces. No Kubernetes volume attach is involved, so a pod stuck `Terminating` on a dead node does not hold anything the standby needs.
+The client-recovery database moves from a Kubernetes RWO volume to a simplyblock volume that the guest connects over NVMe-oF itself, as it does for export namespaces. No Kubernetes volume attach is involved, so a pod stuck `Terminating` on a dead node does not hold anything a standby needs.
 
 Fencing is what prevents a double mount. The record and the events decide which guest is promoted, and do not need to be correct for the data to be safe. Each promotion gets a new epoch, recorded on the workload with optimistic concurrency, and each epoch a reservation key that no earlier guest holds. A guest mounts a device only after it holds that device's reservation under its own key, and a fenced guest has no code path that registers again. A partitioned old active that resumes has its writes refused by the target, whether or not it knows it was replaced.
 
@@ -69,7 +71,7 @@ The primitives reused are the guest, runner, and assembler of `design-pnfs-mds-v
 ### Goals
 
 - A storage cluster's exports are served again after the loss of the active's node, without waiting for the node or for its pod to be deleted.
-- Two guests never have the same filesystem mounted with write access to it, under any interleaving of failure, partition, operator restart, or concurrent reconcile. The storage target enforces it, so it holds when the operator's view is stale.
+- No two guests ever have the same filesystem mounted with write access to it, under any interleaving of failure, partition, operator restart, or concurrent reconcile. The storage target enforces it, so it holds when the operator's view is stale.
 - A promotion whose fencing fails on any device mounts nothing.
 - A brief API server or operator outage does not cause a failover.
 - Clients recover through the same path as a restart: reclaim in grace, the layout hold, and the re-probe. No client remounts.
@@ -92,7 +94,7 @@ The primitives reused are the guest, runner, and assembler of `design-pnfs-mds-v
 │                                                                                           │
 │  operator (leader)                                                                        │
 │  ┌───────────────────────────────────────────┐                                            │
-│  │ NFSExportReconciler                       │   StatefulSet <mds> (2 replicas)           │
+│  │ NFSExportReconciler                       │   StatefulSet <mds> (1 + standbys replicas)│
 │  │ 1. ensure StatefulSet and state volume    │   annotations: mds-active, mds-epoch,      │
 │  │ 2. detect the active's loss (§7.2)        │   mds-active-instance, mds-state-volume    │
 │  │ 3. write the active record (CAS)          │                                            │
@@ -131,21 +133,26 @@ The primitives reused are the guest, runner, and assembler of `design-pnfs-mds-v
 `stateSize` and `stateStorageClassName` are removed, since the state volume is no longer a PVC (§5.4). One field is added:
 
 ```go
-// DisableStandby runs one metadata server guest instead of an active and a
-// standby on two nodes. With a standby, the loss of the active's node is
-// recovered in about the time a restart takes. Without one, exports stay
-// unserved until the lost pod is deleted and started again elsewhere.
+// Standbys is how many standby guests run beside the active one, each on
+// its own node. A standby takes over when the active is lost, in about the
+// time a restart takes. At 0, exports stay unserved after the loss of the
+// active's node until the lost pod is deleted and started again elsewhere.
+// Each standby needs another node offering KVM, and one without such a node
+// stays pending while the active serves.
+// +kubebuilder:validation:Minimum=0
+// +kubebuilder:validation:Maximum=4
+// +kubebuilder:default=1
 // +optional
-DisableStandby bool `json:"disableStandby,omitempty"`
+Standbys *int32 `json:"standbys,omitempty"`
 ```
 
-| Field            | Type   | Default | Description                                                                                         |
-|------------------|--------|---------|-----------------------------------------------------------------------------------------------------|
-| `disableStandby` | `bool` | `false` | `false` runs an active guest beside a standby guest. `true` runs one guest and restarts it in place |
+| Field      | Type    | Default | Description                                                                                                                        |
+|------------|---------|---------|------------------------------------------------------------------------------------------------------------------------------------|
+| `standbys` | `int32` | `1`     | Standby guests beside the active one, 0 to 4. The StatefulSet runs `1 + standbys` replicas, and at `0` one guest restarts in place |
 
-**Why the standby is the default.** The constraint is P0-4: a standby needs a second KVM-capable node. A cluster with one such node loses nothing to the default: the standby stays `Pending`, the active serves, and an `MDSStandbyMissing` warning says why. A cluster with two is protected against the unbounded outage of §1 without anyone setting a field. The default costs a warning where a standby cannot run and prevents an outage where it can, so the zero value is "standby on" and the toggle is `disableStandby`.
+**Why one standby is the default.** The constraint is P0-4: each standby needs its own KVM-capable node. A cluster without a second such node loses nothing to the default: the standby stays `Pending`, the active serves, and an `MDSStandbyMissing` warning says why. A cluster with one is protected against the unbounded outage of §1 without anyone setting a field. A second standby keeps the cluster protected while the first is down or being rolled, at the cost of one more pod's reservation (§5.5) and one more host on every volume (P0-2), which is what the maximum of 4 bounds.
 
-The field is reconfigurable. Setting it scales the StatefulSet to one replica after a switchover that leaves the active on ordinal 0 (§7.4). Clearing it scales back to two, and the new pod boots as the standby.
+The field is reconfigurable. Raising it scales the StatefulSet up, and every new pod boots as a standby. Lowering it removes the highest ordinals, as a StatefulSet scale-down does. When the active is on one of them, the operator first switches over to a standby on a remaining ordinal (§7.4), then scales down.
 
 The full type is Appendix A.
 
@@ -176,28 +183,30 @@ The first three are written in one update conditioned on the StatefulSet's `reso
 
 The StatefulSet of `design-pnfs-mds-vm.md` §5.1 keeps its name, owner, and template hash, and changes in four ways:
 
-- `replicas: 2`, or `1` with `disableStandby`.
+- `replicas: 1 + standbys`.
 - `podManagementPolicy: Parallel`, so a pod stuck on a lost node does not stop the other ordinal from being created or restarted.
-- A required pod anti-affinity on `kubernetes.io/hostname` against the StatefulSet's own pods, in addition to the `kvm-capable` node selector. Two guests on one node would both be lost with it.
+- A required pod anti-affinity on `kubernetes.io/hostname` against the StatefulSet's own pods, in addition to the `kvm-capable` node selector. Two guests on one node are lost together with it.
 - `updateStrategy: OnDelete`. The operator rolls the pods itself (§7.4), because the StatefulSet controller's rolling update restarts ordinals in a fixed order regardless of which one is active.
 
 No `volumeClaimTemplates`. The per-cluster state StorageClass, its `ValidatingAdmissionPolicy`, and the PVC permission of `design-pnfs-mds-vm.md` §5.3 and §7.8 are removed.
 
 ### 5.2 Host identity
 
-Each pod has its own host NQN, so the control plane authorizes, and the target records, two distinct hosts:
+Each pod has its own host NQN, so the control plane authorizes, and the target records, a distinct host per ordinal:
 
 ```
 hostNQN(ordinal) = nqn.Host(uuid.NewSHA1(<StatefulSet UID>, "<ordinal>"))
 ```
 
-The seed is a name-based UUID because `nqn.HostUUID` requires a UUID and the host identifier is derived from it. It is stable across pod restarts and changes when the StatefulSet is recreated, which keeps `design-pnfs-mds-vm.md` §6.5's reasoning. The operator computes it from the pod's owner reference and ordinal and sends it with every call.
+The seed is a name-based UUID because `nqn.HostUUID` requires a UUID and the host identifier is derived from it. It is stable across pod restarts and changes when the StatefulSet is recreated, which keeps `design-pnfs-mds-vm.md` §6.5's reasoning. The operator computes it from the pod's owner reference and ordinal and sends it with every call. The target keys a registration by the host identifier, which `atlas-lib/nvmeof` derives from the host NQN's UUID, so each ordinal is its own registrant, and the same one across that pod's restarts.
 
-Both guests boot with the same hostname, the StatefulSet's name, rather than the pod name. nfsd derives its server owner and scope from the hostname, and NFSv4.1 clients reclaim only from a server whose identity did not change, so a client of `<mds>-0` reclaims on `<mds>-1` exactly as it would on a restarted `<mds>-0`. Only the active's nfsd runs, so the shared name never answers twice. This replaces the pod-name hostname of `design-pnfs-mds-vm.md` §6.6.
+Every guest boots with the same hostname, the StatefulSet's name, rather than the pod name. nfsd derives its server owner and scope from the hostname, and NFSv4.1 clients reclaim only from a server whose identity did not change, so a client of `<mds>-0` reclaims on `<mds>-1` exactly as it would on a restarted `<mds>-0`. Only the active's nfsd runs, so the shared name never answers twice. This replaces the pod-name hostname of `design-pnfs-mds-vm.md` §6.6.
 
 ### 5.3 Roles and boot
 
 Every guest boots as a standby: systemd starts the agent and does not start `nfs-server.service`, mount `/var/lib/nfs`, or connect anything. The agent reports its role and epoch through `Describe` (§8). The readiness probe is the agent's health, which is `SERVING` for a booted standby and, once active, additionally requires the state volume mounted and nfsd threads running. Readiness carries no traffic, because the operator writes the EndpointSlices.
+
+A standby connects no volume ahead of its promotion. Under the reservation an unregistered host cannot read, so the kernel's partition scan of a device connected before promotion fails with reservation conflicts, and every such device is one more controller per volume per standby at the target.
 
 A guest becomes active only through `Promote`, at most once per boot. A guest that was active and rebooted is a standby again, whatever the record says, and the record's instance no longer matches it.
 
@@ -211,7 +220,9 @@ A finalizer on the StatefulSet, `storage.simplyblock.io/mds-state-volume`, delet
 
 ### 5.5 Resources
 
-Each pod takes `spec.pnfs.mds.resources`, so the standby doubles the reservation. A booted standby uses little of it, since the guest's free page reporting (`design-pnfs-mds-vm.md` §5.5) returns what it does not touch, and the limit is what the guest needs at the moment it is promoted.
+Each pod takes `spec.pnfs.mds.resources`, so every standby adds one pod's reservation. The guests share one pod template, so a standby requests what the active does. The default memory request is 256Mi, and the default memory limit stays 2Gi. A serving active was measured at 300Mi, above that request, and a booted standby uses less, since the guest's free page reporting (`design-pnfs-mds-vm.md` §5.5) returns what it does not touch.
+
+The request is bounded by eviction: under node memory pressure the kubelet evicts pods using more than their request first, and the active is the pod that does. A deployment that cannot accept that sets the request to the active's working set and reserves it for every standby as well.
 
 ---
 
@@ -222,6 +233,8 @@ Each pod takes `spec.pnfs.mds.resources`, so the standby doubles the reservation
 nfsd reserves each device `PR_EXCLUSIVE_ACCESS_REG_ONLY`: every registered host may read and write, and an unregistered host may do neither. Clients are registered with their own keys, so they write directly. Fencing a guest therefore means removing its registration, which a Reservation Acquire with Preempt does: it unregisters every host whose key is the preempted key and, when that key held the reservation, moves the reservation to the preempting host.
 
 A fence lasts only while the fenced host does not register again, and NVMe has nothing to prevent that. The guest is fenced reliably only when the guest itself contains no path that registers once fenced. That is what P0-1 requires of nfsd (§6.3), and what the agent guarantees of itself (§6.4).
+
+**The guarantee holds on the storage node that holds the reservation.** The target keeps reservation state per SPDK process, not per volume. A host sends every reservation command down the one path its multipath layer has selected (`nvme_find_path`), so the registrations and the reservation exist only on the storage node behind that path, the volume's current primary. The secondaries' listeners are `non_optimized` and accept I/O, and they hold no reservation, so a fenced guest whose path to the primary fails over writes through a secondary unrefused. A change of the volume's primary node, and the replacement of a storage node's SPDK pod, whose reservation file lives in the container's writable layer, leave the reservation empty or stale on the node that serves next. Fencing that holds across those events is P0-5.
 
 ### 6.2 The instance key and the epoch
 
@@ -254,12 +267,12 @@ For every device the active will mount (the state volume and each export namespa
 
 1. Connects the namespace with the pod's host NQN.
 2. Reads the reservation report. Refuses on the collision of §6.2, or when the holder's key is outside the MDS range, since a client never holds the reservation.
-3. Registers its key (Register, ignore existing key).
+3. Registers its key with Replace and ignore existing key (`IOC_PR_REGISTER` with a non-zero old key and `PR_FL_IGNORE_KEY`). SPDK answers Register with a conflict for a host already registered under another key, and a pod's host identifier is the same across its reboots, so a guest that was active in an earlier boot is still registered with that boot's key. Replace with ignore existing key registers a host that is not registered and replaces the key of one that is.
 4. When another key holds the reservation, acquires with Preempt of that key. When none does, acquires.
 5. Preempts every other registered key in the MDS range, so a guest of an earlier epoch that was registered without holding is unregistered too.
 6. Reads the report again and confirms that its key holds the reservation and that no other MDS-range key is registered.
 
-Client keys are never touched. Preempt and Abort is not used, because SPDK's target refuses it (0002's commit message), so the plain Preempt is the one the agent issues.
+Client keys are never touched. Preempt and Abort is not used, because SPDK's target answers it with Invalid Field (`nvmf_ns_reservation_acquire`), so the plain Preempt is the one the agent issues.
 
 A promotion fences every device before it mounts any. When any step fails on any device, `Promote` returns the device and the step, mounts nothing, starts no nfsd, and leaves the guest a standby. Devices already fenced stay fenced: the old active has lost them, which is the intended outcome of a takeover whatever happens next.
 
@@ -267,11 +280,13 @@ A promotion fences every device before it mounts any. When any step fails on any
 
 ### 6.5 What a fenced guest does
 
-A fenced guest's writes to the namespace fail with a reservation conflict. Its filesystem sees I/O errors on its next metadata write or log flush, and XFS is expected to shut the filesystem down, after which nfsd answers its clients with errors (Open Question 3). Its clients are not on it by then, because the EndpointSlice was moved and their flows forgotten (§7.3), and their data path never went through it. Its reads also fail, since `PR_EXCLUSIVE_ACCESS_REG_ONLY` excludes unregistered readers.
+A fenced guest's writes to the namespace fail with a reservation conflict. Its filesystem sees I/O errors on its next metadata write or log flush, and XFS is expected to shut the filesystem down, after which nfsd answers its clients with errors (Open Question 2). Its clients are not on it by then, because the EndpointSlice was moved and their flows forgotten (§7.3), and their data path never went through it. Its reads also fail, since `PR_EXCLUSIVE_ACCESS_REG_ONLY` excludes unregistered readers.
 
 ### 6.6 Residual exposure
 
 A plain Preempt does not abort commands already queued at the target from the preempted host. A write the old active issued before the preempt and the target executes after it reaches the device. The window is the target's queue depth for that host at the instant of preemption, measured in milliseconds, and the new active's mount follows the preemption, so XFS log recovery on the new active sees the device after those writes. The case is pinned by a test (I-09 in the test plan) rather than designed away, because closing it needs Preempt and Abort from the target.
+
+Until P0-5, the fence also holds only on the volume's primary storage node (§6.1). A fenced guest whose path fails over to a secondary, or that reaches a primary whose reservation was lost with its SPDK pod, is not refused there. The agent's fence and the old active's withdrawal (§7.3 Step 3) make a write from it unlikely, and nothing on the target excludes it.
 
 ---
 
@@ -306,9 +321,13 @@ The signals are the active's csi-link session, its pod's `Ready` condition and d
 
 - The active has no csi-link session.
 - The active's pod is not `Ready`, or its node is not `Ready`.
-- The standby has a session and its agent reports the standby role.
+- A standby has a session and its agent reports the standby role.
 
 The link session is the signal that does not depend on the API server, and the pod and node conditions are the signals that do not depend on the operator's own connections. Requiring both keeps an API server blip of a few seconds (pod and node conditions stale, sessions up) and a broken link alone (sessions down, pod `Ready`) from starting a takeover. The window restarts when the operator acquires leadership, so a new leader never counts time it did not observe, and every link session is new to it.
+
+**API server reads.** Every API read the decision depends on (the pods, the nodes, and the StatefulSet) is retried 3 times, 2 seconds apart. A read that still fails ends the pass: it never counts as a condition observed, and it never advances the window. An API server outage of up to about 6 seconds costs a delayed pass and nothing else, and a longer one holds the decision for as long as it lasts.
+
+A lost node's `Ready` condition turns false only after the node controller's `node-monitor-grace-period`, 40 seconds by default, and its pod reads `Ready` until then, so that period bounds the detection of a lost node.
 
 While a loss is observed and the window has not elapsed, the decision is held with an `MDSFailoverHeld` event. The window's length, and whether `CheckExport` failures alone should count, are Open Question 1.
 
@@ -316,7 +335,7 @@ While a loss is observed and the window has not elapsed, the decision is held wi
 
 #### Step 1: Choose the target
 
-The standby with a session, `Ready`, and reporting the standby role. With no such standby, the takeover waits, and the first guest that becomes one is the target, including the old active's pod once it has restarted. A cluster with `disableStandby` has only that case.
+Every standby with a session, `Ready`, and reporting the standby role is a candidate. The operator prefers a candidate on a node whose `topology.kubernetes.io/zone` differs from the lost active's, when both nodes carry the label, and among those the lowest ordinal. The choice depends only on the observed pods and nodes, so two passes deciding from the same observation choose the same pod, and the record's conditioned write (Step 2) settles any that do not. With no candidate, the takeover waits, and the first guest that becomes one is the target, including the old active's pod once it has restarted. A cluster with `standbys: 0` has only that case.
 
 #### Step 2: Record
 
@@ -340,7 +359,7 @@ For every export bound to the cluster, eight at a time (`design-pnfs-mds-vm.md` 
 takeover(cluster):
   rec := statefulSet.annotations
   if rec.active is lost (§7.2) or deleting or empty:
-      target := chooseStandby() or return wait
+      target := chooseStandby() or return wait     // §7.3 Step 1
       rec' := {active: target, instance: target.instance, epoch: rec.epoch + 1}
       if !update(statefulSet, rec', resourceVersion): return requeue   // lost the race
       withdraw(exportsOf(cluster), oldIP)
@@ -357,13 +376,15 @@ takeover(cluster):
 
 A pod with a deletion timestamp is the planned case. Its runner drains on `SIGTERM` (`design-pnfs-mds-vm.md` §5.2): data-carrying packets to the guest's NFS port are dropped and requests already in nfsd are answered. The operator does not wait for the old guest to exit before fencing. Exports use the `sync` option, so every metadata request nfsd answered was committed, and the new active's log recovery starts from that.
 
-A template change rolls the pair without serving from an old template longer than one restart: the operator deletes the standby, waits until the new pod is `Ready` as a standby, then deletes the active, which promotes the new standby. The old active's pod comes back as the standby on the new template. A manual switchover is Open Question 4.
+A template change rolls the guests without serving from an old template longer than one restart: the operator deletes the standbys one at a time, each after the previous one's replacement reports the standby role and is `Ready`, then deletes the active, which promotes a standby on the new template. The old active's pod comes back as a standby on the new template.
 
-Setting `disableStandby` when the active is ordinal 1 first switches over to ordinal 0, then scales to one replica.
+A manual switchover is the `SwitchoverMDS` action of a `SimplyblockDriverOps` kind, the `Ops` companion of `SimplyblockDriver` in the pattern `ControlPlaneOps` follows for `ControlPlane`. The action names a storage cluster, since each storage cluster has its own MDS, and optionally the standby pod to promote. It deletes the active's pod, which is the planned case above, with the named standby as Step 1's target when it is a candidate. The kind's definition is a follow-up design (Open Question 3).
+
+Lowering `standbys` below the active's ordinal first switches over to a standby on a remaining ordinal, then scales down (§4.1).
 
 ### 7.5 The old active returns
 
-A guest whose instance is not the record's and whose agent reports active is a returning old active: a partition healed, or a paused node resumed. It is already fenced, so it cannot write, but it holds dead mounts and a running nfsd. The operator deletes its pod with an `MDSDemoted` event, and the restarted pod boots as the standby. A pod on a node that never returns stays `Terminating`, the cluster runs without a standby, and `MDSStandbyMissing` is emitted until the pod is deleted.
+A guest whose instance is not the record's and whose agent reports active is a returning old active: a partition healed, or a paused node resumed. It is already fenced, so it cannot write, but it holds dead mounts and a running nfsd. The operator deletes its pod with an `MDSDemoted` event, and the restarted pod boots as a standby. A pod on a node that never returns stays `Terminating`, its ordinal is missing from the standbys, and `MDSStandbyMissing` is emitted while no standby runs.
 
 ### 7.6 What clients see
 
@@ -395,22 +416,24 @@ The runner adds the connections, resolved with the pod's host NQN, and drops any
 
 ## 9. Failure Modes
 
-| Failure                                                        | Detection                                                          | Behavior                                                                                                                                                    |
-|----------------------------------------------------------------|--------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| The active's node is lost                                      | No session, and the node or pod not `Ready`, for the window (§7.2) | The standby is promoted. The old pod stays `Terminating`, `MDSStandbyMissing` until it is gone                                                              |
-| The active is partitioned from the operator and the API server | As above                                                           | The standby is promoted and fences the devices. The old guest's next write fails (§6.5). Withdraw and conntrack forget move its clients first (§7.3 Step 3) |
-| API server unavailable for seconds                             | Pod and node conditions stale, sessions up                         | Held. `MDSFailoverHeld` while any condition is observed, no takeover                                                                                        |
-| Operator restarted or leadership moved                         | New leader, every session new                                      | The window restarts. A takeover in progress resumes from the record (§7.1)                                                                                  |
-| Fencing fails on one device                                    | `Promote` returns the device and step                              | Nothing mounted, no nfsd. `MDSFenceFailed`, retry with backoff. Exports stay withdrawn                                                                      |
-| Key collision                                                  | Report shows the key on another host                               | Promotion refused, epoch incremented, retried                                                                                                               |
-| Two writers decide a takeover                                  | `resourceVersion` conflict on the record                           | One record write succeeds and only its writer promotes. A hand-edited record that duplicates an epoch is caught by the collision check                      |
-| Only one KVM-capable node                                      | Standby pod unschedulable                                          | The active serves. `MDSStandbyMissing`. A loss of the active waits for any guest to come back                                                               |
-| Both guests lost                                               | No standby with a session                                          | The takeover waits, and the first guest to come back as a standby is promoted at a new epoch                                                                |
-| The old active returns                                         | A session whose instance is not the record's, reporting `Active`   | Its pod is deleted, `MDSDemoted`, and it boots as the standby                                                                                               |
-| Control plane refuses the standby's host NQN                   | Connect fails in `Promote`                                         | As fencing failure. The prerequisite is P0-2                                                                                                                |
-| State volume creation fails                                    | `CreateVolume` error                                               | No promotion, exports `Pending`, `MDSStateUnavailable`, retry                                                                                               |
-| Export bound during a takeover                                 | Record names a target that is not `Active` yet                     | The export waits in `Pending` until the target is active                                                                                                    |
-| Commands queued at the target when the preempt lands           | Not detected                                                       | They execute (§6.6). The new active mounts after the preempt                                                                                                |
+| Failure                                                                | Detection                                                                                    | Behavior                                                                                                                                                              |
+|------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| The active's node is lost                                              | No session, and the node or pod not `Ready`, for the window (§7.2)                           | A standby is promoted (§7.3 Step 1). The old pod stays `Terminating`, and `MDSStandbyMissing` while no other standby runs                                             |
+| The active is partitioned from the operator and the API server         | As above                                                                                     | A standby is promoted and fences the devices. The old guest's next write fails (§6.5). Withdraw and conntrack forget move its clients first (§7.3 Step 3)             |
+| API server unavailable for seconds                                     | Reads fail after 3 retries 2 s apart, or pod and node conditions stale while sessions are up | Held. A failed read counts toward nothing (§7.2), and `MDSFailoverHeld` while any condition is observed                                                               |
+| Operator restarted or leadership moved                                 | New leader, every session new                                                                | The window restarts. A takeover in progress resumes from the record (§7.1)                                                                                            |
+| Fencing fails on one device                                            | `Promote` returns the device and step                                                        | Nothing mounted, no nfsd. `MDSFenceFailed`, retry with backoff. Exports stay withdrawn                                                                                |
+| Key collision                                                          | Report shows the key on another host                                                         | Promotion refused, epoch incremented, retried                                                                                                                         |
+| Two writers decide a takeover                                          | `resourceVersion` conflict on the record                                                     | One record write succeeds and only its writer promotes. A hand-edited record that duplicates an epoch is caught by the collision check                                |
+| Fewer KVM-capable nodes than `1 + standbys`                            | A standby pod unschedulable                                                                  | The pods that fit serve and the rest stay `Pending`. `MDSStandbyMissing` while no standby runs. A loss of the active with no standby waits for any guest to come back |
+| Every guest lost                                                       | No standby with a session                                                                    | The takeover waits, and the first guest to come back as a standby is promoted at a new epoch                                                                          |
+| The old active returns                                                 | A session whose instance is not the record's, reporting `Active`                             | Its pod is deleted, `MDSDemoted`, and it boots as a standby                                                                                                           |
+| Control plane refuses a standby's host NQN                             | Connect fails in `Promote`                                                                   | As fencing failure. The prerequisite is P0-2                                                                                                                          |
+| State volume creation fails                                            | `CreateVolume` error                                                                         | No promotion, exports `Pending`, `MDSStateUnavailable`, retry                                                                                                         |
+| Export bound during a takeover                                         | Record names a target that is not `Active` yet                                               | The export waits in `Pending` until the target is active                                                                                                              |
+| Commands queued at the target when the preempt lands                   | Not detected                                                                                 | They execute (§6.6). The new active mounts after the preempt                                                                                                          |
+| The volume's primary storage node changes, or its SPDK pod is replaced | Not detected by the operator                                                                 | The reservation on the node serving next is empty or stale, so a fenced guest is refused only where the reservation lives (§6.1). Closed by P0-5                      |
+| The namespace already has 16 registrants                               | Register fails in `Promote`                                                                  | As fencing failure. Closed by P0-6                                                                                                                                    |
 
 ---
 
@@ -430,7 +453,7 @@ A takeover is a property of a storage cluster's MDS, and no kind exists for that
 | The active looks lost and the takeover is held until the detection window elapses                     | `Normal`                               | `MDSFailoverHeld`      | `SimplyblockDriver`              |
 | Another writer moved the active record first, so this pass did not promote                            | `Normal`                               | `MDSPromotionConflict` | `SimplyblockDriver`              |
 | No standby is running and ready, so exports are unserved after a loss of the active                   | `Warning`                              | `MDSStandbyMissing`    | `SimplyblockDriver`              |
-| A guest that was active under an earlier epoch came back and its pod was restarted as the standby     | `Normal`                               | `MDSDemoted`           | `SimplyblockDriver`              |
+| A guest that was active under an earlier epoch came back and its pod was restarted as a standby       | `Normal`                               | `MDSDemoted`           | `SimplyblockDriver`              |
 
 `MDSStateUnavailable` keeps its reason and now names a failed state volume creation.
 
@@ -443,7 +466,7 @@ A takeover is a property of a storage cluster's MDS, and no kind exists for that
 | `simplyblock_pnfs_mds_failovers_total`  | `cluster`, `cause`, `result` | Takeovers by cause (`Deleted`, `Lost`, `First`) and result (`Succeeded`, `FenceFailed`, `Conflict`) |
 | `simplyblock_pnfs_mds_takeover_seconds` | `cluster`, `phase`           | Histogram of each phase: `Detect`, `Fence`, `Start`, `Reassemble`, `Serve`                          |
 
-`simplyblock_pnfs_mds_role{role="Standby"}` summed per cluster is the alert for a cluster that has lost its protection: zero with `disableStandby` unset means the next node loss is an outage. `simplyblock_pnfs_mds_failovers_total{cause="Lost"}` is the alert for false failovers: each one is a server restart for every client, and a rate above the rate of node failures means the detection window is too short. `simplyblock_pnfs_mds_takeover_seconds` per phase is what turns the restore budget into a number: `Fence` plus `Start` plus `Reassemble` must stay under the 60 seconds of `nfsd.pnfs_export_restore`.
+`simplyblock_pnfs_mds_role{role="Standby"}` summed per cluster is the alert for a cluster that has lost its protection: zero with `standbys` above 0 means the next node loss is an outage. `simplyblock_pnfs_mds_failovers_total{cause="Lost"}` is the alert for false failovers: each one is a server restart for every client, and a rate above the rate of node failures means the detection window is too short. `simplyblock_pnfs_mds_takeover_seconds` per phase is what turns the restore budget into a number: `Fence` plus `Start` plus `Reassemble` must stay under the 60 seconds of `nfsd.pnfs_export_restore`.
 
 ---
 
@@ -461,20 +484,17 @@ The scenario matrix, its coverage status, and the gaps are in [`tests/test-plan-
 
 ## 12. Open Questions
 
-| #   | Question                                                                                                                                                                                                                                                                                         | Owner              |
-|-----|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
-| 1   | **Detection signals and thresholds.** The window's length, whether `CheckExport` failures count, and how node `Ready` is weighed. A window that is too short fails over on an API server blip of a few seconds, which has taken storage nodes offline before. One that is too long is the outage | Operator team      |
-| 2   | **Authorizing two host NQNs.** Whether the control plane can authorize two hosts per volume and per state volume, and through which API (P0-2)                                                                                                                                                   | Control plane team |
-| 3   | **The fenced old guest.** What XFS and ext4 do when every write fails with a reservation conflict: the expected forced shutdown, and whether nfsd or the agent can hang on it. To verify on the guest kernel                                                                                     | Operator team      |
-| 4   | **Manual switchover.** Whether a user can ask for a switchover, and as which action of which `Ops` kind                                                                                                                                                                                          | Operator team      |
-| 5   | **A pre-connected standby.** Whether the standby connects the export namespaces ahead of time, without registering, to take the connect time out of `Fence`                                                                                                                                      | Operator team      |
-| 6   | **The state volume's pool.** The first export's pool can be deleted while the state volume lives in it, and pool deletion waits for its volumes                                                                                                                                                  | Operator team      |
-
+| #   | Question                                                                                                                                                                                                                                                                                                                                                                                                                                            | Owner         |
+|-----|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------|
+| 1   | **Detection thresholds.** API reads are retried 3 times, 2 s apart (§7.2). A lost node's pod and node read `Ready` until `node-monitor-grace-period` (40 s by default) passes, which bounds detection of a lost node. Open are the window's length after it and whether `CheckExport` failures count. A window that is too short fails over on an API server blip, which has taken storage nodes offline before. One that is too long is the outage | Operator team |
+| 2   | **The fenced old guest.** What XFS and ext4 do when every write fails with a reservation conflict: the expected forced shutdown, and whether nfsd or the agent can hang on it. Verifiable today on the volume's primary storage node, where the reservation lives. The same behavior after a change of primary waits for P0-5                                                                                                                       | Operator team |
+| 3   | **`SimplyblockDriverOps`.** The kind's definition: its spec, status, phases, and the fields of the `SwitchoverMDS` action (§7.4), with whatever other driver actions it carries                                                                                                                                                                                                                                                                     | Operator team |
+| 4   | **The state volume's pool.** The state volume is created in the pool of the first export bound to the cluster. Once that pool's exports are deleted, deleting the pool is still blocked by the state volume, which nothing shows the user. Where the state volume lives instead, or how the block is made visible                                                                                                                                   | Operator team |
 ---
 
 ## Appendix A: `simplyblockdriver_types.go`
 
-The shipped file with the change of §4.1: `DriverPNFSMDS` loses `stateSize` and `stateStorageClassName` and gains `disableStandby`, and the comments of `DriverPNFS.MDS` and `DriverPNFSMDS` describe the pair. Every other type is unchanged and appears as shipped.
+The shipped file with the change of §4.1: `DriverPNFSMDS` loses `stateSize` and `stateStorageClassName` and gains `standbys`, and the comments of `DriverPNFS.MDS` and `DriverPNFSMDS` describe the active and its standbys. Every other type is unchanged and appears as shipped.
 
 ```go
 // SimplyblockDriverPhase is where the operator has got to with the CSI driver.
@@ -615,8 +635,8 @@ type DriverTLS struct {
 // directly.
 type DriverPNFS struct {
 	// MDS runs the metadata server: per storage cluster, an active pod and,
-	// unless disabled, a standby on another node, each a QEMU guest running
-	// the NFS server with its own kernel, so no node runs nfsd, mounts an
+	// by default, one standby on another node, each a QEMU guest running the
+	// NFS server with its own kernel, so no node runs nfsd, mounts an
 	// export, or needs nfs-utils. The pods need nodes with /dev/kvm. Unset,
 	// no pNFS volume can be exported: its export waits in Pending until this
 	// is set.
@@ -624,8 +644,8 @@ type DriverPNFS struct {
 	MDS *DriverPNFSMDS `json:"mds,omitempty"`
 }
 
-// DriverPNFSMDS is the metadata server: an active guest and, unless disabled,
-// a standby on another node that takes over when the active is lost.
+// DriverPNFSMDS is the metadata server: an active guest and standbys on other
+// nodes, one of which takes over when the active is lost.
 type DriverPNFSMDS struct {
 	// Image is the metadata server image: QEMU, the guest kernel, the guest
 	// root filesystem, and the runner. Unset takes the operator's own registry
@@ -636,18 +656,18 @@ type DriverPNFSMDS struct {
 	// +optional
 	Image string `json:"image,omitempty"`
 
-	// Resources are each pod's requests and limits, so a standby doubles
-	// them. The guest's vCPUs are the whole cores the CPU limit covers, at
+	// Resources are each pod's requests and limits, so every standby adds
+	// one pod's worth. The guest's vCPUs are the whole cores the CPU limit covers, at
 	// least one, and its memory is the memory limit less 256Mi for QEMU, so
 	// the memory limit has to be at least 512Mi. A CPU or memory limit left
-	// unset defaults to 2 and 2Gi, and a memory request left unset to 512Mi,
+	// unset defaults to 2 and 2Gi, and a memory request left unset to 256Mi,
 	// or the limit when that is lower. The guest returns the memory it frees
 	// to the node, so the pod uses about what the guest does.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 
 	// NodeSelector is merged with the kvm-capable label the pods always
-	// require. The active and the standby always run on different nodes.
+	// require. No two of the guests run on one node.
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
@@ -655,14 +675,17 @@ type DriverPNFSMDS struct {
 	// +optional
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
-	// DisableStandby runs one metadata server guest instead of an active and
-	// a standby on two nodes. With a standby, the loss of the active's node
-	// is recovered in about the time a restart takes. Without one, exports
-	// stay unserved until the lost pod is deleted and started again
-	// elsewhere. A standby needs a second node offering KVM, and without one
-	// it stays pending while the active serves.
+	// Standbys is how many standby guests run beside the active one, each on
+	// its own node. A standby takes over when the active is lost, in about the
+	// time a restart takes. At 0, exports stay unserved after the loss of the
+	// active's node until the lost pod is deleted and started again
+	// elsewhere. Each standby needs another node offering KVM, and one
+	// without such a node stays pending while the active serves.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=4
+	// +kubebuilder:default=1
 	// +optional
-	DisableStandby bool `json:"disableStandby,omitempty"`
+	Standbys *int32 `json:"standbys,omitempty"`
 }
 
 // SimplyblockDriverSpec is the CSI driver deployment: the node plugin, the
