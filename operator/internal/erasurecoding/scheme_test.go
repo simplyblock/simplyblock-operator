@@ -131,19 +131,46 @@ func TestTheSupportedSetRendersAsAPhrase(t *testing.T) {
 }
 
 func TestMinimumNodesFor(t *testing.T) {
+	two := Topology{TwoNode: true}
+	one := Topology{SingleNode: true}
 	for _, tc := range []struct {
-		s       Scheme
-		twoNode bool
-		want    int
+		s        Scheme
+		topology Topology
+		want     int
 	}{
-		{Scheme{1, 1}, true, 2},
-		{Scheme{1, 1}, false, 3},
-		{Scheme{1, 0}, true, 1},
-		{Scheme{2, 1}, true, 4},
-		{Scheme{2, 2}, true, 6},
+		{Scheme{1, 1}, two, 2},
+		{Scheme{1, 1}, Topology{}, 3},
+		{Scheme{1, 0}, two, 1},
+		{Scheme{2, 1}, two, 4},
+		{Scheme{2, 2}, two, 6},
+		{Scheme{1, 0}, one, 1},
+		{Scheme{1, 1}, one, 1},
+		{Scheme{2, 1}, one, 1},
+		{Scheme{2, 2}, one, 1},
+		{Scheme{4, 2}, one, 1},
 	} {
-		if got := tc.s.MinimumNodesFor(tc.twoNode); got != tc.want {
-			t.Errorf("%s twoNode=%v: %d, want %d", tc.s, tc.twoNode, got, tc.want)
+		if got := tc.s.MinimumNodesFor(tc.topology); got != tc.want {
+			t.Errorf("%s %+v: %d, want %d", tc.s, tc.topology, got, tc.want)
+		}
+	}
+}
+
+// A single-node cluster places each chunk of a stripe on its own device, so
+// the scheme's width is the device floor (sbcli activation_minimum_devices,
+// no spare at one node).
+func TestMinimumDevicesPerNode(t *testing.T) {
+	one := Topology{SingleNode: true}
+	for _, tc := range []struct {
+		s    Scheme
+		want int
+	}{
+		{Scheme{1, 0}, 1}, {Scheme{1, 1}, 2}, {Scheme{2, 1}, 3}, {Scheme{2, 2}, 4}, {Scheme{4, 2}, 6},
+	} {
+		if got := tc.s.MinimumDevicesPerNode(one); got != tc.want {
+			t.Errorf("%s single node: %d devices, want %d", tc.s, got, tc.want)
+		}
+		if got := tc.s.MinimumDevicesPerNode(Topology{}); got != 0 {
+			t.Errorf("%s ordinary cluster: %d, want 0", tc.s, got)
 		}
 	}
 }

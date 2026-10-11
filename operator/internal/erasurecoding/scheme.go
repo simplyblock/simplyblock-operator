@@ -85,24 +85,62 @@ func (s Scheme) MinimumNodes() int {
 	return s.DataChunks + 2*s.ParityChunks
 }
 
-// MinimumNodesFor is MinimumNodes, except for a declared two-node cluster
-// (StorageCluster spec.twoNode): 1+1 then runs on exactly its two nodes, one
+// Topology is what a cluster declares about its own size: a single-node
+// cluster (spec.singleNode) or a two-node cluster (spec.twoNode). The zero
+// value is an ordinary cluster.
+type Topology struct {
+	SingleNode bool
+	TwoNode    bool
+}
+
+// MinimumNodesFor is MinimumNodes, except for a declared single-node or
+// two-node cluster.
+//
+// A single-node cluster (StorageCluster spec.singleNode) runs every scheme on
+// its one storage node: the control plane activates it non-HA with a single
+// journal, puts every chunk of a stripe on a different device of that node
+// (anti-affinity labels off), and needs ndcs+npcs devices rather than nodes
+// (sbcli cluster_ops.activation_minimum_devices). The parity then protects
+// against device failures, not against losing the node.
+//
+// A two-node cluster (spec.twoNode) runs 1+1 on exactly its two nodes, one
 // copy each, with no spare to rebuild onto. The control plane activates that
 // shape (sbcli cluster_ops.cluster_activate: no node floor for HA, device
 // minimum ndcs+npcs+1, anti-affinity labels off at two nodes) and the journal
 // runs in dual-node mode by membership; a lost node is survived by the peer,
 // and the two-node arbiter decides which one continues on a partition.
 //
-// It is an explicit declaration rather than "the cluster has two nodes": the
-// activation gate counts StorageNode objects as they appear, so a 1+1 cluster
-// planned for three nodes would otherwise activate on its first two and become
-// a two-node cluster nobody asked for. Every other scheme is unchanged, so is
+// Both are explicit declarations rather than "the cluster has one (two)
+// nodes": the activation gate counts StorageNode objects as they appear, so a
+// cluster planned for three would otherwise activate on its first one or two
+// and become a cluster nobody asked for. Every other case is unchanged, so is
 // 1+0 on one node.
-func (s Scheme) MinimumNodesFor(twoNode bool) int {
-	if twoNode && s.DataChunks == 1 && s.ParityChunks == 1 {
+func (s Scheme) MinimumNodesFor(topology Topology) int {
+	switch {
+	case topology.SingleNode:
+		return 1
+	case topology.TwoNode && s.DataChunks == 1 && s.ParityChunks == 1:
 		return 2
 	}
 	return s.MinimumNodes()
+}
+
+// TopologyOf reads a cluster's declarations: spec.singleNode and spec.twoNode
+// of a StorageCluster, or the same two fields of a deployment's cluster
+// template.
+func TopologyOf(singleNode *bool, twoNode *simplyblockv1alpha2.TwoNodeSpec) Topology {
+	return Topology{SingleNode: ptr.BoolFromOrFalse(singleNode), TwoNode: twoNode != nil}
+}
+
+// MinimumDevicesPerNode is how many storage devices each node of a declared
+// single-node cluster needs for the scheme: one per chunk of a stripe, since
+// every chunk lands on a different device of the one node. Zero means the
+// control plane counts devices across nodes and this rule does not apply.
+func (s Scheme) MinimumDevicesPerNode(topology Topology) int {
+	if topology.SingleNode {
+		return s.DataChunks + s.ParityChunks
+	}
+	return 0
 }
 
 // String is the k+m notation the documentation, the control plane's Mod column,

@@ -12,9 +12,10 @@ spec:
     enableDriveFormat: true
     maxSubsystemCount: 30
     name: discovered-discover-numa-08-cluster
+    singleNode: true
     stripe:
-      dataChunks: 1
-      parityChunks: 0
+      dataChunks: 2
+      parityChunks: 1
     vcpuCount: 8
   environment: K3s
   hostOS:

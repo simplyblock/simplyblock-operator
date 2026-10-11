@@ -51,8 +51,8 @@ func TestTheDraftProposesASchemeTheFleetCanCarry(t *testing.T) {
 		workers int
 		scheme  string
 	}{
-		{1, "1+0"},
-		{2, "1+0"},
+		{1, "1+0"}, // a single node that names no devices carries nothing redundant
+		{2, "1+1"}, // as a two-node cluster
 		{3, "1+1"},
 		{4, "2+1"},
 		{6, "2+1"},
@@ -76,9 +76,14 @@ func TestTheProposedSchemeIsOneTheFleetAndTheControlPlaneBothAccept(t *testing.T
 			t.Errorf("a fleet of %d is proposed %s, which the control plane refuses",
 				workers, scheme)
 		}
-		if workers > 0 && scheme.MinimumNodes() > workers {
+		template, err := ClusterTemplateFor("a-cluster", aFleetOf(workers), TemplateOptions{})
+		if err != nil {
+			t.Fatalf("the fleet was refused: %v", err)
+		}
+		topology := erasurecoding.TopologyOf(template.Template.SingleNode, template.Template.TwoNode)
+		if workers > 0 && scheme.MinimumNodesFor(topology) > workers {
 			t.Errorf("a fleet of %d is proposed %s, which needs %d storage nodes",
-				workers, scheme, scheme.MinimumNodes())
+				workers, scheme, scheme.MinimumNodesFor(topology))
 		}
 	}
 }
@@ -100,19 +105,75 @@ func TestTheDraftAccountsForTheSchemeItProposed(t *testing.T) {
 	}
 }
 
-// A fleet of two carries nothing redundant, and the note says so rather than
-// leaving a reviewer to discover that the draft they approved protects nothing.
-func TestAFleetTooSmallForRedundancyIsSaidSo(t *testing.T) {
+// A fleet of two is proposed as a two-node cluster running 1+1, which survives
+// the loss of either worker, rather than a 1+0 that protects nothing and could
+// never be changed.
+func TestAFleetOfTwoIsProposedAsATwoNodeCluster(t *testing.T) {
 	template, err := ClusterTemplateFor("a-cluster", aFleetOf(2), TemplateOptions{})
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
 	}
-
-	joined := strings.ToLower(strings.Join(template.Notes, "\n"))
-	if !strings.Contains(joined, "1+0") {
-		t.Fatalf("the notes do not name the scheme proposed:\n%s", joined)
+	if template.Template.TwoNode == nil {
+		t.Fatalf("a fleet of two is not proposed as a two-node cluster")
 	}
-	if !strings.Contains(joined, "1+1") || !strings.Contains(joined, "third") {
-		t.Errorf("the notes do not say what a redundant scheme would need:\n%s", joined)
+	if template.Template.SingleNode != nil {
+		t.Errorf("a fleet of two is proposed singleNode as well")
+	}
+	if got := erasurecoding.SchemeOf(template.Template.Stripe).String(); got != "1+1" {
+		t.Errorf("a two-node fleet is proposed %s, want 1+1", got)
+	}
+	joined := strings.Join(template.Notes, "\n")
+	if !strings.Contains(joined, "twoNode") || !strings.Contains(joined, "relaxed") {
+		t.Errorf("the note does not account for the two-node proposal:\n%s", joined)
+	}
+}
+
+// oneWorkerWith is a fleet of one worker handing over disks of these sizes.
+func oneWorkerWith(sizes ...uint64) Plan {
+	plan := fleetWithDisks(sizes)
+	plan.NodeSets = aFleetOf(1).NodeSets
+	return plan
+}
+
+// A single worker is proposed as a single-node cluster, and its scheme follows
+// from the devices it hands over for data, since each chunk of a stripe lands
+// on its own device (the control plane's device floor is ndcs+npcs at one
+// node). A disk proposed for the journal is not one data lands on.
+func TestASingleWorkerIsProposedBySchemeOfItsDevices(t *testing.T) {
+	const tb = uint64(1) << 40
+	for _, tc := range []struct {
+		name    string
+		plan    Plan
+		scheme  string
+		journal bool
+	}{
+		{"one disk", oneWorkerWith(tb), "1+0", false},
+		{"two equal disks", oneWorkerWith(tb, tb), "1+1", false},
+		{"three equal disks", oneWorkerWith(tb, tb, tb), "2+1", false},
+		{"six equal disks", oneWorkerWith(tb, tb, tb, tb, tb, tb), "2+1", false},
+		{"a small disk beside two", oneWorkerWith(tb/8, tb, tb), "1+1", true},
+		{"a small disk beside three", oneWorkerWith(tb/8, tb, tb, tb), "2+1", true},
+	} {
+		template, err := ClusterTemplateFor("a-cluster", tc.plan, TemplateOptions{})
+		if err != nil {
+			t.Fatalf("%s: the fleet was refused: %v", tc.name, err)
+		}
+		if template.Template.SingleNode == nil || !*template.Template.SingleNode {
+			t.Errorf("%s: a single worker is not proposed as a single-node cluster", tc.name)
+		}
+		if template.Template.TwoNode != nil {
+			t.Errorf("%s: a single worker is proposed twoNode", tc.name)
+		}
+		journal := template.Template.EnableJournalDevice != nil && *template.Template.EnableJournalDevice
+		if journal != tc.journal {
+			t.Errorf("%s: journal device proposed = %v, want %v", tc.name, journal, tc.journal)
+		}
+		scheme := erasurecoding.SchemeOf(template.Template.Stripe)
+		if got := scheme.String(); got != tc.scheme {
+			t.Errorf("%s: proposed %s, want %s", tc.name, got, tc.scheme)
+		}
+		if scheme.ParityChunks > 0 && !strings.Contains(strings.Join(template.Notes, "\n"), "device failure") {
+			t.Errorf("%s: the note does not say what the parity protects against", tc.name)
+		}
 	}
 }

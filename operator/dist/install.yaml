@@ -1186,6 +1186,15 @@ spec:
                         minimum: 1024
                         type: integer
                     type: object
+                  singleNode:
+                    description: |-
+                      SingleNode declares a single-node cluster: every erasure-coding scheme
+                      then runs on exactly one storage node, each chunk of a stripe on its own
+                      device, so the node needs dataChunks+parityChunks devices and the parity
+                      protects against device failures rather than the loss of the node. It is
+                      carried to the cluster's spec.singleNode and cannot be combined with
+                      twoNode.
+                    type: boolean
                   socketsToUse:
                     description: |-
                       SocketsToUse restricts the deployment to selected NUMA sockets, and empty
@@ -1341,6 +1350,10 @@ spec:
                 - name
                 - vcpuCount
                 type: object
+                x-kubernetes-validations:
+                - message: 'a cluster is either a single-node cluster or a two-node
+                    cluster: singleNode and twoNode cannot both be set'
+                  rule: '!(has(self.singleNode) && self.singleNode && has(self.twoNode))'
               clusterRef:
                 description: |-
                   ClusterRef names an existing StorageCluster this document adds nodes to.
@@ -7518,6 +7531,15 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              singleNode:
+                description: |-
+                  SingleNode declares a single-node cluster, created on the control plane
+                  with is_single_node: one storage node, non-HA with a single journal, and
+                  every erasure-coding scheme placed across that node's devices (one chunk
+                  of a stripe per device), so the node needs dataChunks+parityChunks
+                  devices and the parity protects against device failures rather than the
+                  loss of the node. Immutable.
+                type: boolean
               snodeApiPort:
                 default: 50001
                 description: |-
@@ -8142,6 +8164,13 @@ spec:
             - message: enableAtomicity4K requires enableChecksumValidation to be true
               rule: '!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation)
                 && self.enableChecksumValidation)'
+            - message: 'a cluster is either a single-node cluster or a two-node cluster:
+                singleNode and twoNode cannot both be set'
+              rule: '!(has(self.singleNode) && self.singleNode && has(self.twoNode))'
+            - message: 'singleNode is immutable: the control plane fixes it when the
+                cluster is created'
+              rule: (has(self.singleNode) && self.singleNode) == (has(oldSelf.singleNode)
+                && oldSelf.singleNode)
           status:
             properties:
               activeOpsRef:
@@ -12787,6 +12816,15 @@ spec:
                             minimum: 1024
                             type: integer
                         type: object
+                      singleNode:
+                        description: |-
+                          SingleNode declares a single-node cluster: every erasure-coding scheme
+                          then runs on exactly one storage node, each chunk of a stripe on its own
+                          device, so the node needs dataChunks+parityChunks devices and the parity
+                          protects against device failures rather than the loss of the node. It is
+                          carried to the cluster's spec.singleNode and cannot be combined with
+                          twoNode.
+                        type: boolean
                       socketsToUse:
                         description: |-
                           SocketsToUse restricts the deployment to selected NUMA sockets, and empty
@@ -12942,6 +12980,10 @@ spec:
                     - name
                     - vcpuCount
                     type: object
+                    x-kubernetes-validations:
+                    - message: 'a cluster is either a single-node cluster or a two-node
+                        cluster: singleNode and twoNode cannot both be set'
+                      rule: '!(has(self.singleNode) && self.singleNode && has(self.twoNode))'
                   message:
                     description: |-
                       Message is what the site says about the draft: validation findings while

@@ -13,9 +13,10 @@ spec:
     maxSubsystemCount: 30
     minHugePagesSize: 16G
     name: discovered-discover-net-26-cluster
+    singleNode: true
     stripe:
-      dataChunks: 1
-      parityChunks: 0
+      dataChunks: 2
+      parityChunks: 1
     vcpuCount: 16
   environment: K3s
   hostOS:

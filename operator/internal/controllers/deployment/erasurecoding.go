@@ -94,7 +94,7 @@ func StripeChecks(
 	namespace string,
 	config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) ([]StripeCheck, error) {
-	scheme, subject, twoNode, slots, total, known, err := stripeSubject(ctx, reader, namespace, config)
+	scheme, subject, topology, slots, total, known, err := stripeSubject(ctx, reader, namespace, config)
 	if err != nil || !known {
 		return nil, err
 	}
@@ -113,7 +113,11 @@ func StripeChecks(
 		}}, nil
 	}
 
-	minimum := scheme.MinimumNodesFor(twoNode)
+	if topology.SingleNode {
+		return singleNodeChecks(config, scheme, subject, total), nil
+	}
+
+	minimum := scheme.MinimumNodesFor(topology)
 	if total.nodes() < minimum {
 		return []StripeCheck{{
 			Reason: StripeBelowMinimumNodes,
@@ -135,6 +139,62 @@ func StripeChecks(
 		}}, nil
 	}
 	return nil, nil
+}
+
+// singleNodeChecks holds a declared single-node cluster to what the control
+// plane activates: exactly one storage node, and on it one device per chunk of
+// a stripe (sbcli cluster_ops.activation_minimum_devices), counted from the
+// groups that name their devices. A group that names none hands over every
+// device the worker has, which only the node's own report can count.
+func singleNodeChecks(
+	config *simplyblockv1alpha2.ClusterDeploymentConfig, scheme erasurecoding.Scheme,
+	subject string, total footprint,
+) []StripeCheck {
+	if total.nodes() != 1 {
+		return []StripeCheck{{
+			Reason: StripeSingleNodeCount,
+			Message: fmt.Sprintf(
+				"the cluster is a single-node cluster (singleNode), which runs exactly one "+
+					"storage node, and this document %s %d", leavesPhrase(config), total.nodes()),
+		}}
+	}
+
+	minimum := scheme.MinimumDevicesPerNode(erasurecoding.Topology{SingleNode: true})
+	journal := 0
+	if template := config.Spec.Cluster; template != nil && template.EnableJournalDevice != nil &&
+		*template.EnableJournalDevice {
+		journal = 1
+	}
+	for _, set := range config.Spec.NodeSets {
+		for _, group := range set.Groups {
+			if group.Devices == nil {
+				continue
+			}
+			named := len(group.Devices.NVMe) + len(group.Devices.Block)
+			if named == 0 {
+				continue
+			}
+			if data := named - journal; data < minimum {
+				return []StripeCheck{{
+					Reason: StripeBelowMinimumDevices,
+					Message: fmt.Sprintf(
+						"%s is %s on a single-node cluster, which places each chunk of a "+
+							"stripe on its own device and so needs at least %d storage "+
+							"devices, and group %s of node set %s hands over %d%s",
+						subject, scheme, minimum, group.Name, set.Name, data,
+						journalPhrase(journal)),
+				}}
+			}
+		}
+	}
+	return nil
+}
+
+func journalPhrase(journal int) string {
+	if journal == 0 {
+		return ""
+	}
+	return " after the one enableJournalDevice dedicates to the journal"
 }
 
 // placementPhrase accounts for the minimum, because a number a reviewer cannot
@@ -168,15 +228,16 @@ func stripeSubject(
 	namespace string,
 	config *simplyblockv1alpha2.ClusterDeploymentConfig,
 	//
-	// twoNode is a declared two-node cluster (spec.cluster.twoNode, or the
-	// referenced cluster's spec.twoNode), which may run 1+1 on two nodes.
-) (scheme erasurecoding.Scheme, subject string, twoNode bool, slots int32, existing footprint, known bool, err error) {
+	// topology is what the cluster declares (spec.cluster.singleNode and
+	// twoNode, or the referenced cluster's spec.singleNode and spec.twoNode).
+) (scheme erasurecoding.Scheme, subject string, topology erasurecoding.Topology, slots int32, existing footprint, known bool, err error) {
 	if config.Spec.ClusterRef == "" {
 		template := config.Spec.Cluster
 		if template == nil {
-			return scheme, "", false, 0, existing, false, nil
+			return scheme, "", topology, 0, existing, false, nil
 		}
-		return erasurecoding.SchemeOf(template.Stripe), "spec.cluster.stripe", template.TwoNode != nil,
+		return erasurecoding.SchemeOf(template.Stripe), "spec.cluster.stripe",
+			erasurecoding.TopologyOf(template.SingleNode, template.TwoNode),
 			slotsOf(template.SocketsToUse, template.NodesPerSocket), newFootprint(), true, nil
 	}
 
@@ -184,18 +245,19 @@ func stripeSubject(
 	key := client.ObjectKey{Namespace: namespace, Name: config.Spec.ClusterRef}
 	switch err := reader.Get(ctx, key, &cluster); {
 	case apierrors.IsNotFound(err):
-		return scheme, "", false, 0, existing, false, nil
+		return scheme, "", topology, 0, existing, false, nil
 	case err != nil:
-		return scheme, "", false, 0, existing, false,
+		return scheme, "", topology, 0, existing, false,
 			fmt.Errorf("reading StorageCluster %s: %w", config.Spec.ClusterRef, err)
 	}
 
 	held, err := existingFootprint(ctx, reader, namespace, cluster.Name)
 	if err != nil {
-		return scheme, "", false, 0, existing, false, err
+		return scheme, "", topology, 0, existing, false, err
 	}
 	return erasurecoding.SchemeOf(cluster.Spec.Stripe),
-		fmt.Sprintf("the stripe of cluster %s", cluster.Name), cluster.Spec.TwoNode != nil,
+		fmt.Sprintf("the stripe of cluster %s", cluster.Name),
+		erasurecoding.TopologyOf(cluster.Spec.SingleNode, cluster.Spec.TwoNode),
 		slotsPerWorker(&cluster), held, true, nil
 }
 

@@ -37,11 +37,28 @@ import (
 // cluster that says nothing about erasure coding is held to the three nodes 1+1
 // needs rather than to nothing.
 //
-// twoNode is a declared two-node cluster (spec.twoNode set), which may activate
-// 1+1 on exactly two nodes (erasurecoding.Scheme.MinimumNodesFor).
-func ActivationNodeCountViolation(stripe *simplyblockv1alpha2.StripeSpec, twoNode bool, nodes int) string {
+// topology is what the cluster declares (spec.singleNode, spec.twoNode): a
+// single-node cluster activates any scheme on its one node, a two-node cluster
+// 1+1 on exactly two (erasurecoding.Scheme.MinimumNodesFor).
+func ActivationNodeCountViolation(
+	stripe *simplyblockv1alpha2.StripeSpec, topology erasurecoding.Topology, nodes int,
+) string {
 	scheme := erasurecoding.SchemeOf(stripe)
-	minimum := scheme.MinimumNodesFor(twoNode)
+	if topology.SingleNode {
+		switch {
+		case nodes < 1:
+			return fmt.Sprintf(
+				"the cluster is a single-node cluster with stripe %s, which needs its one "+
+					"storage node, and the cluster has none", scheme)
+		case nodes > 1:
+			return fmt.Sprintf(
+				"the cluster is a single-node cluster, which runs exactly one storage node, "+
+					"and the cluster has %d", nodes)
+		}
+		return ""
+	}
+
+	minimum := scheme.MinimumNodesFor(topology)
 	if nodes >= minimum {
 		return ""
 	}
@@ -87,7 +104,8 @@ func (r *StorageClusterOpsReconciler) stripeNodesReady(
 		return false, err
 	}
 
-	reason := ActivationNodeCountViolation(cluster.Spec.Stripe, cluster.Spec.TwoNode != nil, nodes)
+	reason := ActivationNodeCountViolation(cluster.Spec.Stripe,
+		erasurecoding.TopologyOf(cluster.Spec.SingleNode, cluster.Spec.TwoNode), nodes)
 	if reason == "" {
 		return true, nil
 	}

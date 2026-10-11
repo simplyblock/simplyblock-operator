@@ -34,6 +34,8 @@ const (
 	StripeUnsupported         = "StripeUnsupported"
 	StripeBelowMinimumNodes   = "StripeBelowMinimumNodes"
 	StripeBelowMinimumWorkers = "StripeBelowMinimumWorkers"
+	StripeSingleNodeCount     = "StripeSingleNodeCount"
+	StripeBelowMinimumDevices = "StripeBelowMinimumDevices"
 
 	// AwaitingNodes is the expansion waiting for a node it created to come
 	// online before it asks for the cluster to be activated.

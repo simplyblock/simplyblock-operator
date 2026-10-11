@@ -640,6 +640,8 @@ type StorageNodesSpec struct {
 // StorageClusterSpec is the desired state of one simplyblock backend cluster.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.kms) || self.kms == oldSelf.kms",message="kms is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)",message="enableAtomicity4K requires enableChecksumValidation to be true"
+// +kubebuilder:validation:XValidation:rule="!(has(self.singleNode) && self.singleNode && has(self.twoNode))",message="a cluster is either a single-node cluster or a two-node cluster: singleNode and twoNode cannot both be set"
+// +kubebuilder:validation:XValidation:rule="(has(self.singleNode) && self.singleNode) == (has(oldSelf.singleNode) && oldSelf.singleNode)",message="singleNode is immutable: the control plane fixes it when the cluster is created"
 type StorageClusterSpec struct {
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems per storage
 	// node. It is the cluster's and no node carries a copy: every node's
@@ -872,6 +874,15 @@ type StorageClusterSpec struct {
 	// exactly two storage nodes (an edge site). Ignored for larger clusters.
 	// +optional
 	TwoNode *TwoNodeSpec `json:"twoNode,omitempty"`
+
+	// SingleNode declares a single-node cluster, created on the control plane
+	// with is_single_node: one storage node, non-HA with a single journal, and
+	// every erasure-coding scheme placed across that node's devices (one chunk
+	// of a stripe per device), so the node needs dataChunks+parityChunks
+	// devices and the parity protects against device failures rather than the
+	// loss of the node. Immutable.
+	// +optional
+	SingleNode *bool `json:"singleNode,omitempty"`
 }
 
 // StorageClusterStatus is the observed state of one backend cluster.
