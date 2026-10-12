@@ -188,9 +188,9 @@ type BackupRequest struct {
 //
 // +kubebuilder:validation:XValidation:rule="has(self.source) != has(self.clusterRef)",message="set exactly one of source (to request a backup) or clusterRef (to record one the store holds)"
 type StorageBackupSpec struct {
-	// ClusterRef names the StorageCluster whose store this backup was found in.
-	// A request does not set it: the cluster is the one that provisioned the
-	// claim's volume.
+	// ClusterRef is the StorageCluster that holds this backup. The operator sets
+	// it on a record of an existing backup. Leave it unset when source is set:
+	// the cluster is then the one that provisioned the claim's volume.
 	// +kubebuilder:validation:MaxLength=63
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Ref"
 	// +optional
@@ -198,7 +198,8 @@ type StorageBackupSpec struct {
 	ClusterRef string `json:"clusterRef,omitempty"`
 
 	// Source asks for a new backup of a claim, the way a VolumeSnapshot asks
-	// for a snapshot. Leave it unset on a record.
+	// for a snapshot. It stays after the backup is taken and marks this object
+	// as a request. Leave it unset when clusterRef is set.
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Source"
 	// +optional
 	// +k8s:immutable
