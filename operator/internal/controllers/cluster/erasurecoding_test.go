@@ -16,6 +16,7 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/erasurecoding"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -141,7 +142,7 @@ func TestTheActivationNodeCountRule(t *testing.T) {
 		scheme := simplyblockv1alpha2.StripeSpec{
 			DataChunks: ptr.To(testCase.data), ParityChunks: ptr.To(testCase.parity),
 		}
-		reason := ActivationNodeCountViolation(&scheme, false, testCase.nodes)
+		reason := ActivationNodeCountViolation(&scheme, erasurecoding.Topology{}, testCase.nodes)
 		if held := reason != ""; held != testCase.held {
 			t.Errorf("%d+%d with %d nodes: held = %v, want %v (%s)",
 				testCase.data, testCase.parity, testCase.nodes, held, testCase.held, reason)
@@ -171,7 +172,40 @@ func TestTwoNodeActivationGate(t *testing.T) {
 		{"unstated stripe two-node, 2 nodes", nil, true, 2, false},
 		{"2+1 two-node, 2 nodes", stripe(2, 1), true, 2, true},
 	} {
-		reason := ActivationNodeCountViolation(tc.stripe, tc.twoNode, tc.nodes)
+		reason := ActivationNodeCountViolation(tc.stripe, erasurecoding.Topology{TwoNode: tc.twoNode}, tc.nodes)
+		if held := reason != ""; held != tc.held {
+			t.Errorf("%s: held = %v, want %v (%s)", tc.name, held, tc.held, reason)
+		}
+	}
+}
+
+// A declared single-node cluster activates every scheme on its one node, and
+// is held when it has none or more than one. Without the declaration, 1+1 and
+// wider still need their usual minimum.
+func TestSingleNodeActivationGate(t *testing.T) {
+	stripe := func(d, p int32) *simplyblockv1alpha2.StripeSpec {
+		return &simplyblockv1alpha2.StripeSpec{DataChunks: ptr.To(d), ParityChunks: ptr.To(p)}
+	}
+	one := erasurecoding.Topology{SingleNode: true}
+	for _, tc := range []struct {
+		name     string
+		stripe   *simplyblockv1alpha2.StripeSpec
+		topology erasurecoding.Topology
+		nodes    int
+		held     bool
+	}{
+		{"1+0 single, 1 node", stripe(1, 0), one, 1, false},
+		{"1+1 single, 1 node", stripe(1, 1), one, 1, false},
+		{"2+1 single, 1 node", stripe(2, 1), one, 1, false},
+		{"2+2 single, 1 node", stripe(2, 2), one, 1, false},
+		{"4+2 single, 1 node", stripe(4, 2), one, 1, false},
+		{"unstated single, 1 node", nil, one, 1, false},
+		{"2+1 single, 0 nodes", stripe(2, 1), one, 0, true},
+		{"2+1 single, 2 nodes", stripe(2, 1), one, 2, true},
+		{"2+1 undeclared, 1 node", stripe(2, 1), erasurecoding.Topology{}, 1, true},
+		{"1+1 undeclared, 1 node", stripe(1, 1), erasurecoding.Topology{}, 1, true},
+	} {
+		reason := ActivationNodeCountViolation(tc.stripe, tc.topology, tc.nodes)
 		if held := reason != ""; held != tc.held {
 			t.Errorf("%s: held = %v, want %v (%s)", tc.name, held, tc.held, reason)
 		}

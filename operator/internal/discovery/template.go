@@ -152,8 +152,14 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 			" A cluster's stripe cannot be changed afterward, so this is the number to "+
 			"correct now or never.")
 	} else {
-		stripe, note := stripeFor(plan)
+		stripe, topology, note := stripeFor(plan, propose)
 		out.Template.Stripe = stripe
+		if topology.SingleNode {
+			out.Template.SingleNode = ptr.To(true)
+		}
+		if topology.TwoNode {
+			out.Template.TwoNode = &simplyblockv1alpha2.TwoNodeSpec{}
+		}
 		out.Notes = append(out.Notes, note)
 	}
 
@@ -238,22 +244,105 @@ func enabled(on bool) string {
 // 2+2, and 4+2 buy, and the capacity 4+1 saves — is a trade the reviewer makes
 // against a workload this run knows nothing about, so the note names the
 // alternatives rather than picking one.
-func stripeFor(plan Plan) (*simplyblockv1alpha2.StripeSpec, string) {
+//
+// A fleet of one worker is proposed as a single-node cluster (singleNode), and
+// a fleet of exactly two as a two-node cluster (twoNode) running 1+1: without
+// the declaration neither carries anything redundant, and the stripe a cluster
+// is created with is the one it keeps. A single node places each chunk of a
+// stripe on its own device, so its scheme follows from the devices the worker
+// hands over for data (all of them, less the one a proposed journal device
+// takes): three or more carry 2+1, two carry 1+1, and one carries only 1+0.
+func stripeFor(plan Plan, journalDevice bool) (*simplyblockv1alpha2.StripeSpec, erasurecoding.Topology, string) {
 	nodes := fleetSize(plan)
 
+	var topology erasurecoding.Topology
+	var note string
 	scheme := erasurecoding.Scheme{DataChunks: 2, ParityChunks: 1}
 	switch {
+	case nodes == 1:
+		devices := dataDevices(plan, journalDevice)
+		switch {
+		case devices >= 3:
+			scheme = erasurecoding.Scheme{DataChunks: 2, ParityChunks: 1}
+		case devices == 2:
+			scheme = erasurecoding.Scheme{DataChunks: 1, ParityChunks: 1}
+		default:
+			scheme = erasurecoding.Scheme{DataChunks: 1, ParityChunks: 0}
+		}
+		topology.SingleNode = true
+		note = singleNodeStripeNote(scheme, devices)
+	case nodes == 2:
+		scheme = erasurecoding.Scheme{DataChunks: 1, ParityChunks: 1}
+		topology.TwoNode = true
+		note = fmt.Sprintf(
+			"stripe is %s as a two-node cluster (twoNode): one copy on each of the two "+
+				"workers, so the cluster survives the loss of either; data migration after a "+
+				"failure runs in relaxed placement, so it needs no third node. Without twoNode "+
+				"every redundant scheme needs at least three storage nodes. A cluster's stripe "+
+				"cannot be changed afterward", scheme)
 	case nodes < 3:
 		scheme = erasurecoding.Scheme{DataChunks: 1, ParityChunks: 0}
+		note = stripeNote(scheme, nodes)
 	case nodes < scheme.MinimumNodes():
 		scheme = erasurecoding.Scheme{DataChunks: 1, ParityChunks: 1}
+		note = stripeNote(scheme, nodes)
+	default:
+		note = stripeNote(scheme, nodes)
 	}
 
 	stripe := &simplyblockv1alpha2.StripeSpec{
 		DataChunks:   ptr.To(int32(scheme.DataChunks)),
 		ParityChunks: ptr.To(int32(scheme.ParityChunks)),
 	}
-	return stripe, stripeNote(scheme, nodes)
+	return stripe, topology, note
+}
+
+// dataDevices is how many devices the fleet's one worker hands over for data:
+// the disks the draft names, less the one a proposed journal device takes.
+func dataDevices(plan Plan, journalDevice bool) int {
+	if len(plan.Workers) != 1 {
+		return 0
+	}
+	devices := len(plan.Workers[0].Addresses())
+	if journalDevice && devices > 0 {
+		devices--
+	}
+	return devices
+}
+
+// singleNodeStripeNote accounts for a single-node proposal: what the parity
+// protects against, and which wider schemes the devices would also carry.
+func singleNodeStripeNote(scheme erasurecoding.Scheme, devices int) string {
+	if scheme.ParityChunks == 0 {
+		return fmt.Sprintf(
+			"stripe is %s as a single-node cluster (singleNode), which protects nothing: "+
+				"the worker hands over %d %s for data, and a redundant scheme places each "+
+				"chunk of a stripe on its own device, so 1+1 needs two. A cluster's stripe "+
+				"cannot be changed afterward",
+			scheme, devices, plural(devices, "device", "devices"))
+	}
+	var alternatives []string
+	for _, other := range erasurecoding.Supported() {
+		if other == scheme || other.ParityChunks == 0 ||
+			other.DataChunks+other.ParityChunks > devices {
+			continue
+		}
+		alternatives = append(alternatives, other.String())
+	}
+	also := ""
+	if len(alternatives) > 0 {
+		also = fmt.Sprintf(" The devices would also carry %s, which trade capacity for a "+
+			"second tolerated device failure or the other way about.",
+			strings.Join(alternatives, ", "))
+	}
+	return fmt.Sprintf(
+		"stripe is %s as a single-node cluster (singleNode): each chunk of a stripe lands "+
+			"on its own device of the one worker, which hands over %d for data, so the "+
+			"cluster survives %d device %s but not the loss of the worker; data migration "+
+			"after a device failure runs in relaxed placement on the same node.%s A cluster "+
+			"meant to grow to more workers drops singleNode and states the stripe of the "+
+			"fleet it will have. A cluster's stripe cannot be changed afterward",
+		scheme, devices, scheme.ParityChunks, plural(scheme.ParityChunks, "failure", "failures"), also)
 }
 
 // stripeNote accounts for the proposal, which for this field means saying what
@@ -620,4 +709,12 @@ func smallestDisk(worker Worker) (uint64, string, journalVerdict) {
 		return smallest, found, journalDiskTied
 	}
 	return smallest, found, journalDiskFound
+}
+
+// plural picks the noun that agrees with n.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }

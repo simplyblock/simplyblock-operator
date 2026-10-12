@@ -12,9 +12,10 @@ spec:
     enableDriveFormat: true
     maxSubsystemCount: 30
     name: discovered-discover-size-19-cluster
+    singleNode: true
     stripe:
-      dataChunks: 1
-      parityChunks: 0
+      dataChunks: 2
+      parityChunks: 1
     vcpuCount: 16
   environment: K3s
   hostOS:

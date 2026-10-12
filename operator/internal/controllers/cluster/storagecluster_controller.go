@@ -996,6 +996,7 @@ func (r *StorageClusterReconciler) creationParams(
 		InlineChecksum:         ptr.BoolFromOrFalse(cluster.Spec.EnableChecksumValidation),
 		Atomic4k:               ptr.BoolFromOrFalse(cluster.Spec.EnableAtomicity4K),
 		DeviceMode:             deviceMode(cluster.Spec.DeviceClass),
+		IsSingleNode:           ptr.BoolFromOrFalse(cluster.Spec.SingleNode),
 	}, nil
 }
 

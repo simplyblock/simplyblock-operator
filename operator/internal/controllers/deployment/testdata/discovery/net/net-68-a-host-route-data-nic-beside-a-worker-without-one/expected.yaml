@@ -15,7 +15,8 @@ spec:
     name: discovered-discover-net-68-cluster
     stripe:
       dataChunks: 1
-      parityChunks: 0
+      parityChunks: 1
+    twoNode: {}
     vcpuCount: 16
   environment: K3s
   hostOS:

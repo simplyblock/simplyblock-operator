@@ -478,3 +478,61 @@ func TestStorageClusterCELReadsAnUnstatedHalfAsTheDefault(t *testing.T) {
 		}
 	}
 }
+
+// singleNode and twoNode are two different cluster shapes, and singleNode is
+// fixed on the control plane when the cluster is created.
+func TestStorageClusterSingleNodeRules(t *testing.T) {
+	apiClient := apiServer(t)
+	base := func() *simplyblockv1alpha2.StorageCluster {
+		return &simplyblockv1alpha2.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{GenerateName: "single-", Namespace: "default"},
+			Spec: simplyblockv1alpha2.StorageClusterSpec{
+				MaxSubsystemCount: ptr.To(int32(10)),
+				VCPUCount:         ptr.To(int32(6)),
+			},
+		}
+	}
+
+	both := base()
+	both.Spec.SingleNode = ptr.To(true)
+	both.Spec.TwoNode = &simplyblockv1alpha2.TwoNodeSpec{}
+	err := apiClient.Create(context.Background(), both)
+	if err == nil || !strings.Contains(err.Error(), "singleNode and twoNode cannot both be set") {
+		t.Fatalf("singleNode with twoNode: got %v, want the both-set refusal", err)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		initial *bool
+		changed *bool
+	}{
+		{"set to unset", ptr.To(true), nil},
+		{"true to false", ptr.To(true), ptr.To(false)},
+		{"unset to true", nil, ptr.To(true)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := base()
+			cluster.Spec.SingleNode = tc.initial
+			if err := apiClient.Create(context.Background(), cluster); err != nil {
+				t.Fatalf("creating: %v", err)
+			}
+			defer func() { _ = apiClient.Delete(context.Background(), cluster) }()
+			cluster.Spec.SingleNode = tc.changed
+			err := apiClient.Update(context.Background(), cluster)
+			if err == nil || !strings.Contains(err.Error(), "singleNode is immutable") {
+				t.Fatalf("got %v, want the immutability refusal", err)
+			}
+		})
+	}
+
+	same := base()
+	same.Spec.SingleNode = ptr.To(true)
+	if err := apiClient.Create(context.Background(), same); err != nil {
+		t.Fatalf("creating a single-node cluster: %v", err)
+	}
+	same.Spec.MaxSubsystemCount = ptr.To(int32(12))
+	if err := apiClient.Update(context.Background(), same); err != nil {
+		t.Errorf("an unrelated update of a single-node cluster was refused: %v", err)
+	}
+	_ = apiClient.Delete(context.Background(), same)
+}

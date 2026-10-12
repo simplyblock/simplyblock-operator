@@ -66,6 +66,9 @@ type ClusterAddParams struct {
 	// cluster. Requires sbcli with lblk support (simplyblock/sbcli#1224) — sending
 	// "lblk" against an unpatched backend is rejected.
 	DeviceMode string `json:"device_mode,omitempty"`
+	// IsSingleNode creates a single-node cluster: non-HA, one journal, every
+	// scheme placed across the devices of its one storage node.
+	IsSingleNode bool `json:"is_single_node,omitempty"`
 }
 
 type ClusterUpdateParams struct {

@@ -429,6 +429,11 @@ func (in *ClusterTemplate) DeepCopyInto(out *ClusterTemplate) {
 		*out = new(TwoNodeSpec)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.SingleNode != nil {
+		in, out := &in.SingleNode, &out.SingleNode
+		*out = new(bool)
+		**out = **in
+	}
 	if in.OpenShift != nil {
 		in, out := &in.OpenShift, &out.OpenShift
 		*out = new(OpenShiftSpec)
@@ -2867,6 +2872,11 @@ func (in *StorageClusterSpec) DeepCopyInto(out *StorageClusterSpec) {
 		in, out := &in.TwoNode, &out.TwoNode
 		*out = new(TwoNodeSpec)
 		(*in).DeepCopyInto(*out)
+	}
+	if in.SingleNode != nil {
+		in, out := &in.SingleNode, &out.SingleNode
+		*out = new(bool)
+		**out = **in
 	}
 }
 
