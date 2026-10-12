@@ -17,7 +17,11 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
 )
 
-const ns = "simplyblock"
+const (
+	ns      = "simplyblock"
+	workerA = "worker-a"
+	workerB = "worker-b"
+)
 
 type fakeAPI struct {
 	rec       *Record
@@ -48,7 +52,7 @@ func setup(t *testing.T, api *fakeAPI, extraTaint *corev1.Taint) (*ArbitrationRe
 	cluster.Spec.TwoNode = &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true}
 	objs := make([]client.Object, 0, 5)
 	objs = append(objs, cluster)
-	for _, w := range []struct{ sn, worker, id string }{{"sn-a", "worker-a", "id-a"}, {"sn-b", "worker-b", "id-b"}} {
+	for _, w := range []struct{ sn, worker, id string }{{"sn-a", workerA, "id-a"}, {"sn-b", workerB, "id-b"}} {
 		objs = append(objs, &simplyblockv1alpha2.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{Name: w.sn, Namespace: ns},
 			Spec:       simplyblockv1alpha2.StorageNodeSpec{ClusterRef: "edge", WorkerNode: w.worker},
@@ -56,7 +60,7 @@ func setup(t *testing.T, api *fakeAPI, extraTaint *corev1.Taint) (*ArbitrationRe
 		})
 		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: w.worker},
 			Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}}}
-		if extraTaint != nil && w.worker == "worker-b" {
+		if extraTaint != nil && w.worker == workerB {
 			node.Spec.Taints = []corev1.Taint{*extraTaint}
 		}
 		objs = append(objs, node)
@@ -97,11 +101,11 @@ func TestVerdictTaintsTheFencedNode(t *testing.T) {
 	if res := reconcile(t, r); res.RequeueAfter != requeueActive {
 		t.Fatalf("requeue %v", res.RequeueAfter)
 	}
-	tb := fencedTaint(t, c, "worker-b")
+	tb := fencedTaint(t, c, workerB)
 	if tb == nil || tb.Value != "8" || tb.Effect != corev1.TaintEffectNoExecute {
 		t.Fatalf("worker-b taint %+v", tb)
 	}
-	if fencedTaint(t, c, "worker-a") != nil {
+	if fencedTaint(t, c, workerA) != nil {
 		t.Fatal("the winner must not be tainted")
 	}
 	var sn simplyblockv1alpha2.StorageNode
@@ -111,7 +115,7 @@ func TestVerdictTaintsTheFencedNode(t *testing.T) {
 	}
 	var cl simplyblockv1alpha2.StorageCluster
 	_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "edge"}, &cl)
-	if a := cl.Status.Arbitration; a == nil || a.State != "partitioned" || len(a.FencedNodes) != 1 || a.FencedNodes[0] != "worker-b" {
+	if a := cl.Status.Arbitration; a == nil || a.State != "partitioned" || len(a.FencedNodes) != 1 || a.FencedNodes[0] != workerB {
 		t.Fatalf("status %+v", a)
 	}
 }
@@ -120,14 +124,14 @@ func TestTaintStaysThroughHealingAndLeavesWhenSteady(t *testing.T) {
 	api := &fakeAPI{rec: &Record{State: "healing", Epoch: 9, FencedNodes: []string{"id-b"}}}
 	r, c := setup(t, api, nil)
 	reconcile(t, r)
-	if fencedTaint(t, c, "worker-b") == nil {
+	if fencedTaint(t, c, workerB) == nil {
 		t.Fatal("healing must keep the taint")
 	}
 	api.rec = &Record{State: "steady", Epoch: 9}
 	if res := reconcile(t, r); res.RequeueAfter != requeueSteady {
 		t.Fatalf("requeue %v", res.RequeueAfter)
 	}
-	if fencedTaint(t, c, "worker-b") != nil {
+	if fencedTaint(t, c, workerB) != nil {
 		t.Fatal("steady must remove the taint")
 	}
 }
@@ -137,10 +141,10 @@ func TestIdempotent(t *testing.T) {
 	r, c := setup(t, api, nil)
 	reconcile(t, r)
 	var before corev1.Node
-	_ = c.Get(context.Background(), client.ObjectKey{Name: "worker-b"}, &before)
+	_ = c.Get(context.Background(), client.ObjectKey{Name: workerB}, &before)
 	reconcile(t, r)
 	var after corev1.Node
-	_ = c.Get(context.Background(), client.ObjectKey{Name: "worker-b"}, &after)
+	_ = c.Get(context.Background(), client.ObjectKey{Name: workerB}, &after)
 	if before.ResourceVersion != after.ResourceVersion || len(after.Spec.Taints) != 1 {
 		t.Fatalf("second reconcile changed the node: %s -> %s, %d taints", before.ResourceVersion, after.ResourceVersion, len(after.Spec.Taints))
 	}
@@ -152,7 +156,7 @@ func TestControlPlaneUnreachableChangesNothing(t *testing.T) {
 	if res := reconcile(t, r); res.RequeueAfter != requeueError {
 		t.Fatalf("requeue %v", res.RequeueAfter)
 	}
-	if tb := fencedTaint(t, c, "worker-b"); tb == nil || tb.Value != "7" {
+	if tb := fencedTaint(t, c, workerB); tb == nil || tb.Value != "7" {
 		t.Fatalf("an unreadable record must leave the taint: %+v", tb)
 	}
 }
@@ -168,7 +172,7 @@ func TestOutOfServiceIsReportedNeverSet(t *testing.T) {
 		t.Fatalf("remediation %+v", sn.Status.Remediation)
 	}
 	var a corev1.Node
-	_ = c.Get(context.Background(), client.ObjectKey{Name: "worker-a"}, &a)
+	_ = c.Get(context.Background(), client.ObjectKey{Name: workerA}, &a)
 	for _, tt := range a.Spec.Taints {
 		if tt.Key == simplyblockv1alpha2.TaintOutOfService {
 			t.Fatal("the operator must never set out-of-service")
@@ -182,7 +186,7 @@ func TestOutOfServiceIsReportedNeverSet(t *testing.T) {
 // only calls it may make are Get and ReportFencing; the API interface has no
 // preferred-node method any more).
 func TestDeprecatedPreferredNodeIsIgnored(t *testing.T) {
-	for _, preferred := range []string{"", "worker-a", "worker-b"} {
+	for _, preferred := range []string{"", workerA, workerB} {
 		api := &fakeAPI{rec: &Record{State: "partitioned", Epoch: 8, FencedNodes: []string{"id-b"}}}
 		r, c := setup(t, api, nil)
 		var cl simplyblockv1alpha2.StorageCluster
@@ -192,14 +196,14 @@ func TestDeprecatedPreferredNodeIsIgnored(t *testing.T) {
 			t.Fatal(err)
 		}
 		reconcile(t, r)
-		if tb := fencedTaint(t, c, "worker-b"); tb == nil || tb.Value != "8" {
+		if tb := fencedTaint(t, c, workerB); tb == nil || tb.Value != "8" {
 			t.Fatalf("preferredNode=%q: the arbiter's fence must be applied regardless: %+v", preferred, tb)
 		}
-		if tb := fencedTaint(t, c, "worker-a"); tb != nil {
+		if tb := fencedTaint(t, c, workerA); tb != nil {
 			t.Fatalf("preferredNode=%q: worker-a must not be fenced: %+v", preferred, tb)
 		}
 		_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "edge"}, &cl)
-		if st := cl.Status.Arbitration; st == nil || st.State != "partitioned" || len(st.FencedNodes) != 1 || st.FencedNodes[0] != "worker-b" {
+		if st := cl.Status.Arbitration; st == nil || st.State != "partitioned" || len(st.FencedNodes) != 1 || st.FencedNodes[0] != workerB {
 			t.Fatalf("preferredNode=%q: status %+v", preferred, cl.Status.Arbitration)
 		}
 	}
@@ -215,7 +219,7 @@ func TestArbitrationOffRemovesTaints(t *testing.T) {
 		t.Fatal(err)
 	}
 	reconcile(t, r)
-	if fencedTaint(t, c, "worker-b") != nil {
+	if fencedTaint(t, c, workerB) != nil {
 		t.Fatal("arbitration off must withdraw the taint")
 	}
 }
