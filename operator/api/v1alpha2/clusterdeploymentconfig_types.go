@@ -316,7 +316,7 @@ type NodeSet struct {
 // ClusterTemplate is the StorageCluster the expansion creates, where it creates
 // one. It carries the layout fields a cluster cannot change later, so that a
 // reviewer sees them before the cluster exists rather than after.
-// +kubebuilder:validation:XValidation:rule="!(has(self.singleNode) && self.singleNode && has(self.twoNode))",message="a cluster is either a single-node cluster or a two-node cluster: singleNode and twoNode cannot both be set"
+// +kubebuilder:validation:XValidation:rule="(has(self.clusterMode) && self.clusterMode == 'Dual') || !has(self.twoNode)",message="twoNode is only valid when clusterMode is Dual"
 type ClusterTemplate struct {
 	// Name is the StorageCluster's name, and is therefore held to what such a
 	// name may be rather than to what an object name may be. A longer value is a
@@ -510,21 +510,21 @@ type ClusterTemplate struct {
 	// +optional
 	Stripe *StripeSpec `json:"stripe,omitempty"`
 
-	// TwoNode declares a two-node cluster: 1+1 then runs on exactly two
-	// storage nodes, and the control plane's arbitration settings are carried
-	// to the cluster's spec.twoNode. Every other scheme still needs its usual
-	// minimum.
+	// ClusterMode is how many storage nodes the cluster is built for: Single
+	// runs every erasure-coding scheme on exactly one storage node, each chunk of
+	// a stripe on its own device, so the node needs dataChunks+parityChunks
+	// devices and the parity protects against device failures rather than the
+	// loss of the node; Dual runs 1+1 on exactly two storage nodes; Standard,
+	// the default, keeps every scheme at its usual minimum. It is carried to the
+	// cluster's spec.clusterMode.
+	// +optional
+	// +kubebuilder:default=Standard
+	ClusterMode ClusterMode `json:"clusterMode,omitempty"`
+
+	// TwoNode carries the control plane's arbitration settings to the
+	// cluster's spec.twoNode. Only valid when clusterMode is Dual.
 	// +optional
 	TwoNode *TwoNodeSpec `json:"twoNode,omitempty"`
-
-	// SingleNode declares a single-node cluster: every erasure-coding scheme
-	// then runs on exactly one storage node, each chunk of a stripe on its own
-	// device, so the node needs dataChunks+parityChunks devices and the parity
-	// protects against device failures rather than the loss of the node. It is
-	// carried to the cluster's spec.singleNode and cannot be combined with
-	// twoNode.
-	// +optional
-	SingleNode *bool `json:"singleNode,omitempty"`
 
 	// FabricType is the storage fabric.
 	// +kubebuilder:validation:MaxLength=32

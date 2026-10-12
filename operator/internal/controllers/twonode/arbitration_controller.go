@@ -49,13 +49,13 @@ const (
 	requeueError  = 5 * time.Second
 )
 
-// ArbitrationReconciler follows the arbiter for StorageClusters with
-// spec.twoNode.arbitration on.
+// ArbitrationReconciler follows the arbiter for StorageClusters in clusterMode
+// Dual with spec.twoNode.arbitration on.
 type ArbitrationReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 	API    API
-	// Now is the clock; nil means time.Now.
+	// Now, the clock, is time.Now when nil.
 	Now func() time.Time
 }
 
@@ -76,7 +76,8 @@ func (r *ArbitrationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if cluster.Spec.TwoNode == nil || !cluster.Spec.TwoNode.Arbitration {
+	if cluster.Spec.ClusterMode != simplyblockv1alpha2.ClusterModeDual || cluster.Spec.TwoNode == nil ||
+		!cluster.Spec.TwoNode.Arbitration {
 		// Off: withdraw what this controller put on the nodes.
 		if err := r.applyTaints(ctx, nodes, nil, 0); err != nil {
 			return ctrl.Result{}, err
@@ -93,7 +94,7 @@ func (r *ArbitrationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	rec, err := r.API.Get(ctx, &cluster)
 	if err != nil || rec == nil {
-		// Unreadable or not initialised: no verdict to follow, so nothing changes.
+		// Unreadable or not initialized: no verdict to follow, so nothing changes.
 		msg := "the control plane holds no arbitration record yet"
 		if err != nil {
 			msg = "cannot read the arbitration record: " + err.Error()

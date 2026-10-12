@@ -9,12 +9,12 @@ metadata:
 spec:
   approved: false
   cluster:
+    clusterMode: Single
     enableDriveFormat: true
     enableJournalDevice: true
     maxSubsystemCount: 30
     minHugePagesSize: 16G
     name: discovered-discover-filt-07-cluster
-    singleNode: true
     stripe:
       dataChunks: 2
       parityChunks: 1

@@ -13,30 +13,46 @@ import (
 )
 
 // TestStorageClusterCELValidatesTwoNode covers spec.twoNode's schema: holdMs
-// must stay below the hosts' keep-alive (≤ 4500 ms), and a lease must be
-// shorter than the hold it guards.
+// must stay below the hosts' keep-alive (≤ 4500 ms), a lease must be shorter
+// than the hold it guards, and twoNode is only valid on a Dual cluster.
 func TestStorageClusterCELValidatesTwoNode(t *testing.T) {
 	apiClient := apiServer(t)
+	const onlyDual = "only valid when clusterMode is Dual"
 
 	for _, tc := range []struct {
 		name       string
+		mode       simplyblockv1alpha2.ClusterMode
 		twoNode    *simplyblockv1alpha2.TwoNodeSpec
 		wantDenied string
 	}{
 		{name: "unset"},
-		{name: "arbitration with defaults", twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true}},
+		{name: "dual without arbitration", mode: simplyblockv1alpha2.ClusterModeDual},
+		{name: "arbitration with defaults", mode: simplyblockv1alpha2.ClusterModeDual,
+			twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true}},
 		// preferredNode is deprecated and ignored, but a spec that still
 		// carries it must stay valid, with any value.
-		{name: "deprecated preferredNode accepted", twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true,
-			PreferredNode: "worker-a"}}, //nolint:staticcheck // deprecated field must stay accepted
-		{name: "lease shorter than hold", twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true,
-			HoldMs: ptr.To(int32(2500)), LeaseTtlMs: ptr.To(int32(1500))}},
-		{name: "lease not shorter than hold", twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true,
-			HoldMs: ptr.To(int32(1500)), LeaseTtlMs: ptr.To(int32(1500))}, wantDenied: "leaseTtlMs must be shorter than holdMs"},
-		{name: "hold above the keep-alive", twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true,
-			HoldMs: ptr.To(int32(5000))}, wantDenied: "holdMs"},
-		{name: "hold below the floor", twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true,
-			HoldMs: ptr.To(int32(100))}, wantDenied: "holdMs"},
+		{name: "deprecated preferredNode accepted", mode: simplyblockv1alpha2.ClusterModeDual,
+			twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true,
+				PreferredNode: "worker-a"}}, //nolint:staticcheck // deprecated field must stay accepted
+		{name: "lease shorter than hold", mode: simplyblockv1alpha2.ClusterModeDual,
+			twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true,
+				HoldMs: ptr.To(int32(2500)), LeaseTtlMs: ptr.To(int32(1500))}},
+		{name: "lease not shorter than hold", mode: simplyblockv1alpha2.ClusterModeDual,
+			twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true,
+				HoldMs: ptr.To(int32(1500)), LeaseTtlMs: ptr.To(int32(1500))},
+			wantDenied: "leaseTtlMs must be shorter than holdMs"},
+		{name: "hold above the keep-alive", mode: simplyblockv1alpha2.ClusterModeDual,
+			twoNode:    &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true, HoldMs: ptr.To(int32(5000))},
+			wantDenied: "holdMs"},
+		{name: "hold below the floor", mode: simplyblockv1alpha2.ClusterModeDual,
+			twoNode:    &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true, HoldMs: ptr.To(int32(100))},
+			wantDenied: "holdMs"},
+		{name: "twoNode on a standard cluster", mode: simplyblockv1alpha2.ClusterModeStandard,
+			twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true}, wantDenied: onlyDual},
+		{name: "twoNode on a cluster of unstated mode",
+			twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true}, wantDenied: onlyDual},
+		{name: "twoNode on a single cluster", mode: simplyblockv1alpha2.ClusterModeSingle,
+			twoNode: &simplyblockv1alpha2.TwoNodeSpec{}, wantDenied: onlyDual},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cluster := &simplyblockv1alpha2.StorageCluster{
@@ -44,6 +60,7 @@ func TestStorageClusterCELValidatesTwoNode(t *testing.T) {
 				Spec: simplyblockv1alpha2.StorageClusterSpec{
 					MaxSubsystemCount: ptr.To(int32(10)),
 					VCPUCount:         ptr.To(int32(6)),
+					ClusterMode:       tc.mode,
 					TwoNode:           tc.twoNode,
 				},
 			}

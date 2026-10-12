@@ -49,6 +49,7 @@ func (f *fakeAPI) Get(context.Context, *simplyblockv1alpha2.StorageCluster) (*Re
 func setup(t *testing.T, api *fakeAPI, extraTaint *corev1.Taint) (*ArbitrationReconciler, client.Client) {
 	t.Helper()
 	cluster := testsupport.Cluster(ns, "edge", "c-uuid")
+	cluster.Spec.ClusterMode = simplyblockv1alpha2.ClusterModeDual
 	cluster.Spec.TwoNode = &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true}
 	objs := make([]client.Object, 0, 5)
 	objs = append(objs, cluster)
@@ -221,6 +222,25 @@ func TestArbitrationOffRemovesTaints(t *testing.T) {
 	reconcile(t, r)
 	if fencedTaint(t, c, workerB) != nil {
 		t.Fatal("arbitration off must withdraw the taint")
+	}
+}
+
+// A cluster that is not Dual has no arbitration, whatever enableArbitration
+// says: admission refuses the combination, and the controller does not act on
+// one that reached it some other way.
+func TestArbitrationNeedsDualClusterMode(t *testing.T) {
+	existing := &corev1.Taint{Key: simplyblockv1alpha2.TaintStorageFenced, Value: "7", Effect: corev1.TaintEffectNoExecute}
+	api := &fakeAPI{rec: &Record{State: "partitioned", Epoch: 8, FencedNodes: []string{"id-a"}}}
+	r, c := setup(t, api, existing)
+	var cl simplyblockv1alpha2.StorageCluster
+	_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "edge"}, &cl)
+	cl.Spec.ClusterMode = simplyblockv1alpha2.ClusterModeStandard
+	if err := c.Update(context.Background(), &cl); err != nil {
+		t.Fatal(err)
+	}
+	reconcile(t, r)
+	if fencedTaint(t, c, workerA) != nil || fencedTaint(t, c, workerB) != nil {
+		t.Fatal("a Standard cluster must carry no storage-fenced taint")
 	}
 }
 

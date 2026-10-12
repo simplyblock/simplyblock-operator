@@ -51,6 +51,7 @@ func TestNoPreferredNodeCallToTheControlPlane(t *testing.T) {
 	defer srv.Close()
 
 	cluster := testsupport.Cluster(ns, "edge", "c-uuid")
+	cluster.Spec.ClusterMode = simplyblockv1alpha2.ClusterModeDual
 	cluster.Spec.TwoNode = &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true,
 		PreferredNode: "worker-a"} //nolint:staticcheck // deprecated field must stay ignored
 	objs := make([]client.Object, 0, 5)

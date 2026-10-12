@@ -637,11 +637,24 @@ type StorageNodesSpec struct {
 	InitContainerResources corev1.ResourceRequirements `json:"initContainerResources,omitempty"`
 }
 
+// ClusterMode is how many storage nodes a cluster is built for.
+// +kubebuilder:validation:Enum=Single;Dual;Standard
+type ClusterMode string
+
+const (
+	// ClusterModeSingle is a cluster of one storage node.
+	ClusterModeSingle ClusterMode = "Single"
+	// ClusterModeDual is a cluster of exactly two storage nodes.
+	ClusterModeDual ClusterMode = "Dual"
+	// ClusterModeStandard is a cluster of three or more storage nodes.
+	ClusterModeStandard ClusterMode = "Standard"
+)
+
 // StorageClusterSpec is the desired state of one simplyblock backend cluster.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.kms) || self.kms == oldSelf.kms",message="kms is immutable once set"
+// +kubebuilder:validation:XValidation:rule="(has(self.clusterMode) && self.clusterMode == 'Dual') || !has(self.twoNode)",message="twoNode is only valid when clusterMode is Dual"
+// +kubebuilder:validation:XValidation:rule="(has(self.clusterMode) && self.clusterMode == 'Single') == (has(oldSelf.clusterMode) && oldSelf.clusterMode == 'Single')",message="clusterMode cannot be changed to or from Single: the control plane fixes it when the cluster is created"
 // +kubebuilder:validation:XValidation:rule="!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)",message="enableAtomicity4K requires enableChecksumValidation to be true"
-// +kubebuilder:validation:XValidation:rule="!(has(self.singleNode) && self.singleNode && has(self.twoNode))",message="a cluster is either a single-node cluster or a two-node cluster: singleNode and twoNode cannot both be set"
-// +kubebuilder:validation:XValidation:rule="(has(self.singleNode) && self.singleNode) == (has(oldSelf.singleNode) && oldSelf.singleNode)",message="singleNode is immutable: the control plane fixes it when the cluster is created"
 type StorageClusterSpec struct {
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems per storage
 	// node. It is the cluster's and no node carries a copy: every node's
@@ -870,19 +883,24 @@ type StorageClusterSpec struct {
 	// +optional
 	VolumeAutoPlacement *VolumeAutoPlacementSettings `json:"volumeAutoPlacement,omitempty"`
 
+	// ClusterMode is how many storage nodes the cluster is built for. Single is
+	// one storage node, created on the control plane non-HA with a single
+	// journal, with every erasure-coding scheme placed across that node's
+	// devices (one chunk of a stripe per device): the node needs
+	// dataChunks+parityChunks devices, and the parity protects against device
+	// failures rather than the loss of the node. Dual is exactly two storage
+	// nodes running 1+1, one copy on each, optionally under the control plane's
+	// two-node arbitration. Standard, the default, is three or more storage
+	// nodes. A cluster cannot be changed to or from Single after it is created.
+	// +optional
+	// +kubebuilder:default=Standard
+	ClusterMode ClusterMode `json:"clusterMode,omitempty"`
+
 	// TwoNode configures the control plane's arbitration for a cluster of
-	// exactly two storage nodes (an edge site). Ignored for larger clusters.
+	// exactly two storage nodes (an edge site). Only valid when clusterMode is
+	// Dual.
 	// +optional
 	TwoNode *TwoNodeSpec `json:"twoNode,omitempty"`
-
-	// SingleNode declares a single-node cluster, created on the control plane
-	// with is_single_node: one storage node, non-HA with a single journal, and
-	// every erasure-coding scheme placed across that node's devices (one chunk
-	// of a stripe per device), so the node needs dataChunks+parityChunks
-	// devices and the parity protects against device failures rather than the
-	// loss of the node. Immutable.
-	// +optional
-	SingleNode *bool `json:"singleNode,omitempty"`
 }
 
 // StorageClusterStatus is the observed state of one backend cluster.

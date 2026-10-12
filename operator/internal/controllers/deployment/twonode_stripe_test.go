@@ -29,6 +29,7 @@ func TestATwoNodeDraftRuns1Plus1OnTwoWorkers(t *testing.T) {
 				c.Spec.Cluster.Stripe = oneOne
 				c.Spec.NodeSets[0].Groups[0].Workers = tc.workers
 				if tc.twoNode {
+					c.Spec.Cluster.ClusterMode = simplyblockv1alpha2.ClusterModeDual
 					c.Spec.Cluster.TwoNode = &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true}
 				}
 			})

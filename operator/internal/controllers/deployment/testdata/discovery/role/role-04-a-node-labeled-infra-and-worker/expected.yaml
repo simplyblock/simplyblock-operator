@@ -9,11 +9,11 @@ metadata:
 spec:
   approved: false
   cluster:
+    clusterMode: Single
     enableDriveFormat: true
     maxSubsystemCount: 30
     minHugePagesSize: 16G
     name: discovered-discover-role-04-cluster
-    singleNode: true
     stripe:
       dataChunks: 2
       parityChunks: 1

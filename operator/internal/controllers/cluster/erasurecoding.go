@@ -37,7 +37,7 @@ import (
 // cluster that says nothing about erasure coding is held to the three nodes 1+1
 // needs rather than to nothing.
 //
-// topology is what the cluster declares (spec.singleNode, spec.twoNode): a
+// topology is what the cluster declares (spec.clusterMode): a
 // single-node cluster activates any scheme on its one node, a two-node cluster
 // 1+1 on exactly two (erasurecoding.Scheme.MinimumNodesFor).
 func ActivationNodeCountViolation(
@@ -105,7 +105,7 @@ func (r *StorageClusterOpsReconciler) stripeNodesReady(
 	}
 
 	reason := ActivationNodeCountViolation(cluster.Spec.Stripe,
-		erasurecoding.TopologyOf(cluster.Spec.SingleNode, cluster.Spec.TwoNode), nodes)
+		erasurecoding.TopologyOf(cluster.Spec.ClusterMode), nodes)
 	if reason == "" {
 		return true, nil
 	}

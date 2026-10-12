@@ -26,7 +26,7 @@ type TwoNodeSpec struct {
 	// Arbitration turns the control plane's two-node arbitration on for this
 	// cluster: nodes hold writes when they lose their peer, and only a node the
 	// arbiter grants may continue alone. Off, the cluster keeps today's
-	// behaviour (dual-node tolerance without arbitration).
+	// behavior (dual-node tolerance without arbitration).
 	// +optional
 	Arbitration bool `json:"arbitration,omitempty"`
 
@@ -39,7 +39,7 @@ type TwoNodeSpec struct {
 
 	// HoldMs is how long a node holds writes after losing its peer before it
 	// acts on its own. It must stay below the hosts' NVMe keep-alive timeout
-	// (5000 ms), or clients fail IO before the verdict arrives.
+	// (5000 ms), or clients fail I/O before the verdict arrives.
 	// +optional
 	// +kubebuilder:validation:Minimum=500
 	// +kubebuilder:validation:Maximum=4500

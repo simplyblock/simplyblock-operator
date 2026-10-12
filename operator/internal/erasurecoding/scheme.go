@@ -86,8 +86,8 @@ func (s Scheme) MinimumNodes() int {
 }
 
 // Topology is what a cluster declares about its own size: a single-node
-// cluster (spec.singleNode) or a two-node cluster (spec.twoNode). The zero
-// value is an ordinary cluster.
+// cluster (spec.clusterMode Single) or a two-node cluster (Dual). The zero
+// value is a Standard cluster.
 type Topology struct {
 	SingleNode bool
 	TwoNode    bool
@@ -96,14 +96,14 @@ type Topology struct {
 // MinimumNodesFor is MinimumNodes, except for a declared single-node or
 // two-node cluster.
 //
-// A single-node cluster (StorageCluster spec.singleNode) runs every scheme on
+// A single-node cluster (StorageCluster spec.clusterMode Single) runs every scheme on
 // its one storage node: the control plane activates it non-HA with a single
 // journal, puts every chunk of a stripe on a different device of that node
 // (anti-affinity labels off), and needs ndcs+npcs devices rather than nodes
 // (sbcli cluster_ops.activation_minimum_devices). The parity then protects
 // against device failures, not against losing the node.
 //
-// A two-node cluster (spec.twoNode) runs 1+1 on exactly its two nodes, one
+// A two-node cluster (spec.clusterMode Dual) runs 1+1 on exactly its two nodes, one
 // copy each, with no spare to rebuild onto. The control plane activates that
 // shape (sbcli cluster_ops.cluster_activate: no node floor for HA, device
 // minimum ndcs+npcs+1, anti-affinity labels off at two nodes) and the journal
@@ -125,11 +125,13 @@ func (s Scheme) MinimumNodesFor(topology Topology) int {
 	return s.MinimumNodes()
 }
 
-// TopologyOf reads a cluster's declarations: spec.singleNode and spec.twoNode
-// of a StorageCluster, or the same two fields of a deployment's cluster
-// template.
-func TopologyOf(singleNode *bool, twoNode *simplyblockv1alpha2.TwoNodeSpec) Topology {
-	return Topology{SingleNode: ptr.BoolFromOrFalse(singleNode), TwoNode: twoNode != nil}
+// TopologyOf reads a cluster's declaration: spec.clusterMode of a
+// StorageCluster, or the same field of a deployment's cluster template.
+func TopologyOf(mode simplyblockv1alpha2.ClusterMode) Topology {
+	return Topology{
+		SingleNode: mode == simplyblockv1alpha2.ClusterModeSingle,
+		TwoNode:    mode == simplyblockv1alpha2.ClusterModeDual,
+	}
 }
 
 // MinimumDevicesPerNode is how many storage devices each node of a declared

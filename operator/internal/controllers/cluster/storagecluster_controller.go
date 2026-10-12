@@ -201,7 +201,7 @@ type CSIClusterEntry struct {
 	ClusterID       string `json:"cluster_id"`
 	ClusterEndpoint string `json:"cluster_endpoint"`
 	ClusterSecret   string `json:"cluster_secret"`
-	// Local marks a cluster this operator manages, i.e. the storage of the
+	// Local marks a cluster this operator manages, i.e., the storage of the
 	// Kubernetes cluster the driver runs on, as opposed to an entry another
 	// site registered so that a failed-over volume's handle still resolves.
 	// The driver's csi-addons Replication RPCs act on the LOCAL member of a
@@ -996,7 +996,7 @@ func (r *StorageClusterReconciler) creationParams(
 		InlineChecksum:         ptr.BoolFromOrFalse(cluster.Spec.EnableChecksumValidation),
 		Atomic4k:               ptr.BoolFromOrFalse(cluster.Spec.EnableAtomicity4K),
 		DeviceMode:             deviceMode(cluster.Spec.DeviceClass),
-		IsSingleNode:           ptr.BoolFromOrFalse(cluster.Spec.SingleNode),
+		IsSingleNode:           cluster.Spec.ClusterMode == simplyblockv1alpha2.ClusterModeSingle,
 	}, nil
 }
 
@@ -1141,7 +1141,7 @@ func (r *StorageClusterReconciler) clusterSecret(
 // another operator on this Kubernetes cluster marked Local are left alone;
 // a foreign entry whose cluster the control plane no longer lists is
 // dropped. Until this, the cross-registration was a manual merge of the
-// sites' secrets (realbed deploy.sh csi).
+// sites' secrets (realbed `deploy.sh csi`).
 func (r *StorageClusterReconciler) upsertCSICredentials(
 	ctx context.Context, clusterID, clusterSecret string,
 ) error {

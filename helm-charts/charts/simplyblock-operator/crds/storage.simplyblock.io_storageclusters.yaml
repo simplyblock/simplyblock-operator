@@ -687,6 +687,23 @@ spec:
                     once at cluster-add, so an edit moves the next attach onto the named
                     interface.
                   type: string
+                clusterMode:
+                  default: Standard
+                  description: |-
+                    ClusterMode is how many storage nodes the cluster is built for. Single is
+                    one storage node, created on the control plane non-HA with a single
+                    journal, with every erasure-coding scheme placed across that node's
+                    devices (one chunk of a stripe per device): the node needs
+                    dataChunks+parityChunks devices, and the parity protects against device
+                    failures rather than the loss of the node. Dual is exactly two storage
+                    nodes running 1+1, one copy on each, optionally under the control plane's
+                    two-node arbitration. Standard, the default, is three or more storage
+                    nodes. A cluster cannot be changed to or from Single after it is created.
+                  enum:
+                    - Single
+                    - Dual
+                    - Standard
+                  type: string
                 criticalThreshold:
                   description: CriticalThreshold is the capacity level at which the cluster alarms.
                   properties:
@@ -888,15 +905,6 @@ spec:
                   x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
-                singleNode:
-                  description: |-
-                    SingleNode declares a single-node cluster, created on the control plane
-                    with is_single_node: one storage node, non-HA with a single journal, and
-                    every erasure-coding scheme placed across that node's devices (one chunk
-                    of a stripe per device), so the node needs dataChunks+parityChunks
-                    devices and the parity protects against device failures rather than the
-                    loss of the node. Immutable.
-                  type: boolean
                 snodeApiPort:
                   default: 50001
                   description: |-
@@ -1259,20 +1267,21 @@ spec:
                 twoNode:
                   description: |-
                     TwoNode configures the control plane's arbitration for a cluster of
-                    exactly two storage nodes (an edge site). Ignored for larger clusters.
+                    exactly two storage nodes (an edge site). Only valid when clusterMode is
+                    Dual.
                   properties:
                     arbitration:
                       description: |-
                         Arbitration turns the control plane's two-node arbitration on for this
                         cluster: nodes hold writes when they lose their peer, and only a node the
                         arbiter grants may continue alone. Off, the cluster keeps today's
-                        behaviour (dual-node tolerance without arbitration).
+                        behavior (dual-node tolerance without arbitration).
                       type: boolean
                     holdMs:
                       description: |-
                         HoldMs is how long a node holds writes after losing its peer before it
                         acts on its own. It must stay below the hosts' NVMe keep-alive timeout
-                        (5000 ms), or clients fail IO before the verdict arrives.
+                        (5000 ms), or clients fail I/O before the verdict arrives.
                       format: int32
                       maximum: 4500
                       minimum: 500
@@ -1504,12 +1513,12 @@ spec:
                   rule: '!has(oldSelf.deviceClass) || has(self.deviceClass)'
                 - message: kms is immutable once set
                   rule: '!has(oldSelf.kms) || self.kms == oldSelf.kms'
+                - message: twoNode is only valid when clusterMode is Dual
+                  rule: (has(self.clusterMode) && self.clusterMode == 'Dual') || !has(self.twoNode)
+                - message: 'clusterMode cannot be changed to or from Single: the control plane fixes it when the cluster is created'
+                  rule: (has(self.clusterMode) && self.clusterMode == 'Single') == (has(oldSelf.clusterMode) && oldSelf.clusterMode == 'Single')
                 - message: enableAtomicity4K requires enableChecksumValidation to be true
                   rule: '!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)'
-                - message: 'a cluster is either a single-node cluster or a two-node cluster: singleNode and twoNode cannot both be set'
-                  rule: '!(has(self.singleNode) && self.singleNode && has(self.twoNode))'
-                - message: 'singleNode is immutable: the control plane fixes it when the cluster is created'
-                  rule: (has(self.singleNode) && self.singleNode) == (has(oldSelf.singleNode) && oldSelf.singleNode)
             status:
               properties:
                 activeOpsRef:
