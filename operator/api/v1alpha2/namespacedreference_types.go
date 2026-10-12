@@ -29,10 +29,11 @@ func (r NamespacedReference) In(defaultNamespace string) types.NamespacedName {
 	return types.NamespacedName{Namespace: r.Namespace, Name: r.Name}
 }
 
-// StorageClusterReference is a NamespacedReference whose name is bounded at what a
-// StorageCluster name may be.
-type StorageClusterReference struct {
-	// Name is the StorageCluster's name.
+// NamespacedDnsReference is a NamespacedReference whose name is at most 63
+// characters (a DNS label), the bound on a StorageCluster name. controller-gen
+// takes the bound from the field marker, so it cannot be a clone of NamespacedReference.
+type NamespacedDnsReference struct {
+	// Name is the referenced object's name.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Required
@@ -45,7 +46,7 @@ type StorageClusterReference struct {
 	Namespace string `json:"namespace,omitempty"`
 }
 
-// In returns the cluster's key, taking defaultNamespace when no namespace is set.
-func (r StorageClusterReference) In(defaultNamespace string) types.NamespacedName {
+// In returns the object's key, taking defaultNamespace when no namespace is set.
+func (r NamespacedDnsReference) In(defaultNamespace string) types.NamespacedName {
 	return NamespacedReference(r).In(defaultNamespace)
 }

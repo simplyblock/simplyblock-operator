@@ -202,7 +202,7 @@ func restoreOpsObject() *simplyblockv1alpha2.StorageBackupOps {
 	return &simplyblockv1alpha2.StorageBackupOps{
 		ObjectMeta: metav1.ObjectMeta{Name: "restore-1", Namespace: backupNamespace},
 		Spec: simplyblockv1alpha2.StorageBackupOpsSpec{
-			ClusterRef: simplyblockv1alpha2.StorageClusterReference{Name: "production"},
+			ClusterRef: simplyblockv1alpha2.NamespacedDnsReference{Name: "production"},
 			BackupRef:  simplyblockv1alpha2.NamespacedReference{Name: "backup-1"},
 			Action:     simplyblockv1alpha2.StorageBackupOpsActionRestore,
 			Restore: &simplyblockv1alpha2.RestoreSpec{

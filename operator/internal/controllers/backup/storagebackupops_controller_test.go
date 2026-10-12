@@ -81,7 +81,7 @@ func restoreOps(name string) *simplyblockv1alpha2.StorageBackupOps {
 			Finalizers: []string{opsFinalizer},
 		},
 		Spec: simplyblockv1alpha2.StorageBackupOpsSpec{
-			ClusterRef: simplyblockv1alpha2.StorageClusterReference{Name: testClusterCR},
+			ClusterRef: simplyblockv1alpha2.NamespacedDnsReference{Name: testClusterCR},
 			BackupRef:  simplyblockv1alpha2.NamespacedReference{Name: "backup-1"},
 			Action:     simplyblockv1alpha2.StorageBackupOpsActionRestore,
 			Restore: &simplyblockv1alpha2.RestoreSpec{

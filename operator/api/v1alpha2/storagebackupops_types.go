@@ -146,7 +146,7 @@ type StorageBackupOpsSpec struct {
 	// read it there.
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
-	ClusterRef StorageClusterReference `json:"clusterRef"`
+	ClusterRef NamespacedDnsReference `json:"clusterRef"`
 
 	// BackupRef names the StorageBackup this operation acts on. Its namespace
 	// defaults to this operation's. A backup in another namespace needs the

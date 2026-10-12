@@ -125,7 +125,7 @@ spec:
                   read it there.
                 properties:
                   name:
-                    description: Name is the StorageCluster's name.
+                    description: Name is the referenced object's name.
                     maxLength: 63
                     minLength: 1
                     type: string
