@@ -258,7 +258,7 @@ func serviceReaderClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBindin
 // surge. That combination is what lets a pod be replaced while the control plane
 // keeps answering, and three things in the design rest on it: Degraded is a
 // component below its desired count while the probe still passes, a Restart
-// recycles the workload after draining rather than instead of serving, and an
+// restarts the workload after draining rather than instead of serving, and an
 // Upgrade rolls this Deployment.
 func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 	managed := cp.Spec.Source.Local

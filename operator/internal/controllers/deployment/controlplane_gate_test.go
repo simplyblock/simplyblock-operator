@@ -4,7 +4,7 @@
 // only the second is a reason to wait. design-controlplane.md §4.3 states it
 // directly: a Degraded control plane is one that answers, so nothing holds on
 // it. It is the phase a management API pod restarting behind a Service produces,
-// and a FoundationDB pod recycled without losing quorum, and a metrics exporter
+// and a FoundationDB pod restarted without losing quorum, and a metrics exporter
 // that is not running at all.
 
 package deployment

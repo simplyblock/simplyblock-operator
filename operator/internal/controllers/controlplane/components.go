@@ -259,7 +259,7 @@ func derivePhase(
 	}
 }
 
-// essentialComponents is the set a scoped Restart has to drain before recycling.
+// essentialComponents is the set a scoped Restart has to drain before restarting.
 // It is derived from the table rather than restated, so a component whose
 // classification changes moves both at once.
 func essentialComponents() map[string]bool {
@@ -276,7 +276,7 @@ func essentialComponents() map[string]bool {
 //
 // It is deliberately narrower than membership of the table. The FoundationDB
 // cluster is a component of the control plane and is not rolled by writing an
-// annotation into a pod template, so an operation scoped to it would recycle
+// annotation into a pod template, so an operation scoped to it would restart
 // nothing, find a healthy database on the wait that follows, and report success
 // having done nothing. Refusing the name is the only answer that does not lie.
 func restartable(name string) bool {
@@ -290,7 +290,7 @@ func restartable(name string) bool {
 
 // restartableComponents are the workloads a Restart can roll: everything in the
 // table that is a Deployment or a StatefulSet. The FoundationDBCluster is not
-// one of them, because recycling a database is the FoundationDB operator's
+// one of them, because restarting a database is the FoundationDB operator's
 // mechanism and not a pod-template annotation.
 func restartableComponents() []component {
 	out := make([]component, 0, len(componentTable))

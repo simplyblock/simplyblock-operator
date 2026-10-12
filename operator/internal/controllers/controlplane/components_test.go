@@ -165,7 +165,7 @@ func TestEveryComponentStatesWhyItIsClassifiedAsItIs(t *testing.T) {
 	}
 }
 
-// The FoundationDBCluster is not something a Restart rolls: recycling a database
+// The FoundationDBCluster is not something a Restart rolls: restarting a database
 // is the FoundationDB operator's mechanism rather than a pod-template
 // annotation, and a restart that silently skipped it would report success having
 // done nothing to it.
@@ -177,7 +177,7 @@ func TestTheDatabaseIsNotRestartable(t *testing.T) {
 		}
 	}
 	if restartable(ComponentFDBCluster) {
-		t.Errorf("%s is accepted as a restart scope, so an operation naming it would recycle "+
+		t.Errorf("%s is accepted as a restart scope, so an operation naming it would restart "+
 			"nothing and report success", ComponentFDBCluster)
 	}
 	if !restartable(ComponentTasks) {

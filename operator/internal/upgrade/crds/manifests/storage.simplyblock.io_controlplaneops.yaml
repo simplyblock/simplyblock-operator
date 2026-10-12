@@ -70,7 +70,7 @@ spec:
               what makes the status an audit of the request that ran rather than of whatever
               the object says now. The parameters are consumed several steps apart:
               Preflight reads spec.upgrade.image and Applying writes it, and Draining reads
-              spec.restart.components before Restarting recycles them. An edit in between
+              spec.restart.components before Restarting rolls them. An edit in between
               produces an operation that checked one thing and did another.
 
               What is frozen is each parameter block's presence together with its
@@ -131,9 +131,9 @@ spec:
                 properties:
                   components:
                     description: |-
-                      Components names the workloads to recycle. Empty recycles the whole
+                      Components names the workloads to restart. Empty restarts the whole
                       control plane. Naming only components that status.components reports as
-                      non-essential skips the drain, because recycling them interrupts nothing.
+                      non-essential skips the drain, because restarting them interrupts nothing.
                     items:
                       type: string
                     type: array

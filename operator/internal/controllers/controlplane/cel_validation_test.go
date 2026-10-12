@@ -322,6 +322,6 @@ func TestControlPlaneOpsCELFreezesTheRestartScope(t *testing.T) {
 	ops.Spec.Restart.Components = []string{ComponentTasks, ComponentWebAPI}
 	if err := apiClient.Update(ctx, ops); err == nil {
 		t.Error("an essential component was added to the scope after admission, which " +
-			"would recycle the management API without the drain that scope requires")
+			"would restart the management API without the drain that scope requires")
 	}
 }

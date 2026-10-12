@@ -496,7 +496,7 @@ instead of asserting that something is.
 
 **`Degraded` is a control plane that answers, so nothing holds on it.** A
 management API pod restarting behind a Service with more than one replica, and a
-FoundationDB pod recycled without losing quorum, are both situations in which
+FoundationDB pod restarted without losing quorum, are both situations in which
 every request still succeeds. The phase exists to keep a survivable event
 survivable.
 
@@ -623,7 +623,7 @@ answer.
 load-bearing.** A second instance is what lets a pod be replaced while the control
 plane keeps answering, and three things in this document rest on that: `Degraded`
 is defined as a component below its desired count while the probe still passes
-(§4.3), `Restart` recycles the workload after draining rather than instead of
+(§4.3), `Restart` restarts the workload after draining rather than instead of
 serving (§6), and `Upgrade` rolls the same Deployment. With one instance each of
 those becomes an outage, correctly reported as `Unavailable` and no less an
 outage for being reported well.
@@ -698,11 +698,11 @@ the entity's own. The type is Appendix B.
 Most of what an administrator does to a control plane is expressible as desired
 state: changing the image is an edit, scaling FoundationDB is an edit, and an
 object somebody edited by hand is put back by the next reconcile (§4.3). What is
-left is what this kind carries, and it is three things: recycling a workload,
+left is what this kind carries, and it is three things: restarting a workload,
 moving it to a new version, and asking FoundationDB for a backup.
 
 **Every action requires a local control plane.** Each acts on what the operator
-installed: `Restart` recycles a workload, `Upgrade` replaces its image, and
+installed: `Restart` restarts a workload, `Upgrade` replaces its image, and
 `Backup` asks the `FoundationDBCluster` the operator applied. A managed control
 plane is an endpoint and a credential (§5.2), owning none of those, so there is
 nothing for any of the three to act on.
@@ -714,17 +714,17 @@ type ControlPlaneOpsAction string
 
 | Action    | Steps                                                            | What it is for                                                    | Source |
 |-----------|------------------------------------------------------------------|-------------------------------------------------------------------|--------|
-| `Restart` | `Draining` → `Restarting` → `Awaiting`                           | A workload is wedged and has to be recycled                       | Local  |
+| `Restart` | `Draining` → `Restarting` → `Awaiting`                           | A workload is wedged and has to be restarted                      | Local  |
 | `Upgrade` | `Preflight` → `Draining` → `Applying` → `Awaiting` → `Verifying` | Moving the control plane to a new version                         | Local  |
 | `Backup`  | `Requesting` → `Awaiting`                                        | Asking FoundationDB for a backup outside whatever schedule exists | Local  |
 
 **`Restart` takes a component scope.** `spec.restart.components` names entries
-from §4.3's table, and an empty list recycles the whole control plane. Restarting
+from §4.3's table, and an empty list restarts the whole control plane. Restarting
 one wedged component is the common case, and the table already enumerates what
 there is to name, so the action reuses it rather than inventing a second list of
 workload names.
 
-**An operation that recycles a workload drains first.** The management API is
+**An operation that restarts a workload drains first.** The management API is
 what every controller in the operator talks to, so replacing or restarting it
 mid-flight fails whatever is in flight. `Draining` holds while any
 `StorageClusterOps`, `StorageNodeOps`, or `StoragePoolOps` in the namespace is
@@ -734,10 +734,10 @@ It does not cancel them, because an operation canceled to make a restart
 convenient is a worse outcome than a restart that waited.
 
 **`Restart` and `Upgrade` both carry the step, because both roll the same
-Deployment.** An upgrade replaces the management API's image, which recycles its
+Deployment.** An upgrade replaces the management API's image, which restarts its
 pods exactly as a restart does, and an operation interrupted by that has been
 interrupted whichever field caused it. `Backup` carries no `Draining`, because
-asking FoundationDB for a snapshot recycles nothing.
+asking FoundationDB for a snapshot restarts nothing.
 
 **`Upgrade` drains after `Preflight` rather than before it.** An upgrade refused
 for naming the image already running is refused in a moment, and making it first
@@ -745,7 +745,7 @@ wait out a twenty-minute node add would spend the fleet's time to reach an error
 that was available immediately.
 
 **A scoped restart drains only when it names a component something depends on.**
-Recycling Grafana interrupts nothing, so a restart of it has nothing to wait for.
+Restarting Grafana interrupts nothing, so a restart of it has nothing to wait for.
 `Draining` therefore runs
 when the component list is empty or names any component §4.3 marks essential, and
 is skipped otherwise. A task-runner restart is the case worth naming: it skips the
@@ -775,7 +775,7 @@ and rewritten.
 reads live state, which admission cannot: it holds until the control plane is
 `Available`, and it fails when the requested image is the one already running, because
 rolling a Deployment to its current image produces no change to verify. A restart
-has neither precondition, since recycling a wedged workload is what it is for.
+has neither precondition, since restarting a wedged workload is what it is for.
 
 **`Verifying` is what makes an upgrade more than an image bump.** It re-probes
 readiness, compares the reported version against what was asked for, and fails the
@@ -909,7 +909,6 @@ Events land on the object an administrator has open. For this kind that is the
 | The operation finished successfully                                    | `Normal`  | `OperationSucceeded`   | `ControlPlaneOps` |
 | The operation failed                                                   | `Warning` | `OperationFailed`      | `ControlPlaneOps` |
 | The operation was aborted and its unwind finished                      | `Normal`  | `OperationAborted`     | `ControlPlaneOps` |
-| The reported version disagrees with the requested one                  | `Warning` | `VersionMismatch`      | `ControlPlaneOps` |
 
 **`ControlPlaneNotReady` is the load-bearing one**, because every controller in
 the operator holds when it fires and none of them says why. A cluster that will
@@ -1518,7 +1517,7 @@ const (
 type ControlPlaneOpsStep string
 
 const (
-	// Restart and Upgrade both recycle the management API, so both drain.
+	// Restart and Upgrade both restart the management API, so both drain.
 	ControlPlaneOpsStepDraining ControlPlaneOpsStep = "Draining"
 
 	// Restart.
@@ -1546,9 +1545,9 @@ type UpgradeSpec struct {
 
 // RestartSpec parameterizes the Restart action and is ignored by the others.
 type RestartSpec struct {
-	// Components names the workloads to recycle, from the table in §4.3. Empty
-	// recycles the whole control plane. Naming only components that table marks
-	// non-essential skips the drain, because recycling them interrupts nothing.
+	// Components names the workloads to restart, from the table in §4.3. Empty
+	// restarts the whole control plane. Naming only components that table marks
+	// non-essential skips the drain, because restarting them interrupts nothing.
 	// +listType=set
 	// +optional
 	Components []string `json:"components,omitempty"`

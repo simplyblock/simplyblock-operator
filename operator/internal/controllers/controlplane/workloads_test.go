@@ -3,7 +3,7 @@
 //
 // The management API's second replica is the one worth naming. Three things
 // depend on it: Degraded is defined as a component below its desired count while
-// the probe still passes, a Restart recycles the workload after draining rather
+// the probe still passes, a Restart restarts the workload after draining rather
 // than instead of serving, and an Upgrade rolls this Deployment. With one
 // instance each of those becomes an outage.
 
@@ -379,7 +379,7 @@ func TestTheExporterDoesNotRunTheControlPlanesImage(t *testing.T) {
 // Every service container reaches the database through the cluster file, and
 // every pod that mounts it is annotated for restart when it changes. A
 // coordinator change rewrites that ConfigMap, and a pod holding a connection to
-// the old coordinator has to be recycled to notice.
+// the old coordinator has to be restarted to notice.
 func TestEveryWorkloadThatReachesTheDatabaseIsRolledWhenItMoves(t *testing.T) {
 	cp := localControlPlane()
 

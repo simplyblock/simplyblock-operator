@@ -2,7 +2,7 @@
 // spec.controlPlaneRef at creation and refuses an operation naming a control
 // plane none of its actions can act on.
 //
-// Every action acts on what the operator installed: Restart recycles a workload,
+// Every action acts on what the operator installed: Restart restarts a workload,
 // Upgrade replaces its image, and Backup asks the FoundationDBCluster the
 // operator applied. An operation naming a remote control plane is therefore one
 // that can only fail. Admission is where the check belongs, because an operation
@@ -58,9 +58,9 @@ type ControlPlaneOpsValidator struct {
 // operation has: the finalizer alone does not catch a forced delete with no
 // grace period.
 var undeletableControlPlaneSteps = map[simplyblockv1alpha2.ControlPlaneOpsStep]string{
-	simplyblockv1alpha2.ControlPlaneOpsStepRestarting: "the workloads are being recycled",
+	simplyblockv1alpha2.ControlPlaneOpsStepRestarting: "the workloads are being restarted",
 	simplyblockv1alpha2.ControlPlaneOpsStepApplying:   "the new image is being written onto the control plane",
-	simplyblockv1alpha2.ControlPlaneOpsStepAwaiting:   "the recycled workloads are still coming back",
+	simplyblockv1alpha2.ControlPlaneOpsStepAwaiting:   "the restarted workloads are still coming back",
 	simplyblockv1alpha2.ControlPlaneOpsStepVerifying:  "the rollout is being checked against the version it asked for",
 }
 
@@ -143,7 +143,7 @@ func (v *ControlPlaneOpsValidator) admitCreate(
 	if target.Spec.Source.Local == nil {
 		return admission.Denied(fmt.Sprintf(
 			"ControlPlane %q names a control plane this cluster does not host, and every "+
-				"action of this kind acts on something the operator installed: Restart recycles a "+
+				"action of this kind acts on something the operator installed: Restart restarts a "+
 				"workload, Upgrade replaces its image, and Backup asks the FoundationDBCluster the "+
 				"operator applied. A control plane elsewhere is an endpoint and a credential, so "+
 				"there is nothing here for any of them to act on.",
@@ -173,7 +173,7 @@ func actionBlockPresent(ops *simplyblockv1alpha2.ControlPlaneOps) admission.Resp
 		}
 	case simplyblockv1alpha2.ControlPlaneOpsActionRestart:
 		// Restart takes no required block: an empty spec.restart.components
-		// recycles the whole control plane, which is the common case and a
+		// restarts the whole control plane, which is the common case and a
 		// legitimate one to write nothing for.
 	}
 	return admission.Allowed("")

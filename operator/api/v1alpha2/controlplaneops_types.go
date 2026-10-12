@@ -4,7 +4,7 @@
 // desired state, because the entity re-applies what it installed on every pass:
 // changing the image is an edit, scaling FoundationDB is an edit, and an object
 // somebody deleted by hand is put back. What is left is what this kind carries,
-// and it is three things: recycling a workload, moving it to a new version, and
+// and it is three things: restarting a workload, moving it to a new version, and
 // asking FoundationDB for a backup.
 //
 // Every action requires a control plane this cluster hosts, since each acts on
@@ -33,8 +33,8 @@ import (
 type ControlPlaneOpsAction string
 
 const (
-	// ControlPlaneOpsActionRestart recycles a wedged workload. Its scope is
-	// spec.restart.components, and an empty list recycles the whole control
+	// ControlPlaneOpsActionRestart restarts a wedged workload. Its scope is
+	// spec.restart.components, and an empty list restarts the whole control
 	// plane.
 	ControlPlaneOpsActionRestart ControlPlaneOpsAction = "Restart"
 	// ControlPlaneOpsActionUpgrade moves the control plane to a new version and
@@ -73,14 +73,14 @@ type ControlPlaneOpsStep string
 
 const (
 	// ControlPlaneOpsStepDraining holds while another operation in the namespace
-	// is still running. Restart and Upgrade both recycle the management API, so
+	// is still running. Restart and Upgrade both restart the management API, so
 	// both drain.
 	ControlPlaneOpsStepDraining ControlPlaneOpsStep = "Draining"
 
 	// ControlPlaneOpsStepRestarting rolls the workloads the action named.
 	ControlPlaneOpsStepRestarting ControlPlaneOpsStep = "Restarting"
 	// ControlPlaneOpsStepAwaiting waits for what the previous step asked for:
-	// the recycled pods coming back, or the backup reporting a snapshot.
+	// the restarted pods coming back, or the backup reporting a snapshot.
 	ControlPlaneOpsStepAwaiting ControlPlaneOpsStep = "Awaiting"
 
 	// ControlPlaneOpsStepPreflight reads live state, which admission cannot: it
@@ -112,9 +112,9 @@ type UpgradeSpec struct {
 
 // RestartSpec parameterizes the Restart action and is ignored by the others.
 type RestartSpec struct {
-	// Components names the workloads to recycle. Empty recycles the whole
+	// Components names the workloads to restart. Empty restarts the whole
 	// control plane. Naming only components that status.components reports as
-	// non-essential skips the drain, because recycling them interrupts nothing.
+	// non-essential skips the drain, because restarting them interrupts nothing.
 	// +listType=set
 	// +optional
 	Components []string `json:"components,omitempty"`
@@ -141,7 +141,7 @@ type BackupSpec struct {
 // what makes the status an audit of the request that ran rather than of whatever
 // the object says now. The parameters are consumed several steps apart:
 // Preflight reads spec.upgrade.image and Applying writes it, and Draining reads
-// spec.restart.components before Restarting recycles them. An edit in between
+// spec.restart.components before Restarting rolls them. An edit in between
 // produces an operation that checked one thing and did another.
 //
 // What is frozen is each parameter block's presence together with its

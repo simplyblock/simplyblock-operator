@@ -156,10 +156,10 @@ var installStepBudgets = map[installStep]time.Duration{
 // opsGraphs declares one state graph per operation action over one step type.
 //
 // Restart and Upgrade both carry Draining, because both roll the same
-// Deployment: an upgrade replaces the management API's image, which recycles its
+// Deployment: an upgrade replaces the management API's image, which restarts its
 // pods exactly as a restart does, and an operation interrupted by that has been
 // interrupted whichever field caused it. Backup carries none, because asking
-// FoundationDB for a snapshot recycles nothing.
+// FoundationDB for a snapshot restarts nothing.
 //
 // Upgrade drains after Preflight rather than before it. An upgrade refused for
 // naming the image already running is refused in a moment, and making it first

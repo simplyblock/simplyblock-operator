@@ -320,7 +320,7 @@ func (r *ClusterDeploymentConfigReconciler) markReadyToDeploy(
 //
 // Answering is the test rather than being unimpaired. Degraded is a control
 // plane that answers -- a management API pod restarting behind a Service, a
-// FoundationDB pod recycled without losing quorum, a metrics exporter that is
+// FoundationDB pod restarted without losing quorum, a metrics exporter that is
 // not running at all -- and design-controlplane.md §4.3 says nothing holds on
 // it. Waiting for Available instead let one non-essential component, whose
 // absence loses no work and stops nothing, hold an entire expansion.
