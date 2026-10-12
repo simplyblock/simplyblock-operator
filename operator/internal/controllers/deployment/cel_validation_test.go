@@ -320,15 +320,16 @@ func TestATemplateTakesArbitrationOnlyWhenDual(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		mode       simplyblockv1alpha2.ClusterMode
-		twoNode    *simplyblockv1alpha2.TwoNodeSpec
+		enable     *bool
+		settings   *simplyblockv1alpha2.ArbitrationSpec
 		wantDenied bool
 	}{
-		{name: "dual with arbitration", mode: simplyblockv1alpha2.ClusterModeDual,
-			twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true, HoldMs: ptr.To(int32(2500))}},
+		{name: "dual with arbitration", mode: simplyblockv1alpha2.ClusterModeDual, enable: ptr.To(true),
+			settings: &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(2500))}},
 		{name: "standard with arbitration", mode: simplyblockv1alpha2.ClusterModeStandard,
-			twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true}, wantDenied: true},
+			enable: ptr.To(true), wantDenied: true},
 		{name: "unstated mode with arbitration settings",
-			twoNode: &simplyblockv1alpha2.TwoNodeSpec{HoldMs: ptr.To(int32(2500))}, wantDenied: true},
+			settings: &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(2500))}, wantDenied: true},
 		{name: "single without arbitration", mode: simplyblockv1alpha2.ClusterModeSingle},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -340,7 +341,8 @@ func TestATemplateTakesArbitrationOnlyWhenDual(t *testing.T) {
 						VCPUCount:         ptr.To(int32(4)),
 						MaxSubsystemCount: ptr.To(int32(30)),
 						ClusterMode:       tc.mode,
-						TwoNode:           tc.twoNode,
+						EnableArbitration: tc.enable,
+						Arbitration:       tc.settings,
 					},
 					NodeSets: []simplyblockv1alpha2.NodeSet{{
 						Name: "discovered",

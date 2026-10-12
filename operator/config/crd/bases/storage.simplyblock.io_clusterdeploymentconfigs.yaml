@@ -96,6 +96,34 @@ spec:
                 description: Cluster is the StorageCluster to create. Ignored when
                   ClusterRef is set.
                 properties:
+                  arbitration:
+                    description: |-
+                      Arbitration tunes the two-node arbitration, and is carried to the
+                      cluster's spec.arbitration. Only valid when clusterMode is Dual.
+                    properties:
+                      holdMs:
+                        description: |-
+                          HoldMs is how long a node holds writes after losing its peer before it
+                          acts on its own. It must stay below the hosts' NVMe keep-alive timeout
+                          (5000 ms), or clients fail I/O before the verdict arrives.
+                        format: int32
+                        maximum: 4500
+                        minimum: 500
+                        type: integer
+                      leaseTtlMs:
+                        description: |-
+                          LeaseTtlMs is how long a lease from the arbiter stays valid. It only
+                          matters while a node is holding; a healthy pair is never fenced by a
+                          late renewal.
+                        format: int32
+                        maximum: 10000
+                        minimum: 500
+                        type: integer
+                    type: object
+                    x-kubernetes-validations:
+                    - message: leaseTtlMs must be shorter than holdMs
+                      rule: '!has(self.holdMs) || !has(self.leaseTtlMs) || self.leaseTtlMs
+                        < self.holdMs'
                   backup:
                     description: |-
                       Backup is where this cluster's backups live, and it expands into
@@ -240,6 +268,12 @@ spec:
                           More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                     type: object
+                  enableArbitration:
+                    description: |-
+                      EnableArbitration turns on the control plane's two-node arbitration, and
+                      is carried to the cluster's spec.enableArbitration. Only valid when
+                      clusterMode is Dual.
+                    type: boolean
                   enableAtomicity4K:
                     description: |-
                       EnableAtomicity4K enforces 4K write atomicity on every device this
@@ -621,48 +655,6 @@ spec:
                       type: object
                     maxItems: 32
                     type: array
-                  twoNode:
-                    description: |-
-                      TwoNode carries the control plane's arbitration settings to the
-                      cluster's spec.twoNode. Only valid when clusterMode is Dual.
-                    properties:
-                      arbitration:
-                        description: |-
-                          Arbitration turns the control plane's two-node arbitration on for this
-                          cluster: nodes hold writes when they lose their peer, and only a node the
-                          arbiter grants may continue alone. Off, the cluster keeps today's
-                          behavior (dual-node tolerance without arbitration).
-                        type: boolean
-                      holdMs:
-                        description: |-
-                          HoldMs is how long a node holds writes after losing its peer before it
-                          acts on its own. It must stay below the hosts' NVMe keep-alive timeout
-                          (5000 ms), or clients fail I/O before the verdict arrives.
-                        format: int32
-                        maximum: 4500
-                        minimum: 500
-                        type: integer
-                      leaseTtlMs:
-                        description: |-
-                          LeaseTtlMs is how long a lease from the arbiter stays valid. It only
-                          matters while a node is holding; a healthy pair is never fenced by a
-                          late renewal.
-                        format: int32
-                        maximum: 10000
-                        minimum: 500
-                        type: integer
-                      preferredNode:
-                        description: |-
-                          Deprecated: ignored. The arbiter has no preferred node: at the hold
-                          deadline a node that has no grant always fences itself, and a full
-                          partition fences both nodes. The field is still accepted so that stored
-                          objects that set it stay valid; nothing reads it.
-                        type: string
-                    type: object
-                    x-kubernetes-validations:
-                    - message: leaseTtlMs must be shorter than holdMs
-                      rule: '!has(self.holdMs) || !has(self.leaseTtlMs) || self.leaseTtlMs
-                        < self.holdMs'
                   vcpuCount:
                     description: |-
                       VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
@@ -682,8 +674,10 @@ spec:
                 - vcpuCount
                 type: object
                 x-kubernetes-validations:
-                - message: twoNode is only valid when clusterMode is Dual
-                  rule: (has(self.clusterMode) && self.clusterMode == 'Dual') || !has(self.twoNode)
+                - message: enableArbitration and arbitration are only valid when clusterMode
+                    is Dual
+                  rule: (has(self.clusterMode) && self.clusterMode == 'Dual') || (!has(self.arbitration)
+                    && !(has(self.enableArbitration) && self.enableArbitration))
               clusterRef:
                 description: |-
                   ClusterRef names an existing StorageCluster this document adds nodes to.

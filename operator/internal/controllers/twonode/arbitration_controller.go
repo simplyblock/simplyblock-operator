@@ -19,6 +19,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -50,7 +52,7 @@ const (
 )
 
 // ArbitrationReconciler follows the arbiter for StorageClusters in clusterMode
-// Dual with spec.twoNode.arbitration on.
+// Dual with spec.enableArbitration on.
 type ArbitrationReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -76,8 +78,7 @@ func (r *ArbitrationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if cluster.Spec.ClusterMode != simplyblockv1alpha2.ClusterModeDual || cluster.Spec.TwoNode == nil ||
-		!cluster.Spec.TwoNode.Arbitration {
+	if cluster.Spec.ClusterMode != simplyblockv1alpha2.ClusterModeDual || !ptr.BoolFromOrFalse(cluster.Spec.EnableArbitration) {
 		// Off: withdraw what this controller put on the nodes.
 		if err := r.applyTaints(ctx, nodes, nil, 0); err != nil {
 			return ctrl.Result{}, err

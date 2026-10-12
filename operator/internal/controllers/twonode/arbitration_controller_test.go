@@ -13,6 +13,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
 )
@@ -50,7 +52,7 @@ func setup(t *testing.T, api *fakeAPI, extraTaint *corev1.Taint) (*ArbitrationRe
 	t.Helper()
 	cluster := testsupport.Cluster(ns, "edge", "c-uuid")
 	cluster.Spec.ClusterMode = simplyblockv1alpha2.ClusterModeDual
-	cluster.Spec.TwoNode = &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true}
+	cluster.Spec.EnableArbitration = ptr.To(true)
 	objs := make([]client.Object, 0, 5)
 	objs = append(objs, cluster)
 	for _, w := range []struct{ sn, worker, id string }{{"sn-a", workerA, "id-a"}, {"sn-b", workerB, "id-b"}} {
@@ -181,41 +183,12 @@ func TestOutOfServiceIsReportedNeverSet(t *testing.T) {
 	}
 }
 
-// TestDeprecatedPreferredNodeIsIgnored: the arbiter has no preferred node. A
-// spec that still sets the deprecated field reconciles exactly like one that
-// does not, and the controller makes no call to the control plane for it (the
-// only calls it may make are Get and ReportFencing; the API interface has no
-// preferred-node method any more).
-func TestDeprecatedPreferredNodeIsIgnored(t *testing.T) {
-	for _, preferred := range []string{"", workerA, workerB} {
-		api := &fakeAPI{rec: &Record{State: "partitioned", Epoch: 8, FencedNodes: []string{"id-b"}}}
-		r, c := setup(t, api, nil)
-		var cl simplyblockv1alpha2.StorageCluster
-		_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "edge"}, &cl)
-		cl.Spec.TwoNode.PreferredNode = preferred //nolint:staticcheck // deprecated field must stay ignored
-		if err := c.Update(context.Background(), &cl); err != nil {
-			t.Fatal(err)
-		}
-		reconcile(t, r)
-		if tb := fencedTaint(t, c, workerB); tb == nil || tb.Value != "8" {
-			t.Fatalf("preferredNode=%q: the arbiter's fence must be applied regardless: %+v", preferred, tb)
-		}
-		if tb := fencedTaint(t, c, workerA); tb != nil {
-			t.Fatalf("preferredNode=%q: worker-a must not be fenced: %+v", preferred, tb)
-		}
-		_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "edge"}, &cl)
-		if st := cl.Status.Arbitration; st == nil || st.State != "partitioned" || len(st.FencedNodes) != 1 || st.FencedNodes[0] != workerB {
-			t.Fatalf("preferredNode=%q: status %+v", preferred, cl.Status.Arbitration)
-		}
-	}
-}
-
 func TestArbitrationOffRemovesTaints(t *testing.T) {
 	existing := &corev1.Taint{Key: simplyblockv1alpha2.TaintStorageFenced, Value: "7", Effect: corev1.TaintEffectNoExecute}
 	r, c := setup(t, &fakeAPI{}, existing)
 	var cl simplyblockv1alpha2.StorageCluster
 	_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "edge"}, &cl)
-	cl.Spec.TwoNode.Arbitration = false
+	cl.Spec.EnableArbitration = ptr.To(false)
 	if err := c.Update(context.Background(), &cl); err != nil {
 		t.Fatal(err)
 	}

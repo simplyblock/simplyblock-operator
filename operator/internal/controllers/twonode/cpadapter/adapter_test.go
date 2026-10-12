@@ -16,6 +16,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/twonode"
@@ -52,8 +54,7 @@ func TestNoPreferredNodeCallToTheControlPlane(t *testing.T) {
 
 	cluster := testsupport.Cluster(ns, "edge", "c-uuid")
 	cluster.Spec.ClusterMode = simplyblockv1alpha2.ClusterModeDual
-	cluster.Spec.TwoNode = &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true,
-		PreferredNode: "worker-a"} //nolint:staticcheck // deprecated field must stay ignored
+	cluster.Spec.EnableArbitration = ptr.To(true)
 	objs := make([]client.Object, 0, 5)
 	objs = append(objs, cluster)
 	for _, w := range []struct{ sn, worker, id string }{{"sn-a", "worker-a", "id-a"}, {"sn-b", "worker-b", "id-b"}} {

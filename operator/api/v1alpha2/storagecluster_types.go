@@ -652,7 +652,7 @@ const (
 
 // StorageClusterSpec is the desired state of one simplyblock backend cluster.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.kms) || self.kms == oldSelf.kms",message="kms is immutable once set"
-// +kubebuilder:validation:XValidation:rule="(has(self.clusterMode) && self.clusterMode == 'Dual') || !has(self.twoNode)",message="twoNode is only valid when clusterMode is Dual"
+// +kubebuilder:validation:XValidation:rule="(has(self.clusterMode) && self.clusterMode == 'Dual') || (!has(self.arbitration) && !(has(self.enableArbitration) && self.enableArbitration))",message="enableArbitration and arbitration are only valid when clusterMode is Dual"
 // +kubebuilder:validation:XValidation:rule="(has(self.clusterMode) && self.clusterMode == 'Single') == (has(oldSelf.clusterMode) && oldSelf.clusterMode == 'Single')",message="clusterMode cannot be changed to or from Single: the control plane fixes it when the cluster is created"
 // +kubebuilder:validation:XValidation:rule="!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)",message="enableAtomicity4K requires enableChecksumValidation to be true"
 type StorageClusterSpec struct {
@@ -896,11 +896,18 @@ type StorageClusterSpec struct {
 	// +kubebuilder:default=Standard
 	ClusterMode ClusterMode `json:"clusterMode,omitempty"`
 
-	// TwoNode configures the control plane's arbitration for a cluster of
-	// exactly two storage nodes (an edge site). Only valid when clusterMode is
-	// Dual.
+	// EnableArbitration turns on the control plane's two-node arbitration:
+	// nodes hold writes when they lose their peer, and only a node the arbiter
+	// grants may continue alone. Without it a Dual cluster tolerates the loss
+	// of either node without arbitration. Only valid when clusterMode is Dual.
 	// +optional
-	TwoNode *TwoNodeSpec `json:"twoNode,omitempty"`
+	EnableArbitration *bool `json:"enableArbitration,omitempty"`
+
+	// Arbitration tunes the two-node arbitration that enableArbitration turns
+	// on. Omitted values take the arbiter's defaults. Only valid when
+	// clusterMode is Dual.
+	// +optional
+	Arbitration *ArbitrationSpec `json:"arbitration,omitempty"`
 }
 
 // StorageClusterStatus is the observed state of one backend cluster.
@@ -1056,7 +1063,7 @@ type StorageClusterStatus struct {
 	// from, so a stale status can be told from a current one.
 	// +optional
 	// Arbitration is the two-node arbiter's record as the operator last read
-	// it; set only when spec.twoNode.arbitration is on.
+	// it; set only when spec.enableArbitration is on.
 	// +optional
 	Arbitration *ArbitrationStatus `json:"arbitration,omitempty"`
 

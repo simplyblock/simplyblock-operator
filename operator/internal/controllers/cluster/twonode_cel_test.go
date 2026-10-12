@@ -12,47 +12,42 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// TestStorageClusterCELValidatesTwoNode covers spec.twoNode's schema: holdMs
-// must stay below the hosts' keep-alive (≤ 4500 ms), a lease must be shorter
-// than the hold it guards, and twoNode is only valid on a Dual cluster.
-func TestStorageClusterCELValidatesTwoNode(t *testing.T) {
+// TestStorageClusterCELValidatesArbitration covers spec.arbitration's schema:
+// holdMs must stay below the hosts' keep-alive (≤ 4500 ms), a lease must be
+// shorter than the hold it guards, and arbitration is only valid on a Dual
+// cluster.
+func TestStorageClusterCELValidatesArbitration(t *testing.T) {
 	apiClient := apiServer(t)
 	const onlyDual = "only valid when clusterMode is Dual"
 
 	for _, tc := range []struct {
-		name       string
-		mode       simplyblockv1alpha2.ClusterMode
-		twoNode    *simplyblockv1alpha2.TwoNodeSpec
-		wantDenied string
+		name        string
+		mode        simplyblockv1alpha2.ClusterMode
+		enable      *bool
+		arbitration *simplyblockv1alpha2.ArbitrationSpec
+		wantDenied  string
 	}{
 		{name: "unset"},
 		{name: "dual without arbitration", mode: simplyblockv1alpha2.ClusterModeDual},
-		{name: "arbitration with defaults", mode: simplyblockv1alpha2.ClusterModeDual,
-			twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true}},
-		// preferredNode is deprecated and ignored, but a spec that still
-		// carries it must stay valid, with any value.
-		{name: "deprecated preferredNode accepted", mode: simplyblockv1alpha2.ClusterModeDual,
-			twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true,
-				PreferredNode: "worker-a"}}, //nolint:staticcheck // deprecated field must stay accepted
-		{name: "lease shorter than hold", mode: simplyblockv1alpha2.ClusterModeDual,
-			twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true,
-				HoldMs: ptr.To(int32(2500)), LeaseTtlMs: ptr.To(int32(1500))}},
-		{name: "lease not shorter than hold", mode: simplyblockv1alpha2.ClusterModeDual,
-			twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true,
-				HoldMs: ptr.To(int32(1500)), LeaseTtlMs: ptr.To(int32(1500))},
-			wantDenied: "leaseTtlMs must be shorter than holdMs"},
-		{name: "hold above the keep-alive", mode: simplyblockv1alpha2.ClusterModeDual,
-			twoNode:    &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true, HoldMs: ptr.To(int32(5000))},
-			wantDenied: "holdMs"},
-		{name: "hold below the floor", mode: simplyblockv1alpha2.ClusterModeDual,
-			twoNode:    &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true, HoldMs: ptr.To(int32(100))},
-			wantDenied: "holdMs"},
-		{name: "twoNode on a standard cluster", mode: simplyblockv1alpha2.ClusterModeStandard,
-			twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true}, wantDenied: onlyDual},
-		{name: "twoNode on a cluster of unstated mode",
-			twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true}, wantDenied: onlyDual},
-		{name: "twoNode on a single cluster", mode: simplyblockv1alpha2.ClusterModeSingle,
-			twoNode: &simplyblockv1alpha2.TwoNodeSpec{}, wantDenied: onlyDual},
+		{name: "arbitration with defaults", mode: simplyblockv1alpha2.ClusterModeDual, enable: ptr.To(true)},
+		{name: "lease shorter than hold", mode: simplyblockv1alpha2.ClusterModeDual, enable: ptr.To(true),
+			arbitration: &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(2500)), LeaseTtlMs: ptr.To(int32(1500))}},
+		{name: "lease not shorter than hold", mode: simplyblockv1alpha2.ClusterModeDual, enable: ptr.To(true),
+			arbitration: &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(1500)), LeaseTtlMs: ptr.To(int32(1500))},
+			wantDenied:  "leaseTtlMs must be shorter than holdMs"},
+		{name: "hold above the keep-alive", mode: simplyblockv1alpha2.ClusterModeDual, enable: ptr.To(true),
+			arbitration: &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(5000))}, wantDenied: "holdMs"},
+		{name: "hold below the floor", mode: simplyblockv1alpha2.ClusterModeDual, enable: ptr.To(true),
+			arbitration: &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(100))}, wantDenied: "holdMs"},
+		{name: "arbitration on a standard cluster", mode: simplyblockv1alpha2.ClusterModeStandard,
+			enable: ptr.To(true), wantDenied: onlyDual},
+		{name: "arbitration on a cluster of unstated mode", enable: ptr.To(true), wantDenied: onlyDual},
+		{name: "arbitration on a single cluster", mode: simplyblockv1alpha2.ClusterModeSingle,
+			enable: ptr.To(true), wantDenied: onlyDual},
+		{name: "arbitration settings on a standard cluster", mode: simplyblockv1alpha2.ClusterModeStandard,
+			arbitration: &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(2500))}, wantDenied: onlyDual},
+		{name: "arbitration off on a standard cluster", mode: simplyblockv1alpha2.ClusterModeStandard,
+			enable: ptr.To(false)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cluster := &simplyblockv1alpha2.StorageCluster{
@@ -61,7 +56,8 @@ func TestStorageClusterCELValidatesTwoNode(t *testing.T) {
 					MaxSubsystemCount: ptr.To(int32(10)),
 					VCPUCount:         ptr.To(int32(6)),
 					ClusterMode:       tc.mode,
-					TwoNode:           tc.twoNode,
+					EnableArbitration: tc.enable,
+					Arbitration:       tc.arbitration,
 				},
 			}
 			err := apiClient.Create(context.Background(), cluster)

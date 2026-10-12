@@ -19,24 +19,11 @@ const TaintStorageFenced = "storage.simplyblock.io/fenced"
 // sets it (that is the job of OpenShift's remediation or an administrator).
 const TaintOutOfService = "node.kubernetes.io/out-of-service"
 
-// TwoNodeSpec configures arbitration for a cluster of exactly two storage
-// nodes. All fields are optional; omitted values take the arbiter's defaults.
+// ArbitrationSpec tunes the control plane's arbitration for a cluster of
+// exactly two storage nodes. All fields are optional; omitted values take the
+// arbiter's defaults.
 // +kubebuilder:validation:XValidation:rule="!has(self.holdMs) || !has(self.leaseTtlMs) || self.leaseTtlMs < self.holdMs",message="leaseTtlMs must be shorter than holdMs"
-type TwoNodeSpec struct {
-	// Arbitration turns the control plane's two-node arbitration on for this
-	// cluster: nodes hold writes when they lose their peer, and only a node the
-	// arbiter grants may continue alone. Off, the cluster keeps today's
-	// behavior (dual-node tolerance without arbitration).
-	// +optional
-	Arbitration bool `json:"arbitration,omitempty"`
-
-	// Deprecated: ignored. The arbiter has no preferred node: at the hold
-	// deadline a node that has no grant always fences itself, and a full
-	// partition fences both nodes. The field is still accepted so that stored
-	// objects that set it stay valid; nothing reads it.
-	// +optional
-	PreferredNode string `json:"preferredNode,omitempty"`
-
+type ArbitrationSpec struct {
 	// HoldMs is how long a node holds writes after losing its peer before it
 	// acts on its own. It must stay below the hosts' NVMe keep-alive timeout
 	// (5000 ms), or clients fail I/O before the verdict arrives.
