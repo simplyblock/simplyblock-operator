@@ -1,4 +1,4 @@
-package controller
+package backup
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
 )
 
-func lvol(ns, name, lvolID string) simplyblockv1alpha1.AttachedLvol {
+func attachedLvol(ns, name, lvolID string) simplyblockv1alpha1.AttachedLvol {
 	return simplyblockv1alpha1.AttachedLvol{PVCNamespace: ns, PVCName: name, LvolID: lvolID}
 }
 
@@ -39,7 +39,7 @@ func TestBackupPolicyReconcileAnnotationAddAttachesLvol(t *testing.T) {
 		lvolID      = "lvol-add"
 	)
 
-	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../../shared/openapi.json", false)
 	defer mock.Close()
 	mock.Register(http.MethodGet, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/",
 		webapimock.RouteResponse{Status: http.StatusOK, Body: backupPolicyListJSON(
@@ -79,7 +79,7 @@ func TestBackupPolicyReconcileAnnotationAddAttachesLvol(t *testing.T) {
 	if current.Status.Phase != simplyblockv1alpha1.BackupPolicyPhaseActive {
 		t.Fatalf("expected phase %q, got %q", simplyblockv1alpha1.BackupPolicyPhaseActive, current.Status.Phase)
 	}
-	if len(current.Status.AttachedLvols) != 1 || current.Status.AttachedLvols[0] != lvol(namespace, pvcName, lvolID) {
+	if len(current.Status.AttachedLvols) != 1 || current.Status.AttachedLvols[0] != attachedLvol(namespace, pvcName, lvolID) {
 		t.Fatalf("unexpected attached lvols: %#v", current.Status.AttachedLvols)
 	}
 
@@ -103,7 +103,7 @@ func TestBackupPolicyReconcileDeprecatedAnnotationAttachesLvol(t *testing.T) {
 		lvolID      = "lvol-deprecated"
 	)
 
-	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../../shared/openapi.json", false)
 	defer mock.Close()
 	mock.Register(http.MethodGet, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/",
 		webapimock.RouteResponse{Status: http.StatusOK, Body: backupPolicyListJSON(
@@ -139,7 +139,7 @@ func TestBackupPolicyReconcileDeprecatedAnnotationAttachesLvol(t *testing.T) {
 	if current.Status.Phase != simplyblockv1alpha1.BackupPolicyPhaseActive {
 		t.Fatalf("expected phase %q, got %q", simplyblockv1alpha1.BackupPolicyPhaseActive, current.Status.Phase)
 	}
-	if len(current.Status.AttachedLvols) != 1 || current.Status.AttachedLvols[0] != lvol(namespace, pvcName, lvolID) {
+	if len(current.Status.AttachedLvols) != 1 || current.Status.AttachedLvols[0] != attachedLvol(namespace, pvcName, lvolID) {
 		t.Fatalf("unexpected attached lvols: %#v", current.Status.AttachedLvols)
 	}
 
@@ -163,7 +163,7 @@ func TestBackupPolicyReconcileAnnotationRemovalDetachesLvol(t *testing.T) {
 		lvolID      = "lvol-remove"
 	)
 
-	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../../shared/openapi.json", false)
 	defer mock.Close()
 	mock.Register(http.MethodGet, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/",
 		webapimock.RouteResponse{Status: http.StatusOK, Body: backupPolicyListJSON(
@@ -177,7 +177,7 @@ func TestBackupPolicyReconcileAnnotationRemovalDetachesLvol(t *testing.T) {
 
 	policy := testBackupPolicyCR(policyName)
 	policy.Status.PolicyID = policyID
-	policy.Status.AttachedLvols = []simplyblockv1alpha1.AttachedLvol{lvol(namespace, pvcName, lvolID)}
+	policy.Status.AttachedLvols = []simplyblockv1alpha1.AttachedLvol{attachedLvol(namespace, pvcName, lvolID)}
 	pv, pvc := testBackupPolicyPVC(pvcName, pvName, "", clusterUUID, lvolID, nil)
 
 	r := newBackupPolicyTestReconciler(t,
@@ -222,7 +222,7 @@ func TestBackupPolicyReconcilePolicySwitchMovesAttachment(t *testing.T) {
 		lvolID      = "lvol-switch"
 	)
 
-	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../../shared/openapi.json", false)
 	defer mock.Close()
 	mock.Register(http.MethodGet, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/",
 		webapimock.RouteResponse{Status: http.StatusOK, Body: backupPolicyListJSON(
@@ -240,7 +240,7 @@ func TestBackupPolicyReconcilePolicySwitchMovesAttachment(t *testing.T) {
 
 	oldCR := testBackupPolicyCR(oldPolicy)
 	oldCR.Status.PolicyID = oldPolicyID
-	oldCR.Status.AttachedLvols = []simplyblockv1alpha1.AttachedLvol{lvol(namespace, pvcName, lvolID)}
+	oldCR.Status.AttachedLvols = []simplyblockv1alpha1.AttachedLvol{attachedLvol(namespace, pvcName, lvolID)}
 	newCR := testBackupPolicyCR(newPolicy)
 	newCR.Status.PolicyID = newPolicyID
 	pv, pvc := testBackupPolicyPVC(pvcName, pvName, newPolicy, clusterUUID, lvolID, nil)
@@ -265,7 +265,7 @@ func TestBackupPolicyReconcilePolicySwitchMovesAttachment(t *testing.T) {
 		t.Fatalf("expected old policy attachments to be removed, got %#v", currentOld.Status.AttachedLvols)
 	}
 	currentNew := getBackupPolicy(t, r.Client, newCR)
-	if len(currentNew.Status.AttachedLvols) != 1 || currentNew.Status.AttachedLvols[0] != lvol(namespace, pvcName, lvolID) {
+	if len(currentNew.Status.AttachedLvols) != 1 || currentNew.Status.AttachedLvols[0] != attachedLvol(namespace, pvcName, lvolID) {
 		t.Fatalf("unexpected new policy attachments: %#v", currentNew.Status.AttachedLvols)
 	}
 
@@ -292,7 +292,7 @@ func TestBackupPolicyReconcileLvolAnnotationMismatchDetachesStaleAttachment(t *t
 		staleLvol   = "lvol-stale-annotation"
 	)
 
-	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../../shared/openapi.json", false)
 	defer mock.Close()
 	mock.Register(http.MethodGet, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/",
 		webapimock.RouteResponse{Status: http.StatusOK, Body: backupPolicyListJSON(
@@ -306,7 +306,7 @@ func TestBackupPolicyReconcileLvolAnnotationMismatchDetachesStaleAttachment(t *t
 
 	policy := testBackupPolicyCR(policyName)
 	policy.Status.PolicyID = policyID
-	policy.Status.AttachedLvols = []simplyblockv1alpha1.AttachedLvol{lvol(namespace, pvcName, staleLvol)}
+	policy.Status.AttachedLvols = []simplyblockv1alpha1.AttachedLvol{attachedLvol(namespace, pvcName, staleLvol)}
 	pv, pvc := testBackupPolicyPVC(pvcName, pvName, policyName, clusterUUID, handleLvol,
 		map[string]string{pvcLvolIDAnnotation: staleLvol})
 
@@ -347,7 +347,7 @@ func TestBackupPolicyReconcilePVCRebindSwapsLvolID(t *testing.T) {
 		newLvolID   = "lvol-new"
 	)
 
-	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../../shared/openapi.json", false)
 	defer mock.Close()
 	mock.Register(http.MethodGet, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/",
 		webapimock.RouteResponse{Status: http.StatusOK, Body: backupPolicyListJSON(
@@ -364,7 +364,7 @@ func TestBackupPolicyReconcilePVCRebindSwapsLvolID(t *testing.T) {
 
 	policy := testBackupPolicyCR(policyName)
 	policy.Status.PolicyID = policyID
-	policy.Status.AttachedLvols = []simplyblockv1alpha1.AttachedLvol{lvol(namespace, pvcName, oldLvolID)}
+	policy.Status.AttachedLvols = []simplyblockv1alpha1.AttachedLvol{attachedLvol(namespace, pvcName, oldLvolID)}
 	pv, pvc := testBackupPolicyPVC(pvcName, pvName, policyName, clusterUUID, newLvolID, nil)
 
 	r := newBackupPolicyTestReconciler(t,
@@ -379,7 +379,7 @@ func TestBackupPolicyReconcilePVCRebindSwapsLvolID(t *testing.T) {
 	}
 
 	current := getBackupPolicy(t, r.Client, policy)
-	if len(current.Status.AttachedLvols) != 1 || current.Status.AttachedLvols[0] != lvol(namespace, pvcName, newLvolID) {
+	if len(current.Status.AttachedLvols) != 1 || current.Status.AttachedLvols[0] != attachedLvol(namespace, pvcName, newLvolID) {
 		t.Fatalf("expected attachment to move to %q, got %#v", newLvolID, current.Status.AttachedLvols)
 	}
 
@@ -394,8 +394,8 @@ func TestBackupPolicyReconcilePVCRebindSwapsLvolID(t *testing.T) {
 }
 
 func TestDiffAttachments_NoChange(t *testing.T) {
-	a := []simplyblockv1alpha1.AttachedLvol{lvol("ns", "pvc1", "lvol-aaa")}
-	b := []simplyblockv1alpha1.AttachedLvol{lvol("ns", "pvc1", "lvol-aaa")}
+	a := []simplyblockv1alpha1.AttachedLvol{attachedLvol("ns", "pvc1", "lvol-aaa")}
+	b := []simplyblockv1alpha1.AttachedLvol{attachedLvol("ns", "pvc1", "lvol-aaa")}
 	if got := diffAttachments(a, b); len(got) != 0 {
 		t.Fatalf("expected no diff, got %v", got)
 	}
@@ -403,10 +403,10 @@ func TestDiffAttachments_NoChange(t *testing.T) {
 
 func TestDiffAttachments_NewAttachment(t *testing.T) {
 	desired := []simplyblockv1alpha1.AttachedLvol{
-		lvol("ns", "pvc1", "lvol-aaa"),
-		lvol("ns", testPVC2Name, "lvol-bbb"),
+		attachedLvol("ns", "pvc1", "lvol-aaa"),
+		attachedLvol("ns", testPVC2Name, "lvol-bbb"),
 	}
-	current := []simplyblockv1alpha1.AttachedLvol{lvol("ns", "pvc1", "lvol-aaa")}
+	current := []simplyblockv1alpha1.AttachedLvol{attachedLvol("ns", "pvc1", "lvol-aaa")}
 	got := diffAttachments(desired, current)
 	if len(got) != 1 || got[0].PVCName != testPVC2Name {
 		t.Fatalf("expected %s to attach, got %v", testPVC2Name, got)
@@ -414,10 +414,10 @@ func TestDiffAttachments_NewAttachment(t *testing.T) {
 }
 
 func TestDiffAttachments_RemovedAttachment(t *testing.T) {
-	desired := []simplyblockv1alpha1.AttachedLvol{lvol("ns", "pvc1", "lvol-aaa")}
+	desired := []simplyblockv1alpha1.AttachedLvol{attachedLvol("ns", "pvc1", "lvol-aaa")}
 	current := []simplyblockv1alpha1.AttachedLvol{
-		lvol("ns", "pvc1", "lvol-aaa"),
-		lvol("ns", testPVC2Name, "lvol-bbb"),
+		attachedLvol("ns", "pvc1", "lvol-aaa"),
+		attachedLvol("ns", testPVC2Name, "lvol-bbb"),
 	}
 	got := diffAttachments(current, desired)
 	if len(got) != 1 || got[0].PVCName != testPVC2Name {
@@ -429,8 +429,8 @@ func TestDiffAttachments_RemovedAttachment(t *testing.T) {
 // a PVC rebound to a new lvol was invisible to the diff (same ns/name, different
 // lvolID). The old lvol must appear in toDetach and the new one in toAttach.
 func TestDiffAttachments_ReboundPVC(t *testing.T) {
-	desired := []simplyblockv1alpha1.AttachedLvol{lvol("ns", "pvc1", "lvol-new")}
-	current := []simplyblockv1alpha1.AttachedLvol{lvol("ns", "pvc1", "lvol-old")}
+	desired := []simplyblockv1alpha1.AttachedLvol{attachedLvol("ns", "pvc1", "lvol-new")}
+	current := []simplyblockv1alpha1.AttachedLvol{attachedLvol("ns", "pvc1", "lvol-old")}
 
 	toAttach := diffAttachments(desired, current)
 	toDetach := diffAttachments(current, desired)
@@ -445,22 +445,22 @@ func TestDiffAttachments_ReboundPVC(t *testing.T) {
 
 func TestRemoveAttachment(t *testing.T) {
 	slice := []simplyblockv1alpha1.AttachedLvol{
-		lvol("ns", "pvc1", "lvol-aaa"),
-		lvol("ns", testPVC2Name, "lvol-bbb"),
+		attachedLvol("ns", "pvc1", "lvol-aaa"),
+		attachedLvol("ns", testPVC2Name, "lvol-bbb"),
 	}
-	result := removeAttachment(slice, lvol("ns", "pvc1", "lvol-aaa"))
+	result := removeAttachment(slice, attachedLvol("ns", "pvc1", "lvol-aaa"))
 	if len(result) != 1 || result[0].PVCName != testPVC2Name {
 		t.Fatalf("expected only %s remaining, got %v", testPVC2Name, result)
 	}
 }
 
 // Removing by PVC key alone must not drop an entry that shares the name but has
-// a different lvolID (e.g. after a rebind, the new attachment must survive).
+// a different lvolID (e.g., after a rebind, the new attachment must survive).
 func TestRemoveAttachment_DoesNotMatchDifferentLvol(t *testing.T) {
 	slice := []simplyblockv1alpha1.AttachedLvol{
-		lvol("ns", "pvc1", "lvol-new"),
+		attachedLvol("ns", "pvc1", "lvol-new"),
 	}
-	result := removeAttachment(slice, lvol("ns", "pvc1", "lvol-old"))
+	result := removeAttachment(slice, attachedLvol("ns", "pvc1", "lvol-old"))
 	if len(result) != 1 {
 		t.Fatalf("expected new attachment to survive removal of old lvolID, got %v", result)
 	}

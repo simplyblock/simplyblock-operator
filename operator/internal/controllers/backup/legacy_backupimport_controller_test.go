@@ -6,7 +6,7 @@
 // transport, so the response shape is asserted nowhere else and a change to it
 // is invisible until a restore has nothing to read.
 
-package controller
+package backup
 
 import (
 	"context"
@@ -36,7 +36,7 @@ const exportDocument = `{"schema_version":1,"groups":[` +
 // bare handler, so a test keeps failing if the endpoint itself moves.
 func exportServer(t *testing.T, body string) *BackupImportReconciler {
 	t.Helper()
-	server := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
+	server := webapimock.NewSpecServerFromFile(t, "../../../../shared/openapi.json", false)
 	t.Cleanup(server.Close)
 	server.Register(http.MethodGet,
 		"/api/v2/clusters/"+exportTestCluster+"/backups/export",
