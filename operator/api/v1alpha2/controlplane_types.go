@@ -246,7 +246,14 @@ type LocalControlPlane struct {
 	// The block is defaulted to its own zero value rather than left absent, so
 	// that the field defaults inside it are applied to an object that does not
 	// mention TLS at all.
+	//
+	// It cannot change once the object exists. The database and every storage
+	// node are built with it, so turning TLS off on a live control plane leaves
+	// peers that still demand it and callers that no longer present anything.
+	// Changing it means recreating the control plane, which deletes the
+	// FoundationDB behind it.
 	// +kubebuilder:default={}
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="tls is immutable once the control plane exists"
 	// +optional
 	TLS ControlPlaneTLS `json:"tls,omitempty"`
 

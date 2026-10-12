@@ -108,29 +108,18 @@ Caller pipes through `nindent N` to land it inside a `volumeMounts:` list.
 {{- end -}}
 
 {{/*
-TLS-related env vars for sbcli containers. Caller pipes through `nindent N`
-to land them at the right column inside an `env:` list.
+The operator's TLS environment.
+
+It carries one thing: SB_TLS_PROVIDER, which selects where the admission
+webhooks' serving certificate comes from. The installation's own TLS is stated by
+the ControlPlane (spec.source.local.tls) and read from it, so nothing else about
+TLS is set here. The webhook certificate has to exist before the manager starts,
+which is before any ControlPlane can be read.
+Caller pipes through `nindent N`.
 */}}
 {{- define "simplyblock.tlsEnv" -}}
 {{- if .Values.tls.enabled }}
-- name: SB_TLS_SERVE
-  value: "1"
 - name: SB_TLS_PROVIDER
   value: {{ .Values.tls.provider | quote }}
-{{- end }}
-{{- if .Values.tls.mutual_enabled }}
-- name: SB_TLS_CLIENT_AUTH
-  value: "required"
-- name: SB_TLS_CONNECT
-  value: "authenticated"
-- name: FDB_TLS_CERTIFICATE_FILE
-  value: "/etc/simplyblock/tls/tls.crt"
-- name: FDB_TLS_KEY_FILE
-  value: "/etc/simplyblock/tls/tls.key"
-- name: FDB_TLS_CA_FILE
-  value: "/etc/simplyblock/tls/ca.crt"
-{{- else if .Values.tls.enabled }}
-- name: SB_TLS_CONNECT
-  value: "anonymous"
 {{- end }}
 {{- end -}}

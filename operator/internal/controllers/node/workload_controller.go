@@ -44,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -61,9 +62,11 @@ type StorageNodeWorkloadReconciler struct {
 	// singleton the default image comes from lives.
 	Namespace string
 
-	TLSEnabled       bool
-	TLSMutualEnabled bool
-	TLSProvider      string
+	// TLS answers what the installation's ControlPlane states, per reconcile.
+	// Nil is plaintext. It is read each time rather than once at startup, so a
+	// ControlPlane created after the operator started takes effect on the next
+	// pass.
+	TLS controlplane.TLSResolver
 
 	// Workload writes the per-node ConfigMap, which is the one object here whose
 	// contents come from the nodes rather than from the cluster.
@@ -318,8 +321,9 @@ func (r *StorageNodeWorkloadReconciler) reconcileDaemonSet(
 		return err
 	}
 
+	tls := r.TLS.Settings(ctx)
 	desired := utils.BuildStorageNodeDaemonSet(cluster,
-		r.TLSEnabled, r.TLSMutualEnabled, r.TLSProvider, secretVersion, image)
+		tls.Enabled, tls.Mutual, tls.Provider, secretVersion, image)
 	if err := controllerutil.SetControllerReference(cluster, desired, r.Scheme); err != nil {
 		return err
 	}
@@ -389,7 +393,7 @@ func (r *StorageNodeWorkloadReconciler) image(
 func (r *StorageNodeWorkloadReconciler) tlsSecretVersion(
 	ctx context.Context, namespace string,
 ) (string, error) {
-	if !r.TLSEnabled {
+	if !r.TLS.Settings(ctx).Enabled {
 		return "", nil
 	}
 	var secret corev1.Secret
@@ -408,9 +412,10 @@ func (r *StorageNodeWorkloadReconciler) tlsSecretVersion(
 func (r *StorageNodeWorkloadReconciler) reconcileService(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
+	tls := r.TLS.Settings(ctx)
 	for _, desired := range []*corev1.Service{
-		utils.BuildStorageNodeService(cluster, r.TLSEnabled, r.TLSProvider),
-		utils.BuildSpdkProxyService(cluster, r.TLSEnabled, r.TLSProvider),
+		utils.BuildStorageNodeService(cluster, tls.Enabled, tls.Provider),
+		utils.BuildSpdkProxyService(cluster, tls.Enabled, tls.Provider),
 	} {
 		if err := controllerutil.SetControllerReference(cluster, desired, r.Scheme); err != nil {
 			return err
@@ -536,7 +541,7 @@ func (r *StorageNodeWorkloadReconciler) reconcileRBAC(
 func (r *StorageNodeWorkloadReconciler) reconcileCertificates(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
-	if !r.TLSEnabled || !utils.IsCertManagerTLSProvider(r.TLSProvider) {
+	if tls := r.TLS.Settings(ctx); !tls.Enabled || !utils.IsCertManagerTLSProvider(tls.Provider) {
 		return nil
 	}
 
