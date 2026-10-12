@@ -173,7 +173,7 @@ func TestBackupRestoreEnsurePVIncludesCSIAttributes(t *testing.T) {
 func TestBackupRestoreFailsWhenBackupIsFailed(t *testing.T) {
 	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
 
-	cluster := testCluster("default", "mycluster", "cluster-uuid")
+	cluster := testCluster("mycluster", "cluster-uuid")
 	backup := &simplyblockv1alpha2.StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "backup-sample",
@@ -262,7 +262,7 @@ func TestResolveCrossClusterCredentialsLocalRestoreReturnsNil(t *testing.T) {
 func TestResolveCrossClusterCredentialsResolvesSourceClusterSecret(t *testing.T) {
 	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
 
-	sourceCluster := testCluster("default", "source-cluster", "source-uuid")
+	sourceCluster := testCluster("source-cluster", "source-uuid")
 	sourceCluster.Spec.Backup = &simplyblockv1alpha2.BackupStoreSpec{
 		CredentialsSecretRef: corev1.LocalObjectReference{Name: "source-backup-creds"},
 	}
@@ -322,7 +322,7 @@ func TestResolveCrossClusterCredentialsSourceClusterGone(t *testing.T) {
 
 func TestResolveCrossClusterCredentialsSourceClusterHasNoBackupConfig(t *testing.T) {
 	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
-	sourceCluster := testCluster("default", "source-cluster", "source-uuid")
+	sourceCluster := testCluster("source-cluster", "source-uuid")
 	k8sClient := newTestClient(t, scheme, nil, sourceCluster)
 	r := &BackupRestoreReconciler{Client: k8sClient, Scheme: scheme}
 
@@ -363,7 +363,7 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 func TestBackupRestoreGivesUpAfterRepeatedAttempts(t *testing.T) {
 	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
 
-	cluster := testCluster("default", "mycluster", "cluster-uuid")
+	cluster := testCluster("mycluster", "cluster-uuid")
 	restore := &simplyblockv1alpha1.BackupRestore{
 		ObjectMeta: metav1.ObjectMeta{Name: "restore-sample", Namespace: "default"},
 		Spec: simplyblockv1alpha1.BackupRestoreSpec{
@@ -422,7 +422,7 @@ func TestBackupRestoreGivesUpAfterRepeatedAttempts(t *testing.T) {
 func TestBackupRestoreAcceptsARestoreOnItsLastAttempt(t *testing.T) {
 	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
 
-	cluster := testCluster("default", "mycluster", "cluster-uuid")
+	cluster := testCluster("mycluster", "cluster-uuid")
 	restore := &simplyblockv1alpha1.BackupRestore{
 		ObjectMeta: metav1.ObjectMeta{Name: "restore-sample", Namespace: "default", UID: "restore-uid"},
 		Spec: simplyblockv1alpha1.BackupRestoreSpec{

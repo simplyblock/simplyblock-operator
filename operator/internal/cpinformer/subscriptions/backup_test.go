@@ -21,6 +21,8 @@ const (
 	backupID        = "44444444-4444-4444-4444-444444444444"
 	backupClusterCR = "production"
 	backupNamespace = "sb"
+	// backupSnapshotName is the name of the snapshot the request tests' backup was made of.
+	backupSnapshotName = "sbk-1"
 )
 
 func backupScope() cpinformer.Scope { return cpinformer.Scope{backupCluster} }
@@ -188,7 +190,7 @@ func TestBackupSubscriptionDropsABackupDeletedWithAnEmptyBody(t *testing.T) {
 func TestBackupSubscriptionFindsABackupBySnapshot(t *testing.T) {
 	s := adoptedBackupSubscription()
 	if err := s.Ingest(context.Background(), backupSnapshot(t,
-		BackupDTO{ID: backupID, SnapshotID: "snap-1", SnapshotName: "sbk-1", Status: "in_progress"})); err != nil {
+		BackupDTO{ID: backupID, SnapshotID: "snap-1", SnapshotName: backupSnapshotName, Status: "in_progress"})); err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
 
@@ -211,14 +213,14 @@ func TestBackupSubscriptionTriggersARequestBySnapshotName(t *testing.T) {
 	s := adoptedBackupSubscription()
 
 	if err := s.Ingest(context.Background(), backupSnapshot(t,
-		BackupDTO{ID: backupID, SnapshotID: "snap-1", SnapshotName: "sbk-1"})); err != nil {
+		BackupDTO{ID: backupID, SnapshotID: "snap-1", SnapshotName: backupSnapshotName})); err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
 
 	select {
 	case ev := <-s.SnapshotTriggers():
-		if ev.Object.GetName() != "sbk-1" {
-			t.Errorf("trigger named %q, want the snapshot's name %q", ev.Object.GetName(), "sbk-1")
+		if ev.Object.GetName() != backupSnapshotName {
+			t.Errorf("trigger named %q, want the snapshot's name %q", ev.Object.GetName(), backupSnapshotName)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no request trigger for a backup the stream reported")

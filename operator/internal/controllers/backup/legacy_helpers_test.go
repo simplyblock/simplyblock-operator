@@ -61,11 +61,13 @@ func newTestClient(
 	return builder.Build()
 }
 
-func testCluster(namespace, clusterName, uuid string) *simplyblockv1alpha2.StorageCluster {
+// testCluster is a StorageCluster in the default namespace, where the legacy
+// kinds' tests keep everything.
+func testCluster(clusterName, uuid string) *simplyblockv1alpha2.StorageCluster {
 	return &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      clusterName,
-			Namespace: namespace,
+			Namespace: testBackupPolicyNamespace,
 		},
 		Spec: simplyblockv1alpha2.StorageClusterSpec{},
 		Status: simplyblockv1alpha2.StorageClusterStatus{
