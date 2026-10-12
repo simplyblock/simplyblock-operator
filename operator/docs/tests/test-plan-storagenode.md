@@ -371,24 +371,29 @@ File: `operator/internal/controllers/node/pernodeconfig_test.go`
 ### Workload: Endpoints and Certificate Rotation (design §5.4)
 
 Files: `operator/internal/controllers/node/rotation_test.go`, `migrate_test.go`,
-`operator/internal/utils/storage_node_workload_test.go`
+`operator/internal/utils/storage_node_workload_test.go`, `dnsdomain_test.go`
 
-| #     | Scenario                                                                           | Type     | Test                                                       |
-|-------|------------------------------------------------------------------------------------|----------|------------------------------------------------------------|
-| U-95  | The per-pod address is built from the worker's hostname label and the namespace    | Positive | `TestStorageNodeSetAPIAddress`                             |
-| U-96  | The EndpointSlice check matches the address builder's output exactly               | Positive | `TestPreparingWaitsForTheNameToResolveAndNotOnlyForThePod` |
-| U-97  | A dotted worker hostname is truncated to a valid endpoint label                    | Boundary | `TestBuildSpdkProxyEndpointSlice_DottedNodeNameTruncates`  |
-| U-98  | Two workers whose first label segment collides: the build fails rather than merges | Negative | `TestBuildSpdkProxyEndpointSlice_CollidingFirstLabelFails` |
-| U-99  | SPDK proxy EndpointSlices are built from the running pods                          | Positive | —                                                          |
-| U-100 | Two pods sharing a first label segment: reported rather than silently merged       | Negative | —                                                          |
-| U-101 | The RPC port is read from the pod's environment, falling back to its name          | Boundary | —                                                          |
-| U-102 | The serving certificate's revision is stamped onto the pod template                | Positive | `TestARotatedCertificateRollsTheStoragePods`               |
-| U-103 | The certificate Secret rotates: the DaemonSet rolls                                | Positive | `TestARotatedCertificateRollsTheStoragePods`               |
-| U-104 | The TLS serving environment reaches the container                                  | Positive | —                                                          |
-| U-105 | A Secret that is not the storage-node-api certificate: the predicate ignores it    | Negative | —                                                          |
-| U-106 | The certificate Secret changes: every affected object in the namespace is enqueued | Positive | —                                                          |
-| U-107 | Certificates and Services are reconciled together for the cert-manager provider    | Positive | —                                                          |
-| U-314 | TLS disabled: nothing is stamped, so no pod is rolled by the absence               | Boundary | `TestWithoutTLSNothingIsStampedOnTheTemplate`              |
+| #     | Scenario                                                                           | Type       | Test                                                       |
+|-------|------------------------------------------------------------------------------------|------------|------------------------------------------------------------|
+| U-95  | The per-pod address is built from the worker's hostname label and the namespace    | Positive   | `TestStorageNodeSetAPIAddress`                             |
+| U-96  | The EndpointSlice check matches the address builder's output exactly               | Positive   | `TestPreparingWaitsForTheNameToResolveAndNotOnlyForThePod` |
+| U-97  | A dotted worker hostname is truncated to a valid endpoint label                    | Boundary   | `TestBuildSpdkProxyEndpointSlice_DottedNodeNameTruncates`  |
+| U-98  | Two workers whose first label segment collides: the build fails rather than merges | Negative   | `TestBuildSpdkProxyEndpointSlice_CollidingFirstLabelFails` |
+| U-99  | SPDK proxy EndpointSlices are built from the running pods                          | Positive   | —                                                          |
+| U-100 | Two pods sharing a first label segment: reported rather than silently merged       | Negative   | —                                                          |
+| U-101 | The RPC port is read from the pod's environment, falling back to its name          | Boundary   | —                                                          |
+| U-102 | The serving certificate's revision is stamped onto the pod template                | Positive   | `TestARotatedCertificateRollsTheStoragePods`               |
+| U-103 | The certificate Secret rotates: the DaemonSet rolls                                | Positive   | `TestARotatedCertificateRollsTheStoragePods`               |
+| U-104 | The TLS serving environment reaches the container                                  | Positive   | —                                                          |
+| U-105 | A Secret that is not the storage-node-api certificate: the predicate ignores it    | Negative   | —                                                          |
+| U-106 | The certificate Secret changes: every affected object in the namespace is enqueued | Positive   | —                                                          |
+| U-107 | Certificates and Services are reconciled together for the cert-manager provider    | Positive   | —                                                          |
+| U-314 | TLS disabled: nothing is stamped, so no pod is rolled by the absence               | Boundary   | `TestWithoutTLSNothingIsStampedOnTheTemplate`              |
+| U-522 | The per-pod address is under the cluster DNS domain, not `cluster.local`           | Regression | `TestTheStorageNodeAPIAddressFollowsTheClusterDNSDomain`   |
+| U-523 | The serving certificate names the service under the cluster DNS domain only        | Positive   | `TestTheServingCertificateNamesTheClusterDNSDomain`        |
+| U-524 | No domain configured: the cluster DNS domain is `cluster.local`                    | Boundary   | `TestTheClusterDNSDomainDefaultsToClusterLocal`            |
+| U-525 | A domain given with a trailing dot is stored without it                            | Boundary   | `TestATrailingDotIsDropped`                                |
+| U-526 | A value that is not a DNS subdomain is refused and leaves the domain unchanged     | Negative   | `TestANonDomainIsRefused`                                  |
 
 ### Operation: Lifecycle and Lock (design §7.1, §11)
 
@@ -1017,17 +1022,17 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 427       | 322     | 105         |
+| Unit        | 432       | 327     | 105         |
 | Integration | 54        | 0       | 54          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **512**   | **322** | **190**     |
+| **Total**   | **517**   | **327** | **190**     |
 
 Eight further scenarios are struck through: they describe a system this one no
 longer is, and each names the row that replaced it. They are excluded from the
 counts.
 
-Two hundred and forty-two distinct test functions cover the three hundred and twenty-two
+Two hundred and forty-seven distinct test functions cover the three hundred and twenty-seven
 covered scenarios, because a table-driven test satisfies one identifier per
 subtest and several rows are two halves of one assertion.
 

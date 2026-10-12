@@ -203,6 +203,16 @@ Files: `operator/api/v1alpha2/controlplane_tls_test.go`,
 | U-170 | No peer certificate is issued without peer TLS                                   | Negative   | `TestNoPeerCertificateWithoutPeerTLS`                      |
 | U-171 | Every workload holding the cluster file can open a TLS database                  | Regression | `TestEveryHolderOfTheClusterFileCanReachATLSDatabase`      |
 
+### The Cluster DNS Domain
+
+File: `operator/internal/controllers/controlplane/dnsdomain_test.go`
+
+| #     | Scenario                                                                          | Type       | Test                                                          |
+|-------|-----------------------------------------------------------------------------------|------------|---------------------------------------------------------------|
+| U-519 | The database names its coordinators under the cluster DNS domain, not the default | Regression | `TestTheDatabaseNamesItsCoordinatorsUnderTheClusterDNSDomain` |
+| U-520 | The management API endpoint is under the cluster DNS domain                       | Positive   | `TestTheManagementAPIEndpointIsUnderTheClusterDNSDomain`      |
+| U-521 | The peer certificate names the database's pods under the cluster DNS domain       | Positive   | `TestThePeerCertificateNamesTheClusterDNSDomain`              |
+
 ### Deletion (design §4.4)
 
 | #    | Scenario                                                                       | Type     | Test |
@@ -403,11 +413,11 @@ forever, and that its message names the coordinator rather than the operator.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 166       | 39      | 127         |
+| Unit        | 169       | 42      | 127         |
 | Integration | 38        | 0       | 38          |
 | E2E         | 17        | 0       | 17          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **224**   | **39**  | **185**     |
+| **Total**   | **227**   | **42**  | **185**     |
 
 Every covered row is a unit test in `operator/internal/controllers/controlplane/`.
 Nothing at the integration or end-to-end level asserts anything about either kind,
