@@ -706,7 +706,18 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupPolicy")
 		os.Exit(1)
 	}
-	if err := (&backupcontrollers.StorageBackupOpsReconciler{
+	// An operation stored with string references cannot be decoded, and a cache
+	// that cannot list it never syncs, which would exit the whole manager. The
+	// controller is skipped instead, and the rest of the operator runs.
+	legacyOps, err := backupcontrollers.LegacyBackupOps(context.Background(), mgr.GetAPIReader())
+	if err != nil {
+		setupLog.Error(err, "unable to check for StorageBackupOps in the old format; starting the controller anyway")
+	}
+	if len(legacyOps) > 0 {
+		setupLog.Error(nil, "StorageBackupOps controller not started: these operations use the old string "+
+			"spec.backupRef and spec.clusterRef. Delete them and restart the operator",
+			"operations", legacyOps)
+	} else if err := (&backupcontrollers.StorageBackupOpsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagebackupops-controller"),
