@@ -90,7 +90,7 @@ func SetupCertificate(mgr ctrl.Manager, namespace, certDir string) (chan struct{
 		CAName:                 "simplyblock-operator-metrics-apiserver-ca",
 		CAOrganization:         "simplyblock.io",
 		DNSName:                dnsName,
-		ExtraDNSNames:          []string{dnsName + ".cluster.local"},
+		ExtraDNSNames:          []string{dnsName + "." + utils.ClusterDNSDomain()},
 		IsReady:                ready,
 		Webhooks:               apiServiceRotationTargets(),
 		RestartOnSecretRefresh: true,

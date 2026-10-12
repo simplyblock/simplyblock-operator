@@ -30,6 +30,7 @@ import (
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/tlsutil"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // The keys a credentials Secret may carry. Two are accepted because the two
@@ -55,8 +56,8 @@ func localEndpoint(cp *simplyblockv1alpha2.ControlPlane) string {
 	if cp.Spec.Source.Local.ServesTLS() {
 		scheme = "https"
 	}
-	return fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d",
-		scheme, ComponentWebAPI, cp.Namespace, webAPIPort)
+	return fmt.Sprintf("%s://%s:%d",
+		scheme, utils.ServiceFQDN(ComponentWebAPI, cp.Namespace), webAPIPort)
 }
 
 // localAccess is where an installed control plane answers and what to reach it

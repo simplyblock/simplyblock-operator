@@ -542,7 +542,7 @@ func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 // the cluster control-plane uses to reach a storage-node-api pod backing the
 // given worker node.
 func StorageNodeSetAPIAddress(workerNode, namespace string) string {
-	return fmt.Sprintf("%s.simplyblock-storage-node-api.%s.svc.cluster.local:5000", NodeHostnameLabel(workerNode), namespace)
+	return fmt.Sprintf("%s.%s:5000", NodeHostnameLabel(workerNode), ServiceFQDN(kube.StorageNodeSetAPIServiceName, namespace))
 }
 
 func BuildStorageNodeService(sn *simplyblockv1alpha2.StorageCluster, tlsEnabled bool, tlsProvider string) *corev1.Service {

@@ -2,7 +2,7 @@
 //
 // A storage node's SPDK process answers RPC on its own port, and the control
 // plane reaches it at
-// <worker>.simplyblock-spdk-proxy.<namespace>.svc.cluster.local:<rpc port>.
+// <worker>.simplyblock-spdk-proxy.<namespace>.svc.<cluster DNS domain>:<rpc port>.
 // That name is a headless Service plus one EndpointSlice per port, each endpoint
 // carrying the worker's name as its hostname -- the Service on its own resolves
 // nothing.

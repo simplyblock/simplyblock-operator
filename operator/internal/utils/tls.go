@@ -51,8 +51,8 @@ func BuildServiceServingCertificate(namespace, serviceName, secretName string) *
 		serviceName,
 		fmt.Sprintf("%s.%s", serviceName, namespace),
 		fmt.Sprintf("%s.%s.svc", serviceName, namespace),
-		fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, namespace),
-		fmt.Sprintf("*.%s.%s.svc.cluster.local", serviceName, namespace),
+		ServiceFQDN(serviceName, namespace),
+		"*." + ServiceFQDN(serviceName, namespace),
 	}
 
 	return &unstructured.Unstructured{

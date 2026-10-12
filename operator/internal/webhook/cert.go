@@ -84,7 +84,7 @@ func SetupWebhookCertificate(mgr ctrl.Manager, namespace, tlsProvider string) (c
 		CAName:                 "simplyblock-operator-webhook-ca",
 		CAOrganization:         "simplyblock.io",
 		DNSName:                dnsName,
-		ExtraDNSNames:          []string{dnsName + ".cluster.local"},
+		ExtraDNSNames:          []string{dnsName + "." + utils.ClusterDNSDomain()},
 		IsReady:                ready,
 		Webhooks:               webhooks,
 		RestartOnSecretRefresh: true,

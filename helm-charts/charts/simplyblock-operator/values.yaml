@@ -2,6 +2,13 @@
 # Copyright (c) Arm Limited and Contributors
 # Copyright (c) Intel Corporation
 ---
+# The cluster's DNS domain: the suffix after <service>.<namespace>.svc. Change
+# it only on a cluster set up with a domain other than cluster.local. Every
+# in-cluster address and certificate name the operator and this chart build
+# uses it, and so does the FoundationDB cluster file, whose coordinators do not
+# resolve under the wrong domain.
+clusterDnsDomain: cluster.local
+
 image:
   csiSnapshotterController:
     repository: quay.io/simplyblock-io/snapshot-controller

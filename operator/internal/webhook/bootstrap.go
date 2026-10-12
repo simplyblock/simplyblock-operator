@@ -295,8 +295,9 @@ type servingMaterial struct {
 
 // issueSelfSignedMaterial mints a CA and a serving certificate for dnsName.
 //
-// The certificate carries the in-cluster service name and its .cluster.local
-// form, which are the names the API server dials the conversion webhook by.
+// The certificate carries the in-cluster service name and its fully qualified
+// form under the cluster DNS domain, which are the names the API server dials
+// the conversion webhook by.
 func issueSelfSignedMaterial(dnsName string) (*servingMaterial, error) {
 	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -329,7 +330,7 @@ func issueSelfSignedMaterial(dnsName string) (*servingMaterial, error) {
 	servingTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(now.UnixNano() + 1),
 		Subject:      pkix.Name{CommonName: dnsName},
-		DNSNames:     []string{dnsName, dnsName + ".cluster.local"},
+		DNSNames:     []string{dnsName, dnsName + "." + utils.ClusterDNSDomain()},
 		NotBefore:    now.Add(-time.Hour),
 		NotAfter:     now.Add(bootstrapCertDuration),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,

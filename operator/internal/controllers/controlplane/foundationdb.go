@@ -445,7 +445,14 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 				"storage": classTemplate("storage"),
 				"log":     classTemplate("log"),
 			},
-			"routing":          map[string]any{"defineDNSLocalityFields": true},
+			// The FoundationDB operator writes coordinator hostnames under
+			// dnsDomain into the cluster file and defaults it to cluster.local.
+			// On any other cluster domain no coordinator resolves, and the
+			// FoundationDB operator's own client crashes trying to reach them.
+			"routing": map[string]any{
+				"defineDNSLocalityFields": true,
+				"dnsDomain":               utils.ClusterDNSDomain(),
+			},
 			"mainContainer":    mainContainerSpec(peerTLS),
 			"sidecarContainer": sidecarContainerSpec(peerTLS),
 		},

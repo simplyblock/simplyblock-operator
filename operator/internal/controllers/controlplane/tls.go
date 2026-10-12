@@ -280,8 +280,8 @@ func fdbPeerCertificate(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 		ComponentFDBCluster,
 		fmt.Sprintf("%s.%s", ComponentFDBCluster, cp.Namespace),
 		fmt.Sprintf("%s.%s.svc", ComponentFDBCluster, cp.Namespace),
-		fmt.Sprintf("%s.%s.svc.cluster.local", ComponentFDBCluster, cp.Namespace),
-		fmt.Sprintf("*.%s.%s.svc.cluster.local", ComponentFDBCluster, cp.Namespace),
+		utils.ServiceFQDN(ComponentFDBCluster, cp.Namespace),
+		"*." + utils.ServiceFQDN(ComponentFDBCluster, cp.Namespace),
 	}
 
 	certificate := &unstructured.Unstructured{Object: map[string]any{
