@@ -649,10 +649,10 @@ spec:
                         type: integer
                       preferredNode:
                         description: |-
-                          PreferredNode is the Kubernetes node whose storage node continues alone
-                          when neither the control plane nor the peer is reachable. Empty leaves the
-                          choice to the arbiter.
-                        maxLength: 253
+                          Deprecated: ignored. The arbiter has no preferred node: at the hold
+                          deadline a node that has no grant always fences itself, and a full
+                          partition fences both nodes. The field is still accepted so that stored
+                          objects that set it stay valid; nothing reads it.
                         type: string
                     type: object
                     x-kubernetes-validations:

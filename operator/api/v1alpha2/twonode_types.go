@@ -30,11 +30,11 @@ type TwoNodeSpec struct {
 	// +optional
 	Arbitration bool `json:"arbitration,omitempty"`
 
-	// PreferredNode is the Kubernetes node whose storage node continues alone
-	// when neither the control plane nor the peer is reachable. Empty leaves the
-	// choice to the arbiter.
+	// Deprecated: ignored. The arbiter has no preferred node: at the hold
+	// deadline a node that has no grant always fences itself, and a full
+	// partition fences both nodes. The field is still accepted so that stored
+	// objects that set it stay valid; nothing reads it.
 	// +optional
-	// +kubebuilder:validation:MaxLength=253
 	PreferredNode string `json:"preferredNode,omitempty"`
 
 	// HoldMs is how long a node holds writes after losing its peer before it
@@ -70,10 +70,6 @@ type ArbitrationStatus struct {
 	// on the arbiter's request.
 	// +optional
 	FencedNodes []string `json:"fencedNodes,omitempty"`
-
-	// PreferredNode is the Kubernetes node the arbiter treats as preferred.
-	// +optional
-	PreferredNode string `json:"preferredNode,omitempty"`
 
 	// ObservedAt is when the operator last read the arbiter's record.
 	// +optional

@@ -22,7 +22,6 @@ const ns = "simplyblock"
 type fakeAPI struct {
 	rec       *Record
 	err       error
-	preferred string
 	reports   []string // "<node>=<fenced>" per ReportFencing call
 	reportErr error
 }
@@ -43,15 +42,10 @@ func (f *fakeAPI) Get(context.Context, *simplyblockv1alpha2.StorageCluster) (*Re
 	return f.rec, f.err
 }
 
-func (f *fakeAPI) SetPreferred(_ context.Context, _ *simplyblockv1alpha2.StorageCluster, id string) error {
-	f.preferred = id
-	return nil
-}
-
 func setup(t *testing.T, api *fakeAPI, extraTaint *corev1.Taint) (*ArbitrationReconciler, client.Client) {
 	t.Helper()
 	cluster := testsupport.Cluster(ns, "edge", "c-uuid")
-	cluster.Spec.TwoNode = &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true, PreferredNode: "worker-a"}
+	cluster.Spec.TwoNode = &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true}
 	objs := make([]client.Object, 0, 5)
 	objs = append(objs, cluster)
 	for _, w := range []struct{ sn, worker, id string }{{"sn-a", "worker-a", "id-a"}, {"sn-b", "worker-b", "id-b"}} {
@@ -98,7 +92,7 @@ func fencedTaint(t *testing.T, c client.Client, worker string) *corev1.Taint {
 }
 
 func TestVerdictTaintsTheFencedNode(t *testing.T) {
-	api := &fakeAPI{rec: &Record{State: "partitioned", Epoch: 8, PreferredNode: "id-a", FencedNodes: []string{"id-b"}}}
+	api := &fakeAPI{rec: &Record{State: "partitioned", Epoch: 8, FencedNodes: []string{"id-b"}}}
 	r, c := setup(t, api, nil)
 	if res := reconcile(t, r); res.RequeueAfter != requeueActive {
 		t.Fatalf("requeue %v", res.RequeueAfter)
@@ -123,13 +117,13 @@ func TestVerdictTaintsTheFencedNode(t *testing.T) {
 }
 
 func TestTaintStaysThroughHealingAndLeavesWhenSteady(t *testing.T) {
-	api := &fakeAPI{rec: &Record{State: "healing", Epoch: 9, PreferredNode: "id-a", FencedNodes: []string{"id-b"}}}
+	api := &fakeAPI{rec: &Record{State: "healing", Epoch: 9, FencedNodes: []string{"id-b"}}}
 	r, c := setup(t, api, nil)
 	reconcile(t, r)
 	if fencedTaint(t, c, "worker-b") == nil {
 		t.Fatal("healing must keep the taint")
 	}
-	api.rec = &Record{State: "steady", Epoch: 9, PreferredNode: "id-a"}
+	api.rec = &Record{State: "steady", Epoch: 9}
 	if res := reconcile(t, r); res.RequeueAfter != requeueSteady {
 		t.Fatalf("requeue %v", res.RequeueAfter)
 	}
@@ -139,7 +133,7 @@ func TestTaintStaysThroughHealingAndLeavesWhenSteady(t *testing.T) {
 }
 
 func TestIdempotent(t *testing.T) {
-	api := &fakeAPI{rec: &Record{State: "partitioned", Epoch: 8, PreferredNode: "id-a", FencedNodes: []string{"id-b"}}}
+	api := &fakeAPI{rec: &Record{State: "partitioned", Epoch: 8, FencedNodes: []string{"id-b"}}}
 	r, c := setup(t, api, nil)
 	reconcile(t, r)
 	var before corev1.Node
@@ -165,7 +159,7 @@ func TestControlPlaneUnreachableChangesNothing(t *testing.T) {
 
 func TestOutOfServiceIsReportedNeverSet(t *testing.T) {
 	oos := &corev1.Taint{Key: simplyblockv1alpha2.TaintOutOfService, Value: "nodeshutdown", Effect: corev1.TaintEffectNoExecute}
-	api := &fakeAPI{rec: &Record{State: "steady", Epoch: 3, PreferredNode: "id-a"}}
+	api := &fakeAPI{rec: &Record{State: "steady", Epoch: 3}}
 	r, c := setup(t, api, oos)
 	reconcile(t, r)
 	var sn simplyblockv1alpha2.StorageNode
@@ -182,12 +176,32 @@ func TestOutOfServiceIsReportedNeverSet(t *testing.T) {
 	}
 }
 
-func TestPreferredNodeIsPushed(t *testing.T) {
-	api := &fakeAPI{rec: &Record{State: "steady", Epoch: 1, PreferredNode: "id-b"}}
-	r, _ := setup(t, api, nil)
-	reconcile(t, r)
-	if api.preferred != "id-a" {
-		t.Fatalf("preferred %q", api.preferred)
+// TestDeprecatedPreferredNodeIsIgnored: the arbiter has no preferred node. A
+// spec that still sets the deprecated field reconciles exactly like one that
+// does not, and the controller makes no call to the control plane for it (the
+// only calls it may make are Get and ReportFencing; the API interface has no
+// preferred-node method any more).
+func TestDeprecatedPreferredNodeIsIgnored(t *testing.T) {
+	for _, preferred := range []string{"", "worker-a", "worker-b"} {
+		api := &fakeAPI{rec: &Record{State: "partitioned", Epoch: 8, FencedNodes: []string{"id-b"}}}
+		r, c := setup(t, api, nil)
+		var cl simplyblockv1alpha2.StorageCluster
+		_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "edge"}, &cl)
+		cl.Spec.TwoNode.PreferredNode = preferred //nolint:staticcheck // deprecated field must stay ignored
+		if err := c.Update(context.Background(), &cl); err != nil {
+			t.Fatal(err)
+		}
+		reconcile(t, r)
+		if tb := fencedTaint(t, c, "worker-b"); tb == nil || tb.Value != "8" {
+			t.Fatalf("preferredNode=%q: the arbiter's fence must be applied regardless: %+v", preferred, tb)
+		}
+		if tb := fencedTaint(t, c, "worker-a"); tb != nil {
+			t.Fatalf("preferredNode=%q: worker-a must not be fenced: %+v", preferred, tb)
+		}
+		_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "edge"}, &cl)
+		if st := cl.Status.Arbitration; st == nil || st.State != "partitioned" || len(st.FencedNodes) != 1 || st.FencedNodes[0] != "worker-b" {
+			t.Fatalf("preferredNode=%q: status %+v", preferred, cl.Status.Arbitration)
+		}
 	}
 }
 
@@ -208,7 +222,7 @@ func TestArbitrationOffRemovesTaints(t *testing.T) {
 
 func TestFencingEvidenceIsReportedOnChangeOnly(t *testing.T) {
 	oos := &corev1.Taint{Key: simplyblockv1alpha2.TaintOutOfService, Value: "nodeshutdown", Effect: corev1.TaintEffectNoExecute}
-	api := &fakeAPI{rec: &Record{State: "degraded", Epoch: 4, PreferredNode: "id-a"}}
+	api := &fakeAPI{rec: &Record{State: "degraded", Epoch: 4}}
 	r, _ := setup(t, api, oos)
 	reconcile(t, r)
 	if !testsupport.Contains(api.reports, "id-b=true") || !testsupport.Contains(api.reports, "id-a=false") {
@@ -223,7 +237,7 @@ func TestFencingEvidenceIsReportedOnChangeOnly(t *testing.T) {
 
 func TestFailedFencingReportIsRetried(t *testing.T) {
 	oos := &corev1.Taint{Key: simplyblockv1alpha2.TaintOutOfService, Value: "nodeshutdown", Effect: corev1.TaintEffectNoExecute}
-	api := &fakeAPI{rec: &Record{State: "degraded", Epoch: 4, PreferredNode: "id-a"}, reportErr: errors.New("503")}
+	api := &fakeAPI{rec: &Record{State: "degraded", Epoch: 4}, reportErr: errors.New("503")}
 	r, c := setup(t, api, oos)
 	reconcile(t, r)
 	var sn simplyblockv1alpha2.StorageNode

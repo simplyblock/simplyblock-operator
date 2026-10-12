@@ -1,7 +1,7 @@
 // Package twonode applies the two-node arbiter's verdicts on the edge: the
 // storage-fenced taint on the Kubernetes node of a storage node the arbiter
-// fenced, its removal once the cluster is steady again, the preferred node, and
-// the remediation evidence the arbiter reads back
+// fenced, its removal once the cluster is steady again, and the remediation
+// evidence the arbiter reads back
 // (sbcli docs/design/two-node-arbitration.md §8, §9).
 //
 // The operator only follows the control plane: it never decides a verdict, and
@@ -23,20 +23,19 @@ import (
 )
 
 // Record is what the operator needs from the arbiter's ClusterArbitration
-// record (§7.2): state, epoch, preferred node and the control-plane ids of the
-// storage nodes it holds fenced.
+// record (§7.2): state, epoch and the control-plane ids of the storage nodes it
+// holds fenced. The arbiter has no preferred node; a record that still carries
+// one is read without it.
 type Record struct {
-	State         string
-	Epoch         int64
-	PreferredNode string
-	FencedNodes   []string
+	State       string
+	Epoch       int64
+	FencedNodes []string
 }
 
 // API is the operator's view of the control plane's arbitration endpoints
 // (§7.4). Get returns nil, nil when the control plane holds no record yet.
 type API interface {
 	Get(ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster) (*Record, error)
-	SetPreferred(ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, nodeUUID string) error
 	// ReportFencing sends positive fencing evidence for a node, or clears it
 	// (PUT .../arbitration/remediation).
 	ReportFencing(ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, nodeUUID string, fenced bool) error
@@ -114,15 +113,6 @@ func (r *ArbitrationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			byUUID[n.Status.UUID] = n.Spec.WorkerNode
 		}
 	}
-	if want := cluster.Spec.TwoNode.PreferredNode; want != "" {
-		for _, n := range nodes {
-			if n.Spec.WorkerNode == want && n.Status.UUID != "" && n.Status.UUID != rec.PreferredNode {
-				if err := r.API.SetPreferred(ctx, &cluster, n.Status.UUID); err != nil {
-					log.Info("could not set the preferred node", "error", err.Error())
-				}
-			}
-		}
-	}
 
 	// taint_requests is the arbiter's list: kept through healing, cleared once
 	// the cluster is steady again.
@@ -140,7 +130,7 @@ func (r *ArbitrationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	st := &simplyblockv1alpha2.ArbitrationStatus{State: rec.State, Epoch: rec.Epoch,
-		PreferredNode: byUUID[rec.PreferredNode], FencedNodes: sortedKeys(fenced)}
+		FencedNodes: sortedKeys(fenced)}
 	if err := r.setStatus(ctx, &cluster, st); err != nil {
 		return ctrl.Result{}, err
 	}

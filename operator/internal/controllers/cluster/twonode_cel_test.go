@@ -24,7 +24,11 @@ func TestStorageClusterCELValidatesTwoNode(t *testing.T) {
 		wantDenied string
 	}{
 		{name: "unset"},
-		{name: "arbitration with defaults", twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true, PreferredNode: "worker-a"}},
+		{name: "arbitration with defaults", twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true}},
+		// preferredNode is deprecated and ignored, but a spec that still
+		// carries it must stay valid, with any value.
+		{name: "deprecated preferredNode accepted", twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true,
+			PreferredNode: "worker-a"}}, //nolint:staticcheck // deprecated field must stay accepted
 		{name: "lease shorter than hold", twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true,
 			HoldMs: ptr.To(int32(2500)), LeaseTtlMs: ptr.To(int32(1500))}},
 		{name: "lease not shorter than hold", twoNode: &simplyblockv1alpha2.TwoNodeSpec{Arbitration: true,
