@@ -76,8 +76,13 @@ func (r *StoragePoolReconciler) reconcileDeletion(
 	if !controllerutil.ContainsFinalizer(p, FinalizerStoragePool) {
 		return ctrl.Result{}, nil
 	}
-	if r.VolumeScopes != nil && clusterUUID != "" && p.Status.UUID != "" {
-		r.VolumeScopes.Remove(cpinformer.Scope{clusterUUID, p.Status.UUID})
+	if clusterUUID != "" && p.Status.UUID != "" {
+		if r.VolumeScopes != nil {
+			r.VolumeScopes.Remove(cpinformer.Scope{clusterUUID, p.Status.UUID})
+		}
+		if r.SnapshotScopes != nil {
+			r.SnapshotScopes.Remove(cpinformer.Scope{clusterUUID, p.Status.UUID})
+		}
 	}
 
 	classes, _, err := AssignedClasses(ctx, r.Client, p)

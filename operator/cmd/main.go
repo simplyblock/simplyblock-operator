@@ -466,6 +466,11 @@ func main() {
 	// that opens it is also what registers the namespace its objects belong in.
 	backupSubscription := subscriptions.NewBackupSubscription()
 	backupScopes := cpSubscriptions.AddSubscription(backupSubscription)
+	// A backup request snapshots a volume and follows the snapshot and then the
+	// copy, so it reads the snapshot stream too. That one is per pool, and the
+	// pool's controller opens it.
+	snapshotSubscription := subscriptions.NewSnapshotSubscription()
+	snapshotScopes := cpSubscriptions.AddSubscription(snapshotSubscription)
 	backupPolicySubscription := subscriptions.NewBackupPolicySubscription()
 	backupPolicyScopes := cpSubscriptions.AddSubscription(backupPolicySubscription)
 	// How full a node is exists only in the metrics the control plane exports,
@@ -646,6 +651,7 @@ func main() {
 		Scheme:           mgr.GetScheme(),
 		Recorder:         mgr.GetEventRecorder("storagepool-controller"),
 		VolumeScopes:     volumeScopes,
+		SnapshotScopes:   snapshotScopes,
 		EndpointResolver: controlPlaneEndpoint,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StoragePool")
@@ -689,10 +695,12 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&backupcontrollers.StorageBackupRequestReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("storagebackuprequest-controller"),
-		API:      backupAPI,
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorder("storagebackuprequest-controller"),
+		API:       backupAPI,
+		Snapshots: snapshotSubscription,
+		Backups:   backupSubscription,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupRequest")
 		os.Exit(1)
@@ -726,7 +734,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupOps")
 		os.Exit(1)
 	}
-	if err := (&controller.BackupRestoreReconciler{
+	if err := (&backupcontrollers.BackupRestoreReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("backuprestore-controller"),
@@ -734,7 +742,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupRestore")
 		os.Exit(1)
 	}
-	if err := (&controller.BackupPolicyReconciler{
+	if err := (&backupcontrollers.BackupPolicyReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("backuppolicy-controller"),
@@ -742,7 +750,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupPolicy")
 		os.Exit(1)
 	}
-	if err := (&controller.BackupImportReconciler{
+	if err := (&backupcontrollers.BackupImportReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("backupimport-controller"),
