@@ -154,11 +154,11 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 	} else {
 		stripe, topology, note := stripeFor(plan, propose)
 		out.Template.Stripe = stripe
-		if topology.SingleNode {
-			out.Template.SingleNode = ptr.To(true)
-		}
-		if topology.TwoNode {
-			out.Template.TwoNode = &simplyblockv1alpha2.TwoNodeSpec{}
+		switch {
+		case topology.SingleNode:
+			out.Template.ClusterMode = simplyblockv1alpha2.ClusterModeSingle
+		case topology.TwoNode:
+			out.Template.ClusterMode = simplyblockv1alpha2.ClusterModeDual
 		}
 		out.Notes = append(out.Notes, note)
 	}
@@ -245,8 +245,8 @@ func enabled(on bool) string {
 // against a workload this run knows nothing about, so the note names the
 // alternatives rather than picking one.
 //
-// A fleet of one worker is proposed as a single-node cluster (singleNode), and
-// a fleet of exactly two as a two-node cluster (twoNode) running 1+1: without
+// A fleet of one worker is proposed as a single-node cluster (clusterMode
+// Single), and a fleet of exactly two as a two-node cluster (clusterMode Dual) running 1+1: without
 // the declaration neither carries anything redundant, and the stripe a cluster
 // is created with is the one it keeps. A single node places each chunk of a
 // stripe on its own device, so its scheme follows from the devices the worker
@@ -275,10 +275,10 @@ func stripeFor(plan Plan, journalDevice bool) (*simplyblockv1alpha2.StripeSpec, 
 		scheme = erasurecoding.Scheme{DataChunks: 1, ParityChunks: 1}
 		topology.TwoNode = true
 		note = fmt.Sprintf(
-			"stripe is %s as a two-node cluster (twoNode): one copy on each of the two "+
+			"stripe is %s as a two-node cluster (clusterMode Dual): one copy on each of the two "+
 				"workers, so the cluster survives the loss of either; data migration after a "+
-				"failure runs in relaxed placement, so it needs no third node. Without twoNode "+
-				"every redundant scheme needs at least three storage nodes. A cluster's stripe "+
+				"failure runs in relaxed placement, so it needs no third node. Outside clusterMode "+
+				"Dual every redundant scheme needs at least three storage nodes. A cluster's stripe "+
 				"cannot be changed afterward", scheme)
 	case nodes < 3:
 		scheme = erasurecoding.Scheme{DataChunks: 1, ParityChunks: 0}
@@ -315,7 +315,7 @@ func dataDevices(plan Plan, journalDevice bool) int {
 func singleNodeStripeNote(scheme erasurecoding.Scheme, devices int) string {
 	if scheme.ParityChunks == 0 {
 		return fmt.Sprintf(
-			"stripe is %s as a single-node cluster (singleNode), which protects nothing: "+
+			"stripe is %s as a single-node cluster (clusterMode Single), which protects nothing: "+
 				"the worker hands over %d %s for data, and a redundant scheme places each "+
 				"chunk of a stripe on its own device, so 1+1 needs two. A cluster's stripe "+
 				"cannot be changed afterward",
@@ -336,11 +336,11 @@ func singleNodeStripeNote(scheme erasurecoding.Scheme, devices int) string {
 			strings.Join(alternatives, ", "))
 	}
 	return fmt.Sprintf(
-		"stripe is %s as a single-node cluster (singleNode): each chunk of a stripe lands "+
+		"stripe is %s as a single-node cluster (clusterMode Single): each chunk of a stripe lands "+
 			"on its own device of the one worker, which hands over %d for data, so the "+
 			"cluster survives %d device %s but not the loss of the worker; data migration "+
 			"after a device failure runs in relaxed placement on the same node.%s A cluster "+
-			"meant to grow to more workers drops singleNode and states the stripe of the "+
+			"meant to grow to more workers is not created as Single and states the stripe of the "+
 			"fleet it will have. A cluster's stripe cannot be changed afterward",
 		scheme, devices, scheme.ParityChunks, plural(scheme.ParityChunks, "failure", "failures"), also)
 }
@@ -353,7 +353,7 @@ func stripeNote(scheme erasurecoding.Scheme, nodes int) string {
 			"stripe is %s, which protects nothing: every redundant scheme needs at least "+
 				"three storage nodes and this fleet has %d, so a third worker is what makes "+
 				"1+1 possible; a fleet of exactly two can instead run 1+1 as a two-node "+
-				"cluster (spec.cluster.twoNode). A cluster's stripe cannot be changed afterward",
+				"cluster (spec.cluster.clusterMode Dual). A cluster's stripe cannot be changed afterward",
 			scheme, nodes)
 	}
 

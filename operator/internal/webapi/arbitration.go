@@ -9,14 +9,15 @@ import (
 
 // ClusterArbitration is the two-node arbiter's record of a cluster, as the
 // control plane serves it on GET /api/v2/clusters/{id}/arbitration
-// (sbcli docs/design/two-node-arbitration.md §7.2, §7.4).
+// (sbcli docs/design/two-node-arbitration.md §7.2, §7.4). The arbiter has no
+// preferred node any more; an older control plane may still send
+// preferred_node, which is ignored like every other unknown field.
 type ClusterArbitration struct {
-	ClusterID     string                 `json:"cluster_id"`
-	Epoch         int64                  `json:"epoch"`
-	State         string                 `json:"state"`
-	PreferredNode string                 `json:"preferred_node"`
-	LVS           []ArbitrationLVS       `json:"lvs"`
-	Leases        map[string]interface{} `json:"leases,omitempty"`
+	ClusterID string                 `json:"cluster_id"`
+	Epoch     int64                  `json:"epoch"`
+	State     string                 `json:"state"`
+	LVS       []ArbitrationLVS       `json:"lvs"`
+	Leases    map[string]interface{} `json:"leases,omitempty"`
 	// TaintRequests are the node ids the arbiter asks the operator to taint
 	// as storage-fenced; it clears the list once healing is done.
 	TaintRequests []string `json:"taint_requests"`
@@ -84,23 +85,9 @@ func (c *Client) GetClusterArbitration(ctx context.Context, clusterUUID string) 
 	return &rec, nil
 }
 
-// SetArbitrationPreferredNode tells the arbiter which storage node is the
-// preferred one.
-func (c *Client) SetArbitrationPreferredNode(ctx context.Context, clusterUUID, nodeUUID string) error {
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/arbitration/preferred", clusterUUID)
-	body, status, err := c.Do(ctx, http.MethodPut, endpoint, map[string]string{"node_id": nodeUUID})
-	if err != nil {
-		return fmt.Errorf("set preferred node for cluster %s: %w", clusterUUID, err)
-	}
-	if status >= 300 {
-		return fmt.Errorf("set preferred node for cluster %s: status %d: %s", clusterUUID, status, string(body))
-	}
-	return nil
-}
-
 // ReportArbitrationRemediation reports positive fencing evidence for a node
 // (BMC fence done, node.kubernetes.io/out-of-service present), or clears it.
-// The arbiter only lets the non-preferred node run alone after such evidence.
+// The arbiter reads it as positive evidence that the node is down.
 func (c *Client) ReportArbitrationRemediation(ctx context.Context, clusterUUID, nodeUUID string, fenced bool) error {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/arbitration/remediation", clusterUUID)
 	body, status, err := c.Do(ctx, http.MethodPut, endpoint, map[string]any{"node_id": nodeUUID, "fenced": fenced})

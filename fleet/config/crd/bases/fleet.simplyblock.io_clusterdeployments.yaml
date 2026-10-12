@@ -98,6 +98,34 @@ spec:
                     description: Cluster is the StorageCluster to create. Ignored
                       when ClusterRef is set.
                     properties:
+                      arbitration:
+                        description: |-
+                          Arbitration tunes the two-node arbitration, and is carried to the
+                          cluster's spec.arbitration. Only valid when clusterMode is Dual.
+                        properties:
+                          holdMs:
+                            description: |-
+                              HoldMs is how long a node holds writes after losing its peer before it
+                              acts on its own. It must stay below the hosts' NVMe keep-alive timeout
+                              (5000 ms), or clients fail I/O before the verdict arrives.
+                            format: int32
+                            maximum: 4500
+                            minimum: 500
+                            type: integer
+                          leaseTtlMs:
+                            description: |-
+                              LeaseTtlMs is how long a lease from the arbiter stays valid. It only
+                              matters while a node is holding; a healthy pair is never fenced by a
+                              late renewal.
+                            format: int32
+                            maximum: 10000
+                            minimum: 500
+                            type: integer
+                        type: object
+                        x-kubernetes-validations:
+                        - message: leaseTtlMs must be shorter than holdMs
+                          rule: '!has(self.holdMs) || !has(self.leaseTtlMs) || self.leaseTtlMs
+                            < self.holdMs'
                       backup:
                         description: |-
                           Backup is where this cluster's backups live, and it expands into
@@ -148,6 +176,21 @@ spec:
                         - credentialsSecretRef
                         - endpoint
                         type: object
+                      clusterMode:
+                        default: Standard
+                        description: |-
+                          ClusterMode is how many storage nodes the cluster is built for: Single
+                          runs every erasure-coding scheme on exactly one storage node, each chunk of
+                          a stripe on its own device, so the node needs dataChunks+parityChunks
+                          devices and the parity protects against device failures rather than the
+                          loss of the node; Dual runs 1+1 on exactly two storage nodes; Standard,
+                          the default, keeps every scheme at its usual minimum. It is carried to the
+                          cluster's spec.clusterMode.
+                        enum:
+                        - Single
+                        - Dual
+                        - Standard
+                        type: string
                       containerResources:
                         description: |-
                           ContainerResources sizes the storage-node container, and expands into the
@@ -228,6 +271,12 @@ spec:
                               More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
                         type: object
+                      enableArbitration:
+                        description: |-
+                          EnableArbitration turns on the control plane's two-node arbitration, and
+                          is carried to the cluster's spec.enableArbitration. Only valid when
+                          clusterMode is Dual.
+                        type: boolean
                       enableAtomicity4K:
                         description: |-
                           EnableAtomicity4K enforces 4K write atomicity on every device this
@@ -627,6 +676,12 @@ spec:
                     - name
                     - vcpuCount
                     type: object
+                    x-kubernetes-validations:
+                    - message: enableArbitration and arbitration are only valid when
+                        clusterMode is Dual
+                      rule: (has(self.clusterMode) && self.clusterMode == 'Dual')
+                        || (!has(self.arbitration) && !(has(self.enableArbitration)
+                        && self.enableArbitration))
                   clusterRef:
                     description: |-
                       ClusterRef names an existing StorageCluster this document adds nodes to.

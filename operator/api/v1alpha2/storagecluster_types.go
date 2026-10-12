@@ -637,11 +637,24 @@ type StorageNodesSpec struct {
 	InitContainerResources corev1.ResourceRequirements `json:"initContainerResources,omitempty"`
 }
 
+// ClusterMode is how many storage nodes a cluster is built for.
+// +kubebuilder:validation:Enum=Single;Dual;Standard
+type ClusterMode string
+
+const (
+	// ClusterModeSingle is a cluster of one storage node.
+	ClusterModeSingle ClusterMode = "Single"
+	// ClusterModeDual is a cluster of exactly two storage nodes.
+	ClusterModeDual ClusterMode = "Dual"
+	// ClusterModeStandard is a cluster of three or more storage nodes.
+	ClusterModeStandard ClusterMode = "Standard"
+)
+
 // StorageClusterSpec is the desired state of one simplyblock backend cluster.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.kms) || self.kms == oldSelf.kms",message="kms is immutable once set"
+// +kubebuilder:validation:XValidation:rule="(has(self.clusterMode) && self.clusterMode == 'Dual') || (!has(self.arbitration) && !(has(self.enableArbitration) && self.enableArbitration))",message="enableArbitration and arbitration are only valid when clusterMode is Dual"
+// +kubebuilder:validation:XValidation:rule="(has(self.clusterMode) && self.clusterMode == 'Single') == (has(oldSelf.clusterMode) && oldSelf.clusterMode == 'Single')",message="clusterMode cannot be changed to or from Single: the control plane fixes it when the cluster is created"
 // +kubebuilder:validation:XValidation:rule="!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)",message="enableAtomicity4K requires enableChecksumValidation to be true"
-// +kubebuilder:validation:XValidation:rule="!(has(self.singleNode) && self.singleNode && has(self.twoNode))",message="a cluster is either a single-node cluster or a two-node cluster: singleNode and twoNode cannot both be set"
-// +kubebuilder:validation:XValidation:rule="(has(self.singleNode) && self.singleNode) == (has(oldSelf.singleNode) && oldSelf.singleNode)",message="singleNode is immutable: the control plane fixes it when the cluster is created"
 type StorageClusterSpec struct {
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems per storage
 	// node. It is the cluster's and no node carries a copy: every node's
@@ -870,19 +883,31 @@ type StorageClusterSpec struct {
 	// +optional
 	VolumeAutoPlacement *VolumeAutoPlacementSettings `json:"volumeAutoPlacement,omitempty"`
 
-	// TwoNode configures the control plane's arbitration for a cluster of
-	// exactly two storage nodes (an edge site). Ignored for larger clusters.
+	// ClusterMode is how many storage nodes the cluster is built for. Single is
+	// one storage node, created on the control plane non-HA with a single
+	// journal, with every erasure-coding scheme placed across that node's
+	// devices (one chunk of a stripe per device): the node needs
+	// dataChunks+parityChunks devices, and the parity protects against device
+	// failures rather than the loss of the node. Dual is exactly two storage
+	// nodes running 1+1, one copy on each, optionally under the control plane's
+	// two-node arbitration. Standard, the default, is three or more storage
+	// nodes. A cluster cannot be changed to or from Single after it is created.
 	// +optional
-	TwoNode *TwoNodeSpec `json:"twoNode,omitempty"`
+	// +kubebuilder:default=Standard
+	ClusterMode ClusterMode `json:"clusterMode,omitempty"`
 
-	// SingleNode declares a single-node cluster, created on the control plane
-	// with is_single_node: one storage node, non-HA with a single journal, and
-	// every erasure-coding scheme placed across that node's devices (one chunk
-	// of a stripe per device), so the node needs dataChunks+parityChunks
-	// devices and the parity protects against device failures rather than the
-	// loss of the node. Immutable.
+	// EnableArbitration turns on the control plane's two-node arbitration:
+	// nodes hold writes when they lose their peer, and only a node the arbiter
+	// grants may continue alone. Without it a Dual cluster tolerates the loss
+	// of either node without arbitration. Only valid when clusterMode is Dual.
 	// +optional
-	SingleNode *bool `json:"singleNode,omitempty"`
+	EnableArbitration *bool `json:"enableArbitration,omitempty"`
+
+	// Arbitration tunes the two-node arbitration that enableArbitration turns
+	// on. Omitted values take the arbiter's defaults. Only valid when
+	// clusterMode is Dual.
+	// +optional
+	Arbitration *ArbitrationSpec `json:"arbitration,omitempty"`
 }
 
 // StorageClusterStatus is the observed state of one backend cluster.
@@ -1038,7 +1063,7 @@ type StorageClusterStatus struct {
 	// from, so a stale status can be told from a current one.
 	// +optional
 	// Arbitration is the two-node arbiter's record as the operator last read
-	// it; set only when spec.twoNode.arbitration is on.
+	// it; set only when spec.enableArbitration is on.
 	// +optional
 	Arbitration *ArbitrationStatus `json:"arbitration,omitempty"`
 

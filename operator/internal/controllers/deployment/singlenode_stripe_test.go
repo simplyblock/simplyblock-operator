@@ -52,7 +52,7 @@ func TestASingleNodeDraftRunsEverySchemeOnOneWorker(t *testing.T) {
 					c.Spec.NodeSets[0].Groups[0].Devices = nil
 				}
 				if tc.singleNode {
-					c.Spec.Cluster.SingleNode = ptr.To(true)
+					c.Spec.Cluster.ClusterMode = simplyblockv1alpha2.ClusterModeSingle
 				}
 				if tc.journal {
 					c.Spec.Cluster.EnableJournalDevice = ptr.To(true)

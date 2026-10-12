@@ -38,14 +38,7 @@ func (a *Adapter) Get(ctx context.Context, cluster *simplyblockv1alpha2.StorageC
 	if err != nil || rec == nil {
 		return nil, err
 	}
-	return &twonode.Record{State: rec.State, Epoch: rec.Epoch, PreferredNode: rec.PreferredNode,
-		FencedNodes: rec.FencedNodes()}, nil
-}
-
-// SetPreferred tells the arbiter which storage node is preferred.
-func (a *Adapter) SetPreferred(ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, nodeUUID string) error {
-	ctx = a.authenticate(ctx, cluster)
-	return a.client(ctx).SetArbitrationPreferredNode(ctx, cluster.Status.UUID, nodeUUID)
+	return &twonode.Record{State: rec.State, Epoch: rec.Epoch, FencedNodes: rec.FencedNodes()}, nil
 }
 
 // ReportFencing sends positive fencing evidence for a node, or clears it.

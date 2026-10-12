@@ -9,6 +9,7 @@ metadata:
 spec:
   approved: false
   cluster:
+    clusterMode: Dual
     enableDriveFormat: true
     maxSubsystemCount: 30
     minHugePagesSize: 16G
@@ -16,7 +17,6 @@ spec:
     stripe:
       dataChunks: 1
       parityChunks: 1
-    twoNode: {}
     vcpuCount: 8
   environment: K3s
   hostOS:

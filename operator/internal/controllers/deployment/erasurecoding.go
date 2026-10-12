@@ -154,7 +154,7 @@ func singleNodeChecks(
 		return []StripeCheck{{
 			Reason: StripeSingleNodeCount,
 			Message: fmt.Sprintf(
-				"the cluster is a single-node cluster (singleNode), which runs exactly one "+
+				"the cluster is a single-node cluster (clusterMode Single), which runs exactly one "+
 					"storage node, and this document %s %d", leavesPhrase(config), total.nodes()),
 		}}
 	}
@@ -228,8 +228,8 @@ func stripeSubject(
 	namespace string,
 	config *simplyblockv1alpha2.ClusterDeploymentConfig,
 	//
-	// topology is what the cluster declares (spec.cluster.singleNode and
-	// twoNode, or the referenced cluster's spec.singleNode and spec.twoNode).
+	// topology is what the cluster declares (spec.cluster.clusterMode, or the
+	// referenced cluster's spec.clusterMode).
 ) (scheme erasurecoding.Scheme, subject string, topology erasurecoding.Topology, slots int32, existing footprint, known bool, err error) {
 	if config.Spec.ClusterRef == "" {
 		template := config.Spec.Cluster
@@ -237,7 +237,7 @@ func stripeSubject(
 			return scheme, "", topology, 0, existing, false, nil
 		}
 		return erasurecoding.SchemeOf(template.Stripe), "spec.cluster.stripe",
-			erasurecoding.TopologyOf(template.SingleNode, template.TwoNode),
+			erasurecoding.TopologyOf(template.ClusterMode),
 			slotsOf(template.SocketsToUse, template.NodesPerSocket), newFootprint(), true, nil
 	}
 
@@ -257,7 +257,7 @@ func stripeSubject(
 	}
 	return erasurecoding.SchemeOf(cluster.Spec.Stripe),
 		fmt.Sprintf("the stripe of cluster %s", cluster.Name),
-		erasurecoding.TopologyOf(cluster.Spec.SingleNode, cluster.Spec.TwoNode),
+		erasurecoding.TopologyOf(cluster.Spec.ClusterMode),
 		slotsPerWorker(&cluster), held, true, nil
 }
 

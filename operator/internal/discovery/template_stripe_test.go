@@ -80,7 +80,7 @@ func TestTheProposedSchemeIsOneTheFleetAndTheControlPlaneBothAccept(t *testing.T
 		if err != nil {
 			t.Fatalf("the fleet was refused: %v", err)
 		}
-		topology := erasurecoding.TopologyOf(template.Template.SingleNode, template.Template.TwoNode)
+		topology := erasurecoding.TopologyOf(template.Template.ClusterMode)
 		if workers > 0 && scheme.MinimumNodesFor(topology) > workers {
 			t.Errorf("a fleet of %d is proposed %s, which needs %d storage nodes",
 				workers, scheme, scheme.MinimumNodesFor(topology))
@@ -113,17 +113,14 @@ func TestAFleetOfTwoIsProposedAsATwoNodeCluster(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
 	}
-	if template.Template.TwoNode == nil {
-		t.Fatalf("a fleet of two is not proposed as a two-node cluster")
-	}
-	if template.Template.SingleNode != nil {
-		t.Errorf("a fleet of two is proposed singleNode as well")
+	if template.Template.ClusterMode != simplyblockv1alpha2.ClusterModeDual {
+		t.Fatalf("a fleet of two is proposed clusterMode %q, want Dual", template.Template.ClusterMode)
 	}
 	if got := erasurecoding.SchemeOf(template.Template.Stripe).String(); got != "1+1" {
 		t.Errorf("a two-node fleet is proposed %s, want 1+1", got)
 	}
 	joined := strings.Join(template.Notes, "\n")
-	if !strings.Contains(joined, "twoNode") || !strings.Contains(joined, "relaxed") {
+	if !strings.Contains(joined, "clusterMode Dual") || !strings.Contains(joined, "relaxed") {
 		t.Errorf("the note does not account for the two-node proposal:\n%s", joined)
 	}
 }
@@ -158,11 +155,9 @@ func TestASingleWorkerIsProposedBySchemeOfItsDevices(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: the fleet was refused: %v", tc.name, err)
 		}
-		if template.Template.SingleNode == nil || !*template.Template.SingleNode {
-			t.Errorf("%s: a single worker is not proposed as a single-node cluster", tc.name)
-		}
-		if template.Template.TwoNode != nil {
-			t.Errorf("%s: a single worker is proposed twoNode", tc.name)
+		if template.Template.ClusterMode != simplyblockv1alpha2.ClusterModeSingle {
+			t.Errorf("%s: a single worker is proposed clusterMode %q, want Single",
+				tc.name, template.Template.ClusterMode)
 		}
 		journal := template.Template.EnableJournalDevice != nil && *template.Template.EnableJournalDevice
 		if journal != tc.journal {

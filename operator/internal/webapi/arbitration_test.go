@@ -13,6 +13,8 @@ func TestGetClusterArbitration(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v2/clusters/c1/arbitration":
 			_ = json.NewEncoder(w).Encode(map[string]any{
+				// preferred_node: an older control plane still sends it; the
+				// arbiter has no preferred node any more and it is ignored.
 				"cluster_id": "c1", "epoch": 8, "state": "partitioned", "preferred_node": "a",
 				"lvs": []map[string]any{
 					{"jm_vuid": 3, "leader": "a", "state": "solo", "fenced_node": "b"},
@@ -76,24 +78,6 @@ func TestReportArbitrationRemediation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got["node_id"] != "b" || got["fenced"] != true {
-		t.Fatalf("body %v", got)
-	}
-}
-
-func TestSetArbitrationPreferredNode(t *testing.T) {
-	var got map[string]string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut || r.URL.Path != "/api/v2/clusters/c1/arbitration/preferred" {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		_ = json.NewDecoder(r.Body).Decode(&got)
-	}))
-	defer srv.Close()
-	if err := NewClient(srv.URL).SetArbitrationPreferredNode(context.Background(), "c1", "a"); err != nil {
-		t.Fatal(err)
-	}
-	if got["node_id"] != "a" {
 		t.Fatalf("body %v", got)
 	}
 }

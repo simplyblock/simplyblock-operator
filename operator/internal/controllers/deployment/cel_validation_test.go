@@ -310,3 +310,62 @@ func TestAnOpenShiftBlockNeedsAnOpenShiftEnvironment(t *testing.T) {
 		t.Fatalf("an OpenShift document was refused its own block: %v", err)
 	}
 }
+
+// The cluster template carries the cluster's arbitration settings, and the
+// schema refuses them on a template that is not Dual, as it does on the
+// StorageCluster they are copied to: the document is where the mistake can
+// still be corrected.
+func TestATemplateTakesArbitrationOnlyWhenDual(t *testing.T) {
+	apiClient := apiServer(t)
+	for _, tc := range []struct {
+		name       string
+		mode       simplyblockv1alpha2.ClusterMode
+		enable     *bool
+		settings   *simplyblockv1alpha2.ArbitrationSpec
+		wantDenied bool
+	}{
+		{name: "dual with arbitration", mode: simplyblockv1alpha2.ClusterModeDual, enable: ptr.To(true),
+			settings: &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(2500))}},
+		{name: "standard with arbitration", mode: simplyblockv1alpha2.ClusterModeStandard,
+			enable: ptr.To(true), wantDenied: true},
+		{name: "unstated mode with arbitration settings",
+			settings: &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(2500))}, wantDenied: true},
+		{name: "single without arbitration", mode: simplyblockv1alpha2.ClusterModeSingle},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := &simplyblockv1alpha2.ClusterDeploymentConfig{
+				ObjectMeta: metav1.ObjectMeta{GenerateName: "mode-", Namespace: "default"},
+				Spec: simplyblockv1alpha2.ClusterDeploymentConfigSpec{
+					Cluster: &simplyblockv1alpha2.ClusterTemplate{
+						Name:              "mode-cluster",
+						VCPUCount:         ptr.To(int32(4)),
+						MaxSubsystemCount: ptr.To(int32(30)),
+						ClusterMode:       tc.mode,
+						EnableArbitration: tc.enable,
+						Arbitration:       tc.settings,
+					},
+					NodeSets: []simplyblockv1alpha2.NodeSet{{
+						Name: "discovered",
+						Groups: []simplyblockv1alpha2.NodeGroup{{
+							Name:    "group-1",
+							Workers: []string{"worker-1"},
+							Devices: &simplyblockv1alpha2.DeviceSelection{NVMe: []string{"0000:00:02.0"}},
+						}},
+					}},
+				},
+			}
+			err := apiClient.Create(context.Background(), config)
+			switch {
+			case tc.wantDenied && err == nil:
+				t.Fatal("the template was accepted, want the Dual-only refusal")
+			case tc.wantDenied && !strings.Contains(err.Error(), "only valid when clusterMode is Dual"):
+				t.Fatalf("refused for the wrong reason: %v", err)
+			case !tc.wantDenied && err != nil:
+				t.Fatalf("the template was refused: %v", err)
+			}
+			if err == nil {
+				_ = apiClient.Delete(context.Background(), config)
+			}
+		})
+	}
+}

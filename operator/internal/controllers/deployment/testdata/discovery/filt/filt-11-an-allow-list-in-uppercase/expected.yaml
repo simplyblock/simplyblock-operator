@@ -9,11 +9,11 @@ metadata:
 spec:
   approved: false
   cluster:
+    clusterMode: Single
     enableDriveFormat: true
     maxSubsystemCount: 30
     minHugePagesSize: 16G
     name: discovered-discover-filt-11-cluster
-    singleNode: true
     stripe:
       dataChunks: 1
       parityChunks: 1

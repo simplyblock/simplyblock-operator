@@ -1,7 +1,7 @@
 // Package twonode applies the two-node arbiter's verdicts on the edge: the
 // storage-fenced taint on the Kubernetes node of a storage node the arbiter
-// fenced, its removal once the cluster is steady again, the preferred node, and
-// the remediation evidence the arbiter reads back
+// fenced, its removal once the cluster is steady again, and the remediation
+// evidence the arbiter reads back
 // (sbcli docs/design/two-node-arbitration.md §8, §9).
 //
 // The operator only follows the control plane: it never decides a verdict, and
@@ -19,24 +19,25 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 // Record is what the operator needs from the arbiter's ClusterArbitration
-// record (§7.2): state, epoch, preferred node and the control-plane ids of the
-// storage nodes it holds fenced.
+// record (§7.2): state, epoch and the control-plane ids of the storage nodes it
+// holds fenced. The arbiter has no preferred node; a record that still carries
+// one is read without it.
 type Record struct {
-	State         string
-	Epoch         int64
-	PreferredNode string
-	FencedNodes   []string
+	State       string
+	Epoch       int64
+	FencedNodes []string
 }
 
 // API is the operator's view of the control plane's arbitration endpoints
 // (§7.4). Get returns nil, nil when the control plane holds no record yet.
 type API interface {
 	Get(ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster) (*Record, error)
-	SetPreferred(ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, nodeUUID string) error
 	// ReportFencing sends positive fencing evidence for a node, or clears it
 	// (PUT .../arbitration/remediation).
 	ReportFencing(ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, nodeUUID string, fenced bool) error
@@ -50,13 +51,13 @@ const (
 	requeueError  = 5 * time.Second
 )
 
-// ArbitrationReconciler follows the arbiter for StorageClusters with
-// spec.twoNode.arbitration on.
+// ArbitrationReconciler follows the arbiter for StorageClusters in clusterMode
+// Dual with spec.enableArbitration on.
 type ArbitrationReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 	API    API
-	// Now is the clock; nil means time.Now.
+	// Now, the clock, is time.Now when nil.
 	Now func() time.Time
 }
 
@@ -77,7 +78,7 @@ func (r *ArbitrationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if cluster.Spec.TwoNode == nil || !cluster.Spec.TwoNode.Arbitration {
+	if cluster.Spec.ClusterMode != simplyblockv1alpha2.ClusterModeDual || !ptr.BoolFromOrFalse(cluster.Spec.EnableArbitration) {
 		// Off: withdraw what this controller put on the nodes.
 		if err := r.applyTaints(ctx, nodes, nil, 0); err != nil {
 			return ctrl.Result{}, err
@@ -94,7 +95,7 @@ func (r *ArbitrationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	rec, err := r.API.Get(ctx, &cluster)
 	if err != nil || rec == nil {
-		// Unreadable or not initialised: no verdict to follow, so nothing changes.
+		// Unreadable or not initialized: no verdict to follow, so nothing changes.
 		msg := "the control plane holds no arbitration record yet"
 		if err != nil {
 			msg = "cannot read the arbitration record: " + err.Error()
@@ -114,15 +115,6 @@ func (r *ArbitrationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			byUUID[n.Status.UUID] = n.Spec.WorkerNode
 		}
 	}
-	if want := cluster.Spec.TwoNode.PreferredNode; want != "" {
-		for _, n := range nodes {
-			if n.Spec.WorkerNode == want && n.Status.UUID != "" && n.Status.UUID != rec.PreferredNode {
-				if err := r.API.SetPreferred(ctx, &cluster, n.Status.UUID); err != nil {
-					log.Info("could not set the preferred node", "error", err.Error())
-				}
-			}
-		}
-	}
 
 	// taint_requests is the arbiter's list: kept through healing, cleared once
 	// the cluster is steady again.
@@ -140,7 +132,7 @@ func (r *ArbitrationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	st := &simplyblockv1alpha2.ArbitrationStatus{State: rec.State, Epoch: rec.Epoch,
-		PreferredNode: byUUID[rec.PreferredNode], FencedNodes: sortedKeys(fenced)}
+		FencedNodes: sortedKeys(fenced)}
 	if err := r.setStatus(ctx, &cluster, st); err != nil {
 		return ctrl.Result{}, err
 	}

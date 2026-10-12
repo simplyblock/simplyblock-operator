@@ -769,6 +769,34 @@ spec:
                 description: Cluster is the StorageCluster to create. Ignored when
                   ClusterRef is set.
                 properties:
+                  arbitration:
+                    description: |-
+                      Arbitration tunes the two-node arbitration, and is carried to the
+                      cluster's spec.arbitration. Only valid when clusterMode is Dual.
+                    properties:
+                      holdMs:
+                        description: |-
+                          HoldMs is how long a node holds writes after losing its peer before it
+                          acts on its own. It must stay below the hosts' NVMe keep-alive timeout
+                          (5000 ms), or clients fail I/O before the verdict arrives.
+                        format: int32
+                        maximum: 4500
+                        minimum: 500
+                        type: integer
+                      leaseTtlMs:
+                        description: |-
+                          LeaseTtlMs is how long a lease from the arbiter stays valid. It only
+                          matters while a node is holding; a healthy pair is never fenced by a
+                          late renewal.
+                        format: int32
+                        maximum: 10000
+                        minimum: 500
+                        type: integer
+                    type: object
+                    x-kubernetes-validations:
+                    - message: leaseTtlMs must be shorter than holdMs
+                      rule: '!has(self.holdMs) || !has(self.leaseTtlMs) || self.leaseTtlMs
+                        < self.holdMs'
                   backup:
                     description: |-
                       Backup is where this cluster's backups live, and it expands into
@@ -818,6 +846,21 @@ spec:
                     - credentialsSecretRef
                     - endpoint
                     type: object
+                  clusterMode:
+                    default: Standard
+                    description: |-
+                      ClusterMode is how many storage nodes the cluster is built for: Single
+                      runs every erasure-coding scheme on exactly one storage node, each chunk of
+                      a stripe on its own device, so the node needs dataChunks+parityChunks
+                      devices and the parity protects against device failures rather than the
+                      loss of the node; Dual runs 1+1 on exactly two storage nodes; Standard,
+                      the default, keeps every scheme at its usual minimum. It is carried to the
+                      cluster's spec.clusterMode.
+                    enum:
+                    - Single
+                    - Dual
+                    - Standard
+                    type: string
                   containerResources:
                     description: |-
                       ContainerResources sizes the storage-node container, and expands into the
@@ -898,6 +941,12 @@ spec:
                           More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                     type: object
+                  enableArbitration:
+                    description: |-
+                      EnableArbitration turns on the control plane's two-node arbitration, and
+                      is carried to the cluster's spec.enableArbitration. Only valid when
+                      clusterMode is Dual.
+                    type: boolean
                   enableAtomicity4K:
                     description: |-
                       EnableAtomicity4K enforces 4K write atomicity on every device this
@@ -1186,15 +1235,6 @@ spec:
                         minimum: 1024
                         type: integer
                     type: object
-                  singleNode:
-                    description: |-
-                      SingleNode declares a single-node cluster: every erasure-coding scheme
-                      then runs on exactly one storage node, each chunk of a stripe on its own
-                      device, so the node needs dataChunks+parityChunks devices and the parity
-                      protects against device failures rather than the loss of the node. It is
-                      carried to the cluster's spec.singleNode and cannot be combined with
-                      twoNode.
-                    type: boolean
                   socketsToUse:
                     description: |-
                       SocketsToUse restricts the deployment to selected NUMA sockets, and empty
@@ -1288,50 +1328,6 @@ spec:
                       type: object
                     maxItems: 32
                     type: array
-                  twoNode:
-                    description: |-
-                      TwoNode declares a two-node cluster: 1+1 then runs on exactly two
-                      storage nodes, and the control plane's arbitration settings are carried
-                      to the cluster's spec.twoNode. Every other scheme still needs its usual
-                      minimum.
-                    properties:
-                      arbitration:
-                        description: |-
-                          Arbitration turns the control plane's two-node arbitration on for this
-                          cluster: nodes hold writes when they lose their peer, and only a node the
-                          arbiter grants may continue alone. Off, the cluster keeps today's
-                          behaviour (dual-node tolerance without arbitration).
-                        type: boolean
-                      holdMs:
-                        description: |-
-                          HoldMs is how long a node holds writes after losing its peer before it
-                          acts on its own. It must stay below the hosts' NVMe keep-alive timeout
-                          (5000 ms), or clients fail IO before the verdict arrives.
-                        format: int32
-                        maximum: 4500
-                        minimum: 500
-                        type: integer
-                      leaseTtlMs:
-                        description: |-
-                          LeaseTtlMs is how long a lease from the arbiter stays valid. It only
-                          matters while a node is holding; a healthy pair is never fenced by a
-                          late renewal.
-                        format: int32
-                        maximum: 10000
-                        minimum: 500
-                        type: integer
-                      preferredNode:
-                        description: |-
-                          PreferredNode is the Kubernetes node whose storage node continues alone
-                          when neither the control plane nor the peer is reachable. Empty leaves the
-                          choice to the arbiter.
-                        maxLength: 253
-                        type: string
-                    type: object
-                    x-kubernetes-validations:
-                    - message: leaseTtlMs must be shorter than holdMs
-                      rule: '!has(self.holdMs) || !has(self.leaseTtlMs) || self.leaseTtlMs
-                        < self.holdMs'
                   vcpuCount:
                     description: |-
                       VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
@@ -1351,9 +1347,10 @@ spec:
                 - vcpuCount
                 type: object
                 x-kubernetes-validations:
-                - message: 'a cluster is either a single-node cluster or a two-node
-                    cluster: singleNode and twoNode cannot both be set'
-                  rule: '!(has(self.singleNode) && self.singleNode && has(self.twoNode))'
+                - message: enableArbitration and arbitration are only valid when clusterMode
+                    is Dual
+                  rule: (has(self.clusterMode) && self.clusterMode == 'Dual') || (!has(self.arbitration)
+                    && !(has(self.enableArbitration) && self.enableArbitration))
               clusterRef:
                 description: |-
                   ClusterRef names an existing StorageCluster this document adds nodes to.
@@ -7279,6 +7276,35 @@ spec:
             description: StorageClusterSpec is the desired state of one simplyblock
               backend cluster.
             properties:
+              arbitration:
+                description: |-
+                  Arbitration tunes the two-node arbitration that enableArbitration turns
+                  on. Omitted values take the arbiter's defaults. Only valid when
+                  clusterMode is Dual.
+                properties:
+                  holdMs:
+                    description: |-
+                      HoldMs is how long a node holds writes after losing its peer before it
+                      acts on its own. It must stay below the hosts' NVMe keep-alive timeout
+                      (5000 ms), or clients fail I/O before the verdict arrives.
+                    format: int32
+                    maximum: 4500
+                    minimum: 500
+                    type: integer
+                  leaseTtlMs:
+                    description: |-
+                      LeaseTtlMs is how long a lease from the arbiter stays valid. It only
+                      matters while a node is holding; a healthy pair is never fenced by a
+                      late renewal.
+                    format: int32
+                    maximum: 10000
+                    minimum: 500
+                    type: integer
+                type: object
+                x-kubernetes-validations:
+                - message: leaseTtlMs must be shorter than holdMs
+                  rule: '!has(self.holdMs) || !has(self.leaseTtlMs) || self.leaseTtlMs
+                    < self.holdMs'
               backup:
                 description: |-
                   Backup is the S3 location this cluster's backups live in, and it is both
@@ -7328,6 +7354,23 @@ spec:
                   once at cluster-add, so an edit moves the next attach onto the named
                   interface.
                 type: string
+              clusterMode:
+                default: Standard
+                description: |-
+                  ClusterMode is how many storage nodes the cluster is built for. Single is
+                  one storage node, created on the control plane non-HA with a single
+                  journal, with every erasure-coding scheme placed across that node's
+                  devices (one chunk of a stripe per device): the node needs
+                  dataChunks+parityChunks devices, and the parity protects against device
+                  failures rather than the loss of the node. Dual is exactly two storage
+                  nodes running 1+1, one copy on each, optionally under the control plane's
+                  two-node arbitration. Standard, the default, is three or more storage
+                  nodes. A cluster cannot be changed to or from Single after it is created.
+                enum:
+                - Single
+                - Dual
+                - Standard
+                type: string
               criticalThreshold:
                 description: CriticalThreshold is the capacity level at which the
                   cluster alarms.
@@ -7375,6 +7418,13 @@ spec:
                   same word twice. There is no DisableVolumeMigration beside it: migration
                   cannot be turned off, since a drain, a rebalance, and a device
                   replacement are all performed by moving volumes.
+                type: boolean
+              enableArbitration:
+                description: |-
+                  EnableArbitration turns on the control plane's two-node arbitration:
+                  nodes hold writes when they lose their peer, and only a node the arbiter
+                  grants may continue alone. Without it a Dual cluster tolerates the loss
+                  of either node without arbitration. Only valid when clusterMode is Dual.
                 type: boolean
               enableAtomicity4K:
                 default: false
@@ -7531,15 +7581,6 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
-              singleNode:
-                description: |-
-                  SingleNode declares a single-node cluster, created on the control plane
-                  with is_single_node: one storage node, non-HA with a single journal, and
-                  every erasure-coding scheme placed across that node's devices (one chunk
-                  of a stripe per device), so the node needs dataChunks+parityChunks
-                  devices and the parity protects against device failures rather than the
-                  loss of the node. Immutable.
-                type: boolean
               snodeApiPort:
                 default: 50001
                 description: |-
@@ -7908,48 +7949,6 @@ spec:
                   rule: '[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks)
                     ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4, 1], [1,
                     2], [2, 2], [4, 2]]'
-              twoNode:
-                description: |-
-                  TwoNode configures the control plane's arbitration for a cluster of
-                  exactly two storage nodes (an edge site). Ignored for larger clusters.
-                properties:
-                  arbitration:
-                    description: |-
-                      Arbitration turns the control plane's two-node arbitration on for this
-                      cluster: nodes hold writes when they lose their peer, and only a node the
-                      arbiter grants may continue alone. Off, the cluster keeps today's
-                      behaviour (dual-node tolerance without arbitration).
-                    type: boolean
-                  holdMs:
-                    description: |-
-                      HoldMs is how long a node holds writes after losing its peer before it
-                      acts on its own. It must stay below the hosts' NVMe keep-alive timeout
-                      (5000 ms), or clients fail IO before the verdict arrives.
-                    format: int32
-                    maximum: 4500
-                    minimum: 500
-                    type: integer
-                  leaseTtlMs:
-                    description: |-
-                      LeaseTtlMs is how long a lease from the arbiter stays valid. It only
-                      matters while a node is holding; a healthy pair is never fenced by a
-                      late renewal.
-                    format: int32
-                    maximum: 10000
-                    minimum: 500
-                    type: integer
-                  preferredNode:
-                    description: |-
-                      PreferredNode is the Kubernetes node whose storage node continues alone
-                      when neither the control plane nor the peer is reachable. Empty leaves the
-                      choice to the arbiter.
-                    maxLength: 253
-                    type: string
-                type: object
-                x-kubernetes-validations:
-                - message: leaseTtlMs must be shorter than holdMs
-                  rule: '!has(self.holdMs) || !has(self.leaseTtlMs) || self.leaseTtlMs
-                    < self.holdMs'
               vcpuCount:
                 description: |-
                   VCPUCount is the number of vCPUs allocated to SPDK on each storage node,
@@ -8161,16 +8160,17 @@ spec:
               rule: '!has(oldSelf.deviceClass) || has(self.deviceClass)'
             - message: kms is immutable once set
               rule: '!has(oldSelf.kms) || self.kms == oldSelf.kms'
+            - message: enableArbitration and arbitration are only valid when clusterMode
+                is Dual
+              rule: (has(self.clusterMode) && self.clusterMode == 'Dual') || (!has(self.arbitration)
+                && !(has(self.enableArbitration) && self.enableArbitration))
+            - message: 'clusterMode cannot be changed to or from Single: the control
+                plane fixes it when the cluster is created'
+              rule: (has(self.clusterMode) && self.clusterMode == 'Single') == (has(oldSelf.clusterMode)
+                && oldSelf.clusterMode == 'Single')
             - message: enableAtomicity4K requires enableChecksumValidation to be true
               rule: '!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation)
                 && self.enableChecksumValidation)'
-            - message: 'a cluster is either a single-node cluster or a two-node cluster:
-                singleNode and twoNode cannot both be set'
-              rule: '!(has(self.singleNode) && self.singleNode && has(self.twoNode))'
-            - message: 'singleNode is immutable: the control plane fixes it when the
-                cluster is created'
-              rule: (has(self.singleNode) && self.singleNode) == (has(oldSelf.singleNode)
-                && oldSelf.singleNode)
           status:
             properties:
               activeOpsRef:
@@ -8183,7 +8183,7 @@ spec:
                   ObservedGeneration is the generation the rest of this status was computed
                   from, so a stale status can be told from a current one.
                   Arbitration is the two-node arbiter's record as the operator last read
-                  it; set only when spec.twoNode.arbitration is on.
+                  it; set only when spec.enableArbitration is on.
                 properties:
                   epoch:
                     description: Epoch is the arbiter's current epoch.
@@ -8204,10 +8204,6 @@ spec:
                     description: ObservedAt is when the operator last read the arbiter's
                       record.
                     format: date-time
-                    type: string
-                  preferredNode:
-                    description: PreferredNode is the Kubernetes node the arbiter
-                      treats as preferred.
                     type: string
                   state:
                     description: |-
@@ -12398,6 +12394,34 @@ spec:
                     description: Cluster is the draft's cluster template, with the
                       sizing applied.
                     properties:
+                      arbitration:
+                        description: |-
+                          Arbitration tunes the two-node arbitration, and is carried to the
+                          cluster's spec.arbitration. Only valid when clusterMode is Dual.
+                        properties:
+                          holdMs:
+                            description: |-
+                              HoldMs is how long a node holds writes after losing its peer before it
+                              acts on its own. It must stay below the hosts' NVMe keep-alive timeout
+                              (5000 ms), or clients fail I/O before the verdict arrives.
+                            format: int32
+                            maximum: 4500
+                            minimum: 500
+                            type: integer
+                          leaseTtlMs:
+                            description: |-
+                              LeaseTtlMs is how long a lease from the arbiter stays valid. It only
+                              matters while a node is holding; a healthy pair is never fenced by a
+                              late renewal.
+                            format: int32
+                            maximum: 10000
+                            minimum: 500
+                            type: integer
+                        type: object
+                        x-kubernetes-validations:
+                        - message: leaseTtlMs must be shorter than holdMs
+                          rule: '!has(self.holdMs) || !has(self.leaseTtlMs) || self.leaseTtlMs
+                            < self.holdMs'
                       backup:
                         description: |-
                           Backup is where this cluster's backups live, and it expands into
@@ -12448,6 +12472,21 @@ spec:
                         - credentialsSecretRef
                         - endpoint
                         type: object
+                      clusterMode:
+                        default: Standard
+                        description: |-
+                          ClusterMode is how many storage nodes the cluster is built for: Single
+                          runs every erasure-coding scheme on exactly one storage node, each chunk of
+                          a stripe on its own device, so the node needs dataChunks+parityChunks
+                          devices and the parity protects against device failures rather than the
+                          loss of the node; Dual runs 1+1 on exactly two storage nodes; Standard,
+                          the default, keeps every scheme at its usual minimum. It is carried to the
+                          cluster's spec.clusterMode.
+                        enum:
+                        - Single
+                        - Dual
+                        - Standard
+                        type: string
                       containerResources:
                         description: |-
                           ContainerResources sizes the storage-node container, and expands into the
@@ -12528,6 +12567,12 @@ spec:
                               More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
                         type: object
+                      enableArbitration:
+                        description: |-
+                          EnableArbitration turns on the control plane's two-node arbitration, and
+                          is carried to the cluster's spec.enableArbitration. Only valid when
+                          clusterMode is Dual.
+                        type: boolean
                       enableAtomicity4K:
                         description: |-
                           EnableAtomicity4K enforces 4K write atomicity on every device this
@@ -12816,15 +12861,6 @@ spec:
                             minimum: 1024
                             type: integer
                         type: object
-                      singleNode:
-                        description: |-
-                          SingleNode declares a single-node cluster: every erasure-coding scheme
-                          then runs on exactly one storage node, each chunk of a stripe on its own
-                          device, so the node needs dataChunks+parityChunks devices and the parity
-                          protects against device failures rather than the loss of the node. It is
-                          carried to the cluster's spec.singleNode and cannot be combined with
-                          twoNode.
-                        type: boolean
                       socketsToUse:
                         description: |-
                           SocketsToUse restricts the deployment to selected NUMA sockets, and empty
@@ -12918,50 +12954,6 @@ spec:
                           type: object
                         maxItems: 32
                         type: array
-                      twoNode:
-                        description: |-
-                          TwoNode declares a two-node cluster: 1+1 then runs on exactly two
-                          storage nodes, and the control plane's arbitration settings are carried
-                          to the cluster's spec.twoNode. Every other scheme still needs its usual
-                          minimum.
-                        properties:
-                          arbitration:
-                            description: |-
-                              Arbitration turns the control plane's two-node arbitration on for this
-                              cluster: nodes hold writes when they lose their peer, and only a node the
-                              arbiter grants may continue alone. Off, the cluster keeps today's
-                              behaviour (dual-node tolerance without arbitration).
-                            type: boolean
-                          holdMs:
-                            description: |-
-                              HoldMs is how long a node holds writes after losing its peer before it
-                              acts on its own. It must stay below the hosts' NVMe keep-alive timeout
-                              (5000 ms), or clients fail IO before the verdict arrives.
-                            format: int32
-                            maximum: 4500
-                            minimum: 500
-                            type: integer
-                          leaseTtlMs:
-                            description: |-
-                              LeaseTtlMs is how long a lease from the arbiter stays valid. It only
-                              matters while a node is holding; a healthy pair is never fenced by a
-                              late renewal.
-                            format: int32
-                            maximum: 10000
-                            minimum: 500
-                            type: integer
-                          preferredNode:
-                            description: |-
-                              PreferredNode is the Kubernetes node whose storage node continues alone
-                              when neither the control plane nor the peer is reachable. Empty leaves the
-                              choice to the arbiter.
-                            maxLength: 253
-                            type: string
-                        type: object
-                        x-kubernetes-validations:
-                        - message: leaseTtlMs must be shorter than holdMs
-                          rule: '!has(self.holdMs) || !has(self.leaseTtlMs) || self.leaseTtlMs
-                            < self.holdMs'
                       vcpuCount:
                         description: |-
                           VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
@@ -12981,9 +12973,11 @@ spec:
                     - vcpuCount
                     type: object
                     x-kubernetes-validations:
-                    - message: 'a cluster is either a single-node cluster or a two-node
-                        cluster: singleNode and twoNode cannot both be set'
-                      rule: '!(has(self.singleNode) && self.singleNode && has(self.twoNode))'
+                    - message: enableArbitration and arbitration are only valid when
+                        clusterMode is Dual
+                      rule: (has(self.clusterMode) && self.clusterMode == 'Dual')
+                        || (!has(self.arbitration) && !(has(self.enableArbitration)
+                        && self.enableArbitration))
                   message:
                     description: |-
                       Message is what the site says about the draft: validation findings while
