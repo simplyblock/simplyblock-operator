@@ -253,11 +253,100 @@ checkLogCollector() {
   fi
 }
 
+# checkClusterStorageClasses asserts that a storage cluster given at install time,
+# with a pool, gets a block StorageClass naming that cluster and pool.
+#
+# A cluster given this way has no StorageCluster or StoragePool object here, so
+# no reconciler writes a class for it. Without one nothing can provision from
+# it, and the pNFS metadata server finds no class of the cluster to derive its
+# state disk's class from (nfsexport_mds.go, clusterBlockClass).
+checkClusterStorageClasses() {
+  local yq="${YQ:-yq}"
+  local uuid1="11111111-2222-3333-4444-555555555555"
+  local uuid2="66666666-7777-8888-9999-000000000000"
+  local rendered got want
+  local ok=1
+
+  # classes prints `name provisioner cluster_id pool_name` per simplyblock class.
+  classes() {
+    "$yq" -N 'select(.kind == "StorageClass" and .provisioner == "csi.simplyblock.io") |
+      .metadata.name + " " + .provisioner + " " + .parameters.cluster_id + " " + .parameters.pool_name' <<<"$1"
+  }
+
+  if ! rendered="$(helm template sb "$CHART" --namespace simplyblock \
+    "${CAPABILITIES[@]}" \
+    --set deployment.profile=managed \
+    --set controlplane.managed.endpoint=https://cp.example.com \
+    --set csiConfig.simplybk.uuid="$uuid1" \
+    --set csiConfig.simplybk.ip=https://cp.example.com \
+    --set csiSecret.simplybk.secret=s3cret \
+    --set csiConfig.simplybk.pool=pool1)"; then
+    echo "  storage classes: RENDER FAILED (single cluster)"
+    fail=1
+    return
+  fi
+  got="$(classes "$rendered")"
+  want="simplyblock-pool1 csi.simplyblock.io ${uuid1} pool1"
+  if [ "$got" != "$want" ]; then
+    echo "  storage classes: single cluster rendered [${got}], want [${want}]"
+    ok=0
+  fi
+
+  if ! rendered="$(helm template sb "$CHART" --namespace simplyblock \
+    "${CAPABILITIES[@]}" \
+    --set deployment.profile=managed \
+    --set controlplane.managed.endpoint=https://cp.example.com \
+    --set csiConfig.simplybk.uuid="$uuid1" \
+    --set csiSecret.simplybk.secret=s3cret \
+    --set multiCluster.enable=true \
+    --set multiCluster.clusters[0].cluster_id="$uuid1" \
+    --set multiCluster.clusters[0].secret=s1 \
+    --set multiCluster.clusters[0].pool=pool1 \
+    --set multiCluster.clusters[1].cluster_id="$uuid2" \
+    --set multiCluster.clusters[1].secret=s2 \
+    --set multiCluster.clusters[1].pool=pool2 \
+    --set multiCluster.clusters[1].storageClassName=fast)"; then
+    echo "  storage classes: RENDER FAILED (two clusters)"
+    fail=1
+    return
+  fi
+  got="$(classes "$rendered" | sort)"
+  want="$(printf '%s\n' "fast csi.simplyblock.io ${uuid2} pool2" "simplyblock-pool1 csi.simplyblock.io ${uuid1} pool1" | sort)"
+  if [ "$got" != "$want" ]; then
+    echo "  storage classes: two clusters rendered [${got}], want [${want}]"
+    ok=0
+  fi
+
+  # No pool is no class: a class without pool_name provisions into no pool.
+  if ! rendered="$(helm template sb "$CHART" --namespace simplyblock \
+    "${CAPABILITIES[@]}" \
+    --set deployment.profile=managed \
+    --set controlplane.managed.endpoint=https://cp.example.com \
+    --set csiConfig.simplybk.uuid="$uuid1" \
+    --set csiSecret.simplybk.secret=s3cret)"; then
+    echo "  storage classes: RENDER FAILED (no pool)"
+    fail=1
+    return
+  fi
+  got="$(classes "$rendered")"
+  if [ -n "$got" ]; then
+    echo "  storage classes: a cluster without a pool rendered [${got}]"
+    ok=0
+  fi
+
+  if [ "$ok" -eq 1 ]; then
+    echo "  storage classes: one per install-time cluster with a pool, none without"
+  else
+    fail=1
+  fi
+}
+
 check standalone "${COMMON[@]}"
 check managed "${COMMON[@]}"
 check empty "${OPERATOR[@]}"
 checkEmpty
 checkVendoredCRDs
 checkLogCollector
+checkClusterStorageClasses
 
 exit "$fail"

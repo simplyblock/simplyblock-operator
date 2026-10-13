@@ -67,6 +67,13 @@ csiConfig:
   simplybk:
     uuid:
     ip:
+    # The pool volumes on this cluster are created in. Set, the chart renders a
+    # block StorageClass for the cluster and pool, named storageClassName or
+    # simplyblock-<pool>. A cluster given here has no StorageCluster or
+    # StoragePool object, so nothing else writes a class for it, and the pNFS
+    # metadata server derives its state disk's class from one.
+    pool:
+    storageClassName:
 
 # Configuration for the csiSecret
 csiSecret:
@@ -85,6 +92,9 @@ multiCluster:
   - cluster_id:
     secret:
     workers:
+    # As csiConfig.simplybk.pool and storageClassName, for this cluster.
+    pool:
+    storageClassName:
       
 deployment:
   # One of: standalone, managed, empty.
