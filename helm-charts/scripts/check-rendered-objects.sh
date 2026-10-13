@@ -260,6 +260,10 @@ checkLogCollector() {
 # no reconciler writes a class for it. Without one nothing can provision from
 # it, and the pNFS metadata server finds no class of the cluster to derive its
 # state disk's class from (nfsexport_mds.go, clusterBlockClass).
+#
+# Regression: #726 — with a managed control plane and the cluster given through
+# csiConfig.simplybk, every pNFS export stayed Pending on MDSStateUnavailable,
+# because no StorageClass of the cluster existed to derive the state disk's from.
 checkClusterStorageClasses() {
   local yq="${YQ:-yq}"
   local uuid1="11111111-2222-3333-4444-555555555555"
@@ -333,6 +337,76 @@ checkClusterStorageClasses() {
     echo "  storage classes: a cluster without a pool rendered [${got}]"
     ok=0
   fi
+
+  # A Secret supplied outside the chart is still a cluster the driver reaches,
+  # so who writes the Secret does not decide whether the class is rendered.
+  if ! rendered="$(helm template sb "$CHART" --namespace simplyblock \
+    "${CAPABILITIES[@]}" \
+    --set deployment.profile=managed \
+    --set controlplane.managed.endpoint=https://cp.example.com \
+    --set externallyManagedSecret.create=false \
+    --set csiConfig.simplybk.uuid="$uuid1" \
+    --set csiConfig.simplybk.pool=pool1)"; then
+    echo "  storage classes: RENDER FAILED (externally managed Secret)"
+    fail=1
+    return
+  fi
+  got="$(classes "$rendered")"
+  want="simplyblock-pool1 csi.simplyblock.io ${uuid1} pool1"
+  if [ "$got" != "$want" ]; then
+    echo "  storage classes: externally managed Secret rendered [${got}], want [${want}]"
+    ok=0
+  fi
+
+  # A name YAML would read as another type stays a string.
+  if ! rendered="$(helm template sb "$CHART" --namespace simplyblock \
+    "${CAPABILITIES[@]}" \
+    --set deployment.profile=managed \
+    --set controlplane.managed.endpoint=https://cp.example.com \
+    --set csiConfig.simplybk.uuid="$uuid1" \
+    --set csiSecret.simplybk.secret=s3cret \
+    --set csiConfig.simplybk.pool=pool1 \
+    --set csiConfig.simplybk.storageClassName=123)"; then
+    echo "  storage classes: RENDER FAILED (numeric name)"
+    fail=1
+    return
+  fi
+  got="$("$yq" -N 'select(.kind == "StorageClass") | .metadata.name | type' <<<"$rendered")"
+  if [ "$got" != "!!str" ]; then
+    echo "  storage classes: storageClassName=123 rendered as [${got}], want [!!str]"
+    ok=0
+  fi
+
+  # Two clusters resolving to one class name, and a cluster ID that is not a
+  # UUID, are refused rather than rendered.
+  refused() {
+    local label="$1" message="$2"
+    shift 2
+    local out
+    if out="$(helm template sb "$CHART" --namespace simplyblock \
+      "${CAPABILITIES[@]}" \
+      --set deployment.profile=managed \
+      --set controlplane.managed.endpoint=https://cp.example.com \
+      --set csiConfig.simplybk.uuid="$uuid1" \
+      --set csiSecret.simplybk.secret=s3cret "$@" 2>&1)"; then
+      echo "  storage classes: ${label} rendered"
+      ok=0
+    elif ! grep -qF "$message" <<<"$out"; then
+      echo "  storage classes: ${label} failed without [${message}]: ${out}"
+      ok=0
+    fi
+  }
+  refused "two clusters with one class name" "rendered for two clusters" \
+    --set multiCluster.enable=true \
+    --set multiCluster.clusters[0].cluster_id="$uuid1" \
+    --set multiCluster.clusters[0].secret=s1 \
+    --set multiCluster.clusters[0].pool=pool1 \
+    --set multiCluster.clusters[1].cluster_id="$uuid2" \
+    --set multiCluster.clusters[1].secret=s2 \
+    --set multiCluster.clusters[1].pool=pool1
+  refused "a cluster ID that is not a UUID" "is not a UUID" \
+    --set csiConfig.simplybk.uuid=my-cluster \
+    --set csiConfig.simplybk.pool=pool1
 
   if [ "$ok" -eq 1 ]; then
     echo "  storage classes: one per install-time cluster with a pool, none without"
