@@ -475,10 +475,6 @@ func main() {
 	// that opens it is also what registers the namespace its objects belong in.
 	backupSubscription := subscriptions.NewBackupSubscription()
 	backupScopes := cpSubscriptions.AddSubscription(backupSubscription)
-	// The snapshot stream is per pool, and the pool's controller opens it. A
-	// backup request no longer reads it: the control plane takes the snapshot.
-	snapshotSubscription := subscriptions.NewSnapshotSubscription()
-	snapshotScopes := cpSubscriptions.AddSubscription(snapshotSubscription)
 	backupPolicySubscription := subscriptions.NewBackupPolicySubscription()
 	backupPolicyScopes := cpSubscriptions.AddSubscription(backupPolicySubscription)
 	// How full a node is exists only in the metrics the control plane exports,
@@ -660,7 +656,6 @@ func main() {
 		Scheme:           mgr.GetScheme(),
 		Recorder:         mgr.GetEventRecorder("storagepool-controller"),
 		VolumeScopes:     volumeScopes,
-		SnapshotScopes:   snapshotScopes,
 		EndpointResolver: controlPlaneEndpoint,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StoragePool")

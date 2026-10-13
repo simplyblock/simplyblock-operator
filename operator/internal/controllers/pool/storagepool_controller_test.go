@@ -27,7 +27,6 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
-	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 )
 
 // settledPasses is how many reconciles a pool needs before nothing more
@@ -101,24 +100,6 @@ func TestCreatesThePoolAndRecordsItsUUID(t *testing.T) {
 	}
 	if !rec.has(PoolCreated) {
 		t.Errorf("no %s event: %+v", PoolCreated, rec.events)
-	}
-}
-
-// A backup request snapshots a volume in this pool and then follows the
-// snapshot on the control plane's stream, so the pool's snapshot stream is open
-// for as long as the pool is.
-func TestOpensTheSnapshotStreamOfAPoolWithAUUID(t *testing.T) {
-	cp, rec := newControlPlane(t), &recorder{}
-	ready := newPool("tenant-a", func(p *simplyblockv1alpha2.StoragePool) {
-		p.Status.UUID = testPoolUUID
-	})
-	r := newReconciler(t, cp, rec, newCluster(testClusterUUID), ready)
-	r.SnapshotScopes = cpinformer.NewScopeSetForTest()
-
-	reconcileSettled(t, r, "tenant-a")
-
-	if got := r.SnapshotScopes.Len(); got != 1 {
-		t.Errorf("open snapshot scopes = %d, want the pool's one", got)
 	}
 }
 

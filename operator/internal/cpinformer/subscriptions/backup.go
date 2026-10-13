@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sync"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
@@ -224,6 +225,20 @@ func (s *BackupSubscription) Lookup(key types.NamespacedName) (cpinformer.Scope,
 		return nil, BackupDTO{}, false
 	}
 	return s.Find(backupID)
+}
+
+// enqueueByName pushes a trigger that carries only a name, giving up on
+// shutdown rather than dropping it when the channel is full.
+func enqueueByName(ctx context.Context, ch chan<- event.GenericEvent, name string) {
+	if name == "" {
+		return
+	}
+	obj := &metav1.PartialObjectMetadata{}
+	obj.SetName(name)
+	select {
+	case ch <- event.GenericEvent{Object: obj}:
+	case <-ctx.Done():
+	}
 }
 
 var _ cpinformer.Subscription = (*BackupSubscription)(nil)
