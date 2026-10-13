@@ -1,11 +1,11 @@
 // The StorageBackup request reconciler: it takes the backup a StorageBackup with
 // spec.source asks for. The mirror owns the other kind, a record of a copy the
-// store holds, and records this copy too once the store reports it.
+// store holds, and defers to a request once the request holds the copy's id.
 //
-// It writes to the control plane and reads from its streams. What the snapshot
-// and the backup look like comes from the subscriptions' caches, and a change in
-// either wakes the request through the snapshot's name, so nothing polls the
-// control plane's API.
+// It makes one call, to back the volume up, and the control plane takes and
+// removes the snapshot the copy is made of. What the copy looks like afterward
+// comes from the backup subscription's cache, and a change in it wakes the
+// request, so nothing polls the control plane's API.
 
 package backup
 
@@ -31,7 +31,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
-	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/errs/class"
 	"github.com/simplyblock/atlas/lvol"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -46,66 +45,32 @@ const (
 	requestResync = 5 * time.Minute
 )
 
-// The snapshot a request takes is named from its UID, which is what ties a
-// stream event back to the request.
-const (
-	// RequestSnapshotIndex indexes requests by the name of the snapshot they take.
-	RequestSnapshotIndex = "spec.source.snapshotName"
-
-	// requestSnapshotPrefix starts the snapshot's name, which ends in the
-	// request's UID so that a retried pass derives the same name.
-	requestSnapshotPrefix = "sbk-"
-)
-
-// IndexRequestSnapshot is the index function for [RequestSnapshotIndex],
-// exported so that a test's client can register what the manager does.
-func IndexRequestSnapshot(o client.Object) []string {
-	sb, ok := o.(*simplyblockv1alpha2.StorageBackup)
-	if !ok || sb.Spec.Source == nil {
-		return nil
-	}
-	return []string{requestSnapshotPrefix + string(sb.UID)}
-}
-
 // BackupRequestClient is the control-plane surface a request writes through.
-// What it reads comes from the streams.
+// What it reads comes from the stream.
 type BackupRequestClient interface {
-	CreateSnapshot(ctx context.Context, clusterID, poolID, volumeID, name string) (string, error)
-	CreateBackup(ctx context.Context, clusterID, snapshotID string) error
-}
-
-// RequestSnapshots is the read surface a request needs from the snapshot
-// subscription.
-type RequestSnapshots interface {
-	// FindByName returns the snapshot of that name in one pool's scope.
-	FindByName(scope cpinformer.Scope, name string) (subscriptions.SnapshotDTO, bool)
-	// Synced reports whether a scope's first frame has been applied.
-	Synced(scope cpinformer.Scope) bool
-	// Triggers carries the names of snapshots that changed.
-	Triggers() <-chan event.GenericEvent
+	// CreateVolumeBackup asks for a backup of a volume and returns its id.
+	CreateVolumeBackup(ctx context.Context, clusterID, poolID, volumeID string) (string, error)
 }
 
 // RequestBackups is the read surface a request needs from the backup
 // subscription.
 type RequestBackups interface {
-	// FindBySnapshot returns the backup of a snapshot in one cluster's scope.
-	FindBySnapshot(clusterID, snapshotID string) (subscriptions.BackupDTO, bool)
-	// Synced reports whether a scope's first frame has been applied.
-	Synced(scope cpinformer.Scope) bool
-	// SnapshotTriggers carries the snapshot names of backups that changed.
-	SnapshotTriggers() <-chan event.GenericEvent
+	// Find returns the cached backup with that id and the scope it belongs to.
+	Find(id string) (cpinformer.Scope, subscriptions.BackupDTO, bool)
+	// RequestTriggers carries the record names of backups that changed.
+	RequestTriggers() <-chan event.GenericEvent
 }
 
-// StorageBackupRequestReconciler snapshots the claim's volume, asks the control
-// plane to back the snapshot up, and follows the copy. Each call is preceded by
-// a read that shows whether it already happened, so a retry repeats nothing.
+// StorageBackupRequestReconciler asks the control plane to back the claim's
+// volume up and follows the copy. The call carries nothing that names it, so the
+// id it returns is written to status.backup before anything else happens, and a
+// request that holds an id never calls again.
 type StorageBackupRequestReconciler struct {
 	client.Client
-	Scheme    *runtime.Scheme
-	Recorder  events.EventRecorder
-	API       BackupRequestClient
-	Snapshots RequestSnapshots
-	Backups   RequestBackups
+	Scheme   *runtime.Scheme
+	Recorder events.EventRecorder
+	API      BackupRequestClient
+	Backups  RequestBackups
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagebackups,verbs=get;list;watch
@@ -114,34 +79,29 @@ type StorageBackupRequestReconciler struct {
 // +kubebuilder:rbac:groups="",resources=persistentvolumes;persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
+// SetupWithManager relies on the mirror's SetupWithManager for the
+// [RequestedBackupIndex] that requestsForBackup reads.
 func (r *StorageBackupRequestReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	isRequest := predicate.NewPredicateFuncs(func(o client.Object) bool {
 		sb, ok := o.(*simplyblockv1alpha2.StorageBackup)
 		return ok && sb.Spec.Source != nil
 	})
-	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(), &simplyblockv1alpha2.StorageBackup{},
-		RequestSnapshotIndex, IndexRequestSnapshot,
-	); err != nil {
-		return err
-	}
-	wake := handler.EnqueueRequestsFromMapFunc(r.requestsForSnapshot)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha2.StorageBackup{}, builder.WithPredicates(isRequest)).
 		Named("storagebackuprequest").
-		WatchesRawSource(source.Channel(r.Snapshots.Triggers(), wake)).
-		WatchesRawSource(source.Channel(r.Backups.SnapshotTriggers(), wake)).
+		WatchesRawSource(source.Channel(r.Backups.RequestTriggers(),
+			handler.EnqueueRequestsFromMapFunc(r.requestsForBackup))).
 		Complete(r)
 }
 
-// requestsForSnapshot maps a stream event, which carries a snapshot's name, to
-// the request that took the snapshot. It reads the manager's cache, so it makes
-// no API call.
-func (r *StorageBackupRequestReconciler) requestsForSnapshot(
+// requestsForBackup maps a stream event, which carries the name of a backup's
+// record, to the request that asked for the backup. It reads the manager's
+// cache, so it makes no API call.
+func (r *StorageBackupRequestReconciler) requestsForBackup(
 	ctx context.Context, o client.Object,
 ) []reconcile.Request {
 	var requests simplyblockv1alpha2.StorageBackupList
-	if err := r.List(ctx, &requests, client.MatchingFields{RequestSnapshotIndex: o.GetName()}); err != nil {
+	if err := r.List(ctx, &requests, client.MatchingFields{RequestedBackupIndex: o.GetName()}); err != nil {
 		return nil
 	}
 	out := make([]reconcile.Request, 0, len(requests.Items))
@@ -188,15 +148,19 @@ func (r *StorageBackupRequestReconciler) Reconcile(
 	if err != nil {
 		return r.hold(ctx, &sb, err)
 	}
-	snapshot, err := r.ensureSnapshot(ctx, &sb, s)
-	if err != nil || snapshot.ID == "" {
-		return r.hold(ctx, &sb, err)
+	id := sb.BackupID()
+	if id == "" {
+		if id, err = r.requestBackup(ctx, &sb, s); err != nil {
+			return r.hold(ctx, &sb, err)
+		}
 	}
-	backup, err := r.ensureBackup(ctx, s, snapshot.ID)
-	if err != nil || backup == nil {
-		return r.hold(ctx, &sb, err)
+	_, backup, ok := r.Backups.Find(id)
+	if !ok {
+		// The stream reports the copy a moment after the control plane accepts
+		// the request, and wakes this one when it does.
+		return ctrl.Result{RequeueAfter: requestResync}, nil
 	}
-	return r.report(ctx, &sb, s, snapshot, *backup)
+	return r.report(ctx, &sb, s, backup)
 }
 
 // resolve finds the claim's volume and the cluster that provisioned it. The
@@ -249,51 +213,43 @@ func (r *StorageBackupRequestReconciler) resolve(
 	return nil, blocked("no StorageCluster reports cluster %s", handle.ClusterID)
 }
 
-// ensureSnapshot returns the snapshot this request owns, taking it if needed.
-// An empty ID means it is not visible yet. The stream's cache is the record of
-// what exists, so an unsynced scope is not evidence that the snapshot is absent:
-// it holds the request in Pending rather than asking for a second snapshot.
-func (r *StorageBackupRequestReconciler) ensureSnapshot(
+// requestBackup asks the control plane to back the volume up and writes the id
+// down before the pass does anything else. A pass that dies between the call and
+// the write leaves a backup no request owns, and the retry takes another: the
+// call has no name or key that would let the control plane tell them apart.
+func (r *StorageBackupRequestReconciler) requestBackup(
 	ctx context.Context, sb *simplyblockv1alpha2.StorageBackup, s *requestSubject,
-) (subscriptions.SnapshotDTO, error) {
-	h, name := s.handle, requestSnapshotPrefix+string(sb.UID)
-	scope := cpinformer.Scope{h.ClusterID, h.PoolRef}
-	if snap, ok := r.Snapshots.FindByName(scope, name); ok {
-		return snap, nil
+) (string, error) {
+	h := s.handle
+	id, err := r.API.CreateVolumeBackup(ctx, h.ClusterID, h.PoolRef, h.VolumeID)
+	if err != nil {
+		return "", err
 	}
-	if !r.Snapshots.Synced(scope) {
-		return subscriptions.SnapshotDTO{}, blocked("the snapshot stream for pool %s has not synced yet", h.PoolRef)
-	}
-	id, err := r.API.CreateSnapshot(ctx, h.ClusterID, h.PoolRef, h.VolumeID, name)
-	if errors.Is(err, errs.ErrAlreadyExists) {
-		return subscriptions.SnapshotDTO{}, nil // an earlier pass took it, the stream has not reported it
-	}
-	return subscriptions.SnapshotDTO{ID: id, Name: name}, err
+	err = r.writeStatus(ctx, sb, func(st *simplyblockv1alpha2.StorageBackupStatus) {
+		st.Phase = simplyblockv1alpha2.StorageBackupPhaseCreating
+		st.Message = backupMessageFor(cpBackupInProgress)
+		st.ClusterID = h.ClusterID
+		st.Backup = &simplyblockv1alpha2.BackupCopy{BackupID: id}
+		st.Source = requestSource(sb, s)
+	})
+	return id, err
 }
 
-// ensureBackup returns the backup of the snapshot, requesting it if needed. Nil
-// means it is not visible yet: the stream reports the copy a moment after the
-// control plane accepts the request, and wakes this request when it does.
-func (r *StorageBackupRequestReconciler) ensureBackup(
-	ctx context.Context, s *requestSubject, snapshotID string,
-) (*subscriptions.BackupDTO, error) {
-	if b, ok := r.Backups.FindBySnapshot(s.handle.ClusterID, snapshotID); ok {
-		return &b, nil
+// requestSource is what status.source holds before the stream has reported the
+// copy: the claim and the volume, which the request knows, and not the snapshot,
+// which only the backup names.
+func requestSource(sb *simplyblockv1alpha2.StorageBackup, s *requestSubject) *simplyblockv1alpha2.BackupSource {
+	return &simplyblockv1alpha2.BackupSource{
+		ClaimName: s.claim, ClaimNamespace: sb.Namespace, PersistentVolumeName: s.volume,
+		PoolUUID: s.handle.PoolRef, LvolID: s.handle.VolumeID, FSType: s.fsType,
+		ClusterUUID: s.handle.ClusterID,
 	}
-	if !r.Backups.Synced(cpinformer.Scope{s.handle.ClusterID}) {
-		return nil, blocked("the backup stream for cluster %s has not synced yet", s.handle.ClusterID)
-	}
-	if err := r.API.CreateBackup(ctx, s.handle.ClusterID, snapshotID); err != nil &&
-		!errors.Is(err, errs.ErrAlreadyExists) {
-		return nil, err
-	}
-	return nil, nil
 }
 
 // report records the backup's progress and ends the request when it is done.
 func (r *StorageBackupRequestReconciler) report(
 	ctx context.Context, sb *simplyblockv1alpha2.StorageBackup,
-	s *requestSubject, snap subscriptions.SnapshotDTO, backup subscriptions.BackupDTO,
+	s *requestSubject, backup subscriptions.BackupDTO,
 ) (ctrl.Result, error) {
 	phase := backupPhaseFor(backup.Status)
 	copied := backupCopyFrom(backup)
@@ -303,11 +259,8 @@ func (r *StorageBackupRequestReconciler) report(
 		st.Phase, st.APIStatus, st.Backup = phase, backup.Status, copied
 		st.Message = backupMessageFor(backup.Status)
 		st.ClusterID = s.handle.ClusterID
-		st.Source = &simplyblockv1alpha2.BackupSource{
-			ClaimName: s.claim, ClaimNamespace: sb.Namespace, PersistentVolumeName: s.volume,
-			PoolUUID: s.handle.PoolRef, LvolID: s.handle.VolumeID, FSType: s.fsType,
-			SnapshotID: snap.ID, SnapshotName: snap.Name, ClusterUUID: s.handle.ClusterID,
-		}
+		st.Source = requestSource(sb, s)
+		st.Source.SnapshotID, st.Source.SnapshotName = backup.SnapshotID, backup.SnapshotName
 	})
 	if err != nil {
 		return ctrl.Result{}, err

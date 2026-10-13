@@ -21,8 +21,6 @@ const (
 	backupID        = "44444444-4444-4444-4444-444444444444"
 	backupClusterCR = "production"
 	backupNamespace = "sb"
-	// backupSnapshotName is the name of the snapshot the request tests' backup was made of.
-	backupSnapshotName = "sbk-1"
 )
 
 func backupScope() cpinformer.Scope { return cpinformer.Scope{backupCluster} }
@@ -187,40 +185,22 @@ func TestBackupSubscriptionDropsABackupDeletedWithAnEmptyBody(t *testing.T) {
 	}
 }
 
-func TestBackupSubscriptionFindsABackupBySnapshot(t *testing.T) {
+// The mirror's trigger names a record the person never created, and it is
+// consumed by the mirror, so a request is woken through a channel of its own.
+// The name it carries is the record's, which is what a request's backup id maps
+// to.
+func TestBackupSubscriptionTriggersARequestByTheNameOfTheBackupsRecord(t *testing.T) {
 	s := adoptedBackupSubscription()
-	if err := s.Ingest(context.Background(), backupSnapshot(t,
-		BackupDTO{ID: backupID, SnapshotID: "snap-1", SnapshotName: backupSnapshotName, Status: "in_progress"})); err != nil {
+
+	if err := s.Ingest(context.Background(), backupSnapshot(t, BackupDTO{ID: backupID})); err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
 
-	dto, ok := s.FindBySnapshot(backupCluster, "snap-1")
-
-	if !ok || dto.ID != backupID {
-		t.Errorf("FindBySnapshot = %+v, %v, want backup %s", dto, ok, backupID)
-	}
-	if _, ok := s.FindBySnapshot(backupCluster, "snap-2"); ok {
-		t.Error("FindBySnapshot found a backup of a snapshot it does not hold")
-	}
-	if _, ok := s.FindBySnapshot("another-cluster", "snap-1"); ok {
-		t.Error("FindBySnapshot found the backup in a cluster that did not report it")
-	}
-}
-
-// The mirror's trigger names a record the person never created, so a request
-// is woken by the name of its snapshot, which the backup carries.
-func TestBackupSubscriptionTriggersARequestBySnapshotName(t *testing.T) {
-	s := adoptedBackupSubscription()
-
-	if err := s.Ingest(context.Background(), backupSnapshot(t,
-		BackupDTO{ID: backupID, SnapshotID: "snap-1", SnapshotName: backupSnapshotName})); err != nil {
-		t.Fatalf("Ingest: %v", err)
-	}
-
+	want := simplyblockv1alpha2.StorageBackupName(backupID)
 	select {
-	case ev := <-s.SnapshotTriggers():
-		if ev.Object.GetName() != backupSnapshotName {
-			t.Errorf("trigger named %q, want the snapshot's name %q", ev.Object.GetName(), backupSnapshotName)
+	case ev := <-s.RequestTriggers():
+		if ev.Object.GetName() != want {
+			t.Errorf("trigger named %q, want the record's name %q", ev.Object.GetName(), want)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no request trigger for a backup the stream reported")

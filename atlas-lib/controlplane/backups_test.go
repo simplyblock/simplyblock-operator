@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -227,5 +228,44 @@ func TestClientRestoreBackupWithoutAVolumeFails(t *testing.T) {
 		RestoreBackupParams{BackupID: testBackup, LvolName: "restore-1", Pool: "pool1"},
 	); !errors.Is(err, errs.ErrInvalidResponse) {
 		t.Errorf("err = %v, want ErrInvalidResponse", err)
+	}
+}
+
+func TestClientCreateVolumeBackup(t *testing.T) {
+	var method, path string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		w.Header().Set("Location", "/api/v2/clusters/"+testCluster+"/backups/"+testBackup)
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	id, err := c.CreateVolumeBackup(context.Background(), testCluster, testPool, testVolume)
+	if err != nil || id != testBackup {
+		t.Fatalf("id = %q, err = %v, want %q from the Location header", id, err, testBackup)
+	}
+	want := "/api/v2/clusters/" + testCluster + "/storage-pools/" + testPool + "/volumes/" + testVolume + "/backups"
+	if method != http.MethodPost || strings.TrimSuffix(path, "/") != want {
+		t.Errorf("request = %s %s, want POST %s", method, path, want)
+	}
+}
+
+func TestClientCreateVolumeBackupRejectsALocationThatIsNotAnID(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", "/api/v2/clusters/"+testCluster+"/backups/")
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	if id, err := c.CreateVolumeBackup(context.Background(), testCluster, testPool, testVolume); err == nil {
+		t.Errorf("id = %q, want an error for a response that names no backup", id)
+	}
+}
+
+func TestClientCreateVolumeBackupReportsAFailedRequest(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "node is not online", http.StatusConflict)
+	})
+
+	if _, err := c.CreateVolumeBackup(context.Background(), testCluster, testPool, testVolume); err == nil {
+		t.Error("want an error for a refused request")
 	}
 }

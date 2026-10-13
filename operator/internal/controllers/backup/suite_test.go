@@ -75,7 +75,6 @@ func testClient(t *testing.T, objs ...client.Object) client.Client {
 		).
 		WithIndex(&corev1.PersistentVolume{}, PersistentVolumeLvolIDIndex, IndexPersistentVolumeLvolID).
 		WithIndex(&simplyblockv1alpha2.StorageBackup{}, RequestedBackupIndex, IndexRequestedBackup).
-		WithIndex(&simplyblockv1alpha2.StorageBackup{}, RequestSnapshotIndex, IndexRequestSnapshot).
 		WithObjects(objs...).
 		Build()
 }

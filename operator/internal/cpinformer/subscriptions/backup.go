@@ -73,10 +73,11 @@ type BackupSubscription struct {
 
 	ch chan event.GenericEvent
 
-	// snapshotCh wakes the request that took the snapshot a backup was made of.
-	// The mirror's channel cannot: it names the record the store's identifier
-	// gives, and a request is a person's object under a name of their choosing.
-	snapshotCh chan event.GenericEvent
+	// requestCh wakes the request that asked for a backup. The mirror's channel
+	// cannot: the mirror consumes it, and it names an object in the cluster's
+	// namespace, while a request is a person's object under a name of their
+	// choosing.
+	requestCh chan event.GenericEvent
 
 	// byObject indexes the cache the way the reconciler reads it: a reconcile
 	// request carries an object key, and only the subscription can turn one back
@@ -95,7 +96,7 @@ func NewBackupSubscription() *BackupSubscription {
 		Cache:           NewCache(func(b BackupDTO) string { return b.ID }),
 		ClusterRegistry: newClusterRegistry(),
 		ch:              make(chan event.GenericEvent, 1024),
-		snapshotCh:      make(chan event.GenericEvent, 1024),
+		requestCh:       make(chan event.GenericEvent, 1024),
 		byObject:        map[string]string{},
 	}
 }
@@ -121,9 +122,7 @@ func (s *BackupSubscription) Ingest(ctx context.Context, ev cpinformer.Event) er
 		if present {
 			s.index(scope, backupID)
 			s.enqueue(ctx, scope, backupID)
-			if _, dto, ok := s.Find(backupID); ok {
-				enqueueByName(ctx, s.snapshotCh, dto.SnapshotName)
-			}
+			enqueueByName(ctx, s.requestCh, simplyblockv1alpha2.StorageBackupName(backupID))
 			return
 		}
 		s.enqueue(ctx, scope, backupID)
@@ -206,23 +205,11 @@ func (s *BackupSubscription) enqueue(ctx context.Context, scope cpinformer.Scope
 // source.Channel. Each event names the StorageBackup object to reconcile.
 func (s *BackupSubscription) Triggers() <-chan event.GenericEvent { return s.ch }
 
-// SnapshotTriggers is the request reconciler's trigger channel. Each event
-// carries the name of the snapshot a backup was made of, as the name of a
-// metadata-only object, which the reconciler maps back to the request that took
-// it.
-func (s *BackupSubscription) SnapshotTriggers() <-chan event.GenericEvent { return s.snapshotCh }
-
-// FindBySnapshot returns the backup of a snapshot in one cluster's scope. A
-// request knows the snapshot it took and not yet the backup's identifier, so the
-// snapshot is how it finds the copy.
-func (s *BackupSubscription) FindBySnapshot(clusterID, snapshotID string) (BackupDTO, bool) {
-	for _, dto := range s.List(cpinformer.Scope{clusterID}) {
-		if dto.SnapshotID == snapshotID {
-			return dto, true
-		}
-	}
-	return BackupDTO{}, false
-}
+// RequestTriggers is the request reconciler's trigger channel. Each event
+// carries the name the mirror would give the backup's record, as the name of a
+// metadata-only object, which the reconciler maps back to the request that asked
+// for the backup.
+func (s *BackupSubscription) RequestTriggers() <-chan event.GenericEvent { return s.requestCh }
 
 // Lookup returns the cached backup that the named StorageBackup object mirrors,
 // with the scope it belongs to, or ok=false if the control plane no longer
