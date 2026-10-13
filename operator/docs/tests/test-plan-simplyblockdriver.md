@@ -35,52 +35,53 @@ here.
 
 File: `operator/internal/controllers/driver/simplyblockdriver_controller_unit_test.go`
 
-| #     | Scenario                                                                             | Type     | Test                                                   |
-|-------|--------------------------------------------------------------------------------------|----------|--------------------------------------------------------|
-| U-01  | A fresh object: the node DaemonSet, controller StatefulSet, and RBAC applied         | Positive | `TestDesiredCoversTheWholeObjectSet`                   |
-| U-42  | Every per-driver sidecar is applied whatever the cluster already runs                | Positive | `TestEverySidecarIsAppliedAndAddressedToThisDriver`    |
-| U-43  | Each sidecar receives this driver's socket as `--csi-address`                        | Positive | `TestEverySidecarIsAppliedAndAddressedToThisDriver`    |
-| U-44  | The `csi-snapshotter` sidecar is applied even where a `snapshot-controller` exists   | Boundary | `TestSnapshotterSidecarIsAppliedRegardlessOfTheToggle` |
-| U-02  | The core `CSIDriver` registration is created with `spec.driverName`                  | Positive | `TestRegistrationIsNamedByDriverName`                  |
-| U-33  | `spec.driverName` reaches the node plugin's kubelet registration path                | Positive | `TestDriverNameReachesTheKubeletPaths`                 |
-| U-34  | It reaches the hostPath the node plugin mounts                                       | Positive | `TestDriverNameReachesTheKubeletPaths`                 |
-| U-35  | It reaches the snapshot class's `driver` field when snapshots are enabled            | Positive | `TestSnapshotClassNamesTheDriver`                      |
-| U-36  | A non-default `driverName`: no object carries the default alongside it               | Negative | `TestNoObjectCarriesTheDefaultAlongsideAnOverride`     |
-| U-03  | Every applied object carries a controller reference                                  | Positive | `TestEveryAppliedObjectIsOwned`                        |
-| U-04  | The cluster serves `snapshot.storage.k8s.io/v1`: no CRD and no controller applied    | Negative | —                                                      |
-| U-05  | The cluster does not serve it: the CRDs and a controller are applied                 | Positive | —                                                      |
-| U-37  | The `VolumeSnapshotClass` for `spec.driverName` is applied in both cases             | Positive | `TestSnapshotClassFollowsTheToggle`                    |
-| U-38  | An installed CRD and controller carry no controller reference                        | Negative | —                                                      |
-| U-39  | `status.snapshotSupport` is `Detected` where the API was already served              | Positive | —                                                      |
-| U-40  | `status.snapshotSupport` is `Installed` where the operator applied them              | Positive | —                                                      |
-| U-41  | Deleting the object leaves an installed CRD and controller in place                  | Boundary | —                                                      |
-| U-06  | One image reaches both plugins, never two                                            | Positive | `TestOneImageReachesBothPlugins`                       |
-| U-07  | `controllerReplicas` reaches the controller StatefulSet                              | Positive | `TestReplicasReachTheControllerOnly`                   |
-| U-08  | `nodeSelector` and `tolerations` reach the node DaemonSet and not the controller     | Positive | `TestPlacementReachesItsOwnPluginOnly`                 |
-| U-09  | The resource blocks reach their own plugin and not the other                         | Boundary | `TestResourcesReachTheirOwnPlugin`                     |
-| U-10  | A second reconcile applies nothing new                                               | Negative | —                                                      |
-| U-26  | The node `ConfigMap` carries the endpoint the cluster's `ControlPlane` publishes     | Positive | —                                                      |
-| U-27  | It carries the credentials for that control plane, and not the endpoint alone        | Positive | —                                                      |
-| U-28  | The published endpoint changes: the `ConfigMap` is rewritten                         | Positive | —                                                      |
-| U-29  | No `ControlPlane` in the cluster: the objects are applied and the driver waits       | Boundary | —                                                      |
-| U-30  | A `ControlPlane` that is not `Ready`: applied and waiting, not `Failed`              | Boundary | —                                                      |
-| U-81  | Several `StorageCluster`s: one `clusters` entry each, all naming one endpoint        | Positive | —                                                      |
-| U-82  | A `ControlPlane` in another namespace than the driver: resolved all the same         | Boundary | —                                                      |
-| U-94  | `spec.tls` unset: no `SB_TLS_*` env, no `tls` volume, no mount, on either plugin     | Negative | `TestTLSOffAddsNothing`                                |
-| U-95  | `enableTLS`: `SB_TLS_SERVE`, `SB_TLS_PROVIDER`, `SB_TLS_CONNECT=anonymous`           | Positive | `TestTLSEnvMatchesTheChart`                            |
-| U-96  | `enableMutualTLS`: `SB_TLS_CLIENT_AUTH`, `SB_TLS_CONNECT=authenticated`, `FDB_TLS_*` | Positive | `TestTLSEnvMatchesTheChart`                            |
-| U-97  | None of `U-95`/`U-96` reaches a sidecar or `csi-registrar`                           | Negative | `TestTLSReachesOnlyThePluginContainers`                |
-| U-98  | `enableTLS` alone mounts the CA bundle only, at the provider's shape                 | Positive | `TestTLSVolumeShape`                                   |
-| U-99  | `enableMutualTLS` mounts each plugin's own client-certificate Secret, by name        | Positive | `TestTLSVolumeShape`                                   |
-| U-100 | `enableMutualTLS` with `enableTLS` unset is ignored, the same as the chart           | Boundary | `TestTLSConnectMode`                                   |
+| #     | Scenario                                                                                        | Type     | Test                                                    |
+|-------|-------------------------------------------------------------------------------------------------|----------|---------------------------------------------------------|
+| U-01  | A fresh object: the node DaemonSet, controller StatefulSet, and RBAC applied                    | Positive | `TestDesiredCoversTheWholeObjectSet`                    |
+| U-42  | Every per-driver sidecar is applied whatever the cluster already runs                           | Positive | `TestEverySidecarIsAppliedAndAddressedToThisDriver`     |
+| U-43  | Each sidecar receives this driver's socket as `--csi-address`                                   | Positive | `TestEverySidecarIsAppliedAndAddressedToThisDriver`     |
+| U-44  | The `csi-snapshotter` sidecar is applied even where a `snapshot-controller` exists              | Boundary | `TestSnapshotterSidecarIsAppliedRegardlessOfTheToggle`  |
+| U-02  | The core `CSIDriver` registration is created with `spec.driverName`                             | Positive | `TestRegistrationIsNamedByDriverName`                   |
+| U-33  | `spec.driverName` reaches the node plugin's kubelet registration path                           | Positive | `TestDriverNameReachesTheKubeletPaths`                  |
+| U-34  | It reaches the hostPath the node plugin mounts                                                  | Positive | `TestDriverNameReachesTheKubeletPaths`                  |
+| U-35  | It reaches the snapshot class's `driver` field when snapshots are enabled                       | Positive | `TestSnapshotClassNamesTheDriver`                       |
+| U-36  | A non-default `driverName`: no object carries the default alongside it                          | Negative | `TestNoObjectCarriesTheDefaultAlongsideAnOverride`      |
+| U-03  | Every applied object carries a controller reference                                             | Positive | `TestEveryAppliedObjectIsOwned`                         |
+| U-04  | The cluster serves no snapshot API: the operator applies no CRD and no controller               | Negative | `TestACrdlessClusterGetsNothingInstalled`               |
+| U-05  | The cluster serves no snapshot API: `status.snapshotSupport` is `Missing`, with a warning event | Positive | `TestACrdlessClusterReportsMissing`                     |
+| U-37  | The `VolumeSnapshotClass` for `spec.driverName` is applied in both cases                        | Positive | `TestSnapshotClassFollowsTheToggle`                     |
+| U-38  | A served API reads `Detected` whether or not a snapshot-controller is found                     | Positive | `TestAServedAPIReportsDetected`                         |
+| U-39  | `status.snapshotSupport` moves from `Missing` to `Detected` when the API appears                | Boundary | `TestStatusMovesFromMissingToDetectedWhenTheAPIAppears` |
+| U-41  | A deployment that disabled snapshots reports nothing                                            | Negative | `TestSnapshotsDisabledReportsNothing`                   |
+| U-06  | One image reaches both plugins, never two                                                       | Positive | `TestOneImageReachesBothPlugins`                        |
+| U-07  | `controllerReplicas` reaches the controller StatefulSet                                         | Positive | `TestReplicasReachTheControllerOnly`                    |
+| U-08  | `nodeSelector` and `tolerations` reach the node DaemonSet and not the controller                | Positive | `TestPlacementReachesItsOwnPluginOnly`                  |
+| U-09  | The resource blocks reach their own plugin and not the other                                    | Boundary | `TestResourcesReachTheirOwnPlugin`                      |
+| U-10  | A second reconcile applies nothing new                                                          | Negative | —                                                       |
+| U-26  | The node `ConfigMap` carries the endpoint the cluster's `ControlPlane` publishes                | Positive | —                                                       |
+| U-27  | It carries the credentials for that control plane, and not the endpoint alone                   | Positive | —                                                       |
+| U-28  | The published endpoint changes: the `ConfigMap` is rewritten                                    | Positive | —                                                       |
+| U-29  | No `ControlPlane` in the cluster: the objects are applied and the driver waits                  | Boundary | —                                                       |
+| U-30  | A `ControlPlane` that is not `Ready`: applied and waiting, not `Failed`                         | Boundary | —                                                       |
+| U-81  | Several `StorageCluster`s: one `clusters` entry each, all naming one endpoint                   | Positive | —                                                       |
+| U-82  | A `ControlPlane` in another namespace than the driver: resolved all the same                    | Boundary | —                                                       |
+| U-94  | `spec.tls` unset: no `SB_TLS_*` env, no `tls` volume, no mount, on either plugin                | Negative | `TestTLSOffAddsNothing`                                 |
+| U-95  | `enableTLS`: `SB_TLS_SERVE`, `SB_TLS_PROVIDER`, `SB_TLS_CONNECT=anonymous`                      | Positive | `TestTLSEnvMatchesTheChart`                             |
+| U-96  | `enableMutualTLS`: `SB_TLS_CLIENT_AUTH`, `SB_TLS_CONNECT=authenticated`, `FDB_TLS_*`            | Positive | `TestTLSEnvMatchesTheChart`                             |
+| U-97  | None of `U-95`/`U-96` reaches a sidecar or `csi-registrar`                                      | Negative | `TestTLSReachesOnlyThePluginContainers`                 |
+| U-98  | `enableTLS` alone mounts the CA bundle only, at the provider's shape                            | Positive | `TestTLSVolumeShape`                                    |
+| U-99  | `enableMutualTLS` mounts each plugin's own client-certificate Secret, by name                   | Positive | `TestTLSVolumeShape`                                    |
+| U-100 | `enableMutualTLS` with `enableTLS` unset is ignored, the same as the chart                      | Boundary | `TestTLSConnectMode`                                    |
 
 `U-44` holds the boundary design §4.1 draws. The `csi-snapshotter` sidecar is part
 of this driver's controller plugin, and the detection applies to the cluster's
 `snapshot-controller`.
 
-`U-38` and `U-41` are the pair design §4.1 turns on. What the operator installs
-here is cluster-scoped and shared, so it is applied without ownership and stays
-when the driver goes, which design §9 Q2 records as unfinished.
+`U-04` and `U-05` are the pair design §4.1 turns on. The snapshot CRDs and
+controller are cluster-scoped and shared by every CSI driver, so the operator
+installs none of them and reports what is missing instead. The Helm chart
+installs them, and an installation without the chart is told through
+`status.snapshotSupport` and a warning event.
 
 `U-33` to `U-36` are the four places the name appears. Design §9 Q3 records that
 the chart writes three of them literally, so a plan that asserted only `U-02`
@@ -331,21 +332,21 @@ marked by anything else stays.
 A live deployment with a real kubelet, because a CSI driver that is applied but
 not registered fails only when a workload asks for a volume.
 
-| #    | Scenario                                                                               | Type     | Test |
-|------|----------------------------------------------------------------------------------------|----------|------|
-| E-01 | A fresh `SimplyblockDriver`: the driver registers and a volume provisions              | Positive | —    |
-| E-02 | A node plugin killed on one worker: `Degraded`, and other workers still attach         | Positive | —    |
-| E-03 | The controller plugin killed: `Unavailable`, and existing attachments survive          | Negative | —    |
-| E-04 | The controller plugin returns: provisioning resumes without intervention               | Positive | —    |
-| E-05 | A CSI driver older than the control plane: the skew is visible in both gauges          | Negative | —    |
-| E-06 | `spec.image` changed: the rollout replaces both plugins and the phase recovers         | Positive | —    |
-| E-07 | Sustained I/O across a node-plugin restart: the data path is unaffected                | Positive | —    |
-| E-08 | A cluster with no snapshot API: the CRDs and a controller appear, and a snapshot works | Positive | —    |
-| E-09 | A chart-installed cluster upgraded: the driver is adopted and no plugin pod restarts   | Positive | —    |
-| E-10 | Volumes stay attached and I/O continues across the reconcile that adopts               | Positive | —    |
-| E-11 | `helm uninstall` after adoption: the driver keeps running and volumes keep attaching   | Positive | —    |
-| E-12 | Deleting the adopted `SimplyblockDriver`: every object goes, cluster-scoped included   | Positive | —    |
-| E-13 | A second object created while the webhook is down: the running driver is untouched     | Negative | —    |
+| #    | Scenario                                                                                                           | Type     | Test |
+|------|--------------------------------------------------------------------------------------------------------------------|----------|------|
+| E-01 | A fresh `SimplyblockDriver`: the driver registers and a volume provisions                                          | Positive | —    |
+| E-02 | A node plugin killed on one worker: `Degraded`, and other workers still attach                                     | Positive | —    |
+| E-03 | The controller plugin killed: `Unavailable`, and existing attachments survive                                      | Negative | —    |
+| E-04 | The controller plugin returns: provisioning resumes without intervention                                           | Positive | —    |
+| E-05 | A CSI driver older than the control plane: the skew is visible in both gauges                                      | Negative | —    |
+| E-06 | `spec.image` changed: the rollout replaces both plugins and the phase recovers                                     | Positive | —    |
+| E-07 | Sustained I/O across a node-plugin restart: the data path is unaffected                                            | Positive | —    |
+| E-08 | A cluster with no snapshot API, deployed through the chart: the CRDs and a controller appear, and a snapshot works | Positive | —    |
+| E-09 | A chart-installed cluster upgraded: the driver is adopted and no plugin pod restarts                               | Positive | —    |
+| E-10 | Volumes stay attached and I/O continues across the reconcile that adopts                                           | Positive | —    |
+| E-11 | `helm uninstall` after adoption: the driver keeps running and volumes keep attaching                               | Positive | —    |
+| E-12 | Deleting the adopted `SimplyblockDriver`: every object goes, cluster-scoped included                               | Positive | —    |
+| E-13 | A second object created while the webhook is down: the running driver is untouched                                 | Negative | —    |
 
 ---
 
@@ -427,9 +428,7 @@ Every unit row a fake client can reach is covered: what the controller applies,
 the names, the two ownerships, the phase and its counts, the singleton on both
 sides, the sidecar resolution, and the adoption handover.
 
-What is left divides into four. Snapshot installation, `U-04`, `U-05`, and
-`U-38` to `U-41`, waits on the CRDs and controller design §4.1 supplies where a
-cluster has none. The control-plane rows, `U-26` to `U-30`, `U-81`, and `U-82`,
+What is left divides into three. The control-plane rows, `U-26` to `U-30`, `U-81`, and `U-82`,
 wait on the endpoint the credentials Secret carries and this deployment does not
 write. Version skew, `U-20` to `U-25` and `U-45` to `U-53`, waits on the document
 design §5.1 reads and on the control-plane version endpoint §5.3 says does not
@@ -440,16 +439,15 @@ reconcile with a live cache.
 
 ## 6. What Is Not Yet Covered
 
-| #                                                            | Gap                                                                         | Reason                                                                                                                |
-|--------------------------------------------------------------|-----------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------|
-| U-04, U-05, U-38 … U-41                                      | Snapshot support: detecting it, installing it, and what outlives the driver | Design §4.1 supplies the CRDs and a controller where a cluster has none, which is not built                           |
-| U-20 … U-25, U-31, U-32, U-45 … U-53                         | Version skew                                                                | The document design §5.1 reads does not exist, and neither does the control-plane version endpoint (design §5.3)      |
-| U-10, U-26 … U-30, U-68, U-72, U-73, U-75, U-80 … U-82, U-84 | The idempotent second pass, the control-plane rows, and the adoption edges  | Each needs a live cache, a real API server, or the endpoint the credentials Secret carries                            |
-| I-01 … I-23                                                  | Every admission rule, the real-API-server apply, and field ownership        | Needs `envtest`, because defaulting and immutability are enforced by the API server and a fake client applies neither |
-| E-01 … E-13                                                  | All end-to-end scenarios                                                    | Needs a live deployment with a real kubelet. The e2e harness under `test/` is not committed yet                       |
-| M-01 … M-03                                                  | Two versions, adoption by hand, and a release at non-default values         | Need two builds of the driver and a cluster the chart already installed into                                          |
-| Metrics                                                      | The four metrics of design §6.2                                             | Designed, not built                                                                                                   |
-| Q2, Q3                                                       | Snapshot cleanup, and whether `driverName` stays settable                   | Design §9 leaves both open, so no row asserts what they do                                                            |
+| #                                                            | Gap                                                                        | Reason                                                                                                                |
+|--------------------------------------------------------------|----------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------|
+| U-20 … U-25, U-31, U-32, U-45 … U-53                         | Version skew                                                               | The document design §5.1 reads does not exist, and neither does the control-plane version endpoint (design §5.3)      |
+| U-10, U-26 … U-30, U-68, U-72, U-73, U-75, U-80 … U-82, U-84 | The idempotent second pass, the control-plane rows, and the adoption edges | Each needs a live cache, a real API server, or the endpoint the credentials Secret carries                            |
+| I-01 … I-23                                                  | Every admission rule, the real-API-server apply, and field ownership       | Needs `envtest`, because defaulting and immutability are enforced by the API server and a fake client applies neither |
+| E-01 … E-13                                                  | All end-to-end scenarios                                                   | Needs a live deployment with a real kubelet. The e2e harness under `test/` is not committed yet                       |
+| M-01 … M-03                                                  | Two versions, adoption by hand, and a release at non-default values        | Need two builds of the driver and a cluster the chart already installed into                                          |
+| Metrics                                                      | The four metrics of design §6.2                                            | Designed, not built                                                                                                   |
+| Q2, Q3                                                       | Snapshot cleanup, and whether `driverName` stays settable                  | Design §9 leaves both open, so no row asserts what they do                                                            |
 
 ### Axis coverage
 
@@ -466,8 +464,8 @@ reconcile with a live cache.
 |                   | Driver older                           | U-31, U-32                      |
 |                   | Driver newer                           | U-22, E-05, M-01                |
 |                   | Unknown                                | U-25                            |
-| Snapshot support  | Detected                               | U-04, U-39                      |
-|                   | Installed                              | U-05, U-40, E-08                |
+| Snapshot support  | Detected                               | U-38, U-39                      |
+|                   | Missing                                | U-04, U-05, E-08                |
 | Control plane     | Present and `Ready`                    | U-26, E-01                      |
 |                   | Absent                                 | U-29                            |
 |                   | Present, not `Ready`                   | U-30                            |

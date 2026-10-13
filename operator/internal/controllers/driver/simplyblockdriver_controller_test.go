@@ -17,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -35,6 +36,9 @@ func reconcilerScheme(t *testing.T) *runtime.Scheme {
 	}
 	if err := simplyblockv1alpha2.AddToScheme(s); err != nil {
 		t.Fatalf("add simplyblock scheme: %v", err)
+	}
+	if err := apiextensionsv1.AddToScheme(s); err != nil {
+		t.Fatalf("add apiextensions scheme: %v", err)
 	}
 	return s
 }

@@ -64,22 +64,6 @@ func volumeSnapshotClass(d *simplyblockv1alpha2.SimplyblockDriver) *unstructured
 	return obj
 }
 
-// TODO(simplyblockdriver): supply the snapshot CRDs and a controller where the
-// cluster serves neither, which is the second half of design-simplyblockdriver.md
-// §4.1 and is why SnapshotSupportOriginInstalled is not yet reachable.
-//
-// The chart installs both today, and conditionally: its CRD templates are
-// guarded on .Capabilities.APIVersions.Has, so a cluster already serving the
-// kinds gets nothing, which is the same rule §4.1 states for the operator. What
-// a chart cannot cover is an installation that is not a chart — an OLM bundle,
-// or a release with snapshotcontroller.create false — and that is the case this
-// owes. It needs the upstream manifests carried in this binary and an image for
-// the controller, which no field on the spec names, so it is a change of its own
-// rather than a line here. §9 Q2 is what removes them afterward, and it is open.
-//
-// The test plan's U-38 to U-41 are the rows this owes. U-04 and U-05 are the
-// detection below.
-
 // SnapshotAPI answers whether the cluster serves the snapshot kinds, which is
 // §4.1's detection: a snapshot-controller exists to reconcile those kinds and
 // its Deployment is named differently by every distribution, so the API being
@@ -97,9 +81,10 @@ type SnapshotAPI interface {
 // snapshotOrigin is what status.snapshotSupport should read, and the empty
 // string for a deployment that asked for no snapshots.
 //
-// Only Detected is reachable today. Installed is what the apply above would
-// record, and recording it before that apply exists would say this deployment
-// brought snapshot support to a cluster where nothing did.
+// It follows the API: Missing without it, Detected with it. The operator looks
+// for the API and nothing else, because a snapshot-controller can run under any
+// name in any namespace, and it installs none of it, so Installed is never the
+// answer.
 func (r *SimplyblockDriverReconciler) snapshotOrigin(
 	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
 ) (simplyblockv1alpha2.SnapshotSupportOrigin, error) {
@@ -111,7 +96,7 @@ func (r *SimplyblockDriverReconciler) snapshotOrigin(
 		return "", err
 	}
 	if !served {
-		return "", nil
+		return simplyblockv1alpha2.SnapshotSupportOriginMissing, nil
 	}
 	return simplyblockv1alpha2.SnapshotSupportOriginDetected, nil
 }
