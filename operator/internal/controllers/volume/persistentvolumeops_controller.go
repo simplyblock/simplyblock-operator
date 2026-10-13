@@ -351,8 +351,10 @@ func (r *PersistentVolumeOpsReconciler) advance(
 
 	current := machine.CurrentState()
 
-	if ops.Spec.Abort {
-		return r.unwind(ctx, ops, subject, machine, current)
+	// An abort the graph cannot honor is noted and the step still runs, so the
+	// operation reaches its end instead of waiting on a pass that never comes.
+	if ops.Spec.Abort && machine.CanAbort() {
+		return r.unwind(ctx, ops, subject, current)
 	}
 
 	if machine.TimeoutReached() {
@@ -385,7 +387,11 @@ func (r *PersistentVolumeOpsReconciler) advance(
 		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, err.Error())
 	}
 	if !done {
-		return r.waitOn(machine), r.note(ctx, ops, fmt.Sprintf("waiting on %s", current))
+		message := fmt.Sprintf("waiting on %s", current)
+		if ops.Spec.Abort {
+			message += "; the abort arrived after the volume had moved and cannot be honored"
+		}
+		return r.waitOn(machine), r.note(ctx, ops, message)
 	}
 
 	r.observeStep(ops, subject, current)
@@ -441,30 +447,15 @@ func (r *PersistentVolumeOpsReconciler) enterInitialStep(
 	return ctrl.Result{RequeueAfter: opsAdvance}, nil
 }
 
-// unwind honors spec.abort where the graph allows it, and reports an abort that
-// arrived too late rather than half-undoing the work.
-//
-// The refusal is the point. Verifying has already cut the volume over, so an
-// abort there would leave the volume moved and the paths its move created
-// untracked, which is the state the step exists to prevent.
+// unwind honors an abort the graph allows. Verifying has already cut the volume
+// over, so an abort there is not honored: it would leave the volume moved and the
+// paths its move created untracked.
 func (r *PersistentVolumeOpsReconciler) unwind(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.PersistentVolumeOps,
 	subject *subject,
-	machine *statemachine.Machine[step],
 	current step,
 ) (ctrl.Result, error) {
-	// The machine is asked rather than a table beside it: the graph it was
-	// built from is the one authority over what this action can stop from, and
-	// the DELETE guard reads the same graph.
-	if !machine.CanAbort() {
-		// Not a failure of the operation: it carries on. What was asked for
-		// cannot be done, and saying so is the whole of the response.
-		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, fmt.Sprintf(
-			"the abort arrived at step %s, by which point the volume has already moved "+
-				"and the cleanup is what makes the move safe; the operation is running on", current))
-	}
-
 	if err := r.discardMigration(ctx, ops, subject); err != nil {
 		// Not terminal. The operation stays where it is and the abort is
 		// honored on a later pass, because ending it now is what leaks the
