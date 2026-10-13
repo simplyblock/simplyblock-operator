@@ -15,6 +15,7 @@ env:
   IMAGE_NAME: docker.io/simplyblock/spdkcsi
   ECR_IMAGE_NAME: public.ecr.aws/simply-block/spdkcsi
   QUAY_IMAGE_NAME: quay.io/simplyblock-io/spdkcsi
+  INTERNAL_IMAGE_NAME: registry.simplyblock.ai/simplyblock/spdkcsi
 
 jobs:
 
@@ -27,34 +28,20 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v4
 
-    - name: Login to Docker Hub
-      uses: docker/login-action@v3
-      with:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-    - name: Configure AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: us-east-1
-
     # Quay.io ships customer-facing images, so only a release run (one that names
     # a version) logs in and pushes there.
-    - name: Log in to Quay.io
-      if: inputs.version != ''
-      uses: docker/login-action@v3
+    - name: Log in to container registries
+      uses: ./.github/actions/registry-login
       with:
-        registry: quay.io
-        username: ${{ secrets.QUAY_USERNAME }}
-        password: ${{ secrets.QUAY_PASSWORD }}
-
-    - name: Login to ECR
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v2
-      with:
-        registry-type: public
+        dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+        dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        quay: ${{ inputs.version != '' }}
+        quay-username: ${{ secrets.QUAY_USERNAME }}
+        quay-password: ${{ secrets.QUAY_PASSWORD }}
+        internal-username: ${{ secrets.INTERNAL_USERNAME }}
+        internal-password: ${{ secrets.INTERNAL_PASSWORD }}
 
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
@@ -70,6 +57,7 @@ jobs:
           echo "images<<EOF"
           echo "${IMAGE_NAME}"
           echo "${ECR_IMAGE_NAME}"
+          echo "${INTERNAL_IMAGE_NAME}"
           if [ -n "${{ inputs.version }}" ]; then
             echo "${QUAY_IMAGE_NAME}"
           fi
@@ -143,31 +131,18 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v4
 
-    - name: Login to Docker Hub
-      uses: docker/login-action@v3
+    - name: Log in to container registries
+      uses: ./.github/actions/registry-login
       with:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-    - name: Configure AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
+        dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+        dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: us-east-1
-
-    - name: Log in to Quay.io
-      if: inputs.version != ''
-      uses: docker/login-action@v3
-      with:
-        registry: quay.io
-        username: ${{ secrets.QUAY_USERNAME }}
-        password: ${{ secrets.QUAY_PASSWORD }}
-
-    - name: Login to ECR
-      uses: aws-actions/amazon-ecr-login@v2
-      with:
-        registry-type: public
+        quay: ${{ inputs.version != '' }}
+        quay-username: ${{ secrets.QUAY_USERNAME }}
+        quay-password: ${{ secrets.QUAY_PASSWORD }}
+        internal-username: ${{ secrets.INTERNAL_USERNAME }}
+        internal-password: ${{ secrets.INTERNAL_PASSWORD }}
 
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
@@ -182,6 +157,7 @@ jobs:
           echo "images<<EOF"
           echo "${IMAGE_NAME}"
           echo "${ECR_IMAGE_NAME}"
+          echo "${INTERNAL_IMAGE_NAME}"
           if [ -n "${{ inputs.version }}" ]; then
             echo "${QUAY_IMAGE_NAME}"
           fi
