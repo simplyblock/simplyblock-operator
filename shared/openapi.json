@@ -4744,6 +4744,62 @@
           }
         }
       },
+      "post": {
+        "summary": "Clusters:Storage-Pools:Volumes:Backups:Create",
+        "operationId": "clusters_storage_pools_volumes_backups_create_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__backups_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "pool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Pool Id"
+            }
+          },
+          {
+            "name": "volume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Volume Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "summary": "Clusters:Storage-Pools:Volumes:Backups:Delete",
         "operationId": "clusters_storage_pools_volumes_backups_delete_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__backups_delete",
@@ -14544,11 +14600,6 @@
           "name": {
             "type": "string",
             "title": "Name"
-          },
-          "backup": {
-            "type": "boolean",
-            "title": "Backup",
-            "default": false
           }
         },
         "type": "object",

@@ -2239,8 +2239,7 @@ type UnderscoreRestoreParams struct {
 
 // UnderscoreSnapshotParams defines model for _SnapshotParams.
 type UnderscoreSnapshotParams struct {
-	Backup *bool  `json:"backup,omitempty"`
-	Name   string `json:"name"`
+	Name string `json:"name"`
 }
 
 // UnderscoreUpdateParams defines model for _UpdateParams.
@@ -4126,6 +4125,11 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/backups (the `ClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsGet` operationId).
 	ClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsGet(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost Clusters:Storage-Pools:Volumes:Backups:Create
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/backups (the `ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost` operationId).
+	ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGet Clusters:Storage-Pools:Volumes:Capacity
 	//
@@ -6928,6 +6932,21 @@ func (c *Client) ClustersStoragePoolsVolumesBackupsDeleteApiV2ClustersClusterIdS
 // Corresponds with GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/backups (the `ClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsGet` operationId).
 func (c *Client) ClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsGet(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsGetRequest(c.Server, clusterId, poolId, volumeId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost Clusters:Storage-Pools:Volumes:Backups:Create
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/backups (the `ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost` operationId).
+func (c *Client) ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostRequest(c.Server, clusterId, poolId, volumeId)
 	if err != nil {
 		return nil, err
 	}
@@ -13838,6 +13857,54 @@ func NewClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePools
 	return req, nil
 }
 
+// NewClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostRequest constructs an http.Request for the ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost method
+func NewClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostRequest(server string, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "pool_id", poolId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "volume_id", volumeId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/backups", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGetRequest constructs an http.Request for the ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGet method
 func NewClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGetRequest(server string, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params *ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGetParams) (*http.Request, error) {
 	var err error
@@ -16966,6 +17033,13 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/backups (the `ClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsGet` operationId).
 	ClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsGetResponse, error)
+
+	// ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostWithResponse Clusters:Storage-Pools:Volumes:Backups:Create
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/backups (the `ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost` operationId).
+	ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostResponse, error)
 
 	// ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGetWithResponse Clusters:Storage-Pools:Volumes:Capacity
 	//
@@ -22511,6 +22585,47 @@ func (r ClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePools
 	return ""
 }
 
+type ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGetResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -26032,6 +26147,19 @@ func (c *ClientWithResponses) ClustersStoragePoolsVolumesBackupsListApiV2Cluster
 		return nil, err
 	}
 	return ParseClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsGetResponse(rsp)
+}
+
+// ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostWithResponse Clusters:Storage-Pools:Volumes:Backups:Create
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/backups (the `ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost` operationId).
+func (c *ClientWithResponses) ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostResponse, error) {
+	rsp, err := c.ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost(ctx, clusterId, poolId, volumeId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostResponse(rsp)
 }
 
 // ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGetWithResponse Clusters:Storage-Pools:Volumes:Capacity
@@ -30280,6 +30408,35 @@ func ParseClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePoo
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostResponse parses an HTTP response from a ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostWithResponse call
+func ParseClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostResponse(rsp *http.Response) (*ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 201:
+		break // No content-type
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest HTTPValidationError

@@ -2237,8 +2237,7 @@ type UnderscoreRestoreParams struct {
 
 // UnderscoreSnapshotParams defines model for _SnapshotParams.
 type UnderscoreSnapshotParams struct {
-	Backup *bool  `json:"backup,omitempty"`
-	Name   string `json:"name"`
+	Name string `json:"name"`
 }
 
 // UnderscoreUpdateParams defines model for _UpdateParams.
@@ -3358,6 +3357,9 @@ type ServerInterface interface {
 	// ClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsGet Clusters:Storage-Pools:Volumes:Backups:List
 	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/backups)
 	ClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
+	// ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost Clusters:Storage-Pools:Volumes:Backups:Create
+	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/backups)
+	ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
 	// ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGet Clusters:Storage-Pools:Volumes:Capacity
 	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/capacity)
 	ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGetParams)
@@ -8120,6 +8122,50 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesBackupsListApiV2Cl
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "pool_id" -------------
+	var poolId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "pool_id", r.PathValue("pool_id"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pool_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "volume_id" -------------
+	var volumeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "volume_id", r.PathValue("volume_id"), &volumeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "volume_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost(w, r, clusterId, poolId, volumeId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGet operation middleware
 func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGet(w http.ResponseWriter, r *http.Request) {
 
@@ -9872,6 +9918,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/{$}", wrapper.ClustersStoragePoolsVolumesUpdateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdPut)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/backups", wrapper.ClustersStoragePoolsVolumesBackupsDeleteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsDelete)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/backups", wrapper.ClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/backups", wrapper.ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/capacity", wrapper.ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/clone", wrapper.ClustersStoragePoolsVolumesCloneApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdClonePost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/connect", wrapper.ClustersStoragePoolsVolumesConnectApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdConnectGet)
