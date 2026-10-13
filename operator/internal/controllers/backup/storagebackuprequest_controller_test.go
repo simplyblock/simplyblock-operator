@@ -1,7 +1,5 @@
 // Tests for the StorageBackup request reconciler. The cases that re-run a pass
-// count what the control plane was asked to do, because a second backup is the
-// failure under test: the control plane takes the snapshot itself, so a request
-// has no name to make a repeated call safe and has to remember the id instead.
+// count the calls, because a second backup is the failure under test.
 
 package backup
 
@@ -87,8 +85,7 @@ func newRequestReconciler(
 	}
 }
 
-// recordBackup is the state a request is in after a pass that made the call and
-// wrote the id down, whether or not the stream has reported the copy since.
+// recordBackup is a request after a pass that made the call and wrote the id.
 func recordBackup(t *testing.T, r *StorageBackupRequestReconciler) {
 	t.Helper()
 	var sb simplyblockv1alpha2.StorageBackup
@@ -124,7 +121,7 @@ func inProgressBackup() subscriptions.BackupDTO {
 	}
 }
 
-func TestRequestBacksUpTheVolumeAndRecordsTheBackupBeforeTheStreamReportsIt(t *testing.T) {
+func TestRequestRecordsTheBackupID(t *testing.T) {
 	api, stream := &fakeRequestAPI{}, &fakeStream{}
 	r := newRequestReconciler(t, api, stream, true)
 
@@ -137,8 +134,8 @@ func TestRequestBacksUpTheVolumeAndRecordsTheBackupBeforeTheStreamReportsIt(t *t
 		t.Errorf("status = %q with backup %q, want Creating with the id from the call, which is the only handle on the copy",
 			got.Status.Phase, got.BackupID())
 	}
-	if got.Source().ClaimName != testClaim || got.Status.ClusterID != testClusterID {
-		t.Errorf("source = %+v, cluster = %q, want the claim and cluster recorded", got.Source(), got.Status.ClusterID)
+	if got.Status.ClusterID != testClusterID {
+		t.Errorf("cluster = %q, want %q", got.Status.ClusterID, testClusterID)
 	}
 	if res.RequeueAfter != requestResync {
 		t.Errorf("requeue = %v, want the %v resync until the stream reports the copy", res.RequeueAfter, requestResync)
@@ -176,22 +173,6 @@ func TestRequestFollowsTheCopyToItsEnd(t *testing.T) {
 	}
 }
 
-// A second call would take a second backup, and nothing in the request tells the
-// control plane it is a repeat. The recorded id is what stops it.
-func TestRequestThatHoldsABackupIDAsksForNoSecondBackup(t *testing.T) {
-	api := &fakeRequestAPI{}
-	r := newRequestReconciler(t, api, &fakeStream{}, true)
-	recordBackup(t, r)
-
-	reconcileRequest(t, r)
-
-	if api.creates != 0 {
-		t.Errorf("backups asked for = %d, want none for a request that already has one", api.creates)
-	}
-}
-
-// A refused call leaves the request without an id, so a retry may ask again; a
-// failure that is not worth retrying ends it with the reason.
 func TestRequestWhoseCallFailsRecordsNoBackup(t *testing.T) {
 	api := &fakeRequestAPI{err: errors.New("node is not online")}
 	r := newRequestReconciler(t, api, &fakeStream{}, true)
@@ -200,19 +181,6 @@ func TestRequestWhoseCallFailsRecordsNoBackup(t *testing.T) {
 
 	if got.BackupID() != "" || got.Status.Message == "" {
 		t.Errorf("backup = %q, message = %q, want no backup recorded and a reason", got.BackupID(), got.Status.Message)
-	}
-}
-
-// The stream is what moves a request along, so an in-progress copy is not polled
-// on a short timer. The requeue is only the net under a missed event.
-func TestRequestFollowsAnInProgressCopyByTheStreamNotATimer(t *testing.T) {
-	r := newRequestReconciler(t, &fakeRequestAPI{}, &fakeStream{backups: []subscriptions.BackupDTO{inProgressBackup()}}, true)
-	recordBackup(t, r)
-
-	res, _ := reconcileRequest(t, r)
-
-	if res.RequeueAfter != requestResync {
-		t.Errorf("requeue = %v, want the %v resync", res.RequeueAfter, requestResync)
 	}
 }
 

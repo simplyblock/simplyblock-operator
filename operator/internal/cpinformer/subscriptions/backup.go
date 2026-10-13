@@ -74,10 +74,8 @@ type BackupSubscription struct {
 
 	ch chan event.GenericEvent
 
-	// requestCh wakes the request that asked for a backup. The mirror's channel
-	// cannot: the mirror consumes it, and it names an object in the cluster's
-	// namespace, while a request is a person's object under a name of their
-	// choosing.
+	// requestCh wakes the request that asked for a backup, which the mirror's
+	// channel cannot because the mirror consumes it.
 	requestCh chan event.GenericEvent
 
 	// byObject indexes the cache the way the reconciler reads it: a reconcile
@@ -206,10 +204,8 @@ func (s *BackupSubscription) enqueue(ctx context.Context, scope cpinformer.Scope
 // source.Channel. Each event names the StorageBackup object to reconcile.
 func (s *BackupSubscription) Triggers() <-chan event.GenericEvent { return s.ch }
 
-// RequestTriggers is the request reconciler's trigger channel. Each event
-// carries the name the mirror would give the backup's record, as the name of a
-// metadata-only object, which the reconciler maps back to the request that asked
-// for the backup.
+// RequestTriggers is the request reconciler's trigger channel. Each event names
+// the backup's record, which the reconciler maps to the request that asked for it.
 func (s *BackupSubscription) RequestTriggers() <-chan event.GenericEvent { return s.requestCh }
 
 // Lookup returns the cached backup that the named StorageBackup object mirrors,

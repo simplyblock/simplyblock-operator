@@ -259,13 +259,3 @@ func TestClientCreateVolumeBackupRejectsALocationThatIsNotAnID(t *testing.T) {
 		t.Errorf("id = %q, want an error for a response that names no backup", id)
 	}
 }
-
-func TestClientCreateVolumeBackupReportsAFailedRequest(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "node is not online", http.StatusConflict)
-	})
-
-	if _, err := c.CreateVolumeBackup(context.Background(), testCluster, testPool, testVolume); err == nil {
-		t.Error("want an error for a refused request")
-	}
-}

@@ -146,14 +146,9 @@ func (c *Client) BackupByID(ctx context.Context, clusterID, backupID string) (Ba
 }
 
 // CreateVolumeBackup asks the control plane to back a volume up and returns the
-// backup's identifier. The control plane takes the snapshot the copy is made of,
-// names it, and removes it when it is no longer needed, so the caller manages no
-// snapshot. It returns once the request is accepted, and the copy's progress is
-// read through ListBackups.
-//
-// The identifier comes from the Location header, because the endpoint declares no
-// response model. Nothing the caller sends names the request, so a call whose
-// response was lost cannot be repeated safely: it would take a second backup.
+// backup's id, which comes from the Location header. The control plane takes and
+// removes the snapshot itself. The call carries no key, so repeating it takes a
+// second backup.
 func (c *Client) CreateVolumeBackup(ctx context.Context, clusterID, poolID, volumeID string) (string, error) {
 	cluster, pool, err := parseIDs(clusterID, poolID)
 	if err != nil {
