@@ -35,6 +35,7 @@ resources:
 - bases/storage.simplyblock.io_testfailovers.yaml
 - bases/storage.simplyblock.io_storagesitedeployments.yaml
 - bases/objectstore.simplyblock.io_s3buckets.yaml
+- bases/objectstore.simplyblock.io_objectstores.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches: []

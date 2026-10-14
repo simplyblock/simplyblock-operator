@@ -64,6 +64,12 @@ type S3BucketStatus struct {
 	// +optional
 	Phase S3BucketPhase `json:"phase,omitempty"`
 
+	// PhaseDeadline is when the current phase must be given up on. Persisted
+	// so an operator restarted mid-Provisioning resumes the same deadline
+	// rather than granting a fresh one every time it comes back up.
+	// +optional
+	PhaseDeadline *metav1.Time `json:"phaseDeadline,omitempty"`
+
 	// PersistentVolumeClaimName is the PVC this reconciler created for the
 	// bucket's backing volume, recorded rather than recomputed so a later
 	// change to the naming scheme cannot orphan an existing bucket's volume.
