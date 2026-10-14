@@ -82,12 +82,19 @@ func testNFSExport(volumeHandle string, phase simplyblockv1alpha2.NFSExportPhase
 
 func reconcile(t *testing.T, cli client.Client, bucket *objectstorev1alpha1.S3Bucket) objectstorev1alpha1.S3Bucket {
 	t.Helper()
-	r := &S3BucketReconciler{Client: cli, Scheme: cli.Scheme()}
-	if _, err := r.Reconcile(context.Background(), ctrlRequest(bucket)); err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	// None of these fixtures create a gateway Deployment, so mount delivery
+	// converges immediately with zero nodes to deliver to (design §6: no
+	// Deployment to target). A Registry still has to be present for
+	// reconcileMountDelivery to run that check at all rather than skipping
+	// the whole pass.
+	r := &S3BucketReconciler{Client: cli, Scheme: cli.Scheme(), Registry: newFakePeerRegistry(ctx, t)}
+	if _, err := r.Reconcile(ctx, ctrlRequest(bucket)); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	var got objectstorev1alpha1.S3Bucket
-	if err := cli.Get(context.Background(), client.ObjectKeyFromObject(bucket), &got); err != nil {
+	if err := cli.Get(ctx, client.ObjectKeyFromObject(bucket), &got); err != nil {
 		t.Fatalf("reading back the bucket: %v", err)
 	}
 	return got
