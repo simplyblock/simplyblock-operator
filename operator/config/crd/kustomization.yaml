@@ -38,6 +38,7 @@ resources:
 - bases/storage.simplyblock.io_storagefenceremediations.yaml
 - bases/storage.simplyblock.io_storagefenceremediationtemplates.yaml
 - bases/objectstore.simplyblock.io_s3buckets.yaml
+- bases/objectstore.simplyblock.io_objectstores.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches: []
