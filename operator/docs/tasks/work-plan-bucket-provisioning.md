@@ -167,10 +167,10 @@ Build the integration-test double that W-03's and W-12's `I-` scenarios both nee
 
 **Acceptance criteria**
 
-- [ ] A test PVC against the fake `StorageClass` reaches `Bound` without a real CSI driver
-- [ ] A matching `NFSExport` appears in `Ready` with a `spec.volumeRef` that resolves against the bound `PersistentVolume`
-- [ ] The fake `PeerRegistry` records and acknowledges a `DeliverBucket`/`WithdrawBucket` call per node without a real `csi-link` session
-- [ ] The fakes are reusable from both W-03's and W-12's test files without duplication
+- [x] A test PVC against the fake `StorageClass` reaches `Bound` without a real CSI driver
+- [x] A matching `NFSExport` appears in `Ready` with a `spec.volumeRef` that resolves against the bound `PersistentVolume`
+- [x] The fake `PeerRegistry` records and acknowledges a `DeliverBucket`/`WithdrawBucket` call per node without a real `csi-link` session
+- [x] The fakes are reusable from both W-03's and W-12's test files without duplication (they live in `operator/internal/controllers/objectstore`, a new nested package rather than the legacy flat `internal/controller`: the repo's newer controller groups — backup, cluster, deployment, volume — have moved to a `TestMain` + shared `envtest.Environment` + plain `testing.T` convention over the older Ginkgo-based one, and this package follows that)
 
 ### W-09 — End-to-end verification on a live, pNFS-capable cluster
 
