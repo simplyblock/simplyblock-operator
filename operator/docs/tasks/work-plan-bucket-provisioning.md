@@ -226,10 +226,10 @@ Register `bucketdeliveryrpc`'s service on the `csilink.Agent` the node plugin al
 
 **Acceptance criteria**
 
-- [ ] `DeliverBucket` stages and publishes a real pNFS volume at the derived path, verified against a live cluster
-- [ ] `WithdrawBucket` reverses it, idempotent on a second call
-- [ ] A `target_path` outside the three documented subtrees is rejected before any mount is attempted, rather than silently succeeding invisibly (`0004-direct-csi-mount-spike-result.md`'s finding)
-- [ ] The plugin's own restart recovery (`ns.stack.store`) covers a bucket `DeliverBucket` staged, with no new persistence mechanism added
+- [ ] `DeliverBucket` stages and publishes a real pNFS volume at the derived path, verified against a live cluster — **not done this pass**: implemented (`csi-driver/internal/csi/node/bucketdelivery.go`), but live-cluster verification needs explicit access this session did not have. `ns.stagePNFSVolume`/`ns.publishPNFSVolume` also have no test seam for `attachBacking`/`namespaceIdentity` (real NVMe-oF/sysfs calls), the same pre-existing limitation the rest of the pNFS stage/publish path already has, so this is W-09's E2E class to close, not a unit test.
+- [ ] `WithdrawBucket` reverses it, idempotent on a second call — implemented with an explicit guard (`Withdraw` checks the staging mount directly before calling `NodeUnstageVolume`, since its pNFS-detection reads a stash file the first successful unstage deletes, which would otherwise mis-route a second call). Not live-verified, same reason as above.
+- [x] A `target_path` outside the three documented subtrees is rejected before any mount is attempted, rather than silently succeeding invisibly (`0004-direct-csi-mount-spike-result.md`'s finding): `validateDeliveryPath`, unit tested
+- [ ] The plugin's own restart recovery (`ns.stack.store`) covers a bucket `DeliverBucket` staged, with no new persistence mechanism added — true by construction (`Deliver`/`Withdraw` call the same `NodeStageVolume`/`NodePublishVolume`/`NodeUnpublishVolume`/`NodeUnstageVolume` every other volume does, writing the same stash/stack-record files), but not independently exercised by a restart test; folds into the same live-cluster verification as the first two rows
 
 ### W-12 — Reconcile bucket delivery to the gateway's node set
 
