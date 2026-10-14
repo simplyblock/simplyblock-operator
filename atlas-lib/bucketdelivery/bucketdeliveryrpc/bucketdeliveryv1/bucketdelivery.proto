@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+// Package atlas.bucketdelivery.v1 carries an S3 bucket's mount delivery to the
+// node that serves it.
+//
+// Unlike atlas.storage.v1, which is read-only by construction, both calls here
+// mutate the node: they stage and publish a volume, or tear it down. That is
+// why this is a separate service rather than more methods on the storage one --
+// a credential can be granted the reading and not the writing.
+//
+// The operator is the only caller, driven by an ObjectStore's gateway
+// Deployment's pod placement (design-bucket-provisioning.md §5.3): no
+// consuming pod runs kubelet's own stage/publish for this volume, so something
+// else has to ask, and this is that something.
+package atlas.bucketdelivery.v1;
+
+option go_package = "github.com/simplyblock/atlas/bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1;bucketdeliveryv1";
+
+// BucketDeliveryService delivers and withdraws one S3 bucket's mount on the
+// node it runs on. Both calls are idempotent, because the caller is a
+// reconciler and will make them again.
+service BucketDeliveryService {
+  // DeliverBucket stages and publishes the bucket's backing volume under the
+  // node's shared gateway mount directory, so every gateway pod on this node
+  // sees the bucket appear at the same deterministic path. Re-running it over
+  // an already-delivered bucket changes nothing on the host.
+  rpc DeliverBucket(DeliverBucketRequest) returns (DeliverBucketResponse);
+
+  // WithdrawBucket reverses it: unpublish, then unstage. A bucket already
+  // withdrawn is success, not an error, because the caller reconciles a node
+  // set and has to converge.
+  rpc WithdrawBucket(WithdrawBucketRequest) returns (WithdrawBucketResponse);
+}
+
+message DeliverBucketRequest {
+  // bucket_name is the S3 bucket name, which the node derives the
+  // deterministic mount path from: every gateway pod on a node must see the
+  // same bucket at the same relative path regardless of when it was
+  // delivered.
+  string bucket_name = 1;
+
+  // volume_handle is the CSI volume handle of the bucket's backing volume,
+  // exactly as it appears in a PersistentVolume's spec.csi.volumeHandle.
+  string volume_handle = 2;
+
+  // volume_context mirrors CSI's own VolumeContext (the map CreateVolume
+  // returns and NodeStageVolume/NodePublishVolume consume) field for field,
+  // so the node answers this call the same way it answers kubelet's: by
+  // calling its own NodeStageVolume then NodePublishVolume with this map, no
+  // translation in between.
+  map<string, string> volume_context = 3;
+}
+
+message DeliverBucketResponse {}
+
+message WithdrawBucketRequest {
+  // bucket_name identifies which delivery to tear down, the same name
+  // DeliverBucket derived its mount path from.
+  string bucket_name = 1;
+
+  // volume_handle is the CSI volume handle, as in DeliverBucketRequest.
+  string volume_handle = 2;
+}
+
+message WithdrawBucketResponse {}

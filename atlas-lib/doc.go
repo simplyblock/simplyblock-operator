@@ -38,6 +38,12 @@
 //	kube            Map a logical volume to the Kubernetes objects representing it.
 //	controlplane    Client for the simplyblock control-plane API.
 //	nfsexport       Publish a pNFS export on its metadata-server host.
+//	bucketdeliveryrpc
+//	                Deliver and withdraw an S3 bucket's mount on a gateway
+//	                node, over a link (bucketdelivery/bucketdeliveryrpc). No
+//	                local action package: the node-side work is the CSI node
+//	                plugin's own NodeStageVolume/NodePublishVolume, already
+//	                written for kubelet.
 //	fiemap          What a byte range of a file is made of on disk: data,
 //	                unwritten, delalloc, or hole.
 //	nfsclient       What the kernel's NFS client says about its mounts:
