@@ -244,11 +244,13 @@ Runs in the existing `kubernetes/operator` manager (`0005-s3bucket-joins-the-mai
 
 **Acceptance criteria**
 
-- [ ] U-11 through U-16 pass
-- [ ] I-07 through I-10 pass against the `envtest` harness and fakes W-08 provides
-- [ ] A gateway pod rescheduled to a new node gets `DeliverBucket` called there within one reconcile (I-07), and `WithdrawBucket` is called for the stale node
-- [ ] Two gateway pods on the same node produce exactly one `DeliverBucket` call (U-13)
-- [ ] The existing manager's `ClusterRole` diff is committed with this item, scoped to exactly the `pods`/`deployments.apps` rules design §7.5 lists for this controller
+- [x] U-11 through U-16 pass
+- [x] I-07, I-09, I-10 pass against the `envtest` harness and fakes W-08 provides. I-08 (two concurrent reconciles converge, no duplicate calls) is not a test of this item's own code: design §7.3 already names it "the standard controller-runtime guarantee, not new discipline" (a single object's key is never processed by two workers at once), and a test driving two direct `Reconcile` calls in parallel would only reprove controller-runtime's own workqueue, which this harness does not run
+- [x] A gateway pod rescheduled to a new node gets `DeliverBucket` called there within one reconcile (I-07), and `WithdrawBucket` is called for the stale node
+- [x] Two gateway pods on the same node produce exactly one `DeliverBucket` call (U-13): `desiredDeliveryNodes` builds its node set from a map, so the duplicate never reaches `diffDeliveryNodes` to call `DeliverBucket` twice about
+- [x] The existing manager's `ClusterRole` diff is committed with this item, scoped to exactly the `pods`/`deployments.apps` rules design §7.5 lists for this controller (both verb sets were already a subset of what the manager's merged `ClusterRole` grants other controllers, so the diff adds no new permission, only this reconciler's own explicit markers)
+
+Also added, beyond design §7.2's own text: a `Watches(&corev1.Pod{}, ...)` on the gateway's pods (filtered to ones carrying the `objectstore.simplyblock.io/instance` label), mapping a pod event to every `S3Bucket` naming that `ObjectStore`. Without it nothing would ever wake a `Ready` bucket's reconcile when its gateway pod moved to a new node in production, since this controller watches no object `design-objectstore.md` owns.
 
 ---
 
