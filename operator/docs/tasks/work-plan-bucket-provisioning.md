@@ -42,11 +42,11 @@ W-02 → W-08 → W-03 → W-09 (4 items, weight 7)
 
 ## 2. External Prerequisites
 
-| Prerequisite                                                                                                      | Blocks                                                                                                                                                       | Design               |
-|-------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------|
-| A cluster with the pNFS RWX path (`NFSExport` CRD, MDS pod, `fstype: pnfs` StorageClass) actually deployed        | W-09                                                                                                                                                         | design Phase 0, P0-1 |
-| The `ObjectStore` CRD (gateway Deployment, Service, TLS), designed (`design-objectstore.md`), not yet implemented | W-12 (node-set discovery reads the gateway Deployment's pods by `design-objectstore.md`'s fixed label, not a field, but still needs the Deployment to exist) | design Phase 0, P0-3 |
-| The S3 gateway's `CreateBucket` handler, a separate repository                                                    | none in this plan — this plan's items are reachable and testable by any authorized Kubernetes client, per design §12 Open Question 3                         | design Phase 0, P0-4 |
+| Prerequisite                                                                                                       | Blocks                                                                                                                                                       | Design               |
+|--------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------|
+| A cluster with the pNFS RWX path (`NFSExport` CRD, MDS pod, `fstype: pnfs` StorageClass) actually deployed         | W-09                                                                                                                                                         | design Phase 0, P0-1 |
+| The `ObjectStore` CRD's gateway Deployment, Service, and TLS (its types exist as of W-03, its reconciler does not) | W-12 (node-set discovery reads the gateway Deployment's pods by `design-objectstore.md`'s fixed label, not a field, but still needs the Deployment to exist) | design Phase 0, P0-3 |
+| The S3 gateway's `CreateBucket` handler, a separate repository                                                     | none in this plan — this plan's items are reachable and testable by any authorized Kubernetes client, per design §12 Open Question 3                         | design Phase 0, P0-4 |
 
 An item blocked only on an external prerequisite is still filed. It carries the `blocked` label and names the prerequisite in its body.
 
@@ -101,11 +101,18 @@ Implement the `S3Bucket` reconciler's phase machine, excluding bucket delivery (
 
 **Acceptance criteria**
 
-- [ ] U-01 through U-10 pass
-- [ ] I-01 through I-06 and I-11 pass against the `envtest` harness and CSI/`NFSExport` test double W-08 provides
-- [ ] An operator restart mid-`Provisioning` resumes from `status` without re-creating the PVC (I-06)
-- [ ] The design §9 failure table's first four rows each produce the named event and phase
-- [ ] The existing manager's `ClusterRole` diff is committed with this item, scoped to exactly the resources design §7.5 lists for `S3BucketReconciler`
+- [x] U-01 through U-10 pass
+- [x] I-01 through I-06 pass against the `envtest` harness and CSI/`NFSExport` test double W-08 provides (I-11 does not: proving the manager's `ClusterRole` is sufficient needs a constrained client built from `config/rbac/role.yaml`, not yet set up in this harness — stays `—` in the test plan)
+- [x] An operator restart mid-`Provisioning` resumes from `status` without re-creating the PVC (I-06)
+- [x] The design §9 failure table's first four rows each produce the named event and phase
+- [x] The existing manager's `ClusterRole` diff is committed with this item, scoped to exactly the resources design §7.5 lists for `S3BucketReconciler`, plus `objectstores` read access (the `ObjectStoreNotFound` check design §7.5 did not have a kind to grant against yet) and `s3buckets/finalizers` (omitted from §7.5's table the same way every other kind's own finalizer rule is a mechanical addition, not a design decision)
+
+Two additions beyond what design Appendix A and §7.5 as written cover, both because a reconciler now actually exists to need them:
+
+- `status.phaseDeadline` (`*metav1.Time`) was missing from Appendix A despite §9's own prose assuming a deadline ("stays in Provisioning past its deadline"); added, matching `NFSExportStatus.PhaseDeadline`'s exact shape.
+- The `ObjectStore` CRD (design-objectstore.md Appendix A) did not exist yet, and I-05 needs a real `ObjectStore` existence check. Added its types (data only, no reconciler — that design's own work plan still owns the gateway Deployment/Service/TLS logic), since the design document already specifies them in full.
+
+A `MountDeliveryChecker` seam (`mountDeliveryComplete`, always `true` today) is what lets `Provisioning` reach `Ready` without W-12's node-set computation existing yet; W-12 replaces it with the real check.
 
 ### W-04 — ~~Reconcile mount-holder pods to the gateway's node set~~ Superseded
 

@@ -81,4 +81,13 @@ resources:
   kind: S3Bucket
   path: github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: false
+  domain: simplyblock.io
+  group: objectstore
+  kind: ObjectStore
+  path: github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1
+  version: v1alpha1
 version: "3"
