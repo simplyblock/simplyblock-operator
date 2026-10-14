@@ -57,6 +57,7 @@ import (
 	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	workv1 "open-cluster-management.io/api/work/v1"
 
+	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
@@ -148,6 +149,10 @@ func init() {
 	// OCM ManifestWork: the TestFailover controller places the bubble PV/PVC on a
 	// recovery cluster through it (design-test-failover.md §7.6).
 	utilruntime.Must(workv1.Install(scheme))
+	// objectstore.simplyblock.io: the S3 object interface's bucket provisioning
+	// (design-bucket-provisioning.md), a separate API group from storage's so
+	// its versioning and lifecycle stay independent.
+	utilruntime.Must(objectstorev1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 

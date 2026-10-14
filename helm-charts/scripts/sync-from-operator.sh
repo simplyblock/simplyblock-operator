@@ -22,17 +22,27 @@ echo ""
 # ── CRDs ──────────────────────────────────────────────────────────────────────
 echo "==> Syncing CRDs..."
 
+# One glob per API group this operator owns CRDs in. objectstore.simplyblock.io
+# (design-bucket-provisioning.md) is the first group besides storage.simplyblock.io,
+# so a sync that only ever matched the one prefix stopped covering it silently.
+CRD_GLOBS=("storage.simplyblock.io_*.yaml" "objectstore.simplyblock.io_*.yaml")
+
 # Clear stale CRDs not present in the source (e.g. a CRD type was removed).
-for dst in "$CRD_DST"/storage.simplyblock.io_*.yaml; do
-  [ -f "$dst" ] || continue
-  name=$(basename "$dst")
-  [ -f "$CRD_SRC/$name" ] || { rm "$dst"; echo "  removed (no longer in source): $name"; }
+for glob in "${CRD_GLOBS[@]}"; do
+  for dst in "$CRD_DST"/$glob; do
+    [ -f "$dst" ] || continue
+    name=$(basename "$dst")
+    [ -f "$CRD_SRC/$name" ] || { rm "$dst"; echo "  removed (no longer in source): $name"; }
+  done
 done
 
-for src in "$CRD_SRC"/storage.simplyblock.io_*.yaml; do
-  name=$(basename "$src")
-  cp "$src" "$CRD_DST/$name"
-  echo "  copied: $name"
+for glob in "${CRD_GLOBS[@]}"; do
+  for src in "$CRD_SRC"/$glob; do
+    [ -f "$src" ] || continue
+    name=$(basename "$src")
+    cp "$src" "$CRD_DST/$name"
+    echo "  copied: $name"
+  done
 done
 
 # ── Roles ─────────────────────────────────────────────────────────────────────
