@@ -151,7 +151,13 @@ func TestS3BucketReachesReadyOnceExportIsReady(t *testing.T) {
 	}
 
 	recorder := events.NewFakeRecorder(16)
-	r := &S3BucketReconciler{Client: cli, Scheme: cli.Scheme(), Recorder: recorder}
+	// No gateway Deployment is created (that is design-objectstore.md's own
+	// scope), so mount delivery converges immediately with zero nodes to
+	// deliver to (design §6: no Deployment to target).
+	r := &S3BucketReconciler{
+		Client: cli, Scheme: cli.Scheme(), Recorder: recorder,
+		Registry: newFakePeerRegistry(ctx, t),
+	}
 	key := client.ObjectKeyFromObject(bucket)
 	got := reconcileBucketUntil(t, r, key, func(b *objectstorev1alpha1.S3Bucket) bool {
 		return b.Status.Phase == phaseReady

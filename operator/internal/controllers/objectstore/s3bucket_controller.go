@@ -1,14 +1,12 @@
 // S3BucketReconciler drives one S3 bucket's backing volume from creation to
 // Ready and back: the PersistentVolumeClaim, the NFSExport bound to it, and
-// (once W-12 lands) the per-node mount deliveries that make its gateway's
-// pods see it (design-bucket-provisioning.md).
-//
-// Bucket delivery itself (listing the ObjectStore's gateway pods, diffing
-// the node set, and calling DeliverBucket/WithdrawBucket) is W-12's own
-// work, built on the same reconciler. Until it lands, mountDeliveryComplete
-// is the seam: a bucket reaches Ready once its PVC is bound and its NFSExport
-// is Ready, with nothing yet to wait on for delivery, rather than this phase
-// machine waiting forever on a step nothing performs yet.
+// the per-node mount deliveries that make its gateway's pods see it
+// (design-bucket-provisioning.md). Bucket delivery itself (listing the
+// ObjectStore's gateway pods, diffing the node set, and calling
+// DeliverBucket/WithdrawBucket) lives in s3bucket_delivery.go's own file,
+// since it runs independently of the phase machine below: a gateway pod
+// rescheduled mid-Ready still needs delivering to, and Ready has no
+// outgoing edge for that to ride on.
 package objectstore
 
 import (
@@ -26,10 +24,14 @@ import (
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/simplyblock/atlas/bucketdelivery/bucketdeliveryrpc"
 	"github.com/simplyblock/atlas/link"
@@ -68,8 +70,8 @@ const (
 	// this is the only pace that case has.
 	s3BucketPendingRequeue = 10 * time.Second
 	// How long Provisioning may wait on an NFSExport appearing, becoming
-	// Ready, and (once W-12 reads it) mount delivery completing, before the
-	// bucket degrades.
+	// Ready, and every node confirming mount delivery, before the bucket
+	// degrades.
 	s3BucketProvisioningDeadline = 5 * time.Minute
 	// Come back with a re-read object after a write that bumped
 	// resourceVersion, so status is not written over a copy already stale.
@@ -83,8 +85,9 @@ type S3BucketReconciler struct {
 	Recorder events.EventRecorder
 
 	// Registry resolves a node name to its csi-link session, for bucket
-	// delivery (W-12). Nil until then: this reconciler's own phase machine
-	// does not yet need it.
+	// delivery (s3bucket_delivery.go). Nil skips mount delivery for this
+	// pass rather than erroring, so the kind works (PVC and NFSExport
+	// phases only) before the csi-link hub is wired in.
 	Registry PeerRegistry
 }
 
@@ -131,6 +134,20 @@ func (r *S3BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	defer sm.Close()
 
 	if sm.IsTerminal() {
+		// Ready has no outgoing edge, but a gateway pod can still move to a
+		// new node while this bucket sits there, so delivery reconciliation
+		// runs regardless (I-07). Degraded is left alone: reached by
+		// declining to act, and NFSExport's own Degraded carries the same
+		// rule.
+		if sm.CurrentState() == phaseReady {
+			export, err := r.matchingNFSExport(ctx, &bucket)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if _, err := r.reconcileMountDelivery(ctx, &bucket, export); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -200,9 +217,9 @@ func (r *S3BucketReconciler) reconcilePending(
 }
 
 // reconcileProvisioning waits on the ObjectStore existing, the NFSExport
-// appearing and becoming Ready, and (once W-12 reads mountDeliveryComplete)
-// every node confirming delivery. Not every pass is a transition: most of
-// them find nothing new and only re-poll.
+// appearing and becoming Ready, and every node confirming delivery. Not
+// every pass is a transition: most of them find nothing new and only
+// re-poll.
 func (r *S3BucketReconciler) reconcileProvisioning(
 	ctx context.Context,
 	bucket *objectstorev1alpha1.S3Bucket,
@@ -243,7 +260,11 @@ func (r *S3BucketReconciler) reconcileProvisioning(
 		return ctrl.Result{RequeueAfter: s3BucketFreshCopyRequeue}, nil
 	}
 
-	if !r.mountDeliveryComplete(bucket) {
+	complete, err := r.reconcileMountDelivery(ctx, bucket, export)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !complete {
 		return ctrl.Result{RequeueAfter: s3BucketFreshCopyRequeue}, nil
 	}
 
@@ -263,24 +284,13 @@ func (r *S3BucketReconciler) reconcileProvisioning(
 			Type: conditionExportReady, Status: metav1.ConditionTrue, Reason: "NFSExportReady",
 		})
 		meta.SetStatusCondition(&s.Conditions, metav1.Condition{
-			Type: conditionMountDelivered, Status: metav1.ConditionTrue, Reason: "NothingToDeliverYet",
-			Message: "mount delivery is not yet implemented (W-12); treated as satisfied",
+			Type: conditionMountDelivered, Status: metav1.ConditionTrue, Reason: "AllNodesPublished",
 		})
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
 	r.event(bucket, corev1.EventTypeNormal, "BucketReady", fmt.Sprintf("bucket %s is ready", bucket.Spec.BucketName))
 	return ctrl.Result{}, nil
-}
-
-// mountDeliveryComplete reports whether every node this bucket's gateway
-// serves from has confirmed delivery. W-12 replaces this with a real check
-// against the ObjectStore's gateway Deployment's pods and
-// status.mountDeliveredNodes. Until it lands there is no gateway node set
-// computed anywhere, so treating delivery as satisfied is what lets Ready be
-// reached at all rather than waiting forever on a step nothing performs.
-func (r *S3BucketReconciler) mountDeliveryComplete(*objectstorev1alpha1.S3Bucket) bool {
-	return true
 }
 
 // provisioningFailure names why Provisioning timed out, inspecting the same
@@ -301,7 +311,7 @@ func (r *S3BucketReconciler) provisioningFailure(
 		}
 	}
 	// NFSExport is Ready, so the only thing left Provisioning could still be
-	// waiting on is mount delivery (W-12).
+	// waiting on is mount delivery.
 	return "MountDeliveryFailed", "mount delivery was not confirmed on every node within the deadline"
 }
 
@@ -442,9 +452,8 @@ func (r *S3BucketReconciler) objectStoreExists(
 }
 
 // reconcileDelete releases the PVC and drops the finalizer, on every path
-// including the one where nothing was ever provisioned. Withdrawing the
-// mount from every delivered node is W-12's addition, once there is a
-// Registry and a recorded node set to withdraw from.
+// including the one where nothing was ever provisioned, withdrawing the
+// mount from every node status.mountDeliveredNodes still names first.
 func (r *S3BucketReconciler) reconcileDelete(
 	ctx context.Context, bucket *objectstorev1alpha1.S3Bucket,
 ) (ctrl.Result, error) {
@@ -461,8 +470,7 @@ func (r *S3BucketReconciler) reconcileDelete(
 
 	// Withdraw every delivered node before the PVC goes, per design §6: a
 	// node told to unpublish after its volume is already gone has nothing
-	// left to unpublish from. Empty until W-12 populates
-	// status.mountDeliveredNodes and wires a Registry.
+	// left to unpublish from.
 	for _, node := range bucket.Status.MountDeliveredNodes {
 		if r.Registry == nil {
 			break
@@ -629,11 +637,27 @@ func s3BucketControllerOptions() controller.Options {
 
 // SetupWithManager wires the controller. Owns the PersistentVolumeClaim it
 // creates, so a manual delete of it is noticed and repaired on the bucket's
-// own reconcile.
+// own reconcile. Watches the gateway Deployment's pods (read-only, design
+// §7.2): a pod rescheduled to a new node is what every bucket naming that
+// ObjectStore needs to react to within one reconcile (I-07), and nothing
+// else would wake them for a change to an object this controller never
+// owns.
 func (r *S3BucketReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&objectstorev1alpha1.S3Bucket{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(
+			func(ctx context.Context, obj client.Object) []ctrlreconcile.Request {
+				pod, ok := obj.(*corev1.Pod)
+				if !ok {
+					return nil
+				}
+				return r.bucketsForGatewayPod(ctx, pod)
+			}),
+			builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
+				_, ok := obj.GetLabels()[gatewayInstanceLabel]
+				return ok
+			}))).
 		WithOptions(s3BucketControllerOptions()).
 		Complete(r)
 }
