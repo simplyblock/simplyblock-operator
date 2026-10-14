@@ -8,6 +8,7 @@ rules:
   - ""
   resources:
   - configmaps
+  - persistentvolumeclaims
   - secrets
   - serviceaccounts
   - services
@@ -31,17 +32,6 @@ rules:
   resources:
   - nodes
   verbs:
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - persistentvolumeclaims
-  verbs:
-  - create
   - get
   - list
   - patch
@@ -263,6 +253,38 @@ rules:
   verbs:
   - create
   - get
+  - update
+- apiGroups:
+  - objectstore.simplyblock.io
+  resources:
+  - objectstores
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - objectstore.simplyblock.io
+  resources:
+  - s3buckets
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - objectstore.simplyblock.io
+  resources:
+  - s3buckets/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - objectstore.simplyblock.io
+  resources:
+  - s3buckets/status
+  verbs:
+  - get
+  - patch
   - update
 - apiGroups:
   - operator.openshift.io

@@ -68,6 +68,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	nodecontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/node"
+	objectstorecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/objectstore"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/twonode"
 	twonodecp "github.com/simplyblock/simplyblock-operator/internal/controllers/twonode/cpadapter"
@@ -509,6 +510,21 @@ func main() {
 	}
 	if err := nfsExportReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NFSExport")
+		os.Exit(1)
+	}
+	// S3Bucket's own delivery step (W-12) also reaches its nodes over
+	// csi-link, the same registry NFSExport assembly uses, because both run
+	// in this manager (design-bucket-provisioning.md §7.1).
+	s3BucketReconciler := &objectstorecontrollers.S3BucketReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("s3bucket-controller"),
+	}
+	if csiPeers != nil {
+		s3BucketReconciler.Registry = csiPeers
+	}
+	if err := s3BucketReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "S3Bucket")
 		os.Exit(1)
 	}
 	if err := (&nodecontroller.StorageDeviceReconciler{

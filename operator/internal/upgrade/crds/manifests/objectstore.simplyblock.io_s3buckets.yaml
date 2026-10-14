@@ -202,6 +202,13 @@ spec:
                 - Degraded
                 - Deleting
                 type: string
+              phaseDeadline:
+                description: |-
+                  PhaseDeadline is when the current phase must be given up on. Persisted
+                  so an operator restarted mid-Provisioning resumes the same deadline
+                  rather than granting a fresh one every time it comes back up.
+                format: date-time
+                type: string
             type: object
         type: object
     served: true

@@ -5,12 +5,6 @@
 // dials an in-process bucketdeliveryrpc server per node instead, over a
 // bufconn listener, and records every DeliverBucket/WithdrawBucket call each
 // one acknowledges.
-//
-// It satisfies the same narrow PeerRegistry shape nfsexport_assembler.go
-// already defines in the legacy package (Conn(id) (grpc.ClientConnInterface,
-// error)) rather than importing it: a second copy of a three-line interface in
-// its own package is the ordinary Go shape for "the part of a dependency this
-// package needs," not the duplication the extract-to-atlas-lib skill is about.
 
 package objectstore
 
@@ -27,11 +21,6 @@ import (
 	"github.com/simplyblock/atlas/bucketdelivery/bucketdeliveryrpc"
 	"github.com/simplyblock/atlas/link"
 )
-
-// PeerRegistry is the part of the link hub a bucket-delivery caller needs.
-type PeerRegistry interface {
-	Conn(id link.PeerID) (grpc.ClientConnInterface, error)
-}
 
 // fakePeerRegistry records every delivery and withdrawal its nodes
 // acknowledge, keyed by node name.
