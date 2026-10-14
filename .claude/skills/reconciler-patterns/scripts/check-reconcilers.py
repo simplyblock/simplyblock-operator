@@ -27,7 +27,24 @@ import sys
 from pathlib import Path
 
 SCAN_DIR = "operator/internal"
+# The legacy flat package, plus every nested internal/controllers/<domain>
+# package (backup, cluster, deployment, objectstore, ...): a glob rather than a
+# named list, so a new domain package joins the audit the day it is added
+# instead of silently sitting outside it the way CONTROLLER_DIR being a single
+# path once did.
 CONTROLLER_DIR = "operator/internal/controller"
+
+
+def controller_dirs(repo: Path) -> list[str]:
+    dirs = [CONTROLLER_DIR]
+    nested = repo / "operator" / "internal" / "controllers"
+    if nested.is_dir():
+        dirs += [
+            f"operator/internal/controllers/{child.name}"
+            for child in sorted(nested.iterdir())
+            if child.is_dir()
+        ]
+    return dirs
 
 FUNC_RE = re.compile(r"^func\s+(?:\((\w+)\s+\*?(\w+)\)\s+)?(\w+)\s*\(")
 # A helper assigned as a func literal inside a var block, which is how the
@@ -259,11 +276,12 @@ def main():
     if args.paths:
         targets = set(named)
     elif args.changed:
+        dirs = controller_dirs(repo)
         listed = set()
         for command in (
-            ["git", "diff", "--name-only", "HEAD", "--", CONTROLLER_DIR],
-            ["git", "diff", "--name-only", "--cached", "--", CONTROLLER_DIR],
-            ["git", "ls-files", "--others", "--exclude-standard", "--", CONTROLLER_DIR],
+            ["git", "diff", "--name-only", "HEAD", "--", *dirs],
+            ["git", "diff", "--name-only", "--cached", "--", *dirs],
+            ["git", "ls-files", "--others", "--exclude-standard", "--", *dirs],
         ):
             result = subprocess.run(command, cwd=repo, capture_output=True, text=True)
             listed.update(
@@ -275,7 +293,11 @@ def main():
             return 0
         targets = {(repo / name).resolve() for name in listed}
     else:
-        targets = {p.resolve() for p in (repo / CONTROLLER_DIR).glob("*.go")}
+        targets = {
+            p.resolve()
+            for d in controller_dirs(repo)
+            for p in (repo / d).glob("*.go")
+        }
 
     controller_funcs = [f for f in funcs if f.path.resolve() in targets]
     if not controller_funcs:
