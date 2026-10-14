@@ -2014,7 +2014,8 @@ type UnresolvedBackupConfig struct {
 
 // UpdatableClusterParameters defines model for UpdatableClusterParameters.
 type UpdatableClusterParameters struct {
-	Name *string `json:"name,omitempty"`
+	Name               *string `json:"name,omitempty"`
+	TwoNodeArbitration *bool   `json:"two_node_arbitration,omitempty"`
 }
 
 // UpdatableLVolParams defines model for UpdatableLVolParams.
@@ -2205,12 +2206,29 @@ type UnderscoreMigrationParams struct {
 	TargetNodeId openapi_types.UUID `json:"target_node_id"`
 }
 
+// UnderscoreOverride defines model for _Override.
+type UnderscoreOverride struct {
+	Reason string `json:"reason"`
+	Winner string `json:"winner"`
+}
+
 // UnderscorePolicyCreateParams defines model for _PolicyCreateParams.
 type UnderscorePolicyCreateParams struct {
 	Age      *string `json:"age,omitempty"`
 	Name     string  `json:"name"`
 	Schedule *string `json:"schedule,omitempty"`
 	Versions *int    `json:"versions,omitempty"`
+}
+
+// UnderscorePreferred defines model for _Preferred.
+type UnderscorePreferred struct {
+	NodeId string `json:"node_id"`
+}
+
+// UnderscoreRemediation defines model for _Remediation.
+type UnderscoreRemediation struct {
+	Fenced bool   `json:"fenced"`
+	NodeId string `json:"node_id"`
 }
 
 // UnderscoreReplicationParams defines model for _ReplicationParams.
@@ -2597,6 +2615,17 @@ type ClustersUpdateApiV2ClustersClusterIdPutJSONRequestBody = UpdatableClusterPa
 
 // ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostJSONRequestBody defines body for ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost for application/json ContentType.
 type ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostJSONRequestBody = UnderscoreReplicationParams
+
+// ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostJSONRequestBody defines body for ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost for application/json ContentType.
+type ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostJSONRequestBody = UnderscoreOverride
+
+// ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutJSONRequestBody defines body for ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut for application/json ContentType.
+//
+// Deprecated: this type has been marked as deprecated upstream, but no `x-deprecated-reason` was set
+type ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutJSONRequestBody = UnderscorePreferred
+
+// ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutJSONRequestBody defines body for ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut for application/json ContentType.
+type ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutJSONRequestBody = UnderscoreRemediation
 
 // ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostJSONRequestBody defines body for ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost for application/json ContentType.
 type ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostJSONRequestBody = UnderscoreBackupSnapshotParams
@@ -3178,6 +3207,81 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/alerts/ (the `ClustersAlertsListApiV2ClustersClusterIdAlertsGet` operationId).
 	ClustersAlertsListApiV2ClustersClusterIdAlertsGet(ctx context.Context, clusterId openapi_types.UUID, params *ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet Clusters:Arbitration:Get
+	//
+	// The arbitration record plus live lease ages (console, operator, support).
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/arbitration/ (the `ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet` operationId).
+	ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostWithBody Clusters:Arbitration:Override
+	//
+	// Operator decision when the arbiter cannot decide: ``winner`` leads every
+	// LVS. Counts as positive fencing of the other node; audited.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/arbitration/override (the `ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost` operationId).
+	ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost Clusters:Arbitration:Override
+	//
+	// Operator decision when the arbiter cannot decide: ``winner`` leads every
+	// LVS. Counts as positive fencing of the other node; audited.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/arbitration/override (the `ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost` operationId).
+	ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutWithBody Clusters:Arbitration:Preferred
+	//
+	// Deprecated, ignored: there is no preferred node any more. At the hold
+	// deadline without a verdict a node always fences itself, and a partition
+	// fences both nodes. Accepted (204) so older operators keep working; nothing
+	// is stored and nothing is pushed to the nodes.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/preferred (the `ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut` operationId).
+	//
+	// Deprecated: this operation has been marked as deprecated upstream, but no `x-deprecated-reason` was set
+	ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut Clusters:Arbitration:Preferred
+	//
+	// Deprecated, ignored: there is no preferred node any more. At the hold
+	// deadline without a verdict a node always fences itself, and a partition
+	// fences both nodes. Accepted (204) so older operators keep working; nothing
+	// is stored and nothing is pushed to the nodes.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/preferred (the `ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut` operationId).
+	//
+	// Deprecated: this operation has been marked as deprecated upstream, but no `x-deprecated-reason` was set
+	ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutWithBody Clusters:Arbitration:Remediation
+	//
+	// The edge operator reports positive fencing evidence for a node (BMC
+	// fence done, ``out-of-service`` taint present), or clears it.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/remediation (the `ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut` operationId).
+	ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut Clusters:Arbitration:Remediation
+	//
+	// The edge operator reports positive fencing evidence for a node (BMC
+	// fence done, ``out-of-service`` taint present), or clears it.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/remediation (the `ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut` operationId).
+	ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet Clusters:Backup-Config:Get
 	//
@@ -4676,6 +4780,149 @@ func (c *Client) ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost(
 // Corresponds with GET /api/v2/clusters/{cluster_id}/alerts/ (the `ClustersAlertsListApiV2ClustersClusterIdAlertsGet` operationId).
 func (c *Client) ClustersAlertsListApiV2ClustersClusterIdAlertsGet(ctx context.Context, clusterId openapi_types.UUID, params *ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewClustersAlertsListApiV2ClustersClusterIdAlertsGetRequest(c.Server, clusterId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet Clusters:Arbitration:Get
+//
+// The arbitration record plus live lease ages (console, operator, support).
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/arbitration/ (the `ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet` operationId).
+func (c *Client) ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetRequest(c.Server, clusterId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostWithBody Clusters:Arbitration:Override
+//
+// Operator decision when the arbiter cannot decide: “winner“ leads every
+// LVS. Counts as positive fencing of the other node; audited.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/arbitration/override (the `ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost` operationId).
+func (c *Client) ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostRequestWithBody(c.Server, clusterId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost Clusters:Arbitration:Override
+//
+// Operator decision when the arbiter cannot decide: “winner“ leads every
+// LVS. Counts as positive fencing of the other node; audited.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/arbitration/override (the `ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost` operationId).
+func (c *Client) ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostRequest(c.Server, clusterId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutWithBody Clusters:Arbitration:Preferred
+//
+// Deprecated, ignored: there is no preferred node any more. At the hold
+// deadline without a verdict a node always fences itself, and a partition
+// fences both nodes. Accepted (204) so older operators keep working; nothing
+// is stored and nothing is pushed to the nodes.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/preferred (the `ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut` operationId).
+// Deprecated: this operation has been marked as deprecated upstream, but no `x-deprecated-reason` was set
+func (c *Client) ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutRequestWithBody(c.Server, clusterId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut Clusters:Arbitration:Preferred
+//
+// Deprecated, ignored: there is no preferred node any more. At the hold
+// deadline without a verdict a node always fences itself, and a partition
+// fences both nodes. Accepted (204) so older operators keep working; nothing
+// is stored and nothing is pushed to the nodes.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/preferred (the `ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut` operationId).
+// Deprecated: this operation has been marked as deprecated upstream, but no `x-deprecated-reason` was set
+func (c *Client) ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutRequest(c.Server, clusterId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutWithBody Clusters:Arbitration:Remediation
+//
+// The edge operator reports positive fencing evidence for a node (BMC
+// fence done, “out-of-service“ taint present), or clears it.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/remediation (the `ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut` operationId).
+func (c *Client) ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutRequestWithBody(c.Server, clusterId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut Clusters:Arbitration:Remediation
+//
+// The edge operator reports positive fencing evidence for a node (BMC
+// fence done, “out-of-service“ taint present), or clears it.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/remediation (the `ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut` operationId).
+func (c *Client) ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutRequest(c.Server, clusterId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -8198,6 +8445,181 @@ func NewClustersAlertsListApiV2ClustersClusterIdAlertsGetRequest(server string, 
 	if err != nil {
 		return nil, err
 	}
+
+	return req, nil
+}
+
+// NewClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetRequest constructs an http.Request for the ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet method
+func NewClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetRequest(server string, clusterId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/arbitration/", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostRequest calls the generic ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost builder with application/json body
+func NewClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostRequest(server string, clusterId openapi_types.UUID, body ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostRequestWithBody(server, clusterId, "application/json", bodyReader)
+}
+
+// NewClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostRequestWithBody constructs an http.Request for the ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost method, with any body, and a specified content type
+func NewClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostRequestWithBody(server string, clusterId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/arbitration/override", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutRequest calls the generic ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut builder with application/json body
+func NewClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutRequest(server string, clusterId openapi_types.UUID, body ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutRequestWithBody(server, clusterId, "application/json", bodyReader)
+}
+
+// NewClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutRequestWithBody constructs an http.Request for the ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut method, with any body, and a specified content type
+func NewClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutRequestWithBody(server string, clusterId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/arbitration/preferred", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPut, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutRequest calls the generic ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut builder with application/json body
+func NewClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutRequest(server string, clusterId openapi_types.UUID, body ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutRequestWithBody(server, clusterId, "application/json", bodyReader)
+}
+
+// NewClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutRequestWithBody constructs an http.Request for the ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut method, with any body, and a specified content type
+func NewClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutRequestWithBody(server string, clusterId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/arbitration/remediation", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPut, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -15925,6 +16347,83 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/alerts/ (the `ClustersAlertsListApiV2ClustersClusterIdAlertsGet` operationId).
 	ClustersAlertsListApiV2ClustersClusterIdAlertsGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, params *ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams, reqEditors ...RequestEditorFn) (*ClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse, error)
 
+	// ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetWithResponse Clusters:Arbitration:Get
+	//
+	// The arbitration record plus live lease ages (console, operator, support).
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/arbitration/ (the `ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet` operationId).
+	ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse, error)
+
+	// ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostWithBodyWithResponse Clusters:Arbitration:Override
+	//
+	// Operator decision when the arbiter cannot decide: ``winner`` leads every
+	// LVS. Counts as positive fencing of the other node; audited.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/arbitration/override (the `ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost` operationId).
+	ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostResponse, error)
+
+	// ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostWithResponse Clusters:Arbitration:Override
+	//
+	// Operator decision when the arbiter cannot decide: ``winner`` leads every
+	// LVS. Counts as positive fencing of the other node; audited.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/arbitration/override (the `ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost` operationId).
+	ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostResponse, error)
+
+	// ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutWithBodyWithResponse Clusters:Arbitration:Preferred
+	//
+	// Deprecated, ignored: there is no preferred node any more. At the hold
+	// deadline without a verdict a node always fences itself, and a partition
+	// fences both nodes. Accepted (204) so older operators keep working; nothing
+	// is stored and nothing is pushed to the nodes.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/preferred (the `ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut` operationId).
+	//
+	// Deprecated: this operation has been marked as deprecated upstream, but no `x-deprecated-reason` was set
+	ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutResponse, error)
+
+	// ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutWithResponse Clusters:Arbitration:Preferred
+	//
+	// Deprecated, ignored: there is no preferred node any more. At the hold
+	// deadline without a verdict a node always fences itself, and a partition
+	// fences both nodes. Accepted (204) so older operators keep working; nothing
+	// is stored and nothing is pushed to the nodes.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/preferred (the `ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut` operationId).
+	//
+	// Deprecated: this operation has been marked as deprecated upstream, but no `x-deprecated-reason` was set
+	ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutResponse, error)
+
+	// ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutWithBodyWithResponse Clusters:Arbitration:Remediation
+	//
+	// The edge operator reports positive fencing evidence for a node (BMC
+	// fence done, ``out-of-service`` taint present), or clears it.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/remediation (the `ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut` operationId).
+	ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse, error)
+
+	// ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutWithResponse Clusters:Arbitration:Remediation
+	//
+	// The edge operator reports positive fencing evidence for a node (BMC
+	// fence done, ``out-of-service`` taint present), or clears it.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/remediation (the `ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut` operationId).
+	ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse, error)
+
 	// ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetWithResponse Clusters:Backup-Config:Get
 	//
 	// The cluster's backup configuration, with credentials masked.
@@ -17834,6 +18333,184 @@ func (r ClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse) StatusCode() 
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *map[string]interface{}
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse) GetJSON200() *map[string]interface{} {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON202 the response for an HTTP 202 `application/json` response
+	JSON202 *interface{}
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON202 returns the response for an HTTP 202 `application/json` response
+func (r ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostResponse) GetJSON202() *interface{} {
+	return r.JSON202
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -24254,6 +24931,124 @@ func (c *ClientWithResponses) ClustersAlertsListApiV2ClustersClusterIdAlertsGetW
 	return ParseClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse(rsp)
 }
 
+// ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetWithResponse Clusters:Arbitration:Get
+//
+// The arbitration record plus live lease ages (console, operator, support).
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/arbitration/ (the `ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet` operationId).
+func (c *ClientWithResponses) ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse, error) {
+	rsp, err := c.ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet(ctx, clusterId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse(rsp)
+}
+
+// ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostWithBodyWithResponse Clusters:Arbitration:Override
+//
+// Operator decision when the arbiter cannot decide: “winner“ leads every
+// LVS. Counts as positive fencing of the other node; audited.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/arbitration/override (the `ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost` operationId).
+func (c *ClientWithResponses) ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostResponse, error) {
+	rsp, err := c.ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostWithBody(ctx, clusterId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostResponse(rsp)
+}
+
+// ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostWithResponse Clusters:Arbitration:Override
+//
+// Operator decision when the arbiter cannot decide: “winner“ leads every
+// LVS. Counts as positive fencing of the other node; audited.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/arbitration/override (the `ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost` operationId).
+func (c *ClientWithResponses) ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostResponse, error) {
+	rsp, err := c.ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost(ctx, clusterId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostResponse(rsp)
+}
+
+// ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutWithBodyWithResponse Clusters:Arbitration:Preferred
+//
+// Deprecated, ignored: there is no preferred node any more. At the hold
+// deadline without a verdict a node always fences itself, and a partition
+// fences both nodes. Accepted (204) so older operators keep working; nothing
+// is stored and nothing is pushed to the nodes.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/preferred (the `ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut` operationId).
+//
+// Deprecated: this operation has been marked as deprecated upstream, but no `x-deprecated-reason` was set
+func (c *ClientWithResponses) ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutResponse, error) {
+	rsp, err := c.ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutWithBody(ctx, clusterId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutResponse(rsp)
+}
+
+// ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutWithResponse Clusters:Arbitration:Preferred
+//
+// Deprecated, ignored: there is no preferred node any more. At the hold
+// deadline without a verdict a node always fences itself, and a partition
+// fences both nodes. Accepted (204) so older operators keep working; nothing
+// is stored and nothing is pushed to the nodes.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/preferred (the `ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut` operationId).
+// Deprecated: this operation has been marked as deprecated upstream, but no `x-deprecated-reason` was set
+func (c *ClientWithResponses) ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutResponse, error) {
+	rsp, err := c.ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut(ctx, clusterId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutResponse(rsp)
+}
+
+// ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutWithBodyWithResponse Clusters:Arbitration:Remediation
+//
+// The edge operator reports positive fencing evidence for a node (BMC
+// fence done, “out-of-service“ taint present), or clears it.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/remediation (the `ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut` operationId).
+func (c *ClientWithResponses) ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse, error) {
+	rsp, err := c.ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutWithBody(ctx, clusterId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse(rsp)
+}
+
+// ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutWithResponse Clusters:Arbitration:Remediation
+//
+// The edge operator reports positive fencing evidence for a node (BMC
+// fence done, “out-of-service“ taint present), or clears it.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/remediation (the `ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut` operationId).
+func (c *ClientWithResponses) ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse, error) {
+	rsp, err := c.ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut(ctx, clusterId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse(rsp)
+}
+
 // ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetWithResponse Clusters:Backup-Config:Get
 //
 // The cluster's backup configuration, with credentials masked.
@@ -27049,6 +27844,130 @@ func ParseClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse(rsp *http.Re
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse parses an HTTP response from a ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetWithResponse call
+func ParseClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse(rsp *http.Response) (*ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest map[string]interface{}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostResponse parses an HTTP response from a ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostWithResponse call
+func ParseClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostResponse(rsp *http.Response) (*ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest interface{}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutResponse parses an HTTP response from a ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutWithResponse call
+func ParseClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutResponse(rsp *http.Response) (*ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse parses an HTTP response from a ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutWithResponse call
+func ParseClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse(rsp *http.Response) (*ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest HTTPValidationError

@@ -946,6 +946,207 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/arbitration/": {
+      "get": {
+        "summary": "Clusters:Arbitration:Get",
+        "description": "The arbitration record plus live lease ages (console, operator, support).",
+        "operationId": "clusters_arbitration_get_api_v2_clusters__cluster_id__arbitration__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Clusters Arbitration Get Api V2 Clusters  Cluster Id  Arbitration  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/arbitration/preferred": {
+      "put": {
+        "summary": "Clusters:Arbitration:Preferred",
+        "description": "Deprecated, ignored: there is no preferred node any more. At the hold\ndeadline without a verdict a node always fences itself, and a partition\nfences both nodes. Accepted (204) so older operators keep working; nothing\nis stored and nothing is pushed to the nodes.",
+        "operationId": "clusters_arbitration_preferred_api_v2_clusters__cluster_id__arbitration_preferred_put",
+        "deprecated": true,
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_Preferred"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/arbitration/override": {
+      "post": {
+        "summary": "Clusters:Arbitration:Override",
+        "description": "Operator decision when the arbiter cannot decide: ``winner`` leads every\nLVS. Counts as positive fencing of the other node; audited.",
+        "operationId": "clusters_arbitration_override_api_v2_clusters__cluster_id__arbitration_override_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_Override"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/arbitration/remediation": {
+      "put": {
+        "summary": "Clusters:Arbitration:Remediation",
+        "description": "The edge operator reports positive fencing evidence for a node (BMC\nfence done, ``out-of-service`` taint present), or clears it.",
+        "operationId": "clusters_arbitration_remediation_api_v2_clusters__cluster_id__arbitration_remediation_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_Remediation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/storage-nodes/": {
       "get": {
         "summary": "Clusters:Storage-Nodes:List",
@@ -13595,6 +13796,17 @@
               }
             ],
             "title": "Name"
+          },
+          "two_node_arbitration": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Two Node Arbitration"
           }
         },
         "type": "object",
@@ -14438,6 +14650,26 @@
         ],
         "title": "_MigrationParams"
       },
+      "_Override": {
+        "properties": {
+          "winner": {
+            "type": "string",
+            "title": "Winner"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 10,
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "winner",
+          "reason"
+        ],
+        "title": "_Override"
+      },
       "_PolicyCreateParams": {
         "properties": {
           "name": {
@@ -14486,6 +14718,37 @@
           "name"
         ],
         "title": "_PolicyCreateParams"
+      },
+      "_Preferred": {
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "title": "Node Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_id"
+        ],
+        "title": "_Preferred"
+      },
+      "_Remediation": {
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "title": "Node Id"
+          },
+          "fenced": {
+            "type": "boolean",
+            "title": "Fenced"
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_id",
+          "fenced"
+        ],
+        "title": "_Remediation"
       },
       "_ReplicationParams": {
         "properties": {
