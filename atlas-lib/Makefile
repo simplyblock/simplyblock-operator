@@ -18,11 +18,13 @@ CPAPI_GEN := internal/cpapi/cpapi.gen.go internal/cpapi/validation.gen.go
 # the rules take `buf` as an order-only prerequisite: it installs the toolchain
 # when absent without a phony target forcing a regeneration on every make run.
 PROTO_DIRS := link/linkv1 storage/storagerpc/storagev1 nfsexport/nfsexportrpc/nfsexportv1 \
-	conntrack/conntrackrpc/conntrackv1
+	conntrack/conntrackrpc/conntrackv1 bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1
 PROTO_GEN := link/linkv1/link.pb.go link/linkv1/link_grpc.pb.go \
 	storage/storagerpc/storagev1/nvme.pb.go storage/storagerpc/storagev1/nvme_grpc.pb.go \
 	nfsexport/nfsexportrpc/nfsexportv1/export.pb.go nfsexport/nfsexportrpc/nfsexportv1/export_grpc.pb.go \
-	conntrack/conntrackrpc/conntrackv1/flow.pb.go conntrack/conntrackrpc/conntrackv1/flow_grpc.pb.go
+	conntrack/conntrackrpc/conntrackv1/flow.pb.go conntrack/conntrackrpc/conntrackv1/flow_grpc.pb.go \
+	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.pb.go \
+	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery_grpc.pb.go
 
 GENERATED := $(CPAPI_GEN) $(PROTO_GEN)
 
@@ -63,6 +65,11 @@ conntrack/conntrackrpc/conntrackv1/flow.pb.go: conntrack/conntrackrpc/conntrackv
 	cd conntrack/conntrackrpc/conntrackv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
 
 conntrack/conntrackrpc/conntrackv1/flow_grpc.pb.go: conntrack/conntrackrpc/conntrackv1/flow.pb.go
+
+bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.pb.go: bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.proto bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/buf.gen.yaml bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/buf.yaml | buf
+	cd bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
+
+bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery_grpc.pb.go: bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.pb.go
 
 build: $(GENERATED) ## Build all packages.
 	go build ./...
