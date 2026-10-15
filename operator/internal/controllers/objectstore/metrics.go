@@ -31,7 +31,7 @@ var (
 	// in whatever phase it was last seen in forever.
 	bucketPhaseState = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "simplyblock_objectstore_bucket_phase",
+			Name: "simplyblock_objectstore_bucket_phase_state",
 			Help: "1 for the phase the bucket is in, 0 for every other phase.",
 		},
 		[]string{"bucket", "objectstore", "phase"},

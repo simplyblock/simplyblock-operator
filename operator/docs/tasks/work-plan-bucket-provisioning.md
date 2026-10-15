@@ -138,7 +138,7 @@ Superseded by W-10, W-11, and W-12. The mount-holder-pod mechanism this item des
 **Scenarios:** U-20, U-21, I-12, I-13
 **Size:** S
 
-Emit the five events in design §10's Kubernetes Events table, targeting the `S3Bucket` object, and export the three Prometheus metrics in its table: `simplyblock_objectstore_bucket_phase`, `simplyblock_objectstore_bucket_provisioning_seconds`, and `simplyblock_objectstore_mount_delivery_calls_total`. `simplyblock_objectstore_bucket_provisioning_seconds` is the measurement design §12 Open Question 4 (the `CreateBucket` synchronous-wait bound) depends on, so this item is a prerequisite for answering that question, not just for dashboards.
+Emit the five events in design §10's Kubernetes Events table, targeting the `S3Bucket` object, and export the three Prometheus metrics in its table: `simplyblock_objectstore_bucket_phase_state`, `simplyblock_objectstore_bucket_provisioning_seconds`, and `simplyblock_objectstore_mount_delivery_calls_total`. `simplyblock_objectstore_bucket_provisioning_seconds` is the measurement design §12 Open Question 4 (the `CreateBucket` synchronous-wait bound) depends on, so this item is a prerequisite for answering that question, not just for dashboards.
 
 **Acceptance criteria**
 
