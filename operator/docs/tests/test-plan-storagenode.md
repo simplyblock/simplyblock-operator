@@ -692,6 +692,7 @@ Files: `operator/internal/controllers/node/hostmaintenance_test.go`,
 | U-362 | The window holds the manager before anything that can fail                          | Regression | `TestTheWindowHoldsTheManagerBeforeAnythingThatCanFail`     |
 | U-363 | The window lets the manager go when it lets the storage pod go                      | Regression | `TestTheWindowLetsTheManagerGoWhenItLetsTheStoragePodGo`    |
 | U-364 | A step of another action reached under this one: terminal rather than stalled       | Negative   | `TestAStepOfAnotherActionEndsTheWindow`                     |
+| U-532 | The step ends only when the worker is uncordoned and its API answers                | Regression | `TestAWindowWaitsForTheWorkerToBeUncordoned`                |
 
 ### Ops Shape: The Step Machine (design §6.3)
 

@@ -2013,7 +2013,7 @@ of a maintenance window afterward.
 | `Holding`      | None                                                                                          | Fewer than the cluster's limit are in maintenance |
 | `ShuttingDown` | Label the evictable pods, create a blocking PDB, `POST /storage-nodes/{node}/shutdown`        | The node is `offline`                             |
 | `Releasing`    | Delete the PDB                                                                                | The SPDK pod is gone                              |
-| `AwaitingHost` | None                                                                                          | The worker's storage-node API answers again       |
+| `AwaitingHost` | None                                                                                          | The worker is uncordoned and its API answers      |
 | `Restarting`   | `POST /storage-nodes/{node}/restart`, skipped if the node is already `in_restart` or `online` | The node is `online`                              |
 | `Cleanup`      | Delete the PDB, remove the drain label                                                        | Terminal                                          |
 

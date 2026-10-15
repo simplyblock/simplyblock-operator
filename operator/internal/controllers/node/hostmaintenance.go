@@ -341,9 +341,22 @@ func callableOff(current step) bool {
 // update: an expiry fails the operation and leaves the node offline, needing a
 // Restart to recover, so the deadline is a detection mechanism rather than a
 // recovery one.
+//
+// It ends when the worker is schedulable again and its API answers. The API alone
+// is not enough: a cordoned, never-rebooted worker keeps answering.
+//
+// Regression: 2026-10-13-maintenance-does-not-wait-for-the-uncordon.
 func (r *StorageNodeOpsReconciler) maintenanceAwaitHost(
 	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
 ) (bool, error) {
+	var worker corev1.Node
+	if err := r.Get(ctx, types.NamespacedName{Name: node.Spec.WorkerNode}, &worker); err != nil {
+		// A missing worker keeps the step waiting; the step deadline reports it.
+		return false, client.IgnoreNotFound(err)
+	}
+	if worker.Spec.Unschedulable {
+		return false, nil
+	}
 	return r.Workload.HostAnswers(ctx, node.Namespace, node.Spec.WorkerNode)
 }
 
