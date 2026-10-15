@@ -5,7 +5,7 @@ Scope: the new bucket-provisioning reconciler and its `S3Bucket` CRD. The CSI dr
 
 Scenario IDs are permanent: `U-` unit (no cluster, pure functions, fake `client.Client`, mock HTTP), `I-` integration (full reconcile loop against `envtest` plus a mock backend), `E-` end-to-end (live cluster, real data path), `M-` manual (needs failure injection or orchestration not yet automated). Types are `Positive`, `Negative`, `Boundary`, `Regression`. The `Test` column names the implementing function, or `—` when the scenario is not yet covered, and every `—` also appears in §8 What Is Not Yet Covered.
 
-W-03 landed the phase machine (excluding bucket delivery, W-12's own scope), and W-12 landed bucket delivery itself: U-01 through U-18 and I-01 through I-07, I-09, I-10 are covered below. I-08 and I-11 stay `—`: I-08 is design §7.3's own "standard controller-runtime guarantee, not new discipline," not this reconciler's own code to test; I-11 (RBAC) needs a constrained client built from `config/rbac/role.yaml`, not yet set up in this harness.
+W-03 landed the phase machine (excluding bucket delivery, W-12's own scope), W-12 landed bucket delivery itself, and W-06 landed the metrics and the one event neither of those happened to cover: U-01 through U-21 and I-01 through I-07, I-09, I-10, I-12, I-13 are covered below. I-08 and I-11 stay `—`: I-08 is design §7.3's own "standard controller-runtime guarantee, not new discipline," not this reconciler's own code to test; I-11 (RBAC) needs a constrained client built from `config/rbac/role.yaml`, not yet set up in this harness.
 
 ---
 
@@ -54,6 +54,17 @@ File: `operator/internal/controllers/objectstore/s3bucket_naming_unit_test.go`
 
 ~~U-19 `mountHolderNameFor`~~ **Moved.** The deterministic `target_path` naming this scenario covered is now `DeliverBucket`'s own concern inside `csi-driver` (`W-11`), not this reconciler's. A replacement scenario belongs in `csi-driver`'s own test suite, not here.
 
+### Observability (§10)
+
+File: `operator/internal/controllers/objectstore/collector_test.go`
+
+The phase gauge is collected on a timer, from the full list of `S3Bucket`s, rather than observed inline as the other two metrics are (`metrics_test.go`'s own scope, §2), so its tests run against a fake `client.Client` rather than `envtest`.
+
+| #    | Scenario                                                                                                            | Type     | Test                                          |
+|------|---------------------------------------------------------------------------------------------------------------------|----------|-----------------------------------------------|
+| U-20 | A bucket in a given phase → gauge reads 1 for that phase, 0 for the other four                                      | Positive | `TestCollectorPublishesOneForTheCurrentPhase` |
+| U-21 | A bucket is deleted between two collection passes → its series reads 0 on the next pass, not its last phase forever | Negative | `TestCollectorClearsADeletedBucketsSeries`    |
+
 ---
 
 ## 2. Integration Tests
@@ -79,6 +90,17 @@ Run the full controller reconciliation loop against a real Kubernetes API via `e
 | I-08 | Two `S3Bucket` reconciles triggered concurrently for the same object (two events in quick succession) → converge to one delivery set, no duplicate calls  | Positive | — (design §7.3: the standard controller-runtime guarantee that one object's key is never processed by two workers at once, not this reconciler's own discipline; this harness drives `Reconcile` directly rather than through a manager's workqueue, so a test here would only reprove controller-runtime itself) |
 | I-09 | A node's reported delivery state drifts from `status` out-of-band (simulated via the fake `PeerRegistry`) → reconciled on the next pass                   | Negative | `TestMountDeliveryCorrectsADriftedNodeInStatus`                                                                                                                                                                                                                                                                   |
 | I-10 | `ObjectStore`'s gateway Deployment deleted while an `S3Bucket` is `Ready` → existing deliveries left in place, not withdrawn (§6 failure table)           | Negative | `TestMountDeliveryLeavesDeliveriesWhenTheGatewayDeploymentIsGone`                                                                                                                                                                                                                                                 |
+
+### Observability (§10)
+
+File: `operator/internal/controllers/objectstore/s3bucket_controller_test.go`, `metrics_test.go`
+
+The other four events in design §10's table each already have a dedicated scenario above or in §2's Bucket Delivery section (`BucketReady` in I-02, `PersistentVolumeClaimNotBound` in I-03, `NoMatchingExport` in I-04, and the `BucketReady`/deliver-call pair this item adds its own metrics scenario for below); `MountDeliveryFailed` had none until this item, since every existing Degraded-path scenario reaches one of the other two reasons first.
+
+| #    | Scenario                                                                                                                                                                                                                                               | Type     | Test                                                         |
+|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------------------|
+| I-12 | PVC bound, `NFSExport` Ready, but no node ever confirms mount delivery (no `Registry` wired) → deadline passed degrades the bucket naming `MountDeliveryFailed`, event fired                                                                           | Negative | `TestS3BucketDegradesWhenMountDeliveryNeverConfirms`         |
+| I-13 | A bucket reaching `Ready` → `simplyblock_objectstore_bucket_provisioning_seconds` observes exactly one sample for its `ObjectStore`, and `simplyblock_objectstore_mount_delivery_calls_total` counts exactly one `deliver`/`success` call for its node | Positive | `TestReadyBucketObservesProvisioningDurationAndDeliveryCall` |
 
 ### RBAC (§7.5)
 
@@ -166,8 +188,8 @@ Run against a live simplyblock cluster with the pNFS path actually deployed (`de
 
 | Class       | Scenarios                                   | Covered | Not covered |
 |-------------|---------------------------------------------|---------|-------------|
-| Unit        | 18 (U-19 moved to `csi-driver`'s own suite) | 18      | —           |
-| Integration | 11                                          | 9       | I-08, I-11  |
+| Unit        | 20 (U-19 moved to `csi-driver`'s own suite) | 20      | —           |
+| Integration | 13                                          | 11      | I-08, I-11  |
 | E2E         | 8 (E-09 obsolete)                           | 0       | E-01 … E-08 |
 | Manual      | 2 (both resolved)                           | 2       | —           |
 

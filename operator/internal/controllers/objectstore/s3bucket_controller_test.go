@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 // expectEvent drains recorder's channel looking for one event containing
@@ -286,6 +287,69 @@ func TestS3BucketDegradesWhenObjectStoreMissing(t *testing.T) {
 		t.Errorf("ObjectStoreReady condition = %+v, want reason ObjectStoreNotFound", cond)
 	}
 	expectEvent(t, recorder, "ObjectStoreNotFound")
+}
+
+// I-12: the PVC binds and the export reaches Ready, but no Registry is wired
+// (standing in for every node's DeliverBucket never confirming), so once the
+// deadline is forced into the past the bucket degrades naming
+// MountDeliveryFailed, the one Degraded reason the other scenarios above
+// don't reach: ObjectStoreNotFound and NoMatchingExport both fire earlier in
+// provisioningFailure's own fallthrough, before this one is ever checked.
+func TestS3BucketDegradesWhenMountDeliveryNeverConfirms(t *testing.T) {
+	cli := apiServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	startFakeCSIBinder(ctx, t, cli)
+	startFakeNFSExportCreator(ctx, cli)
+
+	store := testObjectStoreNamed("i12-store")
+	if err := cli.Create(ctx, store); err != nil {
+		t.Fatalf("creating the ObjectStore: %v", err)
+	}
+	bucket := &objectstorev1alpha1.S3Bucket{
+		ObjectMeta: metav1.ObjectMeta{Name: "i12-bucket", Namespace: "default"},
+		Spec: objectstorev1alpha1.S3BucketSpec{
+			ObjectStoreRef: store.Name, BucketName: "i12-bucket",
+			CapacityBytes: 50 * 1 << 20, StorageClassName: fakeStorageClassName,
+		},
+	}
+	if err := cli.Create(ctx, bucket); err != nil {
+		t.Fatalf("creating the bucket: %v", err)
+	}
+
+	recorder := events.NewFakeRecorder(16)
+	// Deliberately no Registry: reconcileMountDelivery returns false forever,
+	// so Provisioning never completes on its own even once the export is
+	// Ready.
+	r := &S3BucketReconciler{Client: cli, Scheme: cli.Scheme(), Recorder: recorder}
+	key := client.ObjectKeyFromObject(bucket)
+	reconcileBucketUntil(t, r, key, func(b *objectstorev1alpha1.S3Bucket) bool {
+		return b.Status.Phase == phaseProvisioning
+	})
+	// Wait for the fake NFSExport creator's own background ticker to carry
+	// this bucket's own export to Ready (matched the same way the
+	// reconciler itself matches it, not any export in the namespace: other
+	// tests share this apiserver), so forcing the deadline past below lands
+	// on MountDeliveryFailed rather than racing NoMatchingExport.
+	waitFor(t, "the matching NFSExport to reach Ready", func() bool {
+		var b objectstorev1alpha1.S3Bucket
+		if err := cli.Get(ctx, key, &b); err != nil {
+			return false
+		}
+		export, err := r.matchingNFSExport(ctx, &b)
+		return err == nil && export != nil && export.Status.Phase == simplyblockv1alpha2.NFSExportPhaseReady
+	})
+
+	forcePastDeadline(t, cli, key)
+
+	got := reconcileBucketUntil(t, r, key, func(b *objectstorev1alpha1.S3Bucket) bool {
+		return b.Status.Phase == phaseDegraded
+	})
+	cond := findCondition(got.Status.Conditions, conditionMountDelivered)
+	if cond == nil || cond.Reason != "MountDeliveryFailed" {
+		t.Errorf("MountDelivered condition = %+v, want reason MountDeliveryFailed", cond)
+	}
+	expectEvent(t, recorder, "MountDeliveryFailed")
 }
 
 // I-06: a reconciler built fresh mid-Provisioning (standing in for an
