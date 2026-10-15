@@ -359,7 +359,7 @@ Target: the `S3Bucket` object, since it is the audit record a user (or the gatew
 
 | Metric                                                | Labels                                        | Description                                                                                                                             |
 |-------------------------------------------------------|-----------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
-| `simplyblock_objectstore_bucket_phase`                | `bucket`, `objectstore`, `phase`              | Gauge, 1 for the bucket's current phase and 0 for the others. What a dashboard sums to show buckets stuck outside `Ready`               |
+| `simplyblock_objectstore_bucket_phase_state`          | `bucket`, `objectstore`, `phase`              | Gauge, 1 for the bucket's current phase and 0 for the others. What a dashboard sums to show buckets stuck outside `Ready`               |
 | `simplyblock_objectstore_bucket_provisioning_seconds` | `objectstore`                                 | Histogram of time from `Pending` to `Ready`, the direct measurement the `CreateBucket` synchronous-wait bound needs and currently lacks |
 | `simplyblock_objectstore_mount_delivery_calls_total`  | `objectstore`, `node`, `operation`, `outcome` | Counter of `DeliverBucket`/`WithdrawBucket` call outcomes, by result                                                                    |
 
