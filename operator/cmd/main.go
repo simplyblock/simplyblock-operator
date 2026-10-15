@@ -527,6 +527,10 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "S3Bucket")
 		os.Exit(1)
 	}
+	if err := mgr.Add(&objectstorecontrollers.Collector{Client: mgr.GetClient()}); err != nil {
+		setupLog.Error(err, "unable to add the S3Bucket collector")
+		os.Exit(1)
+	}
 	if err := (&nodecontroller.StorageDeviceReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
