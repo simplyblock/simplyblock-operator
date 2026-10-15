@@ -290,6 +290,13 @@ func (r *S3BucketReconciler) reconcileProvisioning(
 		return ctrl.Result{}, err
 	}
 	r.event(bucket, corev1.EventTypeNormal, "BucketReady", fmt.Sprintf("bucket %s is ready", bucket.Spec.BucketName))
+	// Observed exactly once per bucket: Ready has no outgoing edge, so this
+	// transition runs exactly once in a bucket's lifetime, and only once the
+	// status write above has already succeeded (a failed write returns
+	// before reaching here, and the next pass re-enters Provisioning rather
+	// than this code, since nothing was persisted).
+	bucketProvisioningSeconds.WithLabelValues(bucket.Spec.ObjectStoreRef).
+		Observe(time.Since(bucket.CreationTimestamp.Time).Seconds())
 	return ctrl.Result{}, nil
 }
 

@@ -135,16 +135,16 @@ Superseded by W-10, W-11, and W-12. The mount-holder-pod mechanism this item des
 **Conflicts with:** —
 **Labels:** operator, enhancement, medium
 **Design:** §10
-**Scenarios:** —
+**Scenarios:** U-20, U-21, I-12, I-13
 **Size:** S
 
 Emit the five events in design §10's Kubernetes Events table, targeting the `S3Bucket` object, and export the three Prometheus metrics in its table: `simplyblock_objectstore_bucket_phase`, `simplyblock_objectstore_bucket_provisioning_seconds`, and `simplyblock_objectstore_mount_delivery_calls_total`. `simplyblock_objectstore_bucket_provisioning_seconds` is the measurement design §12 Open Question 4 (the `CreateBucket` synchronous-wait bound) depends on, so this item is a prerequisite for answering that question, not just for dashboards.
 
 **Acceptance criteria**
 
-- [ ] Each of the five events in design §10 fires on its named condition
-- [ ] All three metrics are exported with the labels design §10 specifies
-- [ ] A test plan row is added for each metric and event, since none currently exists for this item's own scope (test plan is missing dedicated observability scenarios — note this at filing, per `work-plan` skill §1)
+- [x] Each of the five events in design §10 fires on its named condition: `BucketReady`, `PersistentVolumeClaimNotBound`, and `ObjectStoreNotFound` already fired as of W-03, `NoMatchingExport` and `MountDeliveryFailed` as of W-12's `provisioningFailure`; this item added `TestS3BucketDegradesWhenMountDeliveryNeverConfirms` (I-12), the one event of the five with no test proving it fires, since the other four were each already covered incidentally by an earlier item's own scenario
+- [x] All three metrics are exported with the labels design §10 specifies: `bucketPhaseState` (`metrics.go`, rebuilt on a timer by `Collector`, `collector.go`), `bucketProvisioningSeconds` (observed once, in the `Ready` transition), and `mountDeliveryCallsTotal` (observed per node in `reconcileMountDelivery`'s deliver/withdraw loop, including a quiet `no_session` outcome for `link.ErrNoSession` rather than counting a node mid-rollout as an error)
+- [x] A test plan row is added for each metric and event: U-20/U-21 (the phase gauge's collector, `collector_test.go`), I-13 (the provisioning-duration histogram and a successful deliver call, `metrics_test.go`), and I-12 (the `MountDeliveryFailed` event, `s3bucket_controller_test.go`) — see `test-plan-bucket-provisioning.md`'s new Observability section
 
 ### W-07 — ~~Scaffold the separate `S3Bucket` operator manager~~ Superseded
 

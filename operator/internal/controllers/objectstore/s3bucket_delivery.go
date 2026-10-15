@@ -15,6 +15,7 @@ package objectstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -158,22 +159,34 @@ func (r *S3BucketReconciler) reconcileMountDelivery(
 
 	var firstErr error
 	for _, node := range toDeliver {
-		if err := r.deliverToNode(ctx, bucket, export, node); err != nil {
+		err := r.deliverToNode(ctx, bucket, export, node)
+		switch {
+		case err == nil:
+			delivered[node] = struct{}{}
+			r.recordMountDeliveryCall(bucket, node, "deliver", "success")
+		case errors.Is(err, link.ErrNoSession):
+			// Normal during a node's own rollout, not a failure (the same
+			// rule NFSExportReconciler's own HasSession check follows): left
+			// out of the delivered set so the next pass retries it, without
+			// erroring this one.
+			r.recordMountDeliveryCall(bucket, node, "deliver", "no_session")
+		default:
 			if firstErr == nil {
 				firstErr = fmt.Errorf("delivering bucket %s to node %s: %w", bucket.Spec.BucketName, node, err)
 			}
-			continue
+			r.recordMountDeliveryCall(bucket, node, "deliver", "error")
 		}
-		delivered[node] = struct{}{}
 	}
 	for _, node := range toWithdraw {
 		if err := r.withdrawFromNode(ctx, bucket, node); err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("withdrawing bucket %s from node %s: %w", bucket.Spec.BucketName, node, err)
 			}
+			r.recordMountDeliveryCall(bucket, node, "withdraw", "error")
 			continue
 		}
 		delete(delivered, node)
+		r.recordMountDeliveryCall(bucket, node, "withdraw", "success")
 	}
 
 	newSet := make([]string, 0, len(delivered))
@@ -192,6 +205,13 @@ func (r *S3BucketReconciler) reconcileMountDelivery(
 	}
 	remainingDeliver, remainingWithdraw := diffDeliveryNodes(desired, newSet)
 	return len(remainingDeliver) == 0 && len(remainingWithdraw) == 0, nil
+}
+
+// recordMountDeliveryCall publishes simplyblock_objectstore_mount_delivery_calls_total
+// (design §10): one DeliverBucket/WithdrawBucket call outcome, by node and
+// result.
+func (r *S3BucketReconciler) recordMountDeliveryCall(bucket *objectstorev1alpha1.S3Bucket, node, operation, outcome string) {
+	mountDeliveryCallsTotal.WithLabelValues(bucket.Spec.ObjectStoreRef, node, operation, outcome).Inc()
 }
 
 // deliverToNode asks one node's CSI plugin to deliver the bucket's mount.
