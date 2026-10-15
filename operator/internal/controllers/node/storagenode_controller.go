@@ -582,6 +582,12 @@ func (r *StorageNodeReconciler) checkConfig(
 			"cluster %s requires a fault group and this node declares none; "+
 				"set spec.config.failureDomain", cluster.Name)
 	}
+	if ptr.BoolFromOrFalse(cluster.Spec.EnableSyncReplication) &&
+		node.Spec.Config.Site == "" {
+		return stepCheckingConfig, false, blockedf(SiteMissing,
+			"cluster %s requires a site and this node declares none; "+
+				"set spec.config.site", cluster.Name)
+	}
 	return stepAwaitingSlot, true, nil
 }
 
@@ -1594,6 +1600,7 @@ func (r *StorageNodeReconciler) addParams(
 		Format4K:         ptr.BoolFromOrFalse(workload.EnableFormat4K),
 		SpdkSystemMemory: config.SpdkSystemMemory,
 		Expand:           ptr.BoolFromOrFalse(config.Expand),
+		Site:             config.Site,
 	}
 
 	// The control plane's failure domain is an integer, and this API's is a label.

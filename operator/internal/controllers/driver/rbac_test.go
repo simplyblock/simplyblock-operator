@@ -163,6 +163,36 @@ func TestNodeRoleCanPatchNodesForVDOCapability(t *testing.T) {
 	}
 }
 
+// Synchronous replication: the node plugin reads, per PVC at stage time,
+// whether a volume is managed by a sync VolumeReplication and re-points it at
+// the class naming the pod's site (design-sync-replication-csi-addons.md §6.2).
+// It watches and patches VolumeReplications and reads VolumeReplicationClasses;
+// it never creates or deletes a VolumeReplication, whose existence the
+// administrator owns.
+func TestNodeRoleDrivesSyncReplication(t *testing.T) {
+	verbsFor := func(resource string) []string {
+		for _, r := range clusterRoleRules[nodeComponent] {
+			if slices.Contains(r.APIGroups, "replication.storage.openshift.io") &&
+				slices.Contains(r.Resources, resource) {
+				return r.Verbs
+			}
+		}
+		return nil
+	}
+	if got := verbsFor("volumereplications"); !slices.Equal(got, []string{"get", "list", "watch", "patch"}) {
+		t.Errorf("volumereplications verbs = %v, want [get list watch patch]", got)
+	}
+	if got := verbsFor("volumereplicationclasses"); !slices.Equal(got, []string{"get", "list", "watch"}) {
+		t.Errorf("volumereplicationclasses verbs = %v, want [get list watch]", got)
+	}
+	for _, v := range verbsFor("volumereplications") {
+		switch v {
+		case "create", "update", "delete", "deletecollection":
+			t.Errorf("the node role grants %q on volumereplications; it must only get/list/watch/patch", v)
+		}
+	}
+}
+
 // No rule reaches everything. A wildcard in a CSI sidecar's role is the escalation
 // primitive that turns a sidecar compromise into cluster-admin.
 func TestNoRuleIsAWildcard(t *testing.T) {
@@ -217,7 +247,7 @@ func TestCSIAddonsRoleIsNamespacedAndBoundToTheControllerAccount(t *testing.T) {
 // --enable-auth defaults to true), which is cluster-scoped and so cannot be
 // granted by the namespaced Role above -- confirmed against a live cluster,
 // where omitting this left every connection failing with "failed to review
-// token ... is forbidden ... at the cluster scope".
+// token ... is forbidden ... at the cluster scope."
 func TestCSIAddonsSidecarCanAuthenticateIncomingCalls(t *testing.T) {
 	d := testDriver("simplyblock")
 	n := names(d)
@@ -395,3 +425,52 @@ func TestControllerCanRecordANewSizeOnAnExport(t *testing.T) {
 	}
 	t.Error("the controller cannot update nfsexports, so expanding a pNFS volume always fails")
 }
+
+// Regression: 2026-10-15 -- the controller resolves a sync volume's active site
+// from its VolumeReplication's simplyblock.io/sync-site annotation before
+// PromoteVolume/DemoteVolume address the backend site route (design §5.2, §6.3).
+// It runs informers over PersistentVolumes, PersistentVolumeClaims, and
+// VolumeReplications to correlate a volume handle to its VR. Without read on
+// those, the informer cache stays empty, resolveSyncSite returns not-found, the
+// csi-addons controller's promote fails Unavailable, and a sync pod hangs in
+// ContainerCreating behind a gate that never releases:
+//
+//	volumereplications.replication.storage.openshift.io is forbidden: User
+//	"system:serviceaccount:simplyblock:simplyblock-csi-controller-sa" cannot
+//	list resource "volumereplications" at the cluster scope
+func TestControllerRoleCanReadVolumeReplications(t *testing.T) {
+	need := []string{"volumereplications", "persistentvolumes", "persistentvolumeclaims"}
+	for _, resource := range need {
+		var got []string
+		for _, r := range clusterRoleRules[controllerComponent] {
+			if slices.Contains(r.Resources, resource) {
+				got = r.Verbs
+			}
+		}
+		if got == nil {
+			t.Errorf("the controller role carries no rule for %s; its site-resolution informer cannot sync", resource)
+			continue
+		}
+		for _, v := range []string{"get", "list", "watch"} {
+			if !slices.Contains(got, v) {
+				t.Errorf("controller role on %s is missing verb %q (has %v)", resource, v, got)
+			}
+		}
+	}
+	// It must never write a VolumeReplication: the node owns the sync-site
+	// annotation and the administrator owns the object.
+	for _, r := range clusterRoleRules[controllerComponent] {
+		if !slices.Contains(r.Resources, "volumereplications") {
+			continue
+		}
+		for _, v := range r.Verbs {
+			if slices.Contains(writeVerbs, v) {
+				t.Errorf("the controller role grants %q on volumereplications; it must only read them", v)
+			}
+		}
+	}
+}
+
+// writeVerbs are the RBAC verbs that mutate an object; a read-only grant must
+// include none of them.
+var writeVerbs = []string{"create", "update", "patch", "delete", "deletecollection"}

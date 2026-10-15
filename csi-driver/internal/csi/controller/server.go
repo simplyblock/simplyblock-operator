@@ -3,9 +3,13 @@
 package controller
 
 import (
+	"context"
+
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/csi-addons/spec/lib/go/replication"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/simplyblock/atlas/lvol"
 
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
@@ -36,6 +40,20 @@ type Server struct {
 	// cluster and when the CRD is unavailable, in which case a pNFS claim is
 	// refused with a clear message rather than the driver failing to start.
 	exports ExportRegistry
+	// syncVolumeSite resolves the site a sync volume is served from, read from its
+	// VolumeReplication's SyncSiteAnnotation (design §5.2, §6.3). Nil until the
+	// driver wires it (the controller needs a VolumeReplication resolver); the
+	// sync write verbs error rather than guess a site when it is unset.
+	syncVolumeSite func(context.Context, lvol.VolumeHandle) (string, error)
+}
+
+// EnableSyncSiteResolution wires the resolver the sync write verbs (PromoteVolume,
+// DemoteVolume) use to read a volume's active site from its VolumeReplication's
+// SyncSiteAnnotation (design §5.2, §6.3). The driver calls it when the cluster
+// carries the VolumeReplication CRD; until then the sync verbs have no site
+// source and refuse rather than guess.
+func (cs *Server) EnableSyncSiteResolution(resolve func(context.Context, lvol.VolumeHandle) (string, error)) {
+	cs.syncVolumeSite = resolve
 }
 
 //nolint:unparam // error return kept for constructor symmetry / future use

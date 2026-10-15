@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -31,6 +32,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/simplyblock/atlas/bounded"
 	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nqn"
@@ -111,6 +113,23 @@ func (ns *Server) NodeStageVolume(
 	}
 	vc["stagingParentPath"] = stagingParentPath
 	ns.refreshVolumeContext(ctx, volumeID, vc)
+
+	// A sync-managed volume follows its pod: its leadership must move to this
+	// node's site, and the connection is gated on that, so it takes a different
+	// staging path (design §6). An ordinary volume (the common case, and every
+	// volume when sync replication is not configured) falls through unchanged.
+	if vr, isSync, err := ns.detectSyncReplication(ctx, vc); err != nil {
+		return nil, err
+	} else if isSync {
+		// A sync-managed volume must be served on this node's site before it is
+		// attached. ensureSyncPromoted signals the site and gates on the promote,
+		// returning a retryable error until it is done; once it returns nil, the
+		// volume is led from this site and the ordinary attach below connects to
+		// it (design §6.2-§6.4).
+		if err := ns.ensureSyncPromoted(ctx, vr); err != nil {
+			return nil, err
+		}
+	}
 
 	plan, err := ns.attachPlan(ctx, volumeID, stagingTargetPath, vc, req.GetVolumeCapability())
 	if err != nil {
@@ -193,14 +212,49 @@ func (ns *Server) NodeUnstageVolume(
 
 	plan, err := ns.teardownPlan(ctx, volumeID, stagingTargetPath, volumeContext)
 	if err != nil {
+		// Idempotency (CSI spec): if the volume is no longer staged at the target
+		// path, the unstage is a completed no-op. A volume whose staging directory
+		// kubelet has already removed leaves no stash, no record, and nothing the
+		// host can name, so teardownPlan cannot identify it -- but there is also
+		// nothing to release. Returning Internal here instead would wedge the
+		// external-attacher's detach forever, so the volume could never attach on
+		// another node and a pod move would hang in ContainerCreating. A volume
+		// that is still staged (its directory present) keeps failing, because then
+		// the unidentifiable state is a real fault rather than an absent volume.
+		if _, statErr := os.Stat(stagingTargetPath); errors.Is(statErr, os.ErrNotExist) {
+			klog.Warningf("volume %s is not staged at %s and names itself nowhere (%v); "+
+				"treating the unstage as a completed no-op", volumeID, stagingTargetPath, err)
+			if err := cleanUpVolumeContext(stagingParentPath); err != nil {
+				klog.Warningf("volume %s: clean up residual volume context: %v", volumeID, err)
+			}
+			return &csi.NodeUnstageVolumeResponse{}, nil
+		}
 		klog.Errorf("failed to read what was staged for %s: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	devicePath := volumeContext["devicePath"]
+	disconnectAbandoned := false
 	if err := ns.stack.runner.Down(cleanupCtx, volumeID, plan); err != nil {
-		klog.Errorf("failed to release the stack, volumeID: %s err: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
+		// A disconnect abandoned at its deadline (bounded.Error: the kernel
+		// delete_controller write wedged on a dead fabric) must not wedge the
+		// unstage with it. If it did, the single-writer VolumeAttachment would stay
+		// held on this node and the volume could never attach elsewhere, which is
+		// the move-blocked-at-the-attach-layer failure in design §12. The kernel
+		// operation is stuck, so the device is already non-functional: completing
+		// the unstage releases the attachment and lets the volume move, and the
+		// abandoned controller is reaped by the kernel. Any other release failure
+		// still fails the unstage, so a merely slow or misconfigured path is not
+		// mistaken for a wedged one.
+		var abandoned *bounded.Error
+		if !errors.As(err, &abandoned) {
+			klog.Errorf("failed to release the stack, volumeID: %s err: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		klog.Errorf("volume %s: the NVMe-oF disconnect was abandoned at its deadline (%v); "+
+			"completing the unstage so the single-writer attachment releases and the volume "+
+			"can attach elsewhere (design §12), leaving the stuck controller to the kernel", volumeID, err)
+		disconnectAbandoned = true
 	}
 	if devicePath != "" {
 		// A device this node tore down itself is forgotten rather than left to
@@ -208,7 +262,10 @@ func (ns *Server) NodeUnstageVolume(
 		initiator.ForgetDevice(devicePath)
 	}
 
-	if ns.volumeIsBeingDeleted(ctx, volumeID) {
+	// Destroy only after a clean release: destroying the node-local objects of a
+	// stack whose release was abandoned would act on layers that may still be up.
+	// The deleted volume's objects are left for a later unstage or node cleanup.
+	if !disconnectAbandoned && ns.volumeIsBeingDeleted(ctx, volumeID) {
 		// The only caller of Destroy. A volume that is going away for good takes
 		// the node-local objects its stack built with it, because nothing will
 		// stage it again and nothing else on this host knows they are there.

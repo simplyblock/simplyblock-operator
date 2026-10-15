@@ -141,6 +141,31 @@ if [[ "$FORCE" != true ]]; then
     esac
 fi
 
+# Runs a python3 snippet with large JSON inputs supplied as files rather than
+# through the environment. execve caps the combined size of a process's arguments
+# and environment (ARG_MAX), and a full `kubectl get -o json` of a busy namespace
+# exceeds it, so passing it in the environment fails the exec with "Argument list
+# too long". Call as:
+#   [SCALAR=value ...] run_py "<python>" NAME1 "<json1>" [NAME2 "<json2>" ...]
+# Each NAME is set, for the snippet, to the path of a file holding that JSON, so
+# the snippet reads it with json.load(open(os.environ["NAME"])); scalar values
+# stay in the environment as usual.
+run_py() {
+    local code=$1; shift
+    local dir rc; dir=$(mktemp -d)
+    (
+        while (($# >= 2)); do
+            printf '%s' "$2" >"$dir/$1"
+            export "$1=$dir/$1"
+            shift 2
+        done
+        python3 -c "$code"
+    )
+    rc=$?
+    rm -rf "$dir"
+    return "$rc"
+}
+
 # Prints the pods in the namespace that mount a volume of $CSI_DRIVER, one per
 # line as `name owner-kind owner-name`. Kubelet can only unmount such a volume
 # through the driver's node plugin, so these pods must be gone before the plugin
@@ -152,19 +177,19 @@ pods_on_csi_volumes() {
     pods=$($KUBECTL get pods -n "$NAMESPACE" -o json 2>/dev/null) || return 1
     pvcs=$($KUBECTL get pvc -n "$NAMESPACE" -o json 2>/dev/null) || return 1
     pvs=$($KUBECTL get pv -o json 2>/dev/null) || return 1
-    PODS="$pods" PVCS="$pvcs" PVS="$pvs" DRIVER="$CSI_DRIVER" python3 -c '
+    DRIVER="$CSI_DRIVER" run_py '
 import json, os
 driver = os.environ["DRIVER"]
-on_driver = {p["metadata"]["name"] for p in json.loads(os.environ["PVS"])["items"]
+on_driver = {p["metadata"]["name"] for p in json.load(open(os.environ["PVS"]))["items"]
              if (p["spec"].get("csi") or {}).get("driver") == driver}
-claims = {c["metadata"]["name"] for c in json.loads(os.environ["PVCS"])["items"]
+claims = {c["metadata"]["name"] for c in json.load(open(os.environ["PVCS"]))["items"]
           if c["spec"].get("volumeName") in on_driver}
-for p in json.loads(os.environ["PODS"])["items"]:
+for p in json.load(open(os.environ["PODS"]))["items"]:
     used = {(v.get("persistentVolumeClaim") or {}).get("claimName") for v in p["spec"].get("volumes", [])}
     if used & claims or any(v.get("csi", {}).get("driver") == driver for v in p["spec"].get("volumes", [])):
         owner = next((o for o in p["metadata"].get("ownerReferences", []) if o.get("controller")), {})
         print(p["metadata"]["name"], owner.get("kind", "-"), owner.get("name", "-"))
-'
+' PODS "$pods" PVCS "$pvcs" PVS "$pvs"
 }
 
 # Stops before the node plugin is uninstalled, which is the step that cannot be
@@ -208,13 +233,13 @@ nfsexports_of_this_cluster() {
         -o jsonpath='{.items[*].status.uuid}' 2>/dev/null) || return 1
     [[ -z "$uuids" ]] && return 0
     exports=$($KUBECTL get "nfsexports.$CRD_GROUP" -A -o json 2>/dev/null) || return 1
-    EXPORTS="$exports" UUIDS="$uuids" python3 -c '
+    UUIDS="$uuids" run_py '
 import json, os
 uuids = os.environ["UUIDS"].split()
-for e in json.loads(os.environ["EXPORTS"])["items"]:
+for e in json.load(open(os.environ["EXPORTS"]))["items"]:
     if e["spec"].get("volumeRef", "").split(":")[0] in uuids:
         print(e["metadata"]["namespace"], e["metadata"]["name"])
-'
+' EXPORTS "$exports"
 }
 
 # Prints the $CSI_DRIVER StorageClasses of the storage clusters in this
@@ -226,10 +251,10 @@ for e in json.loads(os.environ["EXPORTS"])["items"]:
 storage_classes_of_this_cluster() {
     local classes
     classes=$($KUBECTL get storageclass -o json 2>/dev/null) || return 1
-    CLASSES="$classes" UUIDS="$1" DRIVER="$CSI_DRIVER" NS="$NAMESPACE" python3 -c '
+    UUIDS="$1" DRIVER="$CSI_DRIVER" NS="$NAMESPACE" run_py '
 import json, os
 uuids, ns = os.environ["UUIDS"].split(), os.environ["NS"]
-for c in json.loads(os.environ["CLASSES"])["items"]:
+for c in json.load(open(os.environ["CLASSES"]))["items"]:
     if c.get("provisioner") != os.environ["DRIVER"]:
         continue
     labels = c["metadata"].get("labels") or {}
@@ -237,7 +262,7 @@ for c in json.loads(os.environ["CLASSES"])["items"]:
                     and labels.get("storage.simplyblock.io/namespace") == ns)
     if (c.get("parameters") or {}).get("cluster_id") in uuids or managed_here:
         print(c["metadata"]["name"])
-'
+' CLASSES "$classes"
 }
 
 # Read now, while the StorageClusters exist: step 2 deletes them, and step 4
@@ -476,9 +501,9 @@ done
 stranded_pods() {
     local pods
     pods=$($KUBECTL get pods -n "$NAMESPACE" -o json 2>/dev/null) || return 1
-    PODS="$pods" python3 -c '
+    run_py '
 import json, os
-for p in json.loads(os.environ["PODS"])["items"]:
+for p in json.load(open(os.environ["PODS"]))["items"]:
     meta, status = p["metadata"], p.get("status", {})
     if not meta.get("deletionTimestamp"):
         continue
@@ -488,7 +513,7 @@ for p in json.loads(os.environ["PODS"])["items"]:
     # No status at all is not evidence that everything exited.
     if states and all("terminated" in s for s in states):
         print(meta["uid"], meta["name"], p["spec"].get("nodeName", "<unknown>"))
-'
+' PODS "$pods"
 }
 # The same pods, by UID, before and after kubelet's window: a pod that became
 # stranded during the wait has not had it yet, and one replaced under the same

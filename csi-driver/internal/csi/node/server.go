@@ -7,6 +7,7 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/lvol"
 	export "github.com/simplyblock/atlas/nfsexport"
 	"github.com/simplyblock/atlas/nvme"
@@ -46,6 +47,22 @@ type Server struct {
 	kubeClient     kubernetes.Interface
 	manager        *sbkube.Manager
 	guardian       *guardian.Guardian
+	// syncResolver answers, per PVC, whether a volume is managed by a synchronous
+	// VolumeReplication and must follow its pod (design-sync-replication-csi-addons.md
+	// §6.6). It is nil unless the node is configured for sync replication, in
+	// which case staging an ordinary volume is unchanged. syncCachesSynced reports
+	// whether the informers behind syncResolver have synced, so staging fails
+	// closed rather than reading a cold cache as "not sync."
+	syncResolver     syncReplicationResolver
+	syncCachesSynced func() bool
+	// syncNodeSite reads the site of the node this plugin runs on (its zone
+	// label), and syncPatchVR sets a VolumeReplication's sync-site annotation to a
+	// site and its replicationState to the given value (primary or secondary) --
+	// the write half of the switchover, §6.2, §6.4. Both are seams so staging is
+	// testable without a node object or a dynamic client, and are set together with
+	// syncResolver when sync replication is configured.
+	syncNodeSite func(context.Context) (string, error)
+	syncPatchVR  func(ctx context.Context, vr kube.VolumeReplicationRef, site, state string) error
 }
 
 // New builds the node service. It performs no I/O and starts nothing: the

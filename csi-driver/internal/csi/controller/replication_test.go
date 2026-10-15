@@ -7,6 +7,8 @@ import (
 	"github.com/csi-addons/spec/lib/go/replication"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/simplyblock/atlas/lvol"
 )
 
 const (
@@ -19,7 +21,15 @@ const (
 func newReplicationTestServer(t *testing.T, mock *mockSBCLI) *Server {
 	t.Helper()
 	mock.volumes[testReplVolumeID] = &mockVolume{UUID: testReplVolumeID, Name: "repl-vol", Size: 1 << 30}
-	return newTestControllerServer(t, mock)
+	cs := newTestControllerServer(t, mock)
+	// The single-volume sync verbs read a volume's active site from its
+	// VolumeReplication annotation through this seam (design §5.2); in production
+	// the driver wires a resolver. The default names site-b, the switchover target
+	// the dispatch tests assert; a test exercising a missing annotation overrides it.
+	cs.EnableSyncSiteResolution(func(context.Context, lvol.VolumeHandle) (string, error) {
+		return "site-b", nil
+	})
+	return cs
 }
 
 // replicationSourceFor builds the ReplicationSource the real
@@ -369,6 +379,34 @@ func TestGetVolumeReplicationInfoNeverReplicated(t *testing.T) {
 	}
 	if resp.LastSyncTime != nil {
 		t.Errorf("LastSyncTime = %v, want nil", resp.LastSyncTime)
+	}
+}
+
+// Regression (design §5.3, §8): the sync read path. GetVolumeReplicationInfo
+// carries no class parameters, so it cannot and need not branch on method. It
+// reads the volume's status route, which on a sync cluster the backend fills
+// from the synchronous status. A sync volume has no async replication
+// relationship, so the chain walk resolves to the volume itself rather than
+// erroring, and the last-in-sync instant comes back as LastSyncTime (the only
+// field this csi-addons version carries).
+func TestGetVolumeReplicationInfoServesASyncVolume(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	// No relationship is configured, as a sync volume never has an async chain;
+	// the status body is what the backend fills from the sync status.
+	mock.replicationStatus[testReplVolumeID] = map[string]any{
+		"role": "source", "state": "in_sync", "last_replicated_at": "2026-09-17T12:00:00Z",
+	}
+
+	resp, err := cs.GetVolumeReplicationInfo(context.Background(), &replication.GetVolumeReplicationInfoRequest{
+		VolumeId: testReplVolID,
+	})
+	if err != nil {
+		t.Fatalf("sync volume: %v", err)
+	}
+	if resp.LastSyncTime == nil || resp.LastSyncTime.AsTime().Unix() != 1789646400 {
+		t.Errorf("LastSyncTime = %v, want the last in-sync instant", resp.LastSyncTime)
 	}
 }
 

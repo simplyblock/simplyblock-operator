@@ -24,6 +24,7 @@ import (
 	k8smount "k8s.io/mount-utils"
 
 	"github.com/simplyblock/atlas/blockdev"
+	"github.com/simplyblock/atlas/bounded"
 	export "github.com/simplyblock/atlas/nfsexport"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/volstack"
@@ -395,6 +396,78 @@ func TestUnstageKeepsARetainedVolume(t *testing.T) {
 
 	if runner.called("destroy") {
 		t.Fatal("a retained volume's objects were destroyed on an ordinary unstage")
+	}
+}
+
+// Regression: 2026-10-15-unstage-idempotent-when-unstaged -- a NodeUnstageVolume
+// for a volume no longer staged at the target path (kubelet already removed the
+// staging directory; no stash, no record, nothing the host can name) returned
+// codes.Internal from teardownPlan ("neither the stashed volume context nor the
+// stack record names this volume's namespace"). The CSI spec requires OK when
+// the volume is not staged, and an Internal here wedges the external-attacher's
+// detach forever, so the volume can never attach on another node and a pod move
+// hangs in ContainerCreating.
+func TestUnstageIsIdempotentWhenNothingIsStaged(t *testing.T) {
+	runner := newRecordingRunner()
+	ns, _ := newStackedServer(t, runner)
+	// A bare staging parent: no stash file, no stack record, and no per-volume
+	// staging subdirectory (<parent>/<volumeID>) -- nothing is staged here.
+	parent := t.TempDir()
+
+	if _, err := ns.NodeUnstageVolume(context.Background(), &csi.NodeUnstageVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+	}); err != nil {
+		t.Fatalf("NodeUnstageVolume of a volume that is not staged must be a no-op success, got: %v", err)
+	}
+	if runner.called("down") {
+		t.Error("a volume that is not staged was torn down; the unstage must identify nothing to release")
+	}
+}
+
+// Regression: 2026-10-15-unstage-abandoned-disconnect -- a bounded-out NVMe-oF
+// disconnect (bounded.Error, the kernel delete_controller write wedged on a dead
+// fabric) failed NodeUnstageVolume with codes.Internal, so the single-writer
+// VolumeAttachment stayed held on the old node, the volume could never attach
+// elsewhere, and the pod move hung in ContainerCreating (design §12, Open
+// Question 4). The unstage must complete so the attachment releases.
+func TestUnstageCompletesWhenTheDisconnectIsAbandoned(t *testing.T) {
+	runner := newRecordingRunner()
+	runner.downErr = &bounded.Error{Key: "write /sys/class/nvme/nvme3/delete_controller"}
+	ns, _ := newStackedServer(t, runner)
+	parent := stashedAt(t, stagedContext())
+
+	if _, err := ns.NodeUnstageVolume(context.Background(), &csi.NodeUnstageVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+	}); err != nil {
+		t.Fatalf("NodeUnstageVolume must complete when the disconnect is abandoned, got: %v", err)
+	}
+	// The single-writer attachment releases only once the stash is gone: a stash
+	// left behind means the unstage did not complete and the move stays blocked.
+	if _, err := lookupVolumeContext(parent); err == nil {
+		t.Error("the volume context was left behind, so the unstage did not complete")
+	}
+}
+
+// The guard is narrow: a Down failure that is not a bounded-out abandonment still
+// fails the unstage, because completing it could leave a volume connected on a
+// path that is merely slow or misconfigured rather than wedged.
+func TestUnstageStillFailsOnAnOrdinaryDownError(t *testing.T) {
+	runner := newRecordingRunner()
+	runner.downErr = errors.New("lvm: volume group is busy")
+	ns, _ := newStackedServer(t, runner)
+	parent := stashedAt(t, stagedContext())
+
+	if _, err := ns.NodeUnstageVolume(context.Background(), &csi.NodeUnstageVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+	}); err == nil {
+		t.Fatal("an ordinary Down failure must still fail the unstage")
+	}
+	// A failed release keeps the stash, so kubelet's retry can choose the teardown.
+	if _, err := lookupVolumeContext(parent); err != nil {
+		t.Errorf("the stash was removed despite a failed release: %v", err)
 	}
 }
 

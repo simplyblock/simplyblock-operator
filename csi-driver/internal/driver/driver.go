@@ -26,20 +26,27 @@ package driver
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	csiaddonsidentity "github.com/csi-addons/spec/lib/go/identity"
 	csiaddonsreplication "github.com/csi-addons/spec/lib/go/replication"
 	csiaddonsvolumegroup "github.com/csi-addons/spec/lib/go/volumegroup"
 	"google.golang.org/grpc"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/dynamic/dynamicinformer"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog"
 
 	"github.com/simplyblock/atlas/conntrack"
 	"github.com/simplyblock/atlas/conntrack/conntrackrpc"
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/link"
+	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/storage"
 	"github.com/simplyblock/atlas/storage/storagerpc"
@@ -122,7 +129,7 @@ func Run(conf *config.Config) {
 
 	if conf.IsNodeServer {
 		var err error
-		ns, err = startNodeServer(cd, kubeClient)
+		ns, err = startNodeServer(cd, kubeClient, dynClient)
 		if err != nil {
 			klog.Fatalf("failed to create node server: %s", err)
 		}
@@ -134,6 +141,10 @@ func Run(conf *config.Config) {
 		if err != nil {
 			klog.Fatalf("failed to create controller server: %s", err)
 		}
+		// The sync write verbs read a volume's active site from its
+		// VolumeReplication annotation (design §5.2, §6.3); wire the resolver that
+		// reads it, when the cluster carries the CRD.
+		enableControllerSyncSite(context.Background(), cs, kubeClient, dynClient)
 		// The membership label is live for the volume's whole life (design
 		// §4.5): a PVC watcher joins a volume when the label is added and
 		// detaches it when the label is removed. Degrades to a logged no-op
@@ -254,7 +265,9 @@ func startLink(ctx context.Context, conf *config.Config) error {
 // every poll, so a single instance means a single PV watch and a single PVC
 // watch. It serves reads from cache once synced and falls back to the API until
 // then, so neither consumer needs a fallback of its own.
-func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (*node.Server, error) {
+func startNodeServer(
+	cd *csicommon.CSIDriver, kubeClient kubernetes.Interface, dynClient dynamic.Interface,
+) (*node.Server, error) {
 	manager := sbkube.NewManager(kubeClient)
 	manager.Start(context.Background())
 
@@ -262,6 +275,8 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 	if err != nil {
 		return nil, err
 	}
+
+	enableSyncReplication(context.Background(), ns, kubeClient, dynClient)
 
 	nodeName := cd.GetNodeID()
 	podGuardian, err := guardian.Start(context.Background(), guardian.NewDefaultConfig(nodeName), manager)
@@ -280,6 +295,132 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 	go advertiseKVMCapability(kubeClient, nodeName)
 
 	return ns, nil
+}
+
+// enableSyncReplication turns on the node's scheduling-driven switchover when
+// the cluster carries the VolumeReplication CRD (design §6). Best-effort: with
+// no dynamic client, or on a cluster without the CRD, every volume stages on the
+// ordinary, site-unaware path, exactly as before. The informers run for the
+// process lifetime; the node's cache-synced gate holds staging of a sync volume
+// until they have synced.
+func enableSyncReplication(
+	ctx context.Context, ns *node.Server, kubeClient kubernetes.Interface, dynClient dynamic.Interface,
+) {
+	if dynClient == nil || kubeClient == nil {
+		return
+	}
+	if !volumeReplicationCRDPresent(kubeClient.Discovery()) {
+		klog.Info("sync replication: VolumeReplication CRD absent; node staging stays site-unaware")
+		return
+	}
+	factory := dynamicinformer.NewDynamicSharedInformerFactory(dynClient, 0)
+	vr := factory.ForResource(kube.VolumeReplicationGVR).Informer()
+	vrClass := factory.ForResource(kube.VolumeReplicationClassGVR).Informer()
+	resolver, err := kube.NewSyncResolver(vr, vrClass)
+	if err != nil {
+		klog.Errorf("sync replication: build resolver: %v; node staging stays site-unaware", err)
+		return
+	}
+	factory.Start(ctx.Done())
+	ns.EnableSyncReplication(resolver, func() bool { return vr.HasSynced() && vrClass.HasSynced() }, dynClient)
+	klog.Info("sync replication: node staging is site-aware for VolumeReplication-managed volumes")
+
+	// Report whether the caches actually sync, bounded, without blocking startup.
+	// The node's own gate holds staging of a sync volume until they do; a wait
+	// that never completes is almost always a missing node RBAC for
+	// volumereplications, and a loud log turns "all staging hangs" into a cause.
+	go func() {
+		wctx, cancel := context.WithTimeout(context.Background(), syncCacheSyncTimeout)
+		defer cancel()
+		if cache.WaitForCacheSync(wctx.Done(), vr.HasSynced, vrClass.HasSynced) {
+			klog.Info("sync replication: VolumeReplication caches synced; site-aware staging is ready")
+			return
+		}
+		klog.Errorf("sync replication: VolumeReplication caches did not sync within %s; "+
+			"sync-managed volumes fail closed at staging until they do "+
+			"(check the node RBAC for volumereplications and volumereplicationclasses)",
+			syncCacheSyncTimeout)
+	}()
+}
+
+// syncCacheSyncTimeout bounds the startup wait that only logs whether the sync
+// informers came up; the node's cache-synced gate is the real guard.
+const syncCacheSyncTimeout = 2 * time.Minute
+
+// volumeReplicationCRDPresent reports whether the VolumeReplication CRD is served
+// by the API server, so the node only runs the sync informers where they resolve.
+func volumeReplicationCRDPresent(disc discovery.DiscoveryInterface) bool {
+	list, err := disc.ServerResourcesForGroupVersion(kube.VolumeReplicationGVR.GroupVersion().String())
+	if err != nil {
+		return false
+	}
+	for _, r := range list.APIResources {
+		if r.Name == kube.VolumeReplicationGVR.Resource {
+			return true
+		}
+	}
+	return false
+}
+
+// enableControllerSyncSite wires the resolver the controller's sync write verbs
+// (PromoteVolume, DemoteVolume) use to read a volume's active site from its
+// VolumeReplication's SyncSiteAnnotation (design §5.2, §6.3). Best-effort, like
+// enableSyncReplication on the node: with no client, or on a cluster without the
+// CRD, the seam stays unset and the sync verbs refuse rather than guess a site.
+//
+// The controller needs a full resolver, not the node's sync-only one: it maps a
+// CSI volume handle to its PV, the PV to its claim, and the claim to its
+// VolumeReplication, so it watches PVs and PVCs in addition to VolumeReplications.
+func enableControllerSyncSite(
+	ctx context.Context, cs *controller.Server, kubeClient kubernetes.Interface, dynClient dynamic.Interface,
+) {
+	if dynClient == nil || kubeClient == nil {
+		return
+	}
+	if !volumeReplicationCRDPresent(kubeClient.Discovery()) {
+		klog.Info("sync replication: VolumeReplication CRD absent; controller sync verbs stay site-unaware")
+		return
+	}
+	typed := informers.NewSharedInformerFactory(kubeClient, 0)
+	pv := typed.Core().V1().PersistentVolumes().Informer()
+	pvc := typed.Core().V1().PersistentVolumeClaims().Informer()
+	dynFactory := dynamicinformer.NewDynamicSharedInformerFactory(dynClient, 0)
+	vr := dynFactory.ForResource(kube.VolumeReplicationGVR).Informer()
+	resolver, err := kube.NewResolver(kube.ResolverConfig{
+		PersistentVolumes:      pv,
+		PersistentVolumeClaims: pvc,
+		VolumeReplications:     vr,
+	})
+	if err != nil {
+		klog.Errorf("sync replication: build controller resolver: %v; sync verbs stay site-unaware", err)
+		return
+	}
+	typed.Start(ctx.Done())
+	dynFactory.Start(ctx.Done())
+	cs.EnableSyncSiteResolution(func(ctx context.Context, h lvol.VolumeHandle) (string, error) {
+		ref, err := resolver.VolumeReplicationForVolumeHandle(ctx, h)
+		if err != nil {
+			return "", err
+		}
+		return ref.Site, nil
+	})
+	klog.Info("sync replication: controller sync verbs read the active site from the VolumeReplication annotation")
+
+	// Report whether the caches actually sync, bounded, without blocking startup,
+	// for the same reason the node path does: a wait that never completes is almost
+	// always a missing controller RBAC, and a loud log names the cause.
+	go func() {
+		wctx, cancel := context.WithTimeout(context.Background(), syncCacheSyncTimeout)
+		defer cancel()
+		if cache.WaitForCacheSync(wctx.Done(), pv.HasSynced, pvc.HasSynced, vr.HasSynced) {
+			klog.Info("sync replication: controller caches synced; site resolution is ready")
+			return
+		}
+		klog.Errorf("sync replication: controller caches did not sync within %s; "+
+			"sync write verbs error until they do "+
+			"(check the controller RBAC for persistentvolumes, persistentvolumeclaims, and volumereplications)",
+			syncCacheSyncTimeout)
+	}()
 }
 
 // advertiseVDOCapability runs once in the background, same as the guardian
