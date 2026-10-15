@@ -1,0 +1,31 @@
+name: "Gateway: Tests"
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - "gateway/**"
+      - ".github/workflows/gateway_test.yaml"
+  workflow_dispatch:
+
+jobs:
+  unit-test:
+    name: Unit Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gateway
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: gateway/go.mod
+
+    - name: Tidy Go modules
+      run: go mod tidy
+
+    - name: Test
+      run: make test
