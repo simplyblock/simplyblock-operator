@@ -172,6 +172,9 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
+	// The ServiceAccount, both Services and their Certificates are shared by every
+	// StorageNodeSet in the namespace, so each set co-owns them (owner references
+	// without the controller flag) instead of one set claiming them.
 	if err := r.reconcileRBAC(ctx, snCR); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -659,7 +662,7 @@ func (r *StorageNodeSetReconciler) reconcileService(
 	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) error {
 	svc := utils.BuildStorageNodeSetService(snCR, r.TLSEnabled, r.TLSProvider)
-	if err := controllerutil.SetControllerReference(snCR, svc, r.Scheme); err != nil {
+	if err := controllerutil.SetOwnerReference(snCR, svc, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set Service owner reference: %w", err)
 	}
 
@@ -672,6 +675,11 @@ func (r *StorageNodeSetReconciler) reconcileService(
 		return err
 	}
 
+	// Keep the other StorageNodeSets' owner references and add ours.
+	svc.OwnerReferences = existing.OwnerReferences
+	if err := controllerutil.SetOwnerReference(snCR, svc, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set Service owner reference: %w", err)
+	}
 	svc.ResourceVersion = existing.ResourceVersion
 	svc.Spec.ClusterIP = existing.Spec.ClusterIP
 	return r.Update(ctx, svc)
@@ -717,7 +725,7 @@ func (r *StorageNodeSetReconciler) reconcileServingCertificate(
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cert, func() error {
 		desired := utils.BuildServiceServingCertificate(snCR.Namespace, serviceName, secretName)
 		cert.Object["spec"] = desired.Object["spec"]
-		return controllerutil.SetControllerReference(snCR, cert, r.Scheme)
+		return controllerutil.SetOwnerReference(snCR, cert, r.Scheme)
 	}); err != nil {
 		return fmt.Errorf("failed to apply serving Certificate for %s: %w", serviceName, err)
 	}
@@ -827,7 +835,7 @@ func (r *StorageNodeSetReconciler) reconcileSpdkProxyService(
 	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) error {
 	svc := utils.BuildSpdkProxyService(snCR, r.TLSEnabled, r.TLSProvider)
-	if err := controllerutil.SetControllerReference(snCR, svc, r.Scheme); err != nil {
+	if err := controllerutil.SetOwnerReference(snCR, svc, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set spdk-proxy Service owner reference: %w", err)
 	}
 
@@ -840,6 +848,11 @@ func (r *StorageNodeSetReconciler) reconcileSpdkProxyService(
 		return err
 	}
 
+	// Keep the other StorageNodeSets' owner references and add ours.
+	svc.OwnerReferences = existing.OwnerReferences
+	if err := controllerutil.SetOwnerReference(snCR, svc, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set spdk-proxy Service owner reference: %w", err)
+	}
 	svc.ResourceVersion = existing.ResourceVersion
 	svc.Spec.ClusterIP = existing.Spec.ClusterIP
 	return r.Update(ctx, svc)
@@ -1207,13 +1220,8 @@ func (r *StorageNodeSetReconciler) reconcileWorkerNodes(
 // required by the storage-node DaemonSet are present and up to date.
 func (r *StorageNodeSetReconciler) reconcileRBAC(ctx context.Context, snCR *simplyblockv1alpha1.StorageNodeSet) error {
 	sa := utils.BuildStorageNodeSetServiceAccount(snCR.Namespace)
-	if err := controllerutil.SetControllerReference(snCR, sa, r.Scheme); err != nil {
-		return fmt.Errorf("failed to set ServiceAccount owner reference: %w", err)
-	}
-	desiredSAOwnerRefs := sa.OwnerReferences
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
-		sa.OwnerReferences = desiredSAOwnerRefs
-		return nil
+		return controllerutil.SetOwnerReference(snCR, sa, r.Scheme)
 	}); err != nil {
 		return fmt.Errorf("failed to apply ServiceAccount: %w", err)
 	}

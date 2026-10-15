@@ -21,6 +21,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -2873,4 +2874,75 @@ func TestExpansionDispatchOrder_IsStable(t *testing.T) {
 	if strings.Join(once, ",") != strings.Join(twice, ",") {
 		t.Errorf("not idempotent: %v then %v", once, twice)
 	}
+}
+
+// Two StorageNodeSets in one namespace share the storage-node-api and
+// spdk-proxy Services, their serving Certificates and the ServiceAccount, so
+// the second one must co-own them instead of failing on the first's controller
+// reference.
+func TestTwoStorageNodeSetsShareNamespaceScopedObjects(t *testing.T) {
+	ctx := context.Background()
+	mk := func(name, uid string) *simplyblockv1alpha1.StorageNodeSet {
+		return &simplyblockv1alpha1.StorageNodeSet{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns", UID: types.UID(uid)},
+			Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-" + name},
+		}
+	}
+	a, b := mk("sn-a", "uid-a"), mk("sn-b", "uid-b")
+
+	r := newStorageNodeSetStateTestReconciler(t, a, b)
+	r.TLSEnabled = true
+	r.TLSProvider = utils.TLSProviderCertManager
+
+	for _, sn := range []*simplyblockv1alpha1.StorageNodeSet{a, b, a} {
+		if err := r.reconcileRBAC(ctx, sn); err != nil {
+			t.Fatalf("reconcileRBAC(%s): %v", sn.Name, err)
+		}
+		if err := r.reconcileService(ctx, sn); err != nil {
+			t.Fatalf("reconcileService(%s): %v", sn.Name, err)
+		}
+		if err := r.reconcileSpdkProxyService(ctx, sn); err != nil {
+			t.Fatalf("reconcileSpdkProxyService(%s): %v", sn.Name, err)
+		}
+		if err := r.reconcileServingCertificates(ctx, sn); err != nil {
+			t.Fatalf("reconcileServingCertificates(%s): %v", sn.Name, err)
+		}
+	}
+
+	owners := func(refs []metav1.OwnerReference) map[string]bool {
+		m := map[string]bool{}
+		for _, ref := range refs {
+			m[ref.Name] = true
+		}
+		return m
+	}
+	check := func(what string, refs []metav1.OwnerReference) {
+		t.Helper()
+		got := owners(refs)
+		if !got["sn-a"] || !got["sn-b"] || len(refs) != 2 {
+			t.Fatalf("%s owners = %v, want exactly sn-a and sn-b", what, got)
+		}
+	}
+
+	for _, name := range []string{"simplyblock-storage-node-api", "simplyblock-spdk-proxy"} {
+		var svc corev1.Service
+		if err := r.Get(ctx, client.ObjectKey{Namespace: "ns", Name: name}, &svc); err != nil {
+			t.Fatalf("get Service %s: %v", name, err)
+		}
+		check("Service "+name, svc.OwnerReferences)
+
+		cert := &unstructured.Unstructured{}
+		cert.SetAPIVersion("cert-manager.io/v1")
+		cert.SetKind("Certificate")
+		if err := r.Get(ctx, client.ObjectKey{Namespace: "ns", Name: name}, cert); err != nil {
+			t.Fatalf("get Certificate %s: %v", name, err)
+		}
+		check("Certificate "+name, cert.GetOwnerReferences())
+	}
+
+	var sa corev1.ServiceAccount
+	if err := r.Get(ctx, client.ObjectKey{Namespace: "ns", Name: "simplyblock-storage-node-sa"}, &sa); err != nil {
+		t.Fatalf("get ServiceAccount: %v", err)
+	}
+	check("ServiceAccount", sa.OwnerReferences)
 }
