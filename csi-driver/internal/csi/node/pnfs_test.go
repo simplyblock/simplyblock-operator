@@ -25,6 +25,10 @@ type fakeNFSMounter struct {
 	unmounts  []string
 	isMounted bool
 	mountErr  error
+	// unmountErr fails every plain unmount, as one of a mount whose server
+	// is gone does.
+	unmountErr error
+	detached   []string
 }
 
 func (m *fakeNFSMounter) Mount(source, target, fsType string, options []string) error {
@@ -38,6 +42,15 @@ func (m *fakeNFSMounter) Mount(source, target, fsType string, options []string) 
 
 func (m *fakeNFSMounter) Unmount(target string) error {
 	m.unmounts = append(m.unmounts, target)
+	if m.unmountErr != nil {
+		return m.unmountErr
+	}
+	m.isMounted = false
+	return nil
+}
+
+func (m *fakeNFSMounter) Detach(target string) error {
+	m.detached = append(m.detached, target)
 	m.isMounted = false
 	return nil
 }
@@ -166,6 +179,34 @@ func TestUnstageToleratesAnAbsentMount(t *testing.T) {
 	}
 	if len(m.unmounts) != 0 {
 		t.Errorf("unmounted something that was not mounted: %v", m.unmounts)
+	}
+}
+
+// A mount whose metadata server is gone cannot be unmounted the ordinary way:
+// umount waits on a server that never answers. Left in place, the dead mount's
+// NFS client stays, and the kernel trunks every later mount of a restarted
+// metadata server (same server identity) onto it, so they all fail on that
+// node. Unstage detaches it instead of failing forever.
+func TestUnstageDetachesAMountWhoseServerIsGone(t *testing.T) {
+	m := &fakeNFSMounter{isMounted: true, unmountErr: errors.New("umount.nfs4: server not responding")}
+	path := t.TempDir()
+	if err := unstagePNFS(m, path, ""); err != nil {
+		t.Fatalf("unstage: %v", err)
+	}
+	if len(m.detached) != 1 || m.detached[0] != path {
+		t.Errorf("detached %v, want %s", m.detached, path)
+	}
+}
+
+// A mount that unmounts is never detached: a lazy detach leaves the filesystem
+// alive under any process still holding it.
+func TestUnstageDetachesOnlyWhatDidNotUnmount(t *testing.T) {
+	m := &fakeNFSMounter{isMounted: true}
+	if err := unstagePNFS(m, t.TempDir(), ""); err != nil {
+		t.Fatalf("unstage: %v", err)
+	}
+	if len(m.detached) != 0 {
+		t.Errorf("detached %v after a clean unmount", m.detached)
 	}
 }
 

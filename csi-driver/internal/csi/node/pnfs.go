@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 
@@ -125,6 +126,37 @@ type nfsMounter interface {
 	Mount(source, target, fsType string, flags []string) error
 	Unmount(target string) error
 	IsMounted(path string) (bool, error)
+	// Detach forces off and lazily removes a mount that will not unmount.
+	Detach(target string) error
+}
+
+// unmountTimeout bounds the ordinary unmount of a staging mount. One whose
+// server answers is done well within it. One whose server is gone waits on
+// it for as long as the server stays away.
+var unmountTimeout = 15 * time.Second
+
+// unmountOrDetach unmounts path, and detaches it when that fails or does not
+// finish. A dead mount left in place keeps its NFS client, and the kernel
+// trunks every later mount of the same metadata server (whose identity
+// survives a restart) onto that client, so every later mount on the node
+// fails with it.
+func unmountOrDetach(mounter nfsMounter, path string) error {
+	done := make(chan error, 1)
+	go func() { done <- mounter.Unmount(path) }()
+	var err error
+	select {
+	case err = <-done:
+		if err == nil {
+			return nil
+		}
+	case <-time.After(unmountTimeout):
+		err = fmt.Errorf("no answer within %s", unmountTimeout)
+	}
+	klog.Warningf("pnfs: unmounting %s failed (%v); detaching it", path, err)
+	if derr := mounter.Detach(path); derr != nil {
+		return fmt.Errorf("unmount: %w; detach: %w", err, derr)
+	}
+	return nil
 }
 
 // stagePNFS mounts the export at the staging path. Nothing here formats -- the
@@ -180,7 +212,7 @@ func unstagePNFS(
 		return fmt.Errorf("pnfs: checking %s: %w", stagingPath, err)
 	}
 	if mounted {
-		if err := mounter.Unmount(stagingPath); err != nil {
+		if err := unmountOrDetach(mounter, stagingPath); err != nil {
 			return fmt.Errorf("pnfs: unmounting %s: %w", stagingPath, err)
 		}
 	}
@@ -312,6 +344,13 @@ func (ns *Server) restagePNFSVolume(
 ) error {
 	klog.Warningf("restaging pNFS volume %s: staging mount %s is dead",
 		req.GetVolumeId(), stagingTargetPath)
+	// The mount is dead, so its server may be gone: an ordinary unmount would
+	// wait on it.
+	if mounted, err := ns.mounter.IsMounted(stagingTargetPath); err == nil && mounted {
+		if err := unmountOrDetach(ns.mounter, stagingTargetPath); err != nil {
+			return fmt.Errorf("pnfs: clearing the dead mount at %s: %w", stagingTargetPath, err)
+		}
+	}
 	if err := ns.mounter.Remove(stagingTargetPath); err != nil {
 		return fmt.Errorf("pnfs: clearing the dead mount at %s: %w", stagingTargetPath, err)
 	}
