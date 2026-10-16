@@ -3,11 +3,11 @@
 // certificate (design-objectstore.md §4, Appendix A).
 //
 // Types and generated code only, matching design-objectstore.md's appendix
-// field for field. The reconciler that turns this into a Deployment, a
-// Service, and a certificate is that design's own work plan, not yet
-// written. S3BucketReconciler (design-bucket-provisioning.md) needs the kind
-// to exist to detect a spec.objectStoreRef naming an ObjectStore that does
-// not (I-05), which is the only reason this file exists before that work.
+// field for field (plus PhaseDeadline, added for the same reason
+// S3BucketStatus carries one: §6's deadline has to survive an operator
+// restart, and the appendix did not have a field for it). The reconciler
+// that turns this into a Deployment, a Service, and a certificate is
+// objectstore_controller.go.
 
 package v1alpha1
 
@@ -112,6 +112,14 @@ type ObjectStoreStatus struct {
 	Message string `json:"message,omitempty"`
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// PhaseDeadline is when the current phase gives up waiting and degrades,
+	// carried in status rather than only in memory so a restarted operator
+	// resumes the same deadline instead of granting a fresh one (§6, a design
+	// gap the same field closed for S3BucketStatus: see
+	// design-bucket-provisioning.md's own appendix note).
+	// +optional
+	PhaseDeadline *metav1.Time `json:"phaseDeadline,omitempty"`
 }
 
 // +kubebuilder:object:root=true
