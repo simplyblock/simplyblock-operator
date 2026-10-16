@@ -150,6 +150,17 @@ type fakeControlPlane struct {
 	restored    []controlplane.RestoreBackupParams
 	volumeReads int
 
+	groupRestores        int
+	groupRestored        []controlplane.RestoreGroupBackupParams
+	groupRestoreErr      error
+	restoredGroupID      string
+	restoredGroupMembers []controlplane.RestoredGroupMember
+
+	groupsByName   map[string]string
+	groupByNameErr error
+	groupAttaches  []string
+	groupAttachErr error
+
 	// pool is what ListVolumes answers with, which is how a test puts a volume a
 	// previous pass created into the world without a control plane.
 	pool      []lvol.Volume
@@ -206,6 +217,24 @@ func (f *fakeControlPlane) DetachBackupPolicy(_ context.Context, _, _, volumeID 
 	return nil
 }
 
+func (f *fakeControlPlane) ConsistencyGroupByName(_ context.Context, _, name string) (string, error) {
+	if f.groupByNameErr != nil {
+		return "", f.groupByNameErr
+	}
+	if id, ok := f.groupsByName[name]; ok {
+		return id, nil
+	}
+	return "", notFoundError{}
+}
+
+func (f *fakeControlPlane) AttachBackupPolicyToConsistencyGroup(_ context.Context, _, policyID, groupID string) error {
+	if f.groupAttachErr != nil {
+		return f.groupAttachErr
+	}
+	f.groupAttaches = append(f.groupAttaches, groupID)
+	return nil
+}
+
 func (f *fakeControlPlane) RestoreBackup(
 	_ context.Context, _ string, params controlplane.RestoreBackupParams,
 ) (string, error) {
@@ -215,6 +244,17 @@ func (f *fakeControlPlane) RestoreBackup(
 		return "", f.restoreErr
 	}
 	return f.restoredID, nil
+}
+
+func (f *fakeControlPlane) RestoreGroupBackup(
+	_ context.Context, _ string, params controlplane.RestoreGroupBackupParams,
+) (string, []controlplane.RestoredGroupMember, error) {
+	f.groupRestores++
+	f.groupRestored = append(f.groupRestored, params)
+	if f.groupRestoreErr != nil {
+		return "", nil, f.groupRestoreErr
+	}
+	return f.restoredGroupID, f.restoredGroupMembers, nil
 }
 
 func (f *fakeControlPlane) Volume(_ context.Context, handle lvol.VolumeHandle) (lvol.Volume, error) {

@@ -20,6 +20,10 @@ spec:
     - jsonPath: .spec.backupRef.name
       name: Backup
       type: string
+    - jsonPath: .spec.groupBackupID
+      name: GroupBackup
+      priority: 1
+      type: string
     - jsonPath: .spec.action
       name: Action
       type: string
@@ -94,9 +98,11 @@ spec:
                   rule: self == oldSelf
               backupRef:
                 description: |-
-                  BackupRef names the StorageBackup this operation acts on. Its namespace
-                  defaults to this operation's. A backup in another namespace needs the
-                  requesting user to be allowed to read it there.
+                  BackupRef names the single StorageBackup this operation acts on. Its
+                  namespace defaults to this operation's. A backup in another namespace needs
+                  the requesting user to be allowed to read it there. Set exactly one of this
+                  and GroupBackupID: an operation acts on one backup or on a whole group
+                  backup.
                 properties:
                   name:
                     description: Name is the object's name.
@@ -138,6 +144,18 @@ spec:
                 required:
                 - name
                 type: object
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              groupBackupID:
+                description: |-
+                  GroupBackupID restores a whole consistency-group backup instead of the
+                  single backup named by BackupRef, producing one PersistentVolumeClaim per
+                  member labeled into one restored consistency group. Its value is the
+                  control-plane group backup id carried by the storage.simplyblock.io/group-backup-id
+                  label on the member StorageBackups. Set exactly one of this and BackupRef.
+                maxLength: 253
+                type: string
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
@@ -198,9 +216,17 @@ spec:
                   rule: '!has(oldSelf.claimAnnotations) || has(self.claimAnnotations)'
             required:
             - action
-            - backupRef
             - clusterRef
             type: object
+            x-kubernetes-validations:
+            - message: field backupRef is immutable once set
+              rule: '!has(oldSelf.backupRef) || has(self.backupRef)'
+            - message: field groupBackupID is immutable once set
+              rule: '!has(oldSelf.groupBackupID) || has(self.groupBackupID)'
+            - message: 'set exactly one of backupRef and groupBackupID: an operation
+                acts on a single backup or on a whole group backup, not both or neither'
+              rule: '(has(self.backupRef) ? 1 : 0) + (has(self.groupBackupID) ? 1
+                : 0) == 1'
           status:
             description: status defines the observed state of StorageBackupOps
             properties:
@@ -255,11 +281,52 @@ spec:
                   PoolUUID is the backend identifier of spec.restore.targetPool, resolved
                   once at Validating.
                 type: string
+              restoredGroupID:
+                description: |-
+                  RestoredGroupID is the consistency group a group restore formed, written
+                  once the control-plane group restore returns, so the operation says which
+                  group it produced. Empty for a single-backup restore.
+                type: string
+              restoredGroupMembers:
+                description: |-
+                  RestoredGroupMembers is one entry per restored member volume of a group
+                  restore, written when the control plane accepts the restore and carrying the
+                  claim each is bound to as Binding produces them. It is how a restarted
+                  AwaitingVolumes or Binding step knows which volumes to wait on and which
+                  claims to produce. Empty for a single-backup restore.
+                items:
+                  description: |-
+                    RestoredGroupMember is one volume a group restore produced: the logical volume
+                    the control plane created, the source member it came from, and the claim it is
+                    bound to once Binding produces one.
+                  properties:
+                    claimName:
+                      description: |-
+                        ClaimName is the PersistentVolumeClaim this member was bound to, written by
+                        Binding. Empty until the claim is produced.
+                      type: string
+                    lvolID:
+                      description: LvolID is the restored logical volume's backend
+                        id.
+                      type: string
+                    memberName:
+                      description: |-
+                        MemberName is the source member's volume name, which the restored claim's
+                        name is formed from (claimName-memberName) and which tells the members apart.
+                      type: string
+                  required:
+                  - lvolID
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - lvolID
+                x-kubernetes-list-type: map
               restoredLvolID:
                 description: |-
                   RestoredLvolID is the logical volume the control plane created. It is
                   written before the claim, so a restarted Binding step knows what it is
-                  binding.
+                  binding. For a group restore it holds the first member's volume; the full
+                  set is tracked per member as the group drive binds them.
                 type: string
               startedAt:
                 description: StartedAt is when the operation acquired its target's
@@ -311,7 +378,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Validating'',''Restoring'',''AwaitingVolume'',''Binding'']'
+                  rule: '!has(self.state) || self.state in [''Validating'',''Restoring'',''AwaitingVolume'',''AwaitingVolumes'',''Binding'']'
             type: object
         required:
         - spec

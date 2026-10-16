@@ -119,25 +119,34 @@ func (v *StorageBackupOpsValidator) admitCreate(
 		return *denied
 	}
 
-	var backup simplyblockv1alpha2.StorageBackup
-	err := v.Client.Get(ctx,
-		backupKey(&ops), &backup)
-	if apierrors.IsNotFound(err) {
-		return admission.Denied(fmt.Sprintf(
-			"spec.backupRef %q does not name a StorageBackup in namespace %q",
-			ops.Spec.BackupRef.Name, backupKey(&ops).Namespace))
-	}
-	if err != nil {
-		return admission.Errored(http.StatusInternalServerError, err)
-	}
-	// Refusing a Failed backup is a reference check rather than a state check. A
-	// backup whose phase is Failed has no copy behind it, so a restore naming it
-	// is naming a record of something that does not exist, and that is decided
-	// once and stays decided: a backup does not recover from Failed, it is
-	// replaced by another backup.
-	if backup.Status.Phase == simplyblockv1alpha2.StorageBackupPhaseFailed {
-		return admission.Denied(fmt.Sprintf(
-			"StorageBackup %q failed and has no copy to restore", ops.Spec.BackupRef.Name))
+	// A group restore names a group backup by id rather than one StorageBackup.
+	// The members are the StorageBackups carrying its label. The CEL rule on the
+	// spec guarantees exactly one of the two is set, so this branch is exclusive.
+	if ops.Spec.GroupBackupID != "" {
+		if denied := v.groupBackupMustBeRestorable(ctx, &ops); denied != nil {
+			return *denied
+		}
+	} else {
+		var backup simplyblockv1alpha2.StorageBackup
+		err := v.Client.Get(ctx,
+			backupKey(&ops), &backup)
+		if apierrors.IsNotFound(err) {
+			return admission.Denied(fmt.Sprintf(
+				"spec.backupRef %q does not name a StorageBackup in namespace %q",
+				ops.Spec.BackupRef.Name, backupKey(&ops).Namespace))
+		}
+		if err != nil {
+			return admission.Errored(http.StatusInternalServerError, err)
+		}
+		// Refusing a Failed backup is a reference check rather than a state check. A
+		// backup whose phase is Failed has no copy behind it, so a restore naming it
+		// is naming a record of something that does not exist, and that is decided
+		// once and stays decided: a backup does not recover from Failed, it is
+		// replaced by another backup.
+		if backup.Status.Phase == simplyblockv1alpha2.StorageBackupPhaseFailed {
+			return admission.Denied(fmt.Sprintf(
+				"StorageBackup %q failed and has no copy to restore", ops.Spec.BackupRef.Name))
+		}
 	}
 
 	if ops.Spec.Restore == nil {
@@ -161,6 +170,39 @@ func clusterKey(ops *simplyblockv1alpha2.StorageBackupOps) types.NamespacedName 
 // backupKey is the StorageBackup the operation acts on.
 func backupKey(ops *simplyblockv1alpha2.StorageBackupOps) types.NamespacedName {
 	return ops.Spec.BackupRef.In(ops.Namespace)
+}
+
+// groupBackupMustBeRestorable resolves a group restore's spec.groupBackupID to
+// its member StorageBackups and refuses one that names no member, or whose group
+// has a failed member. The members are the StorageBackups carrying the
+// group-backup-id label in the operation's namespace, the same selector a group
+// restore addresses. The id is immutable, so this is decided once at creation.
+func (v *StorageBackupOpsValidator) groupBackupMustBeRestorable(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
+) *admission.Response {
+	var members simplyblockv1alpha2.StorageBackupList
+	if err := v.Client.List(ctx, &members,
+		client.InNamespace(ops.Namespace),
+		client.MatchingLabels{simplyblockv1alpha2.BackupLabelGroupBackupID: ops.Spec.GroupBackupID},
+	); err != nil {
+		errored := admission.Errored(http.StatusInternalServerError, err)
+		return &errored
+	}
+	if len(members.Items) == 0 {
+		denied := admission.Denied(fmt.Sprintf(
+			"spec.groupBackupID %q names no StorageBackup in namespace %q",
+			ops.Spec.GroupBackupID, ops.Namespace))
+		return &denied
+	}
+	for i := range members.Items {
+		if members.Items[i].Status.Phase == simplyblockv1alpha2.StorageBackupPhaseFailed {
+			denied := admission.Denied(fmt.Sprintf(
+				"group backup %q has a failed member %q and cannot be restored as a unit",
+				ops.Spec.GroupBackupID, members.Items[i].Name))
+			return &denied
+		}
+	}
+	return nil
 }
 
 // requesterMayReach refuses a restore whose references leave its namespace unless

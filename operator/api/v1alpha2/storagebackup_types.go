@@ -45,6 +45,10 @@ const (
 	// BackupLabelPolicy is the StorageBackupPolicy that scheduled the copy,
 	// where the control plane reports one.
 	BackupLabelPolicy = "storage.simplyblock.io/backup-policy"
+	// BackupLabelGroupBackupID is the group backup a member copy belongs to, so
+	// the members of one group backup are a selector. Absent on a standalone
+	// single-volume backup. Its value is status.source.group.groupBackupID.
+	BackupLabelGroupBackupID = "storage.simplyblock.io/group-backup-id"
 )
 
 // storageBackupNames derives a StorageBackup object's name from the identifier
@@ -135,6 +139,37 @@ type BackupSource struct {
 	// backup's own cluster when another cluster wrote it.
 	// +optional
 	ClusterUUID string `json:"clusterUUID,omitempty"`
+
+	// Group is the group backup this copy belongs to, when it is a member of a
+	// consistency-group backup. Absent for a standalone single-volume backup.
+	// +optional
+	Group *BackupGroup `json:"group,omitempty"`
+}
+
+// BackupGroup is the consistency-group generation a backup belongs to, when it
+// is a member of a group backup. It ties the member copies of one generation
+// together so a group backup is legible as a unit without a separate object.
+// Part of status.source: written once from the store and never updated.
+type BackupGroup struct {
+	// GroupBackupID is the control-plane group backup this member belongs to.
+	// Every member copy of one generation shares it, which is also carried as the
+	// storage.simplyblock.io/group-backup-id label so the members are a selector.
+	// +optional
+	GroupBackupID string `json:"groupBackupID,omitempty"`
+
+	// ConsistencyGroupName is the consistency group the generation was taken from.
+	// +optional
+	ConsistencyGroupName string `json:"consistencyGroupName,omitempty"`
+
+	// Generation is the group sequence this backup's generation was stamped with,
+	// so copies of the same generation can be recognized as one point in time.
+	// +optional
+	Generation int64 `json:"generation,omitempty"`
+
+	// MemberCount is how many members the generation has, so a reader can tell a
+	// complete group backup from a partial one without listing every member.
+	// +optional
+	MemberCount int32 `json:"memberCount,omitempty"`
 }
 
 // BackupCopy is the copy itself: what it is, what it cost, and what it depends
@@ -308,6 +343,8 @@ func (b *StorageBackup) Source() BackupSource {
 // +kubebuilder:printcolumn:name="Size",type=integer,JSONPath=".status.backup.size"
 // +kubebuilder:printcolumn:name="Pool",type=string,JSONPath=".status.source.poolName",priority=1
 // +kubebuilder:printcolumn:name="BackupID",type=string,JSONPath=".status.backup.backupID",priority=1
+// +kubebuilder:printcolumn:name="Group",type=string,JSONPath=".status.source.group.consistencyGroupName",priority=1
+// +kubebuilder:printcolumn:name="Generation",type=integer,JSONPath=".status.source.group.generation",priority=1
 // +kubebuilder:printcolumn:name="Completed",type=date,JSONPath=".status.backup.completedAt"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 // +operator-sdk:csv:customresourcedefinitions:displayName="Storage Backup",resources={{PersistentVolume,v1,source-volume},{PersistentVolumeClaim,v1,source-claim}}

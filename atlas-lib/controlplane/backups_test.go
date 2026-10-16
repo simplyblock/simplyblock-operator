@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -158,6 +159,24 @@ func TestClientBackupPolicyByName(t *testing.T) {
 // that timed out, so a detach of something already detached has to converge
 // rather than fail. The control plane reports that as a 400 with a message
 // rather than as a 404, which is the only reason this is worth a test.
+func TestClientAttachBackupPolicyToConsistencyGroup(t *testing.T) {
+	const groupID = testCluster + "/c9c9c9c9-c9c9-4c9c-8c9c-c9c9c9c9c9c9"
+	var body string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		body = string(raw)
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	if err := c.AttachBackupPolicyToConsistencyGroup(
+		context.Background(), testCluster, testPolicy, groupID); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, AttachTargetConsistencyGroup) || !strings.Contains(body, groupID) {
+		t.Errorf("attach body = %q, want the consistency-group target and id", body)
+	}
+}
+
 func TestClientDetachBackupPolicyTreatsAMissingAttachmentAsSuccess(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
@@ -212,6 +231,64 @@ func TestClientRestoreBackup(t *testing.T) {
 	}
 	if got != restoredID {
 		t.Errorf("restored volume = %q, want %q", got, restoredID)
+	}
+}
+
+func TestClientRestoreGroupBackup(t *testing.T) {
+	const (
+		groupBackup  = "55555555-5555-5555-5555-555555555555"
+		restoredCG   = "11111111-1111-1111-1111-111111111111/99999999-9999-9999-9999-999999999999"
+		memberVolOne = "66666666-6666-6666-6666-666666666666"
+		memberVolTwo = "77777777-7777-7777-7777-777777777777"
+	)
+
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if !strings.Contains(r.URL.Path, groupBackup) {
+			t.Errorf("path = %s, want it to name the group backup uuid", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"group_id":"` + restoredCG + `","members":[` +
+			`{"lvol_id":"` + memberVolOne + `","member_name":"db"},` +
+			`{"lvol_id":"` + memberVolTwo + `","member_name":"data"}]}`))
+	})
+
+	// The composite "<cluster>/<uuid>" form the label carries is accepted; the
+	// endpoint is reached by the UUID.
+	groupID, members, err := c.RestoreGroupBackup(context.Background(), testCluster, RestoreGroupBackupParams{
+		GroupBackupID: testCluster + "/" + groupBackup, IntoGroupName: "restored-cg", Pool: "pool1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if groupID != restoredCG {
+		t.Errorf("restored group = %q, want %q", groupID, restoredCG)
+	}
+	want := []RestoredGroupMember{
+		{LvolID: memberVolOne, MemberName: "db"},
+		{LvolID: memberVolTwo, MemberName: "data"},
+	}
+	if len(members) != 2 || members[0] != want[0] || members[1] != want[1] {
+		t.Errorf("restored members = %v, want %v", members, want)
+	}
+}
+
+// A group restore whose response names no group or no volumes leaves the caller
+// with nothing to wait on, so it is an error rather than an empty result.
+func TestClientRestoreGroupBackupWithoutVolumesFails(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"group_id":"11111111-1111-1111-1111-111111111111/abc","members":[]}`))
+	})
+
+	if _, _, err := c.RestoreGroupBackup(context.Background(), testCluster,
+		RestoreGroupBackupParams{GroupBackupID: "55555555-5555-5555-5555-555555555555", IntoGroupName: "restored-cg", Pool: "pool1"},
+	); !errors.Is(err, errs.ErrInvalidResponse) {
+		t.Errorf("err = %v, want ErrInvalidResponse", err)
 	}
 }
 

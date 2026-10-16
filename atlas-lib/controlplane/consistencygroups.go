@@ -61,6 +61,37 @@ func (c *Client) ConsistencyGroupForLvols(ctx context.Context, clusterID string,
 		clusterID, len(lvolIDs))
 }
 
+// ConsistencyGroupByName returns the composite id of the consistency group named
+// `name` in clusterID, the id a backup-policy attachment addresses the group by.
+//
+// A group's name is unique per cluster, so the name and the cluster identify it.
+// Returns an error wrapping ErrNotFound when the cluster has no group by that
+// name, which the caller reconciles by waiting rather than failing: a group is
+// born from its first labeled member, so a policy can name one before it exists.
+func (c *Client) ConsistencyGroupByName(ctx context.Context, clusterID, name string) (string, error) {
+	cluster, err := parseUUID("cluster id", clusterID)
+	if err != nil {
+		return "", err
+	}
+	listResp, err := c.api.ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGetWithResponse(
+		ctx, cluster, &cpapi.ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGetParams{Name: &name})
+	if err != nil {
+		return "", fmt.Errorf("list consistency groups in cluster %s: %w", clusterID, err)
+	}
+	groups, err := payload("consistency groups in cluster "+clusterID,
+		listResp.JSON200, listResp.StatusCode(), listResp.Body)
+	if err != nil {
+		return "", err
+	}
+	for _, g := range *groups {
+		if g.Name == name {
+			return g.ClusterId.String() + "/" + g.Id.String(), nil
+		}
+	}
+	return "", fmt.Errorf("no consistency group named %q in cluster %s: %w",
+		name, clusterID, errs.ErrNotFound)
+}
+
 // consistencyGroupMembers returns a group's current open-epoch member lvol ids.
 func (c *Client) consistencyGroupMembers(ctx context.Context, cluster, group uuid.UUID) ([]string, error) {
 	resp, err := c.api.ClustersConsistencyGroupsMembersApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersGetWithResponse(

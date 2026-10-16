@@ -111,6 +111,78 @@ func TestPolicyAttachesTheClaimsItsSelectorMatches(t *testing.T) {
 	}
 }
 
+func groupPolicyObject(groupName string) *simplyblockv1alpha2.StorageBackupPolicy {
+	return &simplyblockv1alpha2.StorageBackupPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "nightly",
+			Namespace:  testNamespace,
+			Finalizers: []string{policyFinalizer},
+		},
+		Spec: simplyblockv1alpha2.StorageBackupPolicySpec{
+			ClusterRef:           testClusterCR,
+			ConsistencyGroupName: groupName,
+			Schedule:             "24h,7",
+		},
+	}
+}
+
+// A consistency-group policy backs up its named group as one unit: it resolves
+// the group and attaches the control-plane policy to it, rather than attaching
+// per claim.
+func TestPolicyWithConsistencyGroupNameAttachesTheGroup(t *testing.T) {
+	const groupID = testClusterID + "/cg-uuid"
+	api := &fakeControlPlane{
+		createdID:    testPolicyID,
+		groupsByName: map[string]string{"app-group": groupID},
+	}
+	r := policyReconciler(t, api, testClusterObject(), groupPolicyObject("app-group"))
+
+	if _, err := r.Reconcile(context.Background(), policyRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	if !slices.Equal(api.groupAttaches, []string{groupID}) {
+		t.Errorf("group attaches = %v, want the resolved group id", api.groupAttaches)
+	}
+	if len(api.attaches) != 0 {
+		t.Errorf("per-claim attaches = %v, want none for a group policy", api.attaches)
+	}
+
+	var policy simplyblockv1alpha2.StorageBackupPolicy
+	if err := r.Get(context.Background(), policyRequest().NamespacedName, &policy); err != nil {
+		t.Fatal(err)
+	}
+	if got := policy.Status.Phase; got != simplyblockv1alpha2.StorageBackupPolicyPhaseActive {
+		t.Errorf("phase = %q, want Active", got)
+	}
+	if policy.Status.PolicyID != testPolicyID {
+		t.Errorf("policyID = %q, want the id the control plane assigned", policy.Status.PolicyID)
+	}
+}
+
+// A policy may name a group before it exists, since a group is born from its
+// first labeled member. The policy waits rather than failing, and attaches
+// nothing until the group appears.
+func TestPolicyWaitsForAConsistencyGroupThatDoesNotExistYet(t *testing.T) {
+	api := &fakeControlPlane{createdID: testPolicyID} // groupsByName empty: not found
+	r := policyReconciler(t, api, testClusterObject(), groupPolicyObject("not-yet"))
+
+	if _, err := r.Reconcile(context.Background(), policyRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	if len(api.groupAttaches) != 0 {
+		t.Errorf("attached %v, want nothing while the group does not exist", api.groupAttaches)
+	}
+	var policy simplyblockv1alpha2.StorageBackupPolicy
+	if err := r.Get(context.Background(), policyRequest().NamespacedName, &policy); err != nil {
+		t.Fatal(err)
+	}
+	if got := policy.Status.Phase; got == simplyblockv1alpha2.StorageBackupPolicyPhaseActive {
+		t.Errorf("phase = %q, want it waiting rather than Active", got)
+	}
+}
+
 // The default that makes the whole kind safe. A policy with no selector covers
 // nothing, so it can be written before the claims it will cover exist without
 // backing up everything in the namespace in the meantime.

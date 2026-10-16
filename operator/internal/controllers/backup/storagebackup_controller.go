@@ -367,10 +367,7 @@ func (r *StorageBackupReconciler) reconcileLabels(
 	if sb.Labels == nil {
 		sb.Labels = map[string]string{}
 	}
-	for _, key := range []string{
-		simplyblockv1alpha2.BackupLabelCluster,
-		simplyblockv1alpha2.BackupLabelClaim,
-	} {
+	for _, key := range ownedBackupLabelKeys {
 		if value, ok := want[key]; ok {
 			sb.Labels[key] = value
 		} else {
@@ -378,6 +375,15 @@ func (r *StorageBackupReconciler) reconcileLabels(
 		}
 	}
 	return r.Patch(ctx, sb, patch)
+}
+
+// ownedBackupLabelKeys are the label keys this mirror maintains on a
+// StorageBackup. Keys outside this set are left alone, so a label somebody else
+// put on the object is not fought over.
+var ownedBackupLabelKeys = []string{
+	simplyblockv1alpha2.BackupLabelCluster,
+	simplyblockv1alpha2.BackupLabelClaim,
+	simplyblockv1alpha2.BackupLabelGroupBackupID,
 }
 
 // backupLabels are the labels a backup object carries, which is how it is found
@@ -389,6 +395,9 @@ func backupLabels(
 	if taken.ClaimName != "" {
 		labels[simplyblockv1alpha2.BackupLabelClaim] = taken.ClaimName
 	}
+	if taken.Group != nil && taken.Group.GroupBackupID != "" {
+		labels[simplyblockv1alpha2.BackupLabelGroupBackupID] = taken.Group.GroupBackupID
+	}
 	return labels
 }
 
@@ -396,10 +405,7 @@ func backupLabels(
 // mirror owns, with the values it wants. Keys it does not own are ignored, so a
 // label somebody else put on the object is not fought over.
 func labelsMatch(have, want map[string]string) bool {
-	for _, key := range []string{
-		simplyblockv1alpha2.BackupLabelCluster,
-		simplyblockv1alpha2.BackupLabelClaim,
-	} {
+	for _, key := range ownedBackupLabelKeys {
 		wanted, wantIt := want[key]
 		got, haveIt := have[key]
 		if wantIt != haveIt || wanted != got {
@@ -637,6 +643,17 @@ func (r *StorageBackupReconciler) resolveSource(
 		SnapshotName: dto.SnapshotName,
 		NodeID:       dto.NodeID,
 		ClusterUUID:  firstNonEmpty(dto.SourceClusterID, clusterID),
+	}
+	// A member of a group backup carries the group identity the stream reports.
+	// The consistency-group name and member count live in the GroupBackup record
+	// rather than on the member backup, so they are left for a reader that wants
+	// them; the id and generation are what tie the members of one generation
+	// together and what the group-backup-id label selects on.
+	if dto.GroupBackupID != "" {
+		taken.Group = &simplyblockv1alpha2.BackupGroup{
+			GroupBackupID: dto.GroupBackupID,
+			Generation:    dto.GroupSeq,
+		}
 	}
 	if dto.LvolID == "" {
 		return taken, nil

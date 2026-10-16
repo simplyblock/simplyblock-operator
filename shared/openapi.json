@@ -6834,6 +6834,429 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/group-backups/": {
+      "get": {
+        "tags": [
+          "group-backups"
+        ],
+        "summary": "Clusters:Group-Backups:List",
+        "description": "List the cluster's group backups, newest first.",
+        "operationId": "clusters_group_backups_list_api_v2_clusters__cluster_id__group_backups__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GroupBackupDTO"
+                  },
+                  "title": "Response Clusters Group Backups List Api V2 Clusters  Cluster Id  Group Backups  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/group-backups/export": {
+      "get": {
+        "tags": [
+          "group-backups"
+        ],
+        "summary": "Clusters:Group-Backups:Export",
+        "description": "Export a group backup's manifests as a unit, for import elsewhere (\u00a76.5).\n\nCarries the group manifest plus every member backup's chain, so a hand-carried\nfile describes the group backup identically to a bucket read.",
+        "operationId": "clusters_group_backups_export_api_v2_clusters__cluster_id__group_backups_export_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_backup_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Export the group backup with this UUID",
+              "title": "Group Backup Id"
+            },
+            "description": "Export the group backup with this UUID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupBackupExport-Output"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/group-backups/import": {
+      "post": {
+        "tags": [
+          "group-backups"
+        ],
+        "summary": "Clusters:Group-Backups:Import",
+        "description": "Import a group backup, preserving ids, all-or-nothing (\u00a76.5).",
+        "operationId": "clusters_group_backups_import_api_v2_clusters__cluster_id__group_backups_import_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/_GroupImportManifests"
+                  },
+                  {
+                    "$ref": "#/components/schemas/_GroupImportFromBucket"
+                  }
+                ],
+                "title": "Parameters"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/group-backups/discover": {
+      "post": {
+        "tags": [
+          "group-backups"
+        ],
+        "summary": "Clusters:Group-Backups:Discover",
+        "description": "List the group backups a bucket contains, without importing anything (\u00a76.5).\n\nA POST because it carries credentials, which have no business in a query\nstring. Takes no cluster state at all: this is what an operator runs when the\ncluster that wrote the group backups no longer exists.",
+        "operationId": "clusters_group_backups_discover_api_v2_clusters__cluster_id__group_backups_discover_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupConfig-Input"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GroupBackupManifest"
+                  },
+                  "title": "Response Clusters Group Backups Discover Api V2 Clusters  Cluster Id  Group Backups Discover Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/group-backups/{group_backup_id}/": {
+      "get": {
+        "tags": [
+          "group-backups"
+        ],
+        "summary": "Clusters:Group-Backups:Detail",
+        "operationId": "clusters_group_backups_detail_api_v2_clusters__cluster_id__group_backups__group_backup_id___get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_backup_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Backup Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupBackupDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "group-backups"
+        ],
+        "summary": "Clusters:Group-Backups:Delete",
+        "description": "Delete a group backup: its group manifest and its record. The member\nbackups follow per-volume retention (design \u00a79).",
+        "operationId": "clusters_group_backups_delete_api_v2_clusters__cluster_id__group_backups__group_backup_id___delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_backup_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Backup Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/group-backups/{group_backup_id}/restore": {
+      "post": {
+        "tags": [
+          "group-backups"
+        ],
+        "summary": "Clusters:Group-Backups:Restore",
+        "description": "Restore a group backup into a NEW consistency group, all-or-nothing\n(design \u00a76). Returns the restored group id and one entry per restored member\nvolume (its id and the source member's name); each volume recovers its data\nasynchronously, the same as a single-volume restore.",
+        "operationId": "clusters_group_backups_restore_api_v2_clusters__cluster_id__group_backups__group_backup_id__restore_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_backup_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Backup Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_GroupRestoreParams"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/": {
       "get": {
         "summary": "Clusters:Subsystems:Migrations:List",
@@ -8961,6 +9384,75 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/backups": {
+      "post": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Backups:Create",
+        "description": "Back up one generation of the group to S3 as one all-or-nothing unit\n(design \u00a76). Takes a fresh crash-consistent generation unless ``group_seq``\nnames an existing one. Returns the in-progress group backup; it commits once\nevery member backup completes.",
+        "operationId": "clusters_consistency_groups_backups_create_api_v2_clusters__cluster_id__consistency_groups__group_id__backups_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_GroupBackupCreateParams"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupBackupDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication": {
       "put": {
         "tags": [
@@ -9796,6 +10288,22 @@
           "encrypted": {
             "type": "boolean",
             "title": "Encrypted"
+          },
+          "group_backup_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Backup Id"
+          },
+          "group_seq": {
+            "type": "integer",
+            "title": "Group Seq",
+            "default": 0
           }
         },
         "type": "object",
@@ -11580,6 +12088,202 @@
         ],
         "title": "FailoverResultDTO"
       },
+      "GroupBackupDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cluster Id"
+          },
+          "consistency_group_id": {
+            "type": "string",
+            "title": "Consistency Group Id"
+          },
+          "consistency_group_name": {
+            "type": "string",
+            "title": "Consistency Group Name"
+          },
+          "group_seq": {
+            "type": "integer",
+            "title": "Group Seq"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/GroupBackupMemberDTO"
+            },
+            "type": "array",
+            "title": "Members"
+          },
+          "encrypted": {
+            "type": "boolean",
+            "title": "Encrypted"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "created_at": {
+            "type": "integer",
+            "title": "Created At"
+          },
+          "completed_at": {
+            "type": "integer",
+            "title": "Completed At"
+          },
+          "error_message": {
+            "type": "string",
+            "title": "Error Message",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "cluster_id",
+          "consistency_group_id",
+          "consistency_group_name",
+          "group_seq",
+          "status",
+          "members",
+          "encrypted",
+          "size",
+          "created_at",
+          "completed_at"
+        ],
+        "title": "GroupBackupDTO",
+        "description": "A consistency-group backup: the member backups of one generation as one\nall-or-nothing unit (design \u00a74.1)."
+      },
+      "GroupBackupExport-Input": {
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "title": "Schema Version",
+            "default": 1
+          },
+          "group_manifest": {
+            "$ref": "#/components/schemas/GroupBackupManifest"
+          },
+          "members": {
+            "$ref": "#/components/schemas/BackupExport-Input"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "group_manifest",
+          "members"
+        ],
+        "title": "GroupBackupExport",
+        "description": "A group backup carried out of a cluster in a file: the group manifest plus\nthe member backup manifests it names, as one unit (design \u00a76.5).\n\nThis is to the group manifest what ``BackupExport`` is to a single-volume\nmanifest -- the one document that does record a location, because it is not\nstored in the bucket it describes. The group manifest names the generation's\nmembers; ``members`` carries each member's whole restorable chain, grouped by\nthe location it lives in exactly as a single-volume export groups its\nmanifests. A group backup is homogeneous -- its members share one location\n(\u00a73.4) -- so there is one group in practice, but reusing ``BackupExport`` keeps\nthe member records on the single-volume import path and describes a member's\nchain the same way everywhere."
+      },
+      "GroupBackupExport-Output": {
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "title": "Schema Version",
+            "default": 1
+          },
+          "group_manifest": {
+            "$ref": "#/components/schemas/GroupBackupManifest"
+          },
+          "members": {
+            "$ref": "#/components/schemas/BackupExport-Output"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "group_manifest",
+          "members"
+        ],
+        "title": "GroupBackupExport",
+        "description": "A group backup carried out of a cluster in a file: the group manifest plus\nthe member backup manifests it names, as one unit (design \u00a76.5).\n\nThis is to the group manifest what ``BackupExport`` is to a single-volume\nmanifest -- the one document that does record a location, because it is not\nstored in the bucket it describes. The group manifest names the generation's\nmembers; ``members`` carries each member's whole restorable chain, grouped by\nthe location it lives in exactly as a single-volume export groups its\nmanifests. A group backup is homogeneous -- its members share one location\n(\u00a73.4) -- so there is one group in practice, but reusing ``BackupExport`` keeps\nthe member records on the single-volume import path and describes a member's\nchain the same way everywhere."
+      },
+      "GroupBackupManifest": {
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "title": "Schema Version",
+            "default": 1
+          },
+          "group_backup_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Group Backup Id"
+          },
+          "created_at": {
+            "type": "integer",
+            "title": "Created At"
+          },
+          "completed_at": {
+            "type": "integer",
+            "title": "Completed At"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "source": {
+            "$ref": "#/components/schemas/GroupManifestSource"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/GroupManifestMember"
+            },
+            "type": "array",
+            "title": "Members"
+          },
+          "membership": {
+            "$ref": "#/components/schemas/GroupManifestMembership"
+          },
+          "encrypted": {
+            "type": "boolean",
+            "title": "Encrypted",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "group_backup_id",
+          "created_at",
+          "completed_at",
+          "size",
+          "source",
+          "members",
+          "membership"
+        ],
+        "title": "GroupBackupManifest",
+        "description": "The self-describing document for one consistency-group backup."
+      },
+      "GroupBackupMemberDTO": {
+        "properties": {
+          "lvol_id": {
+            "type": "string",
+            "title": "Lvol Id"
+          },
+          "backup_id": {
+            "type": "string",
+            "title": "Backup Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lvol_id",
+          "backup_id"
+        ],
+        "title": "GroupBackupMemberDTO",
+        "description": "One member of a group backup: the source volume and its own backup.\n\n``backup_id`` is the member ``Backup``'s composite ``cluster_id/uuid`` id and\n``lvol_id`` the source volume's id, kept as strings rather than UUIDs because\nthe member id is composite (design \u00a74.1)."
+      },
       "GroupFailbackParams": {
         "properties": {
           "source_cluster_id": {
@@ -11597,6 +12301,99 @@
         },
         "type": "object",
         "title": "GroupFailbackParams"
+      },
+      "GroupManifestMember": {
+        "properties": {
+          "lvol_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Lvol Id"
+          },
+          "lvol_name": {
+            "type": "string",
+            "title": "Lvol Name"
+          },
+          "backup_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Backup Id"
+          },
+          "s3_id": {
+            "type": "integer",
+            "title": "S3 Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "lvol_id",
+          "lvol_name",
+          "backup_id",
+          "s3_id"
+        ],
+        "title": "GroupManifestMember",
+        "description": "One member of a group backup: the volume and the backup that copied it."
+      },
+      "GroupManifestMembership": {
+        "properties": {
+          "expected_lvol_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Expected Lvol Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_lvol_ids"
+        ],
+        "title": "GroupManifestMembership",
+        "description": "The generation's membership, so a reader can verify completeness.\n\nA group backup is restorable only when every expected member is present\n(design-consistency-group-backup.md \u00a76). Recording the expected ids here is\nthe expected-versus-present check (design-consistency-groups.md \u00a78.3) encoded\nin the bucket, so a reader with only the bucket can tell a complete group\nbackup from a torn one."
+      },
+      "GroupManifestSource": {
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cluster Id"
+          },
+          "consistency_group_id": {
+            "type": "string",
+            "title": "Consistency Group Id"
+          },
+          "consistency_group_name": {
+            "type": "string",
+            "title": "Consistency Group Name"
+          },
+          "generation": {
+            "type": "integer",
+            "title": "Generation"
+          },
+          "cluster_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cluster Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "cluster_id",
+          "consistency_group_id",
+          "consistency_group_name",
+          "generation"
+        ],
+        "title": "GroupManifestSource",
+        "description": "Where a group backup's generation came from. Provenance for a reader."
       },
       "HCPKeyDescriptor": {
         "properties": {
@@ -13643,6 +14440,7 @@
               "s3_backup",
               "s3_backup_restore",
               "s3_backup_merge",
+              "group_backup_commit",
               "cluster_expand",
               "replication_final",
               "fdb_backup"
@@ -14590,6 +15388,90 @@
           "size"
         ],
         "title": "_CreateParams"
+      },
+      "_GroupBackupCreateParams": {
+        "properties": {
+          "group_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Seq"
+          }
+        },
+        "type": "object",
+        "title": "_GroupBackupCreateParams"
+      },
+      "_GroupImportFromBucket": {
+        "properties": {
+          "bucket": {
+            "$ref": "#/components/schemas/BackupConfig-Input"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "bucket"
+        ],
+        "title": "_GroupImportFromBucket",
+        "description": "Import whatever group backups a bucket turns out to contain.\n\nThe disaster-recovery path: it needs a bucket and credentials for it, and\nnothing from the cluster that wrote the group backups."
+      },
+      "_GroupImportManifests": {
+        "properties": {
+          "metadata": {
+            "$ref": "#/components/schemas/GroupBackupExport-Input"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "metadata"
+        ],
+        "title": "_GroupImportManifests",
+        "description": "A group export carried in the request itself, e.g. read from a file.\n\nNames nothing beside it: the export records where its member backups live, so\nthe caller states nothing the document has not already recorded."
+      },
+      "_GroupRestoreParams": {
+        "properties": {
+          "into_group_name": {
+            "type": "string",
+            "title": "Into Group Name"
+          },
+          "pool": {
+            "type": "string",
+            "title": "Pool"
+          },
+          "target_node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Node Id"
+          },
+          "s3_credentials": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/S3Credentials"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "into_group_name",
+          "pool"
+        ],
+        "title": "_GroupRestoreParams"
       },
       "_ImportFromBucket": {
         "properties": {

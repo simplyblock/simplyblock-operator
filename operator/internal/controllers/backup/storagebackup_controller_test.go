@@ -118,6 +118,57 @@ func TestMirrorCreatesAnObjectForADiscoveredBackup(t *testing.T) {
 	}
 }
 
+// A member of a group backup carries the group identity on status.source.group
+// and the group-backup-id label, so the members of one generation are a selector
+// a group restore can address.
+func TestMirrorRecordsAGroupMemberBackup(t *testing.T) {
+	const groupBackupID = "11111111-1111-1111-1111-111111111111/gb-1"
+	member := reportedBackup()
+	member.GroupBackupID = groupBackupID
+	member.GroupSeq = 7
+
+	r := backupMirror(t, syncedCache(member), testClusterObject(), sourceVolume())
+	if _, err := r.Reconcile(context.Background(), backupRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var backup simplyblockv1alpha2.StorageBackup
+	if err := r.Get(context.Background(), backupRequest().NamespacedName, &backup); err != nil {
+		t.Fatalf("the mirror created no object: %v", err)
+	}
+
+	group := backup.Source().Group
+	if group == nil {
+		t.Fatal("status.source.group is nil, want the group identity of a member backup")
+	}
+	if group.GroupBackupID != groupBackupID || group.Generation != 7 {
+		t.Errorf("status.source.group = %+v, want group backup %q generation 7", group, groupBackupID)
+	}
+	if got := backup.Labels[simplyblockv1alpha2.BackupLabelGroupBackupID]; got != groupBackupID {
+		t.Errorf("group-backup-id label = %q, want %q", got, groupBackupID)
+	}
+}
+
+// A standalone backup carries no group identity and no group-backup-id label, so
+// it never shows up among a group's members.
+func TestMirrorLeavesAStandaloneBackupUngrouped(t *testing.T) {
+	r := backupMirror(t, syncedCache(reportedBackup()), testClusterObject(), sourceVolume())
+	if _, err := r.Reconcile(context.Background(), backupRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var backup simplyblockv1alpha2.StorageBackup
+	if err := r.Get(context.Background(), backupRequest().NamespacedName, &backup); err != nil {
+		t.Fatalf("the mirror created no object: %v", err)
+	}
+	if backup.Source().Group != nil {
+		t.Errorf("status.source.group = %+v, want nil for a standalone backup", backup.Source().Group)
+	}
+	if _, labeled := backup.Labels[simplyblockv1alpha2.BackupLabelGroupBackupID]; labeled {
+		t.Error("a standalone backup carries the group-backup-id label")
+	}
+}
+
 // A backup whose volume is gone still gets an object. The copy is in the bucket
 // and is restorable, and refusing to record it would make it unreachable: a
 // restore names a StorageBackup, and there would be none to name.

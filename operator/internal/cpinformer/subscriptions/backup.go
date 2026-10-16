@@ -56,6 +56,13 @@ type BackupDTO struct {
 	Size            int64  `json:"size"`
 	CreatedAt       int64  `json:"created_at"`
 	CompletedAt     int64  `json:"completed_at"`
+	// GroupBackupID and GroupSeq tie a copy to a consistency-group backup when it
+	// is a member of one; GroupBackupID is empty for a standalone backup. The
+	// operator mirrors these onto StorageBackup.status.source.group and carries
+	// the id as the group-backup-id label so the members of one group backup are a
+	// selector.
+	GroupBackupID string `json:"group_backup_id"`
+	GroupSeq      int64  `json:"group_seq"`
 }
 
 // BackupSubscription streams a cluster's backups (one stream per cluster),

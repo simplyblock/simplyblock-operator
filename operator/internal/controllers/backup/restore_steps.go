@@ -47,14 +47,23 @@ const (
 func (r *StorageBackupOpsReconciler) perform(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps, current step,
 ) (bool, error) {
+	group := ops.Spec.GroupBackupID != ""
 	switch current {
 	case stepValidating:
 		return r.validate(ctx, ops)
 	case stepRestoring:
+		if group {
+			return r.startGroupRestore(ctx, ops)
+		}
 		return r.startRestore(ctx, ops)
 	case stepAwaitingVolume:
 		return r.awaitVolume(ctx, ops)
+	case stepAwaitingVolumes:
+		return r.awaitGroupVolumes(ctx, ops)
 	case stepBinding:
+		if group {
+			return r.bindGroup(ctx, ops)
+		}
 		return r.bind(ctx, ops)
 	default:
 		return false, fatalf("step %s belongs to no action this controller drives", current)
@@ -75,6 +84,14 @@ func (r *StorageBackupOpsReconciler) validate(
 	clusterID, err := r.clusterIDFor(ctx, ops)
 	if err != nil {
 		return false, fmt.Errorf("resolve cluster %s: %w", ops.Spec.ClusterRef.Name, err)
+	}
+
+	// A group restore names no single backup; its members were validated at
+	// admission. It resolves the cluster and the target pool and nothing else
+	// here, because the per-member copies are read by the control plane rather
+	// than one at a time by this operation.
+	if ops.Spec.GroupBackupID != "" {
+		return r.validateGroup(ctx, ops, clusterID, restore)
 	}
 
 	var backup simplyblockv1alpha2.StorageBackup
