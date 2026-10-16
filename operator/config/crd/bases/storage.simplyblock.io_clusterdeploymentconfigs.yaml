@@ -1047,6 +1047,38 @@ spec:
                         - IfNotPresent
                         type: string
                     type: object
+                  talosctl:
+                    description: |-
+                      Talosctl is the talosctl image a Talos worker's node runs as a Job to
+                      reserve its huge pages through the Talos API. It is the fleet's, written
+                      to StorageCluster.spec.storageNodes.talosctlImage: one DaemonSet, one Job
+                      image. Unstated keeps the node agent's default; a deployment pins it to
+                      the cluster's Talos minor, or to a mirror on an air-gapped site. Read only
+                      for a document whose environment is Talos.
+                    properties:
+                      image:
+                        description: |-
+                          Image is the repository and tag, optionally digest-pinned. An empty value
+                          is not written downstream, so the field it would fill keeps its own
+                          default rather than being overridden with nothing.
+
+                          The registry set is the one every image field in this API is held to,
+                          which is what keeps a reviewed document from naming a build nobody
+                          published.
+                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                        type: string
+                      imagePullPolicy:
+                        default: Always
+                        description: |-
+                          ImagePullPolicy is when that image is pulled. It defaults to Always,
+                          because every image this product ships by default is a moving tag and a
+                          node brought up after a release otherwise runs what its kubelet held.
+                        enum:
+                        - Always
+                        - Never
+                        - IfNotPresent
+                        type: string
+                    type: object
                 type: object
               nodeSets:
                 description: |-
