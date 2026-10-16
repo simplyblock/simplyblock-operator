@@ -558,6 +558,23 @@ func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 			Verbs:     []string{"get", "create", "update", "delete"},
 		},
 		{
+			// The agent copies a finished Job's pod log into its own log before
+			// it deletes the Job: on Talos the talosctl Job is the only record
+			// of what happened on the host side.
+			APIGroups: []string{""},
+			Resources: []string{"pods/log"},
+			Verbs:     []string{"get"},
+		},
+		{
+			// Read-only, for the pre-flight check that the Talos API
+			// credentials Secret exists before a Job is created to mount it;
+			// without it a missing Secret shows up as a Job pod stuck in
+			// ContainerCreating for the whole Job timeout.
+			APIGroups: []string{""},
+			Resources: []string{"secrets"},
+			Verbs:     []string{"get"},
+		},
+		{
 			APIGroups: []string{"apps"},
 			Resources: []string{"deployments"},
 			Verbs:     []string{"create", "delete"},
