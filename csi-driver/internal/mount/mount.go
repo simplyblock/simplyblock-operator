@@ -76,6 +76,17 @@ func (m *Mounter) Unmount(target string) error {
 	return m.mounter.Unmount(target)
 }
 
+// UnmountContext unmounts target with umount(8), killed when ctx ends. It
+// returns once the process has exited, so nothing of it outlives the call to
+// resolve target again later.
+func (m *Mounter) UnmountContext(ctx context.Context, target string) error {
+	out, err := m.execer.CommandContext(ctx, "umount", target).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("umount %s: %w (%s)", target, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // Supported reports whether this driver formats and mounts fsType.
 func Supported(fsType string) bool {
 	return supportedOnDiskFilesystems[fsType]

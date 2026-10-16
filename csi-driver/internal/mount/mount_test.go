@@ -6,6 +6,8 @@
 package mount
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -140,5 +142,28 @@ func TestFormatOptionsRejectsAnUnusableStripeWidth(t *testing.T) {
 		if strings.Contains(joined, "su=32k") {
 			t.Errorf("FormatOptions(xfs, sw=%q) = %q, want no stripe alignment", sw, joined)
 		}
+	}
+}
+
+// The cancellable unmount is umount(8) on the target and nothing else, run
+// through the command seam, which is what kills it when its context ends.
+func TestUnmountContextRunsUmountOnTheTarget(t *testing.T) {
+	fe, calls := scriptedExec([]scriptedResult{{}})
+	if err := NewWith(nil, fe).UnmountContext(context.Background(), "/staging/a"); err != nil {
+		t.Fatalf("UnmountContext: %v", err)
+	}
+	if got := strings.Join((*calls)[0], " "); got != "umount /staging/a" {
+		t.Errorf("ran %q, want umount /staging/a", got)
+	}
+}
+
+// A failed unmount carries umount's own words, which name why.
+func TestUnmountContextReportsUmountsOutput(t *testing.T) {
+	fe, _ := scriptedExec([]scriptedResult{
+		{out: "umount.nfs4: /staging/a: device is busy\n", err: errors.New("exit status 16")},
+	})
+	err := NewWith(nil, fe).UnmountContext(context.Background(), "/staging/a")
+	if err == nil || !strings.Contains(err.Error(), "device is busy") {
+		t.Errorf("err = %v, want umount's output in it", err)
 	}
 }
