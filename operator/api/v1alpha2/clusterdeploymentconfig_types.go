@@ -810,6 +810,15 @@ type DeploymentImages struct {
 	// SPDKProxy is the SPDK proxy image, written per node for the reason SPDK is.
 	// +optional
 	SPDKProxy *ImageSpec `json:"spdkProxy,omitempty"`
+
+	// Talosctl is the talosctl image a Talos worker's node runs as a Job to
+	// reserve its huge pages through the Talos API. It is the fleet's, written
+	// to StorageCluster.spec.storageNodes.talosctlImage: one DaemonSet, one Job
+	// image. Unstated keeps the node agent's default; a deployment pins it to
+	// the cluster's Talos minor, or to a mirror on an air-gapped site. Read only
+	// for a document whose environment is Talos.
+	// +optional
+	Talosctl *ImageSpec `json:"talosctl,omitempty"`
 }
 
 // ClusterDeploymentConfigSpec is a whole simplyblock deployment as one
