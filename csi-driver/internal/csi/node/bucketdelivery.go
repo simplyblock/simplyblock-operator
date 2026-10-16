@@ -23,23 +23,14 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 
+	"github.com/simplyblock/atlas/bucketdelivery"
 	"github.com/simplyblock/atlas/bucketdelivery/bucketdeliveryrpc"
 
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
-// s3GatewayMountRoot is where a delivered bucket's mount is published: the
-// one shared, fixed hostPath every gateway pod of every ObjectStore mounts
-// HostToContainer (design §5.1). It is a subdirectory of
-// /var/lib/kubelet/plugins, one of the three hostPath roots this DaemonSet's
-// own pod template already mounts Bidirectional
-// (0004-direct-csi-mount-spike-result.md). A target_path outside those
-// three stays inside this container's own mount namespace and reaches
-// neither the host nor any other pod.
-const s3GatewayMountRoot = "/var/lib/kubelet/plugins/csi.simplyblock.io/s3-gateway-mounts"
-
 // s3BucketStagingRoot is this plugin's own internal staging area for a
-// delivered bucket's pNFS mount, bind-mounted from into s3GatewayMountRoot by
+// delivered bucket's pNFS mount, bind-mounted from into bucketdelivery.GatewayMountRoot by
 // NodePublishVolume. It does not itself need to be under a Bidirectional
 // root: nothing but this container ever reads it directly.
 const s3BucketStagingRoot = "/var/lib/kubelet/plugins/csi.simplyblock.io/s3-gateway-staging"
@@ -59,8 +50,8 @@ var bidirectionalRoots = []string{
 // before any mount is attempted, rather than mounting it invisibly inside
 // this container's own namespace and reporting success
 // (0004-direct-csi-mount-spike-result.md's finding). This is a guard against
-// this file's own derivation ever drifting from s3GatewayMountRoot, not a
-// check on caller input: bucket_name never reaches a path on its own.
+// this file's own derivation ever drifting from bucketdelivery.GatewayMountRoot,
+// not a check on caller input: bucket_name never reaches a path on its own.
 func validateDeliveryPath(path string) error {
 	clean := filepath.Clean(path)
 	for _, root := range bidirectionalRoots {
@@ -83,7 +74,7 @@ func bucketName(name string) (string, error) {
 }
 
 // bucketTargetPath is the deterministic, published mount path for a bucket:
-// the same relative path under s3GatewayMountRoot regardless of which node
+// the same relative path under bucketdelivery.GatewayMountRoot regardless of which node
 // or when it was delivered, which is what lets every gateway pod on a node
 // see the same bucket at the same path (design §5.2).
 func bucketTargetPath(name string) (string, error) {
@@ -91,7 +82,7 @@ func bucketTargetPath(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(s3GatewayMountRoot, safe)
+	path := filepath.Join(bucketdelivery.GatewayMountRoot, safe)
 	if err := validateDeliveryPath(path); err != nil {
 		return "", err
 	}

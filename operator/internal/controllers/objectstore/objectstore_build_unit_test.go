@@ -9,6 +9,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/simplyblock/atlas/bucketdelivery"
 	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
@@ -30,6 +31,55 @@ func testObjectStoreSpec(mutate ...func(*objectstorev1alpha1.ObjectStore)) *obje
 		m(store)
 	}
 	return store
+}
+
+// Every gateway pod carries the shared hostPath volume DeliverBucket's own
+// bind mounts need to reach it (design-bucket-provisioning.md §5.1, §5.4):
+// without this, a bucket delivered after the pod started would never
+// become visible inside it, since propagation has nothing to propagate
+// into.
+func TestBuildDeploymentMountsTheSharedBucketHostPathWithPropagation(t *testing.T) {
+	store := testObjectStoreSpec()
+	deployment := buildDeployment(store)
+
+	container := deployment.Spec.Template.Spec.Containers[0]
+	var mount *corev1.VolumeMount
+	for i := range container.VolumeMounts {
+		if container.VolumeMounts[i].Name == bucketMountVolumeName {
+			mount = &container.VolumeMounts[i]
+		}
+	}
+	if mount == nil {
+		t.Fatalf("no volume mount named %q, want the gateway container to carry it", bucketMountVolumeName)
+	}
+	if mount.MountPath != bucketdelivery.GatewayMountRoot {
+		t.Errorf("mount path = %q, want %q (the same path DeliverBucket bind-mounts under)",
+			mount.MountPath, bucketdelivery.GatewayMountRoot)
+	}
+	if mount.MountPropagation == nil || *mount.MountPropagation != corev1.MountPropagationHostToContainer {
+		t.Errorf("mountPropagation = %v, want HostToContainer", mount.MountPropagation)
+	}
+
+	var volume *corev1.Volume
+	for i := range deployment.Spec.Template.Spec.Volumes {
+		if deployment.Spec.Template.Spec.Volumes[i].Name == bucketMountVolumeName {
+			volume = &deployment.Spec.Template.Spec.Volumes[i]
+		}
+	}
+	if volume == nil || volume.HostPath == nil || volume.HostPath.Path != bucketdelivery.GatewayMountRoot {
+		t.Fatalf("volume %q = %+v, want a hostPath volume at %q", bucketMountVolumeName, volume, bucketdelivery.GatewayMountRoot)
+	}
+
+	var rootDir string
+	for _, env := range container.Env {
+		if env.Name == gatewayRootDirEnv {
+			rootDir = env.Value
+		}
+	}
+	if rootDir != bucketdelivery.GatewayMountRoot {
+		t.Errorf("%s = %q, want %q (the gateway's own backend root has to be the same path the volume is mounted at)",
+			gatewayRootDirEnv, rootDir, bucketdelivery.GatewayMountRoot)
+	}
 }
 
 // U-09: the pod template carries the label

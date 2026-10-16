@@ -38,6 +38,9 @@
 //	kube            Map a logical volume to the Kubernetes objects representing it.
 //	controlplane    Client for the simplyblock control-plane API.
 //	nfsexport       Publish a pNFS export on its metadata-server host.
+//	bucketdelivery  GatewayMountRoot: the one hostPath the CSI node plugin's
+//	                bucket bind mounts and the operator's gateway pods have
+//	                to agree on without calling each other.
 //	bucketdeliveryrpc
 //	                Deliver and withdraw an S3 bucket's mount on a gateway
 //	                node, over a link (bucketdelivery/bucketdeliveryrpc). No

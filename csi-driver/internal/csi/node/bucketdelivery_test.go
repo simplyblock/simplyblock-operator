@@ -9,6 +9,7 @@
 package node
 
 import (
+	"github.com/simplyblock/atlas/bucketdelivery"
 	"strings"
 	"testing"
 )
@@ -18,8 +19,8 @@ func TestBucketTargetPathIsDeterministicAndUnderTheGatewayRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bucketTargetPath: %v", err)
 	}
-	if !strings.HasPrefix(path, s3GatewayMountRoot+"/") {
-		t.Errorf("path = %q, want it under %q", path, s3GatewayMountRoot)
+	if !strings.HasPrefix(path, bucketdelivery.GatewayMountRoot+"/") {
+		t.Errorf("path = %q, want it under %q", path, bucketdelivery.GatewayMountRoot)
 	}
 	again, err := bucketTargetPath("team-a-reports")
 	if err != nil {
@@ -50,7 +51,7 @@ func TestBucketStagingPathDoesNotCollideWithTheGatewayRoot(t *testing.T) {
 	if staging == target {
 		t.Errorf("staging path equals target path: %q", staging)
 	}
-	if strings.HasPrefix(staging, s3GatewayMountRoot) {
+	if strings.HasPrefix(staging, bucketdelivery.GatewayMountRoot) {
 		t.Errorf("staging path %q sits under the published gateway root; a bind source must not", staging)
 	}
 }
