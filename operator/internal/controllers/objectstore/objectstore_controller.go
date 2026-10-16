@@ -13,7 +13,6 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,6 +23,7 @@ import (
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -65,6 +65,19 @@ const (
 	objectStoreConcurrency = 8
 )
 
+// objectStoreFieldOwner is the field manager the Deployment and Service
+// applies below write under (the same name simplyblockdriver_controller.go
+// and controlplane/apply.go use for their own server-side applies). A
+// server-side apply only claims the fields actually present on the object
+// this reconciler builds, a sparse one by design (design-objectstore.md
+// §4.1's passthrough fields plus the few this reconciler owns outright), so
+// resubmitting it when nothing changed is a true no-op: any field Kubernetes
+// itself defaults (DNS policy, termination-message settings, the rolling
+// update strategy, and so on) that this reconciler never sets is left
+// exactly as it was, rather than manufacturing a diff on every pass the way
+// a blind PUT of that same sparse object would.
+const objectStoreFieldOwner = client.FieldOwner("simplyblock-operator")
+
 // ObjectStoreReconciler reconciles ObjectStore objects.
 type ObjectStoreReconciler struct {
 	client.Client
@@ -74,8 +87,8 @@ type ObjectStoreReconciler struct {
 
 // +kubebuilder:rbac:groups=objectstore.simplyblock.io,resources=objectstores,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=objectstore.simplyblock.io,resources=objectstores/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;delete
-// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;delete
 
 func (r *ObjectStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -237,62 +250,82 @@ func (r *ObjectStoreReconciler) applyOwnedObjects(ctx context.Context, store *ob
 	return nil
 }
 
-// apply creates desired or updates it in place, carrying forward the
-// existing object's resourceVersion. Used for the Deployment, which has no
-// server-assigned field that a blind overwrite would lose (the Service's own
-// ClusterIP does, so it gets its own path below).
+// apply writes the Deployment as a server-side apply under
+// objectStoreFieldOwner, rather than a Get-then-blind-Update of a freshly
+// built object.
 //
-// Skips the Update when desired.Spec already matches: reconcileProvisioning
-// calls this on every pass while waiting for the Deployment to report
-// Available, and an unconditional Update there bumps the Deployment's
-// generation on every pass, which re-triggers this controller's own watch on
-// *v1.Deployment faster than the Deployment controller can settle a stable
-// Available condition — a self-sustaining reconcile storm that starves the
-// very status this is waiting on.
+// reconcileProvisioning calls this on every pass while waiting for the
+// Deployment to report Available. A blind Update there, even one that
+// carries forward the existing resourceVersion, resubmits a sparse object:
+// buildDeployment sets only the fields design-objectstore.md §4.1 gives this
+// reconciler an opinion about, never the fields Kubernetes itself defaults
+// (the rolling-update strategy, DNS/restart policy, each container's
+// termination-message settings, and more). Overwriting the whole object with
+// that sparse one manufactures a diff against the fully defaulted object
+// already stored on every single pass, which on a live cluster was observed
+// bumping the Deployment's generation past 2900 within seven minutes, fast
+// enough to starve the real Deployment controller of a quiet moment to
+// report Available before this reconciler's own provisioning deadline ran
+// out. A server-side apply only ever claims the fields actually present on
+// the object serialized below (Go's encoding/json omits a zero-valued
+// optional field, and so does the unstructured conversion apply uses), so a
+// field this reconciler does not set is never touched, and reapplying the
+// same sparse object is the true no-op idempotency requires.
 func (r *ObjectStoreReconciler) apply(
 	ctx context.Context, desired *appsv1.Deployment, store *objectstorev1alpha1.ObjectStore,
 ) error {
 	if err := controllerutil.SetControllerReference(store, desired, r.Scheme); err != nil {
 		return err
 	}
-	var existing appsv1.Deployment
-	err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
-	if apierrors.IsNotFound(err) {
-		return r.Create(ctx, desired)
-	}
+	cfg, err := r.applyConfiguration(desired)
 	if err != nil {
 		return err
 	}
-	if apiequality.Semantic.DeepEqual(desired.Spec, existing.Spec) {
-		return nil
-	}
-	desired.ResourceVersion = existing.ResourceVersion
-	return r.Update(ctx, desired)
+	return r.Apply(ctx, cfg, objectStoreFieldOwner, client.ForceOwnership)
 }
 
-// applyService creates the Service or updates it in place, carrying forward
-// the cluster-assigned ClusterIP, which a blind overwrite would otherwise
-// clear and fail admission on. Skips the Update when nothing changed, the
-// same reason apply does above.
+// applyService writes the Service the same way apply writes the Deployment,
+// and for the same reason: a server-side apply never touches a field this
+// reconciler does not set, which is what lets it skip carrying the
+// cluster-assigned ClusterIP forward by hand the way a blind Update would
+// have needed to.
 func (r *ObjectStoreReconciler) applyService(ctx context.Context, store *objectstorev1alpha1.ObjectStore) error {
 	desired := buildService(store)
 	if err := controllerutil.SetControllerReference(store, desired, r.Scheme); err != nil {
 		return err
 	}
-	var existing corev1.Service
-	err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
-	if apierrors.IsNotFound(err) {
-		return r.Create(ctx, desired)
-	}
+	cfg, err := r.applyConfiguration(desired)
 	if err != nil {
 		return err
 	}
-	desired.Spec.ClusterIP = existing.Spec.ClusterIP
-	if apiequality.Semantic.DeepEqual(desired.Spec, existing.Spec) {
-		return nil
+	return r.Apply(ctx, cfg, objectStoreFieldOwner, client.ForceOwnership)
+}
+
+// applyConfiguration turns a built object into the shape a server-side apply
+// takes, the same conversion simplyblockdriver_controller.go's own
+// applyConfiguration performs (not shared: each is a few lines, scoped to
+// one small package, and the two reconcilers have no other reason to depend
+// on each other).
+//
+// The apiVersion and kind have to be on the wire for an apply, and a typed
+// object built in Go carries an empty TypeMeta, so the kind is resolved from
+// the scheme rather than written by hand at each call site.
+func (r *ObjectStoreReconciler) applyConfiguration(obj client.Object) (runtime.ApplyConfiguration, error) {
+	gvk, err := apiutil.GVKForObject(obj, r.Scheme)
+	if err != nil {
+		return nil, err
 	}
-	desired.ResourceVersion = existing.ResourceVersion
-	return r.Update(ctx, desired)
+	content, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+	if err != nil {
+		return nil, err
+	}
+	u := &unstructured.Unstructured{Object: content}
+	u.SetGroupVersionKind(gvk)
+	// A built object has no status, and an apply that carries an empty one
+	// claims ownership of a field this reconciler does not set.
+	unstructured.RemoveNestedField(u.Object, "status")
+	unstructured.RemoveNestedField(u.Object, "metadata", "creationTimestamp")
+	return client.ApplyConfigurationFromUnstructured(u), nil
 }
 
 // applyCertificate creates or updates the cert-manager Certificate that
