@@ -100,13 +100,21 @@ func (r *NFSExportReconciler) reconcileExportEndpointSlice(ctx context.Context, 
 // owner of its Service and EndpointSlice: they go when the metadata server
 // goes, and never with one of its exports. A pod that cannot be read, or has
 // no controller, leaves them unowned.
+//
+// The pod's reference carries blockOwnerDeletion, which the copy drops: setting
+// it takes the right to set finalizers on the owner, which OpenShift enforces
+// and the operator does not hold for StatefulSets, so the create was forbidden.
+// Garbage collection still deletes both with the StatefulSet.
 func (r *NFSExportReconciler) mdsOwner(ctx context.Context, mdsPod string) []metav1.OwnerReference {
 	var pod corev1.Pod
 	if err := r.Get(ctx, client.ObjectKey{Namespace: r.OperatorNamespace, Name: mdsPod}, &pod); err != nil {
 		return nil
 	}
-	if ref := metav1.GetControllerOf(&pod); ref != nil {
-		return []metav1.OwnerReference{*ref}
+	ref := metav1.GetControllerOf(&pod)
+	if ref == nil {
+		return nil
 	}
-	return nil
+	owner := *ref
+	owner.BlockOwnerDeletion = nil
+	return []metav1.OwnerReference{owner}
 }

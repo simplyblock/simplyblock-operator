@@ -12,9 +12,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -136,5 +138,44 @@ func TestBindingKeepsAnAlreadyAllocatedClusterIP(t *testing.T) {
 	got := loadExport(t, cl)
 	if got.Status.ServiceAddress != "10.96.5.5" {
 		t.Errorf("status.serviceAddress = %q, want the already-allocated ClusterIP", got.Status.ServiceAddress)
+	}
+}
+
+// The metadata server's Service is owned by its StatefulSet, without
+// blockOwnerDeletion: setting it needs the right to set finalizers on the
+// owner, which OpenShift enforces and the operator does not hold for
+// StatefulSets, so creating the Service was forbidden and every export stayed
+// unbound (dev-ocp, pnfs-1792138910). The pod's own reference to the
+// StatefulSet carries blockOwnerDeletion, so a copy of it must drop it.
+func TestTheMetadataServersServiceDoesNotBlockItsOwnersDeletion(t *testing.T) {
+	pod := boundMDSPod(func(p *corev1.Pod) {
+		readyPod(p)
+		p.OwnerReferences = []metav1.OwnerReference{{
+			APIVersion: "apps/v1", Kind: "StatefulSet", Name: "simplyblock-pnfs-mds-x",
+			UID: "sts-uid", Controller: ptr.To(true), BlockOwnerDeletion: ptr.To(true),
+		}}
+	})
+	r, cl, _ := newPodHostedReconciler(t, testExport(nil), mdsDriver(), pod)
+
+	reconcileExport(t, r)
+
+	var svc corev1.Service
+	if err := cl.Get(context.Background(), mdsServiceKey(), &svc); err != nil {
+		t.Fatalf("reading the metadata server's Service: %v", err)
+	}
+	if len(svc.OwnerReferences) != 1 || svc.OwnerReferences[0].Kind != "StatefulSet" {
+		t.Fatalf("owner references = %+v, want the StatefulSet", svc.OwnerReferences)
+	}
+	if b := svc.OwnerReferences[0].BlockOwnerDeletion; b != nil && *b {
+		t.Error("the Service's owner reference sets blockOwnerDeletion")
+	}
+	var eps discoveryv1.EndpointSlice
+	if err := cl.Get(context.Background(), mdsSliceKeyFor(pod.Name), &eps); err != nil {
+		t.Fatalf("reading the EndpointSlice: %v", err)
+	}
+	for _, ref := range eps.OwnerReferences {
+		if ref.BlockOwnerDeletion != nil && *ref.BlockOwnerDeletion {
+			t.Error("the EndpointSlice's owner reference sets blockOwnerDeletion")
+		}
 	}
 }
