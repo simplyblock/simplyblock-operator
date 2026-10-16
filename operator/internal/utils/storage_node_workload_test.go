@@ -295,6 +295,26 @@ func TestUnstatedTalosIsNotTalos(t *testing.T) {
 	}
 }
 
+// The agent reads a finished Job's pod log and checks for the Talos API
+// credentials Secret before creating a Job that mounts it; both need rules the
+// role did not carry (seen as HTTP 403 in the agent log on the first Talos run).
+func TestStorageNodeRoleLetsTheAgentReadJobLogsAndCheckSecrets(t *testing.T) {
+	granted := map[string][]string{}
+	for _, rule := range BuildStorageNodeSetClusterRole(false).Rules {
+		for _, group := range rule.APIGroups {
+			for _, resource := range rule.Resources {
+				granted[group+"/"+resource] = append(granted[group+"/"+resource], rule.Verbs...)
+			}
+		}
+	}
+	for _, want := range []string{"/pods/log", "/secrets"} {
+		verbs := granted[want]
+		if len(verbs) != 1 || verbs[0] != "get" {
+			t.Errorf("%s verbs = %v, want exactly [get]", want, verbs)
+		}
+	}
+}
+
 // mainEnvOf is the agent container's environment, by name.
 func mainEnvOf(t *testing.T, ds *appsv1.DaemonSet) map[string]string {
 	t.Helper()
