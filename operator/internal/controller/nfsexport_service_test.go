@@ -205,3 +205,28 @@ func TestALostServiceCreateIsRetriedNotBoundWithoutAnAddress(t *testing.T) {
 		t.Fatalf("the lost create returned address %q and no error", ip)
 	}
 }
+
+// Withdrawing the address while the metadata server pod is gone cannot read an
+// owner from the pod. The slice keeps the owner it has, or it would be
+// orphaned rather than collected with the StatefulSet.
+func TestWithdrawingTheAddressKeepsTheSlicesOwner(t *testing.T) {
+	pod := driver.MDSPodName(mdsDriver(), testExportClusterID)
+	owner := metav1.OwnerReference{
+		APIVersion: "apps/v1", Kind: "StatefulSet", Name: "simplyblock-pnfs-mds-x",
+		UID: "sts-uid", Controller: ptr.To(true),
+	}
+	existing := utils.BuildMDSEndpointSlice(testOperatorNS, utils.MDSServiceName(pod), testMDSPodIP)
+	existing.OwnerReferences = []metav1.OwnerReference{owner}
+	r, cl, _ := newPodHostedReconciler(t, testExport(nil), mdsDriver(), existing)
+
+	if err := r.reconcileExportEndpointSlice(context.Background(), pod, ""); err != nil {
+		t.Fatalf("withdrawing: %v", err)
+	}
+	var eps discoveryv1.EndpointSlice
+	if err := cl.Get(context.Background(), mdsSliceKeyFor(pod), &eps); err != nil {
+		t.Fatalf("reading the EndpointSlice: %v", err)
+	}
+	if len(eps.OwnerReferences) != 1 || eps.OwnerReferences[0].UID != owner.UID {
+		t.Errorf("owner references = %+v, want the StatefulSet kept", eps.OwnerReferences)
+	}
+}

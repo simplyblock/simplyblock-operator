@@ -76,7 +76,8 @@ func (r *NFSExportReconciler) reconcileMDSServiceObject(ctx context.Context, mds
 // reconcileExportEndpointSlice publishes address as the metadata server's one
 // endpoint, creating the slice on the first binding and rewriting it on every
 // pass after: this is what follows the metadata server to another pod, and an
-// empty address withdraws it while the pod goes away.
+// empty address withdraws it while the pod goes away. A slice keeps the owner
+// it has when the pod, gone by then, names none.
 func (r *NFSExportReconciler) reconcileExportEndpointSlice(ctx context.Context, mdsPod, address string) error {
 	eps := utils.BuildMDSEndpointSlice(r.OperatorNamespace, utils.MDSServiceName(mdsPod), address)
 	eps.OwnerReferences = r.mdsOwner(ctx, mdsPod)
@@ -93,6 +94,9 @@ func (r *NFSExportReconciler) reconcileExportEndpointSlice(ctx context.Context, 
 		return fmt.Errorf("reading the EndpointSlice: %w", err)
 	default:
 		eps.ResourceVersion = existing.ResourceVersion
+		if eps.OwnerReferences == nil {
+			eps.OwnerReferences = existing.OwnerReferences
+		}
 		if err := r.Update(ctx, eps); err != nil {
 			return fmt.Errorf("updating the EndpointSlice: %w", err)
 		}
