@@ -152,7 +152,7 @@ func TestTalosStatesItselfAndItsTalosctlImage(t *testing.T) {
 	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
 		c.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentTalos
 		c.Spec.Images = &simplyblockv1alpha2.DeploymentImages{
-			Talosctl: &simplyblockv1alpha2.ImageSpec{Image: "ghcr.io/siderolabs/talosctl:v1.12.7"},
+			Talosctl: &simplyblockv1alpha2.ExternalImageSpec{Image: "ghcr.io/siderolabs/talosctl:v1.12.7"},
 		}
 	})
 	r := reconcilerFor(t)
