@@ -92,6 +92,9 @@ func (r *StorageNodeWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error
 		Owns(&discoveryv1.EndpointSlice{}).
 		Watches(&simplyblockv1alpha2.StorageNode{},
 			handler.EnqueueRequestsFromMapFunc(r.clusterOf)).
+		// A migration's target is published before any node runs there.
+		Watches(&simplyblockv1alpha2.StorageNodeOps{},
+			handler.EnqueueRequestsFromMapFunc(r.clusterOfOperation)).
 		// The spdk-proxy EndpointSlices are built from the pod list, so a pod
 		// appearing -- or reappearing on a different RPC port -- is the event that
 		// makes them wrong. Without this watch the pass only reruns when something
@@ -438,11 +441,12 @@ func (r *StorageNodeWorkloadReconciler) reconcileService(
 }
 
 // reconcileEndpointSlice publishes one per-pod DNS name per worker the cluster's
-// nodes run on.
+// nodes run on, plus the target of each unfinished migration.
 //
 // The slice is built from the StorageNode objects rather than from a list on the
 // cluster, because the nodes are what say which workers are in the storage plane
-// now: a relocation adds the target before the node's own spec.workerNode moves.
+// now: a relocation adds the target before the node's own spec.workerNode moves,
+// so the Migrate operations are read as well.
 func (r *StorageNodeWorkloadReconciler) reconcileEndpointSlice(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
@@ -453,22 +457,36 @@ func (r *StorageNodeWorkloadReconciler) reconcileEndpointSlice(
 		return fmt.Errorf("list the cluster's nodes: %w", err)
 	}
 
+	var operations simplyblockv1alpha2.StorageNodeOpsList
+	if err := r.List(ctx, &operations, client.InNamespace(cluster.Namespace)); err != nil {
+		return fmt.Errorf("list the node operations: %w", err)
+	}
+	targets := map[string]string{} // node name -> worker an unfinished Migrate moves it to
+	for i := range operations.Items {
+		op := &operations.Items[i]
+		if op.Spec.Action == simplyblockv1alpha2.StorageNodeOpsActionMigrate && !terminalOps(op.Status.Phase) {
+			targets[op.Spec.NodeRef] = op.Spec.MigrateParams().TargetWorkerNode
+		}
+	}
+
 	addresses := map[string]string{}
 	for i := range nodes.Items {
 		node := &nodes.Items[i]
 		if node.Spec.ClusterRef != cluster.Name {
 			continue
 		}
-		if _, known := addresses[node.Spec.WorkerNode]; known {
-			continue
+		for _, worker := range []string{node.Spec.WorkerNode, targets[node.Name]} {
+			if _, known := addresses[worker]; known || worker == "" {
+				continue
+			}
+			address, err := r.workerAddress(ctx, worker)
+			if err != nil || address == "" {
+				log.V(1).Info("a worker has no internal address yet and is not published",
+					"worker", worker)
+				continue
+			}
+			addresses[worker] = address
 		}
-		address, err := r.workerAddress(ctx, node.Spec.WorkerNode)
-		if err != nil || address == "" {
-			log.V(1).Info("a worker has no internal address yet and is not published",
-				"worker", node.Spec.WorkerNode)
-			continue
-		}
-		addresses[node.Spec.WorkerNode] = address
 	}
 
 	desired := utils.BuildStorageNodeEndpointSlice(cluster, addresses)
@@ -486,6 +504,25 @@ func (r *StorageNodeWorkloadReconciler) reconcileEndpointSlice(
 	}
 	desired.ResourceVersion = existing.ResourceVersion
 	return r.Update(ctx, desired)
+}
+
+// clusterOfOperation maps a Migrate to its node's cluster, so a new migration
+// reaches the pass that publishes the name its first step waits for.
+func (r *StorageNodeWorkloadReconciler) clusterOfOperation(
+	ctx context.Context, object client.Object,
+) []reconcile.Request {
+	op, ok := object.(*simplyblockv1alpha2.StorageNodeOps)
+	if !ok || op.Spec.Action != simplyblockv1alpha2.StorageNodeOpsActionMigrate {
+		return nil
+	}
+	var node simplyblockv1alpha2.StorageNode
+	key := types.NamespacedName{Namespace: op.Namespace, Name: op.Spec.NodeRef}
+	if err := r.Get(ctx, key, &node); err != nil || node.Spec.ClusterRef == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Name: node.Spec.ClusterRef, Namespace: op.Namespace,
+	}}}
 }
 
 // workerAddress is the worker's internal IP, which is what an endpoint carries.
