@@ -179,3 +179,29 @@ func TestTheMetadataServersServiceDoesNotBlockItsOwnersDeletion(t *testing.T) {
 		}
 	}
 }
+
+// unseenServiceClient loses every Service create to a concurrent one: Create
+// reports AlreadyExists, and the winner is not readable yet, as with a cache
+// that has not observed it.
+type unseenServiceClient struct{ client.Client }
+
+func (c unseenServiceClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if _, ok := obj.(*corev1.Service); ok {
+		return apierrors.NewAlreadyExists(corev1.Resource("services"), obj.GetName())
+	}
+	return c.Client.Create(ctx, obj, opts...)
+}
+
+// Two bindings to one metadata server can race to create its Service. The
+// loser must not record an empty address, which nothing backfills and with
+// which CSI cannot stage the volume: it fails, and the binding retries once the
+// winner is visible.
+func TestALostServiceCreateIsRetriedNotBoundWithoutAnAddress(t *testing.T) {
+	r, cl, _ := newPodHostedReconciler(t, testExport(nil), mdsDriver(), boundMDSPod(readyPod))
+	r.Client = unseenServiceClient{cl}
+
+	ip, err := r.reconcileMDSServiceObject(context.Background(), driver.MDSPodName(mdsDriver(), testExportClusterID))
+	if err == nil {
+		t.Fatalf("the lost create returned address %q and no error", ip)
+	}
+}

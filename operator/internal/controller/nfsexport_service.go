@@ -47,6 +47,10 @@ func (r *NFSExportReconciler) reconcileExportService(
 // reconcileMDSServiceObject creates the Service on the first binding to the
 // metadata server, and otherwise leaves it alone: a ClusterIP is allocated
 // once and must not change underneath an already-mounted client.
+//
+// A Service that cannot be read back once created, as when a concurrent
+// binding won the create and the cache has not seen it yet, is an error: an
+// empty address recorded as the export's is never backfilled.
 func (r *NFSExportReconciler) reconcileMDSServiceObject(ctx context.Context, mdsPod string) (string, error) {
 	svc := utils.BuildMDSService(r.OperatorNamespace, utils.MDSServiceName(mdsPod))
 	svc.OwnerReferences = r.mdsOwner(ctx, mdsPod)
@@ -59,7 +63,7 @@ func (r *NFSExportReconciler) reconcileMDSServiceObject(ctx context.Context, mds
 			return "", fmt.Errorf("creating the Service: %w", err)
 		}
 		if err := r.Get(ctx, client.ObjectKeyFromObject(svc), &existing); err != nil {
-			return svc.Spec.ClusterIP, nil
+			return "", fmt.Errorf("reading the Service back: %w", err)
 		}
 		return existing.Spec.ClusterIP, nil
 	case err != nil:
