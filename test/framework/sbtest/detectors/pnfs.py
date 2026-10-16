@@ -145,10 +145,13 @@ class DeviceIO(Detector):
                         note="without the namespace the client cannot use a layout, so "
                              "all of its I/O went through the metadata server")
                     continue
-                yield from self._judge(subject, vol.lvol, node, got)
+                yield from self._judge(subject, vol.lvol, node, got,
+                                       _server_writes(ev, vol, node))
 
-    def _judge(self, subject: str, lvol: str, node: str,
-               got: list[BlockSample]) -> Iterable[Finding]:
+    def _judge(self, subject: str, lvol: str, node: str, got: list[BlockSample],
+               server_writes: int | None) -> Iterable[Finding]:
+        counted = "" if server_writes is None else f"; NFS WRITE {server_writes}"
+        hung = server_writes == 0
         first, last = got[0], got[-1]
         wrote = last.write_sectors - first.write_sectors
         read = last.read_sectors - first.read_sectors
@@ -159,25 +162,30 @@ class DeviceIO(Detector):
                 self.name, title=f"no {' or '.join(flat)} reached the namespace on the client",
                 subject=subject,
                 detail=f"{node}: {wrote} sector(s) written, {read} read over "
-                       f"{(last.ts - first.ts).total_seconds():.0f}s",
+                       f"{(last.ts - first.ts).total_seconds():.0f}s{counted}",
                 evidence={"lvol": lvol, "node": node, "write_sectors": wrote,
-                          "read_sectors": read},
-                note="the pod's I/O went through the metadata server instead of to its "
-                     "NVMe-oF namespace")
+                          "read_sectors": read, "server_writes": server_writes},
+                note=_HUNG_NOTE if hung else
+                "the pod's I/O went through the metadata server instead of to its "
+                "NVMe-oF namespace")
             return
 
         trailing = _trailing_stall(got)
         if trailing > float(self.opt("max_stall_s")):
+            where = ("on the namespace and at the metadata server" if hung
+                     else "to the namespace")
             yield critical(
-                self.name, title=f"writes to the namespace stopped and never resumed "
+                self.name, title=f"writes {where} stopped and never resumed "
                                  f"({trailing:.0f}s before the run ended)",
                 subject=subject,
                 detail=f"{node}: no sector written from {last.ts - timedelta(seconds=trailing):%H:%M:%S} "
-                       f"to {last.ts:%H:%M:%S} while the run was going",
-                evidence={"lvol": lvol, "node": node, "stopped_s": trailing},
-                note="the client lost the direct path and did not get it back, so its I/O "
-                     "went through the metadata server from then on; after an MDS restart "
-                     "this is a device lookup made from the pod's mount namespace")
+                       f"to {last.ts:%H:%M:%S} while the run was going{counted}",
+                evidence={"lvol": lvol, "node": node, "stopped_s": trailing,
+                          "server_writes": server_writes},
+                note=_HUNG_NOTE if hung else
+                "the client lost the direct path and did not get it back, so its I/O "
+                "went through the metadata server from then on; after an MDS restart "
+                "this is a device lookup made from the pod's mount namespace")
             return
 
         budget = float(self.opt("restart_pause_s"))
@@ -360,6 +368,21 @@ def _while_running(got: list[BlockSample], vol: PnfsVolume, node: str,
     inside = [s for s in got if start <= s.ts <= end]
     return inside if len(inside) >= 2 else got
 
+
+def _server_writes(ev: Evidence, vol: PnfsVolume, node: str) -> int | None:
+    """The NFS WRITEs the volume's instances on node sent to the metadata server, or None
+    when an instance has no mount statistics and the count would be partial."""
+    pods = [p for p, where in vol.instances.items() if where == node]
+    counts = [ev.nfs_ops(p) for p in pods]
+    if not pods or not all(counts):
+        return None
+    return sum(c.get("WRITE", 0) for c in counts)
+
+
+#: The note for writes that stopped on the namespace without moving to the server.
+_HUNG_NOTE = ("the mount sent no WRITE to the metadata server either, so the writes did "
+              "not fall back to the server: they stopped, which is a hung client or fio, "
+              "not a lost direct path")
 
 
 #: A path the metadata server's guest connected: its kernel's line for a new controller.
