@@ -344,6 +344,15 @@ spec:
                 - Ready
                 - Degraded
                 type: string
+              phaseDeadline:
+                description: |-
+                  PhaseDeadline is when the current phase gives up waiting and degrades,
+                  carried in status rather than only in memory so a restarted operator
+                  resumes the same deadline instead of granting a fresh one (§6, a design
+                  gap the same field closed for S3BucketStatus: see
+                  design-bucket-provisioning.md's own appendix note).
+                format: date-time
+                type: string
               readyReplicas:
                 description: |-
                   ReadyReplicas mirrors Deployment.Status.ReadyReplicas, so a reader
