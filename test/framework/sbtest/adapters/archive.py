@@ -658,7 +658,8 @@ class ArchiveEvidence:
             return []
         return [PnfsVolume(claim=v.get("claim", ""), lvol=v.get("lvol", ""),
                            shared=bool(v.get("shared")), nodes=list(v.get("nodes") or []),
-                           instances=dict(v.get("instances") or {}))
+                           instances=dict(v.get("instances") or {}),
+                           mounts=dict(v.get("mounts") or {}))
                 for v in raw.get("volumes", []) if isinstance(v, dict)]
 
     def fio_log(self, pod: str) -> Iterator[str]:

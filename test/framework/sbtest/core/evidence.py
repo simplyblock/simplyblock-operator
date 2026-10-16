@@ -135,6 +135,8 @@ class PnfsVolume:
     nodes: list[str] = field(default_factory=list)
     # fio instance (its evidence directory) -> the node it ran on
     instances: dict[str, str] = field(default_factory=dict)
+    # fio instance -> the pod whose one NFS mount it used; empty in older runs
+    mounts: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

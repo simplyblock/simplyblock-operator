@@ -389,6 +389,10 @@ class PnfsRwxWorkload(FioWorkload):
                 # Which instance ran where, so a node is judged while its own fio ran.
                 "instances": {i.evidence: nodes[i.pod] for i in self._instances
                               if i.pod in pods and nodes.get(i.pod)},
+                # Which pod's mount each instance used: the instances of one pod share
+                # its mount, and each carries a copy of its counters.
+                "mounts": {i.evidence: i.pod for i in self._instances
+                           if i.pod in pods and nodes.get(i.pod)},
                 **({"cross_read": {i.evidence: nodes.get(i.pod, "") for i in rounds}}
                    if rounds else {}),
             })

@@ -23,6 +23,7 @@ reached the client's namespace again.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterable
 from datetime import datetime, timedelta
@@ -146,11 +147,13 @@ class DeviceIO(Detector):
                              "all of its I/O went through the metadata server")
                     continue
                 yield from self._judge(subject, vol.lvol, node, got,
-                                       _server_writes(ev, vol, node))
+                                       _server_ops(ev, vol, node))
 
     def _judge(self, subject: str, lvol: str, node: str, got: list[BlockSample],
-               server_writes: int | None) -> Iterable[Finding]:
-        counted = "" if server_writes is None else f"; NFS WRITE {server_writes}"
+               server: dict[str, int] | None) -> Iterable[Finding]:
+        counted = "" if server is None else \
+            f"; NFS WRITE {server['WRITE']}, NFS READ {server['READ']}"
+        server_writes = None if server is None else server["WRITE"]
         hung = server_writes == 0
         first, last = got[0], got[-1]
         wrote = last.write_sectors - first.write_sectors
@@ -164,10 +167,8 @@ class DeviceIO(Detector):
                 detail=f"{node}: {wrote} sector(s) written, {read} read over "
                        f"{(last.ts - first.ts).total_seconds():.0f}s{counted}",
                 evidence={"lvol": lvol, "node": node, "write_sectors": wrote,
-                          "read_sectors": read, "server_writes": server_writes},
-                note=_HUNG_NOTE if hung else
-                "the pod's I/O went through the metadata server instead of to its "
-                "NVMe-oF namespace")
+                          "read_sectors": read, "server_ops": server},
+                note=_flat_note(flat, server))
             return
 
         trailing = _trailing_stall(got)
@@ -181,7 +182,7 @@ class DeviceIO(Detector):
                 detail=f"{node}: no sector written from {last.ts - timedelta(seconds=trailing):%H:%M:%S} "
                        f"to {last.ts:%H:%M:%S} while the run was going{counted}",
                 evidence={"lvol": lvol, "node": node, "stopped_s": trailing,
-                          "server_writes": server_writes},
+                          "server_ops": server},
                 note=_HUNG_NOTE if hung else
                 "the client lost the direct path and did not get it back, so its I/O "
                 "went through the metadata server from then on; after an MDS restart "
@@ -369,14 +370,41 @@ def _while_running(got: list[BlockSample], vol: PnfsVolume, node: str,
     return inside if len(inside) >= 2 else got
 
 
-def _server_writes(ev: Evidence, vol: PnfsVolume, node: str) -> int | None:
-    """The NFS WRITEs the volume's instances on node sent to the metadata server, or None
-    when an instance has no mount statistics and the count would be partial."""
-    pods = [p for p, where in vol.instances.items() if where == node]
-    counts = [ev.nfs_ops(p) for p in pods]
-    if not pods or not all(counts):
+def _server_ops(ev: Evidence, vol: PnfsVolume, node: str) -> dict[str, int] | None:
+    """The NFS READs and WRITEs the volume's mounts on node sent to the metadata server, or
+    None when an instance has no mount statistics and the counts would be partial.
+
+    Every instance of a pod carries a copy of the pod's one mount's counters, so each mount
+    is counted once: by the pod the volume map names, or, in runs from before it named
+    one, by the copy itself, since two different mounts never agree on every counter.
+    """
+    mounts: dict[str, dict[str, int]] = {}
+    for inst, where in vol.instances.items():
+        if where != node:
+            continue
+        ops = ev.nfs_ops(inst)
+        if not ops:
+            return None
+        mounts[vol.mounts.get(inst) or json.dumps(ops, sort_keys=True)] = ops
+    if not mounts:
         return None
-    return sum(c.get("WRITE", 0) for c in counts)
+    return {k: sum(m.get(k, 0) for m in mounts.values()) for k in ("READ", "WRITE")}
+
+
+def _flat_note(flat: list[str], server: dict[str, int] | None) -> str:
+    """Where the I/O a namespace never saw went, by the mount's own counters."""
+    if "writes" in flat:
+        if server is not None and server["WRITE"] == 0:
+            return _HUNG_NOTE
+        return ("the pod's I/O went through the metadata server instead of to its "
+                "NVMe-oF namespace")
+    if server is None:
+        return "the pod's reads did not reach its NVMe-oF namespace"
+    if server["READ"]:
+        return ("the pod's reads went through the metadata server instead of to its "
+                "NVMe-oF namespace")
+    return ("no read reached the namespace or the metadata server: the workload read "
+            "nothing, or its reads hung")
 
 
 #: The note for writes that stopped on the namespace without moving to the server.
