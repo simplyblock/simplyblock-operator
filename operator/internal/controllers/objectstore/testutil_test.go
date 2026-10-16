@@ -64,6 +64,7 @@ func newTestClient(t *testing.T, objects ...client.Object) client.Client {
 		WithScheme(newTestScheme(t)).
 		WithStatusSubresource(
 			&objectstorev1alpha1.S3Bucket{},
+			&objectstorev1alpha1.ObjectStore{},
 			&simplyblockv1alpha2.NFSExport{},
 		).
 		WithObjects(objects...).
