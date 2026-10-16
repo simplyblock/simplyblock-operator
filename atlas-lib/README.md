@@ -145,6 +145,10 @@ atlas/
 │       ├── conntrackrpc.go NewServer(conntrack.Forget), Remote(conn).Forget
 │       └── conntrackv1/    the FlowService protocol (buf-generated, committed)
 ├── bucketdelivery/         Deliver an S3 bucket's mount to its gateway's node set
+│   ├── paths.go            GatewayMountRoot: the one hostPath both the CSI node plugin (bind-mounts a
+│   │                       bucket there) and the operator's ObjectStoreReconciler (mounts every gateway
+│   │                       pod's hostPath there, HostToContainer) have to agree on without calling
+│   │                       each other
 │   └── bucketdeliveryrpc/  BucketDeliveryService: served by the CSI node plugin, called by the operator.
 │       │                   No sibling local-action package: Deliver/Withdraw wrap the node plugin's
 │       │                   own NodeStageVolume/NodePublishVolume, already written for kubelet.
@@ -1495,9 +1499,13 @@ propagation, already confirmed on a live cluster
 and both read and write the plugin's existing stack record, so its own
 restart-recovery path covers a delivered bucket with no new persistence.
 
-*Today:* nothing is wired to this yet. `bucketdeliveryrpc` is the contract
-(`design-bucket-provisioning.md` §5.2, work item W-10); the node-side
-`deliverer` and the operator-side reconciler calling it are W-11 and W-12.
+*Today:* wired end to end. `csi-driver/internal/csi/node/bucketdelivery.go`
+is the node-side `deliverer` (W-11), `S3BucketReconciler` is the
+operator-side caller (W-12, `kubernetes/operator/internal/controllers/
+objectstore/s3bucket_delivery.go`), and `ObjectStoreReconciler` mounts every
+gateway pod's `GatewayMountRoot` hostPath so a bucket delivered after the pod
+started still reaches it (`kubernetes/operator/internal/controllers/
+objectstore/objectstore_build.go`).
 
 ### Cross-cutting
 
