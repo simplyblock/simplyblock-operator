@@ -94,6 +94,7 @@ func BuildStorageNodeDaemonSet(
 	mainEnv := []corev1.EnvVar{
 		{Name: "UBUNTU_HOST", Value: ptr.StringOrDefault(wl.UbuntuHost, "false")},
 		{Name: "OPENSHIFT_CLUSTER", Value: strconv.FormatBool(wl.OpenShift != nil)},
+		{Name: "TALOS_CLUSTER", Value: ptr.StringOrDefault(wl.Talos, "false")},
 		{Name: "SKIP_KUBELET_CONFIGURATION", Value: skipKubeletConfiguration(wl)},
 		{Name: "SIMPLY_BLOCK_DOCKER_IMAGE", Value: image},
 		{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
@@ -121,6 +122,9 @@ func BuildStorageNodeDaemonSet(
 	}
 	if wl.ReservedSystemCPU != "" {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "RESERVED_SYSTEM_CPUS", Value: wl.ReservedSystemCPU})
+	}
+	if wl.TalosctlImage != "" {
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "TALOSCTL_IMAGE", Value: wl.TalosctlImage})
 	}
 	if tlsMutualEnabled {
 		mainEnv = append(mainEnv,
