@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -250,6 +251,65 @@ func TestNoOpenShiftBlockIsNotOpenShift(t *testing.T) {
 	}
 	if _, stated := env["OPENSHIFT_MCP"]; stated {
 		t.Errorf("OPENSHIFT_MCP = %q with no block stated", env["OPENSHIFT_MCP"])
+	}
+}
+
+// Talos is stated the way OpenShift is, and the agent reads it the same way:
+// TALOS_CLUSTER is what switches it to reserving huge pages through the Talos
+// API, and the talosctl image, when the cluster pins one, rides along.
+func TestTalosReachesTheAgent(t *testing.T) {
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "simplyblock"},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			StorageNodes: &simplyblockv1alpha2.StorageNodesSpec{
+				Talos:         ptr.To(true),
+				TalosctlImage: "ghcr.io/siderolabs/talosctl:v1.12.7",
+			},
+		},
+	}
+
+	env := mainEnvOf(t, BuildStorageNodeDaemonSet(cluster, false, false, "", "", "agent:test"))
+	if env["TALOS_CLUSTER"] != "true" {
+		t.Errorf("TALOS_CLUSTER = %q for a cluster that states Talos", env["TALOS_CLUSTER"])
+	}
+	if env["TALOSCTL_IMAGE"] != "ghcr.io/siderolabs/talosctl:v1.12.7" {
+		t.Errorf("TALOSCTL_IMAGE = %q, want the pinned image", env["TALOSCTL_IMAGE"])
+	}
+}
+
+// Unstated is not Talos, said explicitly, and no image is forced on the agent
+// so that its own default stands.
+func TestUnstatedTalosIsNotTalos(t *testing.T) {
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "simplyblock"},
+	}
+
+	env := mainEnvOf(t, BuildStorageNodeDaemonSet(cluster, false, false, "", "", "agent:test"))
+	if env["TALOS_CLUSTER"] != "false" {
+		t.Errorf("TALOS_CLUSTER = %q with Talos unstated", env["TALOS_CLUSTER"])
+	}
+	if _, stated := env["TALOSCTL_IMAGE"]; stated {
+		t.Errorf("TALOSCTL_IMAGE = %q with Talos unstated", env["TALOSCTL_IMAGE"])
+	}
+}
+
+// The agent reads a finished Job's pod log and checks for the Talos API
+// credentials Secret before creating a Job that mounts it; both need rules the
+// role did not carry (seen as HTTP 403 in the agent log on the first Talos run).
+func TestStorageNodeRoleLetsTheAgentReadJobLogsAndCheckSecrets(t *testing.T) {
+	granted := map[string][]string{}
+	for _, rule := range BuildStorageNodeSetClusterRole(false).Rules {
+		for _, group := range rule.APIGroups {
+			for _, res := range rule.Resources {
+				granted[group+"/"+res] = append(granted[group+"/"+res], rule.Verbs...)
+			}
+		}
+	}
+	for _, want := range []string{"/pods/log", "/secrets"} {
+		verbs := granted[want]
+		if len(verbs) != 1 || verbs[0] != "get" {
+			t.Errorf("%s verbs = %v, want exactly [get]", want, verbs)
+		}
 	}
 }
 

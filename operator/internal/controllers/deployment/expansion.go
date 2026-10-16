@@ -393,6 +393,11 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		workload.Image = images.NodeAgent.Image
 		workload.ImagePullPolicy = images.NodeAgent.ImagePullPolicy
 	}
+	// The talosctl slot is the fleet's too: one Job image for every Talos worker
+	// the DaemonSet reaches. Unstated leaves the node agent's default in place.
+	if images := config.Spec.Images; images != nil && images.Talosctl != nil {
+		workload.TalosctlImage = images.Talosctl.Image
+	}
 
 	for _, set := range config.Spec.NodeSets {
 		for _, group := range set.Groups {
@@ -432,7 +437,10 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		workload.EnableKubeletConfiguration = ptr.To(true)
 	case simplyblockv1alpha2.KubernetesEnvironmentTalos:
 		// Talos has no writable kubelet configuration and no package manager, so
-		// the node applies neither.
+		// the node applies neither. Stated to the node as well: it is what makes
+		// the node reserve huge pages through the Talos API rather than through
+		// a write to a host it cannot reach.
+		workload.Talos = ptr.To(true)
 		workload.EnableKubeletConfiguration = ptr.To(false)
 	case simplyblockv1alpha2.KubernetesEnvironmentVanilla,
 		simplyblockv1alpha2.KubernetesEnvironmentRancher,
