@@ -818,6 +818,7 @@ func spdkSlot(images *simplyblockv1alpha2.DeploymentImages) *simplyblockv1alpha2
 func spdkProxySlot(images *simplyblockv1alpha2.DeploymentImages) *simplyblockv1alpha2.ImageSpec {
 	return images.SPDKProxy
 }
+
 // imageOf and pullPolicyOf read one slot, or the zero value when the document
 // states no images or not that slot. The zero value is what the expansion writes
 // for an unstated slot, so the field downstream keeps its own default rather than
