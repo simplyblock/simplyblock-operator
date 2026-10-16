@@ -13,6 +13,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -240,6 +241,14 @@ func (r *ObjectStoreReconciler) applyOwnedObjects(ctx context.Context, store *ob
 // existing object's resourceVersion. Used for the Deployment, which has no
 // server-assigned field that a blind overwrite would lose (the Service's own
 // ClusterIP does, so it gets its own path below).
+//
+// Skips the Update when desired.Spec already matches: reconcileProvisioning
+// calls this on every pass while waiting for the Deployment to report
+// Available, and an unconditional Update there bumps the Deployment's
+// generation on every pass, which re-triggers this controller's own watch on
+// *v1.Deployment faster than the Deployment controller can settle a stable
+// Available condition — a self-sustaining reconcile storm that starves the
+// very status this is waiting on.
 func (r *ObjectStoreReconciler) apply(
 	ctx context.Context, desired *appsv1.Deployment, store *objectstorev1alpha1.ObjectStore,
 ) error {
@@ -254,13 +263,17 @@ func (r *ObjectStoreReconciler) apply(
 	if err != nil {
 		return err
 	}
+	if apiequality.Semantic.DeepEqual(desired.Spec, existing.Spec) {
+		return nil
+	}
 	desired.ResourceVersion = existing.ResourceVersion
 	return r.Update(ctx, desired)
 }
 
 // applyService creates the Service or updates it in place, carrying forward
 // the cluster-assigned ClusterIP, which a blind overwrite would otherwise
-// clear and fail admission on.
+// clear and fail admission on. Skips the Update when nothing changed, the
+// same reason apply does above.
 func (r *ObjectStoreReconciler) applyService(ctx context.Context, store *objectstorev1alpha1.ObjectStore) error {
 	desired := buildService(store)
 	if err := controllerutil.SetControllerReference(store, desired, r.Scheme); err != nil {
@@ -274,8 +287,11 @@ func (r *ObjectStoreReconciler) applyService(ctx context.Context, store *objects
 	if err != nil {
 		return err
 	}
-	desired.ResourceVersion = existing.ResourceVersion
 	desired.Spec.ClusterIP = existing.Spec.ClusterIP
+	if apiequality.Semantic.DeepEqual(desired.Spec, existing.Spec) {
+		return nil
+	}
+	desired.ResourceVersion = existing.ResourceVersion
 	return r.Update(ctx, desired)
 }
 

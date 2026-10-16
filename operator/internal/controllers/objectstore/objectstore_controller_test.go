@@ -310,6 +310,46 @@ func TestObjectStoreResumesMidProvisioningWithoutRecreatingTheDeployment(t *test
 	}
 }
 
+// Regression for a self-triggering reconcile storm: apply() used to call
+// Update on the Deployment unconditionally on every Provisioning-phase
+// reconcile. Since this controller also watches Deployments, each Update
+// re-triggered its own reconcile far faster than the 1-second RequeueAfter
+// backoff intends, bumping the Deployment's generation continuously and
+// starving the real Deployment controller of a quiet moment to report
+// Available — observed live as generation 2998 within seven minutes.
+func TestObjectStoreProvisioningReconcileIsANoOpWhenNothingChanged(t *testing.T) {
+	cli := apiServer(t)
+	ctx := context.Background()
+
+	store := testObjectStoreFixture("os-i07-store")
+	if err := cli.Create(ctx, store); err != nil {
+		t.Fatalf("creating the ObjectStore: %v", err)
+	}
+	key := client.ObjectKeyFromObject(store)
+	r := &ObjectStoreReconciler{Client: cli, Scheme: cli.Scheme()}
+	reconcileStoreUntil(t, r, key, func(o *objectstorev1alpha1.ObjectStore) bool {
+		return o.Status.Phase == osPhaseProvisioning
+	})
+
+	var before appsv1.Deployment
+	if err := cli.Get(ctx, key, &before); err != nil {
+		t.Fatalf("reading the Deployment: %v", err)
+	}
+
+	if _, err := r.Reconcile(ctx, ctrlRequestKey(key)); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var after appsv1.Deployment
+	if err := cli.Get(ctx, key, &after); err != nil {
+		t.Fatalf("reading the Deployment back: %v", err)
+	}
+	if after.ResourceVersion != before.ResourceVersion {
+		t.Errorf("Deployment resourceVersion changed from %s to %s on a reconcile pass with nothing to change",
+			before.ResourceVersion, after.ResourceVersion)
+	}
+}
+
 // U-16 (moved here from the unit class): spec.image naming a registry
 // outside the three the CRD's own Pattern allows is rejected at admission,
 // which only a real apiserver enforces. A fake client applies no OpenAPI
