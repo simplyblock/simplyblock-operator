@@ -1,7 +1,14 @@
 # Test Plan: S3 Gateway Provisioning (`ObjectStore`)
 
 Related design: [`designs/design-objectstore.md`](../designs/design-objectstore.md)
-Harness: [`internal/controller`](../../internal/controller)
+Harness: `internal/controllers/objectstore`. A new nested controller package
+rather than the legacy flat `internal/controller` this plan's file-path
+citations originally named: `S3Bucket`'s own reconciler
+(design-bucket-provisioning.md) already settled on the newer `TestMain` +
+shared `envtest.Environment` + plain `testing.T` convention, and
+`ObjectStoreReconciler` runs in the same manager process
+(0005-s3bucket-joins-the-main-operator-manager.md), so it lives in the same
+package rather than starting a second one.
 
 Scope: the operator's Kubernetes surface. Whether a pulled image actually runs a
 working gateway, and whether cert-manager or OpenShift's serving-cert controller
@@ -14,7 +21,7 @@ Scenario IDs are permanent: `U-` unit (no cluster — pure functions, fake
 CRDs installed), `E-` end-to-end (live cluster, both TLS providers). Types are
 `Positive`, `Negative`, `Boundary`, `Regression`. The `Test` column names the
 implementing function, or `—` when the scenario is not yet covered — every `—`
-also appears in §8 What Is Not Yet Covered.
+also appears in §7 What Is Not Yet Covered.
 
 ---
 
@@ -26,53 +33,61 @@ builders.
 
 ### Phase Transitions (§6)
 
-File: `internal/controller/objectstore_phase_unit_test.go`
+File: `internal/controllers/objectstore/objectstore_phase_unit_test.go`
 
-| #    | Scenario                                                                                               | Type     | Test |
-|------|--------------------------------------------------------------------------------------------------------|----------|------|
-| U-01 | No Deployment yet → `Pending`                                                                          | Positive | —    |
-| U-02 | Deployment/Service/Certificate created, Deployment not yet Available → `Provisioning`                  | Positive | —    |
-| U-03 | Deployment Available, Certificate Ready → `Ready`                                                      | Positive | —    |
-| U-04 | Deployment Available, Certificate not Ready → stays `Provisioning`                                     | Positive | —    |
-| U-05 | `Provisioning` past its deadline with the image unpullable → `Degraded`, `DeploymentAvailable` `False` | Negative | —    |
-| U-06 | `cert-manager` provider with no matching `Issuer` → `Degraded`, `CertificateReady` `False`             | Negative | —    |
-| U-07 | `Ready`, `spec.replicas` changed → reconciles in place, never returns to `Pending`                     | Positive | —    |
-| U-08 | Operator restart mid-`Provisioning` → resumes from `status`, does not recreate the Deployment          | Positive | —    |
+| #    | Scenario                                                                                               | Type     | Test                                                              |
+|------|--------------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------------------|
+| U-01 | No Deployment yet → `Pending`                                                                          | Positive | `TestFreshObjectStoreRestoresToPending`                           |
+| U-02 | Deployment/Service/Certificate created, Deployment not yet Available → `Provisioning`                  | Positive | `TestFirstReconcileCreatesObjectsAndEntersProvisioning`           |
+| U-03 | Deployment Available, Certificate Ready → `Ready`                                                      | Positive | `TestProvisioningReachesReadyOnceBothConditionsAreMet`            |
+| U-04 | Deployment Available, Certificate not Ready → stays `Provisioning`                                     | Positive | `TestProvisioningStaysWhileCertificateIsNotReady`                 |
+| U-05 | `Provisioning` past its deadline with the image unpullable → `Degraded`, `DeploymentAvailable` `False` | Negative | `TestProvisioningDeadlinePassedWithNoAvailableDeploymentDegrades` |
+| U-06 | `cert-manager` provider with no matching `Issuer` → `Degraded`, `CertificateReady` `False`             | Negative | `TestProvisioningDeadlinePassedWithNoReadyCertificateDegrades`    |
+| U-07 | `Ready`, `spec.replicas` changed → reconciles in place, never returns to `Pending`                     | Positive | `TestReadyObjectStoreReconcilesReplicasInPlace`                   |
+| U-08 | Operator restart mid-`Provisioning` → resumes from `status`, does not recreate the Deployment          | Positive | `TestRestartMidProvisioningDoesNotRecreateTheDeployment`          |
 
 ### Object Construction (§4, §5)
 
-File: `internal/controller/objectstore_build_unit_test.go`
+File: `internal/controllers/objectstore/objectstore_build_unit_test.go`
 
-| #    | Function                | Scenario                                                                                                 | Type     | Test |
-|------|-------------------------|----------------------------------------------------------------------------------------------------------|----------|------|
-| U-09 | `buildDeployment`       | Pod template carries label `objectstore.simplyblock.io/instance=<name>`                                  | Positive | —    |
-| U-10 | `buildDeployment`       | `spec.envFrom` copied onto the gateway container's `envFrom` unmodified                                  | Positive | —    |
-| U-11 | `buildDeployment`       | `spec.replicas` unset → Deployment requests 1 replica (default)                                          | Boundary | —    |
-| U-12 | `buildService`          | `ClusterIP`, single port `spec.port`, selector matches the Deployment's pod label                        | Positive | —    |
-| U-13 | `buildService`          | `spec.port` at its minimum (1) and maximum (65535) both accepted                                         | Boundary | —    |
-| U-14 | TLS provider dispatch   | `tlsProvider: OpenShift` → `ServingCertServiceAnnotations`, no `Certificate` object created              | Positive | —    |
-| U-15 | TLS provider dispatch   | `tlsProvider: cert-manager` → `utils.BuildServiceServingCertificate` called, no OpenShift annotation set | Positive | —    |
-| U-16 | `spec.image` validation | A registry prefix outside the three allowed is rejected by the CRD's own `Pattern`                       | Negative | —    |
+| #    | Function              | Scenario                                                                                                 | Type     | Test                                                          |
+|------|-----------------------|----------------------------------------------------------------------------------------------------------|----------|---------------------------------------------------------------|
+| U-09 | `buildDeployment`     | Pod template carries label `objectstore.simplyblock.io/instance=<name>`                                  | Positive | `TestBuildDeploymentCarriesTheGatewayInstanceLabel`           |
+| U-10 | `buildDeployment`     | `spec.envFrom` copied onto the gateway container's `envFrom` unmodified                                  | Positive | `TestBuildDeploymentCopiesEnvFromUnmodified`                  |
+| U-11 | `buildDeployment`     | `spec.replicas` unset → Deployment requests 1 replica (default)                                          | Boundary | `TestBuildDeploymentDefaultsReplicasToOne`                    |
+| U-12 | `buildService`        | `ClusterIP`, single port `spec.port`, selector matches the Deployment's pod label                        | Positive | `TestBuildServiceIsClusterIPOnSpecPortSelectingTheDeployment` |
+| U-13 | `buildService`        | `spec.port` at its minimum (1) and maximum (65535) both accepted                                         | Boundary | `TestBuildServicePortAtItsLimits`                             |
+| U-14 | TLS provider dispatch | `tlsProvider: OpenShift` → `ServingCertServiceAnnotations`, no `Certificate` object created              | Positive | `TestOpenShiftTLSProviderAnnotatesTheServiceOnly`             |
+| U-15 | TLS provider dispatch | `tlsProvider: cert-manager` → `utils.BuildServiceServingCertificate` called, no OpenShift annotation set | Positive | `TestCertManagerTLSProviderBuildsACertificateAndNoAnnotation` |
+
+~~U-16 `spec.image` validation~~ **Moved to Integration (I-16).** A fake
+`client.Client` applies no OpenAPI schema validation at all, so a CRD
+`Pattern` rejection can only be proven against a real apiserver.
 
 ---
 
 ## 2. Integration Tests
 
 Run the full `ObjectStoreReconciler` reconcile loop against `envtest`, with
-cert-manager's CRDs installed, exercising both TLS providers. `Deployment.status`
-is set by the test, since `envtest` runs no kubelet.
+cert-manager's CRDs installed (`internal/controllers/objectstore/testdata/cert-manager-crds.yaml`,
+vendored from cert-manager v1.21.2's own release), exercising both TLS providers.
+`Deployment.status` and the Certificate's `status.conditions` are set by the test
+directly, since `envtest` runs no kubelet and no cert-manager controller either.
 
 ### Provisioning (§6, §7)
 
-| #    | Scenario                                                                                                                                                                                                   | Type     | Test |
-|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| I-01 | `ObjectStore` created → Deployment, Service, and (cert-manager provider) `Certificate` all created, owned via `ownerReferences`                                                                            | Positive | —    |
-| I-02 | Deployment and Certificate faked as ready → `ObjectStore` reaches `Ready`, `status.readyReplicas` mirrors the Deployment                                                                                   | Positive | —    |
-| I-03 | `spec.replicas` updated on an existing `ObjectStore` → Deployment's replica count updates, no Service or Certificate churn                                                                                 | Positive | —    |
-| I-04 | `ObjectStore` deleted while `Ready` → Deployment, Service, and Certificate garbage-collected, no finalizer blocks it                                                                                       | Positive | —    |
-| I-05 | Two reconciles triggered concurrently for the same object → converge to one Deployment/Service/Certificate, no duplicates                                                                                  | Positive | —    |
-| I-06 | Operator process restarted mid-`Provisioning` (envtest manager stopped and restarted) → resumes from `status` without re-creating owned objects                                                            | Positive | —    |
-| I-07 | `spec.envFrom` names a `Secret` that does not exist → `Degraded`, event naming the missing reference (this reconciler does not validate the `Secret`'s existence, and kubelet reports its absence instead) | Negative | —    |
+File: `internal/controllers/objectstore/objectstore_controller_test.go`
+
+| #    | Scenario                                                                                                                                                                                                   | Type     | Test                                                                                                                                                                                                                                                                                                         |
+|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| I-01 | `ObjectStore` created → Deployment, Service, and (cert-manager provider) `Certificate` all created, owned via `ownerReferences`                                                                            | Positive | `TestObjectStoreCreatesItsOwnedObjects`                                                                                                                                                                                                                                                                      |
+| I-02 | Deployment and Certificate faked as ready → `ObjectStore` reaches `Ready`, `status.readyReplicas` mirrors the Deployment                                                                                   | Positive | `TestObjectStoreReachesReadyOnceDeploymentAndCertificateAreReady`                                                                                                                                                                                                                                            |
+| I-03 | `spec.replicas` updated on an existing `ObjectStore` → Deployment's replica count updates, no Service or Certificate churn                                                                                 | Positive | `TestObjectStoreReplicaChangeUpdatesTheDeploymentInPlace`                                                                                                                                                                                                                                                    |
+| I-04 | `ObjectStore` deleted while `Ready` → no finalizer blocks the delete                                                                                                                                       | Positive | `TestObjectStoreDeletionIsNotBlockedByAFinalizer` (narrower than first scoped: see §7)                                                                                                                                                                                                                       |
+| I-05 | Two reconciles triggered concurrently for the same object → converge to one Deployment/Service/Certificate, no duplicates                                                                                  | Positive | — (design §7.3: the standard controller-runtime guarantee that one object's key is never processed by two workers at once, the same reasoning design-bucket-provisioning.md §7.3 states for its own I-08; a test driving two direct `Reconcile` calls would only reprove controller-runtime's own workqueue) |
+| I-06 | Operator process restarted mid-`Provisioning` (envtest manager stopped and restarted) → resumes from `status` without re-creating owned objects                                                            | Positive | `TestObjectStoreResumesMidProvisioningWithoutRecreatingTheDeployment`                                                                                                                                                                                                                                        |
+| I-07 | `spec.envFrom` names a `Secret` that does not exist → `Degraded`, event naming the missing reference (this reconciler does not validate the `Secret`'s existence, and kubelet reports its absence instead) | Negative | — (needs a real kubelet to produce `CreateContainerConfigError`; `envtest` runs none, same boundary §9's own failure-table row draws)                                                                                                                                                                        |
+| I-16 | `spec.image` naming a registry outside the three the CRD's `Pattern` allows is rejected at `Create` (moved from U-16: only a real apiserver enforces it)                                                   | Negative | `TestObjectStoreImageOutsideTheAllowedRegistriesIsRejectedAtCreate`                                                                                                                                                                                                                                          |
 
 ---
 
@@ -117,32 +132,33 @@ repository's concern entirely (`design-objectstore.md` Open Question 2).
 
 ## 5. Axis Coverage
 
-| Axis                | Values covered                                             | IDs                    | Not covered                                                                                                                                |
-|---------------------|------------------------------------------------------------|------------------------|--------------------------------------------------------------------------------------------------------------------------------------------|
-| TLS provider        | `OpenShift`, `cert-manager`                                | U-14, U-15, E-01, E-02 | —                                                                                                                                          |
-| Replica count       | 1 (default), 2+, scaled in place                           | U-11, I-03             | 0 (rejected by CRD validation, not a runtime scenario)                                                                                     |
-| Namespace scope     | single namespace                                           | I-01                   | multi-namespace (no cross-namespace behavior exists to test)                                                                               |
-| Lifecycle / restart | mid-`Provisioning` operator restart, concurrent reconciles | U-08, I-05, I-06       | —                                                                                                                                          |
-| Deletion            | `Ready` → deleted, no finalizer                            | I-04                   | deletion while an `S3Bucket` still references it (that invariant belongs to `design-bucket-provisioning.md`'s own test plan, not this one) |
+| Axis                | Values covered                                             | IDs                    | Not covered                                                                                                                                                                                                           |
+|---------------------|------------------------------------------------------------|------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| TLS provider        | `OpenShift`, `cert-manager`                                | U-14, U-15, E-01, E-02 | —                                                                                                                                                                                                                     |
+| Replica count       | 1 (default), 2+, scaled in place                           | U-11, I-03             | 0 (rejected by CRD validation, not a runtime scenario)                                                                                                                                                                |
+| Namespace scope     | single namespace                                           | I-01                   | multi-namespace (no cross-namespace behavior exists to test)                                                                                                                                                          |
+| Lifecycle / restart | mid-`Provisioning` operator restart, concurrent reconciles | U-08, I-05, I-06       | —                                                                                                                                                                                                                     |
+| Deletion            | `Ready` → deleted, no finalizer                            | I-04                   | deletion while an `S3Bucket` still references it (that invariant belongs to `design-bucket-provisioning.md`'s own test plan, not this one); actual garbage collection of the owned objects (needs a real cluster, §7) |
 
 ---
 
 ## 6. Coverage Summary
 
-| Class       | Scenarios | Covered | Not covered |
-|-------------|-----------|---------|-------------|
-| Unit        | 16        | 0       | U-01 … U-16 |
-| Integration | 7         | 0       | I-01 … I-07 |
-| E2E         | 3         | 0       | E-01 … E-03 |
+| Class       | Scenarios                      | Covered | Not covered |
+|-------------|--------------------------------|---------|-------------|
+| Unit        | 15 (U-16 moved to Integration) | 15      | —           |
+| Integration | 8 (I-16, moved from U-16)      | 6       | I-05, I-07  |
+| E2E         | 3                              | 0       | E-01 … E-03 |
 
 ---
 
 ## 7. What Is Not Yet Covered
 
-Nothing is implemented yet: every scenario above is a requirement, not yet a
-passing test. Beyond that:
-
-| #   | Gap                                                                    | Reason                                                                                         |
-|-----|------------------------------------------------------------------------|------------------------------------------------------------------------------------------------|
-| —   | Graceful shutdown / in-flight request draining during a rolling update | Open Question 2 in the design: not designed here, may be entirely the gateway binary's concern |
-| —   | Richer credential injection (projected volumes, a Vault Agent sidecar) | Open Question 3 in the design: `spec.envFrom` is the only mechanism this CRD has               |
+| #    | Gap                                                                          | Reason                                                                                                                                                                 |
+|------|------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| I-05 | Two concurrent reconciles converge to one set of owned objects               | Design §7.3's own "standard controller-runtime guarantee," the same reasoning design-bucket-provisioning.md's I-08 is not covered for                                  |
+| I-07 | `spec.envFrom` naming a missing `Secret` degrades, naming the reference      | Needs a real kubelet to produce `CreateContainerConfigError`; `envtest` runs none                                                                                      |
+| I-04 | Deleting a `Ready` `ObjectStore` actually garbage-collects its owned objects | `envtest` has no garbage-collector controller; only `TestObjectStoreDeletionIsNotBlockedByAFinalizer`'s narrower claim (no finalizer blocks the delete) is proven here |
+| —    | Graceful shutdown / in-flight request draining during a rolling update       | Open Question 2 in the design: not designed here, may be entirely the gateway binary's concern                                                                         |
+| —    | Richer credential injection (projected volumes, a Vault Agent sidecar)       | Open Question 3 in the design: `spec.envFrom` is the only mechanism this CRD has                                                                                       |
+| —    | E-01 … E-03                                                                  | Need a live cluster with both TLS providers available, which this session has no access to                                                                             |

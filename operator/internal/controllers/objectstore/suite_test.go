@@ -69,6 +69,15 @@ func apiServer(t *testing.T) client.Client {
 		sharedEnv = &envtest.Environment{
 			CRDDirectoryPaths: []string{
 				filepath.Join("..", "..", "..", "config", "crd", "bases"),
+				// Vendored from cert-manager v1.21.2's own release
+				// (cert-manager.crds.yaml), the only consumer of the
+				// cert-manager-provider TLS path today
+				// (objectstore_controller.go, design-objectstore.md §5).
+				// cert-manager's own controller does not run here, so a
+				// Certificate this package creates never reaches Ready on
+				// its own; a test that needs one Ready sets status directly,
+				// same as this suite already does for Deployment.status.
+				filepath.Join("testdata"),
 			},
 			ErrorIfCRDPathMissing: true,
 			BinaryAssetsDirectory: getFirstFoundEnvTestBinaryDir(),

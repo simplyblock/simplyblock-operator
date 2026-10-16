@@ -258,13 +258,6 @@ rules:
   - objectstore.simplyblock.io
   resources:
   - objectstores
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - objectstore.simplyblock.io
-  resources:
   - s3buckets
   verbs:
   - get
@@ -275,16 +268,17 @@ rules:
 - apiGroups:
   - objectstore.simplyblock.io
   resources:
-  - s3buckets/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - objectstore.simplyblock.io
-  resources:
+  - objectstores/status
   - s3buckets/status
   verbs:
   - get
   - patch
+  - update
+- apiGroups:
+  - objectstore.simplyblock.io
+  resources:
+  - s3buckets/finalizers
+  verbs:
   - update
 - apiGroups:
   - operator.openshift.io

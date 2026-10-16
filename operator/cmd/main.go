@@ -527,8 +527,20 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "S3Bucket")
 		os.Exit(1)
 	}
+	// The gateway workload S3Bucket's own mount delivery reaches
+	// (design-objectstore.md), the same manager since both are in the
+	// objectstore.simplyblock.io API group (0005-s3bucket-joins-the-main-
+	// operator-manager.md).
+	if err := (&objectstorecontrollers.ObjectStoreReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("objectstore-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ObjectStore")
+		os.Exit(1)
+	}
 	if err := mgr.Add(&objectstorecontrollers.Collector{Client: mgr.GetClient()}); err != nil {
-		setupLog.Error(err, "unable to add the S3Bucket collector")
+		setupLog.Error(err, "unable to add the S3Bucket/ObjectStore collector")
 		os.Exit(1)
 	}
 	if err := (&nodecontroller.StorageDeviceReconciler{

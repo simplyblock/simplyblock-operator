@@ -316,10 +316,10 @@ Target: the `ObjectStore` object, the audit record a deployer watches, which out
 
 ### Prometheus Metrics
 
-| Metric                                   | Labels                 | Description                                                                                                                   |
-|------------------------------------------|------------------------|-------------------------------------------------------------------------------------------------------------------------------|
-| `simplyblock_objectstore_phase`          | `objectstore`, `phase` | Gauge, 1 for the current phase and 0 for the others. What a dashboard sums to show gateways stuck outside `Ready`             |
-| `simplyblock_objectstore_ready_replicas` | `objectstore`          | Gauge, mirrors `status.readyReplicas`, the load-bearing one: it is what an alert on "fewer gateway pods than requested" reads |
+| Metric                                         | Labels                 | Description                                                                                                                   |
+|------------------------------------------------|------------------------|-------------------------------------------------------------------------------------------------------------------------------|
+| `simplyblock_objectstore_phase_state`          | `objectstore`, `phase` | Gauge, 1 for the current phase and 0 for the others. What a dashboard sums to show gateways stuck outside `Ready`             |
+| `simplyblock_objectstore_ready_replicas_count` | `objectstore`          | Gauge, mirrors `status.readyReplicas`, the load-bearing one: it is what an alert on "fewer gateway pods than requested" reads |
 
 ---
 
@@ -457,6 +457,14 @@ type ObjectStoreStatus struct {
 	Message string `json:"message,omitempty"`
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// PhaseDeadline is when the current phase gives up waiting and degrades,
+	// carried in status rather than only in memory so a restarted operator
+	// resumes the same deadline instead of granting a fresh one (§6). Added
+	// beyond this appendix's first draft, the same gap S3BucketStatus's own
+	// appendix had.
+	// +optional
+	PhaseDeadline *metav1.Time `json:"phaseDeadline,omitempty"`
 }
 
 // +kubebuilder:object:root=true
