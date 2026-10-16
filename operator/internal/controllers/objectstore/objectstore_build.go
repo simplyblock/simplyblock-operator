@@ -14,6 +14,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
+	"github.com/simplyblock/atlas/bucketdelivery"
+	"github.com/simplyblock/atlas/ptr"
 	objectstorev1alpha1 "github.com/simplyblock/simplyblock-operator/api/objectstore/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
@@ -35,6 +37,29 @@ const (
 	// function's package-private constant, so this file states the string
 	// its own doc comment already promises.
 	certificateAuthorityConfigMap = "simplyblock-certificate-authority"
+
+	// bucketMountVolumeName and bucketMountPath are the shared hostPath
+	// every gateway pod mounts HostToContainer
+	// (design-bucket-provisioning.md §5.1, §5.4): the CSI node plugin's own
+	// DeliverBucket bind-mounts a bucket's pNFS volume under
+	// bucketdelivery.GatewayMountRoot on the host, and that mount only
+	// reaches an already-running gateway pod if the pod already carries this
+	// volume, set once at Deployment creation and never touched again. The
+	// in-container path is the same as the host path on purpose: the
+	// gateway's own GATEWAY_ROOT_DIR (gatewayRootDirEnv below) then names
+	// one path that means the same thing on both sides, rather than this
+	// reconciler and the gateway binary each needing their own opinion about
+	// a translation between them.
+	bucketMountVolumeName = "gateway-buckets"
+	bucketMountPath       = bucketdelivery.GatewayMountRoot
+
+	// gatewayRootDirEnv is the env var the gateway binary reads its backend
+	// root directory from (kubernetes/gateway/internal/config). Set here
+	// rather than left to spec.envFrom: it names an operator-determined
+	// mount path, not a credential or anything else the gateway repository's
+	// own Vault integration would supply (design §4.1's own boundary for
+	// what envFrom carries).
+	gatewayRootDirEnv = "GATEWAY_ROOT_DIR"
 )
 
 // defaultReplicas is spec.replicas' own +kubebuilder:default, read here too:
@@ -80,12 +105,23 @@ func buildDeployment(store *objectstorev1alpha1.ObjectStore) *appsv1.Deployment 
 							Ports: []corev1.ContainerPort{
 								{Name: "s3", ContainerPort: store.Spec.Port},
 							},
-							EnvFrom:      store.Spec.EnvFrom,
-							Resources:    store.Spec.Resources,
-							VolumeMounts: []corev1.VolumeMount{{Name: tlsVolumeName, MountPath: tlsMountPath, ReadOnly: true}},
+							Env:       []corev1.EnvVar{{Name: gatewayRootDirEnv, Value: bucketMountPath}},
+							EnvFrom:   store.Spec.EnvFrom,
+							Resources: store.Spec.Resources,
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: tlsVolumeName, MountPath: tlsMountPath, ReadOnly: true},
+								{
+									Name:             bucketMountVolumeName,
+									MountPath:        bucketMountPath,
+									MountPropagation: ptr.To(corev1.MountPropagationHostToContainer),
+								},
+							},
 						},
 					},
-					Volumes: []corev1.Volume{buildGatewayTLSVolume(store)},
+					Volumes: []corev1.Volume{
+						buildGatewayTLSVolume(store),
+						buildGatewayBucketMountVolume(),
+					},
 				},
 			},
 		},
@@ -121,6 +157,25 @@ func buildGatewayTLSVolume(store *objectstorev1alpha1.ObjectStore) corev1.Volume
 						},
 					},
 				},
+			},
+		},
+	}
+}
+
+// buildGatewayBucketMountVolume is the shared hostPath every gateway pod
+// carries so a bucket DeliverBucket bind-mounts after the pod is already
+// running still reaches it (design-bucket-provisioning.md §5.1, §5.4): set
+// once here, at Deployment creation, and never touched again by anything
+// that reacts to a bucket's own lifecycle. DirectoryOrCreate rather than
+// Directory: the first ObjectStore on a node precedes every bucket that
+// will ever be delivered to it, so the path need not exist yet.
+func buildGatewayBucketMountVolume() corev1.Volume {
+	return corev1.Volume{
+		Name: bucketMountVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: bucketMountPath,
+				Type: ptr.To(corev1.HostPathDirectoryOrCreate),
 			},
 		},
 	}
