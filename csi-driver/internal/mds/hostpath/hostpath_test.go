@@ -243,6 +243,62 @@ func TestProxyRefusesAnAddressTheNodeDoesNotHold(t *testing.T) {
 	}
 }
 
+func newPortsProxy(t *testing.T, addrs []netip.Addr, ports []uint16, d *dialer) netip.AddrPort {
+	t.Helper()
+	ln := listen(t)
+	p := &Proxy{
+		Addrs: func() ([]netip.Addr, error) { return addrs, nil },
+		Ports: func() ([]uint16, error) { return ports, nil },
+		Dial:  d.dial,
+		Log:   t.Logf,
+	}
+	serve(t, p.Serve, ln)
+	return addrPort(t, ln)
+}
+
+// Without its own attachment to the data network, the guest reaches every
+// storage node through the proxy: on OVN-Kubernetes a pod's traffic to the data
+// network leaves through the gateway bridge and never arrives. The proxy then
+// opens connections to other nodes too, but only to the storage cluster's
+// listener ports, so it is no relay into the host's network.
+func TestProxyDialsAnotherNodeOnlyOnAStorageListenerPort(t *testing.T) {
+	d := &dialer{}
+	own := []netip.Addr{netip.MustParseAddr("10.10.10.245")}
+	proxy := newPortsProxy(t, own, []uint16{4429, 4431}, d)
+
+	for _, refused := range []string{"10.10.10.244:22", "127.0.0.1:4429", "169.254.169.254:4429", "224.0.0.1:4429"} {
+		answer, _, _ := exchange(t, proxy, ConnectRequest(netip.MustParseAddrPort(refused)))
+		if !strings.HasPrefix(answer, "ERR ") {
+			t.Errorf("CONNECT %s answered %q, want ERR", refused, answer)
+		}
+	}
+	if dials := d.seen(); len(dials) != 0 {
+		t.Fatalf("the proxy dialed %v for refused targets", dials)
+	}
+
+	// Another node's storage listener is dialed. Nothing listens there in the
+	// test, so the connect fails, but the proxy tried it.
+	_, _, _ = exchange(t, proxy, ConnectRequest(netip.MustParseAddrPort("10.10.10.244:4429")))
+	if dials := d.seen(); !slices.Contains(dials, "10.10.10.244:4429") {
+		t.Errorf("the proxy dialed %v, want 10.10.10.244:4429", dials)
+	}
+}
+
+func TestParsePortsReadsWhatTheOperatorWrites(t *testing.T) {
+	got, err := ParsePorts("4429\n4431 4433\n")
+	if err != nil || !slices.Equal(got, []uint16{4429, 4431, 4433}) {
+		t.Errorf("ParsePorts = %v, %v, want [4429 4431 4433]", got, err)
+	}
+	for _, bad := range []string{"0", "65536", "lvol"} {
+		if _, err := ParsePorts(bad); err == nil {
+			t.Errorf("ParsePorts(%q) accepted it", bad)
+		}
+	}
+	if got, err := ReadPorts(t.TempDir() + "/absent"); err != nil || got != nil {
+		t.Errorf("ReadPorts of a missing file = %v, %v, want no ports and no error", got, err)
+	}
+}
+
 func TestProxyReportsAConnectThatFails(t *testing.T) {
 	gone := listen(t)
 	target := addrPort(t, gone)

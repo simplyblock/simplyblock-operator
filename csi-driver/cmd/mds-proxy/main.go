@@ -22,6 +22,9 @@ import (
 func main() {
 	listen := flag.String("listen", "",
 		"host:port to serve on, the node's address (downward API status.hostIP) and the proxy's port")
+	portsFile := flag.String("ports-file", "",
+		"File listing the storage cluster's listener ports, which may be dialed on other nodes; "+
+			"empty allows the node's own addresses only")
 	klog.InitFlags(nil)
 	if err := flag.Set("logtostderr", "true"); err != nil {
 		klog.Exitf("failed to set logtostderr flag: %v", err)
@@ -49,6 +52,11 @@ func main() {
 		Addrs: hostpath.LocalAddrs,
 		Dial:  dialer.DialContext,
 		Log:   klog.Warningf,
+	}
+	if *portsFile != "" {
+		// Read on every request: the operator rewrites the file as storage
+		// nodes come and go, and kubelet replaces it in place.
+		proxy.Ports = func() ([]uint16, error) { return hostpath.ReadPorts(*portsFile) }
 	}
 	if err := proxy.Serve(ctx, ln); err != nil {
 		klog.Errorf("mds-proxy: %v", err)

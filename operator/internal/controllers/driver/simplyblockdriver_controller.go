@@ -28,7 +28,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
@@ -737,6 +739,25 @@ func (r *SimplyblockDriverReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&simplyblockv1alpha2.SimplyblockDriver{}).
 		Owns(&appsv1.DaemonSet{}).
 		Owns(&appsv1.StatefulSet{}).
+		// A storage node's listener port is one the mds-proxy may dial, so a
+		// node that comes or changes its port rewrites the proxy's ports.
+		Watches(&simplyblockv1alpha2.StorageNode{}, handler.EnqueueRequestsFromMapFunc(r.driversWithMDS)).
 		Named("simplyblockdriver").
 		Complete(r)
+}
+
+// driversWithMDS maps any event to every driver running a metadata server.
+func (r *SimplyblockDriverReconciler) driversWithMDS(ctx context.Context, _ client.Object) []reconcile.Request {
+	var drivers simplyblockv1alpha2.SimplyblockDriverList
+	if err := r.List(ctx, &drivers); err != nil {
+		log.FromContext(ctx).Error(err, "listing drivers for a StorageNode event")
+		return nil
+	}
+	var requests []reconcile.Request
+	for _, d := range drivers.Items {
+		if d.Spec.PNFS.MDS != nil {
+			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&d)})
+		}
+	}
+	return requests
 }

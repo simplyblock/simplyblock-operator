@@ -1,6 +1,8 @@
 // The proxy: on the host's network, it opens the connections the forwarder
-// names to the node's own addresses and carries them, which SPDK's
-// interface-bound listeners accept from the host and refuse from a pod.
+// names and carries them. On the node's own addresses SPDK's interface-bound
+// listeners accept them from the host and refuse them from a pod; on other
+// nodes, the host reaches the storage data network where the pod network may
+// not.
 
 package hostpath
 
@@ -34,6 +36,9 @@ type Proxy struct {
 	// binary it is LocalAddrs, read on every request so an address added to
 	// the node is offered without a restart.
 	Addrs func() ([]netip.Addr, error)
+	// Ports returns the storage cluster's listener ports, which CONNECT may
+	// name on an address that is not the node's own. Nil allows none.
+	Ports func() ([]uint16, error)
 	// Dial opens the connection to a listener.
 	Dial DialFunc
 	// DialTimeout bounds Dial, DefaultDialTimeout when zero.
@@ -76,8 +81,8 @@ func (p *Proxy) handle(ctx context.Context, conn net.Conn) {
 		}
 		_, _ = io.WriteString(conn, okLine(words...))
 	case VerbConnect:
-		if !slices.Contains(addrs, req.Target.Addr()) {
-			p.refuse(conn, fmt.Errorf("%s is not an address of this node", req.Target.Addr()))
+		if err := p.allowed(addrs, req.Target); err != nil {
+			p.refuse(conn, err)
 			return
 		}
 		timeout := p.DialTimeout
@@ -98,6 +103,31 @@ func (p *Proxy) handle(ctx context.Context, conn net.Conn) {
 		// Whatever the forwarder sent after its request line is already in r.
 		splice(ctx, &bufferedConn{Conn: conn, r: r}, target)
 	}
+}
+
+// allowed says whether CONNECT may open target: any port on an address of the
+// node's own, or a storage listener port on another unicast address. The
+// listeners authorize every connect by host NQN, so a target the second rule
+// admits lets nobody past the control plane's authorization.
+func (p *Proxy) allowed(addrs []netip.Addr, target netip.AddrPort) error {
+	if slices.Contains(addrs, target.Addr()) {
+		return nil
+	}
+	if !target.Addr().IsGlobalUnicast() {
+		return fmt.Errorf("%s is neither an address of this node nor a unicast one", target.Addr())
+	}
+	if p.Ports == nil {
+		return fmt.Errorf("%s is not an address of this node", target.Addr())
+	}
+	ports, err := p.Ports()
+	if err != nil {
+		return fmt.Errorf("reading the storage listener ports: %w", err)
+	}
+	if !slices.Contains(ports, target.Port()) {
+		return fmt.Errorf("%s is not an address of this node, and %d is no storage listener port",
+			target.Addr(), target.Port())
+	}
+	return nil
 }
 
 func (p *Proxy) refuse(conn net.Conn, err error) {

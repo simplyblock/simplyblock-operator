@@ -85,7 +85,7 @@ func TestGuestTrafficLeavesMasqueradedBehindThePodIP(t *testing.T) {
 // storage nodes on their data interfaces.
 func TestGuestTrafficToTheDataNetworkLeavesMasqueradedBehindTheDataInterface(t *testing.T) {
 	p := DefaultPlan("eth0")
-	p.DataInterface = "net1"
+	p.DataInterface = testDataInterface
 	want := Rule{
 		Table: "nat",
 		Chain: "POSTROUTING",
@@ -112,7 +112,7 @@ func TestAPlanWithoutADataInterfaceHasNoRuleForOne(t *testing.T) {
 // alike.
 func TestInboundClientAddressesAreNotRewritten(t *testing.T) {
 	p := DefaultPlan("eth0")
-	p.DataInterface = "net1"
+	p.DataInterface = testDataInterface
 	for _, r := range p.Rules() {
 		if !slices.Contains(r.Spec, "MASQUERADE") && !slices.Contains(r.Spec, "SNAT") {
 			continue

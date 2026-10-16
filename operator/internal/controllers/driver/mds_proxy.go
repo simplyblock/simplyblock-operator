@@ -18,7 +18,9 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"strconv"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -45,6 +47,12 @@ const (
 	// hostIPEnv carries the node's address (status.hostIP) into both ends.
 	hostIPEnv = "HOST_IP"
 
+	// mdsProxyPortsDir and mdsProxyPortsKey are where the proxy reads the
+	// storage cluster's listener ports, the only ports it dials on another
+	// node: the ConfigMap's one key, mounted as a file.
+	mdsProxyPortsDir = "/etc/mds-proxy"
+	mdsProxyPortsKey = "ports"
+
 	// hostNetworkSCCRole is the ClusterRole OpenShift ships to grant use of
 	// the hostnetwork-v2 SCC, from 4.11 on. Its presence is what says the
 	// cluster is OpenShift.
@@ -58,6 +66,49 @@ var mdsProxyAddress = "$(" + hostIPEnv + "):" + strconv.Itoa(mdsProxyPort)
 // mdsProxyName is the proxy's DaemonSet.
 func mdsProxyName(d *simplyblockv1alpha2.SimplyblockDriver) string {
 	return names(d).prefix + "mds-proxy"
+}
+
+// mdsProxyPortsName is the ConfigMap of the storage cluster's listener ports.
+func mdsProxyPortsName(d *simplyblockv1alpha2.SimplyblockDriver) string {
+	return names(d).prefix + "mds-proxy-ports"
+}
+
+// MDSProxyPortsConfigMap lists the storage cluster's listener ports for the
+// proxy, one per line, each once and sorted. The caller sets ownership.
+//
+// Without an attachment to the data network the guest reaches every storage
+// node through the proxy, because the host routes to the data network wherever
+// the pod network does not (OVN-Kubernetes sends it to the gateway). The proxy
+// dials another node only on these ports, so it is no relay into the host's
+// network, and the listeners there authorize every connect by host NQN.
+func MDSProxyPortsConfigMap(d *simplyblockv1alpha2.SimplyblockDriver, ports []int32) *corev1.ConfigMap {
+	slices.Sort(ports)
+	ports = slices.Compact(ports)
+	var b strings.Builder
+	for _, p := range ports {
+		b.WriteString(strconv.Itoa(int(p)))
+		b.WriteByte('\n')
+	}
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: mdsProxyPortsName(d), Namespace: d.Namespace},
+		Data:       map[string]string{mdsProxyPortsKey: b.String()},
+	}
+}
+
+// storageListenerPorts is every StorageNode's LVS port: the ports the guest's
+// volumes are served on.
+func (r *SimplyblockDriverReconciler) storageListenerPorts(ctx context.Context) ([]int32, error) {
+	var nodes simplyblockv1alpha2.StorageNodeList
+	if err := r.List(ctx, &nodes); err != nil {
+		return nil, fmt.Errorf("listing StorageNodes for the mds-proxy's ports: %w", err)
+	}
+	var ports []int32
+	for _, n := range nodes.Items {
+		if n.Status.Ports != nil && n.Status.Ports.Lvol != nil && *n.Status.Ports.Lvol > 0 {
+			ports = append(ports, *n.Status.Ports.Lvol)
+		}
+	}
+	return ports, nil
 }
 
 // mdsNodeSelector is where the metadata server may run: the KVM-capable nodes
@@ -146,6 +197,7 @@ func MDSProxyDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver, openShift bool)
 					HostNetwork: true,
 					DNSPolicy:   corev1.DNSClusterFirstWithHostNet,
 					Containers:  []corev1.Container{mdsProxyContainer(d, image, openShift)},
+					Volumes:     []corev1.Volume{configMapVolume("ports", mdsProxyPortsName(d), true)},
 				},
 			},
 		},
@@ -164,8 +216,12 @@ func mdsProxyContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string, o
 		Image:           image,
 		ImagePullPolicy: pullPolicy(d),
 		Command:         []string{"/usr/bin/mds-proxy"},
-		Args:            []string{"--listen=" + mdsProxyAddress},
-		Env:             []corev1.EnvVar{hostIPEnvVar()},
+		Args: []string{
+			"--listen=" + mdsProxyAddress,
+			"--ports-file=" + mdsProxyPortsDir + "/" + mdsProxyPortsKey,
+		},
+		VolumeMounts: []corev1.VolumeMount{{Name: "ports", MountPath: mdsProxyPortsDir, ReadOnly: true}},
+		Env:          []corev1.EnvVar{hostIPEnvVar()},
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: ptr.To(false),
 			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
@@ -206,6 +262,9 @@ func (r *SimplyblockDriverReconciler) ensureMDSProxy(ctx context.Context, d *sim
 		if err := r.deleteOwned(ctx, d, &rbacv1.RoleBinding{}, binding.Name); err != nil {
 			return err
 		}
+		if err := r.deleteOwned(ctx, d, &corev1.ConfigMap{}, mdsProxyPortsName(d)); err != nil {
+			return err
+		}
 		return r.deleteOwned(ctx, d, &corev1.ServiceAccount{}, names(d).mdsProxyServiceAccount)
 	}
 
@@ -220,7 +279,11 @@ func (r *SimplyblockDriverReconciler) ensureMDSProxy(ctx context.Context, d *sim
 	}
 	// The ServiceAccount and its SCC first: a DaemonSet whose pods would be
 	// refused backs off before it tries again.
-	objs := []client.Object{MDSProxyServiceAccount(d)}
+	ports, err := r.storageListenerPorts(ctx)
+	if err != nil {
+		return err
+	}
+	objs := []client.Object{MDSProxyServiceAccount(d), MDSProxyPortsConfigMap(d, ports)}
 	if openShift {
 		objs = append(objs, binding)
 	}

@@ -141,8 +141,12 @@ func (p Plan) Rules() []Rule {
 	return rules
 }
 
-// HostPathChain holds one redirect per address of the pod's node, rebuilt
-// when the node's addresses change.
+// linkLocal is the guest's own subnet's range, which never leaves the bridge.
+var linkLocal = netip.MustParsePrefix("169.254.0.0/16")
+
+// HostPathChain holds the redirects to the forwarder: one per address of the
+// pod's node, rebuilt when the node's addresses change, or one for everything
+// when the pod has no attachment to the data network.
 const HostPathChain = "MDS-HOST-PATH"
 
 // ForwarderPort is where the runner's forwarder takes the redirected
@@ -160,7 +164,18 @@ func (p Plan) ForwarderAddress() netip.AddrPort {
 // rather than REDIRECT, which needs a kernel module the pod's other rules do
 // not, and the forwarder reads the original destination the same way after
 // either.
+//
+// A pod without an attachment to the data network sends every TCP connection
+// of the guest's there, except to link-local addresses, which stay on the
+// bridge: whether the pod network routes to the storage data network depends on
+// the CNI (OVN-Kubernetes sends it to the gateway, where it is lost), and the
+// host always does.
 func (p Plan) HostPathRules(addrs []netip.Addr) []Rule {
+	if p.DataInterface == "" {
+		return []Rule{{Table: "nat", Chain: HostPathChain, Spec: []string{
+			"!", "-d", linkLocal.String(), "-p", "tcp", "-j", "DNAT", "--to-destination", p.ForwarderAddress().String(),
+		}}}
+	}
 	rules := make([]Rule, 0, len(addrs))
 	for _, a := range addrs {
 		rules = append(rules, Rule{Table: "nat", Chain: HostPathChain, Spec: []string{

@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -57,8 +58,9 @@ func TestTheMDSProxyRunsOnTheHostNetworkWhereverTheMDSMay(t *testing.T) {
 	if pod.AutomountServiceAccountToken == nil || *pod.AutomountServiceAccountToken {
 		t.Error("the proxy mounts a ServiceAccount token it never uses")
 	}
-	if len(pod.Volumes) != 0 {
-		t.Errorf("the proxy mounts %v, want nothing", pod.Volumes)
+	// No host path, no Secret: only the ConfigMap of listener ports.
+	if len(pod.Volumes) != 1 || pod.Volumes[0].ConfigMap == nil {
+		t.Errorf("the proxy mounts %v, want only its ports ConfigMap", pod.Volumes)
 	}
 
 	if len(pod.Containers) != 1 {
@@ -285,6 +287,70 @@ func TestADriverWithoutAMetadataServerRemovesTheSCCBinding(t *testing.T) {
 	var rb rbacv1.RoleBinding
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(stale), &rb); !apierrors.IsNotFound(err) {
 		t.Errorf("the SCC RoleBinding is still there (%v) after spec.pnfs.mds was unset", err)
+	}
+}
+
+// storageNode is a StorageNode whose LVS listens on lvol.
+func storageNode(name string, lvol int32) *simplyblockv1alpha2.StorageNode {
+	return &simplyblockv1alpha2.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "simplyblock"},
+		Status:     simplyblockv1alpha2.StorageNodeStatus{Ports: &simplyblockv1alpha2.StorageNodePorts{Lvol: ptr.To(lvol)}},
+	}
+}
+
+// Without an attachment to the data network the guest reaches every storage node
+// through the proxy, which opens connections to other nodes only on the storage
+// cluster's listener ports. The operator writes them, from every StorageNode's
+// LVS port, into a ConfigMap the proxy reads, so no data network, subnet, or IP
+// range has to be configured: on OVN-Kubernetes a pod's traffic to the data
+// network never arrives, and a dataNetwork set by hand was lost twice in a day
+// on dev-ocp.
+func TestTheMDSProxyIsToldTheStorageListenerPorts(t *testing.T) {
+	d := withMDS(testDriver("simplyblock"))
+	c := reconcileDriver(t, d, storageNode("n1", 4431), storageNode("n2", 4429), storageNode("n3", 4431))
+
+	var cm corev1.ConfigMap
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: d.Namespace, Name: "simplyblock-csi-mds-proxy-ports"}, &cm); err != nil {
+		t.Fatalf("the ports ConfigMap: %v", err)
+	}
+	if got := cm.Data["ports"]; got != "4429\n4431\n" {
+		t.Errorf("ports = %q, want each LVS port once, sorted", got)
+	}
+	if owner := metav1ControllerOf(&cm); owner != d.Name {
+		t.Errorf("ConfigMap owned by %q, want the driver", owner)
+	}
+
+	var ds appsv1.DaemonSet
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: d.Namespace, Name: "simplyblock-csi-mds-proxy"}, &ds); err != nil {
+		t.Fatalf("the proxy DaemonSet: %v", err)
+	}
+	pod := ds.Spec.Template.Spec
+	if !slices.Contains(pod.Containers[0].Args, "--ports-file=/etc/mds-proxy/ports") {
+		t.Errorf("args = %v, want the ports file", pod.Containers[0].Args)
+	}
+	mounted := slices.ContainsFunc(pod.Containers[0].VolumeMounts, func(m corev1.VolumeMount) bool {
+		return m.MountPath == "/etc/mds-proxy" && m.ReadOnly
+	})
+	fromConfigMap := slices.ContainsFunc(pod.Volumes, func(v corev1.Volume) bool {
+		return v.ConfigMap != nil && v.ConfigMap.Name == "simplyblock-csi-mds-proxy-ports"
+	})
+	if !mounted || !fromConfigMap {
+		t.Errorf("volumes = %+v, mounts = %+v, want the ConfigMap read-only at /etc/mds-proxy", pod.Volumes, pod.Containers[0].VolumeMounts)
+	}
+}
+
+// The ports ConfigMap goes with the proxy once spec.pnfs.mds is unset.
+func TestADriverWithoutAMetadataServerRemovesThePortsConfigMap(t *testing.T) {
+	withProxy := withMDS(testDriver("simplyblock"))
+	stale := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: withProxy.Namespace, Name: "simplyblock-csi-mds-proxy-ports"}}
+	if err := setOwnership(withProxy, stale, reconcilerScheme(t)); err != nil {
+		t.Fatalf("setOwnership: %v", err)
+	}
+	c := reconcileDriver(t, testDriver("simplyblock"), stale)
+
+	var cm corev1.ConfigMap
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(stale), &cm); !apierrors.IsNotFound(err) {
+		t.Errorf("the ports ConfigMap is still there (%v)", err)
 	}
 }
 

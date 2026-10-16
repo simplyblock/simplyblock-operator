@@ -12,6 +12,10 @@ import (
 	"testing"
 )
 
+// testDataInterface is a pod's attachment to the data network, as Multus names
+// the first one.
+const testDataInterface = "net1"
+
 func sameRule(a, b Rule) bool {
 	return a.Table == b.Table && a.Chain == b.Chain && slices.Equal(a.Spec, b.Spec)
 }
@@ -31,8 +35,11 @@ func TestTheHostPathJumpIsOnlyInstalledWhenThePlanHasAProxy(t *testing.T) {
 	}
 }
 
+// A pod with its own attachment to the data network sends only the
+// connections to its own node through the proxy.
 func TestHostPathRulesRedirectEachNodeAddressToTheForwarder(t *testing.T) {
 	p := DefaultPlan("eth0")
+	p.DataInterface = testDataInterface
 	got := p.HostPathRules([]netip.Addr{netip.MustParseAddr("10.10.10.143"), netip.MustParseAddr("192.168.10.143")})
 	redirect := func(addr string) Rule {
 		return Rule{Table: "nat", Chain: HostPathChain, Spec: []string{
@@ -47,6 +54,21 @@ func TestHostPathRulesRedirectEachNodeAddressToTheForwarder(t *testing.T) {
 	// traffic arrives on.
 	if got, want := p.ForwarderAddress(), netip.MustParseAddrPort("169.254.100.1:7071"); got != want {
 		t.Errorf("ForwarderAddress = %s, want %s", got, want)
+	}
+}
+
+// Without an attachment to the data network, every connection the guest opens
+// goes through the proxy, whatever the node's addresses: the pod network may
+// not route to the data network at all (OVN-Kubernetes sends it to the
+// gateway), and the host always does. Link-local stays on the bridge.
+func TestHostPathRulesSendEveryConnectionThroughTheProxyWithoutADataInterface(t *testing.T) {
+	p := DefaultPlan("eth0")
+	got := p.HostPathRules([]netip.Addr{netip.MustParseAddr("10.10.10.143")})
+	want := []Rule{{Table: "nat", Chain: HostPathChain, Spec: []string{
+		"!", "-d", "169.254.0.0/16", "-p", "tcp", "-j", "DNAT", "--to-destination", "169.254.100.1:7071",
+	}}}
+	if !slices.EqualFunc(got, want, sameRule) {
+		t.Errorf("HostPathRules = %v, want %v", got, want)
 	}
 }
 
@@ -75,7 +97,9 @@ func (f *chainIPTables) run(_ context.Context, args ...string) (int, string, err
 
 func TestReplaceChainCreatesAChainOnceAndRefillsIt(t *testing.T) {
 	f := &chainIPTables{}
-	rules := DefaultPlan("eth0").HostPathRules([]netip.Addr{netip.MustParseAddr("10.10.10.143")})
+	p := DefaultPlan("eth0")
+	p.DataInterface = testDataInterface
+	rules := p.HostPathRules([]netip.Addr{netip.MustParseAddr("10.10.10.143")})
 	for range 2 {
 		if err := ReplaceChain(context.Background(), f.run, "nat", HostPathChain, rules); err != nil {
 			t.Fatalf("ReplaceChain: %v", err)
