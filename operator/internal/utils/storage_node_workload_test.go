@@ -302,8 +302,8 @@ func TestStorageNodeRoleLetsTheAgentReadJobLogsAndCheckSecrets(t *testing.T) {
 	granted := map[string][]string{}
 	for _, rule := range BuildStorageNodeSetClusterRole(false).Rules {
 		for _, group := range rule.APIGroups {
-			for _, resource := range rule.Resources {
-				granted[group+"/"+resource] = append(granted[group+"/"+resource], rule.Verbs...)
+			for _, res := range rule.Resources {
+				granted[group+"/"+res] = append(granted[group+"/"+res], rule.Verbs...)
 			}
 		}
 	}
