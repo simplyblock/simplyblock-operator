@@ -17,7 +17,7 @@ several lvols, consistency-group snapshots, and the user-facing `VolumeGroupSnap
 |-------|-----------------------------------------------------------------------|---------------------------------|---------|
 | 0     | External prerequisites (§Phase 0)                                     | Other repos, branches, spikes   | Blocked |
 | 1     | `NFSExport` CRD and reconciler, MDS binding, export create and delete | P0-1 through P0-4               | Planned |
-| 2     | Per-export Service and EndpointSlice, planned restart (§13.4)         | Phase 1                         | Planned |
+| 2     | Metadata server Service and EndpointSlice, planned restart (§13.4)    | Phase 1                         | Planned |
 | 3     | MDS health probe, PR fencing, unplanned failover (§13.5)              | Phase 2, P0-1, P0-2, P0-7, P0-8 | Planned |
 | 4     | Snapshot with `xfs_freeze`, clone, restore, online resize             | Phase 1                         | Planned |
 | 5     | Export client restriction, host allow-listing, squash and tenancy     | Phase 1                         | Planned |
@@ -278,7 +278,7 @@ If the client cannot establish the block path (device missing, fenced, reservati
 
 - **pNFS clients:** Worker nodes that host pods with RWX mounts, gated by a kernel carrying `nvme_get_unique_id` and the pNFS block layout client (P0-9, P0-10). They run the CSI node plugin, which takes the first layout itself (§10.1).
 - **MDS:** one pod per storage cluster, running a QEMU guest with its own kernel ([`design-pnfs-mds-vm.md`](design-pnfs-mds-vm.md)). The guest runs `nfsd`, owns every exported XFS filesystem of its storage cluster, and runs `mds-agent`, which connects the backing namespaces and assembles exports on the operator's request. No Kubernetes node runs `nfsd` or mounts an export.
-- **Operator:** owns the `NFSExport` CR, the authoritative mapping of `{RWX volume → MDS pod → backing lvol → export path}` (§7.1). It enforces the "one MDS per export" invariant, reconciles the per-export Service, and drives failover.
+- **Operator:** owns the `NFSExport` CR, the authoritative mapping of `{RWX volume → MDS pod → backing lvol → export path}` (§7.1). It enforces the "one MDS per export" invariant, reconciles the metadata server's Service, and drives failover.
 
 **Hard invariant (from PoC):** each client export (PVC) is associated with **exactly one** MDS server. The server (and its attached NVMe-oF namespaces) may *migrate*, but the client never fails over to a *different* export. Migration causes a bounded I/O freeze until clients reconnect.
 
@@ -590,8 +590,8 @@ handle itself (§11), because the handle contains colons.
 entry in the guest, a Service, and an attached namespace. Without
 `storage.simplyblock.io/nfsexport` on it, a direct delete leaves every one of those
 orphaned with nothing left to describe them. Deletion order is unexport, unmount,
-release the namespace, delete the Service and EndpointSlice, then drop the
-finalizer.
+release the namespace, then drop the finalizer. The metadata server's Service
+and EndpointSlice stay, since the server's other exports are mounted there.
 
 A CR as it exists once Ready:
 
@@ -867,7 +867,7 @@ Bind-mount the staging NFS mount into the pod target path (existing bind-mount l
 ### 10.4 Reconnect / heal for pNFS
 
 - The existing **`MonitorConnection`** / Guardian machinery watches the underlying NVMe-oF namespaces. On total path loss it can trigger reconnect just like RWO.
-- **An MDS restart keeps the mount address.** The client mounts the export's Service ClusterIP, and the operator repoints the Service's EndpointSlice at the restarted pod (§13.3), so the client reconnects and reclaims its state without a remount.
+- **An MDS restart keeps the mount address.** The client mounts the metadata server's Service ClusterIP, and the operator repoints the Service's EndpointSlice at the restarted pod (§13.3), so the client reconnects and reclaims its state without a remount.
 - **A restart drops the client's cached devices,** because the restarted server is a new server instance. The node plugin watches `/proc/self/mountstats` and probes each pNFS staging mount again when its transport to the MDS reconnects (`KeepLayoutsPrimed`). The guest's `nfsd` holds the client's other layouts until that probe has taken one, so the probe is first again rather than racing the pods (§13.4).
 - Detect dead NFS mounts (`ESTALE`/`ENOTCONN`) using the same `stagingMountDead` approach adapted for NFS, and restage.
 
@@ -966,9 +966,13 @@ second MDS a candidate.
 
 ### 13.3 A stable mount address
 
-**Clients mount a Kubernetes Service, not a node.** The operator gives each export a
-Service and manages its EndpointSlice directly, with exactly one endpoint: the
-MDS pod's IP, port 2049. When the pod restarts with a new IP the operator rewrites
+**Clients mount a Kubernetes Service, not a node.** The operator gives each
+metadata server one Service, `<mds-statefulset>-nfs` in the operator's namespace,
+which every export the metadata server serves is mounted at, and manages its
+EndpointSlice directly, with exactly one endpoint: the MDS pod's IP, port 2049.
+The Service and the EndpointSlice are owned by the metadata server's StatefulSet,
+so they live exactly as long as the metadata server and no export's deletion
+touches them. When the pod restarts with a new IP the operator rewrites
 that endpoint. The ClusterIP does not change, so the client's mount address does
 not change, and no client remounts.
 
@@ -984,10 +988,18 @@ and the pod passes the connection on to the guest, where `nfsd` sees an ordinary
 connection on port 2049 ([`design-pnfs-mds-vm.md`](design-pnfs-mds-vm.md)).
 Host-originated traffic reaches those rules because `KUBE-SERVICES` is hooked into
 `OUTPUT` as well as `PREROUTING`, and the mount here is issued by the client node's
-host kernel. One ClusterIP per export, all targeting port 2049, composes
-correctly: many exports share the guest's `nfsd`. A client reaches every export of
-one MDS over a single connection, because the NFSv4.1 client recognizes the same
-server behind each address and trunks the mounts onto one.
+host kernel.
+
+**One address per metadata server, never one per export.** The NFSv4.1 client
+recognizes the same server behind every address and trunks the mounts onto one
+NFS client, which keeps the transport to the address it mounted first. With an
+address per export, every mount on a node therefore rode on the address of
+whichever export that node mounted first, and once that export was deleted, its
+Service and address went with it and every other mount on the node stalled on a
+dead address (run `pnfs-1792093629`: a 48-second I/O freeze and 115 to 226
+seconds without a write on two nodes). One address for the server matches the one
+server identity the client sees, and a client reaches every export over one
+connection to an address that outlives each of them.
 
 Three caveats ride along, and none of them is settled:
 

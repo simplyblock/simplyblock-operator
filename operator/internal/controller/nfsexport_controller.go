@@ -265,7 +265,7 @@ func (r *NFSExportReconciler) bindExport(
 	// The stable address, ahead of the transition for the same reason as the
 	// client set: an export bound with nothing to mount it at fails at a
 	// client, several steps from the cause.
-	serviceAddress, err := r.reconcileExportService(ctx, export, host.address)
+	serviceAddress, err := r.reconcileExportService(ctx, host.pod, host.address)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensuring the Service for %s: %w", export.Name, err)
 	}

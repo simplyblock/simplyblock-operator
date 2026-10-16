@@ -1,5 +1,6 @@
-// The stable client address for a pNFS export: a ClusterIP Service and the
-// single-endpoint EndpointSlice behind it.
+// The stable client address for a metadata server's pNFS exports: one
+// ClusterIP Service per metadata server and the single-endpoint EndpointSlice
+// behind it.
 //
 // A client mounts the Service, never the MDS host directly, and never
 // resolves it more than once: an NFS mount is a kernel sunrpc socket
@@ -13,6 +14,8 @@
 package utils
 
 import (
+	"strings"
+
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,52 +28,11 @@ import (
 // by path and fsid, not by port.
 const NFSExportServicePort = 2049
 
-// NFSExportServiceName is the ClusterIP Service a client mounts for the named
-// export, in place of the MDS host's own address.
-func NFSExportServiceName(exportName string) string {
-	return exportName + "-nfs"
-}
-
-// NFSExportEndpointSliceName names the one EndpointSlice backing an export's
-// Service. One export, one slice, one endpoint: the bound MDS host.
-func NFSExportEndpointSliceName(exportName string) string {
-	return exportName + "-nfs-endpoints"
-}
-
-// BuildNFSExportService is the Service a client mounts.
-//
-// A normal ClusterIP, not the headless, per-node-hostname pattern
-// BuildStorageNodeSetService uses: that pattern hands out one DNS name per
-// node so a caller can address a specific one by name, which is the opposite
-// of what an export needs -- one address that keeps working when the node
-// behind it changes.
-func BuildNFSExportService(namespace, exportName string) *corev1.Service {
-	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      NFSExportServiceName(exportName),
-			Namespace: namespace,
-			Labels: map[string]string{
-				"storage.simplyblock.io/nfsexport": exportName,
-			},
-		},
-		Spec: corev1.ServiceSpec{
-			Ports: []corev1.ServicePort{
-				{
-					Name:       "nfs",
-					Port:       NFSExportServicePort,
-					TargetPort: intstr.FromInt32(NFSExportServicePort),
-					Protocol:   corev1.ProtocolTCP,
-				},
-			},
-		},
-	}
-}
-
-// BuildNFSExportEndpointSlice publishes the bound MDS host as the Service's
+// buildEndpointSlice publishes the metadata server pod as the Service's
 // one endpoint. Repointing an export at a different host is rebuilding this
 // with the same name and a different address; the Service's ClusterIP does
 // not change, so a client's mount address does not either.
-func BuildNFSExportEndpointSlice(namespace, exportName, mdsNodeIP string) *discoveryv1.EndpointSlice {
+func buildEndpointSlice(namespace, serviceName, mdsNodeIP string) *discoveryv1.EndpointSlice {
 	protocol := corev1.ProtocolTCP
 	port := int32(NFSExportServicePort)
 	portName := "nfs"
@@ -88,10 +50,10 @@ func BuildNFSExportEndpointSlice(namespace, exportName, mdsNodeIP string) *disco
 	}
 	return &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      NFSExportEndpointSliceName(exportName),
+			Name:      MDSEndpointSliceName(serviceName),
 			Namespace: namespace,
 			Labels: map[string]string{
-				"kubernetes.io/service-name": NFSExportServiceName(exportName),
+				"kubernetes.io/service-name": serviceName,
 			},
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
@@ -104,4 +66,43 @@ func BuildNFSExportEndpointSlice(namespace, exportName, mdsNodeIP string) *disco
 			},
 		},
 	}
+}
+
+// MDSServiceName is the Service every export of a metadata server is mounted
+// at, named after the metadata server's StatefulSet, whose one pod is podName.
+// The StatefulSet's name leaves room for the suffix within the 63 characters a
+// Service name takes.
+func MDSServiceName(podName string) string {
+	return strings.TrimSuffix(podName, "-0") + "-nfs"
+}
+
+// MDSEndpointSliceName names the one EndpointSlice backing a metadata server's
+// Service.
+func MDSEndpointSliceName(serviceName string) string {
+	return serviceName + "-endpoints"
+}
+
+// BuildMDSService is the Service a client mounts every export of one metadata
+// server at. One address for one server: the Linux client keeps one NFS
+// client per server and trunks a mount at any other address of the same
+// server onto it, so an address per export made every mount on a node depend
+// on whichever export it mounted first.
+func BuildMDSService(namespace, name string) *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: corev1.ServiceSpec{
+			Ports: []corev1.ServicePort{{
+				Name:       "nfs",
+				Port:       NFSExportServicePort,
+				TargetPort: intstr.FromInt32(NFSExportServicePort),
+				Protocol:   corev1.ProtocolTCP,
+			}},
+		},
+	}
+}
+
+// BuildMDSEndpointSlice publishes the metadata server pod's address as its
+// Service's one endpoint, or none while the metadata server is going away.
+func BuildMDSEndpointSlice(namespace, serviceName, address string) *discoveryv1.EndpointSlice {
+	return buildEndpointSlice(namespace, serviceName, address)
 }

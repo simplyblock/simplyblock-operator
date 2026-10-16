@@ -26,7 +26,6 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
-	"github.com/simplyblock/simplyblock-operator/internal/utils"
 
 	"github.com/simplyblock/atlas/kube"
 )
@@ -659,7 +658,7 @@ func TestPendingPodHostedBindsTheReadyPod(t *testing.T) {
 		t.Error("bound with no client set, which the guest would refuse")
 	}
 	var eps discoveryv1.EndpointSlice
-	epsKey := client.ObjectKey{Name: utils.NFSExportEndpointSliceName(testExportName), Namespace: testExportNS}
+	epsKey := mdsSliceKeyFor(driver.MDSPodName(mdsDriver(), testExportClusterID))
 	if err := cl.Get(context.Background(), epsKey, &eps); err != nil {
 		t.Fatalf("reading the EndpointSlice: %v", err)
 	}

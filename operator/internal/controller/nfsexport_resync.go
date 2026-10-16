@@ -95,7 +95,7 @@ func (r *NFSExportReconciler) followAddress(
 ) error {
 	if ip := pod.Status.PodIP; ip != "" && ip != export.Status.MDSNodeIP {
 		old := export.Status.MDSNodeIP
-		if _, err := r.reconcileExportService(ctx, export, ip); err != nil {
+		if _, err := r.reconcileExportService(ctx, pod.Name, ip); err != nil {
 			return fmt.Errorf("repointing the Service for %s: %w", export.Name, err)
 		}
 		if err := r.writeStatus(ctx, export, func(s *simplyblockv1alpha2.NFSExportStatus) {
@@ -184,7 +184,7 @@ func (r *NFSExportReconciler) withdrawAddress(ctx context.Context, export *simpl
 	if old == "" {
 		return nil
 	}
-	if err := r.reconcileExportEndpointSlice(ctx, export, ""); err != nil {
+	if err := r.reconcileExportEndpointSlice(ctx, export.Status.MDSPodName, ""); err != nil {
 		return fmt.Errorf("withdrawing the address of %s: %w", export.Name, err)
 	}
 	if err := r.writeStatus(ctx, export, func(s *simplyblockv1alpha2.NFSExportStatus) {
@@ -222,14 +222,18 @@ func (r *NFSExportReconciler) cancelForget(ctx context.Context, export *simplybl
 	}
 }
 
-// exportServiceIP is the ClusterIP of the export's Service: the status records
-// it, and the Service itself answers when the status does not yet.
+// exportServiceIP is the ClusterIP the export is mounted at, its metadata
+// server's Service: the status records it, and the Service itself answers when
+// the status does not yet.
 func (r *NFSExportReconciler) exportServiceIP(ctx context.Context, export *simplyblockv1alpha2.NFSExport) string {
 	if a, err := netip.ParseAddr(export.Status.ServiceAddress); err == nil {
 		return a.String()
 	}
+	if export.Status.MDSPodName == "" {
+		return ""
+	}
 	var svc corev1.Service
-	key := client.ObjectKey{Namespace: export.Namespace, Name: utils.NFSExportServiceName(export.Name)}
+	key := client.ObjectKey{Namespace: r.OperatorNamespace, Name: utils.MDSServiceName(export.Status.MDSPodName)}
 	if err := r.Get(ctx, key, &svc); err != nil {
 		return ""
 	}
