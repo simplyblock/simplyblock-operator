@@ -825,7 +825,22 @@ type DeploymentImages struct {
 	// the cluster's Talos minor, or to a mirror on an air-gapped site. Read only
 	// for a document whose environment is Talos.
 	// +optional
-	Talosctl *ImageSpec `json:"talosctl,omitempty"`
+	Talosctl *ExternalImageSpec `json:"talosctl,omitempty"`
+}
+
+// ExternalImageSpec is an image this product does not build, stated the way
+// ImageSpec states one it does. It exists because ImageSpec holds every image to
+// simplyblock's own registries, which is right for software simplyblock publishes
+// and wrong for talosctl: Sidero publishes it on ghcr.io, and a deployment that
+// mirrors it names its own registry. Any registry is admitted; the shape of a
+// reference is still checked.
+type ExternalImageSpec struct {
+	// Image is the repository and tag, optionally digest-pinned, on any
+	// registry. An empty value is not written downstream, so the field it would
+	// fill keeps its own default.
+	// +kubebuilder:validation:Pattern=`^($|[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?/[a-z0-9][a-z0-9._/-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	Image string `json:"image,omitempty"`
 }
 
 // ClusterDeploymentConfigSpec is a whole simplyblock deployment as one
