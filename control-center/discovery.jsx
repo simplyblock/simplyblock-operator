@@ -257,7 +257,11 @@ function gateSelectorCheck(disc, cluster, namespaces, text) {
 // the method (the plan's), sync when both sites are zones of one cluster, and
 // a test target when the target reports an isolated NAD.
 const isolatedNadOf = (disc, cluster) => {
-  const nads = ((discOf(disc, cluster) || {}).nads || []).map(n => `${n.namespace}/${n.name}`);
+  const d = discOf(disc, cluster) || {};
+  // a DHCP server's own attachment (sitemap-dhcp/dnsmasq-drtest) matches the
+  // names too, but workloads never attach to it
+  const serverNS = new Set((d.dhcpServers || []).map(s => s.namespace).filter(Boolean));
+  const nads = (d.nads || []).filter(n => !serverNS.has(n.namespace)).map(n => `${n.namespace}/${n.name}`);
   return nads.find(n => /drtest|isolat|bubble/.test(n)) || nads.find(n => /test/.test(n)) || "";
 };
 function proposePaths(plan, disc, paths) {
@@ -379,6 +383,37 @@ const dhcpServerName = (cluster, f) => dns63(`${cluster}-${(f.owner || f.pod).sp
 function testNadsOf(disc, cluster, paths) {
   const own = isolatedNadOf(disc, cluster);
   return uniqSorted((paths || []).filter(p => p.to === cluster && p.test && p.test.isolatedNad).map(p => p.test.isolatedNad).concat(own ? [own] : []));
+}
+// The NADs a path's test bubble can be put on, for its select. A DHCP
+// server's own attachment (a NAD in the server's namespace) is left out:
+// workloads never attach to it. A network in production use (production VMs
+// on it, or a DHCP server that does not serve a test network) comes last and
+// is marked: test copies keep their production addresses, so on it they
+// collide with production (UI walkthrough findings #3, #4). The isolated
+// test networks come first.
+function testNadChoices(disc, cluster, paths) {
+  const d = discOf(disc, cluster);
+  if (!d) return [];
+  const testNads = testNadsOf(disc, cluster, paths);
+  const serverOwn = new Set(d.dhcpServers.flatMap(s => (s.nads || [])
+    .filter(sn => s.namespace && (sn.nad || "").startsWith(s.namespace + "/")).map(sn => sn.nad)));
+  const rank = c => c.isolated ? 0 : c.production ? 2 : 1;
+  return d.nads.filter(n => !serverOwn.has(nadRef(n))).map(n => {
+    const v = nadRef(n);
+    const isolated = testNads.includes(v);
+    const vms = (d.vms || []).filter(vm => (vm.networks || []).some(x => x.nad === v)).length;
+    const servers = dhcpServersOn(disc, cluster, v).filter(s => !isBubbleServer(disc, cluster, s, testNads));
+    const production = !isolated && (vms > 0 || servers.length > 0);
+    const why = vms > 0 ? `${vms} VM${vms === 1 ? "" : "s"} attached` : servers.length ? `served by ${servers[0].owner || servers[0].pod}` : "";
+    const kind = n.type ? ` (${n.type}${n.vlan ? `, VLAN ${n.vlan}` : ""})` : "";
+    return {v, production, isolated, why,
+      l: `${v}${kind}${isolated ? " — isolated test network" : production ? ` — production network (${why}), not for tests` : ""}`};
+  }).sort((a, b) => rank(a) - rank(b) || a.v.localeCompare(b.v));
+}
+// Why a NAD must not carry a test bubble, or null.
+function testNadError(disc, cluster, paths, nad) {
+  const c = testNadChoices(disc, cluster, paths).find(x => x.v === nad);
+  return c && c.production ? `${nad} is a production network (${c.why}): test copies keep their production addresses and would collide with production there. Choose the isolated test network.` : null;
 }
 // A DHCP server that serves a test bubble's isolated network (its NAD is a
 // test NAD, or shares one's bridge and VLAN): it must not be proposed for a
@@ -607,7 +642,7 @@ Object.assign(window, {uniqSorted, nadRef, AGENT_VIEW, DEFAULT_SC_SELECTOR, DEFA
   parseSelector, selectorText, selectorMatchesLabels, namespaceOptions, pvcPairs, pvcMatches, tierKindsOf, objectsOf, objectPairs,
   tierSelectorCheck, gateSelectorCheck, isolatedNadOf, proposePaths, pathError, bubbleNamespace, proposeTestID, testIDError,
   parseCidr, cidrContains, hostIdOf, inferCidr, nadAddresses, nadSubnet, dhcpServersOn, testDHCPChoice, dhcpServerName, proposedReserved, guestRowError, proposeRoles,
-  testNadsOf, isBubbleServer, proposeDHCPServer,
+  testNadsOf, testNadChoices, testNadError, isBubbleServer, proposeDHCPServer,
   nsInfra, nsElsewhere, nsHoldings,
   proposePVCSelector, pvcSelectorOptions, RESOURCE_TYPE_OPTIONS, GATE_TYPE_OPTIONS, tierLabelOptions, gateCommand, serviceTargets, podPairOptions,
   proposeTiers, tierEditorSpec, tierEditorRows, tierRowError, tierRowInfo, gateRowError, nsReport, reported});

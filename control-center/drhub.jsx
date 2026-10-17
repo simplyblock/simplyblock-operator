@@ -215,7 +215,9 @@ const runActionDialog = (target, kind, ctx) => {
             run: () => drhub.probeHealth({app: target}).then(healthAnswer)}
           : {k: "pnone", type: "note", label: "The application has no health probes: the restart reports it up once its tiers are ready. Add probes under Edit tiers & probes."}),
         {k: "timeout", label: "Timeout", type: "text", def: "30m", placeholder: "30m"},
-        opposite && {k: "n3", type: "note", label: `The application currently runs on ${target.currentCluster}. A Relocate along a path whose target is the current cluster is refused by the hub.`}
+        // only when the chosen path does not start where the application runs:
+        // shown for every path, it read as if this move would be refused (UI walkthrough #24)
+        opposite && (sel => sel && !sel.active && {k: "n3", type: "note", label: `The application runs on ${target.currentCluster}, but ${sel.name} starts at ${sel.from}: the hub refuses a Relocate along it. Choose the path that starts where the application runs.`})(target.paths.find(p => p.name === v.path))
       ].filter(Boolean);
     },
     run: v => drhub.runAction({kind, target, path: v.path, override: v.override && v.override.trim(), timeout: v.timeout && v.timeout.trim()})
@@ -395,7 +397,8 @@ const S3_COLS = [
   {k: "site", label: "Site", placeholder: "site-a", flex: 1},
   {k: "bucket", label: "Bucket", placeholder: "dr-site-a", flex: 1.4},
   {k: "endpoint", label: "Endpoint", placeholder: "https://s3.eu-central-1.amazonaws.com", flex: 2},
-  {k: "region", label: "Region", placeholder: "eu-central-1", flex: 1},
+  // required: Ramen's S3 client needs it, and the hub refuses a store without one (UI walkthrough #16)
+  {k: "region", label: "Region (required; us-east-1 for MinIO)", placeholder: "e.g. eu-central-1", flex: 1},
   {k: "secretRef", label: "Secret (empty: ramen-s3-secret)", placeholder: "ramen-s3-secret", flex: 1}
 ];
 const s3Rows = profiles => (profiles || []).map(p => ({site: p.site || "", bucket: p.bucket || "", endpoint: p.endpoint || "", region: p.region || "", secretRef: typeof p.secretRef === "string" ? p.secretRef : (p.secretRef || {}).name || ""}));
@@ -448,7 +451,7 @@ const PROBE_COLS = [
   {k: "type", label: "Type", type: "select", options: [{v: "http", l: "http"}, {v: "tcp", l: "tcp"}], flex: 0.7},
   {k: "target", label: "Target (URL / host:port)", placeholder: "http://web.shop.svc.cluster.local/", flex: 2.4},
   {k: "timeout", label: "Timeout", placeholder: "15s", flex: 0.7},
-  {k: "expectStatus", label: "HTTP status", type: "number", placeholder: "any 2xx", flex: 0.8}
+  {k: "expectStatus", label: "HTTP status", type: "number", placeholder: "any 2xx or 3xx", flex: 0.8}
 ];
 const TIER_HINT = "Ready gates: vmRunning, deploymentsReady, podsReady, or exec(<pod labels k=v>; <command>; <timeout seconds>) run in a pod of the tier's namespace. Tiers restore in order; the next starts when every gate of the previous holds.";
 
@@ -491,6 +494,9 @@ const siteColsFor = disc => [
   {k: "zone", label: "Zone", type: "select", blank: r => zoneOptions(disc, r.cluster).length ? "— none —" : "— no zone reported —", options: r => zoneOptions(disc, r.cluster), unknown: v => `${v} (not reported)`, flex: 0.9},
   {k: "region", label: "Region", type: "select", blank: r => regionOptions(disc, r.cluster).length ? "— none —" : "— no region reported —", options: r => regionOptions(disc, r.cluster), unknown: v => `${v} (not reported)`, flex: 0.9}
 ];
+// A plan method's proposed name: its type and interval (async-5m, sync, s3-backup-1h).
+const methodName = v => !v.type ? "" : dns63(/^async/.test(v.type) ? `${v.type}-${v.interval || "5m"}` : /backup/.test(v.type) ? `${v.type}-${v.bInterval || "1h"}` : v.type);
+const isMethodName = x => /^(a?sync|async-s3-backup|sync-s3-backup|s3-backup)(-[0-9]+[smh])?$/.test(x);
 const S3_SITE_COLS = S3_COLS.map(c => c.k === "site" ? Object.assign({}, c, {readonly: true}) : c);
 const S3_ALL_COLS = S3_COLS.filter(c => c.k !== "site");
 const S3_MODES = [{v: "site", l: "one store per site"}, {v: "all", l: "one store for all sites"}, {v: "profile", l: "an existing Ramen S3 profile"}];
@@ -547,7 +553,10 @@ const newPlanDialog = () => ({
         rowError: (r, i, rows) => v.sitesOverride ? null : siteRowError(disc, r) || (r.cluster && rows.filter(x => x.cluster === r.cluster && !x.zone).length > 1 && !r.zone ? `${r.cluster} is named twice without zones: a stretch (sync) plan names one zone per site.` : null),
         hint: "A cross-cluster plan names one cluster per site; a sync plan (stretch cluster) names the same cluster on every site, each with its own zone."},
       {k: "type", label: "Replication method", type: "select", required: true, options: METHOD_TYPES},
-      {k: "method", label: "Method name", type: "text", required: true, def: "primary", placeholder: "primary", validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label." : null},
+      // named after what it does unless changed: "primary" said nothing (UI walkthrough #10)
+      {k: "method", label: "Method name", type: "text", required: true, placeholder: "async-5m",
+        sync: (x, vv) => { const auto = methodName(vv); return auto && (!x || x === "primary" || isMethodName(x)) && x !== auto ? auto : undefined; },
+        validate: x => x && !DNS_LABEL_RE.test(x) ? "A DNS label." : null},
       /^async/.test(v.type || "") && {k: "interval", label: "Scheduling interval", type: "select", required: true, def: "5m",
         options: ["1m", "2m", "5m", "10m", "15m", "30m", "1h"].map(x => ({v: x, l: x}))},
       /sync/.test(v.type || "") && !/^async/.test(v.type || "") && {k: "n1", type: "note", label: "A sync plan is a stretch cluster: every site names the same cluster and its own zone. No Ramen policy is derived; dr-agent moves applications between zones."},
@@ -560,17 +569,17 @@ const newPlanDialog = () => ({
         : {k: "nSc", type: "note", icon: "check", label: `StorageClass selector ${selectorText({matchLabels: DEFAULT_SC_SELECTOR})}${siteNames.length ? ` — ${scSummary(disc, sites, sel)}` : ""}.`},
       {k: "cg", label: "Consistency groups", type: "checkbox", def: false},
       {k: "scName", label: missing.length ? `Create the replicated StorageClass on ${missing.join(", ")} (no class there matches), named` : "Create the replicated StorageClass on every site, named (empty: the classes exist already)",
-        type: "text", placeholder: DEFAULT_SC_NAME, sync: (x, vv) => missing.length && x === undefined ? DEFAULT_SC_NAME : undefined,
+        type: "text", placeholder: missing.length ? DEFAULT_SC_NAME : "leave empty: the classes exist already", sync: (x, vv) => missing.length && x === undefined ? DEFAULT_SC_NAME : undefined,
         validate: x => x && !DNS_LABEL_RE.test(x) ? "A StorageClass name: lower-case letters, digits and \"-\"." : missing.length && !x ? `No StorageClass matches the selector on ${missing.join(", ")}: name the class dr-hub creates there, or choose another selector.` : null,
         hint: "dr-hub writes it on each site with the selector's labels, the site's storage cluster and pool."},
       v.scName && {k: "scPool", label: "…from the pool (empty: the storage cluster's default pool)", type: "text", placeholder: "", validate: x => x && !DNS_LABEL_RE.test(x) ? "A pool name: lower-case letters, digits and \"-\"." : null},
       v.scName && {k: "scFs", label: "…with the filesystem", type: "select", def: "xfs", options: [{v: "xfs", l: "xfs"}, {v: "ext4", l: "ext4"}]},
       {k: "s3Mode", label: "S3 stores (Ramen's metadata store and Velero's backups)", type: "select", def: "site", options: S3_MODES},
-      v.s3Mode === "all" && {k: "s3all", label: "The store every site uses", type: "rows", cols: S3_ALL_COLS, fixed: true, sync: x => x && x.length ? undefined : [blankStore("")], rowAction: S3_ALL_TEST,
+      v.s3Mode === "all" && {k: "s3all", label: "The store every site uses", type: "rows", cols: S3_ALL_COLS, fixed: true, sync: x => x && x.length ? undefined : [blankStore("")], rowAction: S3_ALL_TEST, rowError: r => nb(r.bucket) && !nb(r.region) ? "Name the store's region (the bucket's region on AWS, us-east-1 for MinIO): Ramen needs it, although the store test passes without it." : null,
         hint: "Test probes the store from the hub (list, write, delete) with its Secret, which must exist in Ramen's namespace on the hub."},
       v.s3Mode !== "profile" && {k: "s3", label: v.s3Mode === "all" ? "Per-site stores (not used: one store for all sites)" : "One store per site", type: "rows", cols: S3_SITE_COLS, fixed: true,
         def: [], sync: x => syncStores(x, siteNames), disabled: vv => vv.s3Mode === "all", rowAction: S3_ROW_TEST,
-        rowError: (r, i, rows, vv) => vv.s3Mode === "site" && !nb(r.bucket) ? `Name ${r.site}'s bucket.` : null, rowsBlock: v.s3Mode === "site",
+        rowError: (r, i, rows, vv) => vv.s3Mode !== "site" ? null : !nb(r.bucket) ? `Name ${r.site}'s bucket.` : !nb(r.region) ? `Name ${r.site}'s region (the bucket's region on AWS, us-east-1 for MinIO): Ramen needs it, although the store test passes without it.` : null, rowsBlock: v.s3Mode === "site",
         hint: siteNames.length ? "Test probes a store from the hub before the plan is saved." : "Declare the sites first: one row opens per site."},
       v.s3Mode === "profile" && {k: "s3Profile", label: "Ramen S3 profile", type: "text", required: true, placeholder: "existing profile name",
         validate: x => x && !/^[A-Za-z0-9][-A-Za-z0-9_.]*$/.test(x) ? "A profile name." : null},
@@ -611,10 +620,10 @@ const editPlanS3Dialog = p => ({
     const same = rows.length > 1 && rows.every(r => r.bucket === rows[0].bucket && r.endpoint === rows[0].endpoint && r.secretRef === rows[0].secretRef);
     return [
       {k: "s3Mode", label: "S3 stores", type: "select", def: same ? "all" : "site", options: S3_MODES.filter(m => m.v !== "profile")},
-      v.s3Mode === "all" && {k: "s3all", label: "The store every site uses", type: "rows", cols: S3_ALL_COLS, fixed: true, sync: x => x && x.length ? undefined : [Object.assign({}, rows[0] || blankStore(""))], rowAction: S3_ALL_TEST},
+      v.s3Mode === "all" && {k: "s3all", label: "The store every site uses", type: "rows", cols: S3_ALL_COLS, fixed: true, sync: x => x && x.length ? undefined : [Object.assign({}, rows[0] || blankStore(""))], rowAction: S3_ALL_TEST, rowError: r => nb(r.bucket) && !nb(r.region) ? "Name the store's region (the bucket's region on AWS, us-east-1 for MinIO): Ramen needs it, although the store test passes without it." : null},
       {k: "s3", label: v.s3Mode === "all" ? "Per-site stores (not used: one store for all sites)" : "One store per site", type: "rows", cols: S3_SITE_COLS, fixed: true, def: rows,
         sync: x => syncStores(x, p.sites.map(s => s.name)), disabled: vv => vv.s3Mode === "all", rowAction: S3_ROW_TEST,
-        rowError: (r, i, rs, vv) => vv.s3Mode === "site" && !nb(r.bucket) ? `Name ${r.site}'s bucket.` : null, rowsBlock: v.s3Mode === "site",
+        rowError: (r, i, rs, vv) => vv.s3Mode !== "site" ? null : !nb(r.bucket) ? `Name ${r.site}'s bucket.` : !nb(r.region) ? `Name ${r.site}'s region (the bucket's region on AWS, us-east-1 for MinIO): Ramen needs it, although the store test passes without it.` : null, rowsBlock: v.s3Mode === "site",
         hint: "Test probes a store from the DR hub (list, write, delete) with its Secret, before saving."},
       ...veleroFields(v, disc, p.sites.map(s => s.cluster), p.veleroNamespace || "velero")
     ].filter(Boolean);
@@ -635,7 +644,7 @@ const pathFields = (plan, disc, paths, v, fixedSites, servers) => {
   const auto = v.from && v.to ? `${v.from}-to-${v.to}`.slice(0, 63) : "";
   const prop = proposePaths(plan, disc, paths).find(x => x.from === v.from && x.to === v.to);
   const target = site(v.to);
-  const nads = target ? ((discOf(disc, target.cluster) || {}).nads || []).map(n => ({v: `${n.namespace}/${n.name}`, l: `${n.namespace}/${n.name}${n.type ? ` (${n.type}${n.vlan ? `, VLAN ${n.vlan}` : ""})` : ""}`})) : [];
+  const nads = target ? testNadChoices(disc, target.cluster, paths).map(c => ({v: c.v, l: c.l})) : [];
   return [
     !fixedSites && {k: "from", label: "From site", type: "select", required: true, options: sites.map(s => ({v: s.name, l: `${s.name} (${s.cluster}${s.zone ? "/" + s.zone : ""})`}))},
     !fixedSites && {k: "to", label: "To site", type: "select", required: true, options: sites.filter(s => s.name !== v.from).map(s => ({v: s.name, l: `${s.name} (${s.cluster}${s.zone ? "/" + s.zone : ""})`}))},
@@ -647,12 +656,15 @@ const pathFields = (plan, disc, paths, v, fixedSites, servers) => {
       options: [{v: "Failover", l: "Failover"}, {v: "Relocate", l: "Relocate"}, {v: "Test", l: "Test (isolated bubble on the target)"}]},
     (v.actions || []).includes("Test") && {k: "nad", label: `Test: isolated NAD on ${v.to || "the target"} (no uplink)`, type: "select", required: true,
       options: nads, empty: `${v.to || "The target"} reports no NetworkAttachmentDefinition.`, def: prop ? prop.nad : "",
+      validate: x => target ? testNadError(disc, target.cluster, paths, x) : null,
       sync: x => !x && prop && prop.nad ? prop.nad : undefined},
     ...testDHCPFields(disc, servers, target, v),
     (v.actions || []).includes("Test") && {k: "cap", label: "Test: max clone capacity (empty: no limit)", type: "text", placeholder: "500Gi",
       validate: x => x && !QUANTITY_RE.test(x) ? `${x} is not a quantity (500Gi, 2Ti).` : null},
     (v.actions || []).includes("Test") && {k: "recent", label: "Test: a passed test counts as recent for", type: "select", def: "720h", options: RECENT_OPTIONS},
-    {k: "handover", label: "Announcement hand-over on move", type: "checkbox", def: false}
+    // explained here: the runbook and the form never said what it does (UI walkthrough #6)
+    {k: "handover", label: "Announcement hand-over on move", type: "checkbox", def: false,
+      hint: "Load-balancer addresses (MetalLB VIPs) keep their IP on the target: after a move the target announces them. Needs the same MetalLB address pool on both sites. Off: a VIP gets an address from the target's own pool, derived or mapped by the site mapping."}
   ].filter(Boolean);
 };
 // The test network's DHCP server (DRPath spec.test.dhcpServerRef): a
@@ -722,7 +734,7 @@ const proposePathsDialog = plans => ({
       .map(r => ({r, c: dhcpOf(r)})).filter(x => !x.c.options.length && x.c.candidate)
       .filter((x, i, all) => all.findIndex(y => clusterOfSite(y.r.to) === clusterOfSite(x.r.to) && y.c.candidate.hostsConfigMap === x.c.candidate.hostsConfigMap) === i);
     const open = props.filter(x => !x.exists);
-    const nadOpts = to => { const s = plan && plan.sites.find(x => x.name === to); return s ? ((discOf(disc, s.cluster) || {}).nads || []).map(n => ({v: `${n.namespace}/${n.name}`, l: `${n.namespace}/${n.name}`})) : []; };
+    const nadOpts = to => { const s = plan && plan.sites.find(x => x.name === to); return s ? testNadChoices(disc, s.cluster, paths).map(c => ({v: c.v, l: c.l})) : []; };
     return [
       {k: "plan", label: "Protection plan", type: "select", required: true, options: plans.map(p => ({v: p.name, l: p.name})), empty: "Create a protection plan first."},
       props.some(x => x.exists) && {k: "nEx", type: "note", icon: "check", label: `Declared already: ${props.filter(x => x.exists).map(x => `${x.from} → ${x.to} (${x.exists})`).join(", ")}.`},
@@ -735,6 +747,7 @@ const proposePathsDialog = plans => ({
           {k: "nad", label: "Test NAD", type: "select", blank: "— none —", options: r => nadOpts(r.to), flex: 1.4},
           {k: "dhcp", label: "Test DHCP", type: "select", blank: "— none —", options: r => (r.actions || []).includes("Test") && r.nad ? dhcpOf(r).options : [], flex: 1.4}],
         rowError: r => r.accept !== "yes" ? null : pathError(plan, (paths || []).concat([]), {from: r.from, to: r.to, name: r.name, actions: r.actions, nad: r.nad}) ||
+          ((r.actions || []).includes("Test") && r.nad ? testNadError(disc, clusterOfSite(r.to), paths, r.nad) : null) ||
           (!(r.actions || []).length ? "Allow at least one action." : null),
         rowsBlock: true,
         rowAction: {label: "Edit", title: "Open this proposal in the full form", run: r => { window.__ui.dialog(newPathDialog(plans, {plan: plan.name, from: r.from, to: r.to}), {kind: "drpath", id: "new"}); return {status: "ok", text: "opened"}; }}},
@@ -800,6 +813,11 @@ const elsewhereNote = (disc, cluster, nss, siteOf, what) => {
   return `No ${what === "pvcs" ? "PVCs" : "workloads"} in ${nss.join(", ")} on ${nameOf(cluster)} — is the application running on another site?` +
     (there.length ? ` ${there.map(x => `${x.namespace} holds ${x.pvcs} PVC${x.pvcs === 1 ? "" : "s"} and ${x.workloads} workload${x.workloads === 1 ? "" : "s"} on ${nameOf(x.cluster)}`).join("; ")}: choose that site as the source.` : "");
 };
+// The exec checks (Checks section) that gate a tier, for its row.
+const tierChecksNote = (r, gates) => {
+  const mine = (gates || []).filter(g => g.tier && g.tier === r.name);
+  return mine.length ? `also waits for ${mine.length} check${mine.length === 1 ? "" : "s"} below: ${mine.map(g => gateCommand(g).join(" ")).join("; ")}` : null;
+};
 const tierFields = (v, disc, cluster, nss, target, siteOf) => {
   const tierNames = (v.tiers || []).map(r => r.name).filter(Boolean);
   const prop = proposeTiers(disc, cluster, nss);
@@ -813,7 +831,9 @@ const tierFields = (v, disc, cluster, nss, target, siteOf) => {
     {k: "tiers", label: "Tiers — the boot order the Recipe is generated from", type: "rows", cols: tierCols(disc, cluster, nss), max: 12, addLabel: "Add tier", reorder: true, hint: TIER_EDITOR_HINT,
       sync: (x, vv) => x === undefined && nss.length && reported(disc, cluster, nss) ? prop.tiers : undefined,
       add: () => ({name: "", kinds: [], labels: [], ready: []}),
-      rowError: (r, i, rows) => tierRowError(disc, cluster, nss, r, rows), rowInfo: r => tierRowInfo(disc, cluster, nss, r), rowsBlock: true,
+      rowError: (r, i, rows) => tierRowError(disc, cluster, nss, r, rows), // the checks that gate the tier, named on its row: they live in the Checks
+      // section below, and a tier's "Ready when" alone looked incomplete (UI walkthrough #14)
+      rowInfo: (r, i, rows, vv) => [tierRowInfo(disc, cluster, nss, r), tierChecksNote(r, vv.gates)].filter(Boolean).join("; ") || null, rowsBlock: true,
       rowAction: {label: "Test", title: "dr-agent checks this tier's gates now, where the application runs", run: r => testTierRow(target(), r)}},
     {k: "gates", label: "Checks — commands a tier waits for (exec gates)", type: "rows", cols: gateCols(disc, cluster, nss, tierNames), max: 16, addLabel: "Add check",
       sync: (x, vv) => x === undefined && nss.length && reported(disc, cluster, nss) ? prop.gates : undefined,
@@ -1166,7 +1186,12 @@ const newDHCPServerDialog = (sites, profiles) => ({
   desc: "A DHCP server of one site that guest addresses are reserved on. dr-hub never talks to it: it renders the reservations (<mac>,<ip>,<vm>) into the server's ConfigMap on the site, and dnsmasq reads them from its --dhcp-hostsdir. A SiteProfile's guestNetworks[role].dhcpServerRef (or spec.dhcpServerRef) names it.",
   fields: [
     {k: "site", label: "Site (managed cluster)", type: "select", required: true, options: sites.map(s => ({v: s, l: s})), empty: "No site profile reported yet."},
-    {k: "name", label: "Name", type: "text", required: true, placeholder: "dhcp-site-a"},
+    // named after the site unless changed: a typed name let a typo through
+    // (sita-a for site-a; UI walkthrough #12)
+    {k: "name", label: "Name", type: "text", required: true, placeholder: "dhcp-site-a",
+      sync: (x, vv) => vv.site && (!x || /^dhcp-/.test(x)) && x !== dns63(`dhcp-${vv.site}`) ? dns63(`dhcp-${vv.site}`) : undefined,
+      validate: x => x && !DNS_LABEL_RE.test(x.trim()) ? "A DHCP server's name is a DNS label: lower-case letters, digits and \"-\"." : null,
+      hint: (x, vv) => vv && vv.site && x && !x.includes(vv.site) ? `The name does not mention ${vv.site}; site profiles and paths refer to it by name.` : null},
     {k: "type", label: "Type", type: "select", options: [{v: "dnsmasq", l: "dnsmasq — reservations ConfigMap mounted as --dhcp-hostsdir"}]},
     {k: "namespace", label: "ConfigMap namespace (on the site)", type: "text", required: true, placeholder: "dhcp"},
     {k: "configMap", label: "ConfigMap name", type: "text", required: true, placeholder: "sitemap-hosts"},
@@ -1324,6 +1349,10 @@ function PPlanTile({o: p, nav}) {
 }
 const isSync = t => /^sync/.test(t || "");
 
+// What a last action shows: a finished test's outcome (Passed, Failed, …), since
+// a test's phase is Completed whatever its verdict (UI walkthrough finding #23);
+// the phase for anything else, or a test without an outcome yet.
+const actionResult = a => a.outcome || a.phase;
 function DRPathTile({o: p, nav}) {
   const la = Object.values(p.lastActions || {});
   return (
@@ -1336,7 +1365,7 @@ function DRPathTile({o: p, nav}) {
         {p.announcementHandover && <span className="lab">announcement hand-over</span>}
         <span className={"lab" + (p.profileConsistency === "Inconsistent" ? " warn" : "")}><i>profiles</i>{p.profileConsistency}</span>
       </div>
-      {!!la.length && <div className="kv">{la.map(a => <div key={a.kind}><span>last {a.kind}</span><b><TrafficLight status={a.phase} sm /> {a.completionTime ? fmtAgo(a.completionTime) : ""}</b></div>)}</div>}
+      {!!la.length && <div className="kv">{la.map(a => <div key={a.kind}><span>last {a.kind}</span><b><TrafficLight status={actionResult(a)} sm /> {a.completionTime ? fmtAgo(a.completionTime) : ""}</b></div>)}</div>}
       <Foot items={[
         {label: "Apps", count: p.counts.apps, icon: "cluster", onClick: () => nav.layer(p, "protectedapps")},
         {label: "Runs", icon: "clock", onClick: () => nav.layer(p, "ractions")},
@@ -1700,7 +1729,7 @@ function DRPathDetail({o: p, nav}) {
           <p className="mdesc" style={{margin: "9px 0 0"}}>Directions are declared, not inferred. From, to and the plan are immutable; the actions, hand-over and test block can change.</p>
         </div></div>
         <div className="card"><h3>Last actions</h3><div className="bd">
-          <Table cols={["Kind", "Run", "Phase", "Completed"]} empty="Nothing has run along this path yet." rows={Object.values(p.lastActions).map(a => [<KindBadge k={a.kind} />, <Mono>{a.ref}</Mono>, <TrafficLight status={a.phase} sm />, a.completionTime ? fmtDate(a.completionTime) : "—"])} />
+          <Table cols={["Kind", "Run", "Phase", "Result", "Completed"]} empty="Nothing has run along this path yet." rows={Object.values(p.lastActions).map(a => [<KindBadge k={a.kind} />, <Mono>{a.ref}</Mono>, <TrafficLight status={a.phase} sm />, a.outcome ? <TrafficLight status={a.outcome} sm /> : <span style={{color: "var(--dim)"}}>—</span>, a.completionTime ? fmtDate(a.completionTime) : "—"])} />
         </div></div>
       </div>
       <div className="sech"><h2>Readiness of applications on this path</h2><span className="ln"></span></div>
@@ -1781,7 +1810,7 @@ function PAppDetail({o: a, nav}) {
             <div className="sech" style={{margin: "12px 0 8px"}}><h2>Tiers (boot order)</h2><span className="ln"></span></div>
             <Table cols={["#", "Tier", "Selector", "Ready when"]} empty="No tiers declared — the hub protects everything in one group." rows={a.tiers.map((t, i) => [i + 1, <b>{t.name}</b>,
               <Mono dim>{[(t.selector || {}).resourceTypes && t.selector.resourceTypes.join(","), (t.selector || {}).matchLabels && Object.entries(t.selector.matchLabels).map(([k, v]) => `${k}=${v}`).join(",")].filter(Boolean).join(" · ")}</Mono>,
-              <Mono dim>{(t.ready || []).map(r => r.type).join(", ")}</Mono>])} />
+              <Mono dim>{(t.ready || []).map(r => r.type === "exec" && (r.command || []).length ? `exec(${r.command.join(" ")})` : r.type).join(", ")}</Mono>])} />
             {!!a.suggestedTiers.length && <><div className="sech" style={{margin: "12px 0 8px"}}><h2>Suggested tiers</h2><span className="ln"></span></div>
               <div className="labels">{a.suggestedTiers.map((t, i) => <span className="lab" key={i}>{t.name}</span>)}</div>
               <p className="mdesc" style={{margin: "9px 0 0"}}>Suggestions from kind defaults, well-known labels and owner references. Confirming them on the object applies the dr.simplyblock.io/tier label.</p></>}
@@ -2163,8 +2192,11 @@ function DrHubHome({nav}) {
         {!as.length ? <div className="nolim">No protected application yet.</div>
           : <Table cols={["Application", "Plan", "Now on", ...dp.map(p => `${p.from}→${p.to}`)]} rows={as.map(a => [
             <Ref label={`${a.namespace}/${a.name}`} onClick={() => nav.detail(a)} />, <Mono dim>{a.planName}</Mono>, <Mono>{a.currentCluster}</Mono>,
-            ...dp.map(p => { const x = a.paths.find(y => y.name === p.name); return x ? <span title={x.checks.filter(c => c.status === "Fail").map(c => c.name).join(", ")}><VerdictBadge v={x.verdict} sm /></span> : <span style={{color: "var(--dim2)"}}>·</span>; })])} />}
-        <p className="mdesc" style={{margin: "9px 0 0"}}>Columns are exactly the declared paths. A dot means the path does not cover that application; a Relocate-only path is never red for a missing rehearsal.</p>
+            ...dp.map(p => { const x = a.paths.find(y => y.name === p.name); if (!x) return <span style={{color: "var(--dim2)"}}>·</span>;
+              // the way back while the app runs on the other site: its readiness counts once the app is at its source (UI walkthrough #8)
+              return x.active ? <span title={x.checks.filter(c => c.status === "Fail").map(c => c.name).join(", ")}><VerdictBadge v={x.verdict} sm /></span>
+                : <span className="chip" title={`Readiness of this path counts once the application runs on ${x.from}`}>inactive</span>; })])} />}
+        <p className="mdesc" style={{margin: "9px 0 0"}}>Columns are exactly the declared paths. A dot means the path does not cover that application; "inactive" is the way back while the application runs on the other site; a Relocate-only path is never red for a missing rehearsal.</p>
       </div></div>
 
       {!!inbox.length && <>

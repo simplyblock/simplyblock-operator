@@ -72,7 +72,7 @@
       profileComparison: ["inventory-reported", "logical-networks", "guest-networks", "address-pools", "domains", "registry-mirror", "storage-classes", "zones", "test-target"].map(f => ({field: f, status: "Pass", message: ""})),
       conditions: [cond("Valid", true, "Valid", "")]}, status || {})});
   store.DRPath.push(path("fra-a-to-fra-b", "fra-a", "fra-b", "fra", ["Failover", "Relocate", "Test"], {test: {mode: "bubble", isolatedNad: "dr-test/isolated", quotas: {maxCloneCapacity: "2Ti"}, recentWithin: "720h"}},
-    {applications: [`${OPS}/shop`, `${OPS}/ledger`, "payments/payments"], lastActions: [{kind: "Test", ref: `${OPS}/test-shop-w4`, phase: "Completed", completionTime: agoIso(60 * 30)}, {kind: "Relocate", ref: `${OPS}/relocate-ledger-1`, phase: "Completed", completionTime: agoIso(60 * 24 * 9)}]}));
+    {applications: [`${OPS}/shop`, `${OPS}/ledger`, "payments/payments"], lastActions: [{kind: "Test", ref: `${OPS}/test-shop-w4`, phase: "Completed", outcome: "Passed", completionTime: agoIso(60 * 30)}, {kind: "Relocate", ref: `${OPS}/relocate-ledger-1`, phase: "Completed", completionTime: agoIso(60 * 24 * 9)}]}));
   store.DRPath.push(path("fra-b-to-fra-a", "fra-b", "fra-a", "fra", ["Relocate"], {},
     {applications: [`${OPS}/shop`, `${OPS}/ledger`, "payments/payments"], profileConsistency: "Inconsistent",
       profileComparison: [["inventory-reported", "Pass", ""], ["logical-networks", "Warn", "role backend bound on fra-a only"], ["storage-classes", "Pass", ""], ["zones", "Pass", ""], ["test-target", "NotApplicable", "no Test declared"]].map(([f, s, m]) => ({field: f, status: s, message: m}))}));
