@@ -26,14 +26,15 @@ members and depend on control-plane behavior that is not yet established.
 
 ## Phase 0 — External Prerequisites
 
-| #    | Prerequisite                                                                                                                                       | Kind                    | Blocks                        | Status     |
-|------|----------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|-------------------------------|------------|
-| P0-1 | One control plane hosts several clusters in one FoundationDB, each addressed as `/api/v2/clusters/{cluster_id}/…` (§3)                             | Control plane (`sbcli`) | Phase 1                       | Available  |
-| P0-2 | Per-cluster capacity read, `GET /api/v2/clusters/{cluster_id}/capacity` (§7.2, §10)                                                                | Control plane (`sbcli`) | Phase 2                       | Available  |
-| P0-3 | After a cross-cluster move commits with `delete_source`, the original handle `{source}:{pool}:{lvol}` still resolves for every CSI call (§8.3)     | Control plane (`sbcli`) | Phase 3                       | Unknown    |
-| P0-4 | A defined way for a consuming host to attach the target cluster's paths before the cutover flips ANA states (§8.2)                                 | Control plane (`sbcli`) | Phase 3                       | Unknown    |
-| P0-5 | Cross-cluster move of an encrypted volume carries its data encryption key, which the KMS stores under `cluster/{cluster_id}/lvol/{lvol_id}` (§9.4) | Control plane (`sbcli`) | Phase 3 for encrypted volumes | Unknown    |
-| P0-6 | Data-plane reachability between the members' storage networks, since the move attaches the target node's transfer hub over NVMe-oF (§8.2)          | Node OS                 | Phase 3                       | Deployment |
+| #    | Prerequisite                                                                                                                                       | Kind                    | Blocks                        | Status               |
+|------|----------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|-------------------------------|----------------------|
+| P0-1 | One control plane hosts several clusters in one FoundationDB, each addressed as `/api/v2/clusters/{cluster_id}/…` (§3)                             | Control plane (`sbcli`) | Phase 1                       | Available            |
+| P0-2 | Per-cluster capacity read, `GET /api/v2/clusters/{cluster_id}/capacity` (§7.2, §10)                                                                | Control plane (`sbcli`) | Phase 2                       | Available            |
+| P0-3 | After a cross-cluster move commits with `delete_source`, the original handle `{source}:{pool}:{lvol}` still resolves for every CSI call (§8.3)     | Control plane (`sbcli`) | Phase 3                       | Unknown              |
+| P0-4 | A defined way for a consuming host to attach the target cluster's paths before the cutover flips ANA states (§8.2)                                 | Control plane (`sbcli`) | Phase 3                       | Unknown              |
+| P0-5 | Cross-cluster move of an encrypted volume carries its data encryption key, which the KMS stores under `cluster/{cluster_id}/lvol/{lvol_id}` (§9.4) | Control plane (`sbcli`) | Phase 3 for encrypted volumes | Unknown              |
+| P0-6 | Data-plane reachability between the members' storage networks, since the move attaches the target node's transfer hub over NVMe-oF (§8.2)          | Node OS                 | Phase 3                       | Deployment           |
+| P0-7 | The limit of 32 storage nodes per cluster, which the product states and neither sbcli nor this operator enforces today (§5.2)                      | Control plane (`sbcli`) | Phase 1                       | Stated, not enforced |
 
 Without P0-1 there is no feature. Without P0-2 member selection has nothing to
 rank on and Phase 2 cannot ship. P0-3 is the one that decides Phase 3: a
@@ -94,13 +95,14 @@ already names a cluster (`StoragePool.spec.clusterRef`,
 `StorageBackupPolicy.spec.clusterRef`, a StorageClass) name a supercluster with
 no new reference type.
 
-**A `ClusterDeploymentConfig` with more than one node group produces a
-supercluster.** Each distinct group name becomes one member, named
-`<cluster>-<group>`, and the document's `spec.cluster.name` becomes the
-supercluster's name. A group is the set of workers sharing one hardware
-configuration, and a cluster runs one storage-node DaemonSet with one set of
-interfaces, so groups with different hardware are exactly what cannot share a
-cluster today and what a supercluster lets one document describe.
+**A `ClusterDeploymentConfig` with more than one node set produces a
+supercluster.** Each node set becomes one member, named `<cluster>-<nodeset>`,
+and the document's `spec.cluster.name` becomes the supercluster's name. A
+simplyblock cluster holds at most 32 storage nodes, so the discovery generator
+splits a larger fleet into node sets of near-equal size: forty workers become
+two members of twenty. A cluster also runs one storage-node DaemonSet with one
+set of interfaces, so machines that differ there are drafted into separate
+members.
 
 **A volume lives in exactly one member for its whole life, unless it is moved.**
 The CSI driver picks the member at `CreateVolume` and writes it into the volume
@@ -110,13 +112,13 @@ volume to another member is an explicit operation (§8) built on the control
 plane's cross-cluster replication in migration mode, which already moves a volume
 between clusters of one control plane with an ANA flip instead of a reconnect.
 
-| Concern                    | Owned by                         | Section |
-|----------------------------|----------------------------------|---------|
-| Which clusters aggregate   | `StorageCluster.spec.aggregate`  | §4      |
-| How members come to exist  | `ClusterDeploymentConfig` groups | §5      |
-| Which member a volume gets | CSI driver, at `CreateVolume`    | §7      |
-| Moving a volume            | `PersistentVolumeOps` `Relocate` | §8      |
-| Emptying a member          | `StorageClusterOps` `Evacuate`   | §8.4    |
+| Concern                    | Owned by                            | Section |
+|----------------------------|-------------------------------------|---------|
+| Which clusters aggregate   | `StorageCluster.spec.aggregate`     | §4      |
+| How members come to exist  | `ClusterDeploymentConfig` node sets | §5      |
+| Which member a volume gets | CSI driver, at `CreateVolume`       | §7      |
+| Moving a volume            | `PersistentVolumeOps` `Relocate`    | §8      |
+| Emptying a member          | `StorageClusterOps` `Evacuate`      | §8.4    |
 
 ---
 
@@ -171,8 +173,10 @@ volume between nodes of one cluster.
   pools, StorageClasses, and backup policies can name (§4).
 - Report one status for the aggregate: a phase rolled up from the members, the
   combined capacity, and the lowest fault tolerance among them (§4.3).
-- Expand a deployment document with several groups into a supercluster and its
-  members, with member names derived from the document's cluster name (§5).
+- Expand a deployment document with several node sets into a supercluster and
+  its members, with member names derived from the document's cluster name (§5).
+- Hold every cluster to 32 storage nodes, and have discovery draft a larger
+  fleet as evenly sized members within that limit (§5.2, §5.5).
 - Let a supercluster and its members share a namespace without the workload name
   collision that limits a namespace to one cluster today (§6).
 - Place each new volume in one member, chosen by a declared strategy and by
@@ -321,7 +325,7 @@ an ordinary cluster is held to exactly what it was. Relaxing a required field is
 a non-breaking change for writers, and both fields are already pointers in Go.
 
 **`aggregate` is mutable in two directions only.** An entry may be added, which
-is how a supercluster grows by a member (§5.4). An entry may be removed only when
+is how a supercluster grows by a member (§5.6). An entry may be removed only when
 the member it names holds no volumes, which admission checks against the member's
 pools (§4.4) and which §8.4 produces deliberately. Turning a supercluster into an
 ordinary cluster, or an ordinary cluster into a supercluster, is refused, because
@@ -429,54 +433,88 @@ status:
 
 ## 5. Expansion from a ClusterDeploymentConfig
 
-### 5.1 Groups become members
+### 5.1 Node sets become members
 
 The expansion machine
 ([`design-clusterdeploymentconfig.md`](crd-redesign/design-clusterdeploymentconfig.md)
-§4.2) collects the distinct `NodeGroup.name` values across all node sets of the
-document. One distinct name keeps today's behavior exactly: one cluster, named
-`spec.cluster.name`. Two or more produce a supercluster.
+§4.2) reads a document with one node set exactly as it does today: one cluster,
+named `spec.cluster.name`. A document with two or more node sets produces a
+supercluster, with one member per node set.
 
-**A member is one group name, across every node set that uses it.** A node set is
-a rack, and a group is a hardware configuration, so a group named `dense` in both
-`rack-a` and `rack-b` is one member spanning two racks, whose failure domains are
-the two racks. A member therefore keeps everything a cluster has today, including
-fault tolerance across racks, rather than shrinking to one rack per member.
+**A node set is the unit a member is made of, and a group stays what it is.** A
+`NodeGroup` is a hardware signature: discovery puts two workers in one group only
+when their device class, management interface name, and device addresses all
+match ([`discovery-generator-rules.md`](../tests/discovery-generator-rules.md)
+§6.1), which on hardware with persistent device names means one group per worker.
+A node set carries no sizing and holds any number of groups, so it is the level
+that can be sized to a cluster.
+
+**A member keeps fault tolerance across racks.** Failure domains are a group's
+field (`NodeGroup.failureDomain`), not a node set's, so a node set whose groups
+name three racks is a member spread over three racks. The discovery generator
+deals workers into node sets by failure domain for exactly this reason (§5.5).
 
 **The `spec.cluster` template applies to every member.** Sizing is uniform within
 a cluster because one DaemonSet serves every node of it, and it stays uniform
 within each member. Across members it is the same by construction, since one
 template is copied into each. The interface and device-class checks that today
-span the whole document now span one member: two groups may differ in
+span the whole document now span one node set: two node sets may differ in
 `mgmtInterface`, `dataInterfaces`, and device class, because they become two
-clusters with two DaemonSets.
+clusters with two DaemonSets. Two groups within one node set that disagree remain
+a finding, as `TestGroupsThatDisagreeAboutInterfacesAreReported` asserts today.
+The device-class rule is CEL on `ClusterDeploymentConfigSpec` today and spans
+every node set, so it narrows to `self.nodeSets.all(s, …)` over each set's
+groups, and `DeviceClassOf` in `expansion.go` stamps each member with its own
+node set's class.
 
 **A worker belongs to one member.** The existing rule that a worker appears in
 one group (`duplicateWorkers` in `validation.go`) is what guarantees it, and it
 is unchanged.
 
-### 5.2 Naming
+### 5.2 Size limits
 
-| Object                  | Name                      | Example (`spec.cluster.name: prod`, group `dense`) |
-|-------------------------|---------------------------|----------------------------------------------------|
-| Supercluster            | `spec.cluster.name`       | `prod`                                             |
-| Member `StorageCluster` | `<cluster>-<group>`       | `prod-dense`                                       |
-| Backend cluster         | the member's name         | `prod-dense`                                       |
-| `StorageNode`           | as today, from the member | `prod-dense-<worker>-<slot>`                       |
+A simplyblock cluster holds at most 32 storage nodes. A worker runs one storage
+node per slot, and the slot count comes from the template
+(`slotsOf(socketsToUse, nodesPerSocket)` in
+`operator/internal/controllers/deployment/expansion.go`), so it is the same for
+every worker of the document. A node set's storage-node count is therefore its
+worker count times the slots per worker, and a node set may list at most
+`floor(32 / slots)` workers.
 
-The member name is held to what a `StorageCluster` name may be: at most 63
-characters and a DNS label. Validation computes every member name before
-approval and refuses the document with `MemberNameInvalid`, naming the group,
-when one does not fit. The supercluster's name is also a backend-unique name in
-practice, because sbcli refuses duplicate cluster names across its database and
-the members carry the supercluster's name as a prefix.
+| Limit                               | Value                    | Refused at approval with |
+|-------------------------------------|--------------------------|--------------------------|
+| Storage nodes per node set (member) | 32                       | `MemberTooLarge`         |
+| Node sets per document (members)    | 32                       | `TooManyMembers`         |
+| Member name                         | 63 characters, DNS label | `MemberNameInvalid`      |
 
-**The suffix is the group name and not an ordinal**, because a member name is
-read in every event, log line, and `sbctl` listing for the life of the cluster,
-and `prod-dense` says which machines are meant where `prod-2` does not. §16 Q3
-records the alternative for documents whose group names are too long.
+**The storage-node limit holds for an ordinary cluster too.** A one-node-set
+document listing more than 32 storage nodes is refused with `MemberTooLarge`,
+because the product limit is a cluster's and an ordinary cluster is a cluster.
+The two limits of 32 are independent: one bounds a member's nodes, and the other
+bounds the members of an aggregate (§4.1).
 
-### 5.3 The expansion machine
+### 5.3 Naming
+
+| Object                  | Name                      | Example (`spec.cluster.name: prod`, node set `discovered-1`) |
+|-------------------------|---------------------------|--------------------------------------------------------------|
+| Supercluster            | `spec.cluster.name`       | `prod`                                                       |
+| Member `StorageCluster` | `<cluster>-<nodeset>`     | `prod-discovered-1`                                          |
+| Backend cluster         | the member's name         | `prod-discovered-1`                                          |
+| `StorageNode`           | as today, from the member | `prod-discovered-1-<worker>-<slot>`                          |
+
+Validation computes every member name before approval and refuses the document
+with `MemberNameInvalid`, naming the node set, when one does not fit. The
+supercluster's name is also a backend-unique name in practice, because sbcli
+refuses duplicate cluster names across its database and the members carry the
+supercluster's name as a prefix. `StorageNode.spec.nodeSet` already records the
+node set, so every node names the member it was created for.
+
+**The suffix is the node set name**, because a member name is read in every
+event, log line, and `sbctl` listing for the life of the cluster, and a reviewer
+renaming `discovered-1` to `rack-a-dense` before approval is renaming the member.
+§16 Q3 records what happens when a name is too long.
+
+### 5.4 The expansion machine
 
 The steps keep their names. What each does with more than one member:
 
@@ -484,8 +522,8 @@ The steps keep their names. What each does with more than one member:
   approved, control plane ready
     │
     ▼
-  Validating        ← per member: interfaces, device class, failure domains,
-                      member names fit (§5.2), member count ≤ 32
+  Validating        ← per node set: interfaces, device class, failure domains,
+                      storage nodes ≤ 32, member name fits (§5.2, §5.3)
     │  clean
     ▼
   CreatingCluster   ← create the members first, then the supercluster listing them
@@ -518,27 +556,88 @@ administrator works with.
 are all online is activated without waiting for the others, because members are
 independent clusters and an activation is per cluster.
 
-### 5.4 Growth
+**The erasure-coding minimum is checked per member.** Each scheme needs a minimum
+number of storage nodes (eight for 4+2), and the existing check that compares the
+document's node count against it now compares each node set's count, since each
+member stripes only across its own nodes.
+
+### 5.5 The discovery generator sizes members
+
+Discovery (`operator/internal/discovery`) writes the draft a reviewer approves,
+so it is where the size limit is met rather than discovered at approval. The
+generator splits each tier into node sets of near-equal size, each within the
+limit. Forty workers with one slot each become two node sets of twenty. Members
+of equal size fill at the same rate, take the same share of new volumes, and
+each cost the aggregate the same share of its capacity when one fails.
+
+The split runs after grouping and after the role split
+([`discovery-generator-rules.md`](../tests/discovery-generator-rules.md) §6.4),
+once per role tier:
+
+1. **Partition by what a member must share.** Workers whose groups differ in
+   management interface name, data interfaces, or device class cannot share a
+   cluster, so each such class is split separately.
+2. **Count the members.** With `s` slots per worker and `n` workers in a
+   partition, a member holds at most `c = floor(32 / s)` workers, and the
+   partition needs `k = ceil(n / c)` members.
+3. **Size them evenly.** `n mod k` members hold `ceil(n / k)` workers and the
+   rest hold `floor(n / k)`, so no two members differ by more than one worker.
+4. **Deal by failure domain.** Workers are sorted by failure domain, then by
+   name, and dealt round-robin across the `k` node sets, so that every failure
+   domain present in the partition is spread over every member.
+5. **Group within each node set.** Hardware grouping runs again per node set, so
+   group names stay unique within a set as the API requires.
+6. **Name the node sets.** A tier that needs one node set keeps today's name
+   (`infra`, `discovered`, or `control-plane`). A tier that needs several numbers
+   them from one, as `discovered-1`, `discovered-2`, and so on, in dealing order.
+
+| Workers | Slots per worker | Members | Workers per member |
+|---------|------------------|---------|--------------------|
+| 20      | 1                | 1       | 20                 |
+| 32      | 1                | 1       | 32                 |
+| 33      | 1                | 2       | 17, 16             |
+| 40      | 1                | 2       | 20, 20             |
+| 40      | 2                | 3       | 14, 13, 13         |
+| 65      | 1                | 3       | 22, 22, 21         |
+
+**The split replaces the overflow split.** A node set within the storage-node
+limit lists at most 32 workers and therefore at most 32 groups, so the
+sixty-four-group overflow that `nodesetlimit_test.go` covers can no longer
+occur, and that builder is retired with its tests rewritten against the size
+split.
+
+**A partition below the erasure-coding minimum is not padded.** The generator
+never moves a worker into a member it cannot share hardware with. A partition
+too small for the scheme is drafted as it is, and validation reports it with the
+scheme's minimum, which is today's behavior for a small fleet.
+
+**The role split is unchanged, and its meaning sharpens.** A fleet with disks in
+both its infrastructure nodes and its workers is drafted as an `infra` block and
+a `discovered` block, so that a reviewer chooses a tier by deleting a block.
+Approving both now approves a supercluster of two members, and the draft's
+`status.message` names the members a reviewer is about to approve.
+
+### 5.6 Growth
 
 Growth stays a second document naming the existing cluster in `spec.clusterRef`
 ([`design-clusterdeploymentconfig.md`](crd-redesign/design-clusterdeploymentconfig.md)
-§6). For a supercluster:
+§6).
 
-| The growth document's group names    | Expansion does                                                                  |
-|--------------------------------------|---------------------------------------------------------------------------------|
-| All match existing members           | Adds nodes to those members, exactly as growth of an ordinary cluster           |
-| Some name no existing member         | Creates those members and appends them to `spec.aggregate`                      |
-| `clusterRef` names a member directly | Treated as growth of that ordinary cluster. Group names are not used for naming |
+| `clusterRef` names  | The growth document's node sets    | Expansion does                                                                     |
+|---------------------|------------------------------------|------------------------------------------------------------------------------------|
+| An ordinary cluster | Any number                         | Adds every node set's nodes to that cluster, as today, within 32 storage nodes     |
+| A supercluster      | All named like existing members    | Adds nodes to those members, each within 32 storage nodes                          |
+| A supercluster      | Some named like no existing member | Creates those members and appends them to `spec.aggregate`                         |
+| A member            | Any number                         | Treated as growth of that ordinary cluster. Node set names are not used for naming |
+
+The storage-node limit counts the nodes a member already has: a growth document
+adding eight workers to a member of thirty is refused with `MemberTooLarge`,
+naming both numbers.
 
 Appending to `spec.aggregate` is the one place the expansion writes a spec it did
 not create in the same pass. It is an addition, which is all a growth document
 is allowed to do, and it is written with an optimistic-lock patch so that a
 concurrent edit by an administrator is retried rather than overwritten.
-
-A growth document with more than one group name naming an ordinary cluster is
-refused with `ClusterNotAggregate`: turning an ordinary cluster into a
-supercluster is refused (§4.2), and the document would otherwise mean something
-different from what was reviewed.
 
 ---
 
@@ -578,7 +677,7 @@ nothing else. A standalone cluster created beside a supercluster is refused,
 because it would compete for the shared names with no aggregate to justify it. A
 member created before its supercluster is admitted when an approved
 `ClusterDeploymentConfig` in the namespace names it as a member, which is the
-order §5.3 creates them in.
+order §5.4 creates them in.
 
 ---
 
@@ -929,7 +1028,7 @@ do today.
 | Volume rebalancer       | Predicate excludes superclusters. Members are rebalanced as ordinary clusters            |
 | Arbitration (`twonode`) | Requires `status.uuid`, which a supercluster never has. Predicate excludes it explicitly |
 | Backup policy           | Fans out per member (§9.5)                                                               |
-| Deployment expansion    | Creates members and supercluster (§5.3), appends members on growth (§5.4)                |
+| Deployment expansion    | Creates members and supercluster (§5.4), appends members on growth (§5.6)                |
 | `PersistentVolumeOps`   | `Relocate` reads the aggregate from the volume's member's `superclusterRef`              |
 
 ### 10.4 RBAC
@@ -973,7 +1072,7 @@ The CSI driver authenticates to each member with that member's entry in
 | A pool fails to create in one member                 | Backend error                    | That member stays placement-ineligible, pool status names the member, retried                                                                                           |
 | The CSI secret write fails                           | API error                        | Requeued. The driver keeps placing with the previous entry, which can name a member that has since been cordoned. Placement on a cordoned member is allowed, not unsafe |
 | The supercluster object is deleted                   | Finalizer                        | Held while any `StoragePool` names it. Once released, members become standalone and keep serving their volumes                                                          |
-| Operator restart mid-expansion                       | Persisted step                   | Members and supercluster created by name, idempotent (§5.3)                                                                                                             |
+| Operator restart mid-expansion                       | Persisted step                   | Members and supercluster created by name, idempotent (§5.4)                                                                                                             |
 | Operator restart mid-relocation                      | Persisted step, `committed` flag | Resumes without a second start or commit (§8.2)                                                                                                                         |
 
 ---
@@ -1038,11 +1137,12 @@ running on fewer members than it was built with.
 Full scenario matrix, coverage status, and hand-off test concepts:
 [`tests/test-plan-superclusters.md`](../tests/test-plan-superclusters.md)
 
-- **Unit:** the phase rollup table (§4.3), member naming and its limits (§5.2),
-  group-to-member derivation (§5.1), the workload naming rule (§6.1), and the
+- **Unit:** the phase rollup table (§4.3), the size limits and member naming
+  (§5.2, §5.3), node-set-to-member derivation (§5.1), the generator's balanced
+  split with its worked table (§5.5), the workload naming rule (§6.1), and the
   member ranking with every filter and tie-break (§7.2), each against fixtures,
   plus the webhook rules of §4.4 and §6.2 with a fake client.
-- **Integration:** the expansion of a multi-group document into members and a
+- **Integration:** the expansion of a multi-node-set document into members and a
   supercluster, growth adding a member, pool fan-out, and the secret entry,
   against `envtest` and a mock control plane. The `Relocate` step machine with
   every failure row of §8.2, including restart in each step.
@@ -1061,19 +1161,24 @@ data unavailability, so neither group's scenarios may be cut.
 **Nothing changes for an ordinary cluster.** A cluster without `aggregate` is
 admitted, reconciled, and named exactly as before, including its workload names,
 which it keeps because it owns them (§6.1). A deployment document with one
-distinct group name expands exactly as before.
+node set expands exactly as before.
 
-**A document with several groups changes meaning.** An approved, expanded
+**A document with several node sets changes meaning.** An approved, expanded
 document is never re-expanded, so existing clusters are unaffected. A draft
 written before this change and approved after it produces a supercluster. The
 approval webhook names the members in the document's `status.message` while it
-is a draft, which is what a reviewer reads before approving. The interface check
-narrows with it: `TestGroupsThatDisagreeAboutInterfacesAreReported` in
-`operator/internal/controllers/deployment/expansion_review_test.go` builds two
-groups with different names and different interfaces and expects a finding, which
-under this design is a valid two-member supercluster. That test is rewritten to
-use one group name across two node sets, which is where a disagreement is still a
-finding.
+is a draft, which is what a reviewer reads before approving. A hand-written
+document that used node sets for racks of one cluster states the racks as
+failure domains on its groups instead, in one node set.
+
+**A document over 32 storage nodes in one node set is refused.** Before this
+change it was admitted. An expanded cluster above the limit keeps running, since
+expansion is create-only, but a growth document adding to it is refused.
+
+**The discovery overflow split is retired.** The builder that spreads more than
+sixty-four groups over several node sets, and its tests in
+`operator/internal/discovery/nodesetlimit_test.go`, are replaced by the size
+split of §5.5, which never produces a node set of more than 32 groups.
 
 **The required-field relaxation is a schema change on the storage version.**
 `maxSubsystemCount` and `vcpuCount` move from `Required` to a CEL rule. v1alpha1
@@ -1099,8 +1204,8 @@ repository's spell check.
 | #   | Question                                                                                                                                                                                                                                                                                                            | Owner                       |
 |-----|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------|
 | 1   | **A control-plane aggregate:** should sbcli record the aggregate, so that `sbctl` and the web API present it as one cluster, enforce volume-name uniqueness across members, and answer "where is this volume" across members? Nothing in this design depends on it, but P0-3 might be answered most cleanly by it.  | Backend team                |
-| 2   | **Per-member layout overrides:** should a deployment document be able to state a different `vcpuCount`, `maxSubsystemCount`, or `stripe` per group? Groups exist because hardware differs, and a dense node and a fast node may want different sizing.                                                              | Operator team               |
-| 3   | **Member suffix for long group names:** when `<cluster>-<group>` exceeds 63 characters, should validation refuse (the current rule) or fall back to an ordinal suffix?                                                                                                                                              | Operator team               |
+| 2   | **Per-member layout overrides:** should a deployment document be able to state a different `vcpuCount`, `maxSubsystemCount`, or `stripe` per node set? Members exist partly because hardware differs, and a dense node and a fast node may want different sizing.                                                   | Operator team               |
+| 3   | **Member suffix for long node set names:** when `<cluster>-<nodeset>` exceeds 63 characters, should validation refuse (the current rule) or fall back to an ordinal suffix?                                                                                                                                         | Operator team               |
 | 4   | **Aggregate pool ceilings:** is a QoS ceiling across all members of a pool wanted, given that the control plane enforces QoS per backend pool, so the operator has to split and rebalance shares to provide one?                                                                                                    | Product                     |
 | 5   | **Replication with a supercluster on either side:** a pair whose source is a supercluster means one relationship per member, and a supercluster target needs a member mapping. Which shape, and is it needed in the first release?                                                                                  | Operator team, Backend team |
 | 6   | **Placement affinity for groups:** volumes that will form a consistency group or a volume group must share a member. Candidates are a StorageClass parameter keying affinity on the claim's namespace (through the provisioner's `--extra-create-metadata`), or an explicit affinity key. Neither has been settled. | Operator team               |

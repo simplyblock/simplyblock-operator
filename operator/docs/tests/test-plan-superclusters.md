@@ -59,18 +59,18 @@ File: `operator/internal/controllers/cluster/supercluster_rollup_test.go`
 
 File: `operator/internal/controllers/deployment/supercluster_members_test.go`
 
-| #    | Scenario                                                                                                    | Type     | Test                                                                             |
-|------|-------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------------------------------------|
-| U-10 | One distinct group name across two node sets derives one standalone cluster named `spec.cluster.name`       | Positive | —                                                                                |
-| U-11 | Two distinct group names derive two members, `<cluster>-<group>`, and a supercluster `spec.cluster.name`    | Positive | —                                                                                |
-| U-12 | One group name in two node sets derives one member whose nodes span both node sets                          | Positive | —                                                                                |
-| U-13 | A member name of exactly 63 characters is admitted, 64 is refused with `MemberNameInvalid` naming the group | Boundary | —                                                                                |
-| U-14 | A group name that makes the member name an invalid DNS label is refused with `MemberNameInvalid`            | Negative | —                                                                                |
-| U-15 | Thirty-two distinct groups are admitted, thirty-three are refused                                           | Boundary | —                                                                                |
-| U-16 | Two groups with different names and different interfaces are not a finding                                  | Positive | —                                                                                |
-| U-17 | Two node sets using one group name with different interfaces are a finding                                  | Negative | `TestGroupsThatDisagreeAboutInterfacesAreReported` (to be rewritten, design §15) |
-| U-18 | Two groups with different names and different device classes are not a finding                              | Positive | —                                                                                |
-| U-19 | One worker in two groups of different names is still a finding                                              | Negative | —                                                                                |
+| #        | Scenario                                                                                                                                                                                 | Type     | Test |
+|----------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| ~~U-10~~ | ~~One distinct group name across two node sets derives one standalone cluster named `spec.cluster.name`~~ superseded by U-74: members are node sets, not group names (design §5.1)       | Positive | —    |
+| ~~U-11~~ | ~~Two distinct group names derive two members, `<cluster>-<group>`, and a supercluster `spec.cluster.name`~~ superseded by U-75: members are node sets, not group names (design §5.1)    | Positive | —    |
+| ~~U-12~~ | ~~One group name in two node sets derives one member whose nodes span both node sets~~ superseded by U-76: members are node sets, not group names (design §5.1)                          | Positive | —    |
+| ~~U-13~~ | ~~A member name of exactly 63 characters is admitted, 64 is refused with `MemberNameInvalid` naming the group~~ superseded by U-77: members are node sets, not group names (design §5.1) | Boundary | —    |
+| ~~U-14~~ | ~~A group name that makes the member name an invalid DNS label is refused with `MemberNameInvalid`~~ superseded by U-78: members are node sets, not group names (design §5.1)            | Negative | —    |
+| ~~U-15~~ | ~~Thirty-two distinct groups are admitted, thirty-three are refused~~ superseded by U-79: members are node sets, not group names (design §5.1)                                           | Boundary | —    |
+| ~~U-16~~ | ~~Two groups with different names and different interfaces are not a finding~~ superseded by U-80: members are node sets, not group names (design §5.1)                                  | Positive | —    |
+| ~~U-17~~ | ~~Two node sets using one group name with different interfaces are a finding~~ superseded by U-81: members are node sets, not group names (design §5.1)                                  | Negative | —    |
+| ~~U-18~~ | ~~Two groups with different names and different device classes are not a finding~~ superseded by U-82: members are node sets, not group names (design §5.1)                              | Positive | —    |
+| U-19     | One worker in two groups of different names is still a finding                                                                                                                           | Negative | —    |
 
 ### Workload Naming (design §6.1)
 
@@ -155,6 +155,46 @@ File: `operator/internal/webhook/persistentvolumeops_validator_test.go`
 | U-72 | Editing `targetClusterRef` after creation is refused                          | Negative | —    |
 | U-73 | `Relocate` without `relocate` is refused                                      | Negative | —    |
 
+### Node Sets, Limits, and Naming (design §5.1, §5.2, §5.3, §5.6)
+
+File: `operator/internal/controllers/deployment/supercluster_members_test.go`
+
+| #    | Scenario                                                                                                              | Type     | Test                                               |
+|------|-----------------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------|
+| U-74 | One node set with several groups derives one standalone cluster named `spec.cluster.name`                             | Positive | —                                                  |
+| U-75 | Two node sets derive two members, `<cluster>-<nodeset>`, and a supercluster named `spec.cluster.name`                 | Positive | —                                                  |
+| U-76 | A node set whose groups name three failure domains derives one member with all three mapped                           | Positive | —                                                  |
+| U-77 | A member name of exactly 63 characters is admitted, 64 is refused with `MemberNameInvalid` naming the node set        | Boundary | —                                                  |
+| U-78 | A node set name that makes the member name an invalid DNS label is refused with `MemberNameInvalid`                   | Negative | —                                                  |
+| U-79 | Thirty-two node sets are admitted, thirty-three are refused with `TooManyMembers`                                     | Boundary | —                                                  |
+| U-80 | Two node sets with different interfaces are not a finding                                                             | Positive | —                                                  |
+| U-81 | Two groups in one node set with different interfaces are a finding                                                    | Negative | `TestGroupsThatDisagreeAboutInterfacesAreReported` |
+| U-82 | Two node sets with different device classes pass the narrowed CEL rule, and each member is stamped with its own class | Positive | —                                                  |
+| U-83 | With one slot per worker, a node set of 32 workers is admitted and 33 is refused with `MemberTooLarge`                | Boundary | —                                                  |
+| U-84 | With two slots per worker, a node set of 16 workers is admitted and 17 is refused                                     | Boundary | —                                                  |
+| U-85 | A one-node-set document over 32 storage nodes is refused, so an ordinary cluster is held to the limit too             | Negative | —                                                  |
+| U-86 | A node set below the erasure-coding minimum is refused even when the document's total meets it                        | Negative | —                                                  |
+| U-87 | Growth adding eight workers to a member of thirty is refused with `MemberTooLarge` naming both counts                 | Boundary | —                                                  |
+
+### Balanced Split in the Discovery Generator (design §5.5)
+
+File: `operator/internal/discovery/sizesplit_test.go`
+
+| #    | Scenario                                                                                                                      | Type       | Test |
+|------|-------------------------------------------------------------------------------------------------------------------------------|------------|------|
+| U-88 | Twenty workers with one slot each are drafted as one node set keeping the tier's name, `discovered`                           | Positive   | —    |
+| U-89 | Thirty-two workers are one node set, thirty-three are two of 17 and 16                                                        | Boundary   | —    |
+| U-90 | Forty workers with one slot each are two node sets of 20                                                                      | Positive   | —    |
+| U-91 | Forty workers with two slots each are three node sets of 14, 13, and 13                                                       | Positive   | —    |
+| U-92 | Sixty-five workers with one slot each are three node sets of 22, 22, and 21                                                   | Positive   | —    |
+| U-93 | Workers in three failure domains are spread over every node set, with per-domain counts differing by at most one between sets | Positive   | —    |
+| U-94 | Workers whose management interface names differ are never drafted into one node set                                           | Negative   | —    |
+| U-95 | Group names are unique within every node set after the split                                                                  | Boundary   | —    |
+| U-96 | Two runs over an unchanged fleet produce identical node sets and names                                                        | Positive   | —    |
+| U-97 | A partition below the erasure-coding minimum is drafted without padding, and validation reports the minimum                   | Negative   | —    |
+| U-98 | An infra tier and a worker tier split independently, drafted as `infra`, `discovered-1`, and `discovered-2`                   | Positive   | —    |
+| U-99 | Two hundred workers with distinct disks produce no node set above 32 groups, which replaces the overflow split                | Regression | —    |
+
 ---
 
 ## 2. Integration Tests
@@ -222,6 +262,7 @@ server and a real Kubernetes API through `envtest`.
 | I-39 | A `Migrate` and a `Relocate` of one volume exclude each other                                                                                   | Negative | —    |
 | I-40 | `Evacuate` cordons the member, raises one `Relocate` per subsystem within the concurrency bound, and removes the entry when the member is empty | Positive | —    |
 | I-41 | A failing child holds the evacuation with `EvacuationHeld`                                                                                      | Negative | —    |
+| I-42 | A draft with two node sets names both members in `status.message` before approval                                                               | Positive | —    |
 
 ---
 
@@ -231,16 +272,17 @@ Run against a live simplyblock control plane with three members of three nodes
 each, using fio in verify mode for every data-path row. Rows E-06 to E-08 need
 P0-3 and P0-4.
 
-| #    | Scenario                                                                                                           | Type     | Test |
-|------|--------------------------------------------------------------------------------------------------------------------|----------|------|
-| E-01 | A two-group deployment document produces a supercluster and two activated members                                  | Positive | —    |
-| E-02 | Thirty PVCs through a supercluster class spread across members by the strategy, and every volume passes fio verify | Positive | —    |
-| E-03 | `CreateVolume` retried after an injected timeout yields one backend volume                                         | Negative | —    |
-| E-04 | A member shut down leaves the others' volumes serving and new volumes landing elsewhere                            | Negative | —    |
-| E-05 | Snapshot, clone, and expansion of a volume stay in its member                                                      | Positive | —    |
-| E-06 | A relocation under sustained fio completes with no I/O error and verified data                                     | Positive | —    |
-| E-07 | Expand, snapshot, and delete after a relocation succeed through the original handle                                | Positive | —    |
-| E-08 | A member evacuated under load is removed from the aggregate with every volume intact                               | Positive | —    |
+| #    | Scenario                                                                                                                                            | Type     | Test |
+|------|-----------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| E-01 | A two-node-set deployment document produces a supercluster and two activated members                                                                | Positive | —    |
+| E-02 | Thirty PVCs through a supercluster class spread across members by the strategy, and every volume passes fio verify                                  | Positive | —    |
+| E-03 | `CreateVolume` retried after an injected timeout yields one backend volume                                                                          | Negative | —    |
+| E-04 | A member shut down leaves the others' volumes serving and new volumes landing elsewhere                                                             | Negative | —    |
+| E-05 | Snapshot, clone, and expansion of a volume stay in its member                                                                                       | Positive | —    |
+| E-06 | A relocation under sustained fio completes with no I/O error and verified data                                                                      | Positive | —    |
+| E-07 | Expand, snapshot, and delete after a relocation succeed through the original handle                                                                 | Positive | —    |
+| E-08 | A member evacuated under load is removed from the aggregate with every volume intact                                                                | Positive | —    |
+| E-09 | Discovery over a fleet of more than 32 storage nodes (17 workers with two slots each) drafts two node sets that approve and expand into two members | Positive | —    |
 
 ---
 
@@ -284,14 +326,15 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 
 ## 5. Axis Coverage
 
-| Axis            | Values covered                                                                  | IDs                          | Not covered                                |
-|-----------------|---------------------------------------------------------------------------------|------------------------------|--------------------------------------------|
-| Cluster count   | standalone, 2 members, 3 members, 32 members, 33 members, and two superclusters | U-10, U-35, E-02, U-15, I-09 | 32 members on a live control plane         |
-| Member topology | one-node member, three-node member                                              | U-12, E-01                   | five-node members, members of unequal size |
-| Namespace scope | one namespace, two namespaces                                                   | U-29, U-31, I-09             | —                                          |
-| Lifecycle       | restart mid-expansion, restart in every relocate step                           | I-14, I-34                   | restart mid-evacuation                     |
-| Control plane   | 4xx, 5xx, timeout, 409                                                          | I-36, I-35, U-53, I-23       | —                                          |
-| Data path       | spread, failure, relocation, evacuation                                         | E-02, E-04, E-06, E-08       | —                                          |
+| Axis            | Values covered                                                                  | IDs                                      | Not covered                                |
+|-----------------|---------------------------------------------------------------------------------|------------------------------------------|--------------------------------------------|
+| Cluster count   | standalone, 2 members, 3 members, 32 members, 33 members, and two superclusters | U-74, U-35, E-02, U-79, I-09             | 32 members on a live control plane         |
+| Member topology | one-node member, three-node member                                              | U-12, E-01                               | five-node members, members of unequal size |
+| Member size     | 16 and 17 workers at two slots, 32 and 33 at one slot, 20 to 65 workers split   | U-84, U-83, U-89, U-90, U-91, U-92, E-09 | —                                          |
+| Namespace scope | one namespace, two namespaces                                                   | U-29, U-31, I-09                         | —                                          |
+| Lifecycle       | restart mid-expansion, restart in every relocate step                           | I-14, I-34                               | restart mid-evacuation                     |
+| Control plane   | 4xx, 5xx, timeout, 409                                                          | I-36, I-35, U-53, I-23                   | —                                          |
+| Data path       | spread, failure, relocation, evacuation                                         | E-02, E-04, E-06, E-08                   | —                                          |
 
 ---
 
@@ -305,7 +348,8 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 | Manual      | 2         | 0       | M-01, M-02         |
 
 The five covered unit rows are existing tests of behavior this design keeps:
-U-25 to U-28 and U-17. U-17's test is rewritten (design §15).
+U-25 to U-28 and U-81. The unit count excludes the nine rows U-10 to U-18,
+which are struck through and superseded by U-74 to U-82.
 
 ---
 
@@ -319,6 +363,6 @@ U-25 to U-28 and U-17. U-17's test is rewritten (design §15).
 | E-01 … E-05                           | Live supercluster and placement              | Feature not implemented (Phases 1 and 2)                                                             |
 | E-06 … E-08                           | Live relocation and evacuation               | Blocked by P0-3 and P0-4                                                                             |
 | M-01, M-02                            | Failure injection                            | Needs node power control and selective network blocking                                              |
-| —                                     | 32 members on a live control plane           | No lab of that size. U-15 covers the limit                                                           |
+| —                                     | 32 members on a live control plane           | No lab of that size. U-79 covers the limit                                                           |
 | —                                     | Five-node and unequal-size members           | Placement does not read node count, and capacity fixtures in U-47 and U-48 cover it                  |
 | —                                     | Restart mid-evacuation                       | Evacuation resumes through its children, each covered by I-34. A dedicated row is added with Phase 4 |
