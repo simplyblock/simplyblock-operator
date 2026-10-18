@@ -103,7 +103,7 @@ File: `operator/internal/webhook/storagecluster_validator_test.go`
 | U-34 | Members on different `ControlPlane` objects are refused                                                               | Negative            | —                                                   |
 | U-35 | An aggregate of one member is refused, of two is admitted                                                             | Boundary            | —                                                   |
 | U-36 | A supercluster carrying `vcpuCount` or `stripe` is refused, naming the field                                          | Negative            | —                                                   |
-| U-37 | A standalone cluster without `maxSubsystemCount` or `vcpuCount` is refused, as today                                  | Negative            | —                                                   |
+| U-37 | A standalone cluster without `maxSubsystemCount` or `vcpuCount` is refused                                            | Negative            | —                                                   |
 | U-38 | `placement` on a standalone cluster is refused                                                                        | Negative            | —                                                   |
 | U-39 | Adding `aggregate` to a standalone cluster, or removing it from a supercluster, is refused                            | Negative            | —                                                   |
 | U-40 | Appending an aggregate entry is admitted                                                                              | Positive            | —                                                   |
@@ -180,20 +180,20 @@ File: `operator/internal/controllers/deployment/supercluster_members_test.go`
 
 File: `operator/internal/discovery/sizesplit_test.go`
 
-| #    | Scenario                                                                                                                      | Type       | Test |
-|------|-------------------------------------------------------------------------------------------------------------------------------|------------|------|
-| U-88 | Twenty workers with one slot each are drafted as one node set keeping the tier's name, `discovered`                           | Positive   | —    |
-| U-89 | Thirty-two workers are one node set, thirty-three are two of 17 and 16                                                        | Boundary   | —    |
-| U-90 | Forty workers with one slot each are two node sets of 20                                                                      | Positive   | —    |
-| U-91 | Forty workers with two slots each are three node sets of 14, 13, and 13                                                       | Positive   | —    |
-| U-92 | Sixty-five workers with one slot each are three node sets of 22, 22, and 21                                                   | Positive   | —    |
-| U-93 | Workers in three failure domains are spread over every node set, with per-domain counts differing by at most one between sets | Positive   | —    |
-| U-94 | Workers whose management interface names differ are never drafted into one node set                                           | Negative   | —    |
-| U-95 | Group names are unique within every node set after the split                                                                  | Boundary   | —    |
-| U-96 | Two runs over an unchanged fleet produce identical node sets and names                                                        | Positive   | —    |
-| U-97 | A partition below the erasure-coding minimum is drafted without padding, and validation reports the minimum                   | Negative   | —    |
-| U-98 | An infra tier and a worker tier split independently, drafted as `infra`, `discovered-1`, and `discovered-2`                   | Positive   | —    |
-| U-99 | Two hundred workers with distinct disks produce no node set above 32 groups, which replaces the overflow split                | Regression | —    |
+| #    | Scenario                                                                                                                      | Type     | Test |
+|------|-------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| U-88 | Twenty workers with one slot each are drafted as one node set keeping the tier's name, `discovered`                           | Positive | —    |
+| U-89 | Thirty-two workers are one node set, thirty-three are two of 17 and 16                                                        | Boundary | —    |
+| U-90 | Forty workers with one slot each are two node sets of 20                                                                      | Positive | —    |
+| U-91 | Forty workers with two slots each are three node sets of 14, 13, and 13                                                       | Positive | —    |
+| U-92 | Sixty-five workers with one slot each are three node sets of 22, 22, and 21                                                   | Positive | —    |
+| U-93 | Workers in three failure domains are spread over every node set, with per-domain counts differing by at most one between sets | Positive | —    |
+| U-94 | Workers whose management interface names differ are never drafted into one node set                                           | Negative | —    |
+| U-95 | Group names are unique within every node set after the split                                                                  | Boundary | —    |
+| U-96 | Two runs over an unchanged fleet produce identical node sets and names                                                        | Positive | —    |
+| U-97 | A partition below the erasure-coding minimum is drafted without padding, and validation reports the minimum                   | Negative | —    |
+| U-98 | An infra tier and a worker tier split independently, drafted as `infra`, `discovered-1`, and `discovered-2`                   | Positive | —    |
+| U-99 | Two hundred workers with distinct disks produce no node set above 32 groups                                                   | Boundary | —    |
 
 ### Kubernetes Topology (design §5.7, §7.2)
 
@@ -240,17 +240,17 @@ server and a real Kubernetes API through `envtest`.
 
 ### Expansion (design §5.3, §5.4)
 
-| #    | Scenario                                                                                                              | Type       | Test |
-|------|-----------------------------------------------------------------------------------------------------------------------|------------|------|
-| I-12 | A two-group document creates two members, then the supercluster, then nodes per member, and one activation per member | Positive   | —    |
-| I-13 | A one-group document expands exactly as before                                                                        | Regression | —    |
-| I-14 | A restart between creating members and creating the supercluster creates the supercluster and no second member        | Negative   | —    |
-| I-15 | A member whose nodes are online is activated while another member's nodes are still coming up                         | Positive   | —    |
-| I-16 | `status.clusterRef` names the supercluster and `status.nodeRefs` lists every member's nodes                           | Positive   | —    |
-| I-17 | Growth with existing group names adds nodes to those members only                                                     | Positive   | —    |
-| I-18 | Growth with a new group name creates the member and appends it to the aggregate                                       | Positive   | —    |
-| I-19 | Growth with two group names against a standalone cluster is refused with `ClusterNotAggregate`                        | Negative   | —    |
-| I-20 | Appending to the aggregate retries on a conflicting concurrent edit and keeps the administrator's change              | Negative   | —    |
+| #    | Scenario                                                                                                              | Type     | Test |
+|------|-----------------------------------------------------------------------------------------------------------------------|----------|------|
+| I-12 | A two-group document creates two members, then the supercluster, then nodes per member, and one activation per member | Positive | —    |
+| I-13 | A one-node-set document expands into one cluster with no supercluster                                                 | Positive | —    |
+| I-14 | A restart between creating members and creating the supercluster creates the supercluster and no second member        | Negative | —    |
+| I-15 | A member whose nodes are online is activated while another member's nodes are still coming up                         | Positive | —    |
+| I-16 | `status.clusterRef` names the supercluster and `status.nodeRefs` lists every member's nodes                           | Positive | —    |
+| I-17 | Growth with existing group names adds nodes to those members only                                                     | Positive | —    |
+| I-18 | Growth with a new group name creates the member and appends it to the aggregate                                       | Positive | —    |
+| I-19 | Growth with two group names against a standalone cluster is refused with `ClusterNotAggregate`                        | Negative | —    |
+| I-20 | Appending to the aggregate retries on a conflicting concurrent edit and keeps the administrator's change              | Negative | —    |
 
 ### Pools (design §7.1)
 

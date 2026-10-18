@@ -3,6 +3,7 @@
 **Status:** Draft  
 **Author:** Christoph Engelbert (noctarius)  
 **Date:** 2026-10-18  
+**Target Release:** simplyblock 26.4, between beta2 and beta3  
 **Test Plan:** [`tests/test-plan-superclusters.md`](../tests/test-plan-superclusters.md)
 
 ---
@@ -493,7 +494,7 @@ worker count times the slots per worker, and a node set may list at most
 
 **The storage-node limit holds for an ordinary cluster too.** A one-node-set
 document listing more than 32 storage nodes is refused with `MemberTooLarge`,
-because the product limit is a cluster's and an ordinary cluster is a cluster.
+because the limit is a cluster's, whether or not the cluster is a member.
 The two limits of 32 are independent: one bounds a member's nodes, and the other
 bounds the members of an aggregate (§4.1).
 
@@ -610,19 +611,18 @@ once per role tier:
 
 **The split replaces the overflow split.** A node set within the storage-node
 limit lists at most 32 workers and therefore at most 32 groups, so the
-sixty-four-group overflow that `nodesetlimit_test.go` covers can no longer
-occur, and that builder is retired with its tests rewritten against the size
-split.
+sixty-four-group overflow that `nodesetlimit_test.go` covers cannot occur. That
+builder and its tests are replaced by the size split and its tests.
 
 **A partition below the erasure-coding minimum is not padded.** The generator
 never moves a worker into a member it cannot share hardware with. A partition
 too small for the scheme is drafted as it is, and validation reports it with the
 scheme's minimum, which is today's behavior for a small fleet.
 
-**The role split is unchanged, and its meaning sharpens.** A fleet with disks in
-both its infrastructure nodes and its workers is drafted as an `infra` block and
-a `discovered` block, so that a reviewer chooses a tier by deleting a block.
-Approving both now approves a supercluster of two members, and the draft's
+**The role split drafts one member per tier.** A fleet with disks in both its
+infrastructure nodes and its workers is drafted as an `infra` block and a
+`discovered` block, so that a reviewer chooses a tier by deleting a block.
+Approving both approves a supercluster of two members, and the draft's
 `status.message` names the members a reviewer is about to approve.
 
 ### 5.6 Growth
@@ -1230,25 +1230,14 @@ data unavailability, so neither group's scenarios may be cut.
 
 **Nothing changes for an ordinary cluster.** A cluster without `aggregate` is
 admitted, reconciled, and named exactly as before, including its workload names,
-which it keeps because it owns them (§6.1). A deployment document with one
-node set expands exactly as before.
+which it keeps because it owns them (§6.1).
 
-**A document with several node sets changes meaning.** An approved, expanded
-document is never re-expanded, so existing clusters are unaffected. A draft
-written before this change and approved after it produces a supercluster. The
-approval webhook names the members in the document's `status.message` while it
-is a draft, which is what a reviewer reads before approving. A hand-written
-document that used node sets for racks of one cluster states the racks as
-failure domains on its groups instead, in one node set.
-
-**A document over 32 storage nodes in one node set is refused.** Before this
-change it was admitted. An expanded cluster above the limit keeps running, since
-expansion is create-only, but a growth document adding to it is refused.
-
-**The discovery overflow split is retired.** The builder that spreads more than
-sixty-four groups over several node sets, and its tests in
-`operator/internal/discovery/nodesetlimit_test.go`, are replaced by the size
-split of §5.5, which never produces a node set of more than 32 groups.
+**`ClusterDeploymentConfig` and discovery need no migration.** Neither has
+shipped in a release: both arrive in 26.4, and this design lands between its
+second and third beta. Every change §5 makes to them (node sets as members, the
+size limit, the balanced split, and the topology reading) amends an unreleased
+API and unreleased generator behavior, so no document or draft exists in the
+field to convert.
 
 **The required-field relaxation is a schema change on the storage version.**
 `maxSubsystemCount` and `vcpuCount` move from `Required` to a CEL rule. v1alpha1
