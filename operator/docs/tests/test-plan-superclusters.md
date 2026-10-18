@@ -8,7 +8,7 @@ for the CSI driver
 
 Scope: the operator, the CSI driver, and the Kubernetes surface of this
 repository. Control-plane (`sbcli`) behavior is a dependency, faked at the
-boundary. The design's Phase 0 prerequisites (P0-1 to P0-6) are not tested here.
+boundary. The design's Phase 0 prerequisites (P0-1 to P0-8) are not tested here.
 What is tested is this repository's response to each of them being present,
 absent, or failing.
 
@@ -118,26 +118,26 @@ File: `operator/internal/webhook/storagecluster_validator_test.go`
 
 File: `csi-driver/internal/csi/controller/placement_aggregate_test.go`
 
-| #    | Scenario                                                                                              | Type     | Test |
-|------|-------------------------------------------------------------------------------------------------------|----------|------|
-| U-47 | `MostAvailableCapacity` picks the member with the most free capacity                                  | Positive | —    |
-| U-48 | `LeastProvisioned` picks the member with the lowest provisioned ratio                                 | Positive | —    |
-| U-49 | Equal ranks break by cluster UUID, identically across calls                                           | Boundary | —    |
-| U-50 | A member with `placement: false` is never chosen                                                      | Negative | —    |
-| U-51 | A member whose free capacity equals the requested size is eligible, one byte less is not              | Boundary | —    |
-| U-52 | A member above its critical threshold is dropped                                                      | Negative | —    |
-| U-53 | A member whose capacity read exceeds the deadline is dropped, and the others are still ranked         | Negative | —    |
-| U-54 | No candidate fails with `ResourceExhausted`, listing each member's reason                             | Negative | —    |
-| U-55 | An unknown aggregate name fails with `InvalidArgument` naming the class                               | Negative | —    |
-| U-56 | A class carrying both `supercluster` and `cluster_id` is refused                                      | Negative | —    |
-| U-57 | `zone_cluster_map` beside `supercluster` restricts candidates to the zone's members                   | Positive | —    |
-| U-58 | A name existing in a member returns that volume without ranking, including a cordoned member          | Positive | —    |
-| U-59 | A name existing in no member is placed, and the mock receives exactly one create                      | Positive | —    |
-| U-60 | A lookup failing with 5xx in one member fails the call rather than placing, so no duplicate can arise | Negative | —    |
-| U-61 | The handle's first component is the chosen member's UUID                                              | Positive | —    |
-| U-62 | A clone through a supercluster class lands in the source's member                                     | Positive | —    |
-| U-63 | A clone whose source member is not in the class's aggregate is refused with `InvalidArgument`         | Negative | —    |
-| U-64 | A group whose volumes span two members is refused, naming both members                                | Negative | —    |
+| #        | Scenario                                                                                                                                      | Type     | Test |
+|----------|-----------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| U-47     | `MostAvailableCapacity` picks the member with the most free capacity                                                                          | Positive | —    |
+| U-48     | `LeastProvisioned` picks the member with the lowest provisioned ratio                                                                         | Positive | —    |
+| U-49     | Equal ranks break by cluster UUID, identically across calls                                                                                   | Boundary | —    |
+| U-50     | A member with `placement: false` is never chosen                                                                                              | Negative | —    |
+| U-51     | A member whose free capacity equals the requested size is eligible, one byte less is not                                                      | Boundary | —    |
+| U-52     | A member above its critical threshold is dropped                                                                                              | Negative | —    |
+| U-53     | A member whose capacity read exceeds the deadline is dropped, and the others are still ranked                                                 | Negative | —    |
+| U-54     | No candidate fails with `ResourceExhausted`, listing each member's reason                                                                     | Negative | —    |
+| ~~U-55~~ | ~~An unknown aggregate name fails with `InvalidArgument` naming the class~~ superseded by U-113: a class names a supercluster in `cluster_id` | Negative | —    |
+| ~~U-56~~ | ~~A class carrying both `supercluster` and `cluster_id` is refused~~ superseded by U-112: a class names a supercluster in `cluster_id`        | Negative | —    |
+| U-57     | `zone_cluster_map` beside `supercluster` restricts candidates to the zone's members                                                           | Positive | —    |
+| U-58     | A name existing in a member returns that volume without ranking, including a cordoned member                                                  | Positive | —    |
+| U-59     | A name existing in no member is placed, and the mock receives exactly one create                                                              | Positive | —    |
+| U-60     | A lookup failing with 5xx in one member fails the call rather than placing, so no duplicate can arise                                         | Negative | —    |
+| U-61     | The handle's first component is the chosen member's UUID                                                                                      | Positive | —    |
+| U-62     | A clone through a supercluster class lands in the source's member                                                                             | Positive | —    |
+| U-63     | A clone whose source member is not in the class's aggregate is refused with `InvalidArgument`                                                 | Negative | —    |
+| U-64     | A group whose volumes span two members is refused, naming both members                                                                        | Negative | —    |
 
 ### Relocate Validation (design §8.1, §9.3, §9.4)
 
@@ -159,22 +159,22 @@ File: `operator/internal/webhook/persistentvolumeops_validator_test.go`
 
 File: `operator/internal/controllers/deployment/supercluster_members_test.go`
 
-| #    | Scenario                                                                                                              | Type     | Test                                               |
-|------|-----------------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------|
-| U-74 | One node set with several groups derives one standalone cluster named `spec.cluster.name`                             | Positive | —                                                  |
-| U-75 | Two node sets derive two members, `<cluster>-<nodeset>`, and a supercluster named `spec.cluster.name`                 | Positive | —                                                  |
-| U-76 | A node set whose groups name three failure domains derives one member with all three mapped                           | Positive | —                                                  |
-| U-77 | A member name of exactly 63 characters is admitted, 64 is refused with `MemberNameInvalid` naming the node set        | Boundary | —                                                  |
-| U-78 | A node set name that makes the member name an invalid DNS label is refused with `MemberNameInvalid`                   | Negative | —                                                  |
-| U-79 | Thirty-two node sets are admitted, thirty-three are refused with `TooManyMembers`                                     | Boundary | —                                                  |
-| U-80 | Two node sets with different interfaces are not a finding                                                             | Positive | —                                                  |
-| U-81 | Two groups in one node set with different interfaces are a finding                                                    | Negative | `TestGroupsThatDisagreeAboutInterfacesAreReported` |
-| U-82 | Two node sets with different device classes pass the narrowed CEL rule, and each member is stamped with its own class | Positive | —                                                  |
-| U-83 | With one slot per worker, a node set of 32 workers is admitted and 33 is refused with `MemberTooLarge`                | Boundary | —                                                  |
-| U-84 | With two slots per worker, a node set of 16 workers is admitted and 17 is refused                                     | Boundary | —                                                  |
-| U-85 | A one-node-set document over 32 storage nodes is refused, so an ordinary cluster is held to the limit too             | Negative | —                                                  |
-| U-86 | A node set below the erasure-coding minimum is refused even when the document's total meets it                        | Negative | —                                                  |
-| U-87 | Growth adding eight workers to a member of thirty is refused with `MemberTooLarge` naming both counts                 | Boundary | —                                                  |
+| #        | Scenario                                                                                                                                                                               | Type     | Test                                               |
+|----------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------|
+| U-74     | One node set with several groups derives one standalone cluster named `spec.cluster.name`                                                                                              | Positive | —                                                  |
+| U-75     | Two node sets derive two members, `<cluster>-<nodeset>`, and a supercluster named `spec.cluster.name`                                                                                  | Positive | —                                                  |
+| U-76     | A node set whose groups name three failure domains derives one member with all three mapped                                                                                            | Positive | —                                                  |
+| ~~U-77~~ | ~~A member name of exactly 63 characters is admitted, 64 is refused with `MemberNameInvalid` naming the node set~~ superseded by U-129: names are bounded by `MaxLength` (design §5.3) | Boundary | —                                                  |
+| U-78     | A node set name that makes the member name an invalid DNS label is refused with `MemberNameInvalid`                                                                                    | Negative | —                                                  |
+| U-79     | Thirty-two node sets are admitted, thirty-three are refused with `TooManyMembers`                                                                                                      | Boundary | —                                                  |
+| U-80     | Two node sets with different interfaces are not a finding                                                                                                                              | Positive | —                                                  |
+| U-81     | Two groups in one node set with different interfaces are a finding                                                                                                                     | Negative | `TestGroupsThatDisagreeAboutInterfacesAreReported` |
+| U-82     | Two node sets with different device classes pass the narrowed CEL rule, and each member is stamped with its own class                                                                  | Positive | —                                                  |
+| U-83     | With one slot per worker, a node set of 32 workers is admitted and 33 is refused with `MemberTooLarge`                                                                                 | Boundary | —                                                  |
+| U-84     | With two slots per worker, a node set of 16 workers is admitted and 17 is refused                                                                                                      | Boundary | —                                                  |
+| U-85     | A one-node-set document over 32 storage nodes is refused, so an ordinary cluster is held to the limit too                                                                              | Negative | —                                                  |
+| U-86     | A node set below the erasure-coding minimum is refused even when the document's total meets it                                                                                         | Negative | —                                                  |
+| U-87     | Growth adding eight workers to a member of thirty is refused with `MemberTooLarge` naming both counts                                                                                  | Boundary | —                                                  |
 
 ### Balanced Split in the Discovery Generator (design §5.5)
 
@@ -215,6 +215,63 @@ File: `operator/internal/discovery/topology_test.go`, and
 | U-110 | No member in the preferred region with room falls back to the requisite regions, then to every eligible member   | Negative            | —    |
 | U-111 | A class carrying `zone_cluster_map` restricts by the map and ignores member topology                             | Positive            | —    |
 
+### Aggregate Identifier (design §3, §7.1, §15)
+
+File: `operator/internal/utils/objects_test.go`, and
+`csi-driver/internal/csi/controller/placement_aggregate_test.go` for U-112 and U-113
+
+| #     | Scenario                                                                                                                              | Type     | Test |
+|-------|---------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| U-112 | A class whose `cluster_id` is an aggregate's `id` takes the aggregate branch, and one naming a member's UUID takes the cluster branch | Positive | —    |
+| U-113 | A `cluster_id` matching neither a cluster nor an aggregate fails with `InvalidArgument` naming the class                              | Negative | —    |
+| U-114 | A supercluster's `status.uuid` is its `metadata.uid`                                                                                  | Positive | —    |
+| U-115 | `ResolveClusterUUID` on a supercluster returns `ErrAggregateCluster`, and the mock control plane receives no call                     | Negative | —    |
+
+### Chain Resolution for Controller Calls (design §8.3)
+
+File: `atlas-lib/controlplane/chain_test.go` and
+`csi-driver/internal/csi/controller/chain_test.go`
+
+| #     | Scenario                                                                                                                                        | Type     | Test |
+|-------|-------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| U-116 | Expand, snapshot, clone from a volume, publish, and unpublish on a relocated volume's original handle reach the target through the relationship | Positive | —    |
+| U-117 | A handle whose source volume still exists is not redirected, and the relationship endpoint is not called                                        | Negative | —    |
+| U-118 | A chain longer than the hop limit fails with a named error instead of looping                                                                   | Boundary | —    |
+
+### Ceiling Shares (design §7.1, §7.5)
+
+File: `operator/internal/controllers/pool/shares_test.go`
+
+| #     | Scenario                                                                                                  | Type     | Test |
+|-------|-----------------------------------------------------------------------------------------------------------|----------|------|
+| U-119 | A ceiling of 100k IOPS over three eligible members is 33,334, 33,333, and 33,333, and sums to the ceiling | Boundary | —    |
+| U-120 | A member leaving placement has its share divided among the rest                                           | Positive | —    |
+| U-121 | Demand shares give every eligible member a floor of 10% of an even share and divide the rest by rate      | Positive | —    |
+| U-122 | A share moving by less than 5% is not written, and one moving by more is                                  | Boundary | —    |
+| U-123 | Lowered shares are written before raised ones, so the sum never exceeds the ceiling                       | Positive | —    |
+
+### Per-Node-Set Overrides and Name Limits (design §5.3, §5.8)
+
+File: `operator/internal/controllers/deployment/supercluster_members_test.go`
+
+| #     | Scenario                                                                                                           | Type                | Test |
+|-------|--------------------------------------------------------------------------------------------------------------------|---------------------|------|
+| U-124 | A node set's `vcpuCount` override reaches its member only, and the other members inherit the template              | Positive            | —    |
+| U-125 | Slots are counted per node set: 16 workers at two slots in one set and 32 at one slot in another are both admitted | Boundary            | —    |
+| U-126 | Overrides on a document with one node set are refused                                                              | Negative            | —    |
+| U-127 | An NVMe node set beside a logical block node set is admitted, and a node set mixing both is refused                | Positive + Negative | —    |
+| U-128 | The erasure-coding minimum is checked against a node set's own `stripe` override                                   | Boundary            | —    |
+| U-129 | A cluster name of 35 characters is admitted and 36 is refused, a node set name of 26 is admitted and 27 is refused | Boundary            | —    |
+| U-130 | The generator cuts a node set base to 23 characters and appends `-1` to `-32`                                      | Boundary            | —    |
+
+### Fan-Out Admission (design §9.6)
+
+File: `operator/internal/webhook/storageclusterops_validator_test.go`
+
+| #     | Scenario                                                                                                                                    | Type                | Test |
+|-------|---------------------------------------------------------------------------------------------------------------------------------------------|---------------------|------|
+| U-131 | `RollingRestart`, `Restart`, `Shutdown`, and `Start` on a supercluster are admitted, and `Activate`, `Expand`, and `CancelTask` are refused | Positive + Negative | —    |
+
 ---
 
 ## 2. Integration Tests
@@ -254,44 +311,52 @@ server and a real Kubernetes API through `envtest`.
 
 ### Pools (design §7.1)
 
-| #    | Scenario                                                                                | Type     | Test |
-|------|-----------------------------------------------------------------------------------------|----------|------|
-| I-21 | A pool on a supercluster creates one backend pool per member under the pool's name      | Positive | —    |
-| I-22 | The pool is `Ready` only when every eligible member has it                              | Boundary | —    |
-| I-23 | A 409 on an existing backend pool is success, and the mock sees no second create        | Negative | —    |
-| I-24 | One member's create failing leaves that member ineligible and the pool status naming it | Negative | —    |
-| I-25 | `allowedNodes` is split by member                                                       | Positive | —    |
-| I-26 | Limits are applied unchanged to every member's backend pool                             | Positive | —    |
-| I-27 | A member appended later receives every pool before it becomes eligible                  | Positive | —    |
-| I-28 | The generated StorageClass carries `supercluster` and no `cluster_id`                   | Positive | —    |
-| I-29 | Deleting the supercluster is held while a pool names it                                 | Negative | —    |
+| #        | Scenario                                                                                                                                   | Type     | Test |
+|----------|--------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| I-21     | A pool on a supercluster creates one backend pool per member under the pool's name                                                         | Positive | —    |
+| I-22     | The pool is `Ready` only when every eligible member has it                                                                                 | Boundary | —    |
+| I-23     | A 409 on an existing backend pool is success, and the mock sees no second create                                                           | Negative | —    |
+| I-24     | One member's create failing leaves that member ineligible and the pool status naming it                                                    | Negative | —    |
+| I-25     | `allowedNodes` is split by member                                                                                                          | Positive | —    |
+| ~~I-26~~ | ~~Limits are applied unchanged to every member's backend pool~~ superseded by U-119: the ceiling is the supercluster's (design §7.1)       | Positive | —    |
+| I-27     | A member appended later receives every pool before it becomes eligible                                                                     | Positive | —    |
+| ~~I-28~~ | ~~The generated StorageClass carries `supercluster` and no `cluster_id`~~ superseded by I-47: a class names a supercluster in `cluster_id` | Positive | —    |
+| I-29     | Deleting the supercluster is held while a pool names it                                                                                    | Negative | —    |
 
 ### Relocate (design §8.2)
 
-| #    | Scenario                                                                                                                                        | Type     | Test |
-|------|-------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| I-30 | The happy path calls start, polls status, runs the attach Jobs, commits once, and succeeds                                                      | Positive | —    |
-| I-31 | Volumes sharing the subsystem are listed in `status.relocate.volumes` and moved together                                                        | Positive | —    |
-| I-32 | Abort before commit calls stop, deletes the Jobs, and ends `Aborted`                                                                            | Positive | —    |
-| I-33 | Abort after commit is ignored with `RelocationAbortIgnored`                                                                                     | Negative | —    |
-| I-34 | A restart in every step resumes there, and the mock sees one start and one commit                                                               | Negative | —    |
-| I-35 | Start or commit returning 5xx is retried without advancing the step                                                                             | Negative | —    |
-| I-36 | Start returning 4xx fails the operation with the control plane's message                                                                        | Negative | —    |
-| I-37 | A failing attach Job fails the operation after stop                                                                                             | Negative | —    |
-| I-38 | The original handle not resolving after commit fails with `HandleUnresolved`                                                                    | Negative | —    |
-| I-39 | A `Migrate` and a `Relocate` of one volume exclude each other                                                                                   | Negative | —    |
-| I-40 | `Evacuate` cordons the member, raises one `Relocate` per subsystem within the concurrency bound, and removes the entry when the member is empty | Positive | —    |
-| I-41 | A failing child holds the evacuation with `EvacuationHeld`                                                                                      | Negative | —    |
-| I-42 | A draft with two node sets names both members in `status.message` before approval                                                               | Positive | —    |
-| I-43 | The aggregate entry in the secret carries each member's region and zones, read from its nodes' `Node` labels, and follows a relabeled node      | Positive | —    |
+| #        | Scenario                                                                                                                                                                                                          | Type     | Test |
+|----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| ~~I-30~~ | ~~The happy path calls start, polls status, runs the attach Jobs, commits once, and succeeds~~ superseded by I-44: the cutover follows the replication slot's order (design §8.2)                                 | Positive | —    |
+| I-31     | Volumes sharing the subsystem are listed in `status.relocate.volumes` and moved together                                                                                                                          | Positive | —    |
+| I-32     | Abort before commit calls stop, deletes the Jobs, and ends `Aborted`                                                                                                                                              | Positive | —    |
+| I-33     | Abort after commit is ignored with `RelocationAbortIgnored`                                                                                                                                                       | Negative | —    |
+| I-34     | A restart in every step resumes there, and the mock sees one start and one commit                                                                                                                                 | Negative | —    |
+| I-35     | Start or commit returning 5xx is retried without advancing the step                                                                                                                                               | Negative | —    |
+| I-36     | Start returning 4xx fails the operation with the control plane's message                                                                                                                                          | Negative | —    |
+| ~~I-37~~ | ~~A failing attach Job fails the operation after stop~~ superseded by I-45: a failing Job holds instead of failing (design §8.2)                                                                                  | Negative | —    |
+| I-38     | The original handle not resolving after commit fails with `HandleUnresolved`                                                                                                                                      | Negative | —    |
+| I-39     | A `Migrate` and a `Relocate` of one volume exclude each other                                                                                                                                                     | Negative | —    |
+| I-40     | `Evacuate` cordons the member, raises one `Relocate` per subsystem within the concurrency bound, and removes the entry when the member is empty                                                                   | Positive | —    |
+| I-41     | A failing child holds the evacuation with `EvacuationHeld`                                                                                                                                                        | Negative | —    |
+| I-42     | A draft with two node sets names both members in `status.message` before approval                                                                                                                                 | Positive | —    |
+| I-43     | The aggregate entry in the secret carries each member's region and zones, read from its nodes' `Node` labels, and follows a relabeled node                                                                        | Positive | —    |
+| I-44     | `Relocate` calls start, waits for sync, commits once, preconnects every consuming node with the paths `connect` returns at `cutover_pending`, sends `cutover-proceed` once, and verifies through the relationship | Positive | —    |
+| I-45     | A failing preconnect Job holds the step with `PathAttachHeld`, and the mock receives no `cutover-proceed`                                                                                                         | Negative | —    |
+| I-46     | A restart after `proceeded` is set sends no second `cutover-proceed`                                                                                                                                              | Negative | —    |
+| I-47     | The generated StorageClass for a supercluster pool carries the supercluster's `status.uuid` in `cluster_id`                                                                                                       | Positive | —    |
+| I-48     | A `RollingRestart` on a supercluster raises one member operation at a time in aggregate order, and records progress in `status.fanOut`                                                                            | Positive | —    |
+| I-49     | A failing member operation holds the walk with `FanOutHeld`, and no later member is touched                                                                                                                       | Negative | —    |
+| I-50     | A member already running its own operation holds the walk until that operation finishes                                                                                                                           | Negative | —    |
+| I-51     | A member's backend pool limits are written with its share, and a member leaving placement rewrites the others' shares                                                                                             | Positive | —    |
 
 ---
 
 ## 3. E2E Tests
 
 Run against a live simplyblock control plane with three members of three nodes
-each, using fio in verify mode for every data-path row. Rows E-06 to E-08 need
-P0-3 and P0-4.
+each, using fio in verify mode for every data-path row. Rows E-06 to E-08 need a
+member pair whose storage networks reach each other (P0-6).
 
 | #    | Scenario                                                                                                                                            | Type     | Test |
 |------|-----------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
@@ -364,28 +429,30 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 
 | Class       | Scenarios | Covered | Not covered               |
 |-------------|-----------|---------|---------------------------|
-| Unit        | 102       | 5       | every other active U- row |
-| Integration | 43        | 0       | I-01 … I-43               |
+| Unit        | 119       | 5       | all others, U-01 to U-131 |
+| Integration | 47        | 0       | all, I-01 to I-51         |
 | E2E         | 9         | 0       | E-01 … E-09               |
 | Manual      | 2         | 0       | M-01, M-02                |
 
 The five covered unit rows are existing tests of behavior this design keeps:
-U-25 to U-28 and U-81. The unit count excludes the nine rows U-10 to U-18,
-which are struck through and superseded by U-74 to U-82.
+U-25 to U-28 and U-81. The counts exclude struck rows: U-10 to U-18, U-55,
+U-56, U-77, I-26, I-28, I-30, and I-37, each superseded by the row its strike
+names.
 
 ---
 
 ## 7. What Is Not Yet Covered
 
-| #                                                   | Gap                                                    | Reason                                                                                               |
-|-----------------------------------------------------|--------------------------------------------------------|------------------------------------------------------------------------------------------------------|
-| U-01 … U-09, U-19 … U-24, U-29 … U-80, U-82 … U-111 | Every new unit scenario                                | Feature not implemented (Phases 1 to 4)                                                              |
-| I-01 … I-29, I-42, I-43                             | Supercluster reconcile, expansion, pools, and topology | Feature not implemented (Phases 1 and 2)                                                             |
-| I-30 … I-41                                         | Relocation and evacuation                              | Feature not implemented (Phases 3 and 4)                                                             |
-| E-01 … E-05, E-09                                   | Live supercluster, placement, and discovery split      | Feature not implemented (Phases 1 and 2)                                                             |
-| E-06 … E-08                                         | Live relocation and evacuation                         | Blocked by P0-3 and P0-4                                                                             |
-| M-01, M-02                                          | Failure injection                                      | Needs node power control and selective network blocking                                              |
-| —                                                   | A live cluster stretched over two regions              | No such lab. U-105, U-107, and U-109 cover the decisions                                             |
-| —                                                   | 32 members on a live control plane                     | No lab of that size. U-79 covers the limit                                                           |
-| —                                                   | Five-node and unequal-size members                     | Placement does not read node count, and capacity fixtures in U-47 and U-48 cover it                  |
-| —                                                   | Restart mid-evacuation                                 | Evacuation resumes through its children, each covered by I-34. A dedicated row is added with Phase 4 |
+| #                                                                             | Gap                                                    | Reason                                                                                               |
+|-------------------------------------------------------------------------------|--------------------------------------------------------|------------------------------------------------------------------------------------------------------|
+| U-01 … U-09, U-19 … U-24, U-29 … U-54, U-57 … U-76, U-78 … U-80, U-82 … U-131 | Every new unit scenario                                | Feature not implemented (Phases 1 to 5)                                                              |
+| I-01 … I-25, I-27, I-29, I-42, I-43, I-47, I-51                               | Supercluster reconcile, expansion, pools, and topology | Feature not implemented (Phases 1 and 2)                                                             |
+| I-31 … I-36, I-38 … I-41, I-44 … I-46                                         | Relocation and evacuation                              | Feature not implemented (Phases 3 and 4)                                                             |
+| I-48 … I-50                                                                   | Fan-out cluster operations                             | Feature not implemented (Phase 1)                                                                    |
+| E-01 … E-05, E-09                                                             | Live supercluster, placement, and discovery split      | Feature not implemented (Phases 1 and 2)                                                             |
+| E-06 … E-08                                                                   | Live relocation and evacuation                         | Feature not implemented (Phases 3 and 4)                                                             |
+| M-01, M-02                                                                    | Failure injection                                      | Needs node power control and selective network blocking                                              |
+| —                                                                             | A live cluster stretched over two regions              | No such lab. U-105, U-107, and U-109 cover the decisions                                             |
+| —                                                                             | 32 members on a live control plane                     | No lab of that size. U-79 covers the limit                                                           |
+| —                                                                             | Five-node and unequal-size members                     | Placement does not read node count, and capacity fixtures in U-47 and U-48 cover it                  |
+| —                                                                             | Restart mid-evacuation                                 | Evacuation resumes through its children, each covered by I-34. A dedicated row is added with Phase 4 |
