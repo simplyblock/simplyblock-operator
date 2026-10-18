@@ -195,6 +195,26 @@ File: `operator/internal/discovery/sizesplit_test.go`
 | U-98 | An infra tier and a worker tier split independently, drafted as `infra`, `discovered-1`, and `discovered-2`                   | Positive   | —    |
 | U-99 | Two hundred workers with distinct disks produce no node set above 32 groups, which replaces the overflow split                | Regression | —    |
 
+### Kubernetes Topology (design §5.7, §7.2)
+
+File: `operator/internal/discovery/topology_test.go`, and
+`csi-driver/internal/csi/controller/placement_aggregate_test.go` for U-109 to U-111
+
+| #     | Scenario                                                                                                         | Type                | Test |
+|-------|------------------------------------------------------------------------------------------------------------------|---------------------|------|
+| U-100 | A worker's `topology.kubernetes.io/zone` is copied verbatim into its group's `failureDomain`                     | Positive            | —    |
+| U-101 | `failureDomainLabel` set to a rack label replaces the zone label as the source                                   | Positive            | —    |
+| U-102 | A label value that does not fit the `failureDomain` pattern is a finding naming the worker, and is not rewritten | Negative            | —    |
+| U-103 | Every worker labeled sets `enableFailureDomains` on the template, no worker labeled leaves it unset              | Positive + Negative | —    |
+| U-104 | Some workers labeled is drafted with `TopologyIncomplete` naming the unlabeled ones                              | Boundary            | —    |
+| U-105 | Workers in two regions are never drafted into one node set, and node set names carry the region                  | Negative            | —    |
+| U-106 | Thirty workers in zone `a` and ten in zone `b` are two members of fifteen and five each                          | Positive            | —    |
+| U-107 | A hand-written node set whose workers span two regions is refused at approval with `MemberSpansRegions`          | Negative            | —    |
+| U-108 | A worker without a region label matches any region, so an unlabeled fleet is never refused for it                | Boundary            | —    |
+| U-109 | A preferred topology narrows candidates to members in its region                                                 | Positive            | —    |
+| U-110 | No member in the preferred region with room falls back to the requisite regions, then to every eligible member   | Negative            | —    |
+| U-111 | A class carrying `zone_cluster_map` restricts by the map and ignores member topology                             | Positive            | —    |
+
 ---
 
 ## 2. Integration Tests
@@ -263,6 +283,7 @@ server and a real Kubernetes API through `envtest`.
 | I-40 | `Evacuate` cordons the member, raises one `Relocate` per subsystem within the concurrency bound, and removes the entry when the member is empty | Positive | —    |
 | I-41 | A failing child holds the evacuation with `EvacuationHeld`                                                                                      | Negative | —    |
 | I-42 | A draft with two node sets names both members in `status.message` before approval                                                               | Positive | —    |
+| I-43 | The aggregate entry in the secret carries each member's region and zones, read from its nodes' `Node` labels, and follows a relabeled node      | Positive | —    |
 
 ---
 
@@ -331,6 +352,7 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 | Cluster count   | standalone, 2 members, 3 members, 32 members, 33 members, and two superclusters | U-74, U-35, E-02, U-79, I-09             | 32 members on a live control plane         |
 | Member topology | one-node member, three-node member                                              | U-12, E-01                               | five-node members, members of unequal size |
 | Member size     | 16 and 17 workers at two slots, 32 and 33 at one slot, 20 to 65 workers split   | U-84, U-83, U-89, U-90, U-91, U-92, E-09 | —                                          |
+| Topology        | zones labeled, unlabeled, partially labeled, rack label, two regions            | U-100, U-103, U-104, U-101, U-105, U-109 | a live cluster stretched over two regions  |
 | Namespace scope | one namespace, two namespaces                                                   | U-29, U-31, I-09                         | —                                          |
 | Lifecycle       | restart mid-expansion, restart in every relocate step                           | I-14, I-34                               | restart mid-evacuation                     |
 | Control plane   | 4xx, 5xx, timeout, 409                                                          | I-36, I-35, U-53, I-23                   | —                                          |
@@ -340,12 +362,12 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 
 ## 6. Coverage Summary
 
-| Class       | Scenarios | Covered | Not covered        |
-|-------------|-----------|---------|--------------------|
-| Unit        | 73        | 5       | every other U- row |
-| Integration | 41        | 0       | I-01 … I-41        |
-| E2E         | 8         | 0       | E-01 … E-08        |
-| Manual      | 2         | 0       | M-01, M-02         |
+| Class       | Scenarios | Covered | Not covered               |
+|-------------|-----------|---------|---------------------------|
+| Unit        | 102       | 5       | every other active U- row |
+| Integration | 43        | 0       | I-01 … I-43               |
+| E2E         | 9         | 0       | E-01 … E-09               |
+| Manual      | 2         | 0       | M-01, M-02                |
 
 The five covered unit rows are existing tests of behavior this design keeps:
 U-25 to U-28 and U-81. The unit count excludes the nine rows U-10 to U-18,
@@ -355,14 +377,15 @@ which are struck through and superseded by U-74 to U-82.
 
 ## 7. What Is Not Yet Covered
 
-| #                                     | Gap                                          | Reason                                                                                               |
-|---------------------------------------|----------------------------------------------|------------------------------------------------------------------------------------------------------|
-| U-01 … U-16, U-18 … U-24, U-29 … U-73 | Every new unit scenario                      | Feature not implemented (Phases 1 to 4)                                                              |
-| I-01 … I-29                           | Supercluster reconcile, expansion, and pools | Feature not implemented (Phases 1 and 2)                                                             |
-| I-30 … I-41                           | Relocation and evacuation                    | Feature not implemented (Phases 3 and 4)                                                             |
-| E-01 … E-05                           | Live supercluster and placement              | Feature not implemented (Phases 1 and 2)                                                             |
-| E-06 … E-08                           | Live relocation and evacuation               | Blocked by P0-3 and P0-4                                                                             |
-| M-01, M-02                            | Failure injection                            | Needs node power control and selective network blocking                                              |
-| —                                     | 32 members on a live control plane           | No lab of that size. U-79 covers the limit                                                           |
-| —                                     | Five-node and unequal-size members           | Placement does not read node count, and capacity fixtures in U-47 and U-48 cover it                  |
-| —                                     | Restart mid-evacuation                       | Evacuation resumes through its children, each covered by I-34. A dedicated row is added with Phase 4 |
+| #                                                   | Gap                                                    | Reason                                                                                               |
+|-----------------------------------------------------|--------------------------------------------------------|------------------------------------------------------------------------------------------------------|
+| U-01 … U-09, U-19 … U-24, U-29 … U-80, U-82 … U-111 | Every new unit scenario                                | Feature not implemented (Phases 1 to 4)                                                              |
+| I-01 … I-29, I-42, I-43                             | Supercluster reconcile, expansion, pools, and topology | Feature not implemented (Phases 1 and 2)                                                             |
+| I-30 … I-41                                         | Relocation and evacuation                              | Feature not implemented (Phases 3 and 4)                                                             |
+| E-01 … E-05, E-09                                   | Live supercluster, placement, and discovery split      | Feature not implemented (Phases 1 and 2)                                                             |
+| E-06 … E-08                                         | Live relocation and evacuation                         | Blocked by P0-3 and P0-4                                                                             |
+| M-01, M-02                                          | Failure injection                                      | Needs node power control and selective network blocking                                              |
+| —                                                   | A live cluster stretched over two regions              | No such lab. U-105, U-107, and U-109 cover the decisions                                             |
+| —                                                   | 32 members on a live control plane                     | No lab of that size. U-79 covers the limit                                                           |
+| —                                                   | Five-node and unequal-size members                     | Placement does not read node count, and capacity fixtures in U-47 and U-48 cover it                  |
+| —                                                   | Restart mid-evacuation                                 | Evacuation resumes through its children, each covered by I-34. A dedicated row is added with Phase 4 |

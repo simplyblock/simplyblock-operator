@@ -73,6 +73,7 @@ Appendices:
 - [Appendix B: `storagepool_types.go`](#appendix-b-storagepool_typesgo)
 - [Appendix C: `persistentvolumeops_types.go`](#appendix-c-persistentvolumeops_typesgo)
 - [Appendix D: `storageclusterops_types.go`](#appendix-d-storageclusterops_typesgo)
+- [Appendix E: `operatorops_types.go`](#appendix-e-operatorops_typesgo)
 
 ---
 
@@ -177,6 +178,9 @@ volume between nodes of one cluster.
   its members, with member names derived from the document's cluster name (§5).
 - Hold every cluster to 32 storage nodes, and have discovery draft a larger
   fleet as evenly sized members within that limit (§5.2, §5.5).
+- Draft members from the Kubernetes topology: a member within one region, each
+  zone spread over every member, and volumes placed in their consumer's region
+  (§5.7, §7.2).
 - Let a supercluster and its members share a namespace without the workload name
   collision that limits a namespace to one cluster today (§6).
 - Place each new volume in one member, chosen by a declared strategy and by
@@ -523,7 +527,8 @@ The steps keep their names. What each does with more than one member:
     │
     ▼
   Validating        ← per node set: interfaces, device class, failure domains,
-                      storage nodes ≤ 32, member name fits (§5.2, §5.3)
+                      storage nodes ≤ 32, member name fits, one region
+                      (§5.2, §5.3, §5.7)
     │  clean
     ▼
   CreatingCluster   ← create the members first, then the supercluster listing them
@@ -574,22 +579,25 @@ The split runs after grouping and after the role split
 ([`discovery-generator-rules.md`](../tests/discovery-generator-rules.md) §6.4),
 once per role tier:
 
-1. **Partition by what a member must share.** Workers whose groups differ in
-   management interface name, data interfaces, or device class cannot share a
-   cluster, so each such class is split separately.
+1. **Partition by what a member must share.** Workers in different regions, or
+   whose groups differ in management interface name, data interfaces, or device
+   class, cannot share a cluster, so each such class is split separately (§5.7).
 2. **Count the members.** With `s` slots per worker and `n` workers in a
    partition, a member holds at most `c = floor(32 / s)` workers, and the
    partition needs `k = ceil(n / c)` members.
 3. **Size them evenly.** `n mod k` members hold `ceil(n / k)` workers and the
    rest hold `floor(n / k)`, so no two members differ by more than one worker.
-4. **Deal by failure domain.** Workers are sorted by failure domain, then by
-   name, and dealt round-robin across the `k` node sets, so that every failure
-   domain present in the partition is spread over every member.
+4. **Deal by failure domain.** Workers are sorted by failure domain, read from
+   the Kubernetes topology (§5.7), then by name, and dealt round-robin across the
+   `k` node sets, so that every failure domain present in the partition is spread
+   over every member.
 5. **Group within each node set.** Hardware grouping runs again per node set, so
    group names stay unique within a set as the API requires.
 6. **Name the node sets.** A tier that needs one node set keeps today's name
    (`infra`, `discovered`, or `control-plane`). A tier that needs several numbers
    them from one, as `discovered-1`, `discovered-2`, and so on, in dealing order.
+   A tier spanning several regions carries the region before the number, as
+   `discovered-eu-west-1-1`.
 
 | Workers | Slots per worker | Members | Workers per member |
 |---------|------------------|---------|--------------------|
@@ -638,6 +646,61 @@ Appending to `spec.aggregate` is the one place the expansion writes a spec it di
 not create in the same pass. It is an addition, which is all a growth document
 is allowed to do, and it is written with an optimistic-lock patch so that a
 concurrent edit by an administrator is retried rather than overwritten.
+
+### 5.7 Kubernetes topology
+
+The generator reads two labels off every worker's `Node` object, both
+well-known Kubernetes topology labels that cloud providers and most on-premises
+installers set:
+
+| Label                           | Read as             | Effect on the draft                                                           |
+|---------------------------------|---------------------|-------------------------------------------------------------------------------|
+| `topology.kubernetes.io/region` | The member boundary | A member never spans two regions (§5.5 step 1)                                |
+| `topology.kubernetes.io/zone`   | The failure domain  | Copied into `NodeGroup.failureDomain`, and dealt across members (§5.5 step 4) |
+
+**A region bounds a member** because a member stripes every write synchronously
+across its own nodes, so a member spanning regions puts inter-region latency in
+every write. A supercluster may hold members of several regions, which is what a
+Kubernetes cluster stretched over regions gets, and placement then keeps volumes
+in their consumer's region (§7.2).
+
+**A zone is a failure domain**, which is what
+[`design-clusterdeploymentconfig.md`](crd-redesign/design-clusterdeploymentconfig.md)
+§8.2 specifies and what discovery does not do yet
+([`discovery-generator-rules.md`](../tests/discovery-generator-rules.md) §12).
+This design builds it, because the dealing in §5.5 has nothing to deal by without
+it. Dealing spreads every zone over every member of its region, so each member
+can survive the loss of a zone to the extent its erasure-coding scheme allows,
+and a zone outage degrades every member a little rather than taking one member
+down entirely. A fleet of thirty workers in zone `a` and ten in zone `b` becomes
+two members of fifteen and five each.
+
+**A finer domain comes from a label the run names.** Racks and power feeds have
+no well-known label. `OperatorOps` `Discover` gains `failureDomainLabel`
+([Appendix E](#appendix-e-operatorops_typesgo)), a label key that replaces the
+zone label as the failure domain's source, for fleets whose installer labels
+racks (`example.com/rack`). The value is copied verbatim and is held to the
+`failureDomain` pattern, so a value that does not fit is a finding naming the
+worker rather than a silent rewrite.
+
+**Missing topology is reported, never guessed.**
+
+| Workers in one partition           | Draft                                                                           |
+|------------------------------------|---------------------------------------------------------------------------------|
+| All carry the failure-domain label | Failure domains set, and `enableFailureDomains` set on the template             |
+| None carries it                    | Failure domains unset, `enableFailureDomains` unset, members dealt by name only |
+| Some carry it                      | Drafted, with the finding `TopologyIncomplete` naming the unlabeled workers     |
+| None carries the region label      | One unnamed region, which is today's behavior                                   |
+
+A partial labeling is a finding rather than a refusal, because the draft is a
+proposal for a reviewer to correct, and labeling the missing workers and running
+discovery again is the correction.
+
+**Approval checks the region boundary on every document**, including one written
+by hand. `Validating` reads the region label of every worker a node set lists and
+refuses the document with `MemberSpansRegions`, naming the node set and the
+regions, when they disagree. A worker without the label matches any region, so a
+fleet with no region labels is never refused for it.
 
 ---
 
@@ -723,9 +786,9 @@ driver refuses a class carrying both parameters.
       "name": "simplyblock/prod",
       "strategy": "MostAvailableCapacity",
       "members": [
-        {"cluster_id": "4f0c…", "placement": true},
-        {"cluster_id": "9b21…", "placement": true},
-        {"cluster_id": "c7e8…", "placement": false}
+        {"cluster_id": "4f0c…", "placement": true, "region": "eu-west-1", "zones": ["eu-west-1a", "eu-west-1b"]},
+        {"cluster_id": "9b21…", "placement": true, "region": "eu-west-1", "zones": ["eu-west-1a", "eu-west-1b"]},
+        {"cluster_id": "c7e8…", "placement": false, "region": "eu-central-1", "zones": ["eu-central-1a"]}
       ]
     }
   ]
@@ -745,9 +808,13 @@ what lets every call after `CreateVolume` find a member from the handle alone.
 1. Look up the aggregate in the secret. An unknown name fails with
    `InvalidArgument`, naming the class.
 2. Restrict to members with `placement: true`.
-3. If the class also carries `zone_cluster_map` or `region_cluster_map`, restrict
-   further to members the map assigns to the requested topology. This keeps
-   topology-aware routing working when each zone is one member.
+3. Prefer members in the volume's topology. The aggregate entry records each
+   member's region and zones, read from its workers' `Node` labels. When the class
+   uses `WaitForFirstConsumer` and the request carries a preferred topology,
+   candidates narrow to members in the preferred segment's region, then to the
+   requisite segments' regions, and fall back to every eligible member only when
+   neither leaves a candidate with room. A class carrying `zone_cluster_map` or
+   `region_cluster_map` restricts by the map instead, as it does today.
 4. Read each remaining member's capacity (`GET /api/v2/clusters/{id}/capacity`),
    in parallel, with a deadline of two seconds per member. A member that does not
    answer is dropped for this call and logged.
@@ -996,12 +1063,14 @@ Each reconcile:
    others from being read.
 2. Reads each member's phase and maximum fault tolerance from its status, and
    its capacity from the control plane.
-3. Decides placement eligibility per member: listed without
+3. Records each member's region and zones, read from the `topology.kubernetes.io`
+   labels of the `Node` objects its storage nodes run on.
+4. Decides placement eligibility per member: listed without
    `disablePlacement`, phase serving, and holding every pool of the supercluster.
-4. Writes the aggregate entry into `simplyblock-csi-secret-v2` with the same
+5. Writes the aggregate entry into `simplyblock-csi-secret-v2` with the same
    merge the cluster controller uses for its own entry (`mergeCSICredentials`),
    so the two writers never overwrite each other's keys.
-5. Writes status with an optimistic-lock patch and `observedGeneration`.
+6. Writes status with an optimistic-lock patch and `observedGeneration`.
 
 **`StorageClusterReconciler`** writes `status.role` and `status.superclusterRef`
 for every ordinary cluster, by listing superclusters in its namespace, and
@@ -1034,8 +1103,8 @@ do today.
 ### 10.4 RBAC
 
 No new verbs. Every resource the new controller reads or writes
-(`storageclusters`, `storageclusters/status`, `storagepools`, the CSI secret) is
-already granted to the manager.
+(`storageclusters`, `storageclusters/status`, `storagepools`, `nodes` for their
+topology labels, and the CSI secret) is already granted to the manager.
 
 ---
 
@@ -1139,7 +1208,8 @@ Full scenario matrix, coverage status, and hand-off test concepts:
 
 - **Unit:** the phase rollup table (§4.3), the size limits and member naming
   (§5.2, §5.3), node-set-to-member derivation (§5.1), the generator's balanced
-  split with its worked table (§5.5), the workload naming rule (§6.1), and the
+  split with its worked table (§5.5), the topology reading and its findings
+  (§5.7), the workload naming rule (§6.1), and the
   member ranking with every filter and tie-break (§7.2), each against fixtures,
   plus the webhook rules of §4.4 and §6.2 with a fake client.
 - **Integration:** the expansion of a multi-node-set document into members and a
@@ -1560,4 +1630,23 @@ type EvacuateSpec struct {
 	// +optional
 	MaxConcurrentRelocations *int32 `json:"maxConcurrentRelocations,omitempty"`
 }
+```
+
+---
+
+## Appendix E: `operatorops_types.go`
+
+The addition to the discovery run's spec. The rest of the kind is
+[`design-clusterdeploymentconfig.md`](crd-redesign/design-clusterdeploymentconfig.md)
+Appendix B.
+
+```go
+	// FailureDomainLabel is the Node label whose value becomes each worker's
+	// failure domain in the draft, for fleets that label racks or power feeds.
+	// Defaults to topology.kubernetes.io/zone. A worker without the label gets
+	// no failure domain, and the draft reports it.
+	// +kubebuilder:validation:MaxLength=317
+	// +kubebuilder:default="topology.kubernetes.io/zone"
+	// +optional
+	FailureDomainLabel string `json:"failureDomainLabel,omitempty"`
 ```
