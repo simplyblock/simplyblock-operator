@@ -272,6 +272,14 @@ File: `operator/internal/webhook/storageclusterops_validator_test.go`
 |-------|---------------------------------------------------------------------------------------------------------------------------------------------|---------------------|------|
 | U-131 | `RollingRestart`, `Restart`, `Shutdown`, and `Start` on a supercluster are admitted, and `Activate`, `Expand`, and `CancelTask` are refused | Positive + Negative | —    |
 
+### Encrypted Volumes Are Never Moved (design §9.4)
+
+File: `operator/internal/controllers/volume/relocate_test.go`
+
+| #     | Scenario                                                                                                                                                                                        | Type     | Test |
+|-------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| U-132 | A volume the control plane reports with `crypto_bdev` set, through a class that does not enable encryption, fails in `Validating`, and the mock receives no `replication/start` and no `commit` | Negative | —    |
+
 ---
 
 ## 2. Integration Tests
@@ -349,6 +357,7 @@ server and a real Kubernetes API through `envtest`.
 | I-49     | A failing member operation holds the walk with `FanOutHeld`, and no later member is touched                                                                                                                       | Negative | —    |
 | I-50     | A member already running its own operation holds the walk until that operation finishes                                                                                                                           | Negative | —    |
 | I-51     | A member's backend pool limits are written with its share, and a member leaving placement rewrites the others' shares                                                                                             | Positive | —    |
+| I-52     | `Evacuate` of a member holding an encrypted volume holds with `EvacuationHeld` on it, never raises a `commit` for it, and never removes the member from the aggregate                                             | Negative | —    |
 
 ---
 
@@ -429,8 +438,8 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 
 | Class       | Scenarios | Covered | Not covered               |
 |-------------|-----------|---------|---------------------------|
-| Unit        | 119       | 5       | all others, U-01 to U-131 |
-| Integration | 47        | 0       | all, I-01 to I-51         |
+| Unit        | 120       | 5       | all others, U-01 to U-132 |
+| Integration | 48        | 0       | all, I-01 to I-52         |
 | E2E         | 9         | 0       | E-01 … E-09               |
 | Manual      | 2         | 0       | M-01, M-02                |
 
@@ -445,9 +454,9 @@ names.
 
 | #                                                                             | Gap                                                    | Reason                                                                                               |
 |-------------------------------------------------------------------------------|--------------------------------------------------------|------------------------------------------------------------------------------------------------------|
-| U-01 … U-09, U-19 … U-24, U-29 … U-54, U-57 … U-76, U-78 … U-80, U-82 … U-131 | Every new unit scenario                                | Feature not implemented (Phases 1 to 5)                                                              |
+| U-01 … U-09, U-19 … U-24, U-29 … U-54, U-57 … U-76, U-78 … U-80, U-82 … U-132 | Every new unit scenario                                | Feature not implemented (Phases 1 to 5)                                                              |
 | I-01 … I-25, I-27, I-29, I-42, I-43, I-47, I-51                               | Supercluster reconcile, expansion, pools, and topology | Feature not implemented (Phases 1 and 2)                                                             |
-| I-31 … I-36, I-38 … I-41, I-44 … I-46                                         | Relocation and evacuation                              | Feature not implemented (Phases 3 and 4)                                                             |
+| I-31 … I-36, I-38 … I-41, I-44 … I-46, I-52                                   | Relocation and evacuation                              | Feature not implemented (Phases 3 and 4)                                                             |
 | I-48 … I-50                                                                   | Fan-out cluster operations                             | Feature not implemented (Phase 1)                                                                    |
 | E-01 … E-05, E-09                                                             | Live supercluster, placement, and discovery split      | Feature not implemented (Phases 1 and 2)                                                             |
 | E-06 … E-08                                                                   | Live relocation and evacuation                         | Feature not implemented (Phases 3 and 4)                                                             |
