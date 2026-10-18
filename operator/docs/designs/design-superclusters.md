@@ -10,13 +10,13 @@
 
 ## Phasing Overview
 
-| Phase                   | Status  | Scope                                                                                              | Blocked by |
-|-------------------------|---------|----------------------------------------------------------------------------------------------------|------------|
-| **Phase 1** (§4–§6)     | Planned | The aggregate on `StorageCluster`, per-member workload names, and expansion from a deployment      | —          |
-| **Phase 2** (§7)        | Planned | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver | —          |
-| **Phase 3** (§8.1–§8.3) | Planned | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                        | —          |
-| **Phase 4** (§8.4)      | Planned | `StorageClusterOps` action `Evacuate`: a member emptied and removed from its aggregate             | Phase 3    |
-| **Phase 5** (§7.5)      | Planned | Pool QoS ceilings shared across members by demand rather than split evenly                         | Phase 2    |
+| Phase                   | Status  | Scope                                                                                                                              | Blocked by |
+|-------------------------|---------|------------------------------------------------------------------------------------------------------------------------------------|------------|
+| **Phase 1** (§4–§6)     | Planned | Superclusters and members on `StorageCluster`, per-cluster workload names, the shared certificate, and expansion from a deployment | —          |
+| **Phase 2** (§7)        | Planned | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver                                 | —          |
+| **Phase 3** (§8.1–§8.3) | Planned | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —          |
+| **Phase 4** (§8.4)      | Planned | `StorageClusterOps` action `RemoveMember`: a member's volumes moved into the others, then the member deleted                       | Phase 3    |
+| **Phase 5** (§7.5)      | Planned | Pool QoS ceilings shared across members by demand rather than split evenly                                                         | Phase 2    |
 
 Each phase ships on its own. Phase 1 produces a supercluster that reports one
 status and lets an administrator name the members directly, which is already
@@ -56,9 +56,9 @@ of the site, checked by the move's validation step rather than assumed.
 1. [Background](#1-background)
 2. [Goals and Non-Goals](#2-goals-and-non-goals)
 3. [Architecture Overview](#3-architecture-overview)
-4. [API: A Supercluster Is a StorageCluster with an Aggregate](#4-api-a-supercluster-is-a-storagecluster-with-an-aggregate)
+4. [API: A Supercluster Is a StorageCluster](#4-api-a-supercluster-is-a-storagecluster)
 5. [Expansion from a ClusterDeploymentConfig](#5-expansion-from-a-clusterdeploymentconfig)
-6. [Members Share a Namespace](#6-members-share-a-namespace)
+6. [Workload Names and the Shared Certificate](#6-workload-names-and-the-shared-certificate)
 7. [Volume Placement](#7-volume-placement)
 8. [Moving Volumes Between Members](#8-moving-volumes-between-members)
 9. [Feature Treatment](#9-feature-treatment)
@@ -91,39 +91,37 @@ pools, StorageClasses, backups, and dashboards refer to, one status that rolls
 up the members, and a placement decision at volume creation that picks the member
 a new volume lands in.
 
-**The supercluster is a `StorageCluster` whose `spec.aggregate` lists its
-members.** The aggregate is the discriminator: a cluster with one is a
-supercluster, and a cluster without one is an ordinary cluster. Members are
-ordinary `StorageCluster` objects in the same namespace, unchanged in spec. The
-aggregate being a field of the existing kind is what lets every reference that
-already names a cluster (`StoragePool.spec.clusterRef`,
-`StorageBackupPolicy.spec.clusterRef`, a StorageClass) name a supercluster with
-no new reference type.
+**A supercluster is a `StorageCluster` carrying `spec.supercluster`, and a member
+is a `StorageCluster` carrying `spec.superclusterRef`.** Both are the existing
+kind, so every reference that already names a cluster
+(`StoragePool.spec.clusterRef`, `StorageBackupPolicy.spec.clusterRef`, a
+StorageClass's `cluster_id`) names a supercluster with no new reference type.
+Membership is a fact about the member, fixed when the member is created.
 
 **A `ClusterDeploymentConfig` with more than one node set produces a
-supercluster.** Each node set becomes one member, named `<cluster>-<nodeset>`,
-and the document's `spec.cluster.name` becomes the supercluster's name. A
-simplyblock cluster holds at most 32 storage nodes, so the discovery generator
-splits a larger fleet into node sets of near-equal size: forty workers become
-two members of twenty. A cluster also runs one storage-node DaemonSet with one
-set of interfaces, so machines that differ there are drafted into separate
-members.
+supercluster.** Each node set becomes one member, named
+`<cluster>-<nodeset>-<suffix>` with a random three-letter suffix, and the
+document's `spec.cluster.name` becomes the supercluster's name. A simplyblock
+cluster holds at most 32 storage nodes, so the discovery generator splits a
+larger fleet into node sets of near-equal size: forty workers become two
+members of twenty. A further document with `clusterRef` naming the supercluster
+adds members, and one naming a member adds nodes to it.
 
 **A volume lives in exactly one member for its whole life, unless it is moved.**
-The CSI driver picks the member at `CreateVolume` and writes it into the volume
-handle as it does today, so every later call on the volume reaches the member
-directly. Snapshots, clones, and expansion stay inside that member. Moving a
-volume to another member is an explicit operation (§8) built on the control
-plane's cross-cluster replication in migration mode, which already moves a volume
-between clusters of one control plane with an ANA flip instead of a reconnect.
+The operator picks the member at `CreateVolume`, answering the CSI controller
+over the link the driver already holds to the operator, and the driver writes
+the member into the volume handle as it does today, so every later call on the
+volume reaches the member directly. Snapshots, clones, and expansion stay inside
+that member. Moving a volume to another member is an explicit operation (§8)
+built on the control plane's cross-cluster replication in migration mode.
 
-| Concern                    | Owned by                            | Section |
-|----------------------------|-------------------------------------|---------|
-| Which clusters aggregate   | `StorageCluster.spec.aggregate`     | §4      |
-| How members come to exist  | `ClusterDeploymentConfig` node sets | §5      |
-| Which member a volume gets | CSI driver, at `CreateVolume`       | §7      |
-| Moving a volume            | `PersistentVolumeOps` `Relocate`    | §8      |
-| Emptying a member          | `StorageClusterOps` `Evacuate`      | §8.4    |
+| Concern                    | Owned by                                         | Section |
+|----------------------------|--------------------------------------------------|---------|
+| Which clusters aggregate   | `StorageCluster.spec.superclusterRef` on members | §4      |
+| How members come to exist  | `ClusterDeploymentConfig` node sets              | §5      |
+| Which member a volume gets | The operator, asked over `csilink`               | §7      |
+| Moving a volume            | `PersistentVolumeOps` `Relocate`                 | §8      |
+| Removing a member          | `StorageClusterOps` `RemoveMember`               | §8.4    |
 
 ---
 
@@ -140,8 +138,8 @@ fixed by the request path and the pool.
 **The operator models one cluster per namespace, and one cluster per deployment
 document.** `operator/internal/webhook/storagecluster_validator.go` refuses a
 second `StorageCluster` in a namespace, because the storage-node workload carries
-constant names (`atlas-lib/kube.StorageNodeSetAPIServiceName` and the TLS secret
-beside it). A `ClusterDeploymentConfig` may list several node sets with several
+constant names (`atlas-lib/kube.StorageNodeSetAPIServiceName`, the SPDK proxy
+Service, and their certificate Secrets). A `ClusterDeploymentConfig` may list several node sets with several
 groups each, but every group expands into one cluster, and validation refuses
 groups that disagree on interfaces (`conflictingInterfaces` in
 `operator/internal/controllers/deployment/validation.go`) or on device class
@@ -175,7 +173,8 @@ volume between nodes of one cluster.
 ### Goals
 
 - Aggregate several clusters of one control plane into one `StorageCluster` that
-  pools, StorageClasses, and backup policies can name (§4).
+  pools, StorageClasses, and backup policies can name, with membership declared
+  by each member (§4).
 - Report one status for the aggregate: a phase rolled up from the members, the
   combined capacity, and the lowest fault tolerance among them (§4.3).
 - Expand a deployment document with several node sets into a supercluster and
@@ -185,12 +184,13 @@ volume between nodes of one cluster.
 - Draft members from the Kubernetes topology: a member within one region, each
   zone spread over every member, and volumes placed in their consumer's region
   (§5.7, §7.2).
-- Let a supercluster and its members share a namespace without the workload name
-  collision that limits a namespace to one cluster today (§6).
+- Derive every workload name from its cluster, so that any number of clusters
+  share a namespace, and give a supercluster's members one set of Services and
+  one serving certificate (§6).
 - Place each new volume in one member, chosen by a declared strategy and by
   capacity, with `CreateVolume` idempotent across members (§7).
 - Move a single volume between members of one supercluster without a reconnect
-  (§8), and empty a member so that it can leave the aggregate (§8.4).
+  (§8), and remove a member by moving its volumes into the others (§8.4).
 - State, for every feature that exists, whether it works per member unchanged,
   needs aggregation, or is restricted, and refuse the restricted ones at
   admission rather than at the backend (§9).
@@ -210,7 +210,7 @@ volume between nodes of one cluster.
   needs it to. Nothing in this design does.
 - **Not aggregation across control planes or across Kubernetes clusters.** Every
   member is a cluster of the same control plane, deployed in the same Kubernetes
-  cluster and namespace. Fleets spanning Kubernetes clusters are the management
+  cluster and namespace as its supercluster. Fleets spanning Kubernetes clusters are the management
   hub's ([`design-management-hub.md`](design-management-hub.md)).
 - **Not nesting.** A supercluster's members are ordinary clusters. A supercluster
   cannot be a member.
@@ -223,28 +223,32 @@ volume between nodes of one cluster.
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                       Kubernetes Control Plane                           │
 │  ┌────────────────────────────────────────────────────────────────────┐  │
-│  │ SuperclusterReconciler (StorageCluster with spec.aggregate)        │  │
-│  │  1. resolve members, stamp status.role on the aggregate            │  │
-│  │  2. read each member's status and capacity, roll up status         │  │
-│  │  3. publish the aggregate entry into simplyblock-csi-secret-v2     │  │
+│  │ SuperclusterReconciler (StorageCluster with spec.supercluster)     │  │
+│  │  1. list the members naming it, roll up their status               │  │
+│  │  2. poll each member's capacity                                    │  │
+│  │  3. own the shared Services and serving certificate (§6.2)         │  │
+│  └────────────────────────────────────────────────────────────────────┘  │
+│  ┌────────────────────────────────────────────────────────────────────┐  │
+│  │ PlacementService (served over csilink)                             │  │
+│  │  the member for a new volume, from the reconciler's readings       │  │
 │  └────────────────────────────────────────────────────────────────────┘  │
 │  ┌────────────────────────────────────────────────────────────────────┐  │
 │  │ StorageClusterReconciler (members and standalone clusters)         │  │
-│  │  unchanged, except the workload names of a member (§6)             │  │
+│  │  per-cluster workload names, a member's workload in the shared     │  │
+│  │  Services (§6)                                                     │  │
 │  └────────────────────────────────────────────────────────────────────┘  │
 │  ┌────────────────────────────────────────────────────────────────────┐  │
 │  │ StoragePoolReconciler                                              │  │
 │  │  a pool on a supercluster creates one backend pool per member      │  │
 │  └────────────────────────────────────────────────────────────────────┘  │
 │  ┌────────────────────────────────────────────────────────────────────┐  │
-│  │ PersistentVolumeOps (Relocate) / StorageClusterOps (Evacuate)      │  │
+│  │ PersistentVolumeOps (Relocate) / StorageClusterOps (RemoveMember)  │  │
 │  └────────────────────────────────────────────────────────────────────┘  │
-│  StorageCluster (aggregate)  StorageCluster (member) × N  StoragePool    │
 └──────────────────────────────────────────────────────────────────────────┘
-       │ HTTP (webapi client)                     │ simplyblock-csi-secret-v2
-       │                                          ▼
-       │                      ┌────────────────────────────────────────────┐
-       │                      │ CSI controller: resolveClusterSelection    │
+       │ HTTP (webapi client)                     ▲ csilink: Place(...)
+       │                                          │
+       │                      ┌───────────────────┴────────────────────────┐
+       │                      │ CSI controller: CreateVolume               │
        │                      │ supercluster → member → handle             │
        │                      └───────────────────┬────────────────────────┘
 ┌──────▼──────────────────────────────────────────▼────────────────────────┐
@@ -265,79 +269,62 @@ sites resolve a cluster name to `status.uuid` through
 `operator/internal/utils/objects.go`, and §15 is the audit that keeps any of them
 from sending the aggregate's identifier to the control plane.
 
-**The CSI driver does not read custom resources.** It learns the aggregate from
-the secret it already reads, which the supercluster controller writes, so a
-member joining or leaving changes placement without changing any StorageClass
-(whose parameters are immutable).
+**Placement is the operator's.** The CSI controller already holds a link to the
+operator (`atlas-lib/link`, `operator/internal/csilink`), over which either end
+can serve gRPC. The operator serves `PlacementService` on its end, and the CSI
+controller calls it when a class's `cluster_id` names no cluster it knows. The
+operator holds the members, their capacity readings, their topology, and the
+placements it has made since its last reading, so the decision is taken where
+all of that is.
 
 ---
 
-## 4. API: A Supercluster Is a StorageCluster with an Aggregate
+## 4. API: A Supercluster Is a StorageCluster
 
 ### 4.1 Spec
 
-Two fields are added to `StorageClusterSpec`. The full types are in
+Three fields are added to `StorageClusterSpec`. The full types are in
 [Appendix A](#appendix-a-storagecluster_typesgo).
 
 ```go
-	// +kubebuilder:validation:MinItems=2
-	// +kubebuilder:validation:MaxItems=32
-	// +listType=map
-	// +listMapKey=name
 	// +optional
-	Aggregate []AggregateMember `json:"aggregate,omitempty"`
+	Supercluster *SuperclusterSpec `json:"supercluster,omitempty"`
+
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	SuperclusterRef string `json:"superclusterRef,omitempty"`
 
 	// +optional
-	Placement *AggregatePlacement `json:"placement,omitempty"`
+	DisablePlacement *bool `json:"disablePlacement,omitempty"`
 ```
 
-**`aggregate` is the whole discriminator, and no boolean stands beside it.** A
-non-empty list already says that a cluster is a supercluster, so the API carries
-that fact once and has no pair of fields that can disagree.
+**`spec.supercluster` makes a cluster a supercluster**, and holds what belongs to
+the aggregate as a whole: today, the placement strategy. Its presence is fixed at
+creation.
 
-**An entry is a struct rather than a bare name**, because a member has one
-property of its own: whether new volumes may be placed in it.
-`disablePlacement: true` takes a member out of selection while leaving its
-volumes, pools, and status where they are, which is the first step of emptying
-it (§8.4) and the switch an administrator reaches for when one member is close to
-full.
+**`spec.superclusterRef` makes a cluster a member** of the named supercluster in
+its namespace. It is immutable from creation: a member is created into its
+supercluster and leaves it only by being removed (§8.4).
 
-**The minimum is two members.** An aggregate of one is a cluster with an extra
-name, and none of the behavior in this document applies to it. The
-maximum of thirty-two bounds the per-member work every reconcile does and the
-size of the secret entry the CSI driver parses on every `CreateVolume`.
+**`spec.disablePlacement` on a member takes it out of placement.** Its volumes,
+pools, and status stay where they are. It is valid only on a member.
 
-**`placement.strategy` decides how the CSI driver ranks eligible members.**
-`MostAvailableCapacity` (the default) picks the member with the most free
+**`supercluster.placement.strategy` ranks the eligible members** (§7.2).
+`MostAvailableCapacity`, the default, picks the member with the most free
 physical capacity. `LeastProvisioned` picks the member with the lowest ratio of
-provisioned to physical capacity, which is the better choice where thin
-provisioning is heavy and free capacity is a poor predictor. §7.2 has the
-algorithm.
+provisioned to physical capacity.
 
 ### 4.2 What a supercluster's spec may carry
 
 A supercluster has no nodes, so most of `StorageClusterSpec` describes nothing.
-Exactly these fields are admitted beside `aggregate`: `placement`,
-`warningThreshold`, and `criticalThreshold`. The thresholds apply to the combined
-capacity in §4.3 and drive the supercluster's own capacity events. Every other
-field is refused with one message naming the field. The webhook enforces this
-rule rather than CEL, because CEL cannot enumerate the keys an object carries,
-and a rule naming each forbidden field goes stale the first time a field is
-added to the spec. Members carry their own full
-specs, which a deployment document writes identically (§5.1).
+Exactly these fields are admitted beside `supercluster`: `warningThreshold` and
+`criticalThreshold`, which apply to the combined capacity in §4.3 and drive the
+supercluster's own capacity events. Every other field is refused with one
+message naming the field. The webhook enforces this rule, since CEL cannot
+enumerate the keys an object carries. Members carry their own full specs.
 
 `maxSubsystemCount` and `vcpuCount` are `Required` today. They become optional in
-the schema, and a CEL rule requires both whenever `aggregate` is absent, so that
-an ordinary cluster is held to exactly what it was. Relaxing a required field is
-a non-breaking change for writers, and both fields are already pointers in Go.
-
-**`aggregate` is mutable in two directions only.** An entry may be added, which
-is how a supercluster grows by a member (§5.6). An entry may be removed only when
-the member it names holds no volumes, which admission checks against the member's
-pools (§4.4) and which §8.4 produces deliberately. Turning a supercluster into an
-ordinary cluster, or an ordinary cluster into a supercluster, is refused, because
-a supercluster's pools exist only in its members and an ordinary cluster's
-nodes and volumes exist only in itself.
+the schema, and a CEL rule requires both whenever `supercluster` is absent.
 
 ### 4.3 Status
 
@@ -345,32 +332,30 @@ nodes and volumes exist only in itself.
 |----------------------------|----------------|--------------------------------------------------------------------------------------------|
 | `status.uuid`              | a supercluster | The aggregate's identifier, its `metadata.uid`, which a StorageClass names in `cluster_id` |
 | `status.role`              | every cluster  | `Standalone`, `Supercluster`, or `Member`                                                  |
-| `status.superclusterRef`   | a member       | The name of the supercluster whose aggregate lists it                                      |
 | `status.members[]`         | a supercluster | Per member: name, UUID, phase, whether placement may choose it, and its capacity reading   |
+| `status.memberCount`       | a supercluster | The number of members                                                                      |
 | `status.capacity`          | a supercluster | Sums of the members' total, used, and provisioned bytes                                    |
 | `status.maxFaultTolerance` | a supercluster | The lowest `maxFaultTolerance` among the members                                           |
 
 Every field is reconstructable from the members and the control plane, which is
 the rule for status ([`design-crd-model.md`](crd-redesign/design-crd-model.md)
-§7.9). `role` and `superclusterRef` on a member are written by the member's own
-reconciler, which lists the superclusters in its namespace, so no controller
-writes another object's status.
+§7.9). The supercluster finds its members by listing the clusters in its
+namespace whose `spec.superclusterRef` names it, through a field index.
 
 **The phase rolls up.** A supercluster uses the existing `StorageClusterPhase`
 values, so a dashboard reading the phase column needs no new vocabulary.
 
 | Members                                                         | Supercluster phase |
 |-----------------------------------------------------------------|--------------------|
-| Any member not yet resolved, or still `Pending` or `Creating`   | `Provisioning`     |
+| No member yet, or any member still `Pending` or `Creating`      | `Provisioning`     |
 | Every member `Online`                                           | `Online`           |
 | At least one member serving, at least one not `Online`          | `Degraded`         |
 | No member serving, at least one `Suspended`, none `Unavailable` | `Suspended`        |
 | No member serving, otherwise                                    | `Unavailable`      |
 
 "Serving" is `Online`, `Degraded`, `Rebalancing`, or `Shrinking`. A member that
-is rebalancing makes the supercluster `Degraded` rather than `Rebalancing`,
-because a rebalance in one member says nothing about the others, and the member
-row in `status.members` keeps the member's own phase.
+is rebalancing makes the supercluster `Degraded`, and the member row in
+`status.members` keeps the member's own phase.
 
 A new printcolumn `Role` sits after `Phase`, and a priority-one `Members` column
 reads `status.memberCount`.
@@ -378,20 +363,20 @@ reads `status.memberCount`.
 ### 4.4 Admission
 
 The StorageCluster webhook (`operator/internal/webhook/storagecluster_validator.go`)
-gains these rules, each refusing with a message that names the member:
+gains these rules, each refusing with a message that names the object:
 
-| Rule                                                                                 | Reason                                                         |
-|--------------------------------------------------------------------------------------|----------------------------------------------------------------|
-| Every name in `aggregate` resolves to a `StorageCluster` in the same namespace       | `clusterRef` resolution is namespace-local everywhere else     |
-| No member is itself a supercluster                                                   | No nesting (§2)                                                |
-| No member is listed by a second supercluster                                         | A volume's member has to have one answer to "which aggregate"  |
-| Every member is on the same `ControlPlane`                                           | Cross-member moves need one FoundationDB (P0-1)                |
-| Removing an entry requires the member's pools to report no bound volumes             | Removal by omission must not strand data (§4.2)                |
-| Deleting a `StorageCluster` that an aggregate lists is refused                       | A member leaves the aggregate first, which is the guarded path |
-| A namespace holds one standalone cluster, or one supercluster and its members (§6.2) | The workload names (§6)                                        |
+| Rule                                                                                         | Reason                                                     |
+|----------------------------------------------------------------------------------------------|------------------------------------------------------------|
+| `superclusterRef` resolves to a supercluster in the same namespace                           | `clusterRef` resolution is namespace-local everywhere else |
+| `supercluster` and `superclusterRef` are not both set                                        | A supercluster is never a member                           |
+| A member is on the same `ControlPlane` as its supercluster's other members                   | Cross-member moves need one FoundationDB (P0-1)            |
+| `disablePlacement` is set only on a member                                                   | It is a member's property                                  |
+| Deleting a supercluster that has members is refused                                          | Every member names it in an immutable field                |
+| Deleting a member whose pools report bound volumes is refused, outside `RemoveMember` (§8.4) | Removal moves the volumes first                            |
 
-The second and third rules are checked again on the member side, so that a
-create racing an aggregate edit cannot slip between them.
+The rule that refused a second `StorageCluster` in a namespace is removed. Every
+cluster's workload carries names derived from the cluster (§6.1), so clusters
+of any kind share a namespace freely.
 
 ### 4.5 Example
 
@@ -402,39 +387,49 @@ metadata:
   name: prod
   namespace: simplyblock
 spec:
-  aggregate:
-    - name: prod-dense
-    - name: prod-fast
-    - name: prod-archive
-      disablePlacement: true
-  placement:
-    strategy: MostAvailableCapacity
+  supercluster:
+    placement:
+      strategy: MostAvailableCapacity
   warningThreshold:
     capacity: 80
   criticalThreshold:
     capacity: 90
 status:
+  uuid: 0d6f1b2e-…
   role: Supercluster
   phase: Degraded
   maxFaultTolerance: 1
+  memberCount: 3
   capacity:
     totalBytes: 1319413953331200
     usedBytes: 412316860416000
     provisionedBytes: 989560464998400
   members:
-    - name: prod-dense
+    - name: prod-dense-kqv
       uuid: 4f0c…
       phase: Online
       placementEligible: true
-    - name: prod-fast
+    - name: prod-fast-mzt
       uuid: 9b21…
       phase: Degraded
       placementEligible: true
-    - name: prod-archive
+    - name: prod-archive-hwd
       uuid: c7e8…
       phase: Online
       placementEligible: false
   observedGeneration: 3
+---
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageCluster
+metadata:
+  name: prod-archive-hwd
+  namespace: simplyblock
+spec:
+  superclusterRef: prod
+  disablePlacement: true
+  maxSubsystemCount: 32
+  vcpuCount: 8
+  # … the member's own full spec
 ```
 
 ---
@@ -448,14 +443,6 @@ The expansion machine
 §4.2) reads a document with one node set exactly as it does today: one cluster,
 named `spec.cluster.name`. A document with two or more node sets produces a
 supercluster, with one member per node set.
-
-**A node set is the unit a member is made of, and a group stays what it is.** A
-`NodeGroup` is a hardware signature: discovery puts two workers in one group only
-when their device class, management interface name, and device addresses all
-match ([`discovery-generator-rules.md`](../tests/discovery-generator-rules.md)
-§6.1), which on hardware with persistent device names means one group per worker.
-A node set carries no sizing and holds any number of groups, so it is the level
-that can be sized to a cluster.
 
 **A member keeps fault tolerance across racks.** Failure domains are a group's
 field (`NodeGroup.failureDomain`), not a node set's, so a node set whose groups
@@ -494,43 +481,40 @@ enforcing it there is outside this design.
 | Limit                               | Value         | Refused at approval with |
 |-------------------------------------|---------------|--------------------------|
 | Storage nodes per node set (member) | 32            | `MemberTooLarge`         |
-| Node sets per document (members)    | 32            | `TooManyMembers`         |
 | Cluster name (`spec.cluster.name`)  | 35 characters | API server (`MaxLength`) |
-| Node set name                       | 26 characters | API server (`MaxLength`) |
+| Node set name                       | 23 characters | API server (`MaxLength`) |
 | Member name                         | DNS label     | `MemberNameInvalid`      |
 
 **The storage-node limit holds for an ordinary cluster too.** A one-node-set
 document listing more than 32 storage nodes is refused with `MemberTooLarge`,
 because the limit is a cluster's, whether or not the cluster is a member.
-The two limits of 32 are independent: one bounds a member's nodes, and the other
-bounds the members of an aggregate (§4.1).
 
 ### 5.3 Naming
 
-| Object                  | Name                      | Example (`spec.cluster.name: prod`, node set `discovered-1`) |
-|-------------------------|---------------------------|--------------------------------------------------------------|
-| Supercluster            | `spec.cluster.name`       | `prod`                                                       |
-| Member `StorageCluster` | `<cluster>-<nodeset>`     | `prod-discovered-1`                                          |
-| Backend cluster         | the member's name         | `prod-discovered-1`                                          |
-| `StorageNode`           | as today, from the member | `prod-discovered-1-<worker>-<slot>`                          |
+| Object                  | Name                           | Example (`spec.cluster.name: prod`, node set `dense`) |
+|-------------------------|--------------------------------|-------------------------------------------------------|
+| Supercluster            | `spec.cluster.name`            | `prod`                                                |
+| Member `StorageCluster` | `<cluster>-<nodeset>-<suffix>` | `prod-dense-kqv`                                      |
+| Backend cluster         | the member's name              | `prod-dense-kqv`                                      |
+| `StorageNode`           | as today, from the member      | `prod-dense-kqv-<worker>-<slot>`                      |
+
+**The suffix is three random lowercase letters**, drawn when the member is
+created. Members come and go over a supercluster's life, so a member's name
+carries no position: a removed member's name is never reused by the next member
+from the same node set name, and two growth documents naming their node sets
+alike produce two distinct members. The expansion records the drawn name in the
+document's status before it creates the member, so a retry after a crash
+creates the member it named rather than drawing again (§5.4). A drawn name that
+already exists is drawn again.
 
 **The name limits make every member name fit.** A cluster name of at most 35
-characters, a hyphen, and a node set name of at most 26 make a member name of at
-most 62, inside the 63 a `StorageCluster` name may be. A node set name is 23
-characters of name and three of counter: the generator writes a base of at most
-23 characters and appends `-1` to `-32` when a tier needs several node sets
-(§5.5), and a hand-written name may use all 26. Both limits are `MaxLength`
-markers, so an oversized name is refused by the API server rather than at
-approval ([Appendix F](#appendix-f-clusterdeploymentconfig_typesgo)). Validation
-still refuses a member name that is not a DNS label with `MemberNameInvalid`,
-naming the node set. The supercluster's name is also a backend-unique name in practice, because sbcli
-refuses duplicate cluster names across its database and the members carry the
-supercluster's name as a prefix. `StorageNode.spec.nodeSet` already records the
-node set, so every node names the member it was created for.
-
-**The suffix is the node set name**, because a member name is read in every
-event, log line, and `sbctl` listing for the life of the cluster, and a reviewer
-renaming `discovered-1` to `rack-a-dense` before approval is renaming the member.
+characters, a node set name of at most 23, the suffix, and two hyphens make a
+member name of at most 63, which is what a `StorageCluster` name may be. Both
+limits are `MaxLength` markers, so an oversized name is refused by the API server
+([Appendix F](#appendix-f-clusterdeploymentconfig_typesgo)). Validation refuses a
+member name that is not a DNS label with `MemberNameInvalid`, naming the node
+set. `StorageNode.spec.nodeSet` already records the node set, so every node names
+the part of the document it came from.
 
 ### 5.4 The expansion machine
 
@@ -545,7 +529,8 @@ The steps keep their names. What each does with more than one member:
                       (§5.2, §5.3, §5.7)
     │  clean
     ▼
-  CreatingCluster   ← create the members first, then the supercluster listing them
+  CreatingCluster   ← create the supercluster; draw and record each member's
+                      name; create the members, each naming the supercluster
     │
     ▼
   AwaitingCluster   ← wait for every member's status.uuid
@@ -562,10 +547,16 @@ The steps keep their names. What each does with more than one member:
   phase: Expanded
 ```
 
-**Members are created before the supercluster**, so that the aggregate's
-admission rule that every member resolves (§4.4) holds on the first write. The
-step is idempotent by name in both halves: a crash between the two creates the
-supercluster on the next pass and no second member.
+**The supercluster is created before its members**, because a member names it in
+an immutable field and admission resolves that name. A member then holds before
+it creates its backend cluster or any workload until its supercluster reports
+the shared Services and serving certificate ready (§6.2), so no member ever
+starts with a workload outside its supercluster's.
+
+**`CreatingCluster` writes ahead.** It records every member's drawn name in
+`status.members` of the document before creating any member, and creates by
+those names, so a crash between two creates resumes with the same names and
+creates no second member.
 
 **`status.clusterRef` names the supercluster**, and `status.nodeRefs` lists the
 nodes of all members, so the document's printcolumn names the object an
@@ -577,7 +568,7 @@ independent clusters and an activation is per cluster.
 
 **The erasure-coding minimum is checked per member.** Each scheme needs a minimum
 number of storage nodes (eight for 4+2), and the existing check that compares the
-document's node count against it now compares each node set's count, since each
+document's node count against it compares each node set's count, since each
 member stripes only across its own nodes.
 
 ### 5.5 The discovery generator sizes members
@@ -611,8 +602,8 @@ once per role tier:
    (`infra`, `discovered`, or `control-plane`). A tier that needs several numbers
    them from one, as `discovered-1`, `discovered-2`, and so on, in dealing order.
    A tier spanning several regions carries the region before the number, as
-   `discovered-eu-west-1-1`. The base before the counter is cut to 23 characters,
-   so a generated name always fits the node set limit (§5.3).
+   `discovered-eu-west-1-1`. A generated name is cut to the 23 characters a node
+   set name may have, keeping its number (§5.3).
 
 | Workers | Slots per worker | Members | Workers per member |
 |---------|------------------|---------|--------------------|
@@ -641,25 +632,25 @@ Approving both approves a supercluster of two members, and the draft's
 
 ### 5.6 Growth
 
-Growth stays a second document naming the existing cluster in `spec.clusterRef`
+Growth stays a second document naming an existing cluster in `spec.clusterRef`
 ([`design-clusterdeploymentconfig.md`](crd-redesign/design-clusterdeploymentconfig.md)
-§6).
+§6), and what it names decides what it grows:
 
-| `clusterRef` names  | The growth document's node sets    | Expansion does                                                                     |
-|---------------------|------------------------------------|------------------------------------------------------------------------------------|
-| An ordinary cluster | Any number                         | Adds every node set's nodes to that cluster, as today, within 32 storage nodes     |
-| A supercluster      | All named like existing members    | Adds nodes to those members, each within 32 storage nodes                          |
-| A supercluster      | Some named like no existing member | Creates those members and appends them to `spec.aggregate`                         |
-| A member            | Any number                         | Treated as growth of that ordinary cluster. Node set names are not used for naming |
+| `clusterRef` names   | Expansion does                                                                                                  |
+|----------------------|-----------------------------------------------------------------------------------------------------------------|
+| A standalone cluster | Adds every node set's nodes to that cluster, within 32 storage nodes                                            |
+| A supercluster       | Creates one new member per node set, each named `<supercluster>-<nodeset>-<suffix>` and naming the supercluster |
+| A member             | Adds every node set's nodes to that member, within 32 storage nodes                                             |
 
-The storage-node limit counts the nodes a member already has: a growth document
-adding eight workers to a member of thirty is refused with `MemberTooLarge`,
-naming both numbers.
+A document adding members to a supercluster states their sizing in
+`spec.cluster`, as a creating document does, and its node sets may override it
+(§5.8). The template's `name` is not used, because the supercluster already has
+one. A document naming a supercluster without `spec.cluster` is refused with
+`MemberSizingUnstated`.
 
-Appending to `spec.aggregate` is the one place the expansion writes a spec it did
-not create in the same pass. It is an addition, which is all a growth document
-is allowed to do, and it is written with an optimistic-lock patch so that a
-concurrent edit by an administrator is retried rather than overwritten.
+The storage-node limit counts the nodes a member already has: a document adding
+eight workers to a member of thirty is refused with `MemberTooLarge`, naming both
+numbers.
 
 ### 5.7 Kubernetes topology
 
@@ -736,8 +727,8 @@ template's sizing for that node set's member:
 An unset field inherits the template's value. The member is created with the
 merged values, the size limit counts the node set's own slots, and the
 erasure-coding minimum is checked against the member's own scheme. Overrides are
-refused on a document with one node set, because its template already states the
-one member's sizing.
+refused on a document creating one standalone cluster, because its template
+already states that cluster's sizing.
 
 **Groups within a node set stay in one hardware category.** Device class is
 fixed per node set by the narrowed CEL rule (§5.1), so a node set mixing NVMe
@@ -747,43 +738,56 @@ node sets into one document, or written by hand.
 
 ---
 
-## 6. Members Share a Namespace
+## 6. Workload Names and the Shared Certificate
 
-### 6.1 Per-member workload names
+### 6.1 Per-cluster workload names
 
-Three workload objects carry constant names today: the storage-node API Service
-(`simplyblock-storage-node-api`), its EndpointSlice, and the serving certificate's
-TLS secret. Node hostnames are built from the Service name, so the names are part
-of every node's identity in the control plane.
+Two Services carry constant names today, `simplyblock-storage-node-api` and
+`simplyblock-spdk-proxy`, and so do their serving-certificate Secrets
+(`utils.SecretNameStorageNodeSetAPITLS` and `utils.SecretNameSpdkProxyTLS`).
+Node hostnames are built from the storage-node API Service's name, as
+`<node-hostname>.<service>.<namespace>.svc`, so the name is part of every node's
+identity in the control plane.
 
-**A member's workload objects carry the member's name**, as
-`simplyblock-storage-node-api-<member>` and the TLS secret beside it. The
-functions that produce these names move from constants to
-`atlas-lib/kube` functions taking the cluster, because both the operator and the
-storage-node bootstrap build hostnames from them, and two copies of that
-derivation are two hostnames that disagree after the first edit.
+**Every workload object's name derives from the cluster that owns it.** The
+Services are `sb-<name>-node-api` and `sb-<name>-spdk-proxy`, and each
+certificate Secret is its Service's name with `-tls`. A name that would exceed 63
+characters is cut to 40 characters of `<name>` followed by eight characters of
+its hash, so every name stays a valid Service name whatever the cluster name.
+The functions that derive them are in `atlas-lib/kube`, taking the cluster,
+because the operator and the storage-node bootstrap both build hostnames from
+them.
 
-**A cluster keeps the shared names when it already owns them.** Renaming the
+**A cluster that already owns the constant names keeps them.** Renaming the
 Service of a running cluster changes every node's hostname, which is a node
-re-registration rather than a rename. So the rule reads off what exists: a
-cluster uses the shared names if it is the controller owner of the shared
-Service, or if it is not a member and no cluster owns it. Every other cluster
-uses per-member names. A standalone cluster adopted into an aggregate therefore
-keeps its names, and at most one cluster in a namespace ever holds them, which is
-what the shared names can express.
+re-registration rather than a rename, so a cluster that is the controller owner
+of `simplyblock-storage-node-api` in its namespace goes on using the constant
+names. Every other cluster uses derived names. Ownership of the Service does not
+move, so the answer never changes for a cluster whose workload exists.
 
-The rule is evaluated at every reconcile and never changes its answer for a
-cluster whose workload exists, because ownership of the Service does not move.
+### 6.2 A supercluster's members share its Services and certificate
 
-### 6.2 Admission
+**The Services of a supercluster are the supercluster's.** The supercluster
+reconciler creates `sb-<supercluster>-node-api` and `sb-<supercluster>-spdk-proxy`,
+headless and selecting the storage-node pods labeled with the supercluster's
+name, and every member's DaemonSet labels its pods so. Each member publishes its
+own EndpointSlice into the shared Service, named for the member. A node's
+hostname is `<node-hostname>.sb-<supercluster>-node-api.<namespace>.svc`, which is
+unique because a worker belongs to one member.
 
-The one-cluster-per-namespace rule becomes: a namespace holds either one
-standalone cluster, or one supercluster together with the members it lists and
-nothing else. A standalone cluster created beside a supercluster is refused,
-because it would compete for the shared names with no aggregate to justify it. A
-member created before its supercluster is admitted when an approved
-`ClusterDeploymentConfig` in the namespace names it as a member, which is the
-order §5.4 creates them in.
+**One serving certificate covers every member.** It is the shared Service's
+certificate, issued by the provider the operator already uses
+(`service.beta.openshift.io/serving-cert-secret-name` on OpenShift, a cert-manager
+`Certificate` from `simplyblock-certificate-authority-issuer` otherwise), and every
+member's pods mount the one Secret. TLS clients of any member verify against one
+name and one certificate, and mTLS peers present and accept one identity across
+the supercluster, so a volume moved between members and a host connected to
+several members need nothing per member. A member added later joins the existing
+certificate with no reissue, because the certificate names the Service and not
+the members.
+
+**A member's own workload is everything else**: its DaemonSet, its ConfigMaps,
+and its EndpointSlice, each with a name derived from the member (§6.1).
 
 ---
 
@@ -813,79 +817,64 @@ allowed nodes that are its own workers.
 **The generated StorageClass names the supercluster in `cluster_id`.** The pool
 controller writes the supercluster's `status.uuid` there, as it writes a
 cluster's UUID for an ordinary cluster, so a class names a supercluster and a
-cluster the same way, and a hub-side class does too (§9.7).
-
-**The supercluster controller writes an `aggregates` list into
-`simplyblock-csi-secret-v2`**, beside the existing `clusters` list:
-
-```json
-{
-  "clusters": [
-    {"cluster_id": "4f0c…", "cluster_endpoint": "…", "cluster_secret": "…", "local": true},
-    {"cluster_id": "9b21…", "cluster_endpoint": "…", "cluster_secret": "…", "local": true}
-  ],
-  "aggregates": [
-    {
-      "id": "0d6f1b2e-…",
-      "name": "simplyblock/prod",
-      "strategy": "MostAvailableCapacity",
-      "members": [
-        {"cluster_id": "4f0c…", "placement": true, "region": "eu-west-1", "zones": ["eu-west-1a", "eu-west-1b"]},
-        {"cluster_id": "9b21…", "placement": true, "region": "eu-west-1", "zones": ["eu-west-1a", "eu-west-1b"]},
-        {"cluster_id": "c7e8…", "placement": false, "region": "eu-central-1", "zones": ["eu-central-1a"]}
-      ]
-    }
-  ]
-}
-```
-
-The key is `id`, the supercluster's `metadata.uid`, which is unique across
-Kubernetes clusters and therefore safe in a hub's secret that lists several
-sites. `name` is for a reader of the secret. Every member is also an ordinary
-entry in `clusters`, which is what lets every call after `CreateVolume` find a
-member from the handle alone.
+cluster the same way, and a hub-side class does too (§9.7). Every member is an
+ordinary entry in `simplyblock-csi-secret-v2`, where the cluster controller
+already lists every cluster the control plane knows, which is what lets every
+call after `CreateVolume` find a member from the handle alone.
 
 ### 7.2 Choosing a member at CreateVolume
 
-`resolveClusterSelection` gains one branch, taken when the class's `cluster_id`
-matches an aggregate's `id` rather than a cluster's:
+`resolveClusterSelection` in the CSI controller gains one branch, taken when the
+class's `cluster_id` names no cluster in the secret: it calls
+`PlacementService.Place` over the link to the operator, with the aggregate's
+identifier, the pool name, the volume name, the requested size, and the
+request's accessibility requirements. The service is declared in
+`atlas-lib/placement/placementrpc/placementv1/placement.proto`, beside the
+link's other services, and is the first one the operator serves to a peer.
 
-1. Look up the aggregate in the secret. A `cluster_id` matching neither a
-   cluster nor an aggregate fails with `InvalidArgument`, naming the class, as an
-   unknown cluster does today.
-2. Restrict to members with `placement: true`.
-3. Prefer members in the volume's topology. The aggregate entry records each
-   member's region and zones, read from its workers' `Node` labels. When the class
-   uses `WaitForFirstConsumer` and the request carries a preferred topology,
-   candidates narrow to members in the preferred segment's region, then to the
-   requisite segments' regions, and fall back to every eligible member only when
-   neither leaves a candidate with room. A class carrying `zone_cluster_map` or
-   `region_cluster_map` restricts by the map instead, as it does today.
-4. Read each remaining member's capacity (`GET /api/v2/clusters/{id}/capacity`),
-   in parallel, with a deadline of two seconds per member. A member that does not
-   answer is dropped for this call and logged.
-5. Drop members whose free capacity is below the requested size, and members
+The operator answers from the supercluster reconciler's readings:
+
+1. Resolve the aggregate. An identifier that names no supercluster fails with
+   `NotFound`, which the driver returns as `InvalidArgument` naming the class, as
+   an unknown cluster does today.
+2. Look for the volume name in every member's pool (§7.3). A hit is the answer.
+3. Restrict to placement-eligible members: not `disablePlacement`, not
+   being removed, serving, and holding the pool.
+4. Prefer members in the volume's topology. Each member's region and zones are
+   read from its workers' `Node` labels. When the request carries a preferred
+   topology, candidates narrow to members in the preferred segment's region,
+   then to the requisite segments' regions, and fall back to every eligible
+   member only when neither leaves a candidate with room.
+5. Take each member's free capacity from the latest reading, less the sizes the
+   operator has placed in it since that reading, so a burst of provisions spreads
+   instead of landing on the member that was emptiest a minute ago. A reading
+   older than two polling intervals is refreshed with a two-second deadline, and
+   a member whose reading cannot be refreshed is dropped for this call.
+6. Drop members whose free capacity is below the requested size, and members
    above their own `criticalThreshold`.
-6. Rank by the strategy and take the first. Ties break by cluster UUID, so that
-   the choice is deterministic for a test and for a retry.
-7. No candidate left fails with `ResourceExhausted`, naming the aggregate and the
+7. Rank by the strategy and take the first. Ties break by cluster UUID.
+8. No candidate left fails with `ResourceExhausted`, naming the aggregate and the
    reason each member was dropped.
 
-The chosen member's UUID is the first component of the volume handle, exactly
-as a `cluster_id` class produces today.
+The driver writes the chosen member's UUID into the volume handle, exactly as a
+`cluster_id` class produces today. A class carrying `zone_cluster_map` or
+`region_cluster_map` keeps its existing branch and never reaches the operator.
+
+**The link being down fails the call with `Unavailable`**, which the
+external-provisioner retries.
 
 ### 7.3 CreateVolume is idempotent across members
 
 The external-provisioner retries `CreateVolume` with the same name until it gets
 an answer, and a retry may rank members differently, because capacity changed in
-between. Without a check, a retry after a timeout creates a second volume in a
-second member and the first is leaked.
+between.
 
-**Before ranking, the driver looks for the name in every member of the
-aggregate**, including members with `placement: false`, through the existing
-lookup by name in the class's pool. A hit returns that volume, so the first
-member to receive the volume is the member it keeps. The lookup costs one call
-per member on every `CreateVolume`, which the thirty-two-member maximum bounds.
+**Before ranking, the operator looks for the name in every member of the
+aggregate**, including members not eligible for placement, through the control
+plane's lookup by name in the pool. A hit returns that member, so the first
+member to receive the volume is the member it keeps. A lookup that fails in any
+member fails the call with `Unavailable` rather than placing, because placing
+without knowing is how the duplicate arises.
 
 ### 7.4 What a volume knows about its aggregate
 
@@ -1012,22 +1001,43 @@ failed-over one for every call. The resolution moves to `atlas-lib/controlplane`
 because the operator's `Verifying` step asserts the same mapping the driver
 follows, and two copies of a chain walk are two answers to where a volume is.
 
-### 8.4 Emptying a member (Phase 4)
+### 8.4 Removing a member (Phase 4)
 
-`StorageClusterOps` gains `Evacuate`
-([Appendix D](#appendix-d-storageclusterops_typesgo)), targeting a member. It
-sets the member's `disablePlacement` through the aggregate, raises one
-`PersistentVolumeOps` `Relocate` per subsystem with a `creatorRef` naming the
-operation, as a node drain does today
-([`design-persistentvolumeops.md`](crd-redesign/design-persistentvolumeops.md)
-§11.1), and chooses each target by the aggregate's placement strategy. When every
-child has succeeded and the member's pools report no bound volumes, it removes
-the member's entry from the aggregate. Deleting the now-standalone cluster is a
-separate, deliberate act.
+`StorageClusterOps` gains `RemoveMember`
+([Appendix D](#appendix-d-storageclusterops_typesgo)), targeting a member. It is a
+long-running operation because the member's volumes move into the rest of the
+supercluster before the member goes:
 
-`Evacuate` reuses the bounded-concurrency walk of a drain: at most
-`maxConcurrentRelocations` children run at once (default 1), and a child that
-fails holds the walk with an event instead of skipping the volume.
+```
+  action=RemoveMember received
+    │
+    ▼
+  Validating     ← the target is a member; the other members have room for its
+    │              volumes; it holds no encrypted volume (§9.4)
+    ▼
+  Draining       ← the member is out of placement from here on; one
+    │              PersistentVolumeOps Relocate per subsystem, creatorRef naming
+    │              this operation, at most maxConcurrentRelocations at once,
+    │              each target chosen by the placement of §7.2
+    │  the member's pools report no bound volumes
+    ▼
+  Deleting       ← delete the member StorageCluster, which removes its nodes,
+    │              pools, and backend cluster through its own deletion path
+    ▼
+  phase: Succeeded
+```
+
+The member is out of placement for as long as the operation runs, which the
+supercluster reads from the member's active operation rather than from its spec.
+A child relocation that fails holds the walk with `RemovalHeld` instead of
+skipping the volume, so a member is never deleted while it holds a volume.
+Aborting during `Draining` stops raising children, lets the running ones finish,
+and returns the member to placement. `Deleting` cannot be aborted.
+
+The operation takes the member's `status.activeOpsRef` for its duration, so a
+removal and a rolling restart of one member exclude each other as two operations
+on a cluster do today. A supercluster whose last member is removed has no
+members, reports `Provisioning`, and may be deleted (§4.4).
 
 ---
 
@@ -1122,10 +1132,9 @@ control plane's `rekey_data_encryption_keys` and `import_data_encryption_keys`
 encryption with `EncryptedVolumeNotMovable`. `Validating` reads the volume's
 `crypto_bdev` from the control plane and fails the operation before
 `Replicating` if it is set, because a class is not the only way a volume becomes
-encrypted and the cost of a missed refusal is the volume. `Evacuate` inherits
-both checks through its children, and holds with `EvacuationHeld` on an
-encrypted volume rather than skipping it, so that a member holding encrypted
-volumes is never removed from its aggregate.
+encrypted and the cost of a missed refusal is the volume. `RemoveMember` refuses
+a member holding an encrypted volume in its own `Validating`, and its children
+inherit both checks, so a member holding encrypted volumes is never deleted.
 
 ### 9.5 Backups
 
@@ -1139,7 +1148,7 @@ the same store to every member.
 ### 9.6 Cluster operations
 
 `RollingRestart`, `Restart`, `Shutdown`, and `Start` on a supercluster walk its
-members one at a time, in the order the aggregate lists them, as one operation
+members one at a time, in order of member name, as one operation
 per member that the supercluster's operation raises and waits on. Each member's
 operation takes that member's lock, so a member already running an operation of
 its own holds the walk until it finishes. A member's operation that fails holds
@@ -1149,8 +1158,7 @@ down beside it. Progress is in the operation's `status.fanOut`
 ([Appendix D](#appendix-d-storageclusterops_typesgo)).
 
 `Activate`, `Expand`, and `CancelTask` are refused on a supercluster, because
-each names something one cluster has. `Evacuate` targets a member and edits the
-aggregate (§8.4).
+each names something one cluster has. `RemoveMember` targets a member (§8.4).
 
 ### 9.7 StorageSiteDeployment
 
@@ -1158,9 +1166,9 @@ A site deployment mirrors one `StorageCluster` and its UUID back to the hub,
 because a StorageClass on the hub side names `cluster_id` and `pool_name`. A
 supercluster's `status.uuid` is its aggregate identifier, so the mirror carries
 it unchanged and the hub's class names the supercluster in `cluster_id`. The
-hub's CSI secret carries the aggregate entry beside the member clusters, which is
-the addition this design makes to
-[`design-management-hub.md`](design-management-hub.md).
+placement for that class is answered by the site's operator, which owns the
+supercluster, so the class provisions on the site as a cluster's class does
+([`design-management-hub.md`](design-management-hub.md)).
 
 ---
 
@@ -1170,61 +1178,65 @@ the addition this design makes to
 
 **`SuperclusterReconciler`** lives in
 `operator/internal/controllers/cluster/supercluster_controller.go`. It
-reconciles `StorageCluster` objects with a non-empty `spec.aggregate`, and
+reconciles `StorageCluster` objects carrying `spec.supercluster`, and
 `StorageClusterReconciler` gains the inverse predicate, so each object has
 exactly one reconciler. It watches member `StorageCluster` objects and maps each
-to the supercluster listing it, and it polls capacity every 60 seconds.
+to the supercluster its `spec.superclusterRef` names, and it polls capacity
+every 60 seconds.
 
 Each reconcile:
 
-1. Resolves every member. An unresolved member is reported in
-   `status.members` with phase `Pending` and an event, and does not stop the
-   others from being read.
-2. Reads each member's phase and maximum fault tolerance from its status, and
-   its capacity from the control plane.
+1. Ensures the shared Services and serving certificate (§6.2), and reports them
+   ready, which is what a new member waits for (§5.4).
+2. Lists the members through the field index on `spec.superclusterRef`, and reads
+   each member's phase and maximum fault tolerance from its status, and its
+   capacity from the control plane.
 3. Records each member's region and zones, read from the `topology.kubernetes.io`
    labels of the `Node` objects its storage nodes run on.
-4. Decides placement eligibility per member: listed without
-   `disablePlacement`, phase serving, and holding every pool of the supercluster.
-5. Writes the aggregate entry into `simplyblock-csi-secret-v2` with the same
-   merge the cluster controller uses for its own entry (`mergeCSICredentials`),
-   so the two writers never overwrite each other's keys.
+4. Decides placement eligibility per member: not `disablePlacement`, no
+   `RemoveMember` running on it, phase serving, and holding every pool of the
+   supercluster.
+5. Hands the readings to `PlacementService`, which answers from them (§7.2).
 6. Writes status with an optimistic-lock patch and `observedGeneration`.
 
-**`StorageClusterReconciler`** writes `status.role` and `status.superclusterRef`
-for every ordinary cluster, by listing superclusters in its namespace, and
-chooses the workload names by §6.1.
+**`PlacementService`** lives in `operator/internal/placement`, registered on the
+operator's end of every CSI controller link by `operator/internal/csilink`. It
+keeps, per member, the sizes it has placed since the member's last reading,
+which the next reading clears.
+
+**`StorageClusterReconciler`** writes `status.role` for every ordinary cluster,
+chooses the workload names by §6.1, and for a member labels its pods into the
+supercluster's Services and mounts the supercluster's certificate (§6.2).
 
 **`StoragePoolReconciler`** branches on whether the pool's cluster is a
-supercluster and, if so, creates and updates one backend pool per member. A
-member listed later receives every pool before the supercluster calls it
-placement-eligible.
+supercluster and, if so, creates and updates one backend pool per member. A new
+member receives every pool before the supercluster calls it placement-eligible.
 
 ### 10.2 Concurrency and mutual exclusion
 
-The supercluster's reconcile is read-mostly: the only external write is the
-secret entry, which is idempotent. A fan-out operation (§9.6) takes the
-supercluster's `status.activeOpsRef` for its duration, so two walks never
-interleave, and takes each member's lock only while that member's operation
-runs. `Evacuate` takes the member's lock for its duration, so an evacuation and
-a rolling restart of one member exclude each other as two operations on a cluster
-do today.
+The supercluster's reconcile writes nothing to the control plane. A fan-out
+operation (§9.6) takes the supercluster's `status.activeOpsRef` for its duration,
+so two walks never interleave, and takes each member's lock only while that
+member's operation runs. `RemoveMember` takes the member's lock for its duration.
+Placements for one supercluster are serialized in the operator, so two concurrent
+`CreateVolume` calls each see the size the other placed.
 
 ### 10.3 Interaction with existing controllers
 
-| Controller              | Interaction                                                                              |
-|-------------------------|------------------------------------------------------------------------------------------|
-| Volume rebalancer       | Predicate excludes superclusters. Members are rebalanced as ordinary clusters            |
-| Arbitration (`twonode`) | Requires `status.uuid`, which a supercluster never has. Predicate excludes it explicitly |
-| Backup policy           | Fans out per member (§9.5)                                                               |
-| Deployment expansion    | Creates members and supercluster (§5.4), appends members on growth (§5.6)                |
-| `PersistentVolumeOps`   | `Relocate` reads the aggregate from the volume's member's `superclusterRef`              |
+| Controller              | Interaction                                                                         |
+|-------------------------|-------------------------------------------------------------------------------------|
+| Volume rebalancer       | Predicate excludes superclusters. Members are rebalanced as ordinary clusters       |
+| Arbitration (`twonode`) | Predicate excludes superclusters, whose `status.uuid` names no backend cluster      |
+| Backup policy           | Fans out per member (§9.5)                                                          |
+| Deployment expansion    | Creates the supercluster and its members (§5.4), and new members on growth (§5.6)   |
+| `PersistentVolumeOps`   | `Relocate` reads the supercluster from the volume's member's `spec.superclusterRef` |
 
 ### 10.4 RBAC
 
 No new verbs. Every resource the new controller reads or writes
 (`storageclusters`, `storageclusters/status`, `storagepools`, `nodes` for their
-topology labels, and the CSI secret) is already granted to the manager.
+topology labels, and the Services, Certificates, and Secrets of §6.2, which the
+workload controller already creates) is already granted to the manager.
 
 ---
 
@@ -1252,19 +1264,18 @@ The CSI driver authenticates to each member with that member's entry in
 
 ## 12. Failure Modes
 
-| Failure                                                       | Detection                        | Behavior                                                                                                                                                                               |
-|---------------------------------------------------------------|----------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| A member is unavailable                                       | Member phase                     | Supercluster `Degraded`. The member is not placement-eligible. Its volumes are unavailable, others unaffected                                                                          |
-| Every member is unavailable                                   | Member phases                    | Supercluster `Unavailable`. `CreateVolume` fails with `ResourceExhausted` naming each reason                                                                                           |
-| A member's capacity read times out at `CreateVolume`          | Two-second deadline              | Member skipped for this call, logged. Other members still chosen                                                                                                                       |
-| Every eligible member is full                                 | Capacity filter                  | `ResourceExhausted`, with the supercluster's `AggregateCapacityExhausted` event                                                                                                        |
-| A listed member does not exist                                | Resolve step                     | Reported `Pending` in `status.members`, event `MemberNotFound`, others reconciled                                                                                                      |
-| A pool fails to create in one member                          | Backend error                    | That member stays placement-ineligible, pool status names the member, retried                                                                                                          |
-| The CSI secret write fails                                    | API error                        | Requeued. The driver keeps placing with the previous entry, which can name a member that has since been cordoned. Placement on a cordoned member is allowed, not unsafe                |
-| The supercluster object is deleted                            | Finalizer                        | Held while any `StoragePool` names it. Once released, members become standalone and keep serving their volumes                                                                         |
-| The supercluster object is recreated, by a restore or by hand | New `metadata.uid`               | A new aggregate identifier. Classes naming the old one fail new provisions with `InvalidArgument` until rewritten. Existing volumes are unaffected, because their handles name members |
-| Operator restart mid-expansion                                | Persisted step                   | Members and supercluster created by name, idempotent (§5.4)                                                                                                                            |
-| Operator restart mid-relocation                               | Persisted step, `committed` flag | Resumes without a second start or commit (§8.2)                                                                                                                                        |
+| Failure                                                           | Detection                        | Behavior                                                                                                                                                                               |
+|-------------------------------------------------------------------|----------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| A member is unavailable                                           | Member phase                     | Supercluster `Degraded`. The member is not placement-eligible. Its volumes are unavailable, others unaffected                                                                          |
+| Every member is unavailable                                       | Member phases                    | Supercluster `Unavailable`. `CreateVolume` fails with `ResourceExhausted` naming each reason                                                                                           |
+| A member's capacity reading cannot be refreshed at `CreateVolume` | Two-second deadline              | Member dropped for this call, logged. Other members still chosen                                                                                                                       |
+| Every eligible member is full                                     | Capacity filter                  | `ResourceExhausted`, with the supercluster's `AggregateCapacityExhausted` event                                                                                                        |
+| A pool fails to create in one member                              | Backend error                    | That member stays placement-ineligible, pool status names the member, retried                                                                                                          |
+| The operator's link is down at `CreateVolume`                     | `Unavailable` from the link      | The call fails with `Unavailable` and the external-provisioner retries. No volume is placed                                                                                            |
+| The supercluster object is deleted                                | Admission                        | Refused while it has members (§4.4)                                                                                                                                                    |
+| The supercluster object is recreated, by a restore or by hand     | New `metadata.uid`               | A new aggregate identifier. Classes naming the old one fail new provisions with `InvalidArgument` until rewritten. Existing volumes are unaffected, because their handles name members |
+| Operator restart mid-expansion                                    | Persisted step                   | Members and supercluster created by name, idempotent (§5.4)                                                                                                                            |
+| Operator restart mid-relocation                                   | Persisted step, `committed` flag | Resumes without a second start or commit (§8.2)                                                                                                                                        |
 
 ---
 
@@ -1282,43 +1293,41 @@ land on the `PersistentVolumeOps`, which is the audit record of the move.
 
 | Event                                                                                | Type    | Reason                       | On                    |
 |--------------------------------------------------------------------------------------|---------|------------------------------|-----------------------|
-| A member named in the aggregate does not resolve to a `StorageCluster`               | Warning | `MemberNotFound`             | Supercluster          |
 | A member left placement because it is not serving, lacks a pool, or is cordoned      | Normal  | `MemberPlacementChanged`     | Supercluster          |
 | A member returned to placement                                                       | Normal  | `MemberPlacementChanged`     | Supercluster          |
 | The combined capacity crossed the warning or critical threshold                      | Warning | `AggregateCapacityThreshold` | Supercluster          |
 | No member has room for a requested volume                                            | Warning | `AggregateCapacityExhausted` | Supercluster          |
-| A member was appended to the aggregate by a growth document                          | Normal  | `MemberAdded`                | Supercluster          |
-| A member was removed from the aggregate after evacuation                             | Normal  | `MemberRemoved`              | Supercluster          |
+| A member joined the supercluster                                                     | Normal  | `MemberAdded`                | Supercluster          |
+| A member was removed after its volumes moved into the others                         | Normal  | `MemberRemoved`              | Supercluster          |
 | An abort was ignored because the cutover was already committed                       | Warning | `RelocationAbortIgnored`     | `PersistentVolumeOps` |
 | A relocation is holding because a consuming node could not attach the target's paths | Warning | `PathAttachHeld`             | `PersistentVolumeOps` |
 | The relocated volume's original handle does not resolve after the cutover            | Warning | `HandleUnresolved`           | `PersistentVolumeOps` |
-| An evacuation is holding because a child relocation failed                           | Warning | `EvacuationHeld`             | `StorageClusterOps`   |
+| A member removal is holding because a child relocation failed                        | Warning | `RemovalHeld`                | `StorageClusterOps`   |
 | A fan-out operation is holding because a member's operation failed                   | Warning | `FanOutHeld`                 | `StorageClusterOps`   |
 
-`AggregateCapacityExhausted` is raised by the CSI driver through the supercluster
-it read from the class, which is the one event the driver emits on a custom
-resource. It is rate-limited to one per minute per supercluster.
+`AggregateCapacityExhausted` is raised by the operator's placement service when
+it answers `ResourceExhausted`, rate-limited to one per minute per supercluster.
 
 ### 13.2 Prometheus metrics
 
-| Metric                                       | Labels                              | Description                                                            |
-|----------------------------------------------|-------------------------------------|------------------------------------------------------------------------|
-| `simplyblock_supercluster_members`           | `supercluster`, `state`             | Gauge of members by `eligible`, `cordoned`, `notServing`, `missing`    |
-| `simplyblock_supercluster_capacity_bytes`    | `supercluster`, `kind`              | Gauge of combined `total`, `used`, and `provisioned` bytes             |
-| `simplyblock_csi_placement_decisions_total`  | `supercluster`, `cluster`, `result` | Counter of `CreateVolume` placements by chosen member, or `exhausted`  |
-| `simplyblock_csi_placement_duration_seconds` | `supercluster`                      | Histogram of member selection time, lookup and capacity reads included |
-| `simplyblock_relocation_operations_total`    | `supercluster`, `result`            | Counter of `Relocate` operations by `succeeded`, `failed`, `aborted`   |
-| `simplyblock_relocation_duration_seconds`    | `supercluster`                      | Histogram from `Replicating` to `Succeeded`                            |
+| Metric                                                | Labels                              | Description                                                            |
+|-------------------------------------------------------|-------------------------------------|------------------------------------------------------------------------|
+| `simplyblock_supercluster_members`                    | `supercluster`, `state`             | Gauge of members by `eligible`, `cordoned`, `notServing`, `missing`    |
+| `simplyblock_supercluster_capacity_bytes`             | `supercluster`, `kind`              | Gauge of combined `total`, `used`, and `provisioned` bytes             |
+| `simplyblock_supercluster_placement_decisions_total`  | `supercluster`, `cluster`, `result` | Counter of `CreateVolume` placements by chosen member, or `exhausted`  |
+| `simplyblock_supercluster_placement_duration_seconds` | `supercluster`                      | Histogram of member selection time, lookup and capacity reads included |
+| `simplyblock_relocation_operations_total`             | `supercluster`, `result`            | Counter of `Relocate` operations by `succeeded`, `failed`, `aborted`   |
+| `simplyblock_relocation_duration_seconds`             | `supercluster`                      | Histogram from `Replicating` to `Succeeded`                            |
 
 Existing per-cluster series gain a `supercluster` label on members, empty on
 standalone clusters, so a dashboard groups a supercluster's members with one
 `sum by (supercluster)`.
 
-**Three of these are load-bearing.** `simplyblock_csi_placement_decisions_total`
+**Three of these are load-bearing.** `simplyblock_supercluster_placement_decisions_total`
 by `cluster` is how a skewed strategy is seen: a member receiving every new
 volume while another sits empty is a strategy or a capacity-reading problem, and
-nothing else shows it. `simplyblock_csi_placement_duration_seconds` is the alert
-for a slow member, because every member's capacity read sits on the
+nothing else shows it. `simplyblock_supercluster_placement_duration_seconds` is the alert
+for a slow member, because the name lookup in every member sits on the
 `CreateVolume` path and one slow member slows every provision. The `notServing`
 series of `simplyblock_supercluster_members` is the alert that a supercluster is
 running on fewer members than it was built with.
@@ -1339,7 +1348,7 @@ Full scenario matrix, coverage status, and hand-off test concepts:
   each against fixtures, plus the webhook rules of §4.4 and §6.2 with a fake
   client.
 - **Integration:** the expansion of a multi-node-set document into members and a
-  supercluster, growth adding a member, pool fan-out, and the secret entry,
+  supercluster, growth adding a member, pool fan-out, and the placement service,
   against `envtest` and a mock control plane. The `Relocate` step machine with
   every failure row of §8.2, including restart in each step, and the fan-out
   walk of §9.6.
@@ -1355,9 +1364,12 @@ data unavailability, so neither group's scenarios may be cut.
 
 ## 15. Migration and Compatibility
 
-**Nothing changes for an ordinary cluster.** A cluster without `aggregate` is
-admitted, reconciled, and named exactly as before, including its workload names,
-which it keeps because it owns them (§6.1).
+**An existing cluster keeps its workload names.** A cluster that owns the
+constant workload names keeps them (§6.1), so no running cluster's node hostnames
+change. Every cluster created after this design takes derived names, and the
+rule refusing a second cluster in a namespace is removed. `TestASecondClusterInOneNamespaceIsRefused` in
+`operator/internal/webhook/storagecluster_validator_test.go` asserts the removed
+rule and is rewritten to admit the second cluster.
 
 **`ClusterDeploymentConfig` and discovery need no migration.** Neither has
 shipped in a release: both arrive in 26.4, and this design lands between its
@@ -1396,7 +1408,7 @@ repository's spell check.
 | 4   | ~~**Aggregate pool ceilings**~~ **Resolved.** A pool's ceiling is the supercluster's. Phase 2 splits it evenly over the members and Phase 5 divides it by demand (§7.1, §7.5).                                                                                                                                                                                                                                                                                                     | Resolved                    |
 | 5   | **Replication with a supercluster on either side:** a pair whose source is a supercluster means one relationship per member, and a supercluster target needs a member mapping. Which shape, and is it needed in the first release?                                                                                                                                                                                                                                                 | Operator team, Backend team |
 | 6   | **Placement affinity for groups:** volumes that will form a consistency group or a volume group must share a member. Candidates are a StorageClass parameter keying affinity on the claim's namespace (through the provisioner's `--extra-create-metadata`), or an explicit affinity key. Neither has been settled.                                                                                                                                                                | Operator team               |
-| 7   | ~~**Fan-out cluster operations**~~ **Resolved.** Restart, shutdown, and start on a supercluster walk its members one at a time in aggregate order and hold on a member that fails (§9.6).                                                                                                                                                                                                                                                                                          | Resolved                    |
+| 7   | ~~**Fan-out cluster operations**~~ **Resolved.** Restart, shutdown, and start on a supercluster walk its members one at a time in order of member name and hold on a member that fails (§9.6).                                                                                                                                                                                                                                                                                     | Resolved                    |
 | 8   | ~~**Site deployments**~~ **Resolved.** The hub's StorageClass names the supercluster in `cluster_id`, through the supercluster's `status.uuid` (§9.7).                                                                                                                                                                                                                                                                                                                             | Resolved                    |
 | 9   | ~~**Volume names across members**~~ **Resolved.** Not relevant: volumes are created through Kubernetes, whose PV names are unique.                                                                                                                                                                                                                                                                                                                                                 | Resolved                    |
 | 10  | **Encryption across a cross-cluster move:** replication lands an encrypted volume's ciphertext in a target volume without a crypto layer, and `delete_source` deletes the only key, so the data is permanently lost (§9.4). The same path is reachable through replication's own `commit` with `delete_source` and through failover of encrypted volumes, outside this design. What carries the key to the target (P0-5), and is the existing replication path guarded against it? | Backend team                |
@@ -1411,59 +1423,54 @@ existing fields are specified by
 which this appendix does not restate.
 
 ```go
-// AggregatePlacementStrategy is how the CSI driver ranks the members of a
-// supercluster when it places a new volume.
+// PlacementStrategy is how the operator ranks the members of a supercluster
+// when it places a new volume.
 // +kubebuilder:validation:Enum=MostAvailableCapacity;LeastProvisioned
-type AggregatePlacementStrategy string
+type PlacementStrategy string
 
 const (
-	// AggregatePlacementMostAvailableCapacity places a volume in the member with
-	// the most free physical capacity.
-	AggregatePlacementMostAvailableCapacity AggregatePlacementStrategy = "MostAvailableCapacity"
+	// PlacementMostAvailableCapacity places a volume in the member with the most
+	// free physical capacity.
+	PlacementMostAvailableCapacity PlacementStrategy = "MostAvailableCapacity"
 
-	// AggregatePlacementLeastProvisioned places a volume in the member with the
-	// lowest ratio of provisioned to physical capacity.
-	AggregatePlacementLeastProvisioned AggregatePlacementStrategy = "LeastProvisioned"
+	// PlacementLeastProvisioned places a volume in the member with the lowest
+	// ratio of provisioned to physical capacity.
+	PlacementLeastProvisioned PlacementStrategy = "LeastProvisioned"
 )
 
-// StorageClusterRole is what a StorageCluster is within an aggregate.
+// StorageClusterRole is what a StorageCluster is within a supercluster.
 // +kubebuilder:validation:Enum=Standalone;Supercluster;Member
 type StorageClusterRole string
 
 const (
-	// StorageClusterRoleStandalone is an ordinary cluster that no supercluster
-	// lists.
+	// StorageClusterRoleStandalone is an ordinary cluster that belongs to no
+	// supercluster.
 	StorageClusterRoleStandalone StorageClusterRole = "Standalone"
 
-	// StorageClusterRoleSupercluster is a cluster that aggregates others and has
+	// StorageClusterRoleSupercluster is a cluster made of member clusters, with
 	// no nodes of its own.
 	StorageClusterRoleSupercluster StorageClusterRole = "Supercluster"
 
-	// StorageClusterRoleMember is an ordinary cluster that a supercluster lists.
+	// StorageClusterRoleMember is an ordinary cluster that belongs to a
+	// supercluster.
 	StorageClusterRoleMember StorageClusterRole = "Member"
 )
 
-// AggregateMember names one cluster of a supercluster.
-type AggregateMember struct {
-	// Name is the member StorageCluster, in this cluster's namespace.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MaxLength=63
-	Name string `json:"name"`
-
-	// DisablePlacement stops new volumes being placed in this member. Volumes
-	// already in it stay where they are and keep working. Set it before emptying
-	// a member, or when a member is nearly full.
-	// +optional
-	DisablePlacement *bool `json:"disablePlacement,omitempty"`
-}
-
-// AggregatePlacement is how a supercluster places new volumes.
-type AggregatePlacement struct {
+// SuperclusterPlacement is how a supercluster places new volumes.
+type SuperclusterPlacement struct {
 	// Strategy ranks the members that can take a new volume. Defaults to
 	// MostAvailableCapacity.
 	// +kubebuilder:default=MostAvailableCapacity
 	// +optional
-	Strategy AggregatePlacementStrategy `json:"strategy,omitempty"`
+	Strategy PlacementStrategy `json:"strategy,omitempty"`
+}
+
+// SuperclusterSpec makes a StorageCluster a supercluster: one cluster to
+// Kubernetes, made of the member clusters whose superclusterRef names it.
+type SuperclusterSpec struct {
+	// Placement is how new volumes are placed among the members.
+	// +optional
+	Placement *SuperclusterPlacement `json:"placement,omitempty"`
 }
 
 // AggregateCapacity is capacity summed over a supercluster's members, in bytes.
@@ -1481,8 +1488,8 @@ type AggregateCapacity struct {
 	ProvisionedBytes *int64 `json:"provisionedBytes,omitempty"`
 }
 
-// AggregateMemberStatus is one member as the supercluster last read it.
-type AggregateMemberStatus struct {
+// SuperclusterMemberStatus is one member as the supercluster last read it.
+type SuperclusterMemberStatus struct {
 	// Name is the member StorageCluster.
 	Name string `json:"name"`
 
@@ -1490,13 +1497,13 @@ type AggregateMemberStatus struct {
 	// +optional
 	UUID string `json:"uuid,omitempty"`
 
-	// Phase is the member's own phase. Pending when the member does not resolve.
+	// Phase is the member's own phase.
 	// +optional
 	Phase StorageClusterPhase `json:"phase,omitempty"`
 
 	// PlacementEligible says whether new volumes may be placed in this member:
-	// listed without disablePlacement, serving, and holding every pool of the
-	// supercluster.
+	// placement not disabled, not being removed, serving, and holding every pool
+	// of the supercluster.
 	// +optional
 	PlacementEligible bool `json:"placementEligible,omitempty"`
 
@@ -1509,32 +1516,38 @@ type AggregateMemberStatus struct {
 The fields added to `StorageClusterSpec`:
 
 ```go
-	// Aggregate makes this cluster a supercluster: one cluster to Kubernetes,
-	// made of the listed member clusters, each with its own nodes and data. A
-	// new volume is placed in one member and stays there unless it is moved.
-	// Members are StorageClusters in this namespace on the same control plane,
-	// and none may be listed by another supercluster. Entries may be added.
-	// An entry may be removed only once its member holds no volumes. A cluster
-	// cannot gain or lose this field after creation.
-	// +kubebuilder:validation:MinItems=2
-	// +kubebuilder:validation:MaxItems=32
-	// +listType=map
-	// +listMapKey=name
+	// Supercluster makes this cluster a supercluster: one cluster to
+	// Kubernetes, made of the StorageClusters in this namespace whose
+	// superclusterRef names it, each with its own nodes and data. A new volume
+	// is placed in one member and stays there unless it is moved. A supercluster
+	// carries no nodes and no sizing, and may carry only this field and the
+	// capacity thresholds. Set at creation and never added or removed.
 	// +optional
-	Aggregate []AggregateMember `json:"aggregate,omitempty"`
+	Supercluster *SuperclusterSpec `json:"supercluster,omitempty"`
 
-	// Placement is how a supercluster places new volumes among its members.
-	// Valid only with aggregate.
+	// SuperclusterRef makes this cluster a member of the named supercluster in
+	// this namespace. Set at creation and never changed: a member leaves its
+	// supercluster through a RemoveMember operation, which moves its volumes
+	// into the other members and deletes it.
+	// +kubebuilder:validation:MaxLength=63
 	// +optional
-	Placement *AggregatePlacement `json:"placement,omitempty"`
+	SuperclusterRef string `json:"superclusterRef,omitempty"`
+
+	// DisablePlacement stops new volumes being placed in this member. Volumes
+	// already in it stay where they are and keep working. Valid only on a
+	// member.
+	// +optional
+	DisablePlacement *bool `json:"disablePlacement,omitempty"`
 ```
 
 The CEL rules added to `StorageClusterSpec`:
 
 ```go
-// +kubebuilder:validation:XValidation:rule="has(self.aggregate) || (has(self.maxSubsystemCount) && has(self.vcpuCount))",message="maxSubsystemCount and vcpuCount are required unless the cluster is a supercluster"
-// +kubebuilder:validation:XValidation:rule="has(self.aggregate) == has(oldSelf.aggregate)",message="a cluster cannot become a supercluster, or stop being one, after creation"
-// +kubebuilder:validation:XValidation:rule="has(self.aggregate) || !has(self.placement)",message="placement is valid only on a supercluster"
+// +kubebuilder:validation:XValidation:rule="has(self.supercluster) || (has(self.maxSubsystemCount) && has(self.vcpuCount))",message="maxSubsystemCount and vcpuCount are required unless the cluster is a supercluster"
+// +kubebuilder:validation:XValidation:rule="has(self.supercluster) == has(oldSelf.supercluster)",message="a cluster cannot become a supercluster, or stop being one, after creation"
+// +kubebuilder:validation:XValidation:rule="has(self.superclusterRef) == has(oldSelf.superclusterRef) && (!has(self.superclusterRef) || self.superclusterRef == oldSelf.superclusterRef)",message="superclusterRef is set at creation and never changed"
+// +kubebuilder:validation:XValidation:rule="!(has(self.supercluster) && has(self.superclusterRef))",message="a supercluster cannot be a member of another"
+// +kubebuilder:validation:XValidation:rule="has(self.superclusterRef) || !has(self.disablePlacement)",message="disablePlacement is valid only on a member"
 ```
 
 The fields added to `StorageClusterStatus`:
@@ -1545,22 +1558,17 @@ The fields added to `StorageClusterStatus`:
 	// metadata.uid, which a StorageClass names in cluster_id and the control
 	// plane does not know.
 
-	// Role is what this cluster is within an aggregate.
+	// Role is what this cluster is within a supercluster.
 	// +optional
 	Role StorageClusterRole `json:"role,omitempty"`
-
-	// SuperclusterRef names the supercluster that lists this cluster, on a
-	// member only.
-	// +optional
-	SuperclusterRef string `json:"superclusterRef,omitempty"`
 
 	// Members is each member as last read, on a supercluster only.
 	// +optional
 	// +listType=map
 	// +listMapKey=name
-	Members []AggregateMemberStatus `json:"members,omitempty"`
+	Members []SuperclusterMemberStatus `json:"members,omitempty"`
 
-	// MemberCount is the number of members listed, on a supercluster only.
+	// MemberCount is the number of members, on a supercluster only.
 	// +optional
 	MemberCount *int32 `json:"memberCount,omitempty"`
 
@@ -1746,17 +1754,17 @@ The additions to `StorageClusterOps`. The rest of the kind is
 [`design-storagecluster.md`](crd-redesign/design-storagecluster.md) Appendix B.
 
 ```go
-// +kubebuilder:validation:Enum=Activate;Expand;Shutdown;Start;Restart;RollingRestart;CancelTask;Evacuate
+// +kubebuilder:validation:Enum=Activate;Expand;Shutdown;Start;Restart;RollingRestart;CancelTask;RemoveMember
 type StorageClusterOpsAction string
 
 const (
-	// StorageClusterOpsActionEvacuate moves every volume out of a member of a
-	// supercluster into the other members, then removes it from the aggregate.
-	StorageClusterOpsActionEvacuate StorageClusterOpsAction = "Evacuate"
+	// StorageClusterOpsActionRemoveMember moves every volume out of a member of a
+	// supercluster into the other members, then deletes the member.
+	StorageClusterOpsActionRemoveMember StorageClusterOpsAction = "RemoveMember"
 )
 
-// EvacuateSpec bounds an evacuation.
-type EvacuateSpec struct {
+// RemoveMemberSpec bounds a member's removal.
+type RemoveMemberSpec struct {
 	// MaxConcurrentRelocations is how many volume relocations run at once.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=16
@@ -1863,16 +1871,18 @@ type NodeSetClusterOverrides struct {
 The fields changed and added on `NodeSet`:
 
 ```go
-	// Name is the node set's name, and the suffix of the member cluster it
-	// becomes when the document has more than one node set. At most 26
-	// characters, so that a member name fits beside a cluster name of 35.
+	// Name is the node set's name, and the middle of the member cluster's name
+	// when the node set becomes a member, as <cluster>-<nodeset>-<suffix>. At
+	// most 23 characters, so that a member name fits beside a cluster name of 35
+	// and a suffix of three.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MaxLength=26
+	// +kubebuilder:validation:MaxLength=23
 	Name string `json:"name"`
 
 	// Cluster overrides the document's cluster template for this node set's
-	// member, for node sets whose hardware differs from the rest. Valid only on
-	// a document with more than one node set.
+	// member, for node sets whose hardware differs from the rest. Valid on a
+	// document with more than one node set, and on one adding members to a
+	// supercluster.
 	// +optional
 	Cluster *NodeSetClusterOverrides `json:"cluster,omitempty"`
 ```
@@ -1891,5 +1901,37 @@ The field changed on `ClusterTemplate`, and the rules changed on
 
 ```go
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)) || s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group of a node set must name the same device class: all nvme or all block"
-// +kubebuilder:validation:XValidation:rule="size(self.nodeSets) > 1 || self.nodeSets.all(s, !has(s.cluster))",message="a node set overrides the cluster template only when the document has more than one node set"
+// +kubebuilder:validation:XValidation:rule="size(self.nodeSets) > 1 || has(self.clusterRef) || self.nodeSets.all(s, !has(s.cluster))",message="a node set overrides the cluster template only when the document has more than one node set or adds members to a supercluster"
+```
+
+The fields added to `ClusterDeploymentConfigStatus`, and the field whose comment
+changes on `ClusterDeploymentConfigSpec`:
+
+```go
+// ExpansionMember is a member cluster the expansion drew a name for, recorded
+// before the member is created so that a retry creates the same one.
+type ExpansionMember struct {
+	// NodeSet is the node set the member is made of.
+	NodeSet string `json:"nodeSet"`
+
+	// Cluster is the member StorageCluster's name, <cluster>-<nodeset>-<suffix>.
+	Cluster string `json:"cluster"`
+}
+```
+
+```go
+	// Members are the member clusters the expansion created or is creating, one
+	// per node set, when the document produces or grows a supercluster.
+	// +optional
+	// +listType=map
+	// +listMapKey=nodeSet
+	Members []ExpansionMember `json:"members,omitempty"`
+```
+
+```go
+	// Cluster is the StorageCluster to create, or the sizing of the members to
+	// add when ClusterRef names a supercluster. Ignored when ClusterRef names a
+	// standalone cluster or a member.
+	// +optional
+	Cluster *ClusterTemplate `json:"cluster,omitempty"`
 ```
