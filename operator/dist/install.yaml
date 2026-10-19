@@ -5006,6 +5006,9 @@ webhooks:
       path: /mutate-v1-pod-simplyblock-rebalancer
   failurePolicy: Ignore
   name: simplyblock-rebalancer-injector.simplyblock.io
+  objectSelector:
+    matchLabels:
+      role: simplyblock-storage-node
   rules:
   - apiGroups:
     - ""
