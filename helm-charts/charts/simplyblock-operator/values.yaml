@@ -705,7 +705,8 @@ csiLink:
   #
   # Optional. A Secret of your own holding the serving certificate (keys tls.crt
   # / tls.key) instead of the issued one. Its SANs must cover the service name
-  # below, and it must be signed by the CA the CSI pods mount.
+  # below, and it must be signed by the CA the CSI pods mount. It needs TLS
+  # enabled, since that is what gives the CSI pods a CA to verify it with.
   certSecret: ""
 
   # Name the CSI pods verify against that certificate, and dial.
