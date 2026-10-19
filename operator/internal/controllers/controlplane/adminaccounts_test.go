@@ -16,7 +16,7 @@ func TestExtraAdminServiceAccountsAreAppendedOnceAndValidated(t *testing.T) {
 }
 
 // Without the operator's variable the management API trusts the operator alone.
-func TestNoExtraAdminServiceAccountsMeansTheOperatorAlone(t *testing.T) {
+func TestAdminServiceAccountsDefaultsToTheOperatorAlone(t *testing.T) {
 	t.Setenv(extraAdminAccountsEnv, "")
 	if got, want := adminServiceAccounts("sb"), "system:serviceaccount:sb:simplyblock-operator"; got != want {
 		t.Errorf("adminServiceAccounts = %q, want %q", got, want)
