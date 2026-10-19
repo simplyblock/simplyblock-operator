@@ -30,24 +30,13 @@ members, and Phase 5 makes a pool's QoS ceiling follow its load across members.
 
 | #    | Prerequisite                                                                                                                                                                                                                             | Kind                    | Blocks                        | Status          |
 |------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|-------------------------------|-----------------|
-| P0-1 | One control plane hosts several clusters in one FoundationDB, each addressed as `/api/v2/clusters/{cluster_id}/…` (§3)                                                                                                                   | Control plane (`sbcli`) | Phase 1                       | Available       |
-| P0-2 | Per-cluster capacity read, `GET /api/v2/clusters/{cluster_id}/capacity` (§7.2, §10)                                                                                                                                                      | Control plane (`sbcli`) | Phase 2                       | Available       |
-| P0-3 | After a cross-cluster move commits with `delete_source`, the relationship record still maps the original volume to its target, served at `GET /api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}` (§8.3)                  | Control plane (`sbcli`) | Phase 3                       | Available       |
-| P0-4 | While the relationship is `cutover_pending`, the connect call returns the target's paths beside the source's, and the cutover waits for `POST …/replication/cutover-proceed` (§8.2)                                                      | Control plane (`sbcli`) | Phase 3                       | Available       |
-| P0-5 | A cross-cluster move of an encrypted volume creates the target volume with a crypto layer and carries its data encryption key to the target's path before the source is deleted. Without it, `delete_source` deletes the only key (§9.4) | Control plane (`sbcli`) | Phase 3 for encrypted volumes | Not established |
-| P0-6 | Data-plane reachability between the members' storage networks, since the move attaches the target node's transfer hub over NVMe-oF (§8.2)                                                                                                | Node OS                 | Phase 3                       | Deployment      |
-| P0-7 | ~~The control plane enforces the limit of 32 storage nodes per cluster~~ Out of scope: the operator enforces it at approval (§5.2)                                                                                                       | Control plane (`sbcli`) | —                             | Out of scope    |
-| P0-8 | The cutover waits for the operator's `cutover-proceed` (`REPL_CUTOVER_PROCEED_REQUIRED`, on by default) for up to `REPL_CUTOVER_PROCEED_TIMEOUT_SEC` (120 s) before proceeding alone (§8.2)                                              | Control plane (`sbcli`) | Phase 3                       | Available       |
+| P0-1 | A cross-cluster move of an encrypted volume creates the target volume with a crypto layer and carries its data encryption key to the target's path before the source is deleted. Without it, `delete_source` deletes the only key (§9.4) | Control plane (`sbcli`) | Phase 3 for encrypted volumes | Not established |
+| P0-2 | Data-plane reachability between the members' storage networks, since the move attaches the target node's transfer hub over NVMe-oF (§8.2)                                                                                                | Node OS                 | Phase 3                       | Per site        |
 
-Without P0-1 there is no feature. Without P0-2 member selection has nothing to
-rank on and Phase 2 cannot ship. P0-3 and P0-4 are what replication failover and
-planned cutover already use, and the operator and the CSI driver already consume
-both (§8.2, §8.3). P0-8 bounds how long the control plane waits for the
-operator, so a consuming host that cannot attach the target's paths within 120 s
-pauses I/O at the cutover rather than holding the move. Without P0-5 an
-encrypted volume is refused as a move candidate at admission, and refused again
-before replication starts, because a move deletes its key (§9.4). P0-6 is a property
-of the site, checked by the move's validation step rather than assumed.
+Without P0-1 an encrypted volume is refused as a move candidate at admission, and
+refused again before replication starts, because a move deletes its key (§9.4).
+P0-2 is a property of the site, checked by the move's validation step rather than
+assumed.
 
 ---
 
@@ -369,7 +358,7 @@ gains these rules, each refusing with a message that names the object:
 |----------------------------------------------------------------------------------------------|------------------------------------------------------------|
 | `superclusterRef` resolves to a supercluster in the same namespace                           | `clusterRef` resolution is namespace-local everywhere else |
 | `supercluster` and `superclusterRef` are not both set                                        | A supercluster is never a member                           |
-| A member is on the same `ControlPlane` as its supercluster's other members                   | Cross-member moves need one FoundationDB (P0-1)            |
+| A member is on the same `ControlPlane` as its supercluster's other members                   | Cross-member moves need one FoundationDB                   |
 | `disablePlacement` is set only on a member                                                   | It is a member's property                                  |
 | Deleting a supercluster that has members is refused                                          | Every member names it in an immutable field                |
 | Deleting a member whose pools report bound volumes is refused, outside `RemoveMember` (§8.4) | Removal moves the volumes first                            |
@@ -945,7 +934,7 @@ target's paths on every consuming host while the relationship is
     │
     ▼
   Validating       ← target eligible, capacity for every volume of the subsystem,
-    │                no group membership (§9.3), not encrypted unless P0-5 holds
+    │                no group membership (§9.3), not encrypted unless P0-1 holds
     │  clean
     ▼
   Replicating      ← POST …/replication/start  mode=migration,
@@ -971,22 +960,22 @@ target's paths on every consuming host while the relationship is
   phase: Succeeded
 ```
 
-| Condition                                           | Step                                      | Result                                                                                                                                                                                                                                              |
-|-----------------------------------------------------|-------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `abort: true`                                       | Before `Committing`                       | `POST …/replication/stop`, phase `Aborted`                                                                                                                                                                                                          |
-| `abort: true`                                       | `Committing` or later                     | Ignored with an event: a committed cutover cannot be undone                                                                                                                                                                                         |
-| Operator restart                                    | Any                                       | Resumes from `status.step`. `committed` and `proceeded` prevent a second call                                                                                                                                                                       |
-| Start, commit, or proceed returns 5xx or times out  | `Replicating`, `Committing`, `Proceeding` | Retried with backoff, no step advance                                                                                                                                                                                                               |
-| Start returns 4xx                                   | `Replicating`                             | Phase `Failed`, the control plane's message in `status.message`                                                                                                                                                                                     |
-| A consuming node's Job fails                        | `AttachingPaths`                          | Retried with `PathAttachHeld`, and `cutover-proceed` is not sent. After 120 s the control plane cuts over alone (P0-8), and a node without the target's paths reaches it through the relationship on its next stage, with an I/O pause on that node |
-| Commit task reports failure                         | `Verifying`                               | Phase `Failed`, with the control plane's relationship state reported                                                                                                                                                                                |
-| The original handle does not resolve after the move | `Verifying`                               | Phase `Failed` with `HandleUnresolved`                                                                                                                                                                                                              |
+| Condition                                           | Step                                      | Result                                                                                                                                                                                                                                                                            |
+|-----------------------------------------------------|-------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `abort: true`                                       | Before `Committing`                       | `POST …/replication/stop`, phase `Aborted`                                                                                                                                                                                                                                        |
+| `abort: true`                                       | `Committing` or later                     | Ignored with an event: a committed cutover cannot be undone                                                                                                                                                                                                                       |
+| Operator restart                                    | Any                                       | Resumes from `status.step`. `committed` and `proceeded` prevent a second call                                                                                                                                                                                                     |
+| Start, commit, or proceed returns 5xx or times out  | `Replicating`, `Committing`, `Proceeding` | Retried with backoff, no step advance                                                                                                                                                                                                                                             |
+| Start returns 4xx                                   | `Replicating`                             | Phase `Failed`, the control plane's message in `status.message`                                                                                                                                                                                                                   |
+| A consuming node's Job fails                        | `AttachingPaths`                          | Retried with `PathAttachHeld`, and `cutover-proceed` is not sent. After `REPL_CUTOVER_PROCEED_TIMEOUT_SEC` (120 s) the control plane cuts over alone, and a node without the target's paths reaches it through the relationship on its next stage, with an I/O pause on that node |
+| Commit task reports failure                         | `Verifying`                               | Phase `Failed`, with the control plane's relationship state reported                                                                                                                                                                                                              |
+| The original handle does not resolve after the move | `Verifying`                               | Phase `Failed` with `HandleUnresolved`                                                                                                                                                                                                                                            |
 
 ### 8.3 The handle survives the move
 
 A PV's `spec.csi.volumeHandle` is immutable and names the source member. The
 control plane keeps the replication relationship record after a commit with
-`delete_source` (P0-3), and the CSI driver already follows it for a failed-over
+`delete_source`, and the CSI driver already follows it for a failed-over
 volume. NodeStage walks it when the source volume is gone
 (`redirectToActiveVolume` in `csi-driver/internal/csi/node/stats.go`), the
 replication calls resolve through it (`resolveChain` in
@@ -1061,7 +1050,7 @@ supercluster.
 | 8   | Node-to-node migration, rebalancer, realignment | Per member   | Run per member. The supercluster is skipped by the rebalancer's watch                                                                                 | 1     |
 | 9   | Pools and QoS                                   | Aggregated   | One backend pool per member. The ceiling is the supercluster's, split evenly, then by demand (§7.1, §7.5)                                             | 2, 5  |
 | 10  | DHCHAP and `allowedNodes`                       | Aggregated   | Keys are per backend pool and therefore per member. Allowed nodes split by member (§7.1)                                                              | 2     |
-| 11  | Encryption and KMS                              | Restricted   | Members share one KMS configuration through the template. Encrypted volumes are never moved until P0-5 holds, because a move deletes their key (§9.4) | 3     |
+| 11  | Encryption and KMS                              | Restricted   | Members share one KMS configuration through the template. Encrypted volumes are never moved until P0-1 holds, because a move deletes their key (§9.4) | 3     |
 | 12  | Backup policies and restore                     | Aggregated   | A policy on a supercluster fans out per member. A restore places by §7.2 (§9.5)                                                                       | 2     |
 | 13  | Replication (`ReplicationPair`, CSI-Addons)     | Out of scope | A pair naming a supercluster is refused. Members may be named directly (§16 Q5)                                                                       | —     |
 | 14  | `TestFailover`                                  | Per member   | Works from volume handles and is unaffected                                                                                                           | —     |
@@ -1121,7 +1110,7 @@ data permanently:
    that key (`simplyblock_core/controllers/lvol_controller.py`, the
    `crypto_bdev` branch at the end of `delete_lvol`).
 
-After the third step the ciphertext on the target has no key anywhere. P0-5 is
+After the third step the ciphertext on the target has no key anywhere. P0-1 is
 what closes this: the target volume created with a crypto layer, and the key
 carried to the target's path before the source is deleted, for which the
 control plane's `rekey_data_encryption_keys` and `import_data_encryption_keys`
@@ -1242,20 +1231,20 @@ workload controller already creates) is already granted to the manager.
 
 ## 11. Backend API Requirements
 
-| Method | Endpoint                                                                                      | Notes                                                                                                                                                                             |
-|--------|-----------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| GET    | `/api/v2/clusters/`                                                                           | Exists. Used to check that every member is on the same control plane                                                                                                              |
-| GET    | `/api/v2/clusters/{cluster_id}/capacity`                                                      | Exists. Polled by the supercluster controller and read by the CSI driver at `CreateVolume`                                                                                        |
-| POST   | `/api/v2/clusters/{cluster_id}/storage-pools/`                                                | Exists. Called once per member per pool. Idempotent by name: a 409 on an existing pool is success                                                                                 |
-| POST   | `/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/start` | Exists. Body `replication_cluster_id`, `mode: migration`. A repeat on a running relationship must not start a second                                                              |
-| GET    | `…/volumes/{volume_id}/replication/status`                                                    | Exists. Polled in `Replicating`                                                                                                                                                   |
-| POST   | `…/volumes/{volume_id}/replication/stop`                                                      | Exists. Abort before commit                                                                                                                                                       |
-| POST   | `…/volumes/{volume_id}/replication/commit`                                                    | Exists. Body `delete_source: true`. Returns 202 and a task location. Must refuse a second commit rather than run it twice                                                         |
-| GET    | `/api/v2/clusters/{cluster_id}/tasks/{task_id}`                                               | Exists. Polled in `Verifying`                                                                                                                                                     |
-| GET    | `/api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}`                           | Exists. Maps a source volume to its active volume after a commit with `delete_source` (P0-3). Read by the CSI driver's chain resolution and by `Verifying`                        |
-| GET    | `…/volumes/{volume_id}/connect`                                                               | Exists. While the relationship is `cutover_pending`, returns the target's paths beside the source's (P0-4). Read in `AttachingPaths`                                              |
-| POST   | `…/volumes/{volume_id}/replication/cutover-proceed`                                           | Exists. Releases the cutover once every consuming host holds the target's paths. The control plane waits for it up to 120 s (P0-8). Sent once, behind `status.relocate.proceeded` |
-| —      | Key carried with an encrypted volume                                                          | **Not established (P0-5).** No key handling is defined for replication, and `delete_source` deletes the source's key (§9.4, §16 Q10)                                              |
+| Method | Endpoint                                                                                      | Notes                                                                                                                                                                                                           |
+|--------|-----------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| GET    | `/api/v2/clusters/`                                                                           | Exists. Used to check that every member is on the same control plane                                                                                                                                            |
+| GET    | `/api/v2/clusters/{cluster_id}/capacity`                                                      | Exists. Polled by the supercluster controller and read by the CSI driver at `CreateVolume`                                                                                                                      |
+| POST   | `/api/v2/clusters/{cluster_id}/storage-pools/`                                                | Exists. Called once per member per pool. Idempotent by name: a 409 on an existing pool is success                                                                                                               |
+| POST   | `/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/start` | Exists. Body `replication_cluster_id`, `mode: migration`. A repeat on a running relationship must not start a second                                                                                            |
+| GET    | `…/volumes/{volume_id}/replication/status`                                                    | Exists. Polled in `Replicating`                                                                                                                                                                                 |
+| POST   | `…/volumes/{volume_id}/replication/stop`                                                      | Exists. Abort before commit                                                                                                                                                                                     |
+| POST   | `…/volumes/{volume_id}/replication/commit`                                                    | Exists. Body `delete_source: true`. Returns 202 and a task location. Must refuse a second commit rather than run it twice                                                                                       |
+| GET    | `/api/v2/clusters/{cluster_id}/tasks/{task_id}`                                               | Exists. Polled in `Verifying`                                                                                                                                                                                   |
+| GET    | `/api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}`                           | Exists. Maps a source volume to its active volume after a commit with `delete_source`. Read by the CSI driver's chain resolution and by `Verifying`                                                             |
+| GET    | `…/volumes/{volume_id}/connect`                                                               | Exists. While the relationship is `cutover_pending`, returns the target's paths beside the source's. Read in `AttachingPaths`                                                                                   |
+| POST   | `…/volumes/{volume_id}/replication/cutover-proceed`                                           | Exists. Releases the cutover once every consuming host holds the target's paths. The control plane waits for it up to `REPL_CUTOVER_PROCEED_TIMEOUT_SEC` (120 s). Sent once, behind `status.relocate.proceeded` |
+| —      | Key carried with an encrypted volume                                                          | **Not established (P0-1).** No key handling is defined for replication, and `delete_source` deletes the source's key (§9.4, §16 Q10)                                                                            |
 
 The CSI driver authenticates to each member with that member's entry in
 `clusters`, as today. No admin token crosses a cluster boundary.
@@ -1411,7 +1400,7 @@ repository's spell check.
 | 7   | ~~**Fan-out cluster operations**~~ **Resolved.** Restart, shutdown, and start on a supercluster walk its members one at a time in order of member name and hold on a member that fails (§9.6).                                                                                                                                                                                                                                                                                     | Resolved                    |
 | 8   | ~~**Site deployments**~~ **Resolved.** The hub's StorageClass names the supercluster in `cluster_id`, through the supercluster's `status.uuid` (§9.7).                                                                                                                                                                                                                                                                                                                             | Resolved                    |
 | 9   | ~~**Volume names across members**~~ **Resolved.** Not relevant: volumes are created through Kubernetes, whose PV names are unique.                                                                                                                                                                                                                                                                                                                                                 | Resolved                    |
-| 10  | **Encryption across a cross-cluster move:** replication lands an encrypted volume's ciphertext in a target volume without a crypto layer, and `delete_source` deletes the only key, so the data is permanently lost (§9.4). The same path is reachable through replication's own `commit` with `delete_source` and through failover of encrypted volumes, outside this design. What carries the key to the target (P0-5), and is the existing replication path guarded against it? | Backend team                |
+| 10  | **Encryption across a cross-cluster move:** replication lands an encrypted volume's ciphertext in a target volume without a crypto layer, and `delete_source` deletes the only key, so the data is permanently lost (§9.4). The same path is reachable through replication's own `commit` with `delete_source` and through failover of encrypted volumes, outside this design. What carries the key to the target (P0-1), and is the existing replication path guarded against it? | Backend team                |
 
 ---
 

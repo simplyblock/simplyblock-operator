@@ -8,7 +8,7 @@ for the CSI driver
 
 Scope: the operator, the CSI driver, and the Kubernetes surface of this
 repository. Control-plane (`sbcli`) behavior is a dependency, faked at the
-boundary. The design's Phase 0 prerequisites (P0-1 to P0-8) are not tested here.
+boundary. The design's Phase 0 prerequisites (P0-1 and P0-2) are not tested here.
 What is tested is this repository's response to each of them being present,
 absent, or failing.
 
@@ -433,7 +433,7 @@ server and a real Kubernetes API through `envtest`.
 
 Run against a live simplyblock control plane with three members of three nodes
 each, using fio in verify mode for every data-path row. Rows E-06 to E-08 need a
-member pair whose storage networks reach each other (P0-6).
+member pair whose storage networks reach each other (P0-2).
 
 | #    | Scenario                                                                                                                                            | Type     | Test |
 |------|-----------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
