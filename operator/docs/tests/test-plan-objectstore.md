@@ -60,9 +60,9 @@ File: `internal/controllers/objectstore/objectstore_build_unit_test.go`
 | U-14 | TLS provider dispatch | `tlsProvider: OpenShift` → `ServingCertServiceAnnotations`, no `Certificate` object created              | Positive | `TestOpenShiftTLSProviderAnnotatesTheServiceOnly`             |
 | U-15 | TLS provider dispatch | `tlsProvider: cert-manager` → `utils.BuildServiceServingCertificate` called, no OpenShift annotation set | Positive | `TestCertManagerTLSProviderBuildsACertificateAndNoAnnotation` |
 
-~~U-16 `spec.image` validation~~ **Moved to Integration (I-16).** A fake
-`client.Client` applies no OpenAPI schema validation at all, so a CRD
-`Pattern` rejection can only be proven against a real apiserver.
+~~U-16 `spec.image` validation~~ **Dropped.** `spec.image` is a
+`crdtypes.ImageReference`, which accepts any registry. No ObjectStore-specific
+registry rule is left to test.
 
 ---
 
@@ -87,7 +87,6 @@ File: `internal/controllers/objectstore/objectstore_controller_test.go`
 | I-05 | Two reconciles triggered concurrently for the same object → converge to one Deployment/Service/Certificate, no duplicates                                                                                  | Positive | — (design §7.3: the standard controller-runtime guarantee that one object's key is never processed by two workers at once, the same reasoning design-bucket-provisioning.md §7.3 states for its own I-08; a test driving two direct `Reconcile` calls would only reprove controller-runtime's own workqueue) |
 | I-06 | Operator process restarted mid-`Provisioning` (envtest manager stopped and restarted) → resumes from `status` without re-creating owned objects                                                            | Positive | `TestObjectStoreResumesMidProvisioningWithoutRecreatingTheDeployment`                                                                                                                                                                                                                                        |
 | I-07 | `spec.envFrom` names a `Secret` that does not exist → `Degraded`, event naming the missing reference (this reconciler does not validate the `Secret`'s existence, and kubelet reports its absence instead) | Negative | — (needs a real kubelet to produce `CreateContainerConfigError`; `envtest` runs none, same boundary §9's own failure-table row draws)                                                                                                                                                                        |
-| I-16 | `spec.image` naming a registry outside the three the CRD's `Pattern` allows is rejected at `Create` (moved from U-16: only a real apiserver enforces it)                                                   | Negative | `TestObjectStoreImageOutsideTheAllowedRegistriesIsRejectedAtCreate`                                                                                                                                                                                                                                          |
 
 ---
 
@@ -146,8 +145,8 @@ repository's concern entirely (`design-objectstore.md` Open Question 2).
 
 | Class       | Scenarios                      | Covered | Not covered |
 |-------------|--------------------------------|---------|-------------|
-| Unit        | 15 (U-16 moved to Integration) | 15      | —           |
-| Integration | 8 (I-16, moved from U-16)      | 6       | I-05, I-07  |
+| Unit        | 15 (U-16 dropped)              | 15      | —           |
+| Integration | 7                              | 5       | I-05, I-07  |
 | E2E         | 3                              | 0       | E-01 … E-03 |
 
 ---
