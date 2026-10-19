@@ -212,3 +212,56 @@ func TestChooseGroup(t *testing.T) {
 		}
 	}
 }
+
+// A re-protect after an unplanned fail-over: the driver on the healed site A
+// resyncs the VGR that names A's (now superseded) group; the data is live in
+// the peer group on B. The class parameter on A names B (the cluster A resyncs
+// FROM). sbcli reads the id it is sent as the cluster to fail back TO, so the
+// fail-back must name A, or B is told to replicate to itself (#34).
+func TestResyncOfAMovedGroupFailsBackToTheLocalSite(t *testing.T) {
+	cs, mock := movedGroup(t, sanityClusterID)
+
+	resp, err := cs.ResyncVolume(context.Background(), &replication.ResyncVolumeRequest{
+		ReplicationSource: groupSource(),
+		Parameters:        map[string]string{sourceClusterIDParam: peerClusterID},
+	})
+	if err != nil {
+		t.Fatalf("ResyncVolume: %v", err)
+	}
+	if !resp.GetReady() {
+		t.Error("expected Ready (group status has no lag budget, so ready)")
+	}
+	if got := mock.groups[peerGroupID].FailbackSource; got != sanityClusterID {
+		t.Fatalf("live group's fail-back source = %q, want the local site %q, not the class parameter %q",
+			got, sanityClusterID, peerClusterID)
+	}
+	if got := mock.groups[vgGroupID].FailbackSource; got != "" {
+		t.Fatalf("the named (superseded) group was resynced with source %q; want it untouched", got)
+	}
+}
+
+func TestGroupFailbackCluster(t *testing.T) {
+	named := lvol.GroupHandle{ClusterID: sanityClusterID, GroupID: vgGroupID}
+	live := lvol.GroupHandle{ClusterID: peerClusterID, GroupID: peerGroupID}
+	for _, tc := range []struct {
+		name   string
+		active lvol.GroupHandle
+		local  string // cluster flagged local, "" for none
+		param  string
+		want   string
+	}{
+		{"named site is local", live, sanityClusterID, peerClusterID, sanityClusterID},
+		{"peer site is local (relocate back after a fail-over)", live, peerClusterID, sanityClusterID, peerClusterID},
+		{"no flag, moved: the named site", live, "", peerClusterID, sanityClusterID},
+		{"no flag, at home: the parameter as before", named, "", peerClusterID, peerClusterID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newMockSBCLI()
+			defer mock.Close()
+			writeTwoSiteSecret(t, mock, tc.local)
+			if got := groupFailbackCluster(named, tc.active, tc.param); got != tc.want {
+				t.Fatalf("groupFailbackCluster = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

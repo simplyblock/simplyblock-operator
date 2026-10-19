@@ -563,12 +563,15 @@ func (cs *Server) ResyncVolume(
 	ctx context.Context,
 	req *replication.ResyncVolumeRequest,
 ) (*replication.ResyncVolumeResponse, error) {
-	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
-		gh, client, err := resolveGroupTarget(ctx, gh, groupActiveEnd)
+	if named, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
+		gh, client, err := resolveGroupTarget(ctx, named, groupActiveEnd)
 		if err != nil {
 			return nil, err
 		}
-		if err := client.ResyncGroup(ctx, gh, req.GetParameters()[sourceClusterIDParam]); err != nil {
+		// The cluster to fail back TO is this site, never the class parameter
+		// as given: see groupFailbackCluster (#34).
+		source := groupFailbackCluster(named, gh, req.GetParameters()[sourceClusterIDParam])
+		if err := client.ResyncGroup(ctx, gh, source); err != nil {
 			return nil, classifyResyncVolumeError(err)
 		}
 		info, err := client.GetGroupReplicationInfo(ctx, gh)

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"sort"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -95,4 +96,46 @@ func localClusters() map[string]bool {
 		return nil
 	}
 	return local
+}
+
+// groupFailbackCluster is the cluster a group Resync fails back to.
+//
+// sbcli's group fail-back reads source_cluster_id as the cluster to re-aim the
+// live members' replication AT: the recovered site. The class parameter on a
+// site names, by the deploy scripts' and the docs' convention, the cluster
+// that site resyncs FROM -- its peer. Passed through verbatim, a Resync issued
+// on the healed site A for a group live on B told B to replicate to B: the
+// chain picker found the clone's own snapshots on B, pointed its replication
+// at its own node, every 5-minute transfer landed beside the live clone,
+// status read healthy (Ramen saw PeerReady with a fresh lastGroupSyncTime),
+// and the relocate back failed on a copy that was never on A ("No such
+// device" from A's SPDK). #34, run 20261016-1108-ebs: WordPress and Gitea
+// alike, after an unplanned fail-over and re-protect. A planned relocate hid
+// it because its clone already had a replication node pointed home, so the
+// cluster id was never used to pick one.
+//
+// The per-volume Resync already overrides the parameter with the local
+// cluster (activeEndFallback); this is the group analogue. A Resync is issued
+// on the Secondary, and the VGR's handle names that site's own group, so the
+// named cluster is the site to fail back to. With clusters flagged local in
+// the driver's secret the local one wins (the named one when it is local,
+// else the first), exactly as activeEndFallback picks. Without a flag, the
+// named cluster wins whenever the group resolved to another one. Only a group
+// that resolves to itself with nothing flagged keeps the parameter, as before.
+func groupFailbackCluster(named, active lvol.GroupHandle, sourceClusterID string) string {
+	if local := localClusters(); local != nil {
+		if local[named.ClusterID] {
+			return named.ClusterID
+		}
+		ids := make([]string, 0, len(local))
+		for id := range local {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		return ids[0]
+	}
+	if active != named {
+		return named.ClusterID
+	}
+	return sourceClusterID
 }
