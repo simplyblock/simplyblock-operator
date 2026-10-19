@@ -109,7 +109,7 @@ The primitives this design builds on are the `NFSExport` kind and its phases, th
 │                 │ EndpointSlice         │ │  client, QEMU launcher,      │ │  │
 │                 │ per export            │ │  bridge + DNAT               │ │  │
 │                 ▼                       │ └───────────────┬──────────────┘ │  │
-│   export namespace (PVC's)              │      private bridge (link-local)  │  │
+│   export namespace (PVC's)              │      private bridge (link-local) │  │
 │   Service nfsexp-…-nfs ClusterIP ──────▶│ ┌───────────────▼──────────────┐ │  │
 │                                         │ │ guest (own kernel)           │ │  │
 │                                         │ │  agent → assembler           │ │  │
