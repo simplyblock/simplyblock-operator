@@ -697,18 +697,19 @@ csiLink:
   # Port the operator listens on, and the Service that fronts it.
   port: 9500
 
-  # Optional. Secret holding the operator's serving certificate (keys tls.crt /
-  # tls.key), whose SANs must cover the service name below; with cert-manager,
-  # point a Certificate at it. Empty serves the link without TLS, and the CSI
-  # pods dial plaintext to match, so the tokens they present travel in the
-  # clear. Set it on a cluster where that matters.
+  # The link follows the TLS values below. With TLS enabled the operator serves
+  # it with a certificate the chart has issued, and the CSI pods verify it with
+  # the CA they already mount. With mutual TLS the pods also present their
+  # client certificates. With TLS disabled the link is plaintext, and the
+  # tokens the CSI pods present travel in the clear.
+  #
+  # Optional. A Secret of your own holding the serving certificate (keys tls.crt
+  # / tls.key) instead of the issued one. Its SANs must cover the service name
+  # below, and it must be signed by the CA the CSI pods mount.
   certSecret: ""
 
   # Name the CSI pods verify against that certificate, and dial.
   serviceName: simplyblock-csi-link
-
-  # The CSI pods read the CA from the simplyblock-csi-link-ca ConfigMap, mounted
-  # optional. No ConfigMap means no TLS, which matches an empty certSecret.
 
   # Audience the CSI pods' projected tokens carry, and the operator requires. A
   # token bound to no particular audience is one anything holding it can replay
