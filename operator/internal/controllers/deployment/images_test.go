@@ -172,14 +172,24 @@ func TestTheApiserverStampsAndPolicesTheImageSlots(t *testing.T) {
 		}
 	})
 
-	t.Run("an image outside the trusted registries is refused", func(t *testing.T) {
-		config := aStoredDocument(t, apiClient, "images-bad-registry")
+	t.Run("an image naming no registry is accepted", func(t *testing.T) {
+		config := aStoredDocument(t, apiClient, "images-arbitrary-registry")
 		config.Spec.Images = &simplyblockv1alpha2.DeploymentImages{
-			NodeAgent: &simplyblockv1alpha2.ImageSpec{Image: "docker.io/someone/else:latest"},
+			NodeAgent: &simplyblockv1alpha2.ImageSpec{Image: "registry.simplyblock.ai/simplyblock/simplyblock-operator:latest"},
+		}
+		if err := apiClient.Update(ctx, config); err != nil {
+			t.Fatalf("an image from a registry outside the formerly fixed set was refused: %v", err)
+		}
+	})
+
+	t.Run("an image with no repository path is refused", func(t *testing.T) {
+		config := aStoredDocument(t, apiClient, "images-bad-shape")
+		config.Spec.Images = &simplyblockv1alpha2.DeploymentImages{
+			NodeAgent: &simplyblockv1alpha2.ImageSpec{Image: "not-an-image-reference"},
 		}
 		err := apiClient.Update(ctx, config)
 		if err == nil {
-			t.Fatal("an image from an untrusted registry was accepted")
+			t.Fatal("an image with no registry/repository:tag shape was accepted")
 		}
 		if !strings.Contains(err.Error(), "should match") {
 			t.Errorf("refused for the wrong reason: %v", err)

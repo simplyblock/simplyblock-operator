@@ -1023,40 +1023,41 @@ const (
 // it was tested against, and the fields exist so that a pin a Helm release made
 // survives the adoption of that release's deployment.
 //
-// Every field carries the registry pattern Image carries. The node plugin is
-// privileged and mounts /dev, /sys, and the kubelet's plugin directory from the
-// host, so a sidecar beside it runs with the same access.
+// Every field carries the registry pattern Image carries, and any registry is
+// accepted. The node plugin is privileged and mounts /dev, /sys, and the
+// kubelet's plugin directory from the host, so a sidecar beside it runs with
+// the same access.
 type SidecarImages struct {
 	// Provisioner is csi-provisioner, on the controller plugin.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +kubebuilder:validation:Pattern=`^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
 	Provisioner string `json:"provisioner,omitempty"`
 
 	// Attacher is csi-attacher, on the controller plugin.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +kubebuilder:validation:Pattern=`^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
 	Attacher string `json:"attacher,omitempty"`
 
 	// Resizer is csi-resizer, on the controller plugin.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +kubebuilder:validation:Pattern=`^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
 	Resizer string `json:"resizer,omitempty"`
 
 	// Snapshotter is csi-snapshotter, on the controller plugin. It is this
 	// driver's sidecar and not the cluster's snapshot-controller, whose image
 	// is not overridable here because that component belongs to the cluster.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +kubebuilder:validation:Pattern=`^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
 	Snapshotter string `json:"snapshotter,omitempty"`
 
 	// HealthMonitor is csi-external-health-monitor-controller, on the
 	// controller plugin.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +kubebuilder:validation:Pattern=`^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
 	HealthMonitor string `json:"healthMonitor,omitempty"`
 
 	// NodeDriverRegistrar is node-driver-registrar, on the node plugin.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +kubebuilder:validation:Pattern=`^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
 	NodeDriverRegistrar string `json:"nodeDriverRegistrar,omitempty"`
 }
@@ -1125,7 +1126,7 @@ type SimplyblockDriverSpec struct {
 	// operator's own registry and tag with the CSI driver's repository, so a
 	// deployment that states nothing runs the driver belonging to the operator
 	// reconciling it, which is the pairing the release was tested as.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +kubebuilder:validation:Pattern=`^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
 	Image string `json:"image,omitempty"`
 

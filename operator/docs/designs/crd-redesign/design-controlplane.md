@@ -572,7 +572,7 @@ ownership spine starts at a real edge rather than at a Helm release.
 // by the operator.
 type LocalControlPlane struct {
 	// Image is the management API and control-plane image.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +kubebuilder:validation:Pattern=`^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +kubebuilder:validation:Required
 	Image string `json:"image"`
 	// ...
@@ -1252,7 +1252,7 @@ type FoundationDBSpec struct {
 // so the ownership spine starts at a real edge rather than at a Helm release.
 type LocalControlPlane struct {
 	// Image is the management API and control-plane image.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +kubebuilder:validation:Pattern=`^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +kubebuilder:validation:Required
 	Image string `json:"image"`
 
@@ -1538,7 +1538,7 @@ type UpgradeSpec struct {
 	// Image is the version to move to. It replaces
 	// ControlPlane.spec.source.managed.image when the operation succeeds, so the
 	// entity keeps describing what is running.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +kubebuilder:validation:Pattern=`^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +kubebuilder:validation:Required
 	Image string `json:"image"`
 }

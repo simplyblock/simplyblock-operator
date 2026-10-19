@@ -62,11 +62,9 @@ spec:
                   description: |-
                     Image is the container image used for all simplyblock control-plane and
                     storage-node workloads (e.g., `quay.io/simplyblock-io/simplyblock:26.2.2`).
-                    StorageNodeSet CRs that omit spec.clusterImage inherit this value.
-                    Must reference one of the trusted registries (`quay.io/simplyblock-io`,
-                    `docker.io/simplyblock`, `public.ecr.aws/simply-block`). Digest pinning
-                    (@sha256:...) is recommended.
-                  pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    StorageNodeSet CRs that omit spec.clusterImage inherit this value. Any
+                    registry is accepted. Digest pinning (@sha256:...) is recommended.
+                  pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                   type: string
               type: object
             status:
@@ -290,11 +288,9 @@ spec:
                           type: object
                         image:
                           description: |-
-                            Image is the management API and control-plane image.
-                            Must reference one of the trusted registries (`quay.io/simplyblock-io`,
-                            `docker.io/simplyblock`, `public.ecr.aws/simply-block`); digest pinning
-                            (@sha256:...) is recommended.
-                          pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                            Image is the management API and control-plane image. Any registry is
+                            accepted; digest pinning (@sha256:...) is recommended.
+                          pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                           type: string
                         imagePullPolicy:
                           default: IfNotPresent
@@ -551,7 +547,7 @@ spec:
                             there is no equivalent to fall back to without this field -- every
                             StorageCluster on a managed deployment must get an image from here or
                             from its own spec.
-                          pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                          pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                           type: string
                       required:
                         - endpoint

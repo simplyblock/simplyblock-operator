@@ -1437,14 +1437,11 @@ spec:
                     properties:
                       image:
                         description: |-
-                          Image is the repository and tag, optionally digest-pinned. An empty value
-                          is not written downstream, so the field it would fill keeps its own
-                          default rather than being overridden with nothing.
-
-                          The registry set is the one every image field in this API is held to,
-                          which is what keeps a reviewed document from naming a build nobody
-                          published.
-                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                          Image is the registry, repository, and tag, optionally digest-pinned. An
+                          empty value is not written downstream, so the field it would fill keeps
+                          its own default rather than being overridden with nothing. Any registry
+                          is accepted, which is the shape every image field in this API is held to.
+                        pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                         type: string
                       imagePullPolicy:
                         default: Always
@@ -1467,14 +1464,11 @@ spec:
                     properties:
                       image:
                         description: |-
-                          Image is the repository and tag, optionally digest-pinned. An empty value
-                          is not written downstream, so the field it would fill keeps its own
-                          default rather than being overridden with nothing.
-
-                          The registry set is the one every image field in this API is held to,
-                          which is what keeps a reviewed document from naming a build nobody
-                          published.
-                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                          Image is the registry, repository, and tag, optionally digest-pinned. An
+                          empty value is not written downstream, so the field it would fill keeps
+                          its own default rather than being overridden with nothing. Any registry
+                          is accepted, which is the shape every image field in this API is held to.
+                        pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                         type: string
                       imagePullPolicy:
                         default: Always
@@ -1494,14 +1488,11 @@ spec:
                     properties:
                       image:
                         description: |-
-                          Image is the repository and tag, optionally digest-pinned. An empty value
-                          is not written downstream, so the field it would fill keeps its own
-                          default rather than being overridden with nothing.
-
-                          The registry set is the one every image field in this API is held to,
-                          which is what keeps a reviewed document from naming a build nobody
-                          published.
-                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                          Image is the registry, repository, and tag, optionally digest-pinned. An
+                          empty value is not written downstream, so the field it would fill keeps
+                          its own default rather than being overridden with nothing. Any registry
+                          is accepted, which is the shape every image field in this API is held to.
+                        pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                         type: string
                       imagePullPolicy:
                         default: Always
@@ -1937,7 +1928,7 @@ spec:
                       Image is the version to move to. It replaces
                       ControlPlane.spec.source.managed.image when the operation succeeds, so the
                       entity keeps describing what is running.
-                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                     type: string
                 required:
                 - image
@@ -2127,11 +2118,9 @@ spec:
                 description: |-
                   Image is the container image used for all simplyblock control-plane and
                   storage-node workloads (e.g., `quay.io/simplyblock-io/simplyblock:26.2.2`).
-                  StorageNodeSet CRs that omit spec.clusterImage inherit this value.
-                  Must reference one of the trusted registries (`quay.io/simplyblock-io`,
-                  `docker.io/simplyblock`, `public.ecr.aws/simply-block`). Digest pinning
-                  (@sha256:...) is recommended.
-                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                  StorageNodeSet CRs that omit spec.clusterImage inherit this value. Any
+                  registry is accepted. Digest pinning (@sha256:...) is recommended.
+                pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                 type: string
             type: object
           status:
@@ -2359,11 +2348,9 @@ spec:
                         type: object
                       image:
                         description: |-
-                          Image is the management API and control-plane image.
-                          Must reference one of the trusted registries (`quay.io/simplyblock-io`,
-                          `docker.io/simplyblock`, `public.ecr.aws/simply-block`); digest pinning
-                          (@sha256:...) is recommended.
-                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                          Image is the management API and control-plane image. Any registry is
+                          accepted; digest pinning (@sha256:...) is recommended.
+                        pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                         type: string
                       imagePullPolicy:
                         default: IfNotPresent
@@ -2627,7 +2614,7 @@ spec:
                           there is no equivalent to fall back to without this field -- every
                           StorageCluster on a managed deployment must get an image from here or
                           from its own spec.
-                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                        pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                         type: string
                     required:
                     - endpoint
@@ -4772,7 +4759,7 @@ spec:
                   operator's own registry and tag with the CSI driver's repository, so a
                   deployment that states nothing runs the driver belonging to the operator
                   reconciling it, which is the pairing the release was tested as.
-                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                 type: string
               imagePullPolicy:
                 default: Always
@@ -4923,7 +4910,7 @@ spec:
                           in the spdkcsi repository, tagged with the operator's tag prefixed
                           pnfs-mds-, so a deployment that states nothing runs the image belonging
                           to the operator reconciling it.
-                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                        pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                         type: string
                       nodeSelector:
                         additionalProperties:
@@ -5070,7 +5057,7 @@ spec:
                 properties:
                   attacher:
                     description: Attacher is csi-attacher, on the controller plugin.
-                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                     type: string
                   csiAddons:
                     description: |-
@@ -5082,38 +5069,38 @@ spec:
                       service this driver serves.
 
                       Unlike the other sidecars above, this one's upstream home is the
-                      csi-addons project's own registry, not simplyblock's: the allowlist
-                      carries quay.io/csiaddons alongside the simplyblock registries so a
-                      deployment can run the stock kubernetes-csi-addons sidecar image
-                      directly, ahead of (or instead of) a quay.io/simplyblock-io mirror.
-                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block|quay\.io/csiaddons)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                      csi-addons project's own registry, not simplyblock's; any registry is
+                      accepted, so a deployment can run the stock kubernetes-csi-addons
+                      sidecar image directly, ahead of (or instead of) a
+                      quay.io/simplyblock-io mirror.
+                    pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                     type: string
                   healthMonitor:
                     description: |-
                       HealthMonitor is csi-external-health-monitor-controller, on the
                       controller plugin.
-                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                     type: string
                   nodeDriverRegistrar:
                     description: NodeDriverRegistrar is node-driver-registrar, on
                       the node plugin.
-                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                     type: string
                   provisioner:
                     description: Provisioner is csi-provisioner, on the controller
                       plugin.
-                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                     type: string
                   resizer:
                     description: Resizer is csi-resizer, on the controller plugin.
-                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                     type: string
                   snapshotter:
                     description: |-
                       Snapshotter is csi-snapshotter, on the controller plugin. It is this
                       driver's sidecar and not the cluster's snapshot-controller, whose image
                       is not overridable here because that component belongs to the cluster.
-                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                     type: string
                 type: object
               tls:
@@ -7820,7 +7807,7 @@ spec:
                     description: |-
                       Image is the storage-node container image. Defaults to the ControlPlane
                       singleton's spec.image when unset, so a deployment states the version once.
-                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                     type: string
                   imagePullPolicy:
                     default: Always
@@ -10666,8 +10653,8 @@ spec:
               clusterImage:
                 description: |-
                   ClusterImage is the container image used for storage-node workloads.
-                  Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
-                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                  Any registry is accepted; digest pinning (@sha256:...) is recommended.
+                pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                 type: string
               clusterName:
                 description: ClusterName is the target storage cluster name.
@@ -11124,14 +11111,14 @@ spec:
               spdkImage:
                 description: |-
                   SpdkImage is the SPDK image reference used by node services.
-                  Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
-                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                  Any registry is accepted; digest pinning (@sha256:...) is recommended.
+                pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                 type: string
               spdkProxyImage:
                 description: |-
                   SpdkProxyImage is the SPDK proxy image reference used by node services.
-                  Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
-                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                  Any registry is accepted; digest pinning (@sha256:...) is recommended.
+                pattern: ^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                 type: string
               spdkSystemMemory:
                 description: |-

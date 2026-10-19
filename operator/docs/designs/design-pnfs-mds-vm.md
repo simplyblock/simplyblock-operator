@@ -692,7 +692,7 @@ type DriverPNFSMDS struct {
 	// repository, tagged with the operator's tag prefixed pnfs-mds-, so a
 	// deployment that states nothing runs the image belonging to the operator
 	// reconciling it.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +kubebuilder:validation:Pattern=`^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
 	Image string `json:"image,omitempty"`
 

@@ -603,14 +603,11 @@ type ClusterTemplate struct {
 // development one keeps the image and pins the policy to IfNotPresent so a tag
 // rebuilt in place is not picked up mid-deployment.
 type ImageSpec struct {
-	// Image is the repository and tag, optionally digest-pinned. An empty value
-	// is not written downstream, so the field it would fill keeps its own
-	// default rather than being overridden with nothing.
-	//
-	// The registry set is the one every image field in this API is held to,
-	// which is what keeps a reviewed document from naming a build nobody
-	// published.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// Image is the registry, repository, and tag, optionally digest-pinned. An
+	// empty value is not written downstream, so the field it would fill keeps
+	// its own default rather than being overridden with nothing. Any registry
+	// is accepted, which is the shape every image field in this API is held to.
+	// +kubebuilder:validation:Pattern=`^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
 	Image string `json:"image,omitempty"`
 

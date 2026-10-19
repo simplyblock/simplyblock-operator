@@ -218,8 +218,8 @@ Each slot is an image and a pull policy, and either may be stated without the
 other: an override of the image keeps the default policy, and a pin of the policy
 keeps the default image. A slot the document does not state is written nowhere, so
 the field it would have filled keeps its own default rather than being overridden
-with an empty string. Every image is held to the trusted-registry set the rest of
-this API holds them to.
+with an empty string. Every image is held to the registry/repository:tag shape
+the rest of this API holds them to; any registry is accepted.
 
 `images.nodeAgent` is spent only where the document creates the cluster. A document
 naming an existing one in `spec.clusterRef` adds nodes to a DaemonSet already
@@ -1821,7 +1821,7 @@ type ImageSpec struct {
 	// Image is the repository and tag, optionally digest-pinned. An empty value
 	// is not written downstream, so the field it would fill keeps its own
 	// default rather than being overridden with nothing.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +kubebuilder:validation:Pattern=`^($|[a-z0-9]+(\.[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)+:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
 	Image string `json:"image,omitempty"`
 
