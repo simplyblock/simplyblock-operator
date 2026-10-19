@@ -296,7 +296,9 @@ the aggregate as a whole: today, the placement strategy. Its presence is fixed a
 creation.
 
 **`spec.superclusterRef` makes a cluster a member** of the named supercluster in
-its namespace. It is immutable from creation: a member is created into its
+its namespace, reported as `status.role: PlacementGroup`, because a member is one
+of the groups the supercluster's volumes are placed in. It is immutable from
+creation: a member is created into its
 supercluster and leaves it only by being removed (§8.4).
 
 **`spec.disablePlacement` on a member takes it out of placement.** Its volumes,
@@ -305,7 +307,9 @@ pools, and status stay where they are. It is valid only on a member.
 **`supercluster.placement.strategy` ranks the eligible members** (§7.2).
 `MostAvailableCapacity`, the default, picks the member with the most free
 physical capacity. `LeastProvisioned` picks the member with the lowest ratio of
-provisioned to physical capacity.
+provisioned to physical capacity. `LeastVolumes` picks the member holding the
+fewest volumes. Under every strategy, members that rank equal are chosen between
+at random.
 
 ### 4.2 What a supercluster's spec may carry
 
@@ -324,7 +328,7 @@ the schema, and a CEL rule requires both whenever `supercluster` is absent.
 | Field                      | On             | Meaning                                                                                    |
 |----------------------------|----------------|--------------------------------------------------------------------------------------------|
 | `status.uuid`              | a supercluster | The aggregate's identifier, its `metadata.uid`, which a StorageClass names in `cluster_id` |
-| `status.role`              | every cluster  | `Standalone`, `Supercluster`, or `Member`                                                  |
+| `status.role`              | every cluster  | `Standalone`, `Supercluster`, or `PlacementGroup`                                          |
 | `status.members[]`         | a supercluster | Per member: name, UUID, phase, whether placement may choose it, and its capacity reading   |
 | `status.memberCount`       | a supercluster | The number of members                                                                      |
 | `status.capacity`          | a supercluster | Sums of the members' total, used, and provisioned bytes                                    |
@@ -476,7 +480,12 @@ worker appears in one group across the whole document, as today.
 
 ### 5.2 Size limits
 
-A simplyblock cluster holds at most 32 storage nodes. A worker runs one storage
+A simplyblock cluster holds at most 32 storage nodes. The limit bounds a
+cluster's exposure to concurrent failures: its fault tolerance is set by its
+erasure-coding scheme and does not grow with its node count, while the chance
+that more nodes fail at once than the scheme tolerates grows with every node. A
+fleet larger than one cluster is therefore several clusters, and a supercluster
+makes them one to Kubernetes. A worker runs one storage
 node per slot, and the slot count comes from the node set's `socketsToUse` and
 `nodesPerSocket`, overridden or inherited from the template
 (`slotsOf(socketsToUse, nodesPerSocket)` in
@@ -669,10 +678,11 @@ The generator reads two labels off every worker's `Node` object, both
 well-known Kubernetes topology labels that cloud providers and most on-premises
 installers set:
 
-| Label                           | Read as             | Effect on the draft                                                           |
-|---------------------------------|---------------------|-------------------------------------------------------------------------------|
-| `topology.kubernetes.io/region` | The member boundary | A member never spans two regions (§5.5 step 1)                                |
-| `topology.kubernetes.io/zone`   | The failure domain  | Copied into `NodeGroup.failureDomain`, and dealt across members (§5.5 step 4) |
+| Label                                    | Read as              | Effect on the draft                                                                 |
+|------------------------------------------|----------------------|-------------------------------------------------------------------------------------|
+| `topology.kubernetes.io/region`          | The member boundary  | A member never spans two regions (§5.5 step 1)                                      |
+| `topology.kubernetes.io/zone`            | The failure domain   | Copied into `NodeGroup.failureDomain`, and dealt across members (§5.5 step 4)       |
+| `storage.simplyblock.io/placement-group` | The member, when set | Workers with one value form one node set, in place of the split (§5.5 steps 2 to 4) |
 
 **A region bounds a member** because a member stripes every write synchronously
 across its own nodes, so a member spanning regions puts inter-region latency in
@@ -699,6 +709,17 @@ racks (`example.com/rack`). The value is copied verbatim and is held to the
 `failureDomain` pattern, so a value that does not fit is a finding naming the
 worker rather than a silent rewrite.
 
+**A placement-group label assigns workers to members.** The label is optional.
+When every worker of a partition carries it, workers with one value form one node
+set named by the value, and the generator does not count, size, or deal that
+partition. Partitioning still applies (§5.5 step 1), so a value whose workers
+span two regions or two hardware classes is a finding naming the value. A value
+that is not a node set name (a DNS label of at most 23 characters) is a finding
+naming the workers that carry it. A labeled node set over the storage-node limit
+is drafted with `MemberTooLarge`, which approval refuses (§5.2). When only some
+workers of a partition carry the label, the unlabeled workers are split as usual
+and the draft carries the finding `PlacementGroupLabelIncomplete`, naming them.
+
 **Missing topology is reported, never guessed.**
 
 | Workers in one partition           | Draft                                                                           |
@@ -717,6 +738,16 @@ by hand. `Validating` reads the region label of every worker a node set lists an
 refuses the document with `MemberSpansRegions`, naming the node set and the
 regions, when they disagree. A worker without the label matches any region, so a
 fleet with no region labels is never refused for it.
+
+**Approval checks that every member holds every failure domain**, on every
+document. When the template sets `enableFailureDomains`, `Validating` collects
+the failure domains each node set's groups name and refuses the document with
+`MemberMissingFailureDomain` when a node set lacks a domain that another node set
+of its region holds, naming the node set and the missing domains. Failure domains
+and members then form a grid: a domain's loss takes nodes from every member and
+all of no member. The split satisfies the rule by construction (§5.5 step 4). A
+document written by hand, or drafted from placement-group labels, is held to it,
+and the draft reports the same finding before approval.
 
 ### 5.8 Per-node-set overrides
 
@@ -879,8 +910,10 @@ call after `CreateVolume` find a member from the handle alone.
 `resolveClusterSelection` in the CSI controller gains one branch, taken when the
 class's `cluster_id` names no cluster in the secret: it calls
 `PlacementService.Place` over the link to the operator, with the aggregate's
-identifier, the pool name, the volume name, the requested size, and the
-request's accessibility requirements. The service is declared in
+identifier, the pool name, the volume name, the requested size, the
+request's accessibility requirements, and the PVC's
+`storage.simplyblock.io/consistency-group` label, which the controller already
+reads at provisioning. The service is declared in
 `atlas-lib/placement/placementrpc/placementv1/placement.proto`, beside the
 link's other services, and is the first one the operator serves to a peer.
 
@@ -890,22 +923,35 @@ The operator answers from the supercluster reconciler's readings:
    `NotFound`, which the driver returns as `InvalidArgument` naming the class, as
    an unknown cluster does today.
 2. Look for the volume name in every member's pool (§7.3). A hit is the answer.
-3. Restrict to placement-eligible members: not `disablePlacement`, not
+3. Follow the volume's consistency group (§9.3). A labeled request is answered
+   with the member whose cluster holds the group with live members, read from
+   `GET /api/v2/clusters/{cluster_id}/consistency-groups/` in each member, or
+   placed by the operator for that group name since the last reading. The
+   remaining steps are skipped, except that a member that is not
+   placement-eligible (step 4) fails the call with `FailedPrecondition` naming
+   it. A group found in two members fails with
+   `FailedPrecondition` naming both. A label naming no group is placed by the
+   steps below, and that member becomes the group's.
+4. Restrict to placement-eligible members: not `disablePlacement`, not
    being removed, serving, and holding the pool.
-4. Prefer members in the volume's topology. Each member's region and zones are
+5. Prefer members in the volume's topology. Each member's region and zones are
    read from its workers' `Node` labels. When the request carries a preferred
    topology, candidates narrow to members in the preferred segment's region,
    then to the requisite segments' regions, and fall back to every eligible
    member only when neither leaves a candidate with room.
-5. Take each member's free capacity from the latest reading, less the sizes the
+6. Take each member's free capacity from the latest reading, less the sizes the
    operator has placed in it since that reading, so a burst of provisions spreads
    instead of landing on the member that was emptiest a minute ago. A reading
    older than two polling intervals is refreshed with a two-second deadline, and
    a member whose reading cannot be refreshed is dropped for this call.
-6. Drop members whose free capacity is below the requested size, and members
+7. Drop members whose free capacity is below the requested size, and members
    above their own `criticalThreshold`.
-7. Rank by the strategy and take the first. Ties break by cluster UUID.
-8. No candidate left fails with `ResourceExhausted`, naming the aggregate and the
+8. Rank by the strategy and take the first, choosing at random among members
+   that rank equal. A retry stays idempotent, because step 2 finds the volume in
+   the member it was placed in. Under `LeastVolumes`, a member's count is the
+   number of PersistentVolumes whose handle names it, from the operator's cache,
+   plus the volumes placed in it whose PersistentVolume does not exist yet.
+9. No candidate left fails with `ResourceExhausted`, naming the aggregate and the
    reason each member was dropped.
 
 The driver writes the chosen member's UUID into the volume handle, exactly as a
@@ -1108,7 +1154,7 @@ supercluster.
 | 3   | Volume expansion                                | Per member   | Expands in place. Fails with `ResourceExhausted` when the member is full, and relocation is the remedy                                                | —     |
 | 4   | Snapshots                                       | Per member   | Taken in the volume's member. Snapshot names are unique per backend cluster, which is unchanged                                                       | —     |
 | 5   | Clone from a volume or restore from a snapshot  | Restricted   | Lands in the source's member regardless of placement (§9.2)                                                                                           | 2     |
-| 6   | Volume group snapshot, consistency group        | Restricted   | All volumes of a group must share a member (§9.3)                                                                                                     | 2     |
+| 6   | Volume group snapshot, consistency group        | Restricted   | All volumes of a group share one member and one lvstore. Placement follows the group label (§7.2, §9.3)                                               | 2     |
 | 7   | Shared subsystems (`max_namespace_per_subsys`)  | Restricted   | Volumes sharing a subsystem share a member and move together (§8.1)                                                                                   | 3     |
 | 8   | Node-to-node migration, rebalancer, realignment | Per member   | Run per member. The supercluster is skipped by the rebalancer's watch                                                                                 | 1     |
 | 9   | Pools and QoS                                   | Aggregated   | One backend pool per member. The ceiling is the supercluster's, split evenly, then by demand (§7.1, §7.5)                                             | 2, 5  |
@@ -1145,15 +1191,32 @@ the clone with `InvalidArgument` otherwise, so that a clone cannot leave the
 aggregate its class promises. A clone into a full member fails with
 `ResourceExhausted` and the source member named.
 
-### 9.3 Groups need one member
+### 9.3 Groups need one lvstore
 
-The CSI driver already refuses a volume group whose members live in more than one
-cluster (`parseGroupMembers` in `csi-driver/internal/csi/controller/volumegroup.go`).
-With placement spreading volumes, that refusal becomes likely rather than
-exceptional. Until §16 Q6 settles an affinity mechanism, the behavior is the
-refusal, with the members named in the error so that the remedy (relocating the
-stragglers to one member) is visible. Relocation refuses a volume that belongs to
-a group, because moving one member of a consistency group breaks the group.
+A consistency group's frozen snapshot runs on one logical volume store, so every
+volume of the group lives on one lvstore of one node
+([`design-consistency-groups.md`](design-consistency-groups.md) §4.2). A
+`VolumeGroupSnapshot` and a CSI-Addons volume group resolve to the same backend
+group, so the same holds for them. Membership is the PVC label
+`storage.simplyblock.io/consistency-group`. The control plane pins the group to
+its first volume's node and lvstore and creates every later labeled volume on the
+pin, failing the create when the pin has no room (`lvol_controller.py` in sbcli).
+
+**Placement keeps a group in one member.** The group is a record of one backend
+cluster, so a labeled volume is placed in the member holding the group (§7.2
+step 3), and the member's control plane places it on the pin. A group's first
+volume is placed like any other, and its member becomes the group's. The group
+is bounded by its lvstore's room, not by the supercluster's: a group whose pin is
+full fails the create in its member and is not spilled to another.
+
+**A label added later joins only within the member.** The membership watcher in
+the CSI controller resolves the group in the volume's own cluster. A volume in
+another member is refused with a Warning event on the PVC naming the member that
+holds the group. Relocating the volume into that member first (§8) is the remedy,
+after which the existing colocation path moves it onto the pin.
+
+**Relocation refuses a volume that belongs to a group**, because moving one
+member of a consistency group off its lvstore breaks the group.
 
 ### 9.4 Encryption
 
@@ -1463,7 +1526,7 @@ repository's spell check.
 | 3   | ~~**Member names for long node set names**~~ **Resolved.** A cluster name is at most 35 characters and a node set name at most 23, and the member suffix is three random letters, so every member name fits (§5.3).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Resolved                    |
 | 4   | ~~**Aggregate pool ceilings**~~ **Resolved.** A pool's ceiling is the supercluster's. Phase 2 splits it evenly over the members and Phase 5 divides it by demand (§7.1, §7.5).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Resolved                    |
 | 5   | **Replication with a supercluster on either side:** a pair whose source is a supercluster means one relationship per member, and a supercluster target needs a member mapping. Which shape, and is it needed in the first release?                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Operator team, Backend team |
-| 6   | **Placement affinity for groups:** volumes that will form a consistency group or a volume group must share a member. Candidates are a StorageClass parameter keying affinity on the claim's namespace (through the provisioner's `--extra-create-metadata`), or an explicit affinity key. Neither has been settled.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Operator team               |
+| 6   | ~~**Placement affinity for groups**~~ **Resolved.** A group is the PVC label `storage.simplyblock.io/consistency-group`, which the control plane already pins to one node and lvstore. Placement sends a labeled volume to the member that holds the group, and the member's control plane places it on the pin (§7.2, §9.3).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Resolved                    |
 | 7   | ~~**Fan-out cluster operations**~~ **Resolved.** Restart, shutdown, and start on a supercluster walk its members one at a time in order of member name and hold on a member that fails (§9.6).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Resolved                    |
 | 8   | ~~**Site deployments**~~ **Resolved.** The hub's StorageClass names the supercluster in `cluster_id`, through the supercluster's `status.uuid` (§9.7).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Resolved                    |
 | 9   | ~~**Volume names across members**~~ **Resolved.** Not relevant: volumes are created through Kubernetes, whose PV names are unique.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Resolved                    |
@@ -1482,7 +1545,7 @@ which this appendix does not restate.
 ```go
 // PlacementStrategy is how the operator ranks the members of a supercluster
 // when it places a new volume.
-// +kubebuilder:validation:Enum=MostAvailableCapacity;LeastProvisioned
+// +kubebuilder:validation:Enum=MostAvailableCapacity;LeastProvisioned;LeastVolumes
 type PlacementStrategy string
 
 const (
@@ -1493,10 +1556,14 @@ const (
 	// PlacementLeastProvisioned places a volume in the member with the lowest
 	// ratio of provisioned to physical capacity.
 	PlacementLeastProvisioned PlacementStrategy = "LeastProvisioned"
+
+	// PlacementLeastVolumes places a volume in the member holding the fewest
+	// volumes.
+	PlacementLeastVolumes PlacementStrategy = "LeastVolumes"
 )
 
 // StorageClusterRole is what a StorageCluster is within a supercluster.
-// +kubebuilder:validation:Enum=Standalone;Supercluster;Member
+// +kubebuilder:validation:Enum=Standalone;Supercluster;PlacementGroup
 type StorageClusterRole string
 
 const (
@@ -1508,9 +1575,9 @@ const (
 	// no nodes of its own.
 	StorageClusterRoleSupercluster StorageClusterRole = "Supercluster"
 
-	// StorageClusterRoleMember is an ordinary cluster that belongs to a
-	// supercluster.
-	StorageClusterRoleMember StorageClusterRole = "Member"
+	// StorageClusterRolePlacementGroup is an ordinary cluster that belongs to
+	// a supercluster, one of the groups its volumes are placed in.
+	StorageClusterRolePlacementGroup StorageClusterRole = "PlacementGroup"
 )
 
 // SuperclusterPlacement is how a supercluster places new volumes.

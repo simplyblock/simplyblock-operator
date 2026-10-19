@@ -114,7 +114,7 @@ File: `operator/internal/webhook/storagecluster_validator_test.go`
 | ~~U-45~~ | ~~A member created before its supercluster is admitted when an approved document names it, refused otherwise~~ superseded by U-146: the supercluster is created first (design §5.4)               | Positive + Negative | —                                                   |
 | ~~U-46~~ | ~~A member created while a concurrent aggregate edit lists it under a second supercluster is refused on the member side~~ superseded by U-144: membership is declared by the member (design §4.1) | Negative            | —                                                   |
 
-### Member Selection (design §7.2, §7.3)
+### Member Selection (design §7.2, §7.3, §9.3)
 
 File: `csi-driver/internal/csi/controller/placement_aggregate_test.go`
 
@@ -122,6 +122,9 @@ File: `csi-driver/internal/csi/controller/placement_aggregate_test.go`
 |----------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
 | U-47     | `MostAvailableCapacity` picks the member with the most free capacity                                                                                                       | Positive | —    |
 | U-48     | `LeastProvisioned` picks the member with the lowest provisioned ratio                                                                                                      | Positive | —    |
+| U-170    | `LeastVolumes` picks the member with the fewest PersistentVolumes whose handle names it                                                                                    | Positive | —    |
+| U-171    | Members that rank equal under any strategy are chosen between at random, and a retry of the same volume name returns the member it was placed in                           | Positive | —    |
+| U-172    | Under `LeastVolumes`, a burst of creates counts the volumes placed whose PersistentVolume does not exist yet, so the burst spreads                                         | Boundary | —    |
 | U-49     | Equal ranks break by cluster UUID, identically across calls                                                                                                                | Boundary | —    |
 | U-50     | A member with `disablePlacement`, or with a `RemoveMember` running, is never chosen                                                                                        | Negative | —    |
 | U-51     | A member whose free capacity equals the requested size is eligible, one byte less is not                                                                                   | Boundary | —    |
@@ -138,6 +141,11 @@ File: `csi-driver/internal/csi/controller/placement_aggregate_test.go`
 | U-62     | A clone through a supercluster class lands in the source's member                                                                                                          | Positive | —    |
 | U-63     | A clone whose source member does not belong to the class's supercluster is refused with `InvalidArgument`                                                                  | Negative | —    |
 | U-64     | A group whose volumes span two members is refused, naming both members                                                                                                     | Negative | —    |
+| U-165    | A labeled request whose group has live members in one member is placed there, whatever the capacity ranking says                                                           | Positive | —    |
+| U-166    | A labeled request whose group name exists in two members fails with `FailedPrecondition` naming both                                                                       | Negative | —    |
+| U-167    | Two concurrent first volumes of one group land in one member, because the second follows the operator's record of the first                                                | Boundary | —    |
+| U-168    | A labeled request whose group lives in a member with `disablePlacement` or under removal fails with `FailedPrecondition` naming the member                                 | Negative | —    |
+| U-169    | A label added later to a PVC whose volume is in another member than the group is refused with a Warning event naming the group's member                                    | Negative | —    |
 
 ### Relocate Validation (design §8.1, §9.3, §9.4)
 
@@ -199,25 +207,33 @@ File: `operator/internal/discovery/sizesplit_test.go`
 | U-98 | An infra tier and a worker tier split independently, drafted as `infra`, `discovered-1`, and `discovered-2`                   | Positive | —    |
 | U-99 | Two hundred workers with distinct disks produce no node set above 32 groups                                                   | Boundary | —    |
 
-### Kubernetes Topology (design §5.7, §7.2)
+### Kubernetes Topology and Placement-Group Labels (design §5.7, §7.2)
 
 File: `operator/internal/discovery/topology_test.go`, and
 `csi-driver/internal/csi/controller/placement_aggregate_test.go` for U-109 to U-111
 
-| #     | Scenario                                                                                                         | Type                | Test |
-|-------|------------------------------------------------------------------------------------------------------------------|---------------------|------|
-| U-100 | A worker's `topology.kubernetes.io/zone` is copied verbatim into its group's `failureDomain`                     | Positive            | —    |
-| U-101 | `failureDomainLabel` set to a rack label replaces the zone label as the source                                   | Positive            | —    |
-| U-102 | A label value that does not fit the `failureDomain` pattern is a finding naming the worker, and is not rewritten | Negative            | —    |
-| U-103 | Every worker labeled sets `enableFailureDomains` on the template, no worker labeled leaves it unset              | Positive + Negative | —    |
-| U-104 | Some workers labeled is drafted with `TopologyIncomplete` naming the unlabeled ones                              | Boundary            | —    |
-| U-105 | Workers in two regions are never drafted into one node set, and node set names carry the region                  | Negative            | —    |
-| U-106 | Thirty workers in zone `a` and ten in zone `b` are two members of fifteen and five each                          | Positive            | —    |
-| U-107 | A hand-written node set whose workers span two regions is refused at approval with `MemberSpansRegions`          | Negative            | —    |
-| U-108 | A worker without a region label matches any region, so an unlabeled fleet is never refused for it                | Boundary            | —    |
-| U-109 | A preferred topology narrows candidates to members in its region                                                 | Positive            | —    |
-| U-110 | No member in the preferred region with room falls back to the requisite regions, then to every eligible member   | Negative            | —    |
-| U-111 | A class carrying `zone_cluster_map` restricts by the map and ignores member topology                             | Positive            | —    |
+| #     | Scenario                                                                                                                                                | Type                | Test |
+|-------|---------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|------|
+| U-100 | A worker's `topology.kubernetes.io/zone` is copied verbatim into its group's `failureDomain`                                                            | Positive            | —    |
+| U-101 | `failureDomainLabel` set to a rack label replaces the zone label as the source                                                                          | Positive            | —    |
+| U-102 | A label value that does not fit the `failureDomain` pattern is a finding naming the worker, and is not rewritten                                        | Negative            | —    |
+| U-103 | Every worker labeled sets `enableFailureDomains` on the template, no worker labeled leaves it unset                                                     | Positive + Negative | —    |
+| U-104 | Some workers labeled is drafted with `TopologyIncomplete` naming the unlabeled ones                                                                     | Boundary            | —    |
+| U-105 | Workers in two regions are never drafted into one node set, and node set names carry the region                                                         | Negative            | —    |
+| U-106 | Thirty workers in zone `a` and ten in zone `b` are two members of fifteen and five each                                                                 | Positive            | —    |
+| U-107 | A hand-written node set whose workers span two regions is refused at approval with `MemberSpansRegions`                                                 | Negative            | —    |
+| U-108 | A worker without a region label matches any region, so an unlabeled fleet is never refused for it                                                       | Boundary            | —    |
+| U-173 | Every worker of a partition labeled `storage.simplyblock.io/placement-group` forms one node set per value, named by the value, with no split            | Positive            | —    |
+| U-174 | Some workers labeled: the unlabeled ones are split as usual and the draft carries `PlacementGroupLabelIncomplete` naming them                           | Boundary            | —    |
+| U-175 | A label value whose workers span two regions or two hardware classes is a finding naming the value                                                      | Negative            | —    |
+| U-176 | A label value that is not a DNS label of at most 23 characters is a finding naming the workers                                                          | Negative            | —    |
+| U-177 | A labeled node set over the storage-node limit is drafted with `MemberTooLarge`                                                                         | Boundary            | —    |
+| U-178 | With failure domains enabled, a node set lacking a domain another node set of its region holds is refused with `MemberMissingFailureDomain` naming both | Negative            | —    |
+| U-179 | Node sets of different regions are compared only within their region                                                                                    | Positive            | —    |
+| U-180 | With failure domains disabled, node sets with different domains are admitted                                                                            | Positive            | —    |
+| U-109 | A preferred topology narrows candidates to members in its region                                                                                        | Positive            | —    |
+| U-110 | No member in the preferred region with room falls back to the requisite regions, then to every eligible member                                          | Negative            | —    |
+| U-111 | A class carrying `zone_cluster_map` restricts by the map and ignores member topology                                                                    | Positive            | —    |
 
 ### Aggregate Identifier (design §3, §7.1, §15)
 
@@ -355,7 +371,7 @@ server and a real Kubernetes API through `envtest`.
 | #        | Scenario                                                                                                                                                                        | Type     | Test |
 |----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
 | I-01     | A supercluster of two online members reports `Online`, both members eligible, and `observedGeneration`                                                                          | Positive | —    |
-| I-02     | Each member reports `role: Member` and `superclusterRef`, and an unrelated cluster `Standalone`                                                                                 | Positive | —    |
+| I-02     | Each member reports `role: PlacementGroup` and `superclusterRef`, and an unrelated cluster `Standalone`                                                                         | Positive | —    |
 | I-03     | A member going `Unavailable` makes the supercluster `Degraded`, drops the member from placement, and emits `MemberPlacementChanged`                                             | Positive | —    |
 | ~~I-04~~ | ~~A missing member is reported `Pending` with `MemberNotFound`, and the other member is still read~~ superseded by U-140: membership is declared by the member (design §4.1)    | Negative | —    |
 | ~~I-05~~ | ~~The secret gains an `aggregates` entry, and the `clusters` entries the cluster controller wrote are untouched~~ superseded by I-53: placement is the operator's (design §7.2) | Positive | —    |
@@ -518,7 +534,7 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 128       | 4       | all others  |
+| Unit        | 144       | 4       | all others  |
 | Integration | 49        | 0       | all of them |
 | E2E         | 9         | 0       | E-01 … E-09 |
 | Manual      | 2         | 0       | M-01, M-02  |
@@ -533,7 +549,7 @@ the row its strike names: U-10 … U-18, U-20 … U-23, U-26, U-29 … U-33, U-3
 
 | #                                                                                                                              | Gap                                               | Reason                                                                                            |
 |--------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
-| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-164                  | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                           |
+| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-180                  | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                           |
 | I-01 … I-03, I-07 … I-08, I-10, I-13, I-15 … I-16, I-21 … I-25, I-27, I-31 … I-36, I-38 … I-39, I-42, I-44 … I-51, I-53 … I-69 | Every integration scenario                        | Feature not implemented (Phases 1 to 5)                                                           |
 | E-01 … E-05, E-09                                                                                                              | Live supercluster, placement, and discovery split | Feature not implemented (Phases 1 and 2)                                                          |
 | E-06 … E-08                                                                                                                    | Live relocation and member removal                | Feature not implemented (Phases 3 and 4)                                                          |
