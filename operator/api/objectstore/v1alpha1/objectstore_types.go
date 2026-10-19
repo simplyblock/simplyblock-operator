@@ -14,6 +14,8 @@ package v1alpha1
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/simplyblock/atlas/crdtypes"
 )
 
 // ObjectStorePhase is the lifecycle phase of a gateway's provisioning.
@@ -34,8 +36,7 @@ type ObjectStoreSpec struct {
 	// the gateway's are not released together, so there is no sensible
 	// default.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Pattern=`^(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?$`
-	Image string `json:"image"`
+	Image crdtypes.ImageReference `json:"image"`
 
 	// ImagePullPolicy controls when that image is pulled. Defaults to Always:
 	// the default tag is a moving one, and IfNotPresent against a tag that
