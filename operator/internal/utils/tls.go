@@ -2,22 +2,26 @@ package utils
 
 import (
 	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 const (
-	TLSProviderOpenShift           = "OpenShift"
+	TLSProviderOpenShift           = "openshift"
 	TLSProviderCertManager         = "cert-manager"
 	OpenShiftServingCertAnnotation = "service.beta.openshift.io/serving-cert-secret-name"
 	CertManagerClusterIssuerName   = "simplyblock-certificate-authority-issuer"
 )
 
+// NormalizeTLSProvider is the provider in the spelling sbcli's settings accept,
+// which is lowercase: the chart passes it that way, while the CRD enums spell
+// the same provider OpenShift. Empty is OpenShift.
 func NormalizeTLSProvider(provider string) string {
 	if provider == "" {
 		return TLSProviderOpenShift
 	}
-	return provider
+	return strings.ToLower(provider)
 }
 
 func TLSProviderSupported(provider string) bool {

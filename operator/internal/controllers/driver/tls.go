@@ -21,6 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 const (
@@ -85,7 +86,7 @@ func tlsEnv(d *simplyblockv1alpha2.SimplyblockDriver) []corev1.EnvVar {
 	}
 	env := []corev1.EnvVar{
 		{Name: "SB_TLS_SERVE", Value: "1"},
-		{Name: "SB_TLS_PROVIDER", Value: string(tlsProvider(d))},
+		{Name: "SB_TLS_PROVIDER", Value: utils.NormalizeTLSProvider(string(tlsProvider(d)))},
 	}
 	if mutualTLSEnabled(d) {
 		env = append(env,

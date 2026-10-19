@@ -176,6 +176,11 @@ func TestTLSVolumeShape(t *testing.T) {
 	}
 
 	d.Spec.TLS.Provider = simplyblockv1alpha2.DriverTLSProviderOpenShift
+	// Regression: 2026-10-19-tls-provider-case. The chart renders the
+	// provider in lowercase, and so must the CR's OpenShift.
+	if got, _ := envValue(tlsEnv(d), "SB_TLS_PROVIDER"); got != "openshift" {
+		t.Errorf("SB_TLS_PROVIDER = %q, want openshift", got)
+	}
 	openshift := tlsVolume(d, names(d).nodeClientSecret)
 	if openshift == nil || openshift.Projected == nil || len(openshift.Projected.Sources) != 2 {
 		t.Errorf("openshift mutual volume = %+v, want a projected secret+configMap", openshift)
