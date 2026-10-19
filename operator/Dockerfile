@@ -44,9 +44,11 @@ FROM registry.access.redhat.com/ubi10/ubi-minimal:10.2
 
 ARG VERSION=0.1.0
 ARG RELEASE=1
+# Changes daily, so the update layer below is rebuilt instead of served from the build cache.
+ARG CACHE_KEY
 
 # Apply all available security patches from the UBI10 repositories.
-RUN microdnf update -y && microdnf clean all
+RUN echo "package cache key: ${CACHE_KEY}" && microdnf update -y && microdnf clean all
 
 # Required labels for Red Hat certification (preflight check operator).
 LABEL name="simplyblock-operator" \
