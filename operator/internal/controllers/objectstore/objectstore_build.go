@@ -100,7 +100,7 @@ func buildDeployment(store *objectstorev1alpha1.ObjectStore) *appsv1.Deployment 
 					Containers: []corev1.Container{
 						{
 							Name:            gatewayContainerName,
-							Image:           store.Spec.Image,
+							Image:           string(store.Spec.Image),
 							ImagePullPolicy: store.Spec.ImagePullPolicy,
 							Ports: []corev1.ContainerPort{
 								{Name: "s3", ContainerPort: store.Spec.Port},

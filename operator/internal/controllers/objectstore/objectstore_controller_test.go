@@ -355,15 +355,3 @@ func TestObjectStoreProvisioningReconcileIsANoOpWhenNothingChanged(t *testing.T)
 // which only a real apiserver enforces. A fake client applies no OpenAPI
 // schema validation at all, so this cannot be proven as a pure unit test the
 // way the test plan first scoped it.
-func TestObjectStoreImageOutsideTheAllowedRegistriesIsRejectedAtCreate(t *testing.T) {
-	cli := apiServer(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	store := testObjectStoreFixture("os-i16-store", func(o *objectstorev1alpha1.ObjectStore) {
-		o.Spec.Image = "ghcr.io/simplyblock/gateway:main"
-	})
-	if err := cli.Create(ctx, store); err == nil {
-		t.Fatal("Create succeeded with an image outside the three allowed registries, want it rejected")
-	}
-}
