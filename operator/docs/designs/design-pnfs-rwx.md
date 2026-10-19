@@ -1076,7 +1076,7 @@ NFR-2 is a commitment rather than an aspiration. The test plan carries them as
 
 Since the CSI driver repository was merged into this one, there are **two chart
 trees**, and both are still packaged and released: `helm-charts/charts/simplyblock-operator`
-(built by `helm_lint.yaml` and merged by `helm_merge_charts.yaml`) and
+(built by `helm_lint.yaml` and published through the `charts` branch by `repo_release.yaml`) and
 `csi-driver/charts/spdk-csi/latest/spdk-csi` (built by `csi_chart_release.yaml`).
 The operator-side work below lands in the first. Anything that changes the csi-node
 DaemonSet has to be applied to both or deliberately dropped from the second, and
