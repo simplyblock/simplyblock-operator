@@ -175,6 +175,10 @@ File: `operator/internal/controllers/deployment/supercluster_members_test.go`
 | U-85     | A one-node-set document over 32 storage nodes is refused, so an ordinary cluster is held to the limit too                                                                              | Negative | —                                                  |
 | U-86     | A node set below the erasure-coding minimum is refused even when the document's total meets it                                                                                         | Negative | —                                                  |
 | U-87     | Growth adding eight workers to a member of thirty is refused with `MemberTooLarge` naming both counts                                                                                  | Boundary | —                                                  |
+| U-155    | A worker listed twice within one node set is a finding naming the worker                                                                                                               | Negative | —                                                  |
+| U-156    | A worker in two node sets with different sockets and disjoint devices is admitted, and derives one storage node per member on it                                                       | Positive | —                                                  |
+| U-157    | Two node sets sharing a worker with an overlapping `socketsToUse` are a `WorkerOverlap` finding naming the worker and both node sets                                                   | Negative | —                                                  |
+| U-158    | Two node sets sharing a worker whose groups resolve to one device are a `WorkerOverlap` finding                                                                                        | Negative | —                                                  |
 
 ### Balanced Split in the Discovery Generator (design §5.5)
 
@@ -285,13 +289,14 @@ File: `operator/internal/controllers/volume/relocate_test.go`
 File: `atlas-lib/kube/names_test.go` and
 `operator/internal/controllers/cluster/workload_names_test.go`
 
-| #     | Scenario                                                                                                                                                             | Type     | Test |
-|-------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-133 | A cluster that owns no constant-named Service uses `sb-<name>-node-api`, `sb-<name>-spdk-proxy`, and their `-tls` Secrets                                            | Positive | —    |
-| U-134 | A cluster that owns `simplyblock-storage-node-api` keeps the constant names                                                                                          | Positive | —    |
-| U-135 | A name over 63 characters is cut to 40 characters and an eight-character hash, is a valid Service name, and is the same on every call                                | Boundary | —    |
-| U-136 | A member's pods carry the supercluster's label, its hostnames are `<node>.sb-<supercluster>-node-api.<namespace>.svc`, and its EndpointSlice is named for the member | Positive | —    |
-| U-137 | A member mounts the supercluster's certificate Secret, and no Certificate is created for the member                                                                  | Positive | —    |
+| #     | Scenario                                                                                                                                                                 | Type     | Test |
+|-------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| U-133 | A cluster that owns no constant-named Service uses `sb-<name>-node-api`, `sb-<name>-spdk-proxy`, and their `-tls` Secrets                                                | Positive | —    |
+| U-134 | A cluster that owns `simplyblock-storage-node-api` keeps the constant names                                                                                              | Positive | —    |
+| U-135 | A name over 63 characters is cut to 40 characters and an eight-character hash, is a valid Service name, and is the same on every call                                    | Boundary | —    |
+| U-136 | A member's hostnames are `<node>-<suffix>.sb-<supercluster>-node-api.<namespace>.svc`, and its EndpointSlice is named for the member and lists its agents' pod addresses | Positive | —    |
+| U-159 | Two members with storage nodes on one worker get distinct hostnames in the shared Service, and a label over 63 characters is cut by the hash rule                        | Positive | —    |
+| U-137 | A member mounts the supercluster's certificate Secret, and no Certificate is created for the member                                                                      | Positive | —    |
 
 ### Membership Admission (design §4.1, §4.4)
 
@@ -326,12 +331,12 @@ File: `operator/internal/placement/placement_test.go`, and
 File: `operator/internal/controllers/deployment/supercluster_members_test.go`, and
 `operator/internal/discovery/sizesplit_test.go` for U-151
 
-| #     | Scenario                                                                                                           | Type                | Test |
-|-------|--------------------------------------------------------------------------------------------------------------------|---------------------|------|
-| U-151 | A generated node set name is cut to 23 characters, keeping its number                                              | Boundary            | —    |
-| U-152 | A member's suffix is three random lowercase letters, and a drawn name that already exists is drawn again           | Positive + Negative | —    |
-| U-153 | Two growth documents with alike node set names produce two distinct members                                        | Positive            | —    |
-| U-154 | A cluster name of 35 characters is admitted and 36 is refused, a node set name of 23 is admitted and 24 is refused | Boundary            | —    |
+| #     | Scenario                                                                                                                                                          | Type                | Test |
+|-------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|------|
+| U-151 | A generated node set name is cut to 23 characters, keeping its number                                                                                             | Boundary            | —    |
+| U-152 | A member's suffix is three random lowercase letters, and a drawn name that already exists, or a suffix another member of the supercluster carries, is drawn again | Positive + Negative | —    |
+| U-153 | Two growth documents with alike node set names produce two distinct members                                                                                       | Positive            | —    |
+| U-154 | A cluster name of 35 characters is admitted and 36 is refused, a node set name of 23 is admitted and 24 is refused                                                | Boundary            | —    |
 
 ---
 
@@ -506,7 +511,7 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 118       | 4       | all others  |
+| Unit        | 123       | 4       | all others  |
 | Integration | 47        | 0       | all of them |
 | E2E         | 9         | 0       | E-01 … E-09 |
 | Manual      | 2         | 0       | M-01, M-02  |
@@ -521,7 +526,7 @@ the row its strike names: U-10 … U-18, U-20 … U-23, U-26, U-29 … U-33, U-3
 
 | #                                                                                                                              | Gap                                               | Reason                                                                                            |
 |--------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
-| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-154                  | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                           |
+| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-159                  | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                           |
 | I-01 … I-03, I-07 … I-08, I-10, I-13, I-15 … I-16, I-21 … I-25, I-27, I-31 … I-36, I-38 … I-39, I-42, I-44 … I-51, I-53 … I-67 | Every integration scenario                        | Feature not implemented (Phases 1 to 5)                                                           |
 | E-01 … E-05, E-09                                                                                                              | Live supercluster, placement, and discovery split | Feature not implemented (Phases 1 and 2)                                                          |
 | E-06 … E-08                                                                                                                    | Live relocation and member removal                | Feature not implemented (Phases 3 and 4)                                                          |

@@ -10,13 +10,13 @@
 
 ## Phasing Overview
 
-| Phase                   | Status  | Scope                                                                                                                              | Blocked by |
-|-------------------------|---------|------------------------------------------------------------------------------------------------------------------------------------|------------|
-| **Phase 1** (§4–§6)     | Planned | Superclusters and members on `StorageCluster`, per-cluster workload names, the shared certificate, and expansion from a deployment | —          |
-| **Phase 2** (§7)        | Planned | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver                                 | —          |
-| **Phase 3** (§8.1–§8.3) | Planned | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —          |
-| **Phase 4** (§8.4)      | Planned | `StorageClusterOps` action `RemoveMember`: a member's volumes moved into the others, then the member deleted                       | Phase 3    |
-| **Phase 5** (§7.5)      | Planned | Pool QoS ceilings shared across members by demand rather than split evenly                                                         | Phase 2    |
+| Phase                   | Status  | Scope                                                                                                                              | Blocked by                                       |
+|-------------------------|---------|------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------|
+| **Phase 1** (§4–§6)     | Planned | Superclusters and members on `StorageCluster`, per-cluster workload names, the shared certificate, and expansion from a deployment | Workers shared between members: P0-3 and §16 Q11 |
+| **Phase 2** (§7)        | Planned | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver                                 | —                                                |
+| **Phase 3** (§8.1–§8.3) | Planned | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —                                                |
+| **Phase 4** (§8.4)      | Planned | `StorageClusterOps` action `RemoveMember`: a member's volumes moved into the others, then the member deleted                       | Phase 3                                          |
+| **Phase 5** (§7.5)      | Planned | Pool QoS ceilings shared across members by demand rather than split evenly                                                         | Phase 2                                          |
 
 Each phase ships on its own. Phase 1 produces a supercluster that reports one
 status and lets an administrator name the members directly, which is already
@@ -28,15 +28,17 @@ members, and Phase 5 makes a pool's QoS ceiling follow its load across members.
 
 ## Phase 0 — External Prerequisites
 
-| #    | Prerequisite                                                                                                                                                                                                                             | Kind                    | Blocks                        | Status          |
-|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|-------------------------------|-----------------|
-| P0-1 | A cross-cluster move of an encrypted volume creates the target volume with a crypto layer and carries its data encryption key to the target's path before the source is deleted. Without it, `delete_source` deletes the only key (§9.4) | Control plane (`sbcli`) | Phase 3 for encrypted volumes | Not established |
-| P0-2 | Data-plane reachability between the members' storage networks, since the move attaches the target node's transfer hub over NVMe-oF (§8.2)                                                                                                | Node OS                 | Phase 3                       | Per site        |
+| #    | Prerequisite                                                                                                                                                                                                                             | Kind                    | Blocks                                | Status          |
+|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|---------------------------------------|-----------------|
+| P0-1 | A cross-cluster move of an encrypted volume creates the target volume with a crypto layer and carries its data encryption key to the target's path before the source is deleted. Without it, `delete_source` deletes the only key (§9.4) | Control plane (`sbcli`) | Phase 3 for encrypted volumes         | Not established |
+| P0-2 | Data-plane reachability between the members' storage networks, since the move attaches the target node's transfer hub over NVMe-oF (§8.2)                                                                                                | Node OS                 | Phase 3                               | Per site        |
+| P0-3 | The storage-node API (node agent) runs on the pod network. It reads the host's interfaces from the host network namespace, and its hostname, cloud instance, and topology from the Node object                                           | Node agent (`sbcli`)    | Workers shared between members (§5.1) | Rewrite planned |
 
 Without P0-1 an encrypted volume is refused as a move candidate at admission, and
 refused again before replication starts, because a move deletes its key (§9.4).
 P0-2 is a property of the site, checked by the move's validation step rather than
-assumed.
+assumed. Without P0-3 every agent binds the same host port, so a worker serves one
+member (§5.1).
 
 ---
 
@@ -451,9 +453,23 @@ every node set, so it narrows to `self.nodeSets.all(s, …)` over each set's
 groups, and `DeviceClassOf` in `expansion.go` stamps each member with its own
 node set's class.
 
-**A worker belongs to one member.** The existing rule that a worker appears in
-one group (`duplicateWorkers` in `validation.go`) is what guarantees it, and it
-is unchanged.
+**A worker may serve more than one member.** A `StorageNode` is identified by its
+cluster, its worker, and its slot, so the storage nodes of two members on one
+worker are distinct. The rule that a worker appears in one group
+(`duplicateWorkers` in `validation.go`) narrows to one node set, as the interface
+rule does: a worker listed twice within a node set remains a finding. A worker
+listed in several node sets is admitted when those node sets do not overlap on it.
+Their `socketsToUse` name different sockets, so each keeps the cores and the huge
+pages of its own sockets, and the devices their groups resolve to on the worker
+are disjoint. An overlap is a `WorkerOverlap` finding naming the worker and both node sets. A
+shared worker is in a failure domain of every member it serves, and its loss takes
+its storage nodes from each of them.
+
+Sharing needs two things the members cannot provide themselves. Each member's
+node agent on the worker binds its port in its own pod, which needs the agent on
+the pod network (P0-3). The members' SPDK pods keep host networking and must be
+handed disjoint ports, which is an open decision (§16 Q11). Until both hold, a
+worker appears in one group across the whole document, as today.
 
 ### 5.2 Size limits
 
@@ -494,7 +510,9 @@ from the same node set name, and two growth documents naming their node sets
 alike produce two distinct members. The expansion records the drawn name in the
 document's status before it creates the member, so a retry after a crash
 creates the member it named rather than drawing again (§5.4). A drawn name that
-already exists is drawn again.
+already exists is drawn again, and so is a suffix another member of the same
+supercluster carries, because the suffix tells members apart in node hostnames
+(§6.2).
 
 **The name limits make every member name fit.** A cluster name of at most 35
 characters, a node set name of at most 23, the suffix, and two hyphens make a
@@ -584,7 +602,8 @@ once per role tier:
 4. **Deal by failure domain.** Workers are sorted by failure domain, read from
    the Kubernetes topology (§5.7), then by name, and dealt round-robin across the
    `k` node sets, so that every failure domain present in the partition is spread
-   over every member.
+   over every member. Each worker is dealt to one node set. A worker shared
+   between members (§5.1) comes from a document edited by hand.
 5. **Group within each node set.** Hardware grouping runs again per node set, so
    group names stay unique within a set as the API requires.
 6. **Name the node sets.** A tier that needs one node set keeps today's name
@@ -758,11 +777,13 @@ move, so the answer never changes for a cluster whose workload exists.
 
 **The Services of a supercluster are the supercluster's.** The supercluster
 reconciler creates `sb-<supercluster>-node-api` and `sb-<supercluster>-spdk-proxy`,
-headless and selecting the storage-node pods labeled with the supercluster's
-name, and every member's DaemonSet labels its pods so. Each member publishes its
-own EndpointSlice into the shared Service, named for the member. A node's
-hostname is `<node-hostname>.sb-<supercluster>-node-api.<namespace>.svc`, which is
-unique because a worker belongs to one member.
+headless and without a selector. Each member publishes its own EndpointSlice into
+the shared Service, named for the member, listing its node agents' pod addresses
+(P0-3). A node's hostname is
+`<node-hostname>-<suffix>.sb-<supercluster>-node-api.<namespace>.svc`, where
+`<suffix>` is the member's three letters (§5.3), because one worker may carry
+storage nodes of several members (§5.1). A label longer than 63 characters is cut
+by the rule of §6.1.
 
 **One serving certificate covers every member.** It is the shared Service's
 certificate, issued by the provider the operator already uses
@@ -1389,18 +1410,19 @@ repository's spell check.
 
 ## 16. Open Questions
 
-| #   | Question                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Owner                       |
-|-----|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------|
-| 1   | ~~**A control-plane aggregate**~~ **Resolved.** The aggregate stays out of the control plane. It is orchestration in the operator and the CSI driver, and the control plane learns of it only when a requirement needs it to. None of this design's mechanisms does (§2, Non-Goals).                                                                                                                                                                                               | Resolved                    |
-| 2   | ~~**Per-member layout overrides**~~ **Resolved.** A node set overrides the template's sizing and erasure-coding scheme for its member, which is what makes a mixed supercluster of NVMe and logical block members possible. Groups within a node set stay in one hardware category (§5.8).                                                                                                                                                                                         | Resolved                    |
-| 3   | ~~**Member names for long node set names**~~ **Resolved.** A cluster name is at most 35 characters and a node set name at most 26, 23 of name and three of counter, so every member name fits (§5.3).                                                                                                                                                                                                                                                                              | Resolved                    |
-| 4   | ~~**Aggregate pool ceilings**~~ **Resolved.** A pool's ceiling is the supercluster's. Phase 2 splits it evenly over the members and Phase 5 divides it by demand (§7.1, §7.5).                                                                                                                                                                                                                                                                                                     | Resolved                    |
-| 5   | **Replication with a supercluster on either side:** a pair whose source is a supercluster means one relationship per member, and a supercluster target needs a member mapping. Which shape, and is it needed in the first release?                                                                                                                                                                                                                                                 | Operator team, Backend team |
-| 6   | **Placement affinity for groups:** volumes that will form a consistency group or a volume group must share a member. Candidates are a StorageClass parameter keying affinity on the claim's namespace (through the provisioner's `--extra-create-metadata`), or an explicit affinity key. Neither has been settled.                                                                                                                                                                | Operator team               |
-| 7   | ~~**Fan-out cluster operations**~~ **Resolved.** Restart, shutdown, and start on a supercluster walk its members one at a time in order of member name and hold on a member that fails (§9.6).                                                                                                                                                                                                                                                                                     | Resolved                    |
-| 8   | ~~**Site deployments**~~ **Resolved.** The hub's StorageClass names the supercluster in `cluster_id`, through the supercluster's `status.uuid` (§9.7).                                                                                                                                                                                                                                                                                                                             | Resolved                    |
-| 9   | ~~**Volume names across members**~~ **Resolved.** Not relevant: volumes are created through Kubernetes, whose PV names are unique.                                                                                                                                                                                                                                                                                                                                                 | Resolved                    |
-| 10  | **Encryption across a cross-cluster move:** replication lands an encrypted volume's ciphertext in a target volume without a crypto layer, and `delete_source` deletes the only key, so the data is permanently lost (§9.4). The same path is reachable through replication's own `commit` with `delete_source` and through failover of encrypted volumes, outside this design. What carries the key to the target (P0-1), and is the existing replication path guarded against it? | Backend team                |
+| #   | Question                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Owner                       |
+|-----|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------|
+| 1   | ~~**A control-plane aggregate**~~ **Resolved.** The aggregate stays out of the control plane. It is orchestration in the operator and the CSI driver, and the control plane learns of it only when a requirement needs it to. None of this design's mechanisms does (§2, Non-Goals).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Resolved                    |
+| 2   | ~~**Per-member layout overrides**~~ **Resolved.** A node set overrides the template's sizing and erasure-coding scheme for its member, which is what makes a mixed supercluster of NVMe and logical block members possible. Groups within a node set stay in one hardware category (§5.8).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Resolved                    |
+| 3   | ~~**Member names for long node set names**~~ **Resolved.** A cluster name is at most 35 characters and a node set name at most 23, and the member suffix is three random letters, so every member name fits (§5.3).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Resolved                    |
+| 4   | ~~**Aggregate pool ceilings**~~ **Resolved.** A pool's ceiling is the supercluster's. Phase 2 splits it evenly over the members and Phase 5 divides it by demand (§7.1, §7.5).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Resolved                    |
+| 5   | **Replication with a supercluster on either side:** a pair whose source is a supercluster means one relationship per member, and a supercluster target needs a member mapping. Which shape, and is it needed in the first release?                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Operator team, Backend team |
+| 6   | **Placement affinity for groups:** volumes that will form a consistency group or a volume group must share a member. Candidates are a StorageClass parameter keying affinity on the claim's namespace (through the provisioner's `--extra-create-metadata`), or an explicit affinity key. Neither has been settled.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Operator team               |
+| 7   | ~~**Fan-out cluster operations**~~ **Resolved.** Restart, shutdown, and start on a supercluster walk its members one at a time in order of member name and hold on a member that fails (§9.6).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Resolved                    |
+| 8   | ~~**Site deployments**~~ **Resolved.** The hub's StorageClass names the supercluster in `cluster_id`, through the supercluster's `status.uuid` (§9.7).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Resolved                    |
+| 9   | ~~**Volume names across members**~~ **Resolved.** Not relevant: volumes are created through Kubernetes, whose PV names are unique.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Resolved                    |
+| 10  | **Encryption across a cross-cluster move:** replication lands an encrypted volume's ciphertext in a target volume without a crypto layer, and `delete_source` deletes the only key, so the data is permanently lost (§9.4). The same path is reachable through replication's own `commit` with `delete_source` and through failover of encrypted volumes, outside this design. What carries the key to the target (P0-1), and is the existing replication path guarded against it?                                                                                                                                                                                                                                                                                                                                                 | Backend team                |
+| 11  | **Port separation for SPDK pods on a shared worker:** SPDK pods keep host networking, and each cluster hands out NVMe-oF, RPC, and firewall ports by counting up from its own `nvmfBasePort`, `rpcBasePort`, and `snodeApiPort` (`get_next_nvmf_port`, `get_next_lvstore_ports`, and `get_next_fw_port` in sbcli), skipping only the ports that cluster uses. Members sharing a worker (§5.1) therefore need disjoint ports. The candidates are three. The operator assigns each member a port range, which needs an upper bound the control plane does not enforce today. The operator gives each member distinct base ports with a fixed spacing, which needs no control-plane change and holds while no member counts past the spacing. The control plane allocates ports per host across clusters. Which, and with what width? | Operator team, Backend team |
 
 ---
 
