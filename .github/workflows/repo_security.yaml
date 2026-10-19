@@ -51,8 +51,8 @@ jobs:
             image: docker.io/simplyblock/spdkcsi
 
     steps:
-      # The first checkout only supplies git remote access and the local
-      # registry-login action. The scan itself runs from the second checkout.
+      # The first checkout only supplies git remote access for the tag lookup.
+      # The scan itself runs from the second checkout.
       - name: Checkout default branch
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -108,13 +108,13 @@ jobs:
             echo "release_tag=${tag}"
           } >> "$GITHUB_OUTPUT"
 
+      # Not the local registry-login action: the second checkout replaces the
+      # workspace, and the action's post step then cannot find its own files.
       - name: Log in to Docker Hub
-        uses: ./.github/actions/registry-login
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
-          ecr: 'false'
-          internal: 'false'
-          dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
-          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Checkout branch
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -216,6 +216,22 @@ jobs:
           else
             echo "has_pending=false" >> "$GITHUB_OUTPUT"
           fi
+
+      # Lists what the gating scans found, so a failed run can be read without
+      # downloading a report.
+      - name: Summarize branch-image findings
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.component }} ${{ matrix.line }}: ${{ matrix.image }}:${{ steps.tags.outputs.branch_tag }}"
+            echo
+            echo "| ID | Severity | Package | Installed | Fixed in |"
+            echo "|----|----------|---------|-----------|----------|"
+            if [[ -s grype-branch.json ]]; then
+              jq -r '.matches[]? | select(.vulnerability.severity | ascii_downcase | IN("medium","high","critical"))
+                | "| \(.vulnerability.id) | \(.vulnerability.severity) | \(.artifact.name) | \(.artifact.version) | \(.vulnerability.fix.versions | join(", ")) |"' grype-branch.json | sort -u
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Generate SBOM (CycloneDX)
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
