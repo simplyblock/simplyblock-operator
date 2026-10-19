@@ -137,9 +137,9 @@ func TestOneStatedSlotLeavesTheOthersUnstated(t *testing.T) {
 }
 
 // What the apiserver itself does with spec.images: the policy it stamps on a
-// slot that states only an image, and the two values it refuses. A schema
-// default and a pattern are the apiserver's work, so a fake client would report
-// them passing whatever the markers said.
+// slot that states only an image, the mirrored images it accepts, and the
+// values it refuses. A schema default and a pattern are the apiserver's work, so
+// a fake client would report them passing whatever the markers said.
 func TestTheApiserverStampsAndPolicesTheImageSlots(t *testing.T) {
 	apiClient := apiServer(t)
 	ctx := context.Background()
@@ -172,17 +172,46 @@ func TestTheApiserverStampsAndPolicesTheImageSlots(t *testing.T) {
 		}
 	})
 
-	t.Run("an image outside the trusted registries is refused", func(t *testing.T) {
-		config := aStoredDocument(t, apiClient, "images-bad-registry")
-		config.Spec.Images = &simplyblockv1alpha2.DeploymentImages{
-			NodeAgent: &simplyblockv1alpha2.ImageSpec{Image: "docker.io/someone/else:latest"},
+	t.Run("an image from a local mirror is accepted", func(t *testing.T) {
+		config := aStoredDocument(t, apiClient, "images-mirror")
+		mirrored := []string{
+			"registry.airgap.local:5000/simplyblock/simplyblock:main",
+			"mirror.example.com/a/b/c/spdk:v1.2.3@sha256:" + strings.Repeat("a", 64),
+			"localhost/ultra@sha256:" + strings.Repeat("0", 64),
+			"ultra:main-latest",
 		}
-		err := apiClient.Update(ctx, config)
-		if err == nil {
-			t.Fatal("an image from an untrusted registry was accepted")
+		for _, image := range mirrored {
+			config.Spec.Images = &simplyblockv1alpha2.DeploymentImages{
+				NodeAgent: &simplyblockv1alpha2.ImageSpec{Image: image},
+			}
+			if err := apiClient.Update(ctx, config); err != nil {
+				t.Errorf("a mirrored image %q was refused: %v", image, err)
+			}
 		}
-		if !strings.Contains(err.Error(), "should match") {
-			t.Errorf("refused for the wrong reason: %v", err)
+	})
+
+	t.Run("a malformed image reference is refused", func(t *testing.T) {
+		config := aStoredDocument(t, apiClient, "images-malformed")
+		malformed := []string{
+			"docker.io/simplyblock/ultra",
+			"docker.io/Simplyblock/ultra:main",
+			"docker.io/simplyblock/ultra:",
+			"docker.io/simplyblock/ultra:main@sha256:abc",
+			"https://docker.io/simplyblock/ultra:main",
+			"docker.io/simplyblock/ultra main",
+		}
+		for _, image := range malformed {
+			config.Spec.Images = &simplyblockv1alpha2.DeploymentImages{
+				NodeAgent: &simplyblockv1alpha2.ImageSpec{Image: image},
+			}
+			err := apiClient.Update(ctx, config)
+			if err == nil {
+				t.Errorf("a malformed image %q was accepted", image)
+				continue
+			}
+			if !strings.Contains(err.Error(), "should match") {
+				t.Errorf("%q refused for the wrong reason: %v", image, err)
+			}
 		}
 	})
 }

@@ -607,10 +607,10 @@ type ImageSpec struct {
 	// is not written downstream, so the field it would fill keeps its own
 	// default rather than being overridden with nothing.
 	//
-	// The registry set is the one every image field in this API is held to,
-	// which is what keeps a reviewed document from naming a build nobody
-	// published.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// Every image field in this API is held to the same reference format and
+	// to no particular registry, so an air-gapped deployment can name its own
+	// mirror.
+	// +kubebuilder:validation:Pattern=`^($|([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$`
 	// +optional
 	Image string `json:"image,omitempty"`
 

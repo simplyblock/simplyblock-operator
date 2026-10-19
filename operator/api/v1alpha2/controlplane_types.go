@@ -200,10 +200,10 @@ func (l *LocalControlPlane) TLSProvider() ControlPlaneTLSProvider {
 // so the ownership spine starts at a real edge rather than at a Helm release.
 type LocalControlPlane struct {
 	// Image is the management API and control-plane image.
-	// Must reference one of the trusted registries (`quay.io/simplyblock-io`,
-	// `docker.io/simplyblock`, `public.ecr.aws/simply-block`); digest pinning
+	// Any registry is accepted, mirrors included, as long as the value is a
+	// well-formed reference carrying a tag, a digest, or both. Digest pinning
 	// (@sha256:...) is recommended.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +kubebuilder:validation:Pattern=`^($|([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$`
 	// +kubebuilder:validation:Required
 	Image string `json:"image"`
 
@@ -353,7 +353,7 @@ type ManagedControlPlane struct {
 	// there is no equivalent to fall back to without this field -- every
 	// StorageCluster on a managed deployment must get an image from here or
 	// from its own spec.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +kubebuilder:validation:Pattern=`^($|([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$`
 	// +optional
 	StorageNodeImage string `json:"storageNodeImage,omitempty"`
 }
