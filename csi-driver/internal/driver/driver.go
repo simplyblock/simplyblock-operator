@@ -190,6 +190,8 @@ func startLink(ctx context.Context, conf *config.Config) error {
 	cfg := csilink.Config{
 		HubAddress:  conf.LinkHubAddress,
 		CAFile:      conf.LinkCAFile,
+		CertFile:    conf.LinkCertFile,
+		KeyFile:     conf.LinkKeyFile,
 		ServerName:  conf.LinkServerName,
 		TokenFile:   conf.LinkTokenFile,
 		InstanceUID: conf.PodUID,
