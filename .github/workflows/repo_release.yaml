@@ -122,6 +122,9 @@ jobs:
   # so a tag cut from any release branch keeps the charts of every other release.
   # Publishing waits on every image the charts reference, and a single
   # concurrency group keeps two releases from pushing or uploading at once.
+  # Each release adds only its own charts, so a release whose job is canceled
+  # stays unpublished; queue: max keeps every waiting release in line instead of
+  # replacing the pending one.
   release-helm:
     name: Release helm charts
     needs: [setup, package-csi-chart, package-operator-chart, build-csi, build-operator, release-operator]
@@ -129,6 +132,7 @@ jobs:
     concurrency:
       group: helm-charts-publish
       cancel-in-progress: false
+      queue: max
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
