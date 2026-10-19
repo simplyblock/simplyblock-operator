@@ -119,9 +119,7 @@ type FoundationDBSpec struct {
 // ControlPlaneTLSProvider is who issues the control plane's serving certificate.
 //
 // The two values are each product's own spelling rather than this group's
-// PascalCase, because they are not this group's words. The control-plane image
-// accepts SB_TLS_PROVIDER only in lowercase, so the controller passes the value
-// through utils.NormalizeTLSProvider rather than copying it.
+// PascalCase, because they are not this group's words.
 // +kubebuilder:validation:Enum=cert-manager;OpenShift
 type ControlPlaneTLSProvider string
 

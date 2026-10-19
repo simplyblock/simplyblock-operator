@@ -86,6 +86,7 @@ func tlsEnv(d *simplyblockv1alpha2.SimplyblockDriver) []corev1.EnvVar {
 	}
 	env := []corev1.EnvVar{
 		{Name: "SB_TLS_SERVE", Value: "1"},
+		// Lowercase, as the chart renders it; the enum spells it OpenShift.
 		{Name: "SB_TLS_PROVIDER", Value: utils.NormalizeTLSProvider(string(tlsProvider(d)))},
 	}
 	if mutualTLSEnabled(d) {

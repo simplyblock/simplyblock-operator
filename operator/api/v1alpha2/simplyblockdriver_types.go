@@ -106,9 +106,7 @@ type SidecarImages struct {
 // DriverTLSProvider is where the TLS certificate on this connection comes
 // from. The values are not this group's to spell: OpenShift and cert-manager
 // are the two products, and ControlPlaneTLSProvider uses the same words, so a
-// driver and a control plane in the same namespace agree on the provider. The
-// plugins receive SB_TLS_PROVIDER in lowercase, as the chart renders it,
-// through utils.NormalizeTLSProvider.
+// driver and a control plane in the same namespace agree on the provider.
 // +kubebuilder:validation:Enum=OpenShift;cert-manager
 type DriverTLSProvider string
 
