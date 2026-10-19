@@ -129,7 +129,7 @@ atlas/
 │   ├── peer.go             PeerKind/PeerID/Claim/Identity/Peer
 │   ├── auth.go             Authenticator iface, bearer-token plumbing, TokenSource
 │   ├── kubeauth.go         KubeAuthenticator: TokenReview → the pod's node, not the peer's word
-│   ├── dial.go             TLSDialer / InsecureDialer
+│   ├── dial.go             TLSFileDialer / TLSDialer / InsecureDialer
 │   └── linkv1/             the Hello handshake protocol (buf-generated, committed)
 ├── storage/                one node's storage as one value, with no gRPC in here
 │   ├── accessor.go         Accessor: every lookup flat, plus the questions that re-scan
@@ -1353,8 +1353,16 @@ go hub.Serve(ctx)
 CSI side, one call for the whole lifecycle — dial, identify, serve, reconnect:
 
 ```go
+// The files are read on every attempt: they are mounted from Secrets that can
+// be populated after the pod starts, and rotated in place later. A missing
+// file fails the attempt and never downgrades it to plaintext.
+dial, err := link.TLSFileDialer("simplyblock-csi-link.simplyblock.svc:9500", link.TLSFiles{
+    CAFile:   "/etc/simplyblock/tls/ca.crt",
+    CertFile: "/etc/simplyblock/tls/tls.crt", // mutual TLS only
+    KeyFile:  "/etc/simplyblock/tls/tls.key",
+})
 agent, err := link.NewAgent(link.AgentConfig{
-    Dial:        link.TLSDialer("simplyblock-operator-link:9443", clientTLS),
+    Dial:        dial,
     ID:          link.NodePeer(os.Getenv("NODE_NAME")),   // downward API
     InstanceUID: os.Getenv("POD_UID"),                    // supersedes a stale session
     Token:       link.TokenFile("/var/run/secrets/atlas/link/token"),
