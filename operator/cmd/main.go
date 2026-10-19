@@ -213,11 +213,13 @@ func main() {
 			"be carried across.")
 	var csiLinkEnabled bool
 	var csiLinkAddr, csiLinkCertPath, csiLinkCertName, csiLinkCertKey, csiLinkAudience string
+	var csiLinkClientCAFile string
 	flag.BoolVar(&csiLinkEnabled, "csi-link", false, "Serve the CSI link.")
 	flag.StringVar(&csiLinkAddr, "csi-link-bind-address", ":9500",
 		"The address the CSI link endpoint binds to.")
 	flag.StringVar(&csiLinkCertPath, "csi-link-cert-path", "",
-		"The directory that contains the CSI link serving certificate. Unset serves the link "+
+		"The directory that contains the CSI link serving certificate. Set, the link serves TLS "+
+			"only, waiting for the certificate if it is not there yet. Unset serves the link "+
 			"without TLS, and peers' bearer tokens then travel in the clear.")
 	flag.StringVar(&csiLinkCertName, "csi-link-cert-name", "tls.crt",
 		"The name of the CSI link serving certificate file.")
@@ -225,6 +227,9 @@ func main() {
 		"The name of the CSI link serving key file.")
 	flag.StringVar(&csiLinkAudience, "csi-link-audience", "simplyblock-csi-link",
 		"The audience the peers' projected ServiceAccount tokens must carry.")
+	flag.StringVar(&csiLinkClientCAFile, "csi-link-client-ca-file", "",
+		"The CA bundle that verifies the CSI peers' client certificates. Set, the link requires "+
+			"mutual TLS, admitting only the CSI node and controller client certificates.")
 
 	var enableMetricsAPI bool
 	var metricsAPIPort int
@@ -386,7 +391,8 @@ func main() {
 	// link.ErrNoSession as a requeue rather than a failure.
 	//
 	// Off by default, on with --csi-link. TLS when a certificate is
-	// configured, plaintext when none is.
+	// configured, plaintext when none is, and mutual TLS when a client CA
+	// bundle is configured as well.
 	var csiPeers *link.Registry
 	if csiLinkEnabled {
 		var certFile, keyFile string
@@ -395,10 +401,14 @@ func main() {
 			keyFile = filepath.Join(csiLinkCertPath, csiLinkCertKey)
 		}
 		var err error
+		// ClientNames are the client certificates the chart issues to the two
+		// plugins. The metadata server presents the node plugin's.
 		csiPeers, err = csilink.Setup(mgr, csilink.Config{
 			BindAddress:              csiLinkAddr,
 			CertFile:                 certFile,
 			KeyFile:                  keyFile,
+			ClientCAFile:             csiLinkClientCAFile,
+			ClientNames:              []string{"simplyblock-csi-node", "simplyblock-csi-controller"},
 			Namespace:                operatorNamespace,
 			Audiences:                []string{csiLinkAudience},
 			NodeServiceAccount:       "simplyblock-csi-node-sa",
