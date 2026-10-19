@@ -289,14 +289,19 @@ File: `operator/internal/controllers/volume/relocate_test.go`
 File: `atlas-lib/kube/names_test.go` and
 `operator/internal/controllers/cluster/workload_names_test.go`
 
-| #     | Scenario                                                                                                                                                                 | Type     | Test |
-|-------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-133 | A cluster that owns no constant-named Service uses `sb-<name>-node-api`, `sb-<name>-spdk-proxy`, and their `-tls` Secrets                                                | Positive | —    |
-| U-134 | A cluster that owns `simplyblock-storage-node-api` keeps the constant names                                                                                              | Positive | —    |
-| U-135 | A name over 63 characters is cut to 40 characters and an eight-character hash, is a valid Service name, and is the same on every call                                    | Boundary | —    |
-| U-136 | A member's hostnames are `<node>-<suffix>.sb-<supercluster>-node-api.<namespace>.svc`, and its EndpointSlice is named for the member and lists its agents' pod addresses | Positive | —    |
-| U-159 | Two members with storage nodes on one worker get distinct hostnames in the shared Service, and a label over 63 characters is cut by the hash rule                        | Positive | —    |
-| U-137 | A member mounts the supercluster's certificate Secret, and no Certificate is created for the member                                                                      | Positive | —    |
+| #     | Scenario                                                                                                                                                                                   | Type     | Test |
+|-------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| U-133 | A new standalone cluster in a namespace where no cluster records the constant names records `simplyblock-storage-node-api`, `simplyblock-spdk-proxy`, and their `-tls` Secrets             | Positive | —    |
+| U-134 | A second standalone cluster in that namespace records `sb-<name>-node-api` and `sb-<name>-spdk-proxy`, and a supercluster always does                                                      | Positive | —    |
+| U-135 | A name over 63 characters is cut to 40 characters and an eight-character hash, is a valid Service name, and is the same on every call                                                      | Boundary | —    |
+| U-160 | A cluster with `status.uuid` set and no `status.workloadNames` is recorded with the constant names and no suffix, and its Services keep their names                                        | Positive | —    |
+| U-161 | `status.workloadNames` is written before any workload object and before the backend cluster is created, and a later reconcile never changes it                                             | Positive | —    |
+| U-162 | A member records its supercluster's Services and Secrets and its own `-<suffix>`                                                                                                           | Positive | —    |
+| U-163 | Two standalone clusters created at once that both record the constant names: the one that finds the Service owned by the other rewrites to derived names before its backend cluster exists | Boundary | —    |
+| U-164 | Every workload builder reads its names from `status.workloadNames` and none derives them                                                                                                   | Positive | —    |
+| U-136 | A member's hostnames are `<node>-<suffix>.sb-<supercluster>-node-api.<namespace>.svc`, and its EndpointSlice is named for the member and lists its agents' pod addresses                   | Positive | —    |
+| U-159 | Two members with storage nodes on one worker get distinct hostnames in the shared Service, and a label over 63 characters is cut by the hash rule                                          | Positive | —    |
+| U-137 | A member mounts the supercluster's certificate Secret, and no Certificate is created for the member                                                                                        | Positive | —    |
 
 ### Membership Admission (design §4.1, §4.4)
 
@@ -431,6 +436,8 @@ server and a real Kubernetes API through `envtest`.
 | I-65     | `RemoveMember` of a member holding an encrypted volume fails in `Validating`, raises no `Relocate`, and deletes nothing                                                                                                                        | Negative            | —    |
 | I-66     | Aborting during `Draining` raises no further children, lets running ones finish, and returns the member to placement                                                                                                                           | Positive            | —    |
 | I-67     | The supercluster creates one Service per API and one serving certificate, and a member joining later creates no Certificate                                                                                                                    | Positive            | —    |
+| I-68     | Creating a supercluster's member sends the recorded Services, Secret, and suffix in the `POST /api/v2/clusters/` body to a fake control plane                                                                                                  | Positive            | —    |
+| I-69     | Upgrading the operator over a cluster without `status.workloadNames` leaves its Services, Secrets, and node hostnames unchanged                                                                                                                | Positive            | —    |
 
 ---
 
@@ -511,8 +518,8 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 123       | 4       | all others  |
-| Integration | 47        | 0       | all of them |
+| Unit        | 128       | 4       | all others  |
+| Integration | 49        | 0       | all of them |
 | E2E         | 9         | 0       | E-01 … E-09 |
 | Manual      | 2         | 0       | M-01, M-02  |
 
@@ -526,8 +533,8 @@ the row its strike names: U-10 … U-18, U-20 … U-23, U-26, U-29 … U-33, U-3
 
 | #                                                                                                                              | Gap                                               | Reason                                                                                            |
 |--------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
-| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-159                  | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                           |
-| I-01 … I-03, I-07 … I-08, I-10, I-13, I-15 … I-16, I-21 … I-25, I-27, I-31 … I-36, I-38 … I-39, I-42, I-44 … I-51, I-53 … I-67 | Every integration scenario                        | Feature not implemented (Phases 1 to 5)                                                           |
+| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-164                  | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                           |
+| I-01 … I-03, I-07 … I-08, I-10, I-13, I-15 … I-16, I-21 … I-25, I-27, I-31 … I-36, I-38 … I-39, I-42, I-44 … I-51, I-53 … I-69 | Every integration scenario                        | Feature not implemented (Phases 1 to 5)                                                           |
 | E-01 … E-05, E-09                                                                                                              | Live supercluster, placement, and discovery split | Feature not implemented (Phases 1 and 2)                                                          |
 | E-06 … E-08                                                                                                                    | Live relocation and member removal                | Feature not implemented (Phases 3 and 4)                                                          |
 | M-01, M-02                                                                                                                     | Failure injection                                 | Needs node power control and selective network blocking                                           |
