@@ -2126,7 +2126,7 @@ Appendix A.
 type NodeSetClusterOverrides struct {
 	// VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
 	// this member.
-	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Minimum=4
 	// +optional
 	VCPUCount *int32 `json:"vcpuCount,omitempty"`
 

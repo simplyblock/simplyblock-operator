@@ -293,6 +293,7 @@ File: `operator/internal/controllers/deployment/supercluster_members_test.go`
 | U-128     | The erasure-coding minimum is checked against a node set's own `stripe` override                                                                                                                   | Boundary            | —    |
 | ~~U-129~~ | ~~A cluster name of 35 characters is admitted and 36 is refused, a node set name of 26 is admitted and 27 is refused~~ superseded by U-154: node set names are at most 23 characters (design §5.3) | Boundary            | —    |
 | ~~U-130~~ | ~~The generator cuts a node set base to 23 characters and appends `-1` to `-32`~~ superseded by U-151: members carry a random suffix (design §5.3)                                                 | Boundary            | —    |
+| U-194     | A node set's `vcpuCount` override of 4 is admitted and 3 is refused by the API server, as the template and `StorageClusterSpec` refuse it                                                          | Boundary            | —    |
 
 ### Fan-Out Admission (design §9.6)
 
@@ -556,7 +557,7 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 156       | 4       | all others  |
+| Unit        | 157       | 4       | all others  |
 | Integration | 55        | 0       | all of them |
 | E2E         | 10        | 0       | E-01 … E-10 |
 | Manual      | 2         | 0       | M-01, M-02  |
@@ -571,7 +572,7 @@ the row its strike names: U-10 … U-18, U-20 … U-23, U-26, U-29 … U-33, U-3
 
 | #                                                                                                                                                        | Gap                                               | Reason                                                                                                   |
 |----------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------|----------------------------------------------------------------------------------------------------------|
-| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-193                                            | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                                  |
+| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-194                                            | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                                  |
 | I-01 … I-03, I-07 … I-08, I-10, I-13, I-15 … I-16, I-21 … I-25, I-27, I-31 … I-33, I-35 … I-36, I-38 … I-39, I-42, I-44 … I-45, I-47 … I-51, I-53 … I-77 | Every integration scenario                        | Feature not implemented (Phases 1 to 5)                                                                  |
 | E-01 … E-05, E-09                                                                                                                                        | Live supercluster, placement, and discovery split | Feature not implemented (Phases 1 and 2)                                                                 |
 | E-06 … E-08, E-10                                                                                                                                        | Live relocation and member removal                | Feature not implemented (Phases 3 and 4)                                                                 |
