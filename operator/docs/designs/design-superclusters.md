@@ -321,6 +321,17 @@ supercluster's own capacity events. Every other field is refused with one
 message naming the field. The webhook enforces this rule, since CEL cannot
 enumerate the keys an object carries. Members carry their own full specs.
 
+**A field holding its schema default counts as unset.** The API server applies
+`+kubebuilder:default` values before admission, so every supercluster reaches
+the webhook carrying `nvmfBasePort`, `rpcBasePort`, `snodeApiPort`,
+`enableChecksumValidation`, `enableAtomicity4K`, `deviceClass`,
+`maxConcurrentWorkerRestarts`, and `clusterMode`, none of which its author wrote.
+The webhook admits a field whose value equals its default and refuses one that
+differs. It reads the defaults from the generated CRD schema rather than from a
+list of its own, so a defaulted field added to `StorageClusterSpec` later is
+covered without a change to the rule. A default written by hand is admitted as
+well, which is harmless, because a supercluster reads none of these fields.
+
 `maxSubsystemCount` and `vcpuCount` are `Required` today. They become optional in
 the schema, and a CEL rule requires both whenever `supercluster` is absent.
 

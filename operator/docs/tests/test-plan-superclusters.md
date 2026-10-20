@@ -104,6 +104,8 @@ File: `operator/internal/webhook/storagecluster_validator_test.go`
 | ~~U-35~~ | ~~An aggregate of one member is refused, of two is admitted~~ superseded by U-142: a supercluster has no member minimum (design §4.3)                                                             | Boundary            | —                                                   |
 | U-36     | A supercluster carrying `vcpuCount` or `stripe` is refused, naming the field                                                                                                                      | Negative            | —                                                   |
 | U-37     | A standalone cluster without `maxSubsystemCount` or `vcpuCount` is refused                                                                                                                        | Negative            | —                                                   |
+| U-181    | A supercluster carrying every defaulted spec field at its schema default is admitted, and the defaults are read from the generated CRD schema                                                     | Positive            | —                                                   |
+| U-182    | A supercluster carrying `nvmfBasePort: 4421` is refused, naming the field                                                                                                                         | Negative            | —                                                   |
 | ~~U-38~~ | ~~`placement` on a standalone cluster is refused~~ superseded by U-143: placement moved into `spec.supercluster` (design §4.1)                                                                    | Negative            | —                                                   |
 | ~~U-39~~ | ~~Adding `aggregate` to a standalone cluster, or removing it from a supercluster, is refused~~ superseded by U-144: membership is declared by the member (design §4.1)                            | Negative            | —                                                   |
 | ~~U-40~~ | ~~Appending an aggregate entry is admitted~~ superseded by U-144: membership is declared by the member (design §4.1)                                                                              | Positive            | —                                                   |
@@ -454,6 +456,7 @@ server and a real Kubernetes API through `envtest`.
 | I-67     | The supercluster creates one Service per API and one serving certificate, and a member joining later creates no Certificate                                                                                                                    | Positive            | —    |
 | I-68     | Creating a supercluster's member sends the recorded Services, Secret, and suffix in the `POST /api/v2/clusters/` body to a fake control plane                                                                                                  | Positive            | —    |
 | I-69     | Upgrading the operator over a cluster without `status.workloadNames` leaves its Services, Secrets, and node hostnames unchanged                                                                                                                | Positive            | —    |
+| I-70     | The §4.5 supercluster created through `envtest` reads back with every defaulted field set, and the validator admits the object as read                                                                                                         | Positive            | —    |
 
 ---
 
@@ -534,8 +537,8 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 144       | 4       | all others  |
-| Integration | 49        | 0       | all of them |
+| Unit        | 146       | 4       | all others  |
+| Integration | 50        | 0       | all of them |
 | E2E         | 9         | 0       | E-01 … E-09 |
 | Manual      | 2         | 0       | M-01, M-02  |
 
@@ -549,8 +552,8 @@ the row its strike names: U-10 … U-18, U-20 … U-23, U-26, U-29 … U-33, U-3
 
 | #                                                                                                                              | Gap                                               | Reason                                                                                            |
 |--------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
-| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-180                  | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                           |
-| I-01 … I-03, I-07 … I-08, I-10, I-13, I-15 … I-16, I-21 … I-25, I-27, I-31 … I-36, I-38 … I-39, I-42, I-44 … I-51, I-53 … I-69 | Every integration scenario                        | Feature not implemented (Phases 1 to 5)                                                           |
+| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-182                  | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                           |
+| I-01 … I-03, I-07 … I-08, I-10, I-13, I-15 … I-16, I-21 … I-25, I-27, I-31 … I-36, I-38 … I-39, I-42, I-44 … I-51, I-53 … I-70 | Every integration scenario                        | Feature not implemented (Phases 1 to 5)                                                           |
 | E-01 … E-05, E-09                                                                                                              | Live supercluster, placement, and discovery split | Feature not implemented (Phases 1 and 2)                                                          |
 | E-06 … E-08                                                                                                                    | Live relocation and member removal                | Feature not implemented (Phases 3 and 4)                                                          |
 | M-01, M-02                                                                                                                     | Failure injection                                 | Needs node power control and selective network blocking                                           |
