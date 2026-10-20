@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"sort"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -14,7 +13,7 @@ import (
 )
 
 // groupSide says which group of a moved consistency group a verb acts on, the
-// group analogue of chooseReplica's local member and the chain's active end.
+// group analog of chooseReplica's local member and the chain's active end.
 type groupSide int
 
 const (
@@ -104,39 +103,48 @@ func localClusters() map[string]bool {
 // sbcli's group fail-back reads source_cluster_id as the cluster to re-aim the
 // members' replication AT. The class parameter on a site names, by the deploy
 // scripts' and the docs' convention, that site's peer. Which cluster is right
-// depends on where the data is:
+// depends on where the data is, never on which site the driver runs on:
 //
-//   - The group resolved to another site (a re-protect after an unplanned
-//     fail-over): the members to configure are the live clones over THERE, and
-//     the cluster to replicate to is this site -- the named group's. Passed
-//     through verbatim, the parameter (this site's peer) told the live clone's
-//     cluster to replicate to itself: the chain picker found the clone's own
-//     snapshots, every transfer landed beside the live clone, status read
-//     healthy (Ramen saw PeerReady with a fresh lastGroupSyncTime), and the
-//     relocate back failed on a copy that was never shipped (#34, run
-//     20261016-1108-ebs: WordPress and Gitea). The local flag in the driver's
-//     secret wins when set, as activeEndFallback picks for a volume; else the
-//     named group's cluster.
-//   - The group resolved to itself (a plain relocate: Ramen demoted this site
-//     and resyncs it before promoting the peer): the members are HERE, just
-//     demoted, and the cluster to replicate to is the peer -- the parameter,
-//     exactly as before #34. Naming this site here handed every member its own
-//     cluster and the control plane refused the fail-back, so no relocate
-//     completed (run 20261019-1541-ebs, tests 1 and 3).
+//   - The group resolved to a group on another site: the members to configure
+//     are the live clones over THERE, and the cluster to replicate to is the
+//     named group's site. That holds whichever site resyncs. After an unplanned
+//     fail-over the recovered site resyncs (#34, run 20261016-1108-ebs: passed
+//     through verbatim, the parameter told the live clone's cluster to
+//     replicate to itself and the relocate back failed on a copy that was
+//     never shipped). On a relocate back the site holding the data resyncs
+//     after its demote; picking the driver's own site there named the live
+//     group's own cluster, and only the control plane's guard corrected it
+//     (run 20261020-1300-ebs, test 2).
+//   - The group resolved to itself, or to another group on the same site (a
+//     plain relocate: Ramen demoted this site and resyncs it before promoting
+//     the peer): the members are HERE, just demoted, and the cluster to
+//     replicate to is the peer -- the parameter, exactly as before #34. Naming
+//     this site here handed every member its own cluster and the control plane
+//     refused the fail-back, so no relocate completed (run 20261019-1541-ebs,
+//     tests 1 and 3).
 func groupFailbackCluster(named, active lvol.GroupHandle, sourceClusterID string) string {
-	if active == named {
+	if active.ClusterID == named.ClusterID {
 		return sourceClusterID
 	}
-	if local := localClusters(); local != nil {
-		if local[named.ClusterID] {
-			return named.ClusterID
-		}
-		ids := make([]string, 0, len(local))
-		for id := range local {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		return ids[0]
-	}
 	return named.ClusterID
+}
+
+// liveGroupOnPeer reports whether the group a VGR handle resolved to sits on
+// another site than this driver's. Enable has nothing to do then: this site's
+// policy targets the peer, so attaching it to the peer's live group tells that
+// group to replicate to itself, which the control plane refuses (#1502), and
+// the promote that follows attaches the new primary's own policy (sbcli's
+// attach_reverse_replication and _resume_replication_after_failback). Before
+// the refusal the attach went through for the moment until the promote
+// replaced it; after it, every Enable failed and csi-addons never promoted, so
+// no relocate back completed (run 20261020-1300-ebs, test 2).
+//
+// The local flag in the driver's secret says which site this is. Without one
+// (an older operator), the class's sourceClusterID names the peer by the deploy
+// convention. With neither, the group is taken to be this site's.
+func liveGroupOnPeer(live lvol.GroupHandle, local map[string]bool, peerClusterID string) bool {
+	if local != nil {
+		return !local[live.ClusterID]
+	}
+	return peerClusterID != "" && live.ClusterID == peerClusterID
 }

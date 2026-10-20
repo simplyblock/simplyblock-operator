@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"k8s.io/klog"
 
 	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/errs"
@@ -106,7 +107,7 @@ func volumeIDFrom(req volumeIDCarrier) string {
 // (2026-10-02, WordPress: the demote fenced the live primary's paths and
 // took demote snapshots of it; the fail-back never got PeerReady). A secret
 // that marks no cluster local (an operator predating the flag) keeps the
-// previous behaviour, the chain's active end.
+// previous behavior, the chain's active end.
 func resolveToLocalReplica(
 	ctx context.Context, h *lvol.Handle, client *atlascp.Client,
 ) (*lvol.Handle, *atlascp.Client, error) {
@@ -229,7 +230,7 @@ type chainHop struct {
 
 // chooseReplica picks the chain member a Replication RPC acts on: the last
 // member on a local cluster when the secret marks local clusters (and the
-// chain's end when none of the members is local, e.g. a volume that only
+// chain's end when none of the members is local, e.g., a volume that only
 // ever lived elsewhere), else the chain's end.
 func chooseReplica(hops []chainHop, local map[string]bool, flagged bool) chainHop {
 	end := hops[len(hops)-1]
@@ -281,10 +282,17 @@ func (cs *Server) EnableVolumeReplication(
 	// §5 path below unchanged.
 	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
 		// The live group: after a relocate the named group is empty and the
-		// re-protection attaches the group serving the data.
+		// re-protection attaches the group serving the data -- when that group
+		// is this site's. While it is the peer's (this site is about to be
+		// promoted), there is nothing here to attach this site's policy to:
+		// see liveGroupOnPeer.
 		gh, client, err := resolveGroupTarget(ctx, gh, groupActiveEnd)
 		if err != nil {
 			return nil, err
+		}
+		if liveGroupOnPeer(gh, localClusters(), req.GetParameters()[sourceClusterIDParam]) {
+			klog.Infof("enable group replication %s: the live group is the peer's; left to the promote", gh.Handle())
+			return &replication.EnableVolumeReplicationResponse{}, nil
 		}
 		if err := client.EnableGroupReplication(ctx, gh, policyID); err != nil {
 			return nil, classifyEnableVolumeReplicationError(err)
@@ -568,8 +576,8 @@ func (cs *Server) ResyncVolume(
 		if err != nil {
 			return nil, err
 		}
-		// The cluster to fail back TO is this site, never the class parameter
-		// as given: see groupFailbackCluster (#34).
+		// The cluster to fail back TO is the one opposite the live group, not
+		// the class parameter as given: see groupFailbackCluster (#34).
 		source := groupFailbackCluster(named, gh, req.GetParameters()[sourceClusterIDParam])
 		if err := client.ResyncGroup(ctx, gh, source); err != nil {
 			return nil, classifyResyncVolumeError(err)

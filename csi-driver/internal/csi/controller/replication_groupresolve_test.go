@@ -250,9 +250,16 @@ func TestGroupFailbackCluster(t *testing.T) {
 		param  string
 		want   string
 	}{
-		{"moved, named site is local", live, sanityClusterID, peerClusterID, sanityClusterID},
-		{"moved, peer site is local (relocate back after a fail-over)", live, peerClusterID, sanityClusterID, peerClusterID},
+		// A moved group: the data is on the peer, and whichever site resyncs,
+		// the members there replicate to the named group's site. On the
+		// relocate back the live site resyncs; naming its own cluster there was
+		// refused by the control plane (run 20261020-1300-ebs, test 2).
+		{"moved, named site is local (re-protect after a fail-over)", live, sanityClusterID, peerClusterID, sanityClusterID},
+		{"moved, live site is local (relocate back)", live, peerClusterID, sanityClusterID, sanityClusterID},
 		{"moved, no flag: the named site", live, "", peerClusterID, sanityClusterID},
+		// Moved onto a second group on the same site (a fail-back that built a
+		// new group beside the emptied one): the data is HERE, as at home.
+		{"moved within the site: the peer from the class", lvol.GroupHandle{ClusterID: sanityClusterID, GroupID: peerGroupID}, sanityClusterID, peerClusterID, peerClusterID},
 		// A plain relocate: the group resolves to itself, its members are the
 		// demoted primaries on this site, and they replicate to the peer the
 		// class names -- never to this site (run 20261019-1541-ebs).
@@ -292,5 +299,73 @@ func TestResyncOfAGroupAtHomeFailsBackToThePeer(t *testing.T) {
 	}
 	if got := mock.groups[vgGroupID].FailbackSource; got != peerClusterID {
 		t.Fatalf("fail-back source = %q, want the peer %q, never the group's own site", got, peerClusterID)
+	}
+}
+
+// The relocate back (B -> A, after A -> B): Ramen demotes B's group, resyncs it
+// on B, then Enables and Promotes on A. A's Enable carries A's policy, whose
+// target is B, and the VGR's handle resolves to the live group on B. Attaching
+// A's policy there told B's group to replicate to itself. The control plane now
+// refuses that (#1502), and since csi-addons Promotes only after Enable
+// succeeds, the relocate never completed (run 20261020-1300-ebs, test 2). The
+// promote's fail-back attaches the new primary's own policy, so the Enable on
+// the site being promoted has nothing to do while the data is still on the
+// peer. Regression: 2026-10-20-enable-on-peers-live-group.
+func TestEnableOnTheSiteBeingPromotedLeavesThePeersLiveGroupAlone(t *testing.T) {
+	cs, mock := movedGroup(t, sanityClusterID)
+
+	_, err := cs.EnableVolumeReplication(context.Background(), &replication.EnableVolumeReplicationRequest{
+		ReplicationSource: groupSource(),
+		Parameters: map[string]string{
+			replicationPolicyParam: vgPolicyID, sourceClusterIDParam: peerClusterID},
+	})
+	if err != nil {
+		t.Fatalf("EnableVolumeReplication: %v", err)
+	}
+	if got := mock.groups[peerGroupID].PolicyID; got != "" {
+		t.Fatalf("the peer's live group was attached to this site's policy %q; want it left alone", got)
+	}
+	if got := mock.groups[vgGroupID].PolicyID; got != "" {
+		t.Fatalf("the named (empty) group was attached to policy %q; want it left alone", got)
+	}
+}
+
+// Without a local flag in the driver's secret (an older operator), the class's
+// sourceClusterID names the peer by convention: a live group on that cluster is
+// the peer's, and the Enable is the same no-op.
+func TestEnableWithoutALocalFlagTellsThePeerByTheClassParameter(t *testing.T) {
+	cs, mock := movedGroup(t, "")
+
+	_, err := cs.EnableVolumeReplication(context.Background(), &replication.EnableVolumeReplicationRequest{
+		ReplicationSource: groupSource(),
+		Parameters: map[string]string{
+			replicationPolicyParam: vgPolicyID, sourceClusterIDParam: peerClusterID},
+	})
+	if err != nil {
+		t.Fatalf("EnableVolumeReplication: %v", err)
+	}
+	if got := mock.groups[peerGroupID].PolicyID; got != "" {
+		t.Fatalf("the peer's live group was attached to this site's policy %q; want it left alone", got)
+	}
+}
+
+// The relocate back's resync runs on B, the site being left, where the live
+// group is: its members must replicate to A, the named group's site, not to B.
+// The driver named B, its own cluster, and only the control plane's guard
+// (#1502) corrected it (run 20261020-1300-ebs, test 2). Regression:
+// 2026-10-20-resync-on-the-live-site.
+func TestResyncOnTheSiteBeingLeftFailsBackToTheNamedSite(t *testing.T) {
+	cs, mock := movedGroup(t, peerClusterID)
+
+	_, err := cs.ResyncVolume(context.Background(), &replication.ResyncVolumeRequest{
+		ReplicationSource: groupSource(),
+		Parameters:        map[string]string{sourceClusterIDParam: sanityClusterID},
+	})
+	if err != nil {
+		t.Fatalf("ResyncVolume: %v", err)
+	}
+	if got := mock.groups[peerGroupID].FailbackSource; got != sanityClusterID {
+		t.Fatalf("live group's fail-back source = %q, want the named group's site %q, never the live group's own %q",
+			got, sanityClusterID, peerClusterID)
 	}
 }
