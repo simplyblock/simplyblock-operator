@@ -16470,6 +16470,7 @@ webhooks:
     operations:
     - CREATE
     - UPDATE
+    - DELETE
     resources:
     - storageclusters
   sideEffects: None

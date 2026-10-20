@@ -18,6 +18,7 @@ package cluster
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -533,5 +534,34 @@ func TestAnUnreachableControlPlaneRequeuesRatherThanFailing(t *testing.T) {
 	got, _ := reconcileOps(t, r, 4)
 	if got.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseRunning {
 		t.Errorf("phase = %q, want the operation still Running", got.Status.Phase)
+	}
+}
+
+// A supercluster's status.uuid names no backend cluster, so an operation on
+// one would send the aggregate's identifier to the control plane. Until the
+// fan-out walk over the members exists (design-superclusters.md §9.6), the
+// operation fails before any call, and says that a member is the target.
+// The fake control plane answers no cluster read, so reaching it fails the
+// test as well.
+func TestAnOperationOnASuperclusterFailsWithoutReachingTheControlPlane(t *testing.T) {
+	api := &fakeControlPlane{}
+	supercluster := newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+		c.Spec = simplyblockv1alpha2.StorageClusterSpec{
+			Supercluster: &simplyblockv1alpha2.SuperclusterSpec{},
+		}
+		c.Status.UUID = "0d6f1b2e-1f0a-4c71-9a0e-5b7d2c3e4f50"
+	})
+	r := newOpsReconciler(t, api, &recorder{},
+		supercluster, newTestOps(simplyblockv1alpha2.StorageClusterOpsActionShutdown))
+
+	ops, _ := reconcileOps(t, r, 6)
+	if ops.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseFailed {
+		t.Fatalf("phase = %q, want Failed (message: %s)", ops.Status.Phase, ops.Status.Message)
+	}
+	if !strings.Contains(ops.Status.Message, "supercluster") {
+		t.Errorf("the failure does not say the target is a supercluster: %s", ops.Status.Message)
+	}
+	if api.shutdownCalls != 0 {
+		t.Errorf("the control plane was asked to shut down %d times, want 0", api.shutdownCalls)
 	}
 }

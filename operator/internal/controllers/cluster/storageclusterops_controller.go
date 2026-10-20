@@ -830,6 +830,13 @@ func (r *StorageClusterOpsReconciler) clusterUUIDFor(
 	if err := r.Get(ctx, key, &cluster); err != nil {
 		return "", err
 	}
+	// A supercluster's UUID is the aggregate's identifier and names no backend
+	// cluster, so there is nothing in the control plane for an action to act
+	// on until operations walk the members one at a time.
+	if cluster.Spec.Supercluster != nil {
+		return "", fatalf("cluster %s is a supercluster, and operations on a supercluster "+
+			"are not supported yet; run the operation on each of its members", ops.Spec.ClusterRef)
+	}
 	if cluster.Status.UUID == "" {
 		return "", fatalf("cluster %s has not been created in the control plane yet",
 			ops.Spec.ClusterRef)
@@ -980,7 +987,7 @@ func (r *StorageClusterOpsReconciler) clusterSecret(
 // identity -- the only way to reach a control plane a different Kubernetes
 // cluster runs (a ControlPlane.spec.source.managed one), since a Kubernetes
 // TokenReview can never cross a cluster boundary. See StorageClusterReconciler's
-// identically-named method.
+// identically named method.
 func (r *StorageClusterOpsReconciler) authenticatedContext(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps,
 ) context.Context {
