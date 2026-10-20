@@ -12,6 +12,7 @@ import argparse
 import csv
 import json
 import os
+import pathlib
 import sys
 import tempfile
 import time
@@ -1025,6 +1026,50 @@ class ChurnLeave(unittest.TestCase):
         self.assertIsNotNone(record.deleted)
         self.assertIsNotNone(record.pvc_deleted)
         self.assertEqual(record.error, "")
+
+
+class ChurnStall(unittest.TestCase):
+    """Regression: pnfs-1792478853. A churn pod that never reached fio's timed run was deleted
+    with nothing kept of it, so why it stalled could not be told from a slow file layout."""
+
+    def stall(self, **opts: object):
+        import subprocess
+        from datetime import UTC, datetime
+
+        from sbtest.components.workloads import churn, fio
+
+        calls: list[list[str]] = []
+
+        def run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            calls.append(args)
+            out = "Name: r1-fio-churn-1\nEvents: none" if "describe" in args else \
+                "[pod] starting fio\nfio: laying out file"
+            return subprocess.CompletedProcess(args, 0, out, "")
+
+        w = churn.ChurnWorkload(**opts)
+        inst = fio.FioInstance(pod="r1-fio-churn-1", container="fio-0", filename="/data/f",
+                               logdir="/logs", evidence="r1-fio-churn-1")
+        record = churn._Record(pod=inst.pod, claim="r1-pnfs-shared-0", own_volume=False,
+                               created=datetime.now(UTC))
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(kube, "run", run), \
+                mock.patch.object(churn, "_phase", return_value="Running"), \
+                mock.patch.object(churn, "_node", return_value="node-1"):
+            ctx = RunContext(run_id="r1", outdir=d, log=Logger(os.path.join(d, "run.log")))
+            w._run(ctx, "default", inst, record, 60.0)
+            ctx.log.close()
+            kept = {f: pathlib.Path(d, f).read_text() for f in os.listdir(d)
+                    if f.startswith("churn-stall-")}
+        return record, kept
+
+    def test_a_pod_that_never_reaches_io_keeps_its_log_and_description(self):
+        record, kept = self.stall(io_timeout_s=0.1)
+        self.assertIn("not in its timed run", record.error)
+        self.assertIn("laying out file", kept["churn-stall-r1-fio-churn-1.log"])
+        self.assertIn("Events", kept["churn-stall-r1-fio-churn-1-describe.txt"])
+
+    def test_the_default_io_timeout_leaves_a_slow_layout_room(self):
+        from sbtest.components.workloads import churn
+        self.assertGreaterEqual(churn.ChurnWorkload().defaults()["io_timeout_s"], 300.0)
 
 
 class RestartSchedule(unittest.TestCase):

@@ -378,7 +378,7 @@ class MetadataWorkload(Component):
             "apiVersion": "v1", "kind": "Pod",
             "metadata": {"name": name, "labels": self._labels(ctx)},
             "spec": {
-                "nodeName": node, "restartPolicy": "Never", "terminationGracePeriodSeconds": 5,
+                "nodeName": kube.full_node(node), "restartPolicy": "Never", "terminationGracePeriodSeconds": 5,
                 "containers": [{
                     "name": "meta", "image": str(self.opt("image")),
                     "imagePullPolicy": "IfNotPresent", "command": ["sh", "-c", script],

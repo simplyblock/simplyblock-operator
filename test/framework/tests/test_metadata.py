@@ -227,6 +227,27 @@ class Gating(unittest.TestCase):
         self.assertIn(f"touch {metadata.LOGDIR}/go", execs)
 
 
+class NodePinning(unittest.TestCase):
+    """Regression: pnfs-1792475169. The assignment carries the short node name (vm02), the
+    pod's nodeName needs the full one (vm02.lab.localdomain), and a pod bound to a node that
+    does not exist stays Pending with no events, so no metadata worker ever started."""
+
+    NODES = json.dumps({"items": [{"metadata": {"name": "w1.lab.localdomain"}},
+                                  {"metadata": {"name": "w2.lab.localdomain"}}]})
+
+    def test_the_pods_are_pinned_by_the_nodes_full_name(self):
+        w = workload()
+        with mock.patch.object(kube, "run", return_value=completed(0, out=self.NODES)):
+            worker = w._worker_pod(context(tempfile.mkdtemp()), a_worker(), 1791540000.0)
+            verifier = w._verifier_pod(context(tempfile.mkdtemp()), a_worker())
+        self.assertEqual(worker["spec"]["nodeName"], "w1.lab.localdomain")
+        self.assertEqual(verifier["spec"]["nodeName"], "w2.lab.localdomain")
+
+    def test_a_node_the_cluster_does_not_list_keeps_the_name_it_was_given(self):
+        with mock.patch.object(kube, "run", return_value=completed(0, out=self.NODES)):
+            self.assertEqual(kube.full_node("w9"), "w9")
+
+
 class CheckErrors(unittest.TestCase):
     def test_a_failing_cleanup_is_recorded_and_the_check_kept(self):
         """A cleanup that failed after a check error escaped, the record was lost, and the

@@ -133,3 +133,15 @@ def pod_mounting(namespace: str, claim: str) -> tuple[str, str] | None:
 
 def short(node: str) -> str:
     return node.split(".")[0]
+
+
+def full_node(name: str) -> str:
+    """The cluster's name for a node given by its short name, for a pod's nodeName: a pod
+    bound to a name no node has stays Pending with no events. A name the cluster does not
+    list comes back as given, so a node that is already full or gone is left alone."""
+    cp = run(["get", "nodes", "-o", "json"], check=False)
+    for it in json.loads(cp.stdout or "{}").get("items", []) if cp.returncode == 0 else []:
+        full = str(it["metadata"]["name"])
+        if full == name or short(full) == name:
+            return full
+    return name

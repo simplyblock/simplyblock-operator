@@ -130,7 +130,7 @@ class ChurnWorkload(Component):
             "volume_size_gb": 5,       # an own volume
             "file_size_gb": 1,
             "ready_timeout_s": 300.0,  # to Running, which includes staging the volume
-            "io_timeout_s": 180.0,     # from Running to fio's timed run
+            "io_timeout_s": 400.0,     # from Running to fio's timed run: layout on a busy shared volume took 161 s
             "gone_timeout_s": 180.0,   # for an own volume's PV and NFSExport, at collect
             "seed": None,              # random, and logged, when unset
             **{k: v for k, v in fio.FIO_DEFAULTS.items() if k != "runtime_s"},
@@ -247,6 +247,7 @@ class ChurnWorkload(Component):
             if time.monotonic() > deadline:
                 record.error = (f"not Running within {self.opt('ready_timeout_s')}s "
                                 f"({_phase(ns, inst.pod) or 'absent'})")
+                self._keep_stalled(ctx, ns, inst)
                 return
             time.sleep(3)
         record.node = kube.short(_node(ns, inst.pod))
@@ -255,6 +256,7 @@ class ChurnWorkload(Component):
                                              "--tail=8"], check=False, timeout=30).stdout or ""):
             if time.monotonic() > deadline:
                 record.error = f"fio not in its timed run within {self.opt('io_timeout_s')}s"
+                self._keep_stalled(ctx, ns, inst)
                 return
             time.sleep(3)
         record.io_started = datetime.now(UTC)
@@ -271,6 +273,16 @@ class ChurnWorkload(Component):
             record.error = "fio still running past its lifetime"
         # Collected before the pod goes: the evidence is on its emptyDir.
         fio.collect_instance(ctx, ns, inst, [])
+
+    def _keep_stalled(self, ctx: RunContext, ns: str, inst: fio.FioInstance) -> None:
+        """A pod that stalled is deleted next, and its log and events go with it: what the pod
+        printed and what the kubelet said are all that tell a slow layout from a stuck mount."""
+        for suffix, args in (("log", ["logs", inst.pod, "--all-containers", "--tail=-1"]),
+                             ("describe.txt", ["describe", "pod", inst.pod])):
+            cp = kube.run(["-n", ns, *args], check=False, timeout=120)
+            name = f"churn-stall-{inst.pod}" + (f".{suffix}" if suffix == "log" else f"-{suffix}")
+            with open(ctx.path(name), "w") as fh:
+                fh.write(cp.stdout or cp.stderr or "")
 
     def _leave(self, ctx: RunContext, ns: str, inst: fio.FioInstance, record: _Record) -> None:
         """Delete the pod, and an own volume's claim after it, recording when each delete
