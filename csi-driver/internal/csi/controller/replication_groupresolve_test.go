@@ -250,10 +250,14 @@ func TestGroupFailbackCluster(t *testing.T) {
 		param  string
 		want   string
 	}{
-		{"named site is local", live, sanityClusterID, peerClusterID, sanityClusterID},
-		{"peer site is local (relocate back after a fail-over)", live, peerClusterID, sanityClusterID, peerClusterID},
-		{"no flag, moved: the named site", live, "", peerClusterID, sanityClusterID},
-		{"no flag, at home: the parameter as before", named, "", peerClusterID, peerClusterID},
+		{"moved, named site is local", live, sanityClusterID, peerClusterID, sanityClusterID},
+		{"moved, peer site is local (relocate back after a fail-over)", live, peerClusterID, sanityClusterID, peerClusterID},
+		{"moved, no flag: the named site", live, "", peerClusterID, sanityClusterID},
+		// A plain relocate: the group resolves to itself, its members are the
+		// demoted primaries on this site, and they replicate to the peer the
+		// class names -- never to this site (run 20261019-1541-ebs).
+		{"at home, named site is local: the peer from the class", named, sanityClusterID, peerClusterID, peerClusterID},
+		{"at home, no flag: the peer from the class", named, "", peerClusterID, peerClusterID},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := newMockSBCLI()
@@ -263,5 +267,30 @@ func TestGroupFailbackCluster(t *testing.T) {
 				t.Fatalf("groupFailbackCluster = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// A plain relocate A -> B: Ramen demotes A's group, then resyncs it on A
+// before promoting B. The group still resolves to itself (B holds nothing
+// yet), its members are A's demoted primaries, and the fail-back must point
+// them at B -- the peer the class names -- not at A. Naming A refused every
+// member ("source_cluster_id names the volume's own cluster") and no relocate
+// completed (run 20261019-1541-ebs, tests 1 and 3).
+func TestResyncOfAGroupAtHomeFailsBackToThePeer(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	mock.seedGroup(vgGroupID, vgMember1)
+	cs := newTestControllerServer(t, mock)
+	writeTwoSiteSecret(t, mock, sanityClusterID)
+
+	_, err := cs.ResyncVolume(context.Background(), &replication.ResyncVolumeRequest{
+		ReplicationSource: groupSource(),
+		Parameters:        map[string]string{sourceClusterIDParam: peerClusterID},
+	})
+	if err != nil {
+		t.Fatalf("ResyncVolume: %v", err)
+	}
+	if got := mock.groups[vgGroupID].FailbackSource; got != peerClusterID {
+		t.Fatalf("fail-back source = %q, want the peer %q, never the group's own site", got, peerClusterID)
 	}
 }
