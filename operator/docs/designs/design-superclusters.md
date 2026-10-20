@@ -10,13 +10,13 @@
 
 ## Phasing Overview
 
-| Phase                   | Status  | Scope                                                                                                                              | Blocked by                                       |                                                                                                                      |
-|-------------------------|---------|------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
-| **Phase 1** (§4–§6)     | Planned | Superclusters and members on `StorageCluster`, per-cluster workload names, the shared certificate, and expansion from a deployment | Workers shared between members: P0-3 and §16 Q11 | Superclusters and a second standalone cluster in a namespace: P0-4. Workers shared between members: P0-3 and §16 Q11 |
-| **Phase 2** (§7)        | Planned | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver                                 | —                                                |                                                                                                                      |
-| **Phase 3** (§8.1–§8.3) | Planned | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —                                                |                                                                                                                      |
-| **Phase 4** (§8.4)      | Planned | `StorageClusterOps` action `RemoveMember`: a member's volumes moved into the others, then the member deleted                       | Phase 3                                          |                                                                                                                      |
-| **Phase 5** (§7.5)      | Planned | Pool QoS ceilings shared across members by demand rather than split evenly                                                         | Phase 2                                          |                                                                                                                      |
+| Phase                   | Status  | Scope                                                                                                                              | Blocked by                                                                                                           |
+|-------------------------|---------|------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| **Phase 1** (§4–§6)     | Planned | Superclusters and members on `StorageCluster`, per-cluster workload names, the shared certificate, and expansion from a deployment | Superclusters and a second standalone cluster in a namespace: P0-4. Workers shared between members: P0-3 and §16 Q11 |
+| **Phase 2** (§7)        | Planned | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver                                 | IOPS and throughput ceilings: P0-5                                                                                   |
+| **Phase 3** (§8.1–§8.3) | Planned | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —                                                                                                                    |
+| **Phase 4** (§8.4)      | Planned | `StorageClusterOps` action `RemoveMember`: a member's volumes moved into the others, then the member deleted                       | Phase 3                                                                                                              |
+| **Phase 5** (§7.5)      | Planned | Pool QoS ceilings shared across members by demand rather than split evenly                                                         | Phase 2, P0-5                                                                                                        |
 
 Each phase ships on its own. Phase 1 produces a supercluster that reports one
 status and lets an administrator name the members directly, which is already
@@ -28,12 +28,13 @@ members, and Phase 5 makes a pool's QoS ceiling follow its load across members.
 
 ## Phase 0 — External Prerequisites
 
-| #    | Prerequisite                                                                                                                                                                                                                             | Kind                    | Blocks                                                               | Status          |
-|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|----------------------------------------------------------------------|-----------------|
-| P0-1 | A cross-cluster move of an encrypted volume creates the target volume with a crypto layer and carries its data encryption key to the target's path before the source is deleted. Without it, `delete_source` deletes the only key (§9.4) | Control plane (`sbcli`) | Phase 3 for encrypted volumes                                        | Not established |
-| P0-2 | Data-plane reachability between the members' storage networks, since the move attaches the target node's transfer hub over NVMe-oF (§8.2)                                                                                                | Node OS                 | Phase 3                                                              | Per site        |
-| P0-3 | The storage-node API (node agent) runs on the pod network. It reads the host's interfaces from the host network namespace, and its hostname, cloud instance, and topology from the Node object                                           | Node agent (`sbcli`)    | Workers shared between members (§5.1)                                | Rewrite planned |
-| P0-4 | `POST /api/v2/clusters/` accepts the workload names (§6.1), the cluster record keeps them, and node hostnames and the SPDK pod's certificate Secret are built from them. A record without them resolves to the constant names            | Control plane (`sbcli`) | Superclusters, and a second standalone cluster in a namespace (§6.1) | Not established |
+| #    | Prerequisite                                                                                                                                                                                                                                                                                                                                                                                                                                       | Kind                    | Blocks                                                                       | Status          |
+|------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|------------------------------------------------------------------------------|-----------------|
+| P0-1 | A cross-cluster move of an encrypted volume creates the target volume with a crypto layer and carries its data encryption key to the target's path before the source is deleted. Without it, `delete_source` deletes the only key (§9.4)                                                                                                                                                                                                           | Control plane (`sbcli`) | Phase 3 for encrypted volumes                                                | Not established |
+| P0-2 | Data-plane reachability between the members' storage networks, since the move attaches the target node's transfer hub over NVMe-oF (§8.2)                                                                                                                                                                                                                                                                                                          | Node OS                 | Phase 3                                                                      | Per site        |
+| P0-3 | The storage-node API (node agent) runs on the pod network. It reads the host's interfaces from the host network namespace, and its hostname, cloud instance, and topology from the Node object                                                                                                                                                                                                                                                     | Node agent (`sbcli`)    | Workers shared between members (§5.1)                                        | Rewrite planned |
+| P0-4 | `POST /api/v2/clusters/` accepts the workload names (§6.1), the cluster record keeps them, and node hostnames and the SPDK pod's certificate Secret are built from them. A record without them resolves to the constant names                                                                                                                                                                                                                      | Control plane (`sbcli`) | Superclusters, and a second standalone cluster in a namespace (§6.1)         | Not established |
+| P0-5 | Pool-wide IOPS and throughput limits enforced by SPDK without corrupting the volumes that share them. Today, the `PoolLimits` CEL rule refuses both (`operator/api/v1alpha2/storagepool_types.go`), because SPDK freed the pool's limits array while volumes still used it: the IOPS limit went unenforced, the throughput limit applied per volume, and SPDK crashed on every storage node (regression `2026-09-30-pool-qos-limits-corrupt-spdk`) | Data plane (SPDK)       | IOPS and throughput ceilings on a pool of a supercluster (§7.1), and Phase 5 | Not established |
 
 Without P0-1 an encrypted volume is refused as a move candidate at admission, and
 refused again before replication starts, because a move deletes its key (§9.4).
@@ -41,6 +42,8 @@ P0-2 is a property of the site, checked by the move's validation step rather tha
 assumed. Without P0-3 every agent binds the same host port, so a worker serves one
 member (§5.1). Without P0-4 the control plane reaches nodes only through the
 constant Service names, so only a cluster recorded with them can be created.
+Without P0-5 the `PoolLimits` rule stays, so a pool of a supercluster, like every
+pool, carries a capacity limit only.
 
 ---
 
@@ -905,6 +908,12 @@ IOPS however many members it spans. The control plane enforces QoS per backend
 pool, so the operator writes each member's backend pool a share of the ceiling.
 Phase 2 splits the ceiling evenly over the placement-eligible members, and §7.5
 specifies the demand-driven shares that replace the even split.
+
+**Only the capacity ceiling is split until P0-5 holds.** `PoolLimits` refuses
+`iops` and `throughput` on every pool today, after SPDK failed to enforce them
+and crashed. The rule stays until enforcement is verified, and is then lifted for
+every pool at once rather than for superclusters first, so the IOPS and
+throughput shares of this section and of §7.5 are written only after P0-5.
 
 **Every member's backend pool receives the whole `allowedNodes` list.** The list
 names the Kubernetes nodes that consume the pool, not the workers that serve it:
