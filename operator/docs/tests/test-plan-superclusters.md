@@ -348,6 +348,9 @@ File: `operator/internal/placement/placement_test.go`, and
 | U-148 | The link to the operator being down fails `CreateVolume` with `Unavailable`, and no create reaches the control plane                         | Negative | —    |
 | U-149 | A class naming a member's UUID in `cluster_id` never calls `Place`                                                                           | Negative | —    |
 | U-150 | Two concurrent `Place` calls for one supercluster each see the size the other placed                                                         | Boundary | —    |
+| U-183 | A chosen member is written to the PVC annotation before `Place` answers, and a failed patch fails the call with `Unavailable`                | Positive | —    |
+| U-184 | A retry for a PVC carrying a placement record returns that member while the name lookup finds nothing                                        | Negative | —    |
+| U-185 | A request without the PVC name and namespace fails with `FailedPrecondition` and places nothing                                              | Negative | —    |
 
 ### Member Names (design §5.3, §5.5)
 
@@ -470,7 +473,7 @@ member pair whose storage networks reach each other (P0-2).
 |------|-----------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
 | E-01 | A two-node-set deployment document produces a supercluster and two activated members                                                                | Positive | —    |
 | E-02 | Thirty PVCs through a supercluster class spread across members by the strategy, and every volume passes fio verify                                  | Positive | —    |
-| E-03 | `CreateVolume` retried after an injected timeout yields one backend volume                                                                          | Negative | —    |
+| E-03 | `CreateVolume` whose create times out in member A and becomes visible only after the retry is retried in A, and one backend volume results          | Negative | —    |
 | E-04 | A member shut down leaves the others' volumes serving and new volumes landing elsewhere                                                             | Negative | —    |
 | E-05 | Snapshot, clone, and expansion of a volume stay in its member                                                                                       | Positive | —    |
 | E-06 | A relocation under sustained fio completes with no I/O error and verified data                                                                      | Positive | —    |
@@ -537,7 +540,7 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 146       | 4       | all others  |
+| Unit        | 149       | 4       | all others  |
 | Integration | 50        | 0       | all of them |
 | E2E         | 9         | 0       | E-01 … E-09 |
 | Manual      | 2         | 0       | M-01, M-02  |
@@ -552,7 +555,7 @@ the row its strike names: U-10 … U-18, U-20 … U-23, U-26, U-29 … U-33, U-3
 
 | #                                                                                                                              | Gap                                               | Reason                                                                                            |
 |--------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
-| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-182                  | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                           |
+| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-185                  | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                           |
 | I-01 … I-03, I-07 … I-08, I-10, I-13, I-15 … I-16, I-21 … I-25, I-27, I-31 … I-36, I-38 … I-39, I-42, I-44 … I-51, I-53 … I-70 | Every integration scenario                        | Feature not implemented (Phases 1 to 5)                                                           |
 | E-01 … E-05, E-09                                                                                                              | Live supercluster, placement, and discovery split | Feature not implemented (Phases 1 and 2)                                                          |
 | E-06 … E-08                                                                                                                    | Live relocation and member removal                | Feature not implemented (Phases 3 and 4)                                                          |

@@ -927,9 +927,13 @@ call after `CreateVolume` find a member from the handle alone.
 class's `cluster_id` names no cluster in the secret: it calls
 `PlacementService.Place` over the link to the operator, with the aggregate's
 identifier, the pool name, the volume name, the requested size, the
-request's accessibility requirements, and the PVC's
+request's accessibility requirements, the PVC's name and namespace, and the PVC's
 `storage.simplyblock.io/consistency-group` label, which the controller already
-reads at provisioning. The service is declared in
+reads at provisioning. The PVC's name and namespace are the parameters the
+external-provisioner adds under `--extra-create-metadata`, which the operator
+sets on the provisioner it deploys (`operator/internal/controllers/driver/workloads.go`).
+A request without them fails with `FailedPrecondition`, as a pNFS volume does
+today (`csi-driver/internal/csi/controller/pnfs.go`). The service is declared in
 `atlas-lib/placement/placementrpc/placementv1/placement.proto`, beside the
 link's other services, and is the first one the operator serves to a peer.
 
@@ -938,7 +942,8 @@ The operator answers from the supercluster reconciler's readings:
 1. Resolve the aggregate. An identifier that names no supercluster fails with
    `NotFound`, which the driver returns as `InvalidArgument` naming the class, as
    an unknown cluster does today.
-2. Look for the volume name in every member's pool (§7.3). A hit is the answer.
+2. Read the PVC's placement record, then look for the volume name in every
+   member's pool (§7.3). A record or a hit is the answer.
 3. Follow the volume's consistency group (§9.3). A labeled request is answered
    with the member whose cluster holds the group with live members, read from
    `GET /api/v2/clusters/{cluster_id}/consistency-groups/` in each member, or
@@ -963,12 +968,14 @@ The operator answers from the supercluster reconciler's readings:
 7. Drop members whose free capacity is below the requested size, and members
    above their own `criticalThreshold`.
 8. Rank by the strategy and take the first, choosing at random among members
-   that rank equal. A retry stays idempotent, because step 2 finds the volume in
-   the member it was placed in. Under `LeastVolumes`, a member's count is the
+   that rank equal. Under `LeastVolumes`, a member's count is the
    number of PersistentVolumes whose handle names it, from the operator's cache,
    plus the volumes placed in it whose PersistentVolume does not exist yet.
 9. No candidate left fails with `ResourceExhausted`, naming the aggregate and the
    reason each member was dropped.
+
+A member chosen in step 3 or step 8 is recorded on the PVC before `Place`
+answers (§7.3), and a failed write fails the call with `Unavailable`.
 
 The driver writes the chosen member's UUID into the volume handle, exactly as a
 `cluster_id` class produces today. A class carrying `zone_cluster_map` or
@@ -981,13 +988,25 @@ external-provisioner retries.
 
 The external-provisioner retries `CreateVolume` with the same name until it gets
 an answer, and a retry may rank members differently, because capacity changed in
-between.
+between. A lookup by name cannot settle the retry alone: a create that timed out
+in one member may still be running there and not yet visible, and a retry that
+finds nothing would place the volume a second time in another member.
 
-**Before ranking, the operator looks for the name in every member of the
+**The placement is recorded on the PVC before the first answer.** `Place` writes
+the annotation `storage.simplyblock.io/placement-member`, holding the chosen
+member's UUID, to the PVC the request names, and answers only once the patch
+succeeds. A retry finds the annotation first and returns that member, whether the
+volume is visible there yet or not, so a create whose outcome is unknown is
+retried in the member it was sent to and nowhere else. The record lives as long
+as the PVC and survives an operator restart. A recorded member that has since
+left placement is still returned: the retry succeeds there or keeps failing
+there, and is never moved to another member.
+
+**Without a record, the operator looks for the name in every member of the
 aggregate**, including members not eligible for placement, through the control
-plane's lookup by name in the pool. A hit returns that member, so the first
-member to receive the volume is the member it keeps. A lookup that fails in any
-member fails the call with `Unavailable` rather than placing, because placing
+plane's lookup by name in the pool. This covers a volume created before the
+record existed. A hit returns that member and is recorded. A lookup that fails in
+any member fails the call with `Unavailable` rather than placing, because placing
 without knowing is how the duplicate arises.
 
 ### 7.4 What a volume knows about its aggregate
@@ -1166,7 +1185,7 @@ supercluster.
 | #   | Feature                                         | Treatment    | Behavior in a supercluster                                                                                                                            | Phase |
 |-----|-------------------------------------------------|--------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
 | 1   | Volume creation                                 | Aggregated   | Member chosen by §7.2                                                                                                                                 | 2     |
-| 2   | `CreateVolume` retry                            | Aggregated   | Name looked up in every member first (§7.3)                                                                                                           | 2     |
+| 2   | `CreateVolume` retry                            | Aggregated   | The member recorded on the PVC, else the name looked up in every member (§7.3)                                                                        | 2     |
 | 3   | Volume expansion                                | Per member   | Expands in place. Fails with `ResourceExhausted` when the member is full, and relocation is the remedy                                                | —     |
 | 4   | Snapshots                                       | Per member   | Taken in the volume's member. Snapshot names are unique per backend cluster, which is unchanged                                                       | —     |
 | 5   | Clone from a volume or restore from a snapshot  | Restricted   | Lands in the source's member regardless of placement (§9.2)                                                                                           | 2     |
@@ -1367,8 +1386,10 @@ Placements for one supercluster are serialized in the operator, so two concurren
 
 No new verbs. Every resource the new controller reads or writes
 (`storageclusters`, `storageclusters/status`, `storagepools`, `nodes` for their
-topology labels, and the Services, Certificates, and Secrets of §6.2, which the
-workload controller already creates) is already granted to the manager.
+topology labels, `persistentvolumeclaims` for the placement record of §7.3, and
+the Services, Certificates, and Secrets of §6.2, which the workload controller
+already creates) is already granted to the manager. The PVC `patch` verb comes
+from `persistentvolumeclaim_controller.go`.
 
 ---
 
@@ -1405,6 +1426,7 @@ The CSI driver authenticates to each member with that member's entry in
 | Every eligible member is full                                     | Capacity filter                  | `ResourceExhausted`, with the supercluster's `AggregateCapacityExhausted` event                                                                                                        |
 | A pool fails to create in one member                              | Backend error                    | That member stays placement-ineligible, pool status names the member, retried                                                                                                          |
 | The operator's link is down at `CreateVolume`                     | `Unavailable` from the link      | The call fails with `Unavailable` and the external-provisioner retries. No volume is placed                                                                                            |
+| A create times out in a member and is still running               | PVC placement record             | The retry is sent to the recorded member and never placed elsewhere. One backend volume results (§7.3)                                                                                 |
 | The supercluster object is deleted                                | Admission                        | Refused while it has members (§4.4)                                                                                                                                                    |
 | The supercluster object is recreated, by a restore or by hand     | New `metadata.uid`               | A new aggregate identifier. Classes naming the old one fail new provisions with `InvalidArgument` until rewritten. Existing volumes are unaffected, because their handles name members |
 | Operator restart mid-expansion                                    | Persisted step                   | Members and supercluster created by name, idempotent (§5.4)                                                                                                                            |
