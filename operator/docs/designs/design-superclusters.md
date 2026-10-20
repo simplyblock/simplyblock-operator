@@ -1191,6 +1191,20 @@ without the mark, or with a mark naming another volume, keeps the safeguard
 unchanged: the failure is a leaked destination, never a deleted volume another
 cluster runs on.
 
+**A marked PV resolves from its mark.** Every call that resolves a handle, in the
+controller and in the node plugin, starts a marked PV's walk at the handle its
+mark names instead of at the PV's own handle, and walks relationships onward from
+there as before, so a later fail-over of the destination is still followed. The
+node plugin reads the mark through the PV `get` it already holds
+(`operator/internal/controllers/driver/rbac.go`). Starting at the mark is what
+lets the source member go: once every PV naming it is marked, no call reads the
+source's relationship records or its entry in `simplyblock-csi-secret-v2`
+(§8.4). DeleteVolume reads the mark before it treats a handle naming an unknown
+cluster as already deleted. An unmarked handle resolves from the handle itself,
+as today. The mark is local to the Kubernetes cluster holding the PV, so a
+disaster-recovery peer's PV carrying the same handle never sees it, which is why
+removal refuses a member holding a fail-over relationship (§8.4).
+
 ### 8.4 Removing a member (Phase 4)
 
 `StorageClusterOps` gains `RemoveMember`
@@ -1203,13 +1217,15 @@ supercluster before the member goes:
     │
     ▼
   Validating     ← the target is a member; the other members have room for its
-    │              volumes; it holds no encrypted volume (§9.4)
+    │              volumes; it holds no encrypted volume (§9.4) and no volume
+    │              with a fail-over relationship (§8.3)
     ▼
   Draining       ← the member is out of placement from here on; one
     │              PersistentVolumeOps Relocate per subsystem, creatorRef naming
     │              this operation, at most maxConcurrentRelocations at once,
     │              each target chosen by the placement of §7.2
-    │  the member's pools report no bound volumes
+    │  the member's pools report no bound volumes, and every PV whose
+    │  handle names the member is marked relocated-to another member
     ▼
   Deleting       ← delete the member StorageCluster, which removes its nodes,
     │              pools, and backend cluster through its own deletion path
@@ -1221,6 +1237,16 @@ The member is out of placement for as long as the operation runs, which the
 supercluster reads from the member's active operation rather than from its spec.
 A child relocation that fails holds the walk with `RemovalHeld` instead of
 skipping the volume, so a member is never deleted while it holds a volume.
+
+**A member is deleted only once no handle depends on it.** Deleting the member
+deletes its backend cluster, which takes the relationship records with it, and
+removes its entry from `simplyblock-csi-secret-v2`. A relocated PV keeps a handle
+naming the member, so `Draining` ends only when every PV whose handle names the
+member carries a `relocated-to` mark naming another member and the mark resolves
+(§8.3). Until then the operation holds with `RemovalHeld`, naming the unmarked
+PVs. A volume with a `failover`-mode relationship is refused in `Validating`,
+naming the volume, because its disaster-recovery peer's PV in another Kubernetes
+cluster resolves from the source member and cannot see the mark.
 Aborting during `Draining` stops raising children, lets the running ones finish,
 and returns the member to placement. `Deleting` cannot be aborted.
 

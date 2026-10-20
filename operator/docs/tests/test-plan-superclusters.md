@@ -262,6 +262,8 @@ File: `atlas-lib/controlplane/chain_test.go` and
 | U-189 | DeleteVolume of a PV whose `relocated-to` names the chain's active volume deletes it with the retired members                                   | Positive | —    |
 | U-190 | DeleteVolume of an unmarked PV with the same chain, the disaster-recovery case, deletes no active volume                                        | Negative | —    |
 | U-191 | DeleteVolume of a PV whose mark names a volume other than the active one deletes no active volume                                               | Negative | —    |
+| U-192 | A marked PV's resolution starts at the mark's handle and follows a later fail-over relationship of the destination                              | Positive | —    |
+| U-193 | DeleteVolume of a marked PV whose source cluster is gone from the secret deletes the destination instead of reporting it deleted                | Negative | —    |
 
 ### Ceiling Shares (design §7.1, §7.5)
 
@@ -471,6 +473,8 @@ server and a real Kubernetes API through `envtest`.
 | I-73     | A commit the mock accepts but answers only after the client timeout is resent, and the task the 409 names is recorded                                                                                                                          | Negative            | —    |
 | I-74     | A restart after `proceeded` is written and before the proceed is sent sends it while the relationship is `cutover_pending`                                                                                                                     | Negative            | —    |
 | I-75     | A restart after the relationship left `cutover_pending` sends no proceed and advances to `Verifying`                                                                                                                                           | Negative            | —    |
+| I-76     | `RemoveMember` holds in `Draining` with `RemovalHeld` naming a moved PV without a mark, and deletes the member once the PV is marked                                                                                                           | Negative            | —    |
+| I-77     | `RemoveMember` of a member holding a volume with a `failover`-mode relationship fails in `Validating`, naming the volume                                                                                                                       | Negative            | —    |
 
 ---
 
@@ -491,6 +495,7 @@ member pair whose storage networks reach each other (P0-2).
 | E-07 | Expand and snapshot after a relocation succeed through the original handle, and deleting the PVC leaves no volume in either member                  | Positive | —    |
 | E-08 | A member removed under load is deleted with every volume moved out and intact                                                                       | Positive | —    |
 | E-09 | Discovery over a fleet of more than 32 storage nodes (17 workers with two slots each) drafts two node sets that approve and expand into two members | Positive | —    |
+| E-10 | Removing the source member of a relocated PV, then restarting its pod, remounts the volume from the destination with its data intact                | Positive | —    |
 
 ---
 
@@ -551,9 +556,9 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 154       | 4       | all others  |
-| Integration | 53        | 0       | all of them |
-| E2E         | 9         | 0       | E-01 … E-09 |
+| Unit        | 156       | 4       | all others  |
+| Integration | 55        | 0       | all of them |
+| E2E         | 10        | 0       | E-01 … E-10 |
 | Manual      | 2         | 0       | M-01, M-02  |
 
 The four covered unit rows are existing tests of behavior this design keeps:
@@ -566,10 +571,10 @@ the row its strike names: U-10 … U-18, U-20 … U-23, U-26, U-29 … U-33, U-3
 
 | #                                                                                                                                                        | Gap                                               | Reason                                                                                                   |
 |----------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------|----------------------------------------------------------------------------------------------------------|
-| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-191                                            | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                                  |
-| I-01 … I-03, I-07 … I-08, I-10, I-13, I-15 … I-16, I-21 … I-25, I-27, I-31 … I-33, I-35 … I-36, I-38 … I-39, I-42, I-44 … I-45, I-47 … I-51, I-53 … I-75 | Every integration scenario                        | Feature not implemented (Phases 1 to 5)                                                                  |
+| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-193                                            | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                                  |
+| I-01 … I-03, I-07 … I-08, I-10, I-13, I-15 … I-16, I-21 … I-25, I-27, I-31 … I-33, I-35 … I-36, I-38 … I-39, I-42, I-44 … I-45, I-47 … I-51, I-53 … I-77 | Every integration scenario                        | Feature not implemented (Phases 1 to 5)                                                                  |
 | E-01 … E-05, E-09                                                                                                                                        | Live supercluster, placement, and discovery split | Feature not implemented (Phases 1 and 2)                                                                 |
-| E-06 … E-08                                                                                                                                              | Live relocation and member removal                | Feature not implemented (Phases 3 and 4)                                                                 |
+| E-06 … E-08, E-10                                                                                                                                        | Live relocation and member removal                | Feature not implemented (Phases 3 and 4)                                                                 |
 | M-01, M-02                                                                                                                                               | Failure injection                                 | Needs node power control and selective network blocking                                                  |
 | —                                                                                                                                                        | Many members on a live control plane              | No lab of that size. Placement and roll-up are covered by fixtures                                       |
 | —                                                                                                                                                        | A live cluster stretched over two regions         | No such lab. U-105, U-107, and U-109 cover the decisions                                                 |
