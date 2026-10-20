@@ -15290,6 +15290,11 @@ spec:
         - --csi-link
         command:
         - /manager
+        env:
+        - name: SB_OPERATOR_IMAGE
+          value: quay.io/simplyblock-io/simplyblock-operator:0.1.0
+        - name: SB_NODEPROBE_IMAGE
+          value: quay.io/simplyblock-io/simplyblock-operator:0.1.0
         image: quay.io/simplyblock-io/simplyblock-operator:0.1.0
         livenessProbe:
           httpGet:

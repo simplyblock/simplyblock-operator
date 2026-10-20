@@ -25,7 +25,10 @@ YQ_CSV_EXPR = .metadata.annotations.containerImage = strenv(OPERATOR_IMG) \
     {"name": "simplyblock", "image": strenv(CLUSTER_IMG)}, \
     {"name": "ultra-spdk", "image": strenv(SPDK_IMG)}, \
     {"name": "simplyblock-rebalancer", "image": strenv(REBALANCER_IMG)}] \
-  | .spec.install.spec.deployments[0].spec.template.spec.containers[0].image = strenv(OPERATOR_IMG)
+  | .spec.install.spec.deployments[0].spec.template.spec.containers[0].image = strenv(OPERATOR_IMG) \
+  | (.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[] | select(.name == "SB_NODEPROBE_IMAGE")).value = strenv(OPERATOR_IMG) \
+  | (.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[] | select(.name == "SB_OPERATOR_IMAGE")).value = strenv(OPERATOR_TAGGED_IMG) \
+  | .spec.install.spec.deployments[0].spec.template.spec.containers[0].env += [{"name": "SIMPLYBLOCK_REBALANCER_IMAGE", "value": strenv(REBALANCER_IMG)}]
 YQ_ANNOTATIONS_EXPR = .annotations."com.redhat.openshift.versions" = strenv(OPENSHIFT_VERSION)
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -339,6 +342,7 @@ bundle: yq verify-config-yaml verify-crd-kustomization ## Generate bundle manife
 	(cd config/manager && kustomize edit set image controller=$(IMG_BASE)@$$OPERATOR_DIGEST); \
 	kustomize build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION); \
 	OPERATOR_IMG="$(IMG_BASE)@$$OPERATOR_DIGEST" \
+	OPERATOR_TAGGED_IMG="$(IMG_BASE):$(IMG_TAG)@$$OPERATOR_DIGEST" \
 	CLUSTER_IMG="$(CLUSTER_IMAGE_BASE):$(CLUSTER_IMAGE_TAG)@$$CLUSTER_DIGEST" \
 	SPDK_IMG="$(SPDK_IMAGE_BASE):$(SPDK_IMAGE_TAG)@$$SPDK_DIGEST" \
 	REBALANCER_IMG="$(REBALANCER_IMG_BASE)@$$REBALANCER_DIGEST" \
