@@ -1098,7 +1098,7 @@ target's paths on every consuming host while the relationship is
     ▼
   Committing       ← POST …/replication/commit  delete_source=true  (write-ahead
     │                status.relocate.committed before the call)
-    │  202, task location recorded
+    │  202 or 409, the task recorded in status.relocate.taskID
     ▼
   AttachingPaths   ← relationship cutover_pending; GET …/connect returns the
     │                target's paths beside the source's; one preconnect Job per
@@ -1119,12 +1119,35 @@ target's paths on every consuming host while the relationship is
 |-----------------------------------------------------|-------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `abort: true`                                       | Before `Committing`                       | `POST …/replication/stop`, phase `Aborted`                                                                                                                                                                                                                                        |
 | `abort: true`                                       | `Committing` or later                     | Ignored with an event: a committed cutover cannot be undone                                                                                                                                                                                                                       |
-| Operator restart                                    | Any                                       | Resumes from `status.step`. `committed` and `proceeded` prevent a second call                                                                                                                                                                                                     |
-| Start, commit, or proceed returns 5xx or times out  | `Replicating`, `Committing`, `Proceeding` | Retried with backoff, no step advance                                                                                                                                                                                                                                             |
+| Operator restart                                    | Any                                       | Resumes from `status.step`. The commit is resent until a task is recorded, and the proceed while the relationship is `cutover_pending`                                                                                                                                            |
+| Start, commit, or proceed returns 5xx or times out  | `Replicating`, `Committing`, `Proceeding` | Retried with backoff, no step advance. A timed-out commit or proceed is retried by the same rule as a restart                                                                                                                                                                     |
 | Start returns 4xx                                   | `Replicating`                             | Phase `Failed`, the control plane's message in `status.message`                                                                                                                                                                                                                   |
 | A consuming node's Job fails                        | `AttachingPaths`                          | Retried with `PathAttachHeld`, and `cutover-proceed` is not sent. After `REPL_CUTOVER_PROCEED_TIMEOUT_SEC` (120 s) the control plane cuts over alone, and a node without the target's paths reaches it through the relationship on its next stage, with an I/O pause on that node |
 | Commit task reports failure                         | `Verifying`                               | Phase `Failed`, with the control plane's relationship state reported                                                                                                                                                                                                              |
 | The original handle does not resolve after the move | `Verifying`                               | Phase `Failed` with `HandleUnresolved`                                                                                                                                                                                                                                            |
+
+**`committed` and `proceeded` record intent, and the backend records
+acceptance.** Each flag is written before its first call, so a restart knows the
+call may have reached the control plane, and `committed` is what refuses an abort
+from then on. Neither flag suppresses a call, because a crash between the status
+write and the request, or a request that times out, leaves the operator unable to
+tell from its own status whether the control plane received it:
+
+- **The commit is resent until a task is recorded.** Every reconcile in
+  `Committing` without `status.relocate.taskID` sends the commit again. The
+  first commit the control plane accepts returns 202 and its task, and every
+  later one returns 409 naming the same task (§11), so a resend never starts a
+  second cutover and always ends with the task recorded.
+- **The proceed is resent while the relationship is `cutover_pending`.** Every
+  reconcile in `Proceeding` reads the relationship's state, sends
+  `cutover-proceed` while it is still `cutover_pending`, and advances to
+  `Verifying` once it has moved on, whether this proceed released it or
+  `REPL_CUTOVER_PROCEED_TIMEOUT_SEC` did. A proceed is never sent to a
+  relationship past `cutover_pending`.
+
+`ReplicationSlotReconciler` follows the same rule for the proceed today: it
+resends one that failed while the preconnect Job still exists
+(`handleExistingPreconnectJob`).
 
 ### 8.3 The handle survives the move
 
@@ -1414,11 +1437,11 @@ from `persistentvolumeclaim_controller.go`.
 | POST   | `/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/start` | Exists. Body `replication_cluster_id`, `mode: migration`. A repeat on a running relationship must not start a second                                                                                                               |
 | GET    | `…/volumes/{volume_id}/replication/status`                                                    | Exists. Polled in `Replicating`                                                                                                                                                                                                    |
 | POST   | `…/volumes/{volume_id}/replication/stop`                                                      | Exists. Abort before commit                                                                                                                                                                                                        |
-| POST   | `…/volumes/{volume_id}/replication/commit`                                                    | Exists. Body `delete_source: true`. Returns 202 and a task location. Must refuse a second commit rather than run it twice                                                                                                          |
+| POST   | `…/volumes/{volume_id}/replication/commit`                                                    | Exists. Body `delete_source: true`. Returns 202 and a task location. Must refuse a second commit with 409 naming the running task, rather than run it twice                                                                        |
 | GET    | `/api/v2/clusters/{cluster_id}/tasks/{task_id}`                                               | Exists. Polled in `Verifying`                                                                                                                                                                                                      |
 | GET    | `/api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}`                           | Exists. Maps a source volume to its active volume after a commit with `delete_source`. Read by the CSI driver's chain resolution and by `Verifying`                                                                                |
 | GET    | `…/volumes/{volume_id}/connect`                                                               | Exists. While the relationship is `cutover_pending`, returns the target's paths beside the source's. Read in `AttachingPaths`                                                                                                      |
-| POST   | `…/volumes/{volume_id}/replication/cutover-proceed`                                           | Exists. Releases the cutover once every consuming host holds the target's paths. The control plane waits for it up to `REPL_CUTOVER_PROCEED_TIMEOUT_SEC` (120 s). Sent once, behind `status.relocate.proceeded`                    |
+| POST   | `…/volumes/{volume_id}/replication/cutover-proceed`                                           | Exists. Releases the cutover once every consuming host holds the target's paths. The control plane waits for it up to `REPL_CUTOVER_PROCEED_TIMEOUT_SEC` (120 s). Resent while the relationship is `cutover_pending`               |
 | —      | Key carried with an encrypted volume                                                          | **Not established (P0-1).** No key handling is defined for replication, and `delete_source` deletes the source's key (§9.4, §16 Q10)                                                                                               |
 | POST   | `/api/v2/clusters/`                                                                           | **Not established (P0-4).** Body gains the workload names of §6.1: the storage-node API and SPDK proxy Services, the SPDK proxy certificate Secret, and the node label suffix. Absent fields mean the constant names and no suffix |
 
@@ -1429,19 +1452,19 @@ The CSI driver authenticates to each member with that member's entry in
 
 ## 12. Failure Modes
 
-| Failure                                                           | Detection                        | Behavior                                                                                                                                                                               |
-|-------------------------------------------------------------------|----------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| A member is unavailable                                           | Member phase                     | Supercluster `Degraded`. The member is not placement-eligible. Its volumes are unavailable, others unaffected                                                                          |
-| Every member is unavailable                                       | Member phases                    | Supercluster `Unavailable`. `CreateVolume` fails with `ResourceExhausted` naming each reason                                                                                           |
-| A member's capacity reading cannot be refreshed at `CreateVolume` | Two-second deadline              | Member dropped for this call, logged. Other members still chosen                                                                                                                       |
-| Every eligible member is full                                     | Capacity filter                  | `ResourceExhausted`, with the supercluster's `AggregateCapacityExhausted` event                                                                                                        |
-| A pool fails to create in one member                              | Backend error                    | That member stays placement-ineligible, pool status names the member, retried                                                                                                          |
-| The operator's link is down at `CreateVolume`                     | `Unavailable` from the link      | The call fails with `Unavailable` and the external-provisioner retries. No volume is placed                                                                                            |
-| A create times out in a member and is still running               | PVC placement record             | The retry is sent to the recorded member and never placed elsewhere. One backend volume results (§7.3)                                                                                 |
-| The supercluster object is deleted                                | Admission                        | Refused while it has members (§4.4)                                                                                                                                                    |
-| The supercluster object is recreated, by a restore or by hand     | New `metadata.uid`               | A new aggregate identifier. Classes naming the old one fail new provisions with `InvalidArgument` until rewritten. Existing volumes are unaffected, because their handles name members |
-| Operator restart mid-expansion                                    | Persisted step                   | Members and supercluster created by name, idempotent (§5.4)                                                                                                                            |
-| Operator restart mid-relocation                                   | Persisted step, `committed` flag | Resumes without a second start or commit (§8.2)                                                                                                                                        |
+| Failure                                                           | Detection                                    | Behavior                                                                                                                                                                               |
+|-------------------------------------------------------------------|----------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| A member is unavailable                                           | Member phase                                 | Supercluster `Degraded`. The member is not placement-eligible. Its volumes are unavailable, others unaffected                                                                          |
+| Every member is unavailable                                       | Member phases                                | Supercluster `Unavailable`. `CreateVolume` fails with `ResourceExhausted` naming each reason                                                                                           |
+| A member's capacity reading cannot be refreshed at `CreateVolume` | Two-second deadline                          | Member dropped for this call, logged. Other members still chosen                                                                                                                       |
+| Every eligible member is full                                     | Capacity filter                              | `ResourceExhausted`, with the supercluster's `AggregateCapacityExhausted` event                                                                                                        |
+| A pool fails to create in one member                              | Backend error                                | That member stays placement-ineligible, pool status names the member, retried                                                                                                          |
+| The operator's link is down at `CreateVolume`                     | `Unavailable` from the link                  | The call fails with `Unavailable` and the external-provisioner retries. No volume is placed                                                                                            |
+| A create times out in a member and is still running               | PVC placement record                         | The retry is sent to the recorded member and never placed elsewhere. One backend volume results (§7.3)                                                                                 |
+| The supercluster object is deleted                                | Admission                                    | Refused while it has members (§4.4)                                                                                                                                                    |
+| The supercluster object is recreated, by a restore or by hand     | New `metadata.uid`                           | A new aggregate identifier. Classes naming the old one fail new provisions with `InvalidArgument` until rewritten. Existing volumes are unaffected, because their handles name members |
+| Operator restart mid-expansion                                    | Persisted step                               | Members and supercluster created by name, idempotent (§5.4)                                                                                                                            |
+| Operator restart mid-relocation                                   | Persisted step, `taskID`, relationship state | Resumes without a second start or cutover: the commit is resent until a task is recorded (§8.2)                                                                                        |
 
 ---
 
@@ -1923,17 +1946,19 @@ type RelocateStatus struct {
 	// +listType=set
 	Volumes []string `json:"volumes,omitempty"`
 
-	// Committed is set before the commit is requested, so that a restart
-	// never requests it twice.
+	// Committed is set before the commit is first requested. It refuses an
+	// abort from then on, and does not stop the commit being resent until
+	// TaskID is recorded.
 	// +optional
 	Committed bool `json:"committed,omitempty"`
 
-	// Proceeded is set before the cutover is released, so that a restart never
-	// releases it twice.
+	// Proceeded is set before the cutover is first released. The release is
+	// resent while the relationship is cutover_pending.
 	// +optional
 	Proceeded bool `json:"proceeded,omitempty"`
 
-	// TaskID is the control plane's task carrying the cutover.
+	// TaskID is the control plane's task carrying the cutover, from the
+	// commit's 202 or from the 409 that refuses a second commit.
 	// +optional
 	TaskID string `json:"taskID,omitempty"`
 }
