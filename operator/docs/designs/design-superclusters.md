@@ -1029,12 +1029,23 @@ shares by demand:
    member that is idle now can serve the next volume placed in it.
 3. Divide the rest of the ceiling in proportion to each member's rate over the
    last interval.
-4. Write a member's backend pool limits only when its share moved by more than
-   5%, so that the shares do not churn the control plane.
+4. Write the new allocation only when some member's share moved by more than 5%
+   of its applied value, so that the shares do not churn the control plane. A
+   written allocation is written whole: every member whose share differs is
+   written, including the ones that moved by less.
 
-The shares sum to the ceiling at every write. Lowering one member's share is
-written before raising another's, so the sum never exceeds the ceiling between
-two writes. A member's share is reported in the pool's `status.members[]`.
+The hysteresis is the allocation's and not a member's, because skipping a small
+decrease while writing a large increase overshoots the ceiling: moving from
+10k/45k/45k to 11k/44.5k/44.5k IOPS writes the 10% increase, and skipping both
+1.1% decreases leaves 101k applied against a ceiling of 100k.
+
+**Decreases are written before increases, and increases wait for every
+decrease.** The applied limits sum to the ceiling or less before a round, each
+decrease lowers the sum, and the increases bring it to the new allocation, which
+sums to the ceiling, so the applied sum never exceeds the ceiling at any point of
+the round. A decrease that fails ends the round without sending any increase, and
+the next interval computes and writes a fresh allocation. A member's applied
+share is reported in the pool's `status.members[]`.
 
 ---
 

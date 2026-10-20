@@ -264,13 +264,16 @@ File: `atlas-lib/controlplane/chain_test.go` and
 
 File: `operator/internal/controllers/pool/shares_test.go`
 
-| #     | Scenario                                                                                                  | Type     | Test |
-|-------|-----------------------------------------------------------------------------------------------------------|----------|------|
-| U-119 | A ceiling of 100k IOPS over three eligible members is 33,334, 33,333, and 33,333, and sums to the ceiling | Boundary | —    |
-| U-120 | A member leaving placement has its share divided among the rest                                           | Positive | —    |
-| U-121 | Demand shares give every eligible member a floor of 10% of an even share and divide the rest by rate      | Positive | —    |
-| U-122 | A share moving by less than 5% is not written, and one moving by more is                                  | Boundary | —    |
-| U-123 | Lowered shares are written before raised ones, so the sum never exceeds the ceiling                       | Positive | —    |
+| #         | Scenario                                                                                                                                           | Type     | Test |
+|-----------|----------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| U-119     | A ceiling of 100k IOPS over three eligible members is 33,334, 33,333, and 33,333, and sums to the ceiling                                          | Boundary | —    |
+| U-120     | A member leaving placement has its share divided among the rest                                                                                    | Positive | —    |
+| U-121     | Demand shares give every eligible member a floor of 10% of an even share and divide the rest by rate                                               | Positive | —    |
+| ~~U-122~~ | ~~A share moving by less than 5% is not written, and one moving by more is~~ superseded by U-186: the hysteresis is the allocation's (design §7.5) | Boundary | —    |
+| U-123     | Lowered shares are written before raised ones, so the sum never exceeds the ceiling                                                                | Positive | —    |
+| U-186     | Moving from 10k/45k/45k to 11k/44.5k/44.5k writes all three shares, both decreases before the increase, and the applied sum never exceeds 100k     | Boundary | —    |
+| U-187     | A decrease that fails ends the round with no increase sent, and the next interval writes a fresh allocation                                        | Negative | —    |
+| U-188     | An allocation in which no share moved by more than 5% writes nothing                                                                               | Negative | —    |
 
 ### Per-Node-Set Overrides and Name Limits (design §5.3, §5.8)
 
@@ -540,14 +543,14 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 149       | 4       | all others  |
+| Unit        | 151       | 4       | all others  |
 | Integration | 50        | 0       | all of them |
 | E2E         | 9         | 0       | E-01 … E-09 |
 | Manual      | 2         | 0       | M-01, M-02  |
 
 The four covered unit rows are existing tests of behavior this design keeps:
 U-25, U-27, U-28, and U-81. The counts exclude struck rows, each superseded by
-the row its strike names: U-10 … U-18, U-20 … U-23, U-26, U-29 … U-33, U-35, U-38 … U-46, U-55 … U-57, U-77, U-79, U-129 … U-130, and I-04 … I-06, I-09, I-11 … I-12, I-14, I-17 … I-20, I-26, I-28 … I-30, I-37, I-40 … I-41, I-43, I-52.
+the row its strike names: U-10 … U-18, U-20 … U-23, U-26, U-29 … U-33, U-35, U-38 … U-46, U-55 … U-57, U-77, U-79, U-122, U-129 … U-130, and I-04 … I-06, I-09, I-11 … I-12, I-14, I-17 … I-20, I-26, I-28 … I-30, I-37, I-40 … I-41, I-43, I-52.
 
 ---
 
@@ -555,7 +558,7 @@ the row its strike names: U-10 … U-18, U-20 … U-23, U-26, U-29 … U-33, U-3
 
 | #                                                                                                                              | Gap                                               | Reason                                                                                            |
 |--------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
-| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-185                  | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                           |
+| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-188                  | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                           |
 | I-01 … I-03, I-07 … I-08, I-10, I-13, I-15 … I-16, I-21 … I-25, I-27, I-31 … I-36, I-38 … I-39, I-42, I-44 … I-51, I-53 … I-70 | Every integration scenario                        | Feature not implemented (Phases 1 to 5)                                                           |
 | E-01 … E-05, E-09                                                                                                              | Live supercluster, placement, and discovery split | Feature not implemented (Phases 1 and 2)                                                          |
 | E-06 … E-08                                                                                                                    | Live relocation and member removal                | Feature not implemented (Phases 3 and 4)                                                          |
