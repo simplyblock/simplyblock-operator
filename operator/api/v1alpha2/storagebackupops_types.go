@@ -155,6 +155,15 @@ type StorageBackupOpsSpec struct {
 	// +k8s:immutable
 	ClusterRef NamespacedDnsReference `json:"clusterRef"`
 
+	// omitzero, not omitempty, on BackupRef: a struct is never "empty" to
+	// encoding/json, so omitempty serialized an unset BackupRef as {"name": ""}
+	// on every write the controller made to the object (its finalizer update,
+	// first of all). The API server then refused the operation it had just
+	// admitted: the CEL rule saw both backupRef and groupBackupID set, and name
+	// failed its minimum length. Every group restore died on its first
+	// reconcile (live 2026-10-20). Kept out of the doc comment so the CRD
+	// description stays the field's, not the bug's.
+
 	// BackupRef names the single StorageBackup this operation acts on. Its
 	// namespace defaults to this operation's. A backup in another namespace needs
 	// the requesting user to be allowed to read it there. Set exactly one of this
@@ -162,7 +171,7 @@ type StorageBackupOpsSpec struct {
 	// backup.
 	// +k8s:immutable
 	// +optional
-	BackupRef NamespacedReference `json:"backupRef,omitempty"`
+	BackupRef NamespacedReference `json:"backupRef,omitzero"`
 
 	// GroupBackupID restores a whole consistency-group backup instead of the
 	// single backup named by BackupRef, producing one PersistentVolumeClaim per
