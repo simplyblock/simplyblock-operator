@@ -774,3 +774,80 @@ func TestAnUndeclaredBaselineValuePassesThrough(t *testing.T) {
 		t.Errorf("an unrecognized value converted to %q, want it carried through", got)
 	}
 }
+
+// A supercluster and its members are hub-only shapes: this version has no
+// field for either, so they travel through a v1alpha1 write in the stash and
+// come back unchanged. Losing them on the way would turn a member into a
+// standalone cluster and a supercluster into a cluster with no sizing.
+func TestStorageClusterSuperclusterFieldsSurviveTheHub(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		hub  *v1alpha2.StorageCluster
+	}{
+		{name: "a supercluster", hub: &v1alpha2.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "prod", Namespace: "sb"},
+			Spec: v1alpha2.StorageClusterSpec{
+				Supercluster: &v1alpha2.SuperclusterSpec{
+					Placement: &v1alpha2.SuperclusterPlacement{Strategy: v1alpha2.PlacementLeastProvisioned},
+				},
+			},
+			Status: v1alpha2.StorageClusterStatus{
+				UUID:        "0d6f1b2e-1f0a-4c71-9a0e-5b7d2c3e4f50",
+				Role:        v1alpha2.StorageClusterRoleSupercluster,
+				MemberCount: ptr.To(int32(2)),
+				Capacity: &v1alpha2.AggregateCapacity{
+					TotalBytes: ptr.To(int64(1 << 50)), UsedBytes: ptr.To(int64(1 << 40)),
+				},
+				Members: []v1alpha2.SuperclusterMemberStatus{
+					{Name: "prod-dense-kqv", UUID: "4f0c1e70-9a2b-4d51-b1c7-2f6e0d9a4c88",
+						Phase: v1alpha2.StorageClusterPhaseOnline, PlacementEligible: true},
+					{Name: "prod-fast-mzt", Phase: v1alpha2.StorageClusterPhaseCreating},
+				},
+			},
+		}},
+		{name: "a member", hub: &v1alpha2.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "prod-dense-kqv", Namespace: "sb"},
+			Spec: v1alpha2.StorageClusterSpec{
+				MaxSubsystemCount: ptr.To(int32(20)),
+				VCPUCount:         ptr.To(int32(8)),
+				DeviceClass:       v1alpha2.StorageClusterDeviceClassNVMe,
+				SuperclusterRef:   "prod",
+				DisablePlacement:  ptr.To(true),
+			},
+			Status: v1alpha2.StorageClusterStatus{Role: v1alpha2.StorageClusterRolePlacementGroup},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.hub.Spec.DeviceClass == "" {
+				tc.hub.Spec.DeviceClass = v1alpha2.StorageClusterDeviceClassNVMe
+			}
+			var spoke StorageCluster
+			if err := spoke.ConvertFrom(tc.hub.DeepCopy()); err != nil {
+				t.Fatalf("ConvertFrom: %v", err)
+			}
+			var back v1alpha2.StorageCluster
+			if err := spoke.ConvertTo(&back); err != nil {
+				t.Fatalf("ConvertTo: %v", err)
+			}
+			if diff := cmp.Diff(tc.hub.Spec, back.Spec); diff != "" {
+				t.Errorf("spec changed through v1alpha1 (-before +after):\n%s", diff)
+			}
+			for _, field := range []struct {
+				name         string
+				before, back any
+			}{
+				{"role", tc.hub.Status.Role, back.Status.Role},
+				{"members", tc.hub.Status.Members, back.Status.Members},
+				{"memberCount", tc.hub.Status.MemberCount, back.Status.MemberCount},
+				{"capacity", tc.hub.Status.Capacity, back.Status.Capacity},
+			} {
+				if diff := cmp.Diff(field.before, field.back); diff != "" {
+					t.Errorf("status.%s changed through v1alpha1 (-before +after):\n%s", field.name, diff)
+				}
+			}
+			if len(back.Annotations) != 0 {
+				t.Errorf("the stash was left on the hub object: %v", back.Annotations)
+			}
+		})
+	}
+}
