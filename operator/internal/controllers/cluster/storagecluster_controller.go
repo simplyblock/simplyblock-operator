@@ -31,11 +31,13 @@ import (
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	ctrlbuilder "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	atlasnet "github.com/simplyblock/atlas/net"
@@ -226,7 +228,11 @@ type CSIClusterEntry struct {
 // rather than within the next interval.
 func (r *StorageClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	builder := ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha2.StorageCluster{}).
+		For(&simplyblockv1alpha2.StorageCluster{},
+			ctrlbuilder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
+				cluster, ok := obj.(*simplyblockv1alpha2.StorageCluster)
+				return ok && !isSupercluster(cluster)
+			}))).
 		Named("storagecluster")
 	if r.Clusters != nil {
 		builder = builder.WatchesRawSource(
@@ -245,6 +251,13 @@ func (r *StorageClusterReconciler) Reconcile(
 	var cluster simplyblockv1alpha2.StorageCluster
 	if err := r.Get(ctx, req.NamespacedName, &cluster); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	// A supercluster has no backend cluster to create or read; it is
+	// SuperclusterReconciler's. The watch predicate keeps it from arriving
+	// here, and this keeps a stream trigger or a stale request from acting on
+	// it anyway.
+	if isSupercluster(&cluster) {
+		return ctrl.Result{}, nil
 	}
 
 	if !cluster.DeletionTimestamp.IsZero() {
@@ -1116,6 +1129,15 @@ func (r *StorageClusterReconciler) writeClusterSecret(
 func (r *StorageClusterReconciler) clusterSecret(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) (string, error) {
+	return readClusterSecret(ctx, r.Client, cluster)
+}
+
+// readClusterSecret reads the secret a cluster's control-plane reads
+// authenticate with. A supercluster reads each member's capacity with it, so
+// it is a function of the client rather than of this reconciler.
+func readClusterSecret(
+	ctx context.Context, r client.Reader, cluster *simplyblockv1alpha2.StorageCluster,
+) (string, error) {
 	var secret corev1.Secret
 	key := types.NamespacedName{
 		Name:      fmt.Sprintf("simplyblock-cluster-%s", cluster.Name),
@@ -1349,10 +1371,31 @@ var allPhases = []simplyblockv1alpha2.StorageClusterPhase{
 
 // writeStatus applies the mutation and patches only when something changed, so
 // a cluster whose state has not moved produces no writes.
+//
+// Every write also records the cluster's role within a supercluster, which is
+// a fact about its spec and so is never stale when the rest of the status is
+// current.
 func (r *StorageClusterReconciler) writeStatus(
 	ctx context.Context,
 	cluster *simplyblockv1alpha2.StorageCluster,
 	mutate func(*simplyblockv1alpha2.StorageClusterStatus),
+) error {
+	return writeClusterStatus(ctx, r.Client, cluster,
+		func(fresh *simplyblockv1alpha2.StorageCluster, status *simplyblockv1alpha2.StorageClusterStatus) {
+			mutate(status)
+			status.Role = roleOf(fresh)
+		})
+}
+
+// writeClusterStatus is the status write both reconcilers of this kind use:
+// re-read, apply the mutation, and patch with an optimistic lock only when
+// something changed. The mutation sees the fresh object, because what it
+// writes may depend on the spec as it is now.
+func writeClusterStatus(
+	ctx context.Context,
+	r client.Client,
+	cluster *simplyblockv1alpha2.StorageCluster,
+	mutate func(*simplyblockv1alpha2.StorageCluster, *simplyblockv1alpha2.StorageClusterStatus),
 ) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var fresh simplyblockv1alpha2.StorageCluster
@@ -1361,7 +1404,7 @@ func (r *StorageClusterReconciler) writeStatus(
 		}
 
 		desired := *fresh.Status.DeepCopy()
-		mutate(&desired)
+		mutate(&fresh, &desired)
 		desired.ObservedGeneration = fresh.Generation
 
 		if equality.Semantic.DeepEqual(fresh.Status, desired) {

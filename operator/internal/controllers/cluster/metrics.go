@@ -26,6 +26,8 @@ package cluster
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
+
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 // operationBuckets span the range a cluster operation actually takes: an
@@ -118,6 +120,25 @@ var (
 		},
 		[]string{"cluster", "phase"},
 	)
+
+	// superclusterMembers counts a supercluster's members by whether
+	// placement may choose them. The notServing series is the alert that a
+	// supercluster runs on fewer members than it was built with.
+	superclusterMembers = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "simplyblock_supercluster_members",
+			Help: "Members of a supercluster by state: eligible, cordoned (placement disabled), or notServing.",
+		},
+		[]string{"supercluster", "state"},
+	)
+
+	superclusterCapacityBytes = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "simplyblock_supercluster_capacity_bytes",
+			Help: "A supercluster's members' combined total, used, and provisioned bytes.",
+		},
+		[]string{"supercluster", "kind"},
+	)
 )
 
 func init() {
@@ -132,5 +153,36 @@ func init() {
 		rollingRestartNodeIndex,
 		rollingRestartNodeCount,
 		clusterPhaseState,
+		superclusterMembers,
+		superclusterCapacityBytes,
 	)
+}
+
+// observeSupercluster publishes a supercluster's member states and combined
+// capacity. Every state is written on every pass, so a state that drops to
+// zero reads as zero rather than as its last nonzero value.
+func observeSupercluster(supercluster *simplyblockv1alpha2.StorageCluster, rollup superclusterRollup) {
+	counts := map[string]float64{"eligible": 0, "cordoned": 0, "notServing": 0}
+	for _, row := range rollup.Members {
+		switch {
+		case row.PlacementEligible:
+			counts["eligible"]++
+		case isServing(row.Phase):
+			counts["cordoned"]++
+		default:
+			counts["notServing"]++
+		}
+	}
+	for state, n := range counts {
+		superclusterMembers.WithLabelValues(supercluster.Name, state).Set(n)
+	}
+	if c := rollup.Capacity; c != nil {
+		for kind, v := range map[string]*int64{
+			"total": c.TotalBytes, "used": c.UsedBytes, "provisioned": c.ProvisionedBytes,
+		} {
+			if v != nil {
+				superclusterCapacityBytes.WithLabelValues(supercluster.Name, kind).Set(float64(*v))
+			}
+		}
+	}
 }

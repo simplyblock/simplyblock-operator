@@ -307,7 +307,7 @@ func TestAnUpgradeSecretAdoptsRatherThanCreating(t *testing.T) {
 // using the secret the upgrade Secret names.
 func TestAnUpgradeSecretAuthenticatesTheAdoptionReadAsTheAdoptedCluster(t *testing.T) {
 	// Every Cluster() call across the run is checked, not just the last: a
-	// later, correctly-authenticated steady-state read would otherwise
+	// later, correctly authenticated steady-state read would otherwise
 	// overwrite a single captured value and hide a regression in the
 	// adoption read specifically.
 	var calls []struct {
@@ -666,5 +666,64 @@ func TestDeletingAnUncreatedClusterAsksTheControlPlaneNothing(t *testing.T) {
 	}
 	if api.deleteCalls != 0 {
 		t.Errorf("a cluster that was never created was deleted %d times", api.deleteCalls)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Roles within a supercluster
+// ---------------------------------------------------------------------------
+
+// I-02: every ordinary cluster reports what it is within a supercluster, a
+// member as PlacementGroup and any other as Standalone.
+func TestAnOrdinaryClusterReportsItsRole(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*simplyblockv1alpha2.StorageCluster)
+		want   simplyblockv1alpha2.StorageClusterRole
+	}{
+		{name: "standalone", mutate: func(*simplyblockv1alpha2.StorageCluster) {},
+			want: simplyblockv1alpha2.StorageClusterRoleStandalone},
+		{name: "member", mutate: func(c *simplyblockv1alpha2.StorageCluster) { c.Spec.SuperclusterRef = "prod" },
+			want: simplyblockv1alpha2.StorageClusterRolePlacementGroup},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := &fakeControlPlane{
+				cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+			}
+			r := newClusterReconciler(t, api, &recorder{}, newTestCluster(tc.mutate))
+
+			cluster := reconcileCluster(t, r, 1)
+			if cluster.Status.Role != tc.want {
+				t.Errorf("status.role = %q, want %q", cluster.Status.Role, tc.want)
+			}
+		})
+	}
+}
+
+// A supercluster has no backend cluster, so the reconciler that creates and
+// reads backend clusters leaves it to its own reconciler: no finalizer, no
+// creation claim, and no call to the control plane. The fake answers no call,
+// so reaching it fails the test as well.
+func TestTheClusterReconcilerLeavesASuperclusterAlone(t *testing.T) {
+	supercluster := newUncreatedCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+		c.Finalizers = nil
+		c.Spec = simplyblockv1alpha2.StorageClusterSpec{
+			Supercluster: &simplyblockv1alpha2.SuperclusterSpec{},
+		}
+	})
+	r := newClusterReconciler(t, &fakeControlPlane{
+		ready: func() error {
+			t.Fatal("the control plane was asked whether it is ready to create a supercluster")
+			return nil
+		},
+	}, &recorder{}, supercluster)
+
+	cluster := reconcileCluster(t, r, 3)
+	if len(cluster.Finalizers) != 0 {
+		t.Errorf("finalizers = %v, want none on a supercluster", cluster.Finalizers)
+	}
+	if cluster.Status.Step.State != "" || cluster.Status.Phase != "" {
+		t.Errorf("the creation machine ran on a supercluster: step %q, phase %q",
+			cluster.Status.Step.State, cluster.Status.Phase)
 	}
 }

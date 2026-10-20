@@ -939,6 +939,15 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageClusterOps")
 		os.Exit(1)
 	}
+	if err := (&clustercontroller.SuperclusterReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("supercluster-controller"),
+		API:      clustercontroller.NewControlPlane(controlPlaneEndpoint, controlPlaneCredential),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Supercluster")
+		os.Exit(1)
+	}
 	if err := (&controller.VolumeRebalancerReconciler{
 		Client:            mgr.GetClient(),
 		Scheme:            mgr.GetScheme(),

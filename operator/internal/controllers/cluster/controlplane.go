@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"sync"
 
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -84,6 +85,11 @@ type ControlPlane interface {
 	// outcome being asked for reached by another route, so the implementation
 	// reads a 404 as success.
 	CancelTask(ctx context.Context, clusterID, taskID string) error
+
+	// ClusterCapacity is the cluster's latest capacity sample, or nil when the
+	// control plane has none yet, which is a supercluster's reading of one
+	// member.
+	ClusterCapacity(ctx context.Context, clusterID string) (*simplyblockv1alpha2.AggregateCapacity, error)
 
 	// Endpoint is the base URL this call would currently reach the control
 	// plane at, resolved the same way every other call resolves it (§3.3).
@@ -263,6 +269,44 @@ func (c *httpControlPlane) CancelTask(ctx context.Context, clusterID, taskID str
 		return nil
 	}
 	return err
+}
+
+func (c *httpControlPlane) ClusterCapacity(
+	ctx context.Context, clusterID string,
+) (*simplyblockv1alpha2.AggregateCapacity, error) {
+	body, err := c.call(ctx, http.MethodGet, "/api/v2/clusters/"+clusterID+"/capacity", nil)
+	if err != nil {
+		return nil, err
+	}
+	return newestCapacity(body)
+}
+
+// newestCapacity reads the latest sample out of the capacity endpoint's
+// answer, which is a list of dated samples rather than one reading.
+func newestCapacity(body []byte) (*simplyblockv1alpha2.AggregateCapacity, error) {
+	var samples []struct {
+		Date        int64 `json:"date"`
+		Total       int64 `json:"size_total"`
+		Used        int64 `json:"size_used"`
+		Provisioned int64 `json:"size_prov"`
+	}
+	if err := json.Unmarshal(body, &samples); err != nil {
+		return nil, fmt.Errorf("decode the capacity samples: %w", err)
+	}
+	if len(samples) == 0 {
+		return nil, nil
+	}
+	newest := samples[0]
+	for _, sample := range samples[1:] {
+		if sample.Date > newest.Date {
+			newest = sample
+		}
+	}
+	return &simplyblockv1alpha2.AggregateCapacity{
+		TotalBytes:       &newest.Total,
+		UsedBytes:        &newest.Used,
+		ProvisionedBytes: &newest.Provisioned,
+	}, nil
 }
 
 // post issues a call whose body is not read, which every action endpoint is.

@@ -710,3 +710,21 @@ func TestReconcileDataRealignment_ReplayOfStackedRealignment(t *testing.T) {
 		t.Fatalf("after tick 3: %d call(s), want 1 — nothing moved, so nothing to realign", n)
 	}
 }
+
+// I-08: a supercluster's status.uuid is the aggregate's identifier, which the
+// control plane does not know, and its members are rebalanced as ordinary
+// clusters. A forced realignment due on a supercluster therefore never reaches
+// the control plane (design-superclusters.md §10.3).
+func TestReconcile_TheRebalancerNeverActsOnASupercluster(t *testing.T) {
+	cr := realignTestCluster(1, 0, nil, true, nil)
+	cr.Spec.Supercluster = &simplyblockv1alpha2.SuperclusterSpec{}
+	f := newRealignFixture(t, http.StatusOK, cr)
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: realignNamespace, Name: realignClusterName}}
+	if _, err := f.r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if n := atomic.LoadInt32(f.calls); n != 0 {
+		t.Fatalf("the control plane was called %d times for a supercluster, want 0", n)
+	}
+}

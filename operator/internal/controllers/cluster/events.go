@@ -92,4 +92,17 @@ const (
 	// failure nowhere but in the cluster's status falling back, so this event is
 	// the only record that an attempt was made and lost.
 	ActivationRetried = "ActivationRetried"
+
+	// The supercluster's events, emitted on the supercluster, which is the
+	// object an administrator reads and the one that outlives any member.
+
+	// MemberAdded says a member cluster joined the supercluster.
+	MemberAdded = "MemberAdded"
+
+	// MemberPlacementChanged says a member left placement or returned to it.
+	MemberPlacementChanged = "MemberPlacementChanged"
+
+	// AggregateCapacityThreshold says the members' combined capacity crossed
+	// the supercluster's warning or critical threshold.
+	AggregateCapacityThreshold = "AggregateCapacityThreshold"
 )
