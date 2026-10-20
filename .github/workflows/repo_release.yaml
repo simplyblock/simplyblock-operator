@@ -92,11 +92,15 @@ jobs:
       version: ${{ needs.setup.outputs.version }}
     secrets: inherit
 
-  # 5b. package operator chart -> artifact helm-charts-operator (feeds the publish)
+  # 5b. package operator chart -> artifact helm-charts-operator (feeds the publish).
+  # The packaged chart carries the release version and names the images this
+  # release built.
   package-operator-chart:
     name: Package operator chart
-    needs: release-csi
+    needs: [setup, release-csi]
     uses: ./.github/workflows/helm_release.yaml
+    with:
+      version: ${{ needs.setup.outputs.version }}
     secrets: inherit
 
   # The published Helm repository lives in the charts branch, which holds every
