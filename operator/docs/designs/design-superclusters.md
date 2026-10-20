@@ -906,8 +906,12 @@ pool, so the operator writes each member's backend pool a share of the ceiling.
 Phase 2 splits the ceiling evenly over the placement-eligible members, and §7.5
 specifies the demand-driven shares that replace the even split.
 
-**`allowedNodes` is split by member.** Each member's backend pool receives the
-allowed nodes that are its own workers.
+**Every member's backend pool receives the whole `allowedNodes` list.** The list
+names the Kubernetes nodes that consume the pool, not the workers that serve it:
+`syncAllowedHosts` in `storagepool_controller.go` derives each node's host NQN
+from its UID. A volume of the pool may be placed in any member and consumed from
+any allowed node, so each member's backend pool admits the full resolved list,
+including nodes that run no storage node at all.
 
 **The generated StorageClass names the supercluster in `cluster_id`.** The pool
 controller writes the supercluster's `status.uuid` there, as it writes a
@@ -1170,7 +1174,7 @@ supercluster.
 | 7   | Shared subsystems (`max_namespace_per_subsys`)  | Restricted   | Volumes sharing a subsystem share a member and move together (§8.1)                                                                                   | 3     |
 | 8   | Node-to-node migration, rebalancer, realignment | Per member   | Run per member. The supercluster is skipped by the rebalancer's watch                                                                                 | 1     |
 | 9   | Pools and QoS                                   | Aggregated   | One backend pool per member. The ceiling is the supercluster's, split evenly, then by demand (§7.1, §7.5)                                             | 2, 5  |
-| 10  | DHCHAP and `allowedNodes`                       | Aggregated   | Keys are per backend pool and therefore per member. Allowed nodes split by member (§7.1)                                                              | 2     |
+| 10  | DHCHAP and `allowedNodes`                       | Aggregated   | Keys are per backend pool and therefore per member. Every member admits the whole allowed-node list (§7.1)                                            | 2     |
 | 11  | Encryption and KMS                              | Restricted   | Members share one KMS configuration through the template. Encrypted volumes are never moved until P0-1 holds, because a move deletes their key (§9.4) | 3     |
 | 12  | Backup policies and restore                     | Aggregated   | A policy on a supercluster fans out per member. A restore places by §7.2 (§9.5)                                                                       | 2     |
 | 13  | Replication (`ReplicationPair`, CSI-Addons)     | Out of scope | A pair naming a supercluster is refused. Members may be named directly (§16 Q5)                                                                       | —     |

@@ -406,7 +406,7 @@ server and a real Kubernetes API through `envtest`.
 | I-22     | The pool is `Ready` only when every eligible member has it                                                                                 | Boundary | —    |
 | I-23     | A 409 on an existing backend pool is success, and the mock sees no second create                                                           | Negative | —    |
 | I-24     | One member's create failing leaves that member ineligible and the pool status naming it                                                    | Negative | —    |
-| I-25     | `allowedNodes` is split by member                                                                                                          | Positive | —    |
+| I-25     | Every member's backend pool admits every allowed node's NQN, including a consuming node that runs no storage node                          | Positive | —    |
 | ~~I-26~~ | ~~Limits are applied unchanged to every member's backend pool~~ superseded by U-119: the ceiling is the supercluster's (design §7.1)       | Positive | —    |
 | I-27     | A member added later receives every pool before it becomes eligible                                                                        | Positive | —    |
 | ~~I-28~~ | ~~The generated StorageClass carries `supercluster` and no `cluster_id`~~ superseded by I-47: a class names a supercluster in `cluster_id` | Positive | —    |
