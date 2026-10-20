@@ -2,6 +2,7 @@ package volumemigration
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -17,6 +18,12 @@ import (
 const (
 	testNamespace   = "simplyblock"
 	testClusterUUID = "11111111-1111-1111-1111-111111111111"
+
+	// operatorImageEnv is the variable the chart sets to the operator's own
+	// image, and releaseOperatorImage what a release install sets it to.
+	operatorImageEnv       = "SB_OPERATOR_IMAGE"
+	releaseOperatorImage   = "quay.io/simplyblock-io/simplyblock-operator:v26.4.0-beta2"
+	releaseRebalancerImage = "quay.io/simplyblock-io/simplyblock-rebalancer:v26.4.0-beta2"
 )
 
 // clusterReporting builds a StorageCluster reporting testClusterUUID with the
@@ -29,6 +36,12 @@ func clusterReporting(settings *simplyblockv1alpha2.VolumeMigrationSettings) *si
 	}
 }
 
+// Regression: 2026-10-20-job-image-main-fallback — a cluster that pinned no
+// rebalancer image ran every validation, release, and replication Job on
+// docker.io/simplyblock/simplyblock-rebalancer:main, whatever release the
+// operator was. A v26.4.0-beta2 install ran migration Jobs from the moving
+// development tag, on Docker Hub rather than the registry the release was
+// installed from.
 func TestJobImage(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := simplyblockv1alpha2.AddToScheme(scheme); err != nil {
@@ -36,6 +49,8 @@ func TestJobImage(t *testing.T) {
 	}
 
 	t.Run("the cluster's pinned image is used", func(t *testing.T) {
+		t.Setenv(operatorImageEnv, releaseOperatorImage)
+		t.Setenv(RebalancerImageEnvVar, "registry.example.com/ignored:v9")
 		const pinned = "pinned:v1"
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 			clusterReporting(&simplyblockv1alpha2.VolumeMigrationSettings{
@@ -51,7 +66,9 @@ func TestJobImage(t *testing.T) {
 		}
 	})
 
-	t.Run("a cluster pinning none falls back", func(t *testing.T) {
+	t.Run("a cluster pinning none runs the operator's release", func(t *testing.T) {
+		t.Setenv(operatorImageEnv, releaseOperatorImage)
+		t.Setenv(RebalancerImageEnvVar, "")
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 			clusterReporting(&simplyblockv1alpha2.VolumeMigrationSettings{})).Build()
 
@@ -59,20 +76,54 @@ func TestJobImage(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got != JobImageDefault {
-			t.Errorf("image = %q, want %q", got, JobImageDefault)
+		if got != releaseRebalancerImage {
+			t.Errorf("image = %q, want %q", got, releaseRebalancerImage)
 		}
 	})
 
-	t.Run("a cluster that is not there falls back", func(t *testing.T) {
+	t.Run("a cluster pinning none takes the deployment's rebalancer image", func(t *testing.T) {
+		t.Setenv(operatorImageEnv, releaseOperatorImage)
+		t.Setenv(RebalancerImageEnvVar, "registry.example.com/rebalancer:v9")
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(clusterReporting(nil)).Build()
+
+		got, err := JobImage(context.Background(), c, testNamespace, testClusterUUID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != "registry.example.com/rebalancer:v9" {
+			t.Errorf("image = %q, want the deployment's", got)
+		}
+	})
+
+	t.Run("a cluster that is not there runs the operator's release", func(t *testing.T) {
+		t.Setenv(operatorImageEnv, releaseOperatorImage)
+		t.Setenv(RebalancerImageEnvVar, "")
 		c := fake.NewClientBuilder().WithScheme(scheme).Build()
 
 		got, err := JobImage(context.Background(), c, testNamespace, testClusterUUID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got != JobImageDefault {
-			t.Errorf("image = %q, want %q", got, JobImageDefault)
+		if got != releaseRebalancerImage {
+			t.Errorf("image = %q, want %q", got, releaseRebalancerImage)
+		}
+	})
+
+	// With nothing to derive the image from, a Job is not created at all. Any
+	// literal default is some release other than the operator's.
+	t.Run("nothing naming an image is an error", func(t *testing.T) {
+		t.Setenv(operatorImageEnv, "")
+		t.Setenv(RebalancerImageEnvVar, "")
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(clusterReporting(nil)).Build()
+
+		got, err := JobImage(context.Background(), c, testNamespace, testClusterUUID)
+		if err == nil {
+			t.Fatalf("image = %q, want an error naming what to set", got)
+		}
+		for _, name := range []string{operatorImageEnv, RebalancerImageEnvVar} {
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("error %q does not name %s", err, name)
+			}
 		}
 	})
 }
@@ -143,8 +194,10 @@ func clusterTolerating(tolerations []corev1.Toleration) *simplyblockv1alpha2.Sto
 }
 
 func TestJobPlacementCarriesTheClustersTolerations(t *testing.T) {
+	t.Setenv(operatorImageEnv, releaseOperatorImage)
+	t.Setenv(RebalancerImageEnvVar, "")
 	// A validation Job is pinned to the node whose paths it checks. On a
-	// hyperconverged fleet that node is a tainted storage worker, and a Job
+	// hyper-converged fleet that node is a tainted storage worker, and a Job
 	// tolerating nothing stays Pending until its deadline kills it, which
 	// leaves the migration's paths connected and nothing to disconnect them.
 	scheme := runtime.NewScheme()
@@ -167,8 +220,8 @@ func TestJobPlacementCarriesTheClustersTolerations(t *testing.T) {
 	if len(placement.Tolerations) != 1 || placement.Tolerations[0].Key != "io.simplyblock.node-type" {
 		t.Errorf("the placement tolerates %+v, want the cluster's taint", placement.Tolerations)
 	}
-	if placement.Image != JobImageDefault {
-		t.Errorf("the placement runs %q, want the default image", placement.Image)
+	if placement.Image != releaseRebalancerImage {
+		t.Errorf("the placement runs %q, want %q", placement.Image, releaseRebalancerImage)
 	}
 
 	job := BuildJob(JobParams{
@@ -182,6 +235,7 @@ func TestJobPlacementCarriesTheClustersTolerations(t *testing.T) {
 }
 
 func TestJobPlacementOfAClusterThatTakesNoTaint(t *testing.T) {
+	t.Setenv(operatorImageEnv, releaseOperatorImage)
 	scheme := runtime.NewScheme()
 	if err := simplyblockv1alpha2.AddToScheme(scheme); err != nil {
 		t.Fatal(err)

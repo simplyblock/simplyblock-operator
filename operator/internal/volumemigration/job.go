@@ -26,14 +26,6 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// JobImageDefault is the image a Job runs when the cluster pins none.
-//
-// It is not DefaultRebalancerImage, and the two disagreeing is a fact about the
-// code rather than a decision taken here: the settings block's default is the
-// env-var-aware one the chart sets, and the Job's fallback has always been this
-// literal. Moving the function did not change which image a Job runs.
-const JobImageDefault = "docker.io/simplyblock/simplyblock-rebalancer:main"
-
 // JobParams holds the caller-specific knobs for BuildJob.
 type JobParams struct {
 	Name          string
@@ -71,8 +63,8 @@ type JobParams struct {
 // both to build a Job that runs. Reading them separately listed the clusters
 // twice for one answer.
 type JobPlacement struct {
-	// Image is the simplyblock-rebalancer image the cluster pins, or
-	// JobImageDefault where it pins none.
+	// Image is the simplyblock-rebalancer image RebalancerImage resolves for
+	// the cluster.
 	Image string
 
 	// Tolerations are the cluster's storage-node tolerations.
@@ -208,31 +200,35 @@ func RecordVolumeMoved(
 // JobPlacementOf returns what the StorageCluster reporting clusterUUID says
 // about running a Job against one of its nodes.
 //
-// A namespace with no such cluster answers the default image and no
+// A namespace with no such cluster answers the deployment's image and no
 // tolerations, which is what a Job built before any cluster reported itself
 // gets. That is a Job that runs on an untainted node and stays Pending on a
 // tainted one, and it is the behavior every such Job had before the cluster's
 // tolerations were read at all.
 func JobPlacementOf(ctx context.Context, c client.Client, namespace, clusterUUID string) (JobPlacement, error) {
-	placement := JobPlacement{Image: JobImageDefault}
-
 	var clusters simplyblockv1alpha2.StorageClusterList
 	if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
-		return placement, fmt.Errorf("list StorageClusters: %w", err)
+		return JobPlacement{}, fmt.Errorf("list StorageClusters: %w", err)
 	}
+
+	var settings *simplyblockv1alpha2.VolumeMigrationSettings
+	var placement JobPlacement
 	for _, cr := range clusters.Items {
 		if cr.Status.UUID != clusterUUID {
 			continue
 		}
-		if vm := cr.Spec.VolumeMigrationSettings; vm != nil &&
-			vm.RebalancerImage != nil && *vm.RebalancerImage != "" {
-			placement.Image = *vm.RebalancerImage
-		}
+		settings = cr.Spec.VolumeMigrationSettings
 		if wl := cr.Spec.StorageNodes; wl != nil {
 			placement.Tolerations = wl.Tolerations
 		}
 		break
 	}
+
+	image, err := RebalancerImage(settings)
+	if err != nil {
+		return JobPlacement{}, err
+	}
+	placement.Image = image
 	return placement, nil
 }
 

@@ -22,6 +22,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/ownimage"
 )
 
 var (
@@ -33,6 +34,10 @@ var (
 
 // TestMain stops the shared apiserver once, after every test that used it.
 func TestMain(m *testing.M) {
+	// The Jobs these controllers create run the rebalancer of the operator's own
+	// release, derived from the image every install path sets here. Without it
+	// they refuse to create a Job at all.
+	_ = os.Setenv(ownimage.Env, "quay.io/simplyblock-io/simplyblock-operator:v0.0.0-test")
 	code := m.Run()
 	if sharedEnv != nil {
 		_ = sharedEnv.Stop()
