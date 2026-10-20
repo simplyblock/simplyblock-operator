@@ -259,7 +259,9 @@ func TestGroupFailbackCluster(t *testing.T) {
 		{"moved, no flag: the named site", live, "", peerClusterID, sanityClusterID},
 		// Moved onto a second group on the same site (a fail-back that built a
 		// new group beside the emptied one): the data is HERE, as at home.
-		{"moved within the site: the peer from the class", lvol.GroupHandle{ClusterID: sanityClusterID, GroupID: peerGroupID}, sanityClusterID, peerClusterID, peerClusterID},
+		{"moved within the site: the peer from the class",
+			lvol.GroupHandle{ClusterID: sanityClusterID, GroupID: peerGroupID},
+			sanityClusterID, peerClusterID, peerClusterID},
 		// A plain relocate: the group resolves to itself, its members are the
 		// demoted primaries on this site, and they replicate to the peer the
 		// class names -- never to this site (run 20261019-1541-ebs).
