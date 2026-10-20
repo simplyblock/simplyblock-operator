@@ -35,6 +35,17 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
+// ProvisionedByAnnotation is the annotation the external provisioner selects
+// on: it deletes a Released PersistentVolume with reclaim policy Delete only
+// when this names its own driver, and leaves every other PV alone. A restored
+// volume's PV is created by the operator, not provisioned by the driver, so
+// without the annotation a deleted restored claim left its PV Released and
+// its backend volume alive -- three restored members kept their consistency
+// group occupied after the claims were gone, and the next restore into that
+// name was refused (live 2026-10-20, regression_test/24). With it, deleting
+// the claim deletes the volume, which is what reclaim policy Delete promises.
+const ProvisionedByAnnotation = "pv.kubernetes.io/provisioned-by"
+
 // The control plane's volume statuses a restore cares about, in its own
 // spelling. restore_failed is what the tasks runner sets after exhausting every
 // retry of the S3 transfer, and it is the only one of the two that is a verdict.
@@ -352,8 +363,9 @@ func (r *StorageBackupOpsReconciler) ensurePersistentVolume(
 	size := restoredSize(backup)
 	volume := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   name,
-			Labels: map[string]string{RestoredByLabel: ops.Name},
+			Name:        name,
+			Labels:      map[string]string{RestoredByLabel: ops.Name},
+			Annotations: map[string]string{ProvisionedByAnnotation: utils.CSIProvisioner},
 		},
 		Spec: corev1.PersistentVolumeSpec{
 			StorageClassName: storageClass,

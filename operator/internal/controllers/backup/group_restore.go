@@ -366,8 +366,9 @@ func (r *StorageBackupOpsReconciler) ensureMemberVolume(
 	}
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   name,
-			Labels: map[string]string{RestoredByLabel: ops.Name},
+			Name:        name,
+			Labels:      map[string]string{RestoredByLabel: ops.Name},
+			Annotations: map[string]string{ProvisionedByAnnotation: utils.CSIProvisioner},
 		},
 		Spec: corev1.PersistentVolumeSpec{
 			StorageClassName:              storageClass,

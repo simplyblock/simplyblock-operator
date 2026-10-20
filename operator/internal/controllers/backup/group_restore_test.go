@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -122,6 +124,21 @@ func TestGroupRestoreRunsTheWholeGraphAndProducesClaims(t *testing.T) {
 
 	if ops.Status.Phase != simplyblockv1alpha2.StorageBackupOpsPhaseSucceeded {
 		t.Fatalf("phase = %q (%s), want Succeeded", ops.Status.Phase, ops.Status.Message)
+	}
+	// Every restored PV must name the driver as its provisioner, or the
+	// external provisioner never deletes it and a deleted claim leaves the
+	// backend volume alive in the restored group (live 2026-10-20).
+	var pvs corev1.PersistentVolumeList
+	if err := r.List(context.Background(), &pvs, client.MatchingLabels{RestoredByLabel: ops.Name}); err != nil {
+		t.Fatal(err)
+	}
+	if len(pvs.Items) != len(claimNames) {
+		t.Fatalf("%d restored PVs, want %d", len(pvs.Items), len(claimNames))
+	}
+	for _, pv := range pvs.Items {
+		if got := pv.Annotations[ProvisionedByAnnotation]; got != utils.CSIProvisioner {
+			t.Errorf("PV %s %s = %q, want %q", pv.Name, ProvisionedByAnnotation, got, utils.CSIProvisioner)
+		}
 	}
 	if api.groupRestores != 1 {
 		t.Errorf("the control plane was asked for %d group restores, want exactly 1", api.groupRestores)
