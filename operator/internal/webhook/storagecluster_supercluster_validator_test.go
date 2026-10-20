@@ -28,8 +28,9 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade/crds"
 )
 
-func superclusterAt(namespace, name string) *simplyblockv1alpha2.StorageCluster {
-	c := clusterAt(namespace, name)
+// superclusterAt is the supercluster every member below names, in a namespace.
+func superclusterAt(namespace string) *simplyblockv1alpha2.StorageCluster {
+	c := clusterAt(namespace, "prod")
 	c.Spec.Supercluster = &simplyblockv1alpha2.SuperclusterSpec{}
 	return c
 }
@@ -108,7 +109,7 @@ func wantDenied(t *testing.T, response admission.Response, what string, mentions
 
 // U-139
 func TestAMemberNamingASuperclusterInItsNamespaceIsAdmitted(t *testing.T) {
-	validator := clusterValidator(t, superclusterAt("sb", "prod"))
+	validator := clusterValidator(t, superclusterAt("sb"))
 
 	response := validator.Handle(context.Background(),
 		clusterRequest(t, admissionv1.Create, memberAt("sb", "prod-dense-kqv", "prod")))
@@ -125,7 +126,7 @@ func TestAMemberWhoseSuperclusterDoesNotResolveIsRefused(t *testing.T) {
 	}{
 		{name: "nothing by that name, as when the member is created first"},
 		{name: "a standalone cluster", existing: []client.Object{clusterAt("sb", "prod")}},
-		{name: "a supercluster in another namespace", existing: []client.Object{superclusterAt("elsewhere", "prod")}},
+		{name: "a supercluster in another namespace", existing: []client.Object{superclusterAt("elsewhere")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			validator := clusterValidator(t, tc.existing...)
@@ -144,7 +145,7 @@ func TestASuperclusterWithNoMembersIsAdmitted(t *testing.T) {
 	validator := clusterValidator(t)
 
 	response := validator.Handle(context.Background(),
-		clusterRequest(t, admissionv1.Create, superclusterAt("sb", "prod")))
+		clusterRequest(t, admissionv1.Create, superclusterAt("sb")))
 
 	wantAllowed(t, response, "a supercluster with no members")
 }
@@ -155,10 +156,10 @@ func TestASuperclusterWithNoMembersIsAdmitted(t *testing.T) {
 func TestASuperclusterSharesANamespaceWithAWorkloadCluster(t *testing.T) {
 	validator := clusterValidator(t, clusterAt("sb", "standalone"))
 	wantAllowed(t, validator.Handle(context.Background(),
-		clusterRequest(t, admissionv1.Create, superclusterAt("sb", "prod"))),
+		clusterRequest(t, admissionv1.Create, superclusterAt("sb"))),
 		"a supercluster beside a standalone cluster")
 
-	validator = clusterValidator(t, superclusterAt("sb", "prod"))
+	validator = clusterValidator(t, superclusterAt("sb"))
 	wantAllowed(t, validator.Handle(context.Background(),
 		clusterRequest(t, admissionv1.Create, memberAt("sb", "prod-dense-kqv", "prod"))),
 		"the first member beside its supercluster")
@@ -222,7 +223,7 @@ func TestASuperclusterWithAPortOffItsDefaultIsRefused(t *testing.T) {
 // U-145, the supercluster half: every member names it in an immutable field,
 // so deleting it would strand them.
 func TestDeletingASuperclusterWithMembersIsRefused(t *testing.T) {
-	prod := superclusterAt("sb", "prod")
+	prod := superclusterAt("sb")
 	validator := clusterValidator(t, prod, memberAt("sb", "prod-dense-kqv", "prod"))
 
 	response := validator.Handle(context.Background(), deleteClusterRequest(t, prod))
@@ -231,7 +232,7 @@ func TestDeletingASuperclusterWithMembersIsRefused(t *testing.T) {
 }
 
 func TestDeletingAnEmptySuperclusterIsAdmitted(t *testing.T) {
-	prod := superclusterAt("sb", "prod")
+	prod := superclusterAt("sb")
 	validator := clusterValidator(t, prod, memberAt("sb", "staging-a-xyz", "staging"),
 		memberAt("elsewhere", "prod-b-abc", "prod"))
 

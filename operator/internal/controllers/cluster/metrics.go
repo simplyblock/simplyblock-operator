@@ -126,7 +126,7 @@ var (
 	// supercluster runs on fewer members than it was built with.
 	superclusterMembers = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "simplyblock_supercluster_members",
+			Name: "simplyblock_supercluster_member_count",
 			Help: "Members of a supercluster by state: eligible, cordoned (placement disabled), or notServing.",
 		},
 		[]string{"supercluster", "state"},
