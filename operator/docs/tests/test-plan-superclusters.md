@@ -43,17 +43,17 @@ groups below.
 
 File: `operator/internal/controllers/cluster/supercluster_rollup_test.go`
 
-| #    | Scenario                                                                                                          | Type     | Test |
-|------|-------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-01 | Every member `Online` rolls up to `Online`                                                                        | Positive | —    |
-| U-02 | One member `Degraded`, the rest `Online`, rolls up to `Degraded`                                                  | Positive | —    |
-| U-03 | One member `Rebalancing` rolls up to `Degraded`, not `Rebalancing`                                                | Positive | —    |
-| U-04 | One member `Unavailable` while another serves rolls up to `Degraded`                                              | Positive | —    |
-| U-05 | No member serving, at least one `Suspended`, with none `Unavailable`, rolls up to `Suspended`                     | Positive | —    |
-| U-06 | No member serving, one `Unavailable`, rolls up to `Unavailable`                                                   | Negative | —    |
-| U-07 | One member unresolved, or still `Pending` or `Creating`, rolls up to `Provisioning`                               | Boundary | —    |
-| U-08 | `maxFaultTolerance` is the lowest among members, and unset when any member reports none                           | Boundary | —    |
-| U-09 | Capacity sums the members' readings, and a member with no reading contributes nothing rather than zeroing the sum | Boundary | —    |
+| #    | Scenario                                                                                                          | Type     | Test                                                   |
+|------|-------------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------------|
+| U-01 | Every member `Online` rolls up to `Online`                                                                        | Positive | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
+| U-02 | One member `Degraded`, the rest `Online`, rolls up to `Degraded`                                                  | Positive | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
+| U-03 | One member `Rebalancing` rolls up to `Degraded`, not `Rebalancing`                                                | Positive | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
+| U-04 | One member `Unavailable` while another serves rolls up to `Degraded`                                              | Positive | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
+| U-05 | No member serving, at least one `Suspended`, with none `Unavailable`, rolls up to `Suspended`                     | Positive | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
+| U-06 | No member serving, one `Unavailable`, rolls up to `Unavailable`                                                   | Negative | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
+| U-07 | One member unresolved, or still `Pending` or `Creating`, rolls up to `Provisioning`                               | Boundary | `TestTheSuperclusterPhaseRollsUpFromItsMembers`        |
+| U-08 | `maxFaultTolerance` is the lowest among members, and unset when any member reports none                           | Boundary | `TestTheSuperclusterFaultToleranceIsItsWeakestMembers` |
+| U-09 | Capacity sums the members' readings, and a member with no reading contributes nothing rather than zeroing the sum | Boundary | `TestTheSuperclusterCapacitySumsTheMembersReadings`    |
 
 ### Member Derivation and Naming (design §5.1, §5.2)
 
@@ -87,34 +87,36 @@ File: `atlas-lib/kube/names_test.go` and
 
 ### Admission (design §4.2, §4.4, §6.2)
 
-File: `operator/internal/webhook/storagecluster_validator_test.go`
+File: `operator/internal/webhook/storagecluster_validator_test.go`, the supercluster rules in
+`storagecluster_supercluster_validator_test.go`, and the CEL rules in
+`operator/internal/controllers/cluster/supercluster_cel_test.go`
 
-| #        | Scenario                                                                                                                                                                                          | Type                | Test                                                |
-|----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|-----------------------------------------------------|
-| U-25     | The first cluster of a namespace is admitted                                                                                                                                                      | Positive            | `TestTheFirstClusterOfANamespaceIsAdmitted`         |
-| ~~U-26~~ | ~~A second standalone cluster in one namespace is refused~~ superseded by U-138: the one-cluster-per-namespace rule is removed (design §4.4)                                                      | Negative            | —                                                   |
-| U-27     | A cluster beside one in another namespace is admitted                                                                                                                                             | Positive            | `TestAClusterIsAdmittedBesideOneInAnotherNamespace` |
-| U-28     | Updating the only cluster is admitted                                                                                                                                                             | Positive            | `TestUpdatingTheOnlyClusterIsAdmitted`              |
-| ~~U-29~~ | ~~A supercluster whose members all resolve in its namespace is admitted~~ superseded by U-139: membership is declared by the member (design §4.1)                                                 | Positive            | —                                                   |
-| ~~U-30~~ | ~~A supercluster naming a member that does not exist is refused, naming it~~ superseded by U-140: membership is declared by the member (design §4.1)                                              | Negative            | —                                                   |
-| ~~U-31~~ | ~~A supercluster naming a member in another namespace is refused~~ superseded by U-140: membership is declared by the member (design §4.1)                                                        | Negative            | —                                                   |
-| ~~U-32~~ | ~~A supercluster naming another supercluster as a member is refused~~ superseded by U-141: membership is declared by the member (design §4.1)                                                     | Negative            | —                                                   |
-| ~~U-33~~ | ~~A supercluster naming a member another supercluster lists is refused~~ superseded by U-144: membership is declared by the member (design §4.1)                                                  | Negative            | —                                                   |
-| U-34     | Members on different `ControlPlane` objects are refused                                                                                                                                           | Negative            | —                                                   |
-| ~~U-35~~ | ~~An aggregate of one member is refused, of two is admitted~~ superseded by U-142: a supercluster has no member minimum (design §4.3)                                                             | Boundary            | —                                                   |
-| U-36     | A supercluster carrying `vcpuCount` or `stripe` is refused, naming the field                                                                                                                      | Negative            | —                                                   |
-| U-37     | A standalone cluster without `maxSubsystemCount` or `vcpuCount` is refused                                                                                                                        | Negative            | —                                                   |
-| U-181    | A supercluster carrying every defaulted spec field at its schema default is admitted, and the defaults are read from the generated CRD schema                                                     | Positive            | —                                                   |
-| U-182    | A supercluster carrying `nvmfBasePort: 4421` is refused, naming the field                                                                                                                         | Negative            | —                                                   |
-| ~~U-38~~ | ~~`placement` on a standalone cluster is refused~~ superseded by U-143: placement moved into `spec.supercluster` (design §4.1)                                                                    | Negative            | —                                                   |
-| ~~U-39~~ | ~~Adding `aggregate` to a standalone cluster, or removing it from a supercluster, is refused~~ superseded by U-144: membership is declared by the member (design §4.1)                            | Negative            | —                                                   |
-| ~~U-40~~ | ~~Appending an aggregate entry is admitted~~ superseded by U-144: membership is declared by the member (design §4.1)                                                                              | Positive            | —                                                   |
-| ~~U-41~~ | ~~Removing an entry whose member's pools report bound volumes is refused~~ superseded by U-145: a member leaves through `RemoveMember` (design §8.4)                                              | Negative            | —                                                   |
-| ~~U-42~~ | ~~Removing an entry whose member holds no volumes is admitted~~ superseded by U-145: a member leaves through `RemoveMember` (design §8.4)                                                         | Positive            | —                                                   |
-| ~~U-43~~ | ~~Deleting a cluster an aggregate lists is refused~~ superseded by U-145: a member leaves through `RemoveMember` (design §8.4)                                                                    | Negative            | —                                                   |
-| ~~U-44~~ | ~~A standalone cluster created beside a supercluster is refused~~ superseded by U-138: the one-cluster-per-namespace rule is removed (design §4.4)                                                | Negative            | —                                                   |
-| ~~U-45~~ | ~~A member created before its supercluster is admitted when an approved document names it, refused otherwise~~ superseded by U-146: the supercluster is created first (design §5.4)               | Positive + Negative | —                                                   |
-| ~~U-46~~ | ~~A member created while a concurrent aggregate edit lists it under a second supercluster is refused on the member side~~ superseded by U-144: membership is declared by the member (design §4.1) | Negative            | —                                                   |
+| #        | Scenario                                                                                                                                                                                          | Type                | Test                                                     |
+|----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|----------------------------------------------------------|
+| U-25     | The first cluster of a namespace is admitted                                                                                                                                                      | Positive            | `TestTheFirstClusterOfANamespaceIsAdmitted`              |
+| ~~U-26~~ | ~~A second standalone cluster in one namespace is refused~~ superseded by U-138: the one-cluster-per-namespace rule is removed (design §4.4)                                                      | Negative            | —                                                        |
+| U-27     | A cluster beside one in another namespace is admitted                                                                                                                                             | Positive            | `TestAClusterIsAdmittedBesideOneInAnotherNamespace`      |
+| U-28     | Updating the only cluster is admitted                                                                                                                                                             | Positive            | `TestUpdatingTheOnlyClusterIsAdmitted`                   |
+| ~~U-29~~ | ~~A supercluster whose members all resolve in its namespace is admitted~~ superseded by U-139: membership is declared by the member (design §4.1)                                                 | Positive            | —                                                        |
+| ~~U-30~~ | ~~A supercluster naming a member that does not exist is refused, naming it~~ superseded by U-140: membership is declared by the member (design §4.1)                                              | Negative            | —                                                        |
+| ~~U-31~~ | ~~A supercluster naming a member in another namespace is refused~~ superseded by U-140: membership is declared by the member (design §4.1)                                                        | Negative            | —                                                        |
+| ~~U-32~~ | ~~A supercluster naming another supercluster as a member is refused~~ superseded by U-141: membership is declared by the member (design §4.1)                                                     | Negative            | —                                                        |
+| ~~U-33~~ | ~~A supercluster naming a member another supercluster lists is refused~~ superseded by U-144: membership is declared by the member (design §4.1)                                                  | Negative            | —                                                        |
+| U-34     | Members on different `ControlPlane` objects are refused                                                                                                                                           | Negative            | —                                                        |
+| ~~U-35~~ | ~~An aggregate of one member is refused, of two is admitted~~ superseded by U-142: a supercluster has no member minimum (design §4.3)                                                             | Boundary            | —                                                        |
+| U-36     | A supercluster carrying `vcpuCount` or `stripe` is refused, naming the field                                                                                                                      | Negative            | `TestASuperclusterCarryingSizingIsRefusedNamingTheField` |
+| U-37     | A standalone cluster without `maxSubsystemCount` or `vcpuCount` is refused                                                                                                                        | Negative            | `TestSuperclusterCELCreateRules`                         |
+| U-181    | A supercluster carrying every defaulted spec field at its schema default is admitted, and the defaults are read from the generated CRD schema                                                     | Positive            | `TestASuperclusterAtItsSchemaDefaultsIsAdmitted`         |
+| U-182    | A supercluster carrying `nvmfBasePort: 4421` is refused, naming the field                                                                                                                         | Negative            | `TestASuperclusterWithAPortOffItsDefaultIsRefused`       |
+| ~~U-38~~ | ~~`placement` on a standalone cluster is refused~~ superseded by U-143: placement moved into `spec.supercluster` (design §4.1)                                                                    | Negative            | —                                                        |
+| ~~U-39~~ | ~~Adding `aggregate` to a standalone cluster, or removing it from a supercluster, is refused~~ superseded by U-144: membership is declared by the member (design §4.1)                            | Negative            | —                                                        |
+| ~~U-40~~ | ~~Appending an aggregate entry is admitted~~ superseded by U-144: membership is declared by the member (design §4.1)                                                                              | Positive            | —                                                        |
+| ~~U-41~~ | ~~Removing an entry whose member's pools report bound volumes is refused~~ superseded by U-145: a member leaves through `RemoveMember` (design §8.4)                                              | Negative            | —                                                        |
+| ~~U-42~~ | ~~Removing an entry whose member holds no volumes is admitted~~ superseded by U-145: a member leaves through `RemoveMember` (design §8.4)                                                         | Positive            | —                                                        |
+| ~~U-43~~ | ~~Deleting a cluster an aggregate lists is refused~~ superseded by U-145: a member leaves through `RemoveMember` (design §8.4)                                                                    | Negative            | —                                                        |
+| ~~U-44~~ | ~~A standalone cluster created beside a supercluster is refused~~ superseded by U-138: the one-cluster-per-namespace rule is removed (design §4.4)                                                | Negative            | —                                                        |
+| ~~U-45~~ | ~~A member created before its supercluster is admitted when an approved document names it, refused otherwise~~ superseded by U-146: the supercluster is created first (design §5.4)               | Positive + Negative | —                                                        |
+| ~~U-46~~ | ~~A member created while a concurrent aggregate edit lists it under a second supercluster is refused on the member side~~ superseded by U-144: membership is declared by the member (design §4.1) | Negative            | —                                                        |
 
 ### Member Selection (design §7.2, §7.3, §9.3)
 
@@ -242,12 +244,12 @@ File: `operator/internal/discovery/topology_test.go`, and
 File: `operator/internal/utils/objects_test.go`, and
 `csi-driver/internal/csi/controller/placement_aggregate_test.go` for U-112 and U-113
 
-| #     | Scenario                                                                                                                            | Type     | Test |
-|-------|-------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-112 | A class whose `cluster_id` names no cluster in the secret calls `Place`, and one naming a member's UUID never calls it              | Positive | —    |
-| U-113 | `Place` for an identifier naming no supercluster returns `NotFound`, which the driver returns as `InvalidArgument` naming the class | Negative | —    |
-| U-114 | A supercluster's `status.uuid` is its `metadata.uid`                                                                                | Positive | —    |
-| U-115 | `ResolveClusterUUID` on a supercluster returns `ErrAggregateCluster`, and the mock control plane receives no call                   | Negative | —    |
+| #     | Scenario                                                                                                                            | Type     | Test                                               |
+|-------|-------------------------------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------|
+| U-112 | A class whose `cluster_id` names no cluster in the secret calls `Place`, and one naming a member's UUID never calls it              | Positive | —                                                  |
+| U-113 | `Place` for an identifier naming no supercluster returns `NotFound`, which the driver returns as `InvalidArgument` naming the class | Negative | —                                                  |
+| U-114 | A supercluster's `status.uuid` is its `metadata.uid`                                                                                | Positive | `TestASuperclusterOfTwoOnlineMembersReportsOnline` |
+| U-115 | `ResolveClusterUUID` on a supercluster returns `ErrAggregateCluster`, and the mock control plane receives no call                   | Negative | `TestResolvingASuperclusterIsRefused`              |
 
 ### Chain Resolution for Controller Calls (design §8.3)
 
@@ -332,19 +334,47 @@ File: `atlas-lib/kube/names_test.go` and
 
 ### Membership Admission (design §4.1, §4.4)
 
-File: `operator/internal/webhook/storagecluster_validator_test.go`
+File: `operator/internal/webhook/storagecluster_validator_test.go`, the supercluster rules in
+`storagecluster_supercluster_validator_test.go`, and the CEL rules in
+`operator/internal/controllers/cluster/supercluster_cel_test.go`
 
-| #     | Scenario                                                                                                                                                                        | Type                | Test |
-|-------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|------|
-| U-138 | A second standalone cluster in one namespace is admitted                                                                                                                        | Positive            | —    |
-| U-139 | A member whose `superclusterRef` names a supercluster in its namespace is admitted                                                                                              | Positive            | —    |
-| U-140 | A `superclusterRef` naming nothing, a standalone cluster, or a supercluster in another namespace is refused                                                                     | Negative            | —    |
-| U-141 | A cluster carrying both `supercluster` and `superclusterRef` is refused                                                                                                         | Negative            | —    |
-| U-142 | A supercluster with no members is admitted and reports `Provisioning`                                                                                                           | Boundary            | —    |
-| U-143 | `disablePlacement` on a cluster that is not a member is refused                                                                                                                 | Negative            | —    |
-| U-144 | Adding or removing `supercluster`, and adding, changing, or removing `superclusterRef`, after creation is refused                                                               | Negative            | —    |
-| U-145 | Deleting a supercluster with members is refused, deleting a member whose pools report bound volumes is refused outside `RemoveMember`, and deleting an empty member is admitted | Positive + Negative | —    |
-| U-146 | A member created before its supercluster is refused                                                                                                                             | Negative            | —    |
+| #     | Scenario                                                                                                                                                                        | Type                | Test                                                                |
+|-------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|---------------------------------------------------------------------|
+| U-138 | A second standalone cluster in one namespace is admitted                                                                                                                        | Positive            | —                                                                   |
+| U-139 | A member whose `superclusterRef` names a supercluster in its namespace is admitted                                                                                              | Positive            | `TestAMemberNamingASuperclusterInItsNamespaceIsAdmitted`            |
+| U-140 | A `superclusterRef` naming nothing, a standalone cluster, or a supercluster in another namespace is refused                                                                     | Negative            | `TestAMemberWhoseSuperclusterDoesNotResolveIsRefused`               |
+| U-141 | A cluster carrying both `supercluster` and `superclusterRef` is refused                                                                                                         | Negative            | `TestSuperclusterCELCreateRules`                                    |
+| U-142 | A supercluster with no members is admitted and reports `Provisioning`                                                                                                           | Boundary            | `TestASuperclusterWithNoMembersIsAdmitted`                          |
+| U-143 | `disablePlacement` on a cluster that is not a member is refused                                                                                                                 | Negative            | `TestSuperclusterCELCreateRules`                                    |
+| U-144 | Adding or removing `supercluster`, and adding, changing, or removing `superclusterRef`, after creation is refused                                                               | Negative            | `TestSuperclusterCELRoleIsFixedAtCreation`                          |
+| U-145 | Deleting a supercluster with members is refused, deleting a member whose pools report bound volumes is refused outside `RemoveMember`, and deleting an empty member is admitted | Positive + Negative | `TestDeletingASuperclusterWithMembersIsRefused` (supercluster half) |
+| U-146 | A member created before its supercluster is refused                                                                                                                             | Negative            | `TestAMemberWhoseSuperclusterDoesNotResolveIsRefused`               |
+
+### Supercluster Reconciler (design §10.1, §13)
+
+File: `operator/internal/controllers/cluster/supercluster_controller_test.go`, and
+`storagecluster_controller_test.go` for U-202
+
+| #     | Scenario                                                                                                                    | Type     | Test                                               |
+|-------|-----------------------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------|
+| U-199 | The newest of the capacity endpoint's dated samples is the reading, an empty list is no reading, and a non-list is an error | Boundary | `TestTheNewestCapacitySampleIsTheReading`          |
+| U-200 | A member's capacity is read with that member's own recorded secret                                                          | Positive | `TestAMembersCapacityIsReadAsTheMember`            |
+| U-201 | A member joining is announced with `MemberAdded` on the pass that first sees it, and not again                              | Positive | `TestAMemberJoiningIsAnnouncedOnce`                |
+| U-202 | `StorageClusterReconciler` leaves a supercluster alone: no finalizer, no creation step, and no call to the control plane    | Negative | `TestTheClusterReconcilerLeavesASuperclusterAlone` |
+
+### Refusals Until a Later Phase (design §7.1, §9.6, §15)
+
+File: `operator/internal/webhook/storagecluster_supercluster_validator_test.go`,
+`storagepool_validator_test.go`,
+`operator/internal/controllers/cluster/storageclusterops_controller_test.go`, and
+`operator/api/v1alpha1/storagecluster_conversion_test.go` for U-198
+
+| #     | Scenario                                                                                                                                                                       | Type     | Test                                                                |
+|-------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|---------------------------------------------------------------------|
+| U-195 | A supercluster is admitted beside the one cluster with a storage-node workload in its namespace, and so is that cluster's first member, while a second such cluster is refused | Positive | `TestASuperclusterSharesANamespaceWithAWorkloadCluster`             |
+| U-196 | A `StoragePool` naming a supercluster is refused until pools fan out, and the refusal names the members as what a pool may name                                                | Negative | `TestAPoolOnASuperclusterIsRefusedUntilPoolsFanOut`                 |
+| U-197 | A `StorageClusterOps` on a supercluster fails before any control-plane call until the fan-out walk exists                                                                      | Negative | `TestAnOperationOnASuperclusterFailsWithoutReachingTheControlPlane` |
+| U-198 | A supercluster and a member written through v1alpha1 keep `spec.supercluster`, `superclusterRef`, `disablePlacement`, and the rollup status                                    | Positive | `TestStorageClusterSuperclusterFieldsSurviveTheHub`                 |
 
 ### Placement Service (design §7.2, §7.3)
 
@@ -382,19 +412,19 @@ server and a real Kubernetes API through `envtest`.
 
 ### Supercluster Reconcile (design §10.1)
 
-| #        | Scenario                                                                                                                                                                        | Type     | Test |
-|----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| I-01     | A supercluster of two online members reports `Online`, both members eligible, and `observedGeneration`                                                                          | Positive | —    |
-| I-02     | Each member reports `role: PlacementGroup` and `superclusterRef`, and an unrelated cluster `Standalone`                                                                         | Positive | —    |
-| I-03     | A member going `Unavailable` makes the supercluster `Degraded`, drops the member from placement, and emits `MemberPlacementChanged`                                             | Positive | —    |
-| ~~I-04~~ | ~~A missing member is reported `Pending` with `MemberNotFound`, and the other member is still read~~ superseded by U-140: membership is declared by the member (design §4.1)    | Negative | —    |
-| ~~I-05~~ | ~~The secret gains an `aggregates` entry, and the `clusters` entries the cluster controller wrote are untouched~~ superseded by I-53: placement is the operator's (design §7.2) | Positive | —    |
-| ~~I-06~~ | ~~Setting `disablePlacement` flips the member's `placement` in the secret~~ superseded by I-54: placement is the operator's (design §7.2)                                       | Positive | —    |
-| I-07     | The capacity endpoint returning 5xx keeps the last reading and requeues                                                                                                         | Negative | —    |
-| I-08     | The volume rebalancer and the arbitration controller never reconcile the supercluster                                                                                           | Negative | —    |
-| ~~I-09~~ | ~~Two superclusters in two namespaces write two entries and never read each other's members~~ superseded by I-55: placement is the operator's (design §7.2)                     | Positive | —    |
-| I-10     | Crossing the combined warning threshold emits `AggregateCapacityThreshold` once                                                                                                 | Boundary | —    |
-| ~~I-11~~ | ~~A reconcile with nothing changed issues no status write and no secret write~~ superseded by I-56: placement is the operator's (design §7.2)                                   | Negative | —    |
+| #        | Scenario                                                                                                                                                                        | Type     | Test                                                                                             |
+|----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------------------------------------------------------|
+| I-01     | A supercluster of two online members reports `Online`, both members eligible, and `observedGeneration`                                                                          | Positive | `TestASuperclusterOfTwoOnlineMembersReportsOnline`                                               |
+| I-02     | Each member reports `role: PlacementGroup` and `superclusterRef`, and an unrelated cluster `Standalone`                                                                         | Positive | `TestAnOrdinaryClusterReportsItsRole`                                                            |
+| I-03     | A member going `Unavailable` makes the supercluster `Degraded`, drops the member from placement, and emits `MemberPlacementChanged`                                             | Positive | `TestAMemberGoingUnavailableDegradesTheSuperclusterAndLeavesPlacement`                           |
+| ~~I-04~~ | ~~A missing member is reported `Pending` with `MemberNotFound`, and the other member is still read~~ superseded by U-140: membership is declared by the member (design §4.1)    | Negative | —                                                                                                |
+| ~~I-05~~ | ~~The secret gains an `aggregates` entry, and the `clusters` entries the cluster controller wrote are untouched~~ superseded by I-53: placement is the operator's (design §7.2) | Positive | —                                                                                                |
+| ~~I-06~~ | ~~Setting `disablePlacement` flips the member's `placement` in the secret~~ superseded by I-54: placement is the operator's (design §7.2)                                       | Positive | —                                                                                                |
+| I-07     | The capacity endpoint returning 5xx keeps the last reading and requeues                                                                                                         | Negative | `TestAFailedCapacityReadKeepsTheLastReading`                                                     |
+| I-08     | The volume rebalancer and the arbitration controller never reconcile the supercluster                                                                                           | Negative | `TestReconcile_TheRebalancerNeverActsOnASupercluster`, `TestArbitrationLeavesASuperclusterAlone` |
+| ~~I-09~~ | ~~Two superclusters in two namespaces write two entries and never read each other's members~~ superseded by I-55: placement is the operator's (design §7.2)                     | Positive | —                                                                                                |
+| I-10     | Crossing the combined warning threshold emits `AggregateCapacityThreshold` once                                                                                                 | Boundary | `TestTheCombinedCapacityCrossingAThresholdIsAnnouncedOnce`                                       |
+| ~~I-11~~ | ~~A reconcile with nothing changed issues no status write and no secret write~~ superseded by I-56: placement is the operator's (design §7.2)                                   | Negative | —                                                                                                |
 
 ### Expansion (design §5.3, §5.4)
 
@@ -557,27 +587,32 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 157       | 4       | all others  |
-| Integration | 55        | 0       | all of them |
+| Unit        | 165       | 35      | all others  |
+| Integration | 55        | 6       | all others  |
 | E2E         | 10        | 0       | E-01 … E-10 |
 | Manual      | 2         | 0       | M-01, M-02  |
 
-The four covered unit rows are existing tests of behavior this design keeps:
-U-25, U-27, U-28, and U-81. The counts exclude struck rows, each superseded by
+Four covered unit rows are existing tests of behavior this design keeps: U-25,
+U-27, U-28, and U-81. The rest, and the six integration rows, are Phase 1's
+first iteration: the API, admission, the supercluster reconciler, and the
+refusals of U-195 to U-198. The counts exclude struck rows, each superseded by
 the row its strike names: U-10 … U-18, U-20 … U-23, U-26, U-29 … U-33, U-35, U-38 … U-46, U-55 … U-57, U-77, U-79, U-122, U-129 … U-130, and I-04 … I-06, I-09, I-11 … I-12, I-14, I-17 … I-20, I-26, I-28 … I-30, I-34, I-37, I-40 … I-41, I-43, I-46, I-52.
 
 ---
 
 ## 7. What Is Not Yet Covered
 
-| #                                                                                                                                                        | Gap                                               | Reason                                                                                                   |
-|----------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------|----------------------------------------------------------------------------------------------------------|
-| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-194                                            | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                                  |
-| I-01 … I-03, I-07 … I-08, I-10, I-13, I-15 … I-16, I-21 … I-25, I-27, I-31 … I-33, I-35 … I-36, I-38 … I-39, I-42, I-44 … I-45, I-47 … I-51, I-53 … I-77 | Every integration scenario                        | Feature not implemented (Phases 1 to 5)                                                                  |
-| E-01 … E-05, E-09                                                                                                                                        | Live supercluster, placement, and discovery split | Feature not implemented (Phases 1 and 2)                                                                 |
-| E-06 … E-08, E-10                                                                                                                                        | Live relocation and member removal                | Feature not implemented (Phases 3 and 4)                                                                 |
-| M-01, M-02                                                                                                                                               | Failure injection                                 | Needs node power control and selective network blocking                                                  |
-| —                                                                                                                                                        | Many members on a live control plane              | No lab of that size. Placement and roll-up are covered by fixtures                                       |
-| —                                                                                                                                                        | A live cluster stretched over two regions         | No such lab. U-105, U-107, and U-109 cover the decisions                                                 |
-| —                                                                                                                                                        | Five-node and unequal-size members                | Placement does not read node count, and capacity fixtures in U-47 and U-48 cover it                      |
-| —                                                                                                                                                        | Restart mid-removal                               | Removal resumes through its children, each covered by I-71 … I-75. A dedicated row is added with Phase 4 |
+| #                                                                                                                          | Gap                                                              | Reason                                                                                                                                                                      |
+|----------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| U-19, U-24, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-113, U-116 … U-128, U-131 … U-138, U-147 … U-180, U-183 … U-194 | The remaining unit scenarios                                     | Feature not implemented (rest of Phase 1, Phases 2 to 5)                                                                                                                    |
+| U-34                                                                                                                       | Members on different `ControlPlane` objects                      | A `StorageCluster` names no `ControlPlane`: one operator reaches one control plane, so every member shares it. The rule is needed once a cluster can name its control plane |
+| U-145 (member half)                                                                                                        | Deleting a member whose pools report bound volumes               | Pools report no bound volumes yet. The rule arrives with `RemoveMember` (Phase 4)                                                                                           |
+| I-01 … I-03, I-07 … I-08, I-10                                                                                             | Run against the fake client, pass by pass, rather than `envtest` | The reconcile is covered. A run of the manager's watches and field index against `envtest` is not                                                                           |
+| I-13, I-15 … I-16, I-21 … I-25, I-27, I-31 … I-33, I-35 … I-36, I-38 … I-39, I-42, I-44 … I-45, I-47 … I-51, I-53 … I-77   | The remaining integration scenarios                              | Feature not implemented (rest of Phase 1, Phases 2 to 5)                                                                                                                    |
+| E-01 … E-05, E-09                                                                                                          | Live supercluster, placement, and discovery split                | Feature not implemented (Phases 1 and 2)                                                                                                                                    |
+| E-06 … E-08, E-10                                                                                                          | Live relocation and member removal                               | Feature not implemented (Phases 3 and 4)                                                                                                                                    |
+| M-01, M-02                                                                                                                 | Failure injection                                                | Needs node power control and selective network blocking                                                                                                                     |
+| —                                                                                                                          | Many members on a live control plane                             | No lab of that size. Placement and roll-up are covered by fixtures                                                                                                          |
+| —                                                                                                                          | A live cluster stretched over two regions                        | No such lab. U-105, U-107, and U-109 cover the decisions                                                                                                                    |
+| —                                                                                                                          | Five-node and unequal-size members                               | Placement does not read node count, and capacity fixtures in U-47 and U-48 cover it                                                                                         |
+| —                                                                                                                          | Restart mid-removal                                              | Removal resumes through its children, each covered by I-71 … I-75. A dedicated row is added with Phase 4                                                                    |

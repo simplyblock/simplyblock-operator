@@ -10,13 +10,25 @@
 
 ## Phasing Overview
 
-| Phase                   | Status  | Scope                                                                                                                              | Blocked by                                                                                                           |
-|-------------------------|---------|------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
-| **Phase 1** (§4–§6)     | Planned | Superclusters and members on `StorageCluster`, per-cluster workload names, the shared certificate, and expansion from a deployment | Superclusters and a second standalone cluster in a namespace: P0-4. Workers shared between members: P0-3 and §16 Q11 |
-| **Phase 2** (§7)        | Planned | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver                                 | IOPS and throughput ceilings: P0-5                                                                                   |
-| **Phase 3** (§8.1–§8.3) | Planned | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —                                                                                                                    |
-| **Phase 4** (§8.4)      | Planned | `StorageClusterOps` action `RemoveMember`: a member's volumes moved into the others, then the member deleted                       | Phase 3                                                                                                              |
-| **Phase 5** (§7.5)      | Planned | Pool QoS ceilings shared across members by demand rather than split evenly                                                         | Phase 2, P0-5                                                                                                        |
+| Phase                   | Status      | Scope                                                                                                                              | Blocked by                                                                                                           |
+|-------------------------|-------------|------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| **Phase 1** (§4–§6)     | In progress | Superclusters and members on `StorageCluster`, per-cluster workload names, the shared certificate, and expansion from a deployment | Superclusters and a second standalone cluster in a namespace: P0-4. Workers shared between members: P0-3 and §16 Q11 |
+| **Phase 2** (§7)        | Planned     | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver                                 | IOPS and throughput ceilings: P0-5                                                                                   |
+| **Phase 3** (§8.1–§8.3) | Planned     | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —                                                                                                                    |
+| **Phase 4** (§8.4)      | Planned     | `StorageClusterOps` action `RemoveMember`: a member's volumes moved into the others, then the member deleted                       | Phase 3                                                                                                              |
+| **Phase 5** (§7.5)      | Planned     | Pool QoS ceilings shared across members by demand rather than split evenly                                                         | Phase 2, P0-5                                                                                                        |
+
+**Phase 1 in place:** the API of §4.1 and its status (§4.3), the admission rules
+of §4.2 and §4.4 except the deletion of a member holding volumes, the
+supercluster reconciler with its roll-up, events, and two gauges (§10.1, §13),
+`status.role` on every cluster, `ErrAggregateCluster` from the resolver (§15),
+and the predicates that keep the rebalancer and arbitration off a supercluster
+(§10.3). Until the rest of Phase 1 lands, three rules hold in its place. The
+one-cluster-per-namespace rule holds for clusters that carry a storage-node
+workload, which a supercluster does not, because workload names (§6.1) wait on
+P0-4. A `StoragePool` naming a supercluster is refused at admission until pools
+fan out (§7.1). A `StorageClusterOps` on a supercluster fails before any
+control-plane call until the walk of §9.6 exists.
 
 Each phase ships on its own. Phase 1 produces a supercluster that reports one
 status and lets an administrator name the members directly, which is already
@@ -1561,7 +1573,7 @@ it answers `ResourceExhausted`, rate-limited to one per minute per supercluster.
 
 | Metric                                                | Labels                              | Description                                                            |
 |-------------------------------------------------------|-------------------------------------|------------------------------------------------------------------------|
-| `simplyblock_supercluster_members`                    | `supercluster`, `state`             | Gauge of members by `eligible`, `cordoned`, `notServing`, `missing`    |
+| `simplyblock_supercluster_member_count`               | `supercluster`, `state`             | Gauge of members by `eligible`, `cordoned`, `notServing`, `missing`    |
 | `simplyblock_supercluster_capacity_bytes`             | `supercluster`, `kind`              | Gauge of combined `total`, `used`, and `provisioned` bytes             |
 | `simplyblock_supercluster_placement_decisions_total`  | `supercluster`, `cluster`, `result` | Counter of `CreateVolume` placements by chosen member, or `exhausted`  |
 | `simplyblock_supercluster_placement_duration_seconds` | `supercluster`                      | Histogram of member selection time, lookup and capacity reads included |
@@ -1578,7 +1590,7 @@ volume while another sits empty is a strategy or a capacity-reading problem, and
 nothing else shows it. `simplyblock_supercluster_placement_duration_seconds` is the alert
 for a slow member, because the name lookup in every member sits on the
 `CreateVolume` path and one slow member slows every provision. The `notServing`
-series of `simplyblock_supercluster_members` is the alert that a supercluster is
+series of `simplyblock_supercluster_member_count` is the alert that a supercluster is
 running on fewer members than it was built with.
 
 ---
