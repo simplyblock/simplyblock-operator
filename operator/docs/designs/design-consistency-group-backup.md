@@ -269,7 +269,7 @@ type BackupGroup struct {
 }
 ```
 
-`status.source.group` carries it, in the source group that is written once and never updated (`design-storagebackup.md` §5.2). A label `storage.simplyblock.io/group-backup-id` on each member `StorageBackup` makes "the members of this group backup" a selector, which is what a group restore addresses (§7.3). No new object represents the group; the group is the set of member `StorageBackup`s sharing the id, the same way a generation is the set of member snapshots sharing `(group_id, group_seq)` in the control plane.
+`status.source.group` carries it, in the source group that is written once and never updated (`design-storagebackup.md` §5.2), with one addition allowed: the group identity itself, because the control plane writes a member backup first and attaches it to its group backup in a second write, so the mirror's first event has no group to freeze. A label `storage.simplyblock.io/group-backup-id` on each member `StorageBackup` makes "the members of this group backup" a selector, which is what a group restore addresses (§7.3). The label carries the group backup's bare UUID (`GroupBackupLabelValue`): the control plane's composite `cluster_id/uuid` is not a legal label value, and every writer and selector of the label normalizes through the same function, so an operation may name the group backup in either form. No new object represents the group; the group is the set of member `StorageBackup`s sharing the id, the same way a generation is the set of member snapshots sharing `(group_id, group_seq)` in the control plane.
 
 ### 7.3 `StorageBackupOps{Restore}` restores a group
 

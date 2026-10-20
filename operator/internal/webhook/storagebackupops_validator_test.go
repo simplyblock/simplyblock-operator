@@ -32,7 +32,7 @@ func groupMember(name, groupID string, phase simplyblockv1alpha2.StorageBackupPh
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: backupOpsNamespace,
-			Labels:    map[string]string{simplyblockv1alpha2.BackupLabelGroupBackupID: groupID},
+			Labels:    map[string]string{simplyblockv1alpha2.BackupLabelGroupBackupID: simplyblockv1alpha2.GroupBackupLabelValue(groupID)},
 		},
 		Status: simplyblockv1alpha2.StorageBackupStatus{Phase: phase},
 	}
@@ -109,6 +109,24 @@ func TestGroupRestoreWithHealthyMembersIsAdmitted(t *testing.T) {
 	)
 	if !resp.Allowed {
 		t.Fatalf("a group restore of a complete, healthy group backup was refused: %q", resp.Result.Message)
+	}
+}
+
+// The id may be given bare, as the label carries it, or as the control plane's
+// composite: both resolve the same members.
+func TestGroupRestoreAcceptsTheBareGroupBackupID(t *testing.T) {
+	pool := &simplyblockv1alpha2.StoragePool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool-1", Namespace: backupOpsNamespace},
+	}
+	ops := groupRestoreOps()
+	ops.Spec.GroupBackupID = simplyblockv1alpha2.GroupBackupLabelValue(testGroupBackupID)
+	resp := admitGroupRestore(t, ops,
+		testCluster(),
+		pool,
+		groupMember("member-db", testGroupBackupID, simplyblockv1alpha2.StorageBackupPhaseAvailable),
+	)
+	if !resp.Allowed {
+		t.Fatalf("a group restore naming the bare group backup id was refused: %q", resp.Result.Message)
 	}
 }
 

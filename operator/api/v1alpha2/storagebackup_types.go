@@ -20,6 +20,8 @@
 package v1alpha2
 
 import (
+	"strings"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/simplyblock/atlas/kube"
@@ -50,6 +52,21 @@ const (
 	// single-volume backup. Its value is status.source.group.groupBackupID.
 	BackupLabelGroupBackupID = "storage.simplyblock.io/group-backup-id"
 )
+
+// GroupBackupLabelValue is the value the group-backup-id label carries for a
+// group backup id: the bare UUID. The control plane reports the id as the
+// composite "<cluster_id>/<uuid>", the same shape as its lvol and snapshot ids,
+// and a label value can hold neither the slash nor the 73 characters -- the API
+// server refused every member's label patch, which left the mirror's status
+// writes behind it undone (members stuck Pending with no group block, live
+// 2026-10-20). Every writer and every selector of the label goes through this,
+// so an operation may name the group backup in either form.
+func GroupBackupLabelValue(groupBackupID string) string {
+	if i := strings.LastIndex(groupBackupID, "/"); i >= 0 {
+		return groupBackupID[i+1:]
+	}
+	return groupBackupID
+}
 
 // storageBackupNames derives a StorageBackup object's name from the identifier
 // the store holds the backup under.

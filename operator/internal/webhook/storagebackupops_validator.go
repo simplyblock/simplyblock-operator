@@ -183,7 +183,7 @@ func (v *StorageBackupOpsValidator) groupBackupMustBeRestorable(
 	var members simplyblockv1alpha2.StorageBackupList
 	if err := v.Client.List(ctx, &members,
 		client.InNamespace(ops.Namespace),
-		client.MatchingLabels{simplyblockv1alpha2.BackupLabelGroupBackupID: ops.Spec.GroupBackupID},
+		client.MatchingLabels{simplyblockv1alpha2.BackupLabelGroupBackupID: simplyblockv1alpha2.GroupBackupLabelValue(ops.Spec.GroupBackupID)},
 	); err != nil {
 		errored := admission.Errored(http.StatusInternalServerError, err)
 		return &errored

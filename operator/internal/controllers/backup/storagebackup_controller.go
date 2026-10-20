@@ -396,7 +396,7 @@ func backupLabels(
 		labels[simplyblockv1alpha2.BackupLabelClaim] = taken.ClaimName
 	}
 	if taken.Group != nil && taken.Group.GroupBackupID != "" {
-		labels[simplyblockv1alpha2.BackupLabelGroupBackupID] = taken.Group.GroupBackupID
+		labels[simplyblockv1alpha2.BackupLabelGroupBackupID] = simplyblockv1alpha2.GroupBackupLabelValue(taken.Group.GroupBackupID)
 	}
 	return labels
 }
@@ -452,6 +452,15 @@ func (r *StorageBackupReconciler) writeStatus(
 		// data came from, which is what a restore reads.
 		if desired.Source == nil {
 			desired.Source = &taken
+		} else if desired.Source.Group == nil && taken.Group != nil {
+			// The one addition the write-once rule allows: the group identity.
+			// The control plane writes a member backup first and attaches it to
+			// its group backup in a second write, so the first event the mirror
+			// sees has no group, and a source frozen at that event would never
+			// name one. The group is identity, not placement, and arrives once.
+			source := *desired.Source
+			source.Group = taken.Group
+			desired.Source = &source
 		}
 
 		if reflect.DeepEqual(sb.Status, desired) {

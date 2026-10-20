@@ -49,7 +49,7 @@ func groupMemberBackup(name, memberName string) *simplyblockv1alpha2.StorageBack
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: testNamespace,
-			Labels:    map[string]string{simplyblockv1alpha2.BackupLabelGroupBackupID: testGroupBackupID},
+			Labels:    map[string]string{simplyblockv1alpha2.BackupLabelGroupBackupID: simplyblockv1alpha2.GroupBackupLabelValue(testGroupBackupID)},
 		},
 		Spec: simplyblockv1alpha2.StorageBackupSpec{ClusterRef: testClusterCR},
 		Status: simplyblockv1alpha2.StorageBackupStatus{

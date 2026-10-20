@@ -144,8 +144,59 @@ func TestMirrorRecordsAGroupMemberBackup(t *testing.T) {
 	if group.GroupBackupID != groupBackupID || group.Generation != 7 {
 		t.Errorf("status.source.group = %+v, want group backup %q generation 7", group, groupBackupID)
 	}
-	if got := backup.Labels[simplyblockv1alpha2.BackupLabelGroupBackupID]; got != groupBackupID {
-		t.Errorf("group-backup-id label = %q, want %q", got, groupBackupID)
+	// The label carries the bare uuid: the composite is not a legal label value.
+	if got := backup.Labels[simplyblockv1alpha2.BackupLabelGroupBackupID]; got != "gb-1" {
+		t.Errorf("group-backup-id label = %q, want the bare uuid %q", got, "gb-1")
+	}
+}
+
+// The control plane writes a member backup first and attaches it to its group
+// backup in a second write, so the mirror's first event carries no group. The
+// group must still land: on the later event, into the write-once source, and
+// as the bare-uuid label. Before this, the composite id made the label patch
+// illegal and the reconcile failed before the status write, so the members sat
+// Pending with no group for good (live 2026-10-20).
+func TestMirrorFillsTheGroupOfAMemberReportedBeforeItsGroupID(t *testing.T) {
+	const groupBackupID = "11111111-1111-1111-1111-111111111111/22222222-2222-4222-8222-222222222222"
+	first := reportedBackup()
+	first.Status = cpBackupInProgress
+	cache := syncedCache(first)
+	r := backupMirror(t, cache, testClusterObject(), sourceVolume())
+	if _, err := r.Reconcile(context.Background(), backupRequest()); err != nil {
+		t.Fatalf("first Reconcile: %v", err)
+	}
+
+	var backup simplyblockv1alpha2.StorageBackup
+	if err := r.Get(context.Background(), backupRequest().NamespacedName, &backup); err != nil {
+		t.Fatalf("the mirror created no object: %v", err)
+	}
+	if backup.Source().Group != nil {
+		t.Fatalf("status.source.group = %+v before the group id was reported, want nil", backup.Source().Group)
+	}
+
+	second := reportedBackup()
+	second.GroupBackupID = groupBackupID
+	second.GroupSeq = 3
+	cache.backups[simplyblockv1alpha2.StorageBackupName(second.ID)] = second
+	if _, err := r.Reconcile(context.Background(), backupRequest()); err != nil {
+		t.Fatalf("second Reconcile: %v", err)
+	}
+	if err := r.Get(context.Background(), backupRequest().NamespacedName, &backup); err != nil {
+		t.Fatal(err)
+	}
+	group := backup.Source().Group
+	if group == nil || group.GroupBackupID != groupBackupID || group.Generation != 3 {
+		t.Fatalf("status.source.group = %+v, want group backup %q generation 3 filled in on the later event", group, groupBackupID)
+	}
+	if got := backup.Labels[simplyblockv1alpha2.BackupLabelGroupBackupID]; got != "22222222-2222-4222-8222-222222222222" {
+		t.Errorf("group-backup-id label = %q, want the bare uuid", got)
+	}
+	if backup.Status.Phase != simplyblockv1alpha2.StorageBackupPhaseAvailable {
+		t.Errorf("phase = %q, want Available: the status write must not be lost behind the label", backup.Status.Phase)
+	}
+	// The rest of the source stays as first written.
+	if backup.Source().LvolID != first.LvolID {
+		t.Errorf("status.source.lvolID = %q changed from %q", backup.Source().LvolID, first.LvolID)
 	}
 }
 
