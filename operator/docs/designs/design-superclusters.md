@@ -1110,7 +1110,8 @@ target's paths on every consuming host while the relationship is
     │
     ▼
   Verifying        ← task finished; the relationship names the target as active;
-    │                the original handle resolves through it (§8.3); Jobs deleted
+    │                the original handle resolves through it (§8.3); every moved
+    │                PV marked relocated-to (§8.3); Jobs deleted
     ▼
   phase: Succeeded
 ```
@@ -1158,7 +1159,8 @@ volume. NodeStage walks it when the source volume is gone
 (`redirectToActiveVolume` in `csi-driver/internal/csi/node/stats.go`), the
 replication calls resolve through it (`resolveChain` in
 `csi-driver/internal/csi/controller/replication.go`), and DeleteVolume removes
-the chain it names (`deleteRetiredReplicaChain`).
+the chain's retired members (`deleteRetiredReplicaChain`) but never its active
+volume, which Phase 3 changes for a relocated PV (below).
 
 Four controller calls address the handle directly and fail with not-found once
 the source is deleted: `ControllerExpandVolume`, `CreateSnapshot`, clone from a
@@ -1167,6 +1169,27 @@ through the same chain resolution, so a relocated volume behaves like a
 failed-over one for every call. The resolution moves to `atlas-lib/controlplane`,
 because the operator's `Verifying` step asserts the same mapping the driver
 follows, and two copies of a chain walk are two answers to where a volume is.
+
+**DeleteVolume deletes the destination only of a PV marked as relocated.**
+`deleteRetiredReplicaChain` never deletes the relationship's active volume
+through a stale handle, because after a disaster-recovery fail-over a PV in
+another Kubernetes cluster carries the same handle and runs on that volume. A
+relocated PV's handle is stale in the same way, so without a further signal its
+deletion leaks the destination. The relationship cannot supply the signal: its
+`mode` is `migration` for a `ReplicationOps` migration between sites as well, so
+it does not prove that no second PV names the handle.
+
+`Verifying` writes the annotation `storage.simplyblock.io/relocated-to`, holding
+the destination's handle, on every PV the operation moved, through the PV
+`patch` the `PersistentVolumeOps` controller already holds. A later relocation
+of the same PV overwrites it. DeleteVolume runs while the PV still exists,
+because the external-provisioner deletes the PV only after the call succeeds, so
+the driver reads the mark from its PV informer
+(`csi-driver/internal/kubernetes/manager.go`). When the chain's active volume is
+the volume the mark names, the driver deletes it with the retired members. A PV
+without the mark, or with a mark naming another volume, keeps the safeguard
+unchanged: the failure is a leaked destination, never a deleted volume another
+cluster runs on.
 
 ### 8.4 Removing a member (Phase 4)
 
@@ -1420,10 +1443,12 @@ Placements for one supercluster are serialized in the operator, so two concurren
 
 No new verbs. Every resource the new controller reads or writes
 (`storageclusters`, `storageclusters/status`, `storagepools`, `nodes` for their
-topology labels, `persistentvolumeclaims` for the placement record of §7.3, and
+topology labels, `persistentvolumeclaims` for the placement record of §7.3,
+`persistentvolumes` for the relocation mark of §8.3, and
 the Services, Certificates, and Secrets of §6.2, which the workload controller
 already creates) is already granted to the manager. The PVC `patch` verb comes
-from `persistentvolumeclaim_controller.go`.
+from `persistentvolumeclaim_controller.go`, and the PV `patch` verb from
+`persistentvolumeops_controller.go`.
 
 ---
 

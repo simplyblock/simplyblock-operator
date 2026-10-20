@@ -259,6 +259,9 @@ File: `atlas-lib/controlplane/chain_test.go` and
 | U-116 | Expand, snapshot, clone from a volume, publish, and unpublish on a relocated volume's original handle reach the target through the relationship | Positive | —    |
 | U-117 | A handle whose source volume still exists is not redirected, and the relationship endpoint is not called                                        | Negative | —    |
 | U-118 | A chain longer than the hop limit fails with a named error instead of looping                                                                   | Boundary | —    |
+| U-189 | DeleteVolume of a PV whose `relocated-to` names the chain's active volume deletes it with the retired members                                   | Positive | —    |
+| U-190 | DeleteVolume of an unmarked PV with the same chain, the disaster-recovery case, deletes no active volume                                        | Negative | —    |
+| U-191 | DeleteVolume of a PV whose mark names a volume other than the active one deletes no active volume                                               | Negative | —    |
 
 ### Ceiling Shares (design §7.1, §7.5)
 
@@ -485,7 +488,7 @@ member pair whose storage networks reach each other (P0-2).
 | E-04 | A member shut down leaves the others' volumes serving and new volumes landing elsewhere                                                             | Negative | —    |
 | E-05 | Snapshot, clone, and expansion of a volume stay in its member                                                                                       | Positive | —    |
 | E-06 | A relocation under sustained fio completes with no I/O error and verified data                                                                      | Positive | —    |
-| E-07 | Expand, snapshot, and delete after a relocation succeed through the original handle                                                                 | Positive | —    |
+| E-07 | Expand and snapshot after a relocation succeed through the original handle, and deleting the PVC leaves no volume in either member                  | Positive | —    |
 | E-08 | A member removed under load is deleted with every volume moved out and intact                                                                       | Positive | —    |
 | E-09 | Discovery over a fleet of more than 32 storage nodes (17 workers with two slots each) drafts two node sets that approve and expand into two members | Positive | —    |
 
@@ -548,7 +551,7 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 151       | 4       | all others  |
+| Unit        | 154       | 4       | all others  |
 | Integration | 53        | 0       | all of them |
 | E2E         | 9         | 0       | E-01 … E-09 |
 | Manual      | 2         | 0       | M-01, M-02  |
@@ -563,7 +566,7 @@ the row its strike names: U-10 … U-18, U-20 … U-23, U-26, U-29 … U-33, U-3
 
 | #                                                                                                                                                        | Gap                                               | Reason                                                                                                   |
 |----------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------|----------------------------------------------------------------------------------------------------------|
-| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-188                                            | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                                  |
+| U-01 … U-09, U-19, U-24, U-34, U-36 … U-37, U-47 … U-54, U-58 … U-76, U-78, U-80, U-82 … U-128, U-131 … U-191                                            | Every new unit scenario                           | Feature not implemented (Phases 1 to 5)                                                                  |
 | I-01 … I-03, I-07 … I-08, I-10, I-13, I-15 … I-16, I-21 … I-25, I-27, I-31 … I-33, I-35 … I-36, I-38 … I-39, I-42, I-44 … I-45, I-47 … I-51, I-53 … I-75 | Every integration scenario                        | Feature not implemented (Phases 1 to 5)                                                                  |
 | E-01 … E-05, E-09                                                                                                                                        | Live supercluster, placement, and discovery split | Feature not implemented (Phases 1 and 2)                                                                 |
 | E-06 … E-08                                                                                                                                              | Live relocation and member removal                | Feature not implemented (Phases 3 and 4)                                                                 |
