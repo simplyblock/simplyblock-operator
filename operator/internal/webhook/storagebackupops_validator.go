@@ -175,14 +175,14 @@ func backupKey(ops *simplyblockv1alpha2.StorageBackupOps) types.NamespacedName {
 // groupBackupMustBeRestorable resolves a group restore's spec.groupBackupID to
 // its member StorageBackups and refuses one that names no member, or whose group
 // has a failed member. The members are the StorageBackups carrying the
-// group-backup-id label in the operation's namespace, the same selector a group
-// restore addresses. The id is immutable, so this is decided once at creation.
+// group-backup-id label in the CLUSTER's namespace, where the mirror records
+// them, the same selector a group restore addresses. The id is immutable, so this is decided once at creation.
 func (v *StorageBackupOpsValidator) groupBackupMustBeRestorable(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
 ) *admission.Response {
 	var members simplyblockv1alpha2.StorageBackupList
 	if err := v.Client.List(ctx, &members,
-		client.InNamespace(ops.Namespace),
+		client.InNamespace(ops.BackupsNamespace()),
 		client.MatchingLabels{simplyblockv1alpha2.BackupLabelGroupBackupID: simplyblockv1alpha2.GroupBackupLabelValue(ops.Spec.GroupBackupID)},
 	); err != nil {
 		errored := admission.Errored(http.StatusInternalServerError, err)
@@ -190,8 +190,8 @@ func (v *StorageBackupOpsValidator) groupBackupMustBeRestorable(
 	}
 	if len(members.Items) == 0 {
 		denied := admission.Denied(fmt.Sprintf(
-			"spec.groupBackupID %q names no StorageBackup in namespace %q",
-			ops.Spec.GroupBackupID, ops.Namespace))
+			"spec.groupBackupID %q names no StorageBackup in namespace %q (the cluster's)",
+			ops.Spec.GroupBackupID, ops.BackupsNamespace()))
 		return &denied
 	}
 	for i := range members.Items {
@@ -221,6 +221,11 @@ func (v *StorageBackupOpsValidator) requesterMayReach(
 		needs = append(needs, need{"get", "storageclusters", ns, ops.Spec.ClusterRef.Name})
 		if ops.Spec.Restore != nil {
 			needs = append(needs, need{"get", "storagepools", ns, ops.Spec.Restore.TargetPool})
+		}
+		if ops.Spec.GroupBackupID != "" {
+			// A group restore resolves its members by label beside the cluster,
+			// which is a list there, not a get of one named backup.
+			needs = append(needs, need{"list", "storagebackups", ns, ""})
 		}
 	}
 

@@ -41,7 +41,7 @@ func (r *StorageBackupOpsReconciler) listGroupMembers(
 ) ([]simplyblockv1alpha2.StorageBackup, error) {
 	var members simplyblockv1alpha2.StorageBackupList
 	if err := r.List(ctx, &members,
-		client.InNamespace(ops.Namespace),
+		client.InNamespace(ops.BackupsNamespace()),
 		client.MatchingLabels{simplyblockv1alpha2.BackupLabelGroupBackupID: simplyblockv1alpha2.GroupBackupLabelValue(ops.Spec.GroupBackupID)},
 	); err != nil {
 		return nil, err
@@ -293,7 +293,7 @@ func (r *StorageBackupOpsReconciler) memberBackupsByName(
 ) (map[string]*simplyblockv1alpha2.StorageBackup, error) {
 	var members simplyblockv1alpha2.StorageBackupList
 	if err := r.List(ctx, &members,
-		client.InNamespace(ops.Namespace),
+		client.InNamespace(ops.BackupsNamespace()),
 		client.MatchingLabels{simplyblockv1alpha2.BackupLabelGroupBackupID: simplyblockv1alpha2.GroupBackupLabelValue(ops.Spec.GroupBackupID)},
 	); err != nil {
 		return nil, err

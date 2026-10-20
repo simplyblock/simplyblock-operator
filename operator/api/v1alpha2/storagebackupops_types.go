@@ -216,6 +216,17 @@ type RestoredGroupMember struct {
 	ClaimName string `json:"claimName,omitempty"`
 }
 
+// BackupsNamespace is the namespace the operation's StorageBackups live in:
+// the StorageCluster's, since the mirror records every copy of a cluster's
+// store beside the cluster (StorageBackupReconciler.recordOf), not beside the
+// operations that restore them. An operation created in an application's
+// namespace with a clusterRef into the operator's namespace resolves its group
+// members here; listing them in the operation's own namespace found none and
+// the admission webhook refused every such restore (live 2026-10-20).
+func (ops *StorageBackupOps) BackupsNamespace() string {
+	return ops.Spec.ClusterRef.In(ops.Namespace).Namespace
+}
+
 // StorageBackupOpsStatus is the observed state of one backup operation.
 type StorageBackupOpsStatus struct {
 	// Phase is the operation's own progress.

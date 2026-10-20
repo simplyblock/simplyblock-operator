@@ -9,6 +9,7 @@ package webhook
 import (
 	"context"
 	"encoding/json"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	"strings"
 	"testing"
 
@@ -127,6 +128,51 @@ func TestGroupRestoreAcceptsTheBareGroupBackupID(t *testing.T) {
 	)
 	if !resp.Allowed {
 		t.Fatalf("a group restore naming the bare group backup id was refused: %q", resp.Result.Message)
+	}
+}
+
+// The members live beside the StorageCluster, not beside the operation: an
+// application's namespace holds the restore and the clusterRef points at the
+// operator's namespace, where the mirror put the StorageBackups. Resolving them
+// in the operation's own namespace found none and refused the restore (live
+// 2026-10-20, regression_test/24).
+func TestGroupRestoreResolvesMembersInTheClustersNamespace(t *testing.T) {
+	pool := &simplyblockv1alpha2.StoragePool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool-1", Namespace: backupOpsNamespace},
+	}
+	ops := groupRestoreOps()
+	ops.Namespace = "group-backup-test"
+	ops.Spec.ClusterRef = simplyblockv1alpha2.NamespacedDnsReference{Name: backupOpsNamespace, Namespace: backupOpsNamespace}
+	access := &fakeAccess{}
+	v := &StorageBackupOpsValidator{
+		Client: fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(
+			testCluster(), pool,
+			groupMember("member-db", testGroupBackupID, simplyblockv1alpha2.StorageBackupPhaseAvailable),
+		).Build(),
+		Access: access,
+	}
+	raw, err := json.Marshal(ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := v.Handle(context.Background(), admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+		Operation: admissionv1.Create,
+		Namespace: ops.Namespace,
+		Object:    runtime.RawExtension{Raw: raw},
+		UserInfo:  authenticationv1.UserInfo{Username: "app-admin"},
+	}})
+	if !resp.Allowed {
+		t.Fatalf("a group restore from another namespace was refused although its members exist beside the cluster: %q", resp.Result.Message)
+	}
+	// Reaching into the cluster's namespace for the members is a list the
+	// requester must be allowed, like the get of a single backup.
+	wantAsked := "list storagebackups " + backupOpsNamespace
+	asked := false
+	for _, a := range access.asked {
+		asked = asked || a == wantAsked
+	}
+	if !asked {
+		t.Errorf("the requester's right to %q was not reviewed; asked %v", wantAsked, access.asked)
 	}
 }
 
