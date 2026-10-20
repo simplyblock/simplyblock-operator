@@ -39,6 +39,27 @@ func TestGetConfig(t *testing.T) {
 		}
 	})
 
+	// Regression: 2026-10-20-job-image-main-fallback — a cluster that states
+	// migration settings without an image got no image at all, so the same
+	// cluster ran different rebalancers depending on whether the block existed.
+	t.Run("settings without an image yield the operator's release and keep the rest", func(t *testing.T) {
+		t.Setenv(operatorImageEnv, releaseOperatorImage)
+		t.Setenv(RebalancerImageEnvVar, "")
+		spec := &simplyblockv1alpha2.VolumeMigrationSettings{
+			DataRealignment: &simplyblockv1alpha2.DataRealignmentSettings{MinMoves: ptr.To(int32(4))},
+		}
+		cfg := GetConfig(spec)
+		if got := ptr.From(cfg.RebalancerImage, ""); got != releaseRebalancerImage {
+			t.Errorf("RebalancerImage = %q, want %q", got, releaseRebalancerImage)
+		}
+		if cfg.DataRealignment == nil || ptr.From(cfg.DataRealignment.MinMoves, 0) != 4 {
+			t.Errorf("DataRealignment = %+v, want the minMoves it asked for", cfg.DataRealignment)
+		}
+		if spec.RebalancerImage != nil {
+			t.Errorf("the cluster's own settings were written to: RebalancerImage = %q", *spec.RebalancerImage)
+		}
+	})
+
 	// A provided spec is returned as-is: the default must not overwrite what the
 	// StorageCluster asked for.
 	t.Run("provided settings are returned unchanged", func(t *testing.T) {
