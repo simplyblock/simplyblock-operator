@@ -1222,8 +1222,8 @@ supercluster before the member goes:
     ▼
   Draining       ← the member is out of placement from here on; one
     │              PersistentVolumeOps Relocate per subsystem, creatorRef naming
-    │              this operation, at most maxConcurrentRelocations at once,
-    │              each target chosen by the placement of §7.2
+    │              this operation, at most removeMember.maxConcurrentRelocations
+    │              at once, each target chosen by the placement of §7.2
     │  the member's pools report no bound volumes, and every PV whose
     │  handle names the member is marked relocated-to another member
     ▼
@@ -2072,6 +2072,16 @@ type FanOutStatus struct {
 	// +listType=atomic
 	Completed []string `json:"completed,omitempty"`
 }
+```
+
+The field added to `StorageClusterOpsSpec`, beside `cancelTask` and
+`rollingRestart`:
+
+```go
+	// RemoveMember parameterizes action RemoveMember and is ignored by the
+	// others.
+	// +optional
+	RemoveMember *RemoveMemberSpec `json:"removeMember,omitempty"`
 ```
 
 The field added to `StorageClusterOpsStatus`:
