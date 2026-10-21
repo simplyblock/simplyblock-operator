@@ -360,9 +360,6 @@ func TestStageFormatsOnlyABlankDeviceWithNoRecord(t *testing.T) {
 	}
 }
 
-// The stage error quotes the control plane's answer. "the control plane did
-// not answer" sent three investigations at the control plane and the network
-// when it had answered forty times with the reason (live 2026-10-20).
 func TestNoEndpointErrorQuotesTheControlPlane(t *testing.T) {
 	cause := errors.New("the control plane refused to publish the volume: GET 403: Host NQN w4 not found in allowed hosts for volume v")
 	err := noEndpointError("c:p:v", cause)

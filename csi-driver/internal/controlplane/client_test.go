@@ -281,10 +281,6 @@ func jsonResponse() *http.Response {
 	}
 }
 
-// A 404 from connect is still the not-found sentinel the fail-over redirect
-// keys on, but it keeps the control plane's words: older control planes answer
-// 404 for every connect failure, an unauthorized host included, and the bare
-// sentinel hid the reason for eight hours (live 2026-10-20).
 func TestGetLvolConnectionsKeepsTheReasonOnA404(t *testing.T) {
 	const reason = "Host NQN nqn.2014-08.io.simplyblock:uuid:w4 not found in allowed hosts for volume " + testVolUUID
 	client := newTestClient(func(r *http.Request) (*http.Response, error) {

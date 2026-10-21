@@ -606,14 +606,6 @@ func (client APIClient) getLvolConnections(
 	}
 	raw, err := client.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		// A 404 is the volume being gone -- and still the sentinel, which is
-		// what the fail-over redirect keys on -- but it carries the control
-		// plane's own words, because older control planes answered 404 for
-		// EVERY connect failure, an unauthorized host included, and the bare
-		// sentinel hid "Host NQN ... not found in allowed hosts" behind "volume
-		// not found" for eight hours (live 2026-10-20). Anything else, 403
-		// and 400 from a current control plane among it, is a refusal of the
-		// request and is passed through as it is: it is never "deleted".
 		var httpErr *HTTPError
 		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
 			return nil, fmt.Errorf("%w: %s", ErrVolumeNotFound, httpErr.Message)

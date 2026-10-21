@@ -635,10 +635,7 @@ func (ns *Server) controlPlaneConnection(
 }
 
 // noEndpointError is the stage failure when neither the control plane nor the
-// stashed context yields a subsystem to attach. It quotes the control plane's
-// answer: "the control plane did not answer" sent three investigations at the
-// control plane and the network when it had answered forty times, with the
-// reason, 403 "Host NQN ... not found in allowed hosts" (live 2026-10-20).
+// stashed context yields a subsystem to attach.
 func noEndpointError(volumeID string, cause error) error {
 	return fmt.Errorf("volume %s: %w; its stashed context names no subsystem, so there is nothing to attach",
 		volumeID, cause)
