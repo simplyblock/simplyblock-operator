@@ -96,10 +96,21 @@ const (
 	// also carries a filesystem.
 	ReasonPartitioned Reason = "Partitioned"
 
-	// ReasonNotBlank is a device carrying anything else: a filesystem, an LVM
-	// physical-volume label, a RAID superblock, or bytes matching no signature
-	// this package knows. Candidate.Reading names what was found.
+	// ReasonNotBlank is a device carrying anything else: a filesystem, a RAID
+	// superblock, or bytes matching no signature this package knows.
+	// Candidate.Reading names what was found.
 	ReasonNotBlank Reason = "NotBlank"
+
+	// ReasonLVMPhysicalVolume is a device carrying an LVM physical-volume label
+	// with no logical volume of it active. Nothing holds it and nothing is
+	// mounted from it, so lsblk shows a bare disk while pvs lists it. A device
+	// with an active logical volume is refused as ReasonStacked before its
+	// bytes are read, and never reaches this reason.
+	//
+	// It is separate from ReasonNotBlank because the fix is different: the
+	// label belongs to LVM, and pvremove, not wipefs on a filesystem, is what
+	// hands the disk back.
+	ReasonLVMPhysicalVolume Reason = "LVMPhysicalVolume"
 )
 
 // Rejection is one ground with the evidence for it, so that an event or a log
@@ -304,7 +315,16 @@ func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage) Candidat
 			break
 		}
 		c.reject(ReasonNotBlank, reading.Detail)
-	case ContentFilesystem, ContentStackLayer:
+	case ContentStackLayer:
+		// An LVM label is the only stack layer the signatures name today. One
+		// added later is refused as NotBlank until it is given its own reason,
+		// rather than being reported as LVM.
+		if reading.Type == "LVM2_member" {
+			c.reject(ReasonLVMPhysicalVolume, reading.Detail)
+			break
+		}
+		c.reject(ReasonNotBlank, reading.Detail)
+	case ContentFilesystem:
 		c.reject(ReasonNotBlank, reading.Detail)
 	case ContentReleased:
 		// Not a rejection. The signature was erased where the format keeps it,

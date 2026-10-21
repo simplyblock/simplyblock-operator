@@ -213,6 +213,30 @@ func TestCandidatesNamesAPartitionTableSeparatelyFromAFilesystem(t *testing.T) {
 	}
 }
 
+func TestCandidatesNamesAnLVMPhysicalVolumeSeparatelyFromOtherContent(t *testing.T) {
+	// A physical volume whose volume group has no active logical volume has no
+	// holder and nothing mounted, so lsblk shows a bare disk. The label is the
+	// only evidence, and NotBlank sends the administrator looking for a
+	// filesystem that is not there; the fix is pvremove, so the reason says LVM.
+	pv := blank(3750748848 * 512)
+	pv.bytes[512] = []byte("LABELONE")
+	pv.bytes[512+24] = []byte("LVM2 001")
+
+	in := inspectorOver(t, map[string]sparse{"sdb": pv}, nil)
+	cands, err := in.Candidates(context.Background())
+	if err != nil {
+		t.Fatalf("collect the candidates: %v", err)
+	}
+
+	got := found(t, cands, "sdb")
+	if got.Available() {
+		t.Fatal("handed over a disk carrying an LVM physical-volume label")
+	}
+	if !got.OnlyRejectedFor(ReasonLVMPhysicalVolume) {
+		t.Errorf("rejected it for %v, want %s alone", got.Rejections, ReasonLVMPhysicalVolume)
+	}
+}
+
 func TestCandidatesRejectsADiskWhoseContentItCouldNotRead(t *testing.T) {
 	// A device that could not be read is not a device that was read and found
 	// empty. This is the defect the content reading exists to remove, and it is
