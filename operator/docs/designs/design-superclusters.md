@@ -10,23 +10,25 @@
 
 ## Phasing Overview
 
-| Phase                   | Status      | Scope                                                                                                                              | Blocked by                                                                                                           |
-|-------------------------|-------------|------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
-| **Phase 1** (§4–§6)     | In progress | Superclusters and members on `StorageCluster`, per-cluster workload names, the shared certificate, and expansion from a deployment | Superclusters and a second standalone cluster in a namespace: P0-4. Workers shared between members: P0-3 and §16 Q11 |
-| **Phase 2** (§7)        | Planned     | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver                                 | IOPS and throughput ceilings: P0-5                                                                                   |
-| **Phase 3** (§8.1–§8.3) | Planned     | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —                                                                                                                    |
-| **Phase 4** (§8.4)      | Planned     | `StorageClusterOps` action `RemoveMember`: a member's volumes moved into the others, then the member deleted                       | Phase 3                                                                                                              |
-| **Phase 5** (§7.5)      | Planned     | Pool QoS ceilings shared across members by demand rather than split evenly                                                         | Phase 2, P0-5                                                                                                        |
+| Phase                   | Status      | Scope                                                                                                                              | Blocked by                                                                                                         |
+|-------------------------|-------------|------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------|
+| **Phase 1** (§4–§6)     | In progress | Superclusters and members on `StorageCluster`, per-cluster workload names, the shared certificate, and expansion from a deployment | A second cluster in a namespace, on a control plane without P0-4. Workers shared between members: P0-3 and §16 Q11 |
+| **Phase 2** (§7)        | Planned     | Pools fanned out to members, the supercluster StorageClass, and member selection in the CSI driver                                 | IOPS and throughput ceilings: P0-5                                                                                 |
+| **Phase 3** (§8.1–§8.3) | Planned     | `PersistentVolumeOps` action `Relocate`: one volume moved to another member                                                        | —                                                                                                                  |
+| **Phase 4** (§8.4)      | Planned     | `StorageClusterOps` action `RemoveMember`: a member's volumes moved into the others, then the member deleted                       | Phase 3                                                                                                            |
+| **Phase 5** (§7.5)      | Planned     | Pool QoS ceilings shared across members by demand rather than split evenly                                                         | Phase 2, P0-5                                                                                                      |
 
 **Phase 1 in place:** the API of §4.1 and its status (§4.3), the admission rules
 of §4.2 and §4.4 except the deletion of a member holding volumes, the
 supercluster reconciler with its roll-up, events, and two gauges (§10.1, §13),
 `status.role` on every cluster, `ErrAggregateCluster` from the resolver (§15),
-and the predicates that keep the rebalancer and arbitration off a supercluster
-(§10.3). Until the rest of Phase 1 lands, three rules hold in its place. The
-one-cluster-per-namespace rule holds for clusters that carry a storage-node
-workload, which a supercluster does not, because workload names (§6.1) wait on
-P0-4. A `StoragePool` naming a supercluster is refused at admission until pools
+the predicates that keep the rebalancer, arbitration, and the workload
+reconciler off a supercluster (§10.3), and the workload names of §6.1 with the
+removal of the one-cluster-per-namespace rule for standalone clusters. Until the
+rest of Phase 1 lands, three rules hold in its place. A member shares its
+namespace with no other cluster that has storage nodes, and builds its
+supercluster's Services itself, because the shared Services of §6.2 are not
+built. A `StoragePool` naming a supercluster is refused at admission until pools
 fan out (§7.1). A `StorageClusterOps` on a supercluster fails before any
 control-plane call until the walk of §9.6 exists.
 
@@ -40,13 +42,13 @@ members, and Phase 5 makes a pool's QoS ceiling follow its load across members.
 
 ## Phase 0 — External Prerequisites
 
-| #    | Prerequisite                                                                                                                                                                                                                                                                                                                                                                                                                                       | Kind                    | Blocks                                                                       | Status          |
-|------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|------------------------------------------------------------------------------|-----------------|
-| P0-1 | A cross-cluster move of an encrypted volume creates the target volume with a crypto layer and carries its data encryption key to the target's path before the source is deleted. Without it, `delete_source` deletes the only key (§9.4)                                                                                                                                                                                                           | Control plane (`sbcli`) | Phase 3 for encrypted volumes                                                | Not established |
-| P0-2 | Data-plane reachability between the members' storage networks, since the move attaches the target node's transfer hub over NVMe-oF (§8.2)                                                                                                                                                                                                                                                                                                          | Node OS                 | Phase 3                                                                      | Per site        |
-| P0-3 | The storage-node API (node agent) runs on the pod network. It reads the host's interfaces from the host network namespace, and its hostname, cloud instance, and topology from the Node object                                                                                                                                                                                                                                                     | Node agent (`sbcli`)    | Workers shared between members (§5.1)                                        | Rewrite planned |
-| P0-4 | `POST /api/v2/clusters/` accepts the workload names (§6.1), the cluster record keeps them, and node hostnames and the SPDK pod's certificate Secret are built from them. A record without them resolves to the constant names                                                                                                                                                                                                                      | Control plane (`sbcli`) | Superclusters, and a second standalone cluster in a namespace (§6.1)         | Not established |
-| P0-5 | Pool-wide IOPS and throughput limits enforced by SPDK without corrupting the volumes that share them. Today, the `PoolLimits` CEL rule refuses both (`operator/api/v1alpha2/storagepool_types.go`), because SPDK freed the pool's limits array while volumes still used it: the IOPS limit went unenforced, the throughput limit applied per volume, and SPDK crashed on every storage node (regression `2026-09-30-pool-qos-limits-corrupt-spdk`) | Data plane (SPDK)       | IOPS and throughput ceilings on a pool of a supercluster (§7.1), and Phase 5 | Not established |
+| #    | Prerequisite                                                                                                                                                                                                                                                                                                                                                                                                                                       | Kind                    | Blocks                                                                       | Status                            |
+|------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|------------------------------------------------------------------------------|-----------------------------------|
+| P0-1 | A cross-cluster move of an encrypted volume creates the target volume with a crypto layer and carries its data encryption key to the target's path before the source is deleted. Without it, `delete_source` deletes the only key (§9.4)                                                                                                                                                                                                           | Control plane (`sbcli`) | Phase 3 for encrypted volumes                                                | Not established                   |
+| P0-2 | Data-plane reachability between the members' storage networks, since the move attaches the target node's transfer hub over NVMe-oF (§8.2)                                                                                                                                                                                                                                                                                                          | Node OS                 | Phase 3                                                                      | Per site                          |
+| P0-3 | The storage-node API (node agent) runs on the pod network. It reads the host's interfaces from the host network namespace, and its hostname, cloud instance, and topology from the Node object                                                                                                                                                                                                                                                     | Node agent (`sbcli`)    | Workers shared between members (§5.1)                                        | Rewrite planned                   |
+| P0-4 | `POST /api/v2/clusters/` accepts the workload names (§6.1), the cluster record keeps them, and node hostnames and the SPDK pod's certificate Secret are built from them. A record without them resolves to the constant names                                                                                                                                                                                                                      | Control plane (`sbcli`) | Superclusters, and a second standalone cluster in a namespace (§6.1)         | Built in sbcli#1512, not released |
+| P0-5 | Pool-wide IOPS and throughput limits enforced by SPDK without corrupting the volumes that share them. Today, the `PoolLimits` CEL rule refuses both (`operator/api/v1alpha2/storagepool_types.go`), because SPDK freed the pool's limits array while volumes still used it: the IOPS limit went unenforced, the throughput limit applied per volume, and SPDK crashed on every storage node (regression `2026-09-30-pool-qos-limits-corrupt-spdk`) | Data plane (SPDK)       | IOPS and throughput ceilings on a pool of a supercluster (§7.1), and Phase 5 | Not established                   |
 
 Without P0-1 an encrypted volume is refused as a move candidate at admission, and
 refused again before replication starts, because a move deletes its key (§9.4).
@@ -147,7 +149,7 @@ fixed by the request path and the pool.
 **The operator models one cluster per namespace, and one cluster per deployment
 document.** `operator/internal/webhook/storagecluster_validator.go` refuses a
 second `StorageCluster` in a namespace, because the storage-node workload carries
-constant names (`atlas-lib/kube.StorageNodeSetAPIServiceName`, the SPDK proxy
+constant names (`simplyblock-storage-node-api`, the SPDK proxy
 Service, and their certificate Secrets). A `ClusterDeploymentConfig` may list several node sets with several
 groups each, but every group expands into one cluster, and validation refuses
 groups that disagree on interfaces (`conflictingInterfaces` in
@@ -811,9 +813,10 @@ node sets into one document, or written by hand.
 
 ### 6.1 Workload names
 
-Two Services carry constant names today, `simplyblock-storage-node-api` and
-`simplyblock-spdk-proxy`, and so do their serving-certificate Secrets
-(`utils.SecretNameStorageNodeSetAPITLS` and `utils.SecretNameSpdkProxyTLS`).
+Before this design, two Services carried constant names,
+`simplyblock-storage-node-api` and `simplyblock-spdk-proxy`, and so did their
+serving-certificate Secrets, `simplyblock-storage-node-api-tls` and
+`simplyblock-spdk-proxy-tls`.
 Node hostnames are built from the storage-node API Service's name, as
 `<node-hostname>.<service>.<namespace>.svc`, so the name is part of every node's
 identity in the control plane.
@@ -853,14 +856,29 @@ cluster:
 | Supercluster                                           | `sb-<name>-node-api`, `sb-<name>-spdk-proxy`             | none, it has no nodes                 |
 | Member                                                 | its supercluster's                                       | `-<suffix>`, its three letters (§5.3) |
 
-Each certificate Secret is its Service's name with `-tls`. A derived name that
-would exceed 63 characters is cut to 40 characters of `<name>` followed by eight
-characters of its hash, so every name stays a valid Service name whatever the
-cluster name. The functions that derive them are in `atlas-lib/kube`. Two
-standalone clusters created at once may both find the constant names unclaimed.
-The Service decides between them: a cluster that finds
-`simplyblock-storage-node-api` controller-owned by another cluster before its own
-backend cluster exists rewrites its record to derived names.
+Each certificate Secret is its Service's name with `-tls`. A derived Service name
+is held to a DNS label by `atlas-lib/kube.Formula`: a dot in the cluster name
+becomes a hyphen, and a name that would exceed 63 characters keeps as much of
+`<name>` as fits, followed by an eight-character digest of the whole name, so two
+names sharing a prefix stay apart. The functions that derive the names are in
+`atlas-lib/kube` (`ConstantWorkloadNames`, `DerivedWorkloadNames`, and
+`MemberWorkloadNames`). A member's suffix is the three letters the expansion
+draws onto its name (§5.3), and a member written by hand, whose name carries no
+drawn suffix, takes three characters of a digest of its name. Two standalone
+clusters created at once may both find the constant names unclaimed. The Service
+decides between them: the workload reconciler never takes over a Service another
+object controls, and a cluster that finds `simplyblock-storage-node-api`
+controlled by another cluster before its own backend cluster exists rewrites its
+record to derived names.
+
+**Two objects stay shared within a namespace.** The SPDK pod template names the
+ServiceAccount `simplyblock-storage-node-sa`, so every cluster in a namespace
+runs as it. Each cluster holds an owner reference on it without controlling it,
+so it lives until the last of them is deleted. The SPDK pods are created by the
+control plane and carry no cluster label, so a cluster publishes the pods named
+for its own UUID, `snode-spdk-pod-<port>-<first six of the UUID>`, and a pod
+from a template older than sbcli 25.10.5, which names no cluster, as it did
+before.
 
 **The control plane learns the names at cluster creation.** The operator sends
 the record in the body of `POST /api/v2/clusters/`, beside the `cr_name` and
@@ -869,8 +887,12 @@ builds node hostnames from the recorded Services and node label suffix, and
 passes the recorded SPDK proxy Secret to the node agent when it starts an SPDK
 pod. A cluster record without the fields uses the constant names and no suffix,
 which is the rule the operator applies, so a cluster created before either side
-was upgraded resolves the same names on both. Until sbcli accepts the fields
-(P0-4), only a cluster whose record holds the constant names can be created.
+was upgraded resolves the same names on both. A control plane without P0-4
+accepts the body and drops the fields, so the operator compares the names in the
+create response, or in the list entry it adopts, with its record. A cluster whose
+names the control plane did not keep is held `Unavailable` with a
+`WorkloadNamesNotRecorded` event before its status records a backend cluster,
+which on such a control plane is every cluster but one under the constant names.
 
 ### 6.2 A supercluster's members share its Services and certificate
 
@@ -1630,9 +1652,9 @@ data unavailability, so neither group's scenarios may be cut.
 record without them resolves the same (§6.1), so no running cluster's node
 hostnames change. A new standalone cluster takes the constant names when no other
 cluster in its namespace has them, and the rule refusing a second cluster in a
-namespace is removed. `TestASecondClusterInOneNamespaceIsRefused` in
-`operator/internal/webhook/storagecluster_validator_test.go` asserts the removed
-rule and is rewritten to admit the second cluster.
+namespace is removed. `TestASecondClusterInOneNamespaceIsAdmitted` in
+`operator/internal/webhook/storagecluster_validator_test.go` replaces the test
+that asserted the removed rule.
 
 **`ClusterDeploymentConfig` and discovery need no migration.** Neither has
 shipped in a release: both arrive in 26.4, and this design lands between its

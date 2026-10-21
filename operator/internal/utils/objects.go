@@ -286,7 +286,7 @@ var rebalancingTaskTypes = map[string]bool{
 // It asks twice, because the authoritative answer is not always there. The
 // control plane knows — it refuses the migration with a 400 saying the cluster
 // is rebalancing — but it does not always say so in the status it reports, and
-// a cluster running two node_add jobs has been seen reporting "active". So the
+// a cluster running two node_add jobs has been seen reporting `active`. So the
 // status is read first and the mirrored task list second, and the second is
 // what makes this usable before the first is fixed.
 //

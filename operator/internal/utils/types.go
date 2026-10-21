@@ -66,7 +66,7 @@ type ClusterAddParams struct {
 	// Atomic4k declares 4K write atomicity on devices with a <4K logical block size.
 	// Only meaningful when InlineChecksum is true.
 	Atomic4k bool `json:"atomic_4k,omitempty"`
-	// DeviceMode selects "nvme" (default) or "lblk" device attachment for the whole
+	// DeviceMode selects `nvme` (default) or `lblk` device attachment for the whole
 	// cluster. Requires sbcli with lblk support (simplyblock/sbcli#1224) — sending
 	// "lblk" against an unpatched backend is rejected.
 	DeviceMode string `json:"device_mode,omitempty"`

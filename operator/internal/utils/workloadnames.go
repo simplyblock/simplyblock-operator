@@ -1,7 +1,7 @@
 // A cluster's workload names as the operator reads and writes them: out of
 // status.workloadNames, into the control plane's create body, and back out of
-// its answer. The names themselves are derived in atlas-lib/kube; this file only
-// moves them between the three shapes they travel in.
+// its answer. The names themselves are derived in atlas-lib/kube, and this file
+// only moves them between the three shapes they travel in.
 
 package utils
 

@@ -1102,7 +1102,7 @@ type StorageClusterStatus struct {
 	Role StorageClusterRole `json:"role,omitempty"`
 
 	// WorkloadNames are the names this cluster's workload is reached by,
-	// recorded before the workload exists and never changed afterwards,
+	// recorded before the workload exists and never changed afterward,
 	// because every storage node's hostname is built from them. A cluster
 	// created before they were recorded is given the constant names.
 	// +optional

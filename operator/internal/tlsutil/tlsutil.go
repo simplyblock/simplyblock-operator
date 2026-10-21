@@ -19,12 +19,12 @@ import (
 var ServiceCABundlePath = "/etc/simplyblock/tls/ca.crt"
 
 // ServiceClientCertificatePath is where the operator pod mounts its client
-// certificate for mutually-authenticated TLS to the simplyblock webapp.
+// certificate for mutually authenticated TLS to the simplyblock webapp.
 // Overridable for tests.
 var ServiceClientCertificatePath = "/etc/simplyblock/tls/tls.crt"
 
 // ServiceClientKeyPath is where the operator pod mounts its client private key
-// for mutually-authenticated TLS to the simplyblock webapp. Overridable for
+// for mutually authenticated TLS to the simplyblock webapp. Overridable for
 // tests.
 var ServiceClientKeyPath = "/etc/simplyblock/tls/tls.key"
 

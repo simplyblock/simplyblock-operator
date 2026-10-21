@@ -143,7 +143,7 @@ const (
 
 	// AnnotationLogCollector marks a pod whose logs the chart's fluent-bit ships
 	// to Graylog. Its filter drops every pod without the annotation set to
-	// "true", so a workload left unmarked never reaches Graylog.
+	// `true`, so a workload left unmarked never reaches Graylog.
 	AnnotationLogCollector = "log-collector/enabled"
 
 	LabelFDBClusterName = "foundationdb.org/fdb-cluster-name"
