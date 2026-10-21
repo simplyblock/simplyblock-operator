@@ -1027,6 +1027,62 @@ class ChurnLeave(unittest.TestCase):
         self.assertEqual(record.error, "")
 
 
+class ChurnNeverReachedIO(unittest.TestCase):
+    """A churn pod that never reached I/O is deleted a few minutes later with nothing left
+    to say why, so what the node and the pod reported is kept first."""
+
+    def run_it(self, run_phase: str = "Running"):
+        import subprocess
+        from datetime import UTC, datetime
+
+        from sbtest.components.workloads import churn, fio
+
+        def run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            if "describe" in args:
+                out = "Events:\n  Warning  FailedMount  MountVolume.SetUp failed"
+            elif "logs" in args:
+                out = "fio: starting up"
+            elif "jsonpath={.status.phase}" in args:
+                out = run_phase
+            elif "jsonpath={.spec.nodeName}" in args:
+                out = "node-1"
+            else:
+                out = ""
+            return subprocess.CompletedProcess(args, 0, out, "")
+
+        w = churn.ChurnWorkload(io_timeout_s=0.01, ready_timeout_s=1)
+        inst = fio.FioInstance(pod="r1-churn-8", container="fio-0", filename="/data/f",
+                               logdir="/logs", evidence="r1-fio-churn-8")
+        record = churn._Record(pod=inst.pod, claim="shared-1", own_volume=False,
+                               created=datetime.now(UTC))
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(kube, "run", run), \
+                mock.patch.object(kube, "exec_sh", return_value="1234 D nfs4_wait_clnt_recover fio"), \
+                mock.patch.object(churn.time, "sleep", lambda *_: None):
+            ctx = RunContext(run_id="r1", outdir=d, log=Logger(os.path.join(d, "run.log")))
+            w._run(ctx, "default", inst, record, 60.0)
+            ctx.log.close()
+            kept = {}
+            ev = os.path.join(d, inst.evidence.replace("-fio-", "-diag-"))
+            if os.path.isdir(ev):
+                for name in os.listdir(ev):
+                    with open(os.path.join(ev, name)) as fh:
+                        kept[name] = fh.read()
+        return record, kept
+
+    def test_the_pods_description_log_and_process_states_are_kept(self):
+        record, kept = self.run_it()
+        self.assertIn("fio not in its timed run", record.error)
+        self.assertIn("FailedMount", kept.get("describe.txt", ""))
+        self.assertIn("fio: starting up", kept.get("logs.txt", ""))
+        self.assertIn("nfs4_wait_clnt_recover", kept.get("processes.txt", ""))
+
+
+    def test_a_pod_that_never_ran_keeps_what_it_can(self):
+        record, kept = self.run_it(run_phase="Pending")
+        self.assertIn("not Running", record.error)
+        self.assertIn("FailedMount", kept.get("describe.txt", ""))
+
+
 class RestartTargets(unittest.TestCase):
     """`mds-standby` is a target of its own: configurable, validated, and read back from an
     archive, while `mds` keeps meaning the active guest."""
