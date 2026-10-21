@@ -160,7 +160,7 @@ type StorageSiteDraft struct {
 	Phase string `json:"phase,omitempty"`
 
 	// Message is what the site says about the draft: validation findings while
-	// it is a draft, the expansion's step afterwards.
+	// it is a draft, the expansion's step afterward.
 	// +optional
 	Message string `json:"message,omitempty"`
 
@@ -172,7 +172,9 @@ type StorageSiteDraft struct {
 	// +optional
 	Cluster *ClusterTemplate `json:"cluster,omitempty"`
 
-	// NodeSets are the nodes and devices the discovery found, for review.
+	// NodeSets are the nodes and devices the discovery found, for review. At
+	// most 64, as on the deployment config the draft is.
+	// +kubebuilder:validation:MaxItems=64
 	// +optional
 	NodeSets []NodeSet `json:"nodeSets,omitempty"`
 

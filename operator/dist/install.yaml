@@ -13823,7 +13823,7 @@ spec:
                   message:
                     description: |-
                       Message is what the site says about the draft: validation findings while
-                      it is a draft, the expansion's step afterwards.
+                      it is a draft, the expansion's step afterward.
                     type: string
                   name:
                     description: Name is the ClusterDeploymentConfig on the site.
@@ -13836,8 +13836,9 @@ spec:
                     type: array
                     x-kubernetes-list-type: set
                   nodeSets:
-                    description: NodeSets are the nodes and devices the discovery
-                      found, for review.
+                    description: |-
+                      NodeSets are the nodes and devices the discovery found, for review. At
+                      most 64, as on the deployment config the draft is.
                     items:
                       description: |-
                         NodeSet is the organizational grouping of a deployment, usually a rack: the
@@ -13986,6 +13987,7 @@ spec:
                       - groups
                       - name
                       type: object
+                    maxItems: 64
                     type: array
                   phase:
                     description: |-
