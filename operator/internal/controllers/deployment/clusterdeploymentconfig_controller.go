@@ -394,8 +394,14 @@ func (r *ClusterDeploymentConfigReconciler) succeed(
 		config.Status.ClusterRef, len(config.Status.NodeRefs))
 	r.emit(config, corev1.EventTypeNormal, NodesCreated, message)
 	observeExpansion(config)
-	return r.note(ctx, config,
-		simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanded, message)
+	// The step is the position within Expanding, so it goes with the phase. A
+	// failure keeps its step, which says where the expansion stopped.
+	return r.writeStatus(ctx, config,
+		func(status *simplyblockv1alpha2.ClusterDeploymentConfigStatus) {
+			status.Phase = simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanded
+			status.Message = message
+			status.Step = statemachine.KubeSnapshot{}
+		})
 }
 
 // fail records a terminal refusal.

@@ -68,6 +68,7 @@ File: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_t
 | U-24     | A cluster whose creation fails: the phase becomes `Failed` with the reason                                | Negative | —                                                                                            |
 | U-25     | `AwaitingCluster` holds until `status.uuid` is set                                                        | Negative | —                                                                                            |
 | U-26     | A step's deadline expires: `StepDeadlineExceeded`, phase does not advance                                 | Boundary | —                                                                                            |
+| U-231    | A document reaching `Expanded` carries no step                                                            | Positive | `TestAnExpandedDocumentCarriesNoStep`                                                        |
 | U-185    | The template's `nodeProvisioningBudget` reaches the cluster the expansion creates                         | Positive | `TestTheProvisioningBudgetReachesTheCreatedCluster`                                          |
 | U-186    | A template stating no budget leaves the field unset, so the cluster's default decides it                  | Negative | `TestAnUnstatedProvisioningBudgetIsNotInvented`                                              |
 | U-223    | `CreatingNodes` maps every group's `failureDomain` into the cluster's `status.failureDomains`             | Positive | `TestCreatingNodesMapsTheDocumentsFailureDomains`                                            |
@@ -633,11 +634,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 173       | 40      | 133         | 9         |
+| Unit        | 174       | 41      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **243**   | **43**  | **200**     | **12**    |
+| **Total**   | **244**   | **44**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as
