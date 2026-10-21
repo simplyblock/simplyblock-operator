@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/simplyblock/atlas/lvol"
+	"github.com/simplyblock/simplyblock-operator/internal/mdsstate/mdsstatetest"
 )
 
 func testSTS(annotations map[string]string) *appsv1.StatefulSet {
@@ -46,7 +47,7 @@ func reload(t *testing.T, c client.Client, sts *appsv1.StatefulSet) *appsv1.Stat
 
 // O-04: the volume is created once, 1 GiB, in the export's pool, and recorded.
 func TestEnsureStateVolumeCreatesAndRecordsItOnce(t *testing.T) {
-	api := newFakeAPI()
+	api := mdsstatetest.New()
 	sts := testSTS(nil)
 	c := kubeFor(t, sts)
 	sv := &StateVolume{Client: c, API: api}
@@ -62,8 +63,8 @@ func TestEnsureStateVolumeCreatesAndRecordsItOnce(t *testing.T) {
 	if !slices.Contains(got.Finalizers, StateVolumeFinalizer) {
 		t.Errorf("finalizers = %v, want %s", got.Finalizers, StateVolumeFinalizer)
 	}
-	v := api.volumes[h]
-	if v == nil || v.vol.SizeBytes != StateVolumeSize || v.vol.Pool != testPool {
+	v := api.Volumes[h]
+	if v == nil || v.Vol.SizeBytes != StateVolumeSize || v.Vol.Pool != testPool {
 		t.Fatalf("volume = %+v, want %d bytes in pool %s", v, StateVolumeSize, testPool)
 	}
 	if StateVolumeSize != 1<<30 {
@@ -74,22 +75,22 @@ func TestEnsureStateVolumeCreatesAndRecordsItOnce(t *testing.T) {
 	if h2, err := sv.Ensure(context.Background(), got, testCluster, testPool); err != nil || h2 != h {
 		t.Errorf("second Ensure = %q, %v, want %q", h2, err, h)
 	}
-	if api.creates != 1 {
-		t.Errorf("%d create calls, want 1", api.creates)
+	if api.Creates != 1 {
+		t.Errorf("%d create calls, want 1", api.Creates)
 	}
 }
 
 // A recorded handle wins: the recorded volume is returned even when the pool
 // of the first export has changed, and nothing is created.
 func TestEnsureStateVolumeKeepsTheRecordedHandle(t *testing.T) {
-	api := newFakeAPI()
-	recorded := api.add("whatever")
+	api := mdsstatetest.New()
+	recorded := api.Add("whatever")
 	sts := testSTS(map[string]string{StateVolumeAnnotation: string(recorded)})
 	sv := &StateVolume{Client: kubeFor(t, sts), API: api}
 
 	h, err := sv.Ensure(context.Background(), sts, testCluster, "99999999-2222-4333-8444-555555555555")
-	if err != nil || h != recorded || api.creates != 0 {
-		t.Errorf("Ensure = %q, %v with %d creates, want the recorded %q", h, err, api.creates, recorded)
+	if err != nil || h != recorded || api.Creates != 0 {
+		t.Errorf("Ensure = %q, %v with %d creates, want the recorded %q", h, err, api.Creates, recorded)
 	}
 }
 
@@ -97,27 +98,27 @@ func TestEnsureStateVolumeKeepsTheRecordedHandle(t *testing.T) {
 // two. The next pass finds the volume by its deterministic name and records it,
 // instead of creating a second one.
 func TestEnsureStateVolumeAdoptsAVolumeCreatedBeforeACrash(t *testing.T) {
-	api := newFakeAPI()
+	api := mdsstatetest.New()
 	sts := testSTS(nil)
 	c := kubeFor(t, sts)
 	sv := &StateVolume{Client: c, API: api}
 
 	crash := errors.New("operator died")
-	api.afterCreate = func() { api.createErr = nil }
+	api.AfterCreate = func() { api.CreateErr = nil }
 	failing := &StateVolume{Client: &failingPatch{Client: c, err: crash}, API: api}
 	if _, err := failing.Ensure(context.Background(), sts, testCluster, testPool); err == nil {
 		t.Fatal("the lost record write was not reported")
 	}
-	if api.creates != 1 || reload(t, c, sts).Annotations[StateVolumeAnnotation] != "" {
-		t.Fatalf("setup: %d creates, record %q", api.creates, reload(t, c, sts).Annotations[StateVolumeAnnotation])
+	if api.Creates != 1 || reload(t, c, sts).Annotations[StateVolumeAnnotation] != "" {
+		t.Fatalf("setup: %d creates, record %q", api.Creates, reload(t, c, sts).Annotations[StateVolumeAnnotation])
 	}
 
 	h, err := sv.Ensure(context.Background(), reload(t, c, sts), testCluster, testPool)
 	if err != nil {
 		t.Fatalf("Ensure after the crash: %v", err)
 	}
-	if api.creates != 1 {
-		t.Errorf("%d create calls, want the one volume adopted", api.creates)
+	if api.Creates != 1 {
+		t.Errorf("%d create calls, want the one volume adopted", api.Creates)
 	}
 	if got := reload(t, c, sts).Annotations[StateVolumeAnnotation]; got != string(h) || h == "" {
 		t.Errorf("recorded %q, want %q", got, h)
@@ -140,8 +141,8 @@ func (f *failingPatch) Patch(ctx context.Context, obj client.Object, p client.Pa
 // O-05: the control plane fails, nothing is recorded, and the error says the
 // state volume is unavailable so the caller can emit MDSStateUnavailable.
 func TestEnsureStateVolumeFailureRecordsNothing(t *testing.T) {
-	api := newFakeAPI()
-	api.createErr = errors.New("500 internal error")
+	api := mdsstatetest.New()
+	api.CreateErr = errors.New("500 internal error")
 	sts := testSTS(nil)
 	c := kubeFor(t, sts)
 	sv := &StateVolume{Client: c, API: api}
@@ -161,8 +162,8 @@ func TestEnsureStateVolumeFailureRecordsNothing(t *testing.T) {
 // A pool named by a handle written before the v2 API is a name, resolved to its
 // ID before the create.
 func TestEnsureStateVolumeResolvesAPoolName(t *testing.T) {
-	api := newFakeAPI()
-	api.pools["fast"] = testPool
+	api := mdsstatetest.New()
+	api.Pools["fast"] = testPool
 	sts := testSTS(nil)
 	sv := &StateVolume{Client: kubeFor(t, sts), API: api}
 	h, err := sv.Ensure(context.Background(), sts, testCluster, "fast")
@@ -176,8 +177,8 @@ func TestEnsureStateVolumeResolvesAPoolName(t *testing.T) {
 
 // O-06: the finalizer deletes the volume and is removed. A 404 counts as done.
 func TestFinalizeDeletesTheVolumeAndReleasesTheStatefulSet(t *testing.T) {
-	api := newFakeAPI()
-	h := api.add("state")
+	api := mdsstatetest.New()
+	h := api.Add("state")
 	now := metav1.Now()
 	sts := testSTS(map[string]string{StateVolumeAnnotation: string(h)})
 	sts.Finalizers = []string{StateVolumeFinalizer}
@@ -188,8 +189,8 @@ func TestFinalizeDeletesTheVolumeAndReleasesTheStatefulSet(t *testing.T) {
 	if err := sv.Finalize(context.Background(), sts); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
-	if _, ok := api.volumes[h]; ok || api.deletes != 1 {
-		t.Errorf("volume still exists or %d deletes", api.deletes)
+	if _, ok := api.Volumes[h]; ok || api.Deletes != 1 {
+		t.Errorf("volume still exists or %d deletes", api.Deletes)
 	}
 	var gone appsv1.StatefulSet
 	err := c.Get(context.Background(), client.ObjectKeyFromObject(sts), &gone)
@@ -199,7 +200,7 @@ func TestFinalizeDeletesTheVolumeAndReleasesTheStatefulSet(t *testing.T) {
 }
 
 func TestFinalizeCountsAMissingVolumeAsDone(t *testing.T) {
-	api := newFakeAPI() // the volume was never there: the delete answers as for a 404
+	api := mdsstatetest.New() // the volume was never there: the delete answers as for a 404
 	now := metav1.Now()
 	sts := testSTS(map[string]string{StateVolumeAnnotation: testCluster + ":" + testPool + ":00000000-0000-4000-8000-000000000099"})
 	sts.Finalizers = []string{StateVolumeFinalizer}
@@ -212,9 +213,9 @@ func TestFinalizeCountsAMissingVolumeAsDone(t *testing.T) {
 
 // A failed delete keeps the finalizer, so the volume is not orphaned.
 func TestFinalizeKeepsTheFinalizerWhenTheDeleteFails(t *testing.T) {
-	api := newFakeAPI()
-	h := api.add("state")
-	api.deleteErr = errors.New("500")
+	api := mdsstatetest.New()
+	h := api.Add("state")
+	api.DeleteErr = errors.New("500")
 	now := metav1.Now()
 	sts := testSTS(map[string]string{StateVolumeAnnotation: string(h)})
 	sts.Finalizers = []string{StateVolumeFinalizer}

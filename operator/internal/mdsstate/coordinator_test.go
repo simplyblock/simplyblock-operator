@@ -13,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/simplyblock/atlas/lvol"
+	"github.com/simplyblock/simplyblock-operator/internal/mdsstate/mdsstatetest"
 )
 
 type recordedEvent struct{ eventType, reason, message string }
@@ -27,7 +28,7 @@ func (l *eventLog) has(reason string) bool {
 	return slices.ContainsFunc(l.events, func(e recordedEvent) bool { return e.reason == reason })
 }
 
-func coordinatorFor(t *testing.T, api *fakeAPI, sts *appsv1.StatefulSet, sw Switchover) (*Coordinator, *eventLog) {
+func coordinatorFor(t *testing.T, api *mdsstatetest.API, sts *appsv1.StatefulSet, sw Switchover) (*Coordinator, *eventLog) {
 	t.Helper()
 	log := &eventLog{}
 	c := kubeFor(t, sts)
@@ -50,9 +51,9 @@ func readyPods(names ...string) []corev1.Pod {
 // The first export's pool holds the state volume, its host list gets every
 // ordinal, and the StatefulSet is scaled.
 func TestReconcileCreatesTheStateVolumeAllowsHostsAndScales(t *testing.T) {
-	api := newFakeAPI()
-	first := api.add("export-1", "nqn.client")
-	second := api.add("export-2")
+	api := mdsstatetest.New()
+	first := api.Add("export-1", "nqn.client")
+	second := api.Add("export-2")
 	sts := stsWithReplicas(1)
 	co, log := coordinatorFor(t, api, sts, &fakeSwitchover{known: false})
 
@@ -67,11 +68,11 @@ func TestReconcileCreatesTheStateVolumeAllowsHostsAndScales(t *testing.T) {
 	if res.StateVolume == "" || got.Annotations[StateVolumeAnnotation] != string(res.StateVolume) {
 		t.Errorf("state volume %q, recorded %q", res.StateVolume, got.Annotations[StateVolumeAnnotation])
 	}
-	if !slices.Contains(api.hostsOf(first), hostOf(t, 1)) {
-		t.Errorf("export 1 hosts = %v, want ordinal 1 allowed", api.hostsOf(first))
+	if !slices.Contains(api.HostsOf(first), hostOf(t, 1)) {
+		t.Errorf("export 1 hosts = %v, want ordinal 1 allowed", api.HostsOf(first))
 	}
-	if len(api.hostsOf(second)) != 0 {
-		t.Errorf("an open export got hosts: %v", api.hostsOf(second))
+	if len(api.HostsOf(second)) != 0 {
+		t.Errorf("an open export got hosts: %v", api.HostsOf(second))
 	}
 	if *got.Spec.Replicas != 2 {
 		t.Errorf("replicas = %d, want 2", *got.Spec.Replicas)
@@ -84,9 +85,9 @@ func TestReconcileCreatesTheStateVolumeAllowsHostsAndScales(t *testing.T) {
 // O-05: a failing create is an event and a retry, nothing recorded, and the
 // volumes that do not need the state volume are still handled.
 func TestReconcileStateVolumeFailureIsAnEventAndARetry(t *testing.T) {
-	api := newFakeAPI()
-	export := api.add("export", "nqn.client")
-	api.createErr = errors.New("500")
+	api := mdsstatetest.New()
+	export := api.Add("export", "nqn.client")
+	api.CreateErr = errors.New("500")
 	sts := stsWithReplicas(2)
 	co, log := coordinatorFor(t, api, sts, &fakeSwitchover{})
 
@@ -100,7 +101,7 @@ func TestReconcileStateVolumeFailureIsAnEventAndARetry(t *testing.T) {
 	if !log.has("MDSStateUnavailable") || res.RequeueAfter == 0 || res.StateVolume != "" {
 		t.Errorf("events %+v, requeue %v, state %q: want MDSStateUnavailable and a retry", log.events, res.RequeueAfter, res.StateVolume)
 	}
-	if !slices.Contains(api.hostsOf(export), hostOf(t, 1)) {
+	if !slices.Contains(api.HostsOf(export), hostOf(t, 1)) {
 		t.Error("the export's hosts waited on the state volume")
 	}
 }
@@ -108,10 +109,10 @@ func TestReconcileStateVolumeFailureIsAnEventAndARetry(t *testing.T) {
 // A volume whose hosts cannot be updated is an event and a retry, and does not
 // keep the other volumes from being usable.
 func TestReconcileHostFailureIsAnEventAndARetry(t *testing.T) {
-	api := newFakeAPI()
-	bad := api.add("bad", "nqn.client")
-	good := api.add("good", "nqn.client")
-	api.hostErr[bad] = errors.New("503")
+	api := mdsstatetest.New()
+	bad := api.Add("bad", "nqn.client")
+	good := api.Add("good", "nqn.client")
+	api.HostErr[bad] = errors.New("503")
 	sts := stsWithReplicas(2)
 	co, log := coordinatorFor(t, api, sts, &fakeSwitchover{})
 
@@ -131,7 +132,7 @@ func TestReconcileHostFailureIsAnEventAndARetry(t *testing.T) {
 }
 
 func TestReconcileWarnsWhenNoStandbyIsReady(t *testing.T) {
-	api := newFakeAPI()
+	api := mdsstatetest.New()
 	sts := stsWithReplicas(2)
 	sts.Annotations = map[string]string{ActiveAnnotation: "mds-0"}
 	co, log := coordinatorFor(t, api, sts, &fakeSwitchover{known: true})
@@ -154,7 +155,7 @@ func TestReconcileWarnsWhenNoStandbyIsReady(t *testing.T) {
 
 func TestReconcileDoesNotWarnWithoutStandbys(t *testing.T) {
 	sts := stsWithReplicas(1)
-	co, log := coordinatorFor(t, newFakeAPI(), sts, &fakeSwitchover{known: true})
+	co, log := coordinatorFor(t, mdsstatetest.New(), sts, &fakeSwitchover{known: true})
 	if _, err := co.Reconcile(context.Background(), Input{
 		StatefulSet: sts, ClusterID: testCluster, Standbys: 0, Pods: readyPods("mds-0"),
 	}); err != nil {
@@ -169,7 +170,7 @@ func TestReconcileDoesNotWarnWithoutStandbys(t *testing.T) {
 func TestReconcileScaleDownWaitsForTheSwitchover(t *testing.T) {
 	sts := stsWithReplicas(2)
 	sw := &fakeSwitchover{known: true, active: 1}
-	co, _ := coordinatorFor(t, newFakeAPI(), sts, sw)
+	co, _ := coordinatorFor(t, mdsstatetest.New(), sts, sw)
 
 	res, err := co.Reconcile(context.Background(), Input{StatefulSet: sts, ClusterID: testCluster, Standbys: 0, Pods: readyPods("mds-0", "mds-1")})
 	if err != nil || res.Scale != ScaleWaitingForSwitchover || res.RequeueAfter == 0 {
@@ -183,7 +184,7 @@ func TestReconcileScaleDownWaitsForTheSwitchover(t *testing.T) {
 // Without a hook the scale-down is held with an event, not applied.
 func TestReconcileScaleDownWithoutAHookIsHeldWithAnEvent(t *testing.T) {
 	sts := stsWithReplicas(2)
-	co, log := coordinatorFor(t, newFakeAPI(), sts, nil)
+	co, log := coordinatorFor(t, mdsstatetest.New(), sts, nil)
 	res, err := co.Reconcile(context.Background(), Input{StatefulSet: sts, ClusterID: testCluster, Standbys: 0, Pods: readyPods("mds-0", "mds-1")})
 	if err != nil || res.RequeueAfter == 0 || !log.has("MDSScaleHeld") {
 		t.Errorf("Reconcile = %+v, %v, events %+v, want a held scale-down", res, err, log.events)
@@ -196,12 +197,12 @@ func TestReconcileScaleDownWithoutAHookIsHeldWithAnEvent(t *testing.T) {
 // With nothing to authorize against, the control plane is not needed and the
 // scale still happens.
 func TestReconcileWithNoExportsAndNoStateVolumeTouchesNoVolume(t *testing.T) {
-	api := newFakeAPI()
+	api := mdsstatetest.New()
 	sts := stsWithReplicas(1)
 	co, _ := coordinatorFor(t, api, sts, &fakeSwitchover{})
 	res, err := co.Reconcile(context.Background(), Input{StatefulSet: sts, ClusterID: testCluster, Standbys: 1, Pods: readyPods("mds-0", "mds-1")})
-	if err != nil || res.StateVolume != "" || api.creates != 0 {
-		t.Errorf("Reconcile = %+v, %v, %d creates, want no volume without an export", res, err, api.creates)
+	if err != nil || res.StateVolume != "" || api.Creates != 0 {
+		t.Errorf("Reconcile = %+v, %v, %d creates, want no volume without an export", res, err, api.Creates)
 	}
 	if *reload(t, co.Client, sts).Spec.Replicas != 2 {
 		t.Error("not scaled")
@@ -209,15 +210,15 @@ func TestReconcileWithNoExportsAndNoStateVolumeTouchesNoVolume(t *testing.T) {
 }
 
 func TestFinalizeDeletesTheStateVolumeThroughTheCoordinator(t *testing.T) {
-	api := newFakeAPI()
-	h := api.add("state")
+	api := mdsstatetest.New()
+	h := api.Add("state")
 	sts := testSTS(map[string]string{StateVolumeAnnotation: string(h)})
 	sts.Finalizers = []string{StateVolumeFinalizer}
 	co, _ := coordinatorFor(t, api, sts, nil)
 	if err := co.Finalize(context.Background(), sts, testCluster); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
-	if _, ok := api.volumes[h]; ok {
+	if _, ok := api.Volumes[h]; ok {
 		t.Error("the volume still exists")
 	}
 }

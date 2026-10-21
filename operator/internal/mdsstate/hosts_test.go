@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/simplyblock/atlas/lvol"
+	"github.com/simplyblock/simplyblock-operator/internal/mdsstate/mdsstatetest"
 )
 
 func hostOf(t *testing.T, ordinal int32) string {
@@ -23,9 +24,9 @@ func hostOf(t *testing.T, ordinal int32) string {
 }
 
 func TestSyncHostsAllowsEveryOrdinalOnVolumesThatRestrictHosts(t *testing.T) {
-	api := newFakeAPI()
-	state := api.add("state", "nqn.client-a")
-	export := api.add("export", "nqn.client-a", "nqn.client-b")
+	api := mdsstatetest.New()
+	state := api.Add("state", "nqn.client-a")
+	export := api.Add("export", "nqn.client-a", "nqn.client-b")
 	sts := testSTS(nil)
 	hs := &HostSync{Client: kubeFor(t, sts), API: api}
 
@@ -35,12 +36,12 @@ func TestSyncHostsAllowsEveryOrdinalOnVolumesThatRestrictHosts(t *testing.T) {
 	}
 	for _, v := range []lvol.VolumeHandle{state, export} {
 		for o := int32(0); o < 3; o++ {
-			if !slices.Contains(api.hostsOf(v), hostOf(t, o)) {
-				t.Errorf("volume %s lacks the host of ordinal %d: %v", v, o, api.hostsOf(v))
+			if !slices.Contains(api.HostsOf(v), hostOf(t, o)) {
+				t.Errorf("volume %s lacks the host of ordinal %d: %v", v, o, api.HostsOf(v))
 			}
 		}
 	}
-	if !slices.Contains(api.hostsOf(export), "nqn.client-b") {
+	if !slices.Contains(api.HostsOf(export), "nqn.client-b") {
 		t.Error("a host that was already allowed was dropped")
 	}
 }
@@ -48,8 +49,8 @@ func TestSyncHostsAllowsEveryOrdinalOnVolumesThatRestrictHosts(t *testing.T) {
 // A volume that lists no hosts allows every host: adding one would lock every
 // other client out at the control plane's next re-apply.
 func TestSyncHostsLeavesAVolumeWithoutAllowedHostsAlone(t *testing.T) {
-	api := newFakeAPI()
-	open := api.add("open")
+	api := mdsstatetest.New()
+	open := api.Add("open")
 	sts := testSTS(nil)
 	hs := &HostSync{Client: kubeFor(t, sts), API: api}
 
@@ -57,14 +58,14 @@ func TestSyncHostsLeavesAVolumeWithoutAllowedHostsAlone(t *testing.T) {
 	if err != nil || len(res.Failed) != 0 {
 		t.Fatalf("Sync = %+v, %v", res, err)
 	}
-	if got := api.hostsOf(open); len(got) != 0 {
+	if got := api.HostsOf(open); len(got) != 0 {
 		t.Errorf("hosts = %v, want the volume left open", got)
 	}
 }
 
 func TestSyncHostsIsIdempotent(t *testing.T) {
-	api := newFakeAPI()
-	v := api.add("export", "nqn.client-a")
+	api := mdsstatetest.New()
+	v := api.Add("export", "nqn.client-a")
 	sts := testSTS(nil)
 	c := kubeFor(t, sts)
 	hs := &HostSync{Client: c, API: api}
@@ -74,7 +75,7 @@ func TestSyncHostsIsIdempotent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := api.hostsOf(v); len(got) != 3 {
+	if got := api.HostsOf(v); len(got) != 3 {
 		t.Errorf("hosts = %v, want the client and two pods once each", got)
 	}
 }
@@ -82,10 +83,10 @@ func TestSyncHostsIsIdempotent(t *testing.T) {
 // One volume that cannot be updated is reported and retried, and the volumes
 // that can are done: a promotion of those does not wait.
 func TestSyncHostsReportsAVolumeThatFailsAndFinishesTheRest(t *testing.T) {
-	api := newFakeAPI()
-	bad := api.add("bad", "nqn.client-a")
-	good := api.add("good", "nqn.client-a")
-	api.hostErr[bad] = errors.New("503")
+	api := mdsstatetest.New()
+	bad := api.Add("bad", "nqn.client-a")
+	good := api.Add("good", "nqn.client-a")
+	api.HostErr[bad] = errors.New("503")
 	sts := testSTS(nil)
 	hs := &HostSync{Client: kubeFor(t, sts), API: api}
 
@@ -96,7 +97,7 @@ func TestSyncHostsReportsAVolumeThatFailsAndFinishesTheRest(t *testing.T) {
 	if len(res.Failed) != 1 || res.Failed[bad] == nil {
 		t.Errorf("failed = %v, want only the bad volume", res.Failed)
 	}
-	if !slices.Contains(api.hostsOf(good), hostOf(t, 1)) {
+	if !slices.Contains(api.HostsOf(good), hostOf(t, 1)) {
 		t.Error("the good volume was not updated after the bad one failed")
 	}
 	if res.Allowed(bad) || !res.Allowed(good) {
@@ -107,8 +108,8 @@ func TestSyncHostsReportsAVolumeThatFailsAndFinishesTheRest(t *testing.T) {
 // Scale-down removes the hosts of the ordinals that are gone, once, and a
 // failed removal is retried.
 func TestSyncHostsRemovesTheHostsOfRemovedOrdinals(t *testing.T) {
-	api := newFakeAPI()
-	v := api.add("export", "nqn.client-a")
+	api := mdsstatetest.New()
+	v := api.Add("export", "nqn.client-a")
 	sts := testSTS(nil)
 	c := kubeFor(t, sts)
 	hs := &HostSync{Client: c, API: api}
@@ -121,7 +122,7 @@ func TestSyncHostsRemovesTheHostsOfRemovedOrdinals(t *testing.T) {
 		t.Fatalf("recorded ordinals = %q, want 3", got)
 	}
 
-	api.hostErr[v] = errors.New("503")
+	api.HostErr[v] = errors.New("503")
 	if res, _ := hs.Sync(ctx, reload(t, c, sts), []lvol.VolumeHandle{v}, 1); len(res.Failed) != 1 {
 		t.Fatalf("a failed removal was not reported: %+v", res)
 	}
@@ -129,11 +130,11 @@ func TestSyncHostsRemovesTheHostsOfRemovedOrdinals(t *testing.T) {
 		t.Errorf("recorded ordinals = %q after a failed removal, want 3 kept for the retry", got)
 	}
 
-	delete(api.hostErr, v)
+	delete(api.HostErr, v)
 	if res, err := hs.Sync(ctx, reload(t, c, sts), []lvol.VolumeHandle{v}, 1); err != nil || len(res.Failed) != 0 {
 		t.Fatalf("retry = %+v, %v", res, err)
 	}
-	hosts := api.hostsOf(v)
+	hosts := api.HostsOf(v)
 	if !slices.Contains(hosts, hostOf(t, 0)) || slices.Contains(hosts, hostOf(t, 1)) || slices.Contains(hosts, hostOf(t, 2)) {
 		t.Errorf("hosts = %v, want ordinal 0 kept and 1 and 2 removed", hosts)
 	}
@@ -142,11 +143,11 @@ func TestSyncHostsRemovesTheHostsOfRemovedOrdinals(t *testing.T) {
 	}
 
 	// Settled: nothing further is removed.
-	before := len(api.hostCalls)
+	before := len(api.HostCalls)
 	if _, err := hs.Sync(ctx, reload(t, c, sts), []lvol.VolumeHandle{v}, 1); err != nil {
 		t.Fatal(err)
 	}
-	for _, call := range api.hostCalls[before:] {
+	for _, call := range api.HostCalls[before:] {
 		if len(call) >= 6 && call[:6] == "remove" {
 			t.Errorf("a settled sync made %q", call)
 		}
