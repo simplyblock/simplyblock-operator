@@ -12219,9 +12219,15 @@
             "title": "Completed At"
           },
           "error_message": {
-            "type": "string",
-            "title": "Error Message",
-            "default": ""
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
           }
         },
         "type": "object",
@@ -12313,12 +12319,13 @@
           "source": {
             "$ref": "#/components/schemas/GroupManifestSource"
           },
-          "members": {
+          "member_backup_ids": {
             "items": {
-              "$ref": "#/components/schemas/GroupManifestMember"
+              "type": "string",
+              "format": "uuid"
             },
             "type": "array",
-            "title": "Members"
+            "title": "Member Backup Ids"
           },
           "membership": {
             "$ref": "#/components/schemas/GroupManifestMembership"
@@ -12337,7 +12344,7 @@
           "completed_at",
           "size",
           "source",
-          "members",
+          "member_backup_ids",
           "membership"
         ],
         "title": "GroupBackupManifest",
@@ -12360,38 +12367,6 @@
         },
         "type": "object",
         "title": "GroupFailbackParams"
-      },
-      "GroupManifestMember": {
-        "properties": {
-          "lvol_id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Lvol Id"
-          },
-          "lvol_name": {
-            "type": "string",
-            "title": "Lvol Name"
-          },
-          "backup_id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Backup Id"
-          },
-          "s3_id": {
-            "type": "integer",
-            "title": "S3 Id"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "lvol_id",
-          "lvol_name",
-          "backup_id",
-          "s3_id"
-        ],
-        "title": "GroupManifestMember",
-        "description": "One member of a group backup: the volume and the backup that copied it."
       },
       "GroupManifestMembership": {
         "properties": {

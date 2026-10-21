@@ -514,9 +514,7 @@ The S3 object at `groups/<group_backup_id>.json`, read by discovery and restore.
     "consistency_group_name": "<name>",
     "generation": 7
   },
-  "members": [
-    { "lvol_id": "<uuid>", "lvol_name": "<name>", "backup_id": "<uuid>", "s3_id": 123 }
-  ],
+  "member_backup_ids": ["<uuid>", "..."],
   "membership": {
     "expected_lvol_ids": ["<uuid>", "..."]
   },
@@ -525,7 +523,7 @@ The S3 object at `groups/<group_backup_id>.json`, read by discovery and restore.
 }
 ```
 
-`members` names the N member backups by `backup_id`; a reader then reads each `manifests/<backup_id>.json` to assemble that member's chain. `membership.expected_lvol_ids` is the generation's membership at the take, so a reader verifies completeness (`members` covers `expected_lvol_ids`) before restore, which is the `expected` versus `present` check (`design-consistency-groups.md` §8.3) encoded in the bucket. `encrypted` is the shared disposition, not a key: each member has its own DEK recorded in its own `manifests/<backup_id>.json`, because the per-member backups carry per-volume keys and there is no group-level key (§3.4). A reader resolves per-member keys before a restore. A `schema_version` the reader does not know is refused, as the per-backup manifest does.
+`member_backup_ids` names the N member backups and nothing else about them: each member's volume, `s3_id`, chain link, and key are in its own `manifests/<backup_id>.json`, which a reader reads to assemble that member's chain. `membership.expected_lvol_ids` is the generation's membership at the take. A group backup is complete in a bucket when the bucket holds a manifest for every member it names and those manifests cover `expected_lvol_ids`, which is the `expected` versus `present` check (`design-consistency-groups.md` §8.3) encoded in the bucket. The check needs the member manifests: the group manifest is written only once every member completed, so what a torn group backup lacks afterward is a member's own manifest, which the group manifest alone cannot show. `encrypted` is the shared disposition, not a key: each member has its own DEK recorded in its own `manifests/<backup_id>.json`, because the per-member backups carry per-volume keys and there is no group-level key (§3.4). A reader resolves per-member keys before a restore. A `schema_version` the reader does not know is refused, as the per-backup manifest does.
 
 ## Appendix E: `storagegroupbackup_types.go`
 

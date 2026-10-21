@@ -1599,11 +1599,11 @@ type GroupBackupExportOutput struct {
 
 // GroupBackupManifest The self-describing document for one consistency-group backup.
 type GroupBackupManifest struct {
-	CompletedAt   int                   `json:"completed_at"`
-	CreatedAt     int                   `json:"created_at"`
-	Encrypted     *bool                 `json:"encrypted,omitempty"`
-	GroupBackupId openapi_types.UUID    `json:"group_backup_id"`
-	Members       []GroupManifestMember `json:"members"`
+	CompletedAt     int                  `json:"completed_at"`
+	CreatedAt       int                  `json:"created_at"`
+	Encrypted       *bool                `json:"encrypted,omitempty"`
+	GroupBackupId   openapi_types.UUID   `json:"group_backup_id"`
+	MemberBackupIds []openapi_types.UUID `json:"member_backup_ids"`
 
 	// Membership The generation's membership, so a reader can verify completeness.
 	//
@@ -1623,14 +1623,6 @@ type GroupBackupManifest struct {
 // GroupFailbackParams defines model for GroupFailbackParams.
 type GroupFailbackParams struct {
 	SourceClusterId *openapi_types.UUID `json:"source_cluster_id,omitempty"`
-}
-
-// GroupManifestMember One member of a group backup: the volume and the backup that copied it.
-type GroupManifestMember struct {
-	BackupId openapi_types.UUID `json:"backup_id"`
-	LvolId   openapi_types.UUID `json:"lvol_id"`
-	LvolName string             `json:"lvol_name"`
-	S3Id     int                `json:"s3_id"`
 }
 
 // GroupManifestMembership The generation's membership, so a reader can verify completeness.
