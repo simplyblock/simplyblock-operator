@@ -124,7 +124,7 @@ func TestScaleDownBeforeAnyActiveNeedsNoSwitchover(t *testing.T) {
 	}
 }
 
-// Not knowing who is active is not a licence to remove a pod that may be it.
+// Not knowing who is active is not a license to remove a pod that may be it.
 func TestScaleDownRefusesWithoutAHookOrWhenTheActiveIsUnreadable(t *testing.T) {
 	sts := stsWithReplicas(2)
 	s := &Scaler{Client: kubeFor(t, sts)}

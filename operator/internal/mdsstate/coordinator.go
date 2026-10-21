@@ -98,7 +98,7 @@ func (c *Coordinator) Reconcile(ctx context.Context, in Input) (Result, error) {
 	var volumes []lvol.VolumeHandle
 	var sync *HostSync
 	var state *StateVolume
-	if api, err := c.api(ctx, in); err != nil {
+	if api, err := c.clientFor(ctx, in); err != nil {
 		c.event(corev1.EventTypeWarning, ReasonStateUnavailable,
 			fmt.Sprintf("cannot reach the control plane of storage cluster %s: %v", in.ClusterID, err))
 		retry(retryInterval)
@@ -188,8 +188,8 @@ func (c *Coordinator) reportHosts(hosts HostResult, retry func(time.Duration)) H
 	return hosts
 }
 
-// api returns the cluster's client, or nil when no source is wired.
-func (c *Coordinator) api(ctx context.Context, in Input) (VolumeAPI, error) {
+// clientFor returns the cluster's control-plane client, or nil when no source is wired.
+func (c *Coordinator) clientFor(ctx context.Context, in Input) (VolumeAPI, error) {
 	if c.APIFor == nil {
 		return nil, nil
 	}
@@ -204,7 +204,7 @@ func (c *Coordinator) event(eventType, reason, message string) {
 
 // Finalize releases a deleted StatefulSet's state volume.
 func (c *Coordinator) Finalize(ctx context.Context, sts *appsv1.StatefulSet, clusterID string) error {
-	api, err := c.api(ctx, Input{ClusterID: clusterID})
+	api, err := c.clientFor(ctx, Input{ClusterID: clusterID})
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrStateUnavailable, err)
 	}
