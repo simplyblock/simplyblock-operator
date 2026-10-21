@@ -352,3 +352,40 @@ func TestAMemberHoldsItsCreationUntilItsSuperclustersServicesExist(t *testing.T)
 		t.Errorf("the member did not claim its creation once the Services exist")
 	}
 }
+
+// I-68: a member's create body carries its supercluster's Services and Secret
+// and its own suffix, which is how the control plane builds the member's node
+// hostnames inside the shared Services (§6.2).
+func TestAMembersCreateBodyCarriesItsSuperclustersNamesAndItsSuffix(t *testing.T) {
+	supercluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: objectMeta(testSuperclusterName),
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{Supercluster: &simplyblockv1alpha2.SuperclusterSpec{}},
+	}
+	member := newUncreatedCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+		c.Spec.SuperclusterRef = testSuperclusterName
+	})
+	want := utils.BackendWorkloadNames(atlaskube.MemberWorkloadNames(testSuperclusterName, testClusterName))
+	var sent atlascp.CreateClusterParams
+	api := &fakeControlPlane{
+		create: func(params atlascp.CreateClusterParams) (atlascp.Cluster, error) {
+			sent = params
+			return createdWith(want)(params)
+		},
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
+	}
+	shared := atlaskube.DerivedWorkloadNames(testSuperclusterName)
+	r := newClusterReconciler(t, api, &recorder{}, member, supercluster,
+		&corev1.Service{ObjectMeta: objectMeta(shared.NodeAPIService)},
+		&corev1.Service{ObjectMeta: objectMeta(shared.SpdkProxyService)})
+
+	reconcileCluster(t, r, 6)
+
+	if sent.WorkloadNames != want {
+		t.Errorf("create body names = %+v, want %+v", sent.WorkloadNames, want)
+	}
+	if sent.WorkloadNames.NodeAPIService != shared.NodeAPIService ||
+		sent.WorkloadNames.SpdkProxyTLSSecret != shared.SpdkProxyTLSSecret ||
+		sent.WorkloadNames.NodeLabelSuffix == "" {
+		t.Errorf("create body names = %+v, want the supercluster's Services and Secret and a suffix", sent.WorkloadNames)
+	}
+}

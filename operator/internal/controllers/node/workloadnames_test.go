@@ -14,6 +14,7 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -440,5 +441,28 @@ func TestAClusterOwnsItsServingSecrets(t *testing.T) {
 		if !owned {
 			t.Errorf("Secret %s is owned by %+v, want the cluster among its owners", name, secret.OwnerReferences)
 		}
+	}
+}
+
+// I-67, the member's half: under cert-manager a member applies no Certificate,
+// because the certificates are its supercluster's, for the Services it shares.
+func TestAMemberAppliesNoCertificate(t *testing.T) {
+	member := aMember("prod-fast-kqv", secondClusterUUID)
+	objects := append([]client.Object{member}, theSharedServices()...)
+	r := aWorkloadReconciler(t, objects...)
+	r.TLSEnabled, r.TLSProvider = true, utils.TLSProviderCertManager
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(member)}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	certificates := &unstructured.UnstructuredList{}
+	certificates.SetAPIVersion("cert-manager.io/v1")
+	certificates.SetKind("CertificateList")
+	if err := r.List(context.Background(), certificates, client.InNamespace(opsNamespace)); err != nil {
+		t.Fatalf("list the Certificates: %v", err)
+	}
+	if len(certificates.Items) != 0 {
+		t.Errorf("the member applied %d Certificate(s), want none", len(certificates.Items))
 	}
 }

@@ -34,6 +34,9 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	admissionv1 "k8s.io/api/admission/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 var (
@@ -181,3 +184,53 @@ func TestAStorageClusterIsDeletedWhileTheOperatorIsNotServing(t *testing.T) {
 		t.Errorf("deleting a StorageCluster was refused while the operator was not serving: %v", err)
 	}
 }
+
+// I-70: the §4.5 supercluster, created through a real apiserver, reads back
+// with every field the schema defaults set, and the validator admits the
+// object exactly as read. The validator answers what the apiserver sends after
+// defaulting, so a default the supercluster rules refuse would make every
+// supercluster unadmittable.
+func TestTheExampleSuperclusterReadsBackDefaultedAndIsAdmitted(t *testing.T) {
+	c := apiServer(t)
+	example := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "prod-example", Namespace: "default"},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			Supercluster: &simplyblockv1alpha2.SuperclusterSpec{
+				Placement: &simplyblockv1alpha2.SuperclusterPlacement{
+					Strategy: simplyblockv1alpha2.PlacementMostAvailableCapacity,
+				},
+			},
+			WarningThreshold:  &simplyblockv1alpha2.CapacityThresholdSpec{Capacity: ptrTo(int64(80))},
+			CriticalThreshold: &simplyblockv1alpha2.CapacityThresholdSpec{Capacity: ptrTo(int64(90))},
+		},
+	}
+	if err := c.Create(context.Background(), example); err != nil {
+		t.Fatalf("create the example supercluster: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Delete(context.Background(), example) })
+
+	read := &unstructured.Unstructured{}
+	read.SetGroupVersionKind(simplyblockv1alpha2.GroupVersion.WithKind("StorageCluster"))
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(example), read); err != nil {
+		t.Fatalf("read the example back: %v", err)
+	}
+	spec, _, _ := unstructured.NestedMap(read.Object, "spec")
+	for field := range storageClusterSpecDefaultsForTest(t) {
+		if _, set := spec[field]; !set {
+			t.Errorf("spec.%s reads back unset, want its schema default", field)
+		}
+	}
+
+	validator := &StorageClusterValidator{Client: c, Decoder: admission.NewDecoder(scheme.Scheme)}
+	encoded, err := read.MarshalJSON()
+	if err != nil {
+		t.Fatalf("encode the example: %v", err)
+	}
+	response := validator.Handle(context.Background(), admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+		Operation: admissionv1.Create, Namespace: read.GetNamespace(), Name: read.GetName(),
+		Object: runtime.RawExtension{Raw: encoded},
+	}})
+	wantAllowed(t, response, "the example supercluster as the apiserver stored it")
+}
+
+func ptrTo[T any](v T) *T { return &v }

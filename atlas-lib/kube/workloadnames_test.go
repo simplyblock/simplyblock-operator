@@ -167,3 +167,26 @@ func TestALongWorkerLabelWithASuffixStaysOneDNSLabel(t *testing.T) {
 		t.Errorf("hostname = %q, want %q, the rule sbcli applies", first, want)
 	}
 }
+
+// The control plane builds a member's node hostnames by the same rule,
+// independently, and the two have to agree or the name the control plane
+// dials is not the one published (design-superclusters.md U-24). These are
+// sbcli's own answers, from StorageNode._k8s_service_host, for a short name, a
+// name too long to take the suffix, and a worker name carrying a domain, of
+// which the agent reports the short hostname.
+func TestHostnamesAgreeWithTheControlPlanes(t *testing.T) {
+	for _, tc := range []struct {
+		worker, suffix, want string
+	}{
+		{"worker-2", "-cjd", "worker-2-cjd"},
+		{"worker-node-in-rack-twelve-of-the-eu-west-datacenter-number-0007", "-kqv",
+			"worker-node-in-rack-twelve-of-the-eu-west-datacent-48b897af-kqv"},
+		{"worker-2.example.internal", "-cjd", "worker-2-cjd"},
+	} {
+		names := DerivedWorkloadNames("prod")
+		names.NodeLabelSuffix = tc.suffix
+		if got := names.Hostname(tc.worker); got != tc.want {
+			t.Errorf("Hostname(%q) with suffix %q = %q, want the control plane's %q", tc.worker, tc.suffix, got, tc.want)
+		}
+	}
+}
