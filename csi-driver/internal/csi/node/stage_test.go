@@ -361,7 +361,8 @@ func TestStageFormatsOnlyABlankDeviceWithNoRecord(t *testing.T) {
 }
 
 func TestNoEndpointErrorQuotesTheControlPlane(t *testing.T) {
-	cause := errors.New("the control plane refused to publish the volume: GET 403: Host NQN w4 not found in allowed hosts for volume v")
+	cause := errors.New("the control plane refused to publish the volume: " +
+		"GET 403: Host NQN w4 not found in allowed hosts for volume v")
 	err := noEndpointError("c:p:v", cause)
 	if !errors.Is(err, cause) {
 		t.Fatalf("err = %v, want it to wrap the cause", err)

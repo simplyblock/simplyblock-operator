@@ -291,7 +291,8 @@ func TestGetLvolConnectionsKeepsTheReasonOnA404(t *testing.T) {
 		}, nil
 	})
 
-	_, err := client.getLvolConnections(context.Background(), testPool1UUID, testVolUUID, "nqn.2014-08.io.simplyblock:uuid:w4")
+	_, err := client.getLvolConnections(
+		context.Background(), testPool1UUID, testVolUUID, "nqn.2014-08.io.simplyblock:uuid:w4")
 
 	if !errors.Is(err, ErrVolumeNotFound) {
 		t.Fatalf("err = %v, want it to satisfy ErrVolumeNotFound", err)
