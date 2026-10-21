@@ -28,14 +28,19 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storagecluster,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=storageclusters,verbs=create;update;delete,versions=v1alpha2,name=vstoragecluster.simplyblock.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storagecluster,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=storageclusters,verbs=create;update,versions=v1alpha2,name=vstoragecluster.simplyblock.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storagecluster,mutating=false,failurePolicy=ignore,sideEffects=None,groups=storage.simplyblock.io,resources=storageclusters,verbs=delete,versions=v1alpha2,name=vstoragecluster-delete.simplyblock.io,admissionReviewVersions=v1
 
 // StorageClusterValidator refuses a member whose supercluster does not resolve, a supercluster carrying fields that describe nodes, and the
 // deletion of a supercluster its members still name.
 //
-// failurePolicy=Fail, because the webhook server runs inside the operator pod:
-// its availability tracks the operator's, and a cluster created while the
-// operator is down has nothing to reconcile it anyway.
+// Creates and updates fail closed, because the webhook server runs inside the
+// operator pod: its availability tracks the operator's, and a cluster created
+// while the operator is down has nothing to reconcile it anyway. Deletes fail
+// open, under a webhook entry of their own: an uninstall that removes the
+// operator before the clusters would otherwise leave every cluster behind a
+// webhook nothing answers, and the worst a missed check costs is a supercluster
+// deleted while members still name it.
 type StorageClusterValidator struct {
 	Client  client.Client
 	Decoder admission.Decoder

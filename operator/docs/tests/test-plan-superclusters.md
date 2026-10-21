@@ -89,7 +89,8 @@ File: `atlas-lib/kube/workloadnames_test.go`,
 ### Admission (design §4.2, §4.4, §6.2)
 
 File: `operator/internal/webhook/storagecluster_validator_test.go`, the supercluster rules in
-`storagecluster_supercluster_validator_test.go`, and the CEL rules in
+`storagecluster_supercluster_validator_test.go`, the failure policy of U-223 in
+`install_admission_test.go`, and the CEL rules in
 `operator/internal/controllers/cluster/supercluster_cel_test.go`
 
 | #        | Scenario                                                                                                                                                                                          | Type                | Test                                                     |
@@ -374,6 +375,7 @@ File: `operator/internal/webhook/storagecluster_validator_test.go`, the superclu
 | U-143 | `disablePlacement` on a cluster that is not a member is refused                                                                                                                 | Negative            | `TestSuperclusterCELCreateRules`                                    |
 | U-144 | Adding or removing `supercluster`, and adding, changing, or removing `superclusterRef`, after creation is refused                                                               | Negative            | `TestSuperclusterCELRoleIsFixedAtCreation`                          |
 | U-145 | Deleting a supercluster with members is refused, deleting a member whose pools report bound volumes is refused outside `RemoveMember`, and deleting an empty member is admitted | Positive + Negative | `TestDeletingASuperclusterWithMembersIsRefused` (supercluster half) |
+| U-223 | Deleting a StorageCluster while the operator serves no webhook is admitted, because the delete rules fail open                                                                  | Negative            | `TestAStorageClusterIsDeletedWhileTheOperatorIsNotServing`          |
 | U-146 | A member created before its supercluster is refused                                                                                                                             | Negative            | `TestAMemberWhoseSuperclusterDoesNotResolveIsRefused`               |
 
 ### Supercluster Reconciler (design §10.1, §13)
@@ -615,7 +617,7 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 183       | 110     | all others  |
+| Unit        | 184       | 111     | all others  |
 | Integration | 55        | 12      | all others  |
 | E2E         | 10        | 0       | E-01 … E-10 |
 | Manual      | 2         | 0       | M-01, M-02  |
@@ -624,7 +626,7 @@ Four covered unit rows are existing tests of behavior this design keeps: U-25,
 U-27, U-28, and U-81. The rest, and the six integration rows, are Phase 1's
 first two iterations: the API, admission, the supercluster reconciler, the
 refusals of U-195 to U-198, and the workload names and shared Services of §6 with U-203 to
-U-217, and the expansion into members of §5.1 to §5.4 with U-218 to U-222, the per-node-set overrides of §5.8 with U-124 to U-128 and U-194, growth of §5.6 with U-87, I-60, and I-61, the topology approval rules of §5.7 with U-107, U-108, and U-178 to U-180, the failure domains discovery reads with U-100 to U-104, and the size split of §5.5 with U-88 to U-99, U-105, U-106, and U-151, the suffix draw of U-152, and the placement-group labels of U-173 to U-177. The counts exclude struck rows, each superseded by
+U-217, and the expansion into members of §5.1 to §5.4 with U-218 to U-222, the per-node-set overrides of §5.8 with U-124 to U-128 and U-194, growth of §5.6 with U-87, I-60, and I-61, the topology approval rules of §5.7 with U-107, U-108, and U-178 to U-180, the failure domains discovery reads with U-100 to U-104, and the size split of §5.5 with U-88 to U-99, U-105, U-106, and U-151, the suffix draw of U-152, and the placement-group labels of U-173 to U-177, and the delete rules failing open with U-223. The counts exclude struck rows, each superseded by
 the row its strike names: U-10 … U-18, U-20 … U-23, U-26, U-29 … U-33, U-35, U-38 … U-46, U-55 … U-57, U-77, U-79, U-122, U-129 … U-130, U-163, U-200, and I-04 … I-07, I-09, I-11 … I-12, I-14, I-17 … I-20, I-26, I-28 … I-30, I-34, I-37, I-40 … I-41, I-43, I-46, I-52.
 
 ---

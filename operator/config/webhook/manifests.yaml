@@ -272,6 +272,25 @@ webhooks:
       name: webhook-service
       namespace: system
       path: /validate-storage-simplyblock-io-v1alpha2-storagecluster
+  failurePolicy: Ignore
+  name: vstoragecluster-delete.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - DELETE
+    resources:
+    - storageclusters
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-storage-simplyblock-io-v1alpha2-storagecluster
   failurePolicy: Fail
   name: vstoragecluster.simplyblock.io
   rules:
@@ -282,7 +301,6 @@ webhooks:
     operations:
     - CREATE
     - UPDATE
-    - DELETE
     resources:
     - storageclusters
   sideEffects: None

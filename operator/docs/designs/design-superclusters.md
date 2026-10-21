@@ -403,10 +403,16 @@ gains these rules, each refusing with a message that names the object:
 | Deleting a supercluster that has members is refused                                          | Every member names it in an immutable field                |
 | Deleting a member whose pools report bound volumes is refused, outside `RemoveMember` (§8.4) | Removal moves the volumes first                            |
 
+The two delete rules fail open, under a webhook entry of their own with
+`failurePolicy: Ignore`, while every other rule fails closed. An uninstall that
+removes the operator before its clusters would otherwise leave every cluster
+behind a webhook nothing answers, and the worst a missed delete check costs is a
+supercluster deleted while members still name it.
+
 The rule that refused a second `StorageCluster` in a namespace is removed. Every
-cluster records its workload names, and only the first standalone cluster in a
-namespace takes the constant ones (§6.1), so clusters of any kind share a
-namespace freely.
+cluster records its workload names, and only a cluster that predates the record
+keeps the constant ones (§6.1), so clusters of any kind share a namespace
+freely.
 
 ### 4.5 Example
 

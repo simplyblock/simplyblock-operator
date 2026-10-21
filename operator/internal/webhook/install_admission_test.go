@@ -158,3 +158,26 @@ func TestBootstrapDriverIsAdmittedWhileTheOperatorIsNotServing(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = c.Delete(context.Background(), driver) })
 }
+
+// TestAStorageClusterIsDeletedWhileTheOperatorIsNotServing covers an uninstall
+// that removes the operator before the clusters. The delete check refuses
+// deleting a supercluster that members still name, and a delete refused for
+// want of the operator would strand every cluster behind a webhook nothing
+// answers, so that check fails open.
+func TestAStorageClusterIsDeletedWhileTheOperatorIsNotServing(t *testing.T) {
+	c := apiServer(t)
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "uninstalled", Namespace: "default"},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			Supercluster: &simplyblockv1alpha2.SuperclusterSpec{},
+		},
+	}
+	if err := c.Create(context.Background(), cluster); err != nil {
+		t.Fatalf("create the cluster: %v", err)
+	}
+	registerGeneratedWebhooks(t, c)
+
+	if err := c.Delete(context.Background(), cluster); err != nil {
+		t.Errorf("deleting a StorageCluster was refused while the operator was not serving: %v", err)
+	}
+}
