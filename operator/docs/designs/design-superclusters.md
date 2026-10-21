@@ -610,6 +610,16 @@ creates no second member.
 nodes of all members, so the document's printcolumn names the object an
 administrator works with.
 
+**A member's first node adds run one member at a time.** On OpenShift every
+backend cluster gets a MachineConfigPool of its own, and its first node add on a
+worker reboots the worker to apply the CPU topology. A pool limits how many of
+its own workers reboot at once, but no pool knows the others, so members adding
+their first nodes together reboot every worker at once, including the ones the
+control plane and FoundationDB run on, and the control plane is down until they
+return (seen on dev-ocp with four single-node members). The expansion therefore
+starts a member's nodes only once every earlier member's nodes are online. This
+is not built yet (§16 Q12).
+
 **Activation runs per member and finishes with the last.** A member whose nodes
 are all online is activated without waiting for the others, because members are
 independent clusters and an activation is per cluster.
@@ -1717,6 +1727,7 @@ repository's spell check.
 | 9   | ~~**Volume names across members**~~ **Resolved.** Not relevant: volumes are created through Kubernetes, whose PV names are unique.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Resolved                    |
 | 10  | **Encryption across a cross-cluster move:** replication lands an encrypted volume's ciphertext in a target volume without a crypto layer, and `delete_source` deletes the only key, so the data is permanently lost (§9.4). The same path is reachable through replication's own `commit` with `delete_source` and through failover of encrypted volumes, outside this design. What carries the key to the target (P0-1), and is the existing replication path guarded against it?                                                                                                                                                                                                                                                                                                                                                 | Backend team                |
 | 11  | **Port separation for SPDK pods on a shared worker:** SPDK pods keep host networking, and each cluster hands out NVMe-oF, RPC, and firewall ports by counting up from its own `nvmfBasePort`, `rpcBasePort`, and `snodeApiPort` (`get_next_nvmf_port`, `get_next_lvstore_ports`, and `get_next_fw_port` in sbcli), skipping only the ports that cluster uses. Members sharing a worker (§5.1) therefore need disjoint ports. The candidates are three. The operator assigns each member a port range, which needs an upper bound the control plane does not enforce today. The operator gives each member distinct base ports with a fixed spacing, which needs no control-plane change and holds while no member counts past the spacing. The control plane allocates ports per host across clusters. Which, and with what width? | Operator team, Backend team |
+| 12  | **Serializing members' first node adds:** whether the expansion orders members, starting a member's nodes once the previous member's are online (§5.4), or the operator's node-add slots count across a supercluster's members. The first is simpler and covers documents; the second also covers members created by hand                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Open                        |
 
 ---
 
