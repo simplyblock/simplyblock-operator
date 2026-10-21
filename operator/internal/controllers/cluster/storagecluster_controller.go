@@ -449,14 +449,6 @@ func (r *StorageClusterReconciler) postCluster(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	rewritten, err := r.settleWorkloadNames(ctx, cluster)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if rewritten {
-		return ctrl.Result{RequeueAfter: time.Second}, nil
-	}
-
 	params, err := r.creationParams(ctx, cluster)
 	if err != nil {
 		return ctrl.Result{RequeueAfter: clusterRetry}, r.note(ctx, cluster, err.Error())
@@ -572,18 +564,11 @@ func (r *StorageClusterReconciler) adopt(
 func (r *StorageClusterReconciler) upgradeClaim(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) (adoption, bool, error) {
-	var secret corev1.Secret
-	key := types.NamespacedName{
-		Name:      fmt.Sprintf("simplyblock-%s-upgrade", cluster.Name),
-		Namespace: cluster.Namespace,
-	}
-	if err := r.Get(ctx, key, &secret); err != nil {
-		return adoption{}, false, client.IgnoreNotFound(err)
+	secret, found, err := r.upgradeSecret(ctx, cluster)
+	if err != nil || !found {
+		return adoption{}, false, err
 	}
 	uuid, clusterSecret := string(secret.Data["uuid"]), string(secret.Data["secret"])
-	if uuid == "" || clusterSecret == "" {
-		return adoption{}, false, nil
-	}
 
 	// This read authenticates as the cluster itself, using the secret the
 	// upgrade Secret names, rather than as this operator's own Kubernetes
@@ -591,7 +576,7 @@ func (r *StorageClusterReconciler) upgradeClaim(
 	// ControlPlane.spec.source.managed one, on a different Kubernetes
 	// cluster, where a Kubernetes TokenReview of this operator's own
 	// service-account token can never succeed.
-	found, err := r.API.Cluster(webapi.WithBearerToken(ctx, clusterSecret), uuid)
+	reading, err := r.API.Cluster(webapi.WithBearerToken(ctx, clusterSecret), uuid)
 	if err != nil {
 		// The Secret names a cluster the control plane does not have. That is
 		// worth retrying rather than failing: the control plane may be
@@ -599,14 +584,34 @@ func (r *StorageClusterReconciler) upgradeClaim(
 		// one somebody meant to adopt.
 		return adoption{}, false, fmt.Errorf("read the cluster named by the upgrade secret: %w", err)
 	}
-	if found.Secret != "" {
-		clusterSecret = found.Secret
+	if reading.Secret != "" {
+		clusterSecret = reading.Secret
 	}
 	return adoption{
-		UUID: found.UUID, Secret: clusterSecret, NQN: found.NQN,
-		Status: found.Status, NDCS: found.NDCS, NPCS: found.NPCS,
-		FTT: found.MaxFaultTolerance, Names: found.BackendWorkloadNames,
+		UUID: reading.UUID, Secret: clusterSecret, NQN: reading.NQN,
+		Status: reading.Status, NDCS: reading.NDCS, NPCS: reading.NPCS,
+		FTT: reading.MaxFaultTolerance, Names: reading.BackendWorkloadNames,
 	}, true, nil
+}
+
+// upgradeSecret reads the Secret that migrates a Helm deployment into this
+// cluster, and reports whether there is a usable one: it carries both the UUID
+// and the cluster secret.
+func (r *StorageClusterReconciler) upgradeSecret(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+) (*corev1.Secret, bool, error) {
+	var secret corev1.Secret
+	key := types.NamespacedName{
+		Name:      fmt.Sprintf("simplyblock-%s-upgrade", cluster.Name),
+		Namespace: cluster.Namespace,
+	}
+	if err := r.Get(ctx, key, &secret); err != nil {
+		return nil, false, client.IgnoreNotFound(err)
+	}
+	if len(secret.Data["uuid"]) == 0 || len(secret.Data["secret"]) == 0 {
+		return nil, false, nil
+	}
+	return &secret, true, nil
 }
 
 // persist writes the per-cluster Secret, the CSI credentials entry, and the

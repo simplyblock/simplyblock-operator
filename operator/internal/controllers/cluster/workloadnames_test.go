@@ -1,7 +1,7 @@
 // Tests for how a cluster comes by its workload names (design-superclusters.md
-// §6.1): the constant names for a namespace's first cluster and for one created
-// before the record, its own names otherwise, the names in the create body, and
-// a control plane that does not keep them.
+// §6.1): the constant names for a cluster created before the record and for one
+// adopted from Helm, its own names for every new cluster, the names in the
+// create body, and a control plane that does not keep them.
 
 package cluster
 
@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -69,13 +68,41 @@ func TestAClusterCreatedBeforeTheRecordIsGivenTheConstantNames(t *testing.T) {
 	}
 }
 
-func TestTheFirstClusterInANamespaceTakesTheConstantNames(t *testing.T) {
+// A new cluster takes names of its own even when it is alone in its namespace,
+// so that no cluster holds names the next one would have to avoid.
+func TestANewClusterTakesItsOwnNames(t *testing.T) {
 	r := newClusterReconciler(t, &fakeControlPlane{}, &recorder{}, newUncreatedCluster())
 
 	cluster := reconcileCluster(t, r, 2)
 
+	if got, want := recordedNames(t, cluster), atlaskube.DerivedWorkloadNames(testClusterName); got != want {
+		t.Errorf("workloadNames = %+v, want %+v", got, want)
+	}
+}
+
+// A cluster adopted from a Helm deployment is a new StorageCluster over a
+// backend cluster that has run under the constant names all along, so it keeps
+// them, and its adoption is not held for names the control plane never had.
+func TestAClusterAdoptedFromHelmKeepsTheConstantNames(t *testing.T) {
+	api := &fakeControlPlane{
+		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+	}
+	upgrade := &corev1.Secret{
+		ObjectMeta: objectMeta("simplyblock-" + testClusterName + "-upgrade"),
+		Data: map[string][]byte{
+			"uuid":   []byte(testClusterUUID),
+			"secret": []byte(testClusterSecret),
+		},
+	}
+	r := newClusterReconciler(t, api, &recorder{}, newUncreatedCluster(), upgrade)
+
+	cluster := reconcileCluster(t, r, 6)
+
 	if got := recordedNames(t, cluster); !got.IsConstant() {
 		t.Errorf("workloadNames = %+v, want the constant names", got)
+	}
+	if cluster.Status.UUID != testClusterUUID {
+		t.Errorf("status.uuid = %q, want the adopted cluster (message %q)", cluster.Status.UUID, cluster.Status.Message)
 	}
 }
 
@@ -90,51 +117,6 @@ func TestASecondClusterInANamespaceTakesItsOwnNames(t *testing.T) {
 	}
 }
 
-// A cluster whose names are its own does not hold the constant names, so the
-// next cluster may take them.
-func TestTheConstantNamesAreFreeWhileNoClusterHoldsThem(t *testing.T) {
-	r := newClusterReconciler(t, &fakeControlPlane{}, &recorder{},
-		newUncreatedCluster(), otherCluster(atlaskube.DerivedWorkloadNames("first")))
-
-	cluster := reconcileCluster(t, r, 2)
-
-	if got := recordedNames(t, cluster); !got.IsConstant() {
-		t.Errorf("workloadNames = %+v, want the constant names", got)
-	}
-}
-
-// Two clusters created at once can both find the constant names unclaimed. The
-// Service decides between them: the one that finds it held by the other before
-// its backend cluster exists takes its own names instead.
-func TestAClusterFindingTheConstantServiceHeldRewritesItsNamesBeforeCreating(t *testing.T) {
-	winner := otherCluster(atlaskube.ConstantWorkloadNames())
-	winner.UID = "uid-of-first"
-	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
-		Name: atlaskube.ConstantNodeAPIService, Namespace: testNamespace,
-		OwnerReferences: []metav1.OwnerReference{{
-			APIVersion: simplyblockv1alpha2.GroupVersion.String(), Kind: "StorageCluster",
-			Name: "first", UID: winner.UID, Controller: ptr.To(true),
-		}},
-	}}
-	// The race is lost before the names were read back: this cluster recorded
-	// the constant names too, and has reached the step that creates it.
-	loser := newUncreatedCluster(func(c *simplyblockv1alpha2.StorageCluster) {
-		c.Status.WorkloadNames = utils.WorkloadNamesStatus(atlaskube.ConstantWorkloadNames())
-		c.Status.Step.State = string(simplyblockv1alpha2.StorageClusterStepCreating)
-	})
-	api := &fakeControlPlane{}
-	r := newClusterReconciler(t, api, &recorder{}, loser, winner, service)
-
-	cluster := reconcileCluster(t, r, 1)
-
-	if got, want := recordedNames(t, cluster), atlaskube.DerivedWorkloadNames(testClusterName); got != want {
-		t.Errorf("workloadNames = %+v, want %+v", got, want)
-	}
-	if api.createCalls != 0 {
-		t.Errorf("the cluster was created %d times under names another cluster holds", api.createCalls)
-	}
-}
-
 func TestTheCreateBodyCarriesTheWorkloadNames(t *testing.T) {
 	names := atlaskube.DerivedWorkloadNames(testClusterName)
 	var sent utils.ClusterAddParams
@@ -145,8 +127,7 @@ func TestTheCreateBodyCarriesTheWorkloadNames(t *testing.T) {
 		},
 		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
 	}
-	r := newClusterReconciler(t, api, &recorder{},
-		newUncreatedCluster(), otherCluster(atlaskube.ConstantWorkloadNames()))
+	r := newClusterReconciler(t, api, &recorder{}, newUncreatedCluster())
 
 	cluster := reconcileCluster(t, r, 6)
 
@@ -159,12 +140,14 @@ func TestTheCreateBodyCarriesTheWorkloadNames(t *testing.T) {
 }
 
 // A control plane that predates the names accepts the create body and drops
-// them. The cluster it creates is reached by the constant names, so one recorded
-// with its own names would be unreachable, and it is not finished.
+// them. The cluster it creates is reached by the constant names, so a cluster
+// recorded with its own names, which every new cluster is, would be unreachable
+// there, and it is not finished.
 func TestAControlPlaneThatDropsTheNamesHoldsTheCluster(t *testing.T) {
 	api := &fakeControlPlane{
-		create:  createdWith(webapi.BackendWorkloadNames{}),
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		forgetsNames: true,
+		create:       createdWith(webapi.BackendWorkloadNames{}),
+		cluster:      func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
 		// The cluster it created is listed, without the names, so a later
 		// pass adopts it rather than creating another.
 		byName: func(string) (utils.ClusterListEntry, bool, error) {
@@ -175,8 +158,7 @@ func TestAControlPlaneThatDropsTheNamesHoldsTheCluster(t *testing.T) {
 		},
 	}
 	rec := &recorder{}
-	r := newClusterReconciler(t, api, rec,
-		newUncreatedCluster(), otherCluster(atlaskube.ConstantWorkloadNames()))
+	r := newClusterReconciler(t, api, rec, newUncreatedCluster())
 
 	cluster := reconcileCluster(t, r, 6)
 
@@ -191,20 +173,6 @@ func TestAControlPlaneThatDropsTheNamesHoldsTheCluster(t *testing.T) {
 	}
 	if api.createCalls != 1 {
 		t.Errorf("the control plane was asked to create %d clusters, want 1", api.createCalls)
-	}
-}
-
-func TestAControlPlaneThatPredatesTheNamesStillCreatesTheFirstCluster(t *testing.T) {
-	api := &fakeControlPlane{
-		create:  createdWith(webapi.BackendWorkloadNames{}),
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
-	}
-	r := newClusterReconciler(t, api, &recorder{}, newUncreatedCluster())
-
-	cluster := reconcileCluster(t, r, 6)
-
-	if cluster.Status.UUID != testClusterUUID {
-		t.Errorf("status.uuid = %q, want the created cluster (message %q)", cluster.Status.UUID, cluster.Status.Message)
 	}
 }
 

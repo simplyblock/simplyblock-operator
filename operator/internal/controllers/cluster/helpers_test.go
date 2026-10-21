@@ -210,6 +210,13 @@ type fakeControlPlane struct {
 	// clusterID.
 	clusterCtx func(context.Context)
 
+	// forgetsNames makes the fake a control plane without sbcli#1512, which
+	// drops the workload names from the create body. Without it the fake
+	// keeps the names it was sent and returns them on create and in its list,
+	// as a control plane that records them does.
+	forgetsNames bool
+	keptNames    webapi.BackendWorkloadNames
+
 	ready        func() error
 	create       func(utils.ClusterAddParams) (webapi.ClusterResponse, error)
 	cluster      func(string) (webapi.ClusterResponse, error)
@@ -261,7 +268,14 @@ func (f *fakeControlPlane) CreateCluster(
 	if f.create == nil {
 		f.t.Fatal("the control plane was asked to create a cluster and the test did not script it")
 	}
-	return f.create(params)
+	if !f.forgetsNames {
+		f.keptNames = params.BackendWorkloadNames
+	}
+	response, err := f.create(params)
+	if err == nil && response.BackendWorkloadNames == (webapi.BackendWorkloadNames{}) {
+		response.BackendWorkloadNames = f.keptNames
+	}
+	return response, err
 }
 
 func (f *fakeControlPlane) Cluster(
@@ -282,7 +296,11 @@ func (f *fakeControlPlane) ClusterByName(
 	if f.byName == nil {
 		return utils.ClusterListEntry{}, false, nil
 	}
-	return f.byName(name)
+	entry, found, err := f.byName(name)
+	if found && entry.BackendWorkloadNames == (webapi.BackendWorkloadNames{}) {
+		entry.BackendWorkloadNames = f.keptNames
+	}
+	return entry, found, err
 }
 
 func (f *fakeControlPlane) Clusters(context.Context) ([]utils.ClusterListEntry, error) {
