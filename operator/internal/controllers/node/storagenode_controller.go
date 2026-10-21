@@ -550,7 +550,7 @@ func (r *StorageNodeReconciler) checkHost(
 		return stepAdopting, true, nil
 	}
 
-	answers, err := r.Workload.HostAnswers(ctx, node.Namespace, node.Spec.WorkerNode)
+	answers, err := r.Workload.HostAnswers(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode)
 	if err != nil {
 		return stepCheckingHost, false, err
 	}
@@ -1579,7 +1579,7 @@ func (r *StorageNodeReconciler) addParams(
 	}
 
 	params := utils.StorageNodeSetAddParams{
-		NodeAddress:      r.Workload.NodeAddress(ctx, node.Spec.WorkerNode, node.Namespace),
+		NodeAddress:      r.Workload.NodeAddress(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode),
 		InterfaceName:    workload.MgmtInterface,
 		SPDKImage:        config.SpdkImage,
 		SPDKProxyImage:   config.SpdkProxyImage,

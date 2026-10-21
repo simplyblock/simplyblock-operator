@@ -10,15 +10,10 @@ import (
 // Spec.CSI.Driver equals this value are managed by this stack.
 const DriverName = "csi.simplyblock.io"
 
-// StorageNodeSetAPIServiceName is the headless Service that fronts the
-// storage-node-api pods of every StorageNodeSet in a namespace. The control
-// plane reaches an individual pod at <node-hostname>.<this-service>.<ns>.svc.
-const StorageNodeSetAPIServiceName = "simplyblock-storage-node-api"
-
 // StorageNodeSetAPIEndpointSliceName returns the name of the EndpointSlice that
 // publishes the storage-node-api pods for the given StorageNodeSet. It is named
 // per-StorageNodeSet so multiple sets can each own their own slice while all
-// backing the shared StorageNodeSetAPIServiceName Service. Both the operator's
+// backing the cluster's storage-node API Service (WorkloadNames). Both the operator's
 // slice builder and any consumer checking whether a worker is published must
 // derive the name here so the two cannot drift.
 func StorageNodeSetAPIEndpointSliceName(storageNodeSetName string) string {

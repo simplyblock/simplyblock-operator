@@ -357,7 +357,7 @@ func (r *StorageNodeOpsReconciler) maintenanceAwaitHost(
 	if worker.Spec.Unschedulable {
 		return false, nil
 	}
-	return r.Workload.HostAnswers(ctx, node.Namespace, node.Spec.WorkerNode)
+	return r.Workload.HostAnswers(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode)
 }
 
 // maintenanceRestart brings the backend node back on the host it left. The call is

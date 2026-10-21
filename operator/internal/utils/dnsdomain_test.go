@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	atlaskube "github.com/simplyblock/atlas/kube"
 )
 
 // useClusterDNSDomain sets the domain for one test and puts the default back.
@@ -45,7 +47,7 @@ func TestANonDomainIsRefused(t *testing.T) {
 func TestTheStorageNodeAPIAddressFollowsTheClusterDNSDomain(t *testing.T) {
 	useClusterDNSDomain(t, "acme.local")
 
-	got := StorageNodeSetAPIAddress("worker-1", "simplyblock")
+	got := StorageNodeSetAPIAddress("worker-1", "simplyblock", atlaskube.ConstantWorkloadNames())
 	want := "worker-1.simplyblock-storage-node-api.simplyblock.svc.acme.local:5000"
 	if got != want {
 		t.Fatalf("StorageNodeSetAPIAddress = %q, want %q", got, want)

@@ -30,6 +30,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
@@ -85,7 +86,11 @@ type StorageNodeWorkloadReconciler struct {
 // reach both before its pod can start.
 func (r *StorageNodeWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha2.StorageCluster{}).
+		For(&simplyblockv1alpha2.StorageCluster{},
+			builder.WithPredicates(predicate.NewPredicateFuncs(func(object client.Object) bool {
+				cluster, ok := object.(*simplyblockv1alpha2.StorageCluster)
+				return ok && cluster.Spec.Supercluster == nil
+			}))).
 		Named("storagenode-workload").
 		Owns(&appsv1.DaemonSet{}).
 		Owns(&corev1.Service{}).
@@ -182,6 +187,22 @@ func (r *StorageNodeWorkloadReconciler) Reconcile(
 	// Kubernetes garbage collection tears the workload down with the cluster, so
 	// a cluster on its way out needs nothing done to it here.
 	if !cluster.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
+	}
+
+	// A supercluster has no storage nodes, and the watch predicate keeps it
+	// from arriving; this keeps a stale request from building it a workload
+	// under names a standalone cluster is reached by.
+	if cluster.Spec.Supercluster != nil {
+		return ctrl.Result{}, nil
+	}
+
+	// Every object here is named from the cluster's workload names, which its
+	// own reconciler records before anything else. Until then there is nothing
+	// to build, and the status write that records them brings the cluster back.
+	if _, recorded := utils.WorkloadNamesOf(&cluster); !recorded {
+		logf.FromContext(ctx).V(1).Info("the cluster has not recorded its workload names yet",
+			"cluster", cluster.Name)
 		return ctrl.Result{}, nil
 	}
 
@@ -322,7 +343,7 @@ func (r *StorageNodeWorkloadReconciler) reconcileDaemonSet(
 	if err != nil {
 		return err
 	}
-	secretVersion, err := r.tlsSecretVersion(ctx, cluster.Namespace)
+	secretVersion, err := r.tlsSecretVersion(ctx, cluster)
 	if err != nil {
 		return err
 	}
@@ -396,13 +417,14 @@ func (r *StorageNodeWorkloadReconciler) image(
 
 // tlsSecretVersion is what a certificate rotation is noticed by.
 func (r *StorageNodeWorkloadReconciler) tlsSecretVersion(
-	ctx context.Context, namespace string,
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) (string, error) {
 	if !r.TLSEnabled {
 		return "", nil
 	}
+	names, _ := utils.WorkloadNamesOf(cluster)
 	var secret corev1.Secret
-	key := types.NamespacedName{Namespace: namespace, Name: utils.SecretNameStorageNodeSetAPITLS}
+	key := types.NamespacedName{Namespace: cluster.Namespace, Name: names.NodeAPITLSSecret}
 	err := r.Get(ctx, key, &secret)
 	if apierrors.IsNotFound(err) {
 		return "", nil
@@ -434,6 +456,14 @@ func (r *StorageNodeWorkloadReconciler) reconcileService(
 		}
 		if err != nil {
 			return err
+		}
+		// A Service another object controls is another cluster's: two clusters
+		// that recorded the same names, of which the other was first. Taking it
+		// over would hand that cluster's nodes to this one, so the pass stops
+		// here, and the cluster's own reconciler gives it other names.
+		if owner := metav1.GetControllerOf(&existing); owner != nil && owner.UID != cluster.UID {
+			return fmt.Errorf("Service %s belongs to %s %s, not to this cluster",
+				existing.Name, owner.Kind, owner.Name)
 		}
 		// The cluster IP is assigned by Kubernetes and may not be rewritten, so
 		// it is carried forward rather than re-stated.
@@ -591,11 +621,7 @@ func (r *StorageNodeWorkloadReconciler) workerAddress(
 func (r *StorageNodeWorkloadReconciler) reconcileRBAC(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
-	account := utils.BuildStorageNodeSetServiceAccount(cluster.Namespace)
-	if err := controllerutil.SetControllerReference(cluster, account, r.Scheme); err != nil {
-		return err
-	}
-	if err := r.apply(ctx, account); err != nil {
+	if err := r.shareServiceAccount(ctx, cluster); err != nil {
 		return err
 	}
 
@@ -605,6 +631,47 @@ func (r *StorageNodeWorkloadReconciler) reconcileRBAC(
 		return err
 	}
 	return r.apply(ctx, utils.BuildStorageNodeSetClusterRoleBinding(cluster.Namespace))
+}
+
+// shareServiceAccount makes the cluster an owner of the ServiceAccount the
+// storage-node pods run as.
+//
+// The control plane's SPDK pod template names the account, so every cluster in a
+// namespace runs as the same one. Each cluster owns it without controlling it,
+// which is what keeps it until the last of them is deleted: a controller
+// reference would let the second cluster take it from the first, and deleting
+// the second would then take it from the first one's pods. An owner reference
+// written as a controller by an earlier operator is rewritten as a plain one.
+func (r *StorageNodeWorkloadReconciler) shareServiceAccount(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+) error {
+	account := utils.BuildStorageNodeSetServiceAccount(cluster.Namespace)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var existing corev1.ServiceAccount
+		err := r.Get(ctx, client.ObjectKeyFromObject(account), &existing)
+		if apierrors.IsNotFound(err) {
+			desired := account.DeepCopy()
+			if err := controllerutil.SetOwnerReference(cluster, desired, r.Scheme); err != nil {
+				return err
+			}
+			return r.Create(ctx, desired)
+		}
+		if err != nil {
+			return err
+		}
+		before := len(existing.OwnerReferences)
+		controlled := metav1.GetControllerOf(&existing) != nil
+		if err := controllerutil.SetOwnerReference(cluster, &existing, r.Scheme); err != nil {
+			return err
+		}
+		for i := range existing.OwnerReferences {
+			existing.OwnerReferences[i].Controller = nil
+		}
+		if len(existing.OwnerReferences) == before && !controlled {
+			return nil
+		}
+		return r.Update(ctx, &existing)
+	})
 }
 
 // reconcileCertificates applies the serving certificates cert-manager issues for
@@ -618,9 +685,10 @@ func (r *StorageNodeWorkloadReconciler) reconcileCertificates(
 		return nil
 	}
 
+	names, _ := utils.WorkloadNamesOf(cluster)
 	for _, certificate := range []struct{ service, secret string }{
-		{"simplyblock-storage-node-api", utils.SecretNameStorageNodeSetAPITLS},
-		{"simplyblock-spdk-proxy", utils.SecretNameSpdkProxyTLS},
+		{names.NodeAPIService, names.NodeAPITLSSecret},
+		{names.SpdkProxyService, names.SpdkProxyTLSSecret},
 	} {
 		object := utils.BuildServiceServingCertificate(
 			cluster.Namespace, certificate.service, certificate.secret)

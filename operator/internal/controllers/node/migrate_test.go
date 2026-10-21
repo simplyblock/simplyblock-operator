@@ -238,7 +238,7 @@ func TestTheRelocationRestartIsAimedAtTheTargetAndForced(t *testing.T) {
 	if len(api.restarts) != 1 {
 		t.Fatalf("%d restarts were issued, want one", len(api.restarts))
 	}
-	if api.restarts[0].NodeAddress != utils.StorageNodeSetAPIAddress(opsTarget, opsNamespace) {
+	if api.restarts[0].NodeAddress != utils.StorageNodeSetAPIAddress(opsTarget, opsNamespace, atlaskube.ConstantWorkloadNames()) {
 		t.Errorf("the restart names %q, want the target's per-pod address",
 			api.restarts[0].NodeAddress)
 	}

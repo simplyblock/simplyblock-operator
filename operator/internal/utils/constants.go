@@ -87,9 +87,6 @@ const (
 	ENDPOINT       = "http://simplyblock-webappapi:5000"
 	CSIProvisioner = "csi.simplyblock.io"
 
-	SecretNameStorageNodeSetAPITLS = "simplyblock-storage-node-api-tls"
-	SecretNameSpdkProxyTLS         = "simplyblock-spdk-proxy-tls"
-
 	// Webhook serving-certificate wiring. WebhookServiceName and
 	// WebhookConfigurationName carry the Kustomize namePrefix (simplyblock-operator-)
 	// applied in config/default. The serving certificate is provisioned into
