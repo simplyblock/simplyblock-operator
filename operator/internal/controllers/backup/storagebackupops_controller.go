@@ -132,7 +132,8 @@ func (r *StorageBackupOpsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// operationsOn enqueues every operation naming this backup, in any namespace.
+// operationsOn enqueues every operation naming this backup, in any namespace,
+// by spec.backupRef or, for a group request, by spec.groupBackupRef.
 func (r *StorageBackupOpsReconciler) operationsOn(
 	ctx context.Context, backup client.Object,
 ) []reconcile.Request {
@@ -140,9 +141,13 @@ func (r *StorageBackupOpsReconciler) operationsOn(
 	if err := r.List(ctx, &operations); err != nil {
 		return nil
 	}
+	key := client.ObjectKeyFromObject(backup)
 	var requests []reconcile.Request
 	for i := range operations.Items {
-		if backupKey(&operations.Items[i]) != client.ObjectKeyFromObject(backup) {
+		ops := &operations.Items[i]
+		names := ops.Spec.BackupRef.Name != "" && backupKey(ops) == key
+		namesGroup := ops.Spec.GroupBackupRef.Name != "" && ops.GroupBackupKey() == key
+		if !names && !namesGroup {
 			continue
 		}
 		requests = append(requests, reconcile.Request{
@@ -340,7 +345,7 @@ func (r *StorageBackupOpsReconciler) discardRestoredVolume(
 ) error {
 	// A group restore produced N volumes, tracked per member. An abort at
 	// Restoring takes them all back.
-	if ops.Spec.GroupBackupID != "" {
+	if ops.IsGroupRestore() {
 		return r.discardRestoredGroup(ctx, ops)
 	}
 
@@ -422,13 +427,13 @@ func firstSuccessor(machine *statemachine.Machine[step]) step {
 // where the graph branches. The only branch is Restoring, which goes to
 // AwaitingVolumes for a group restore and AwaitingVolume for a single one; the
 // edges are indistinguishable to firstSuccessor's map walk, so the choice is made
-// here from spec.groupBackupID. Everywhere else the line has one edge.
+// here from whether the operation is a group restore. Everywhere else the line has one edge.
 func (r *StorageBackupOpsReconciler) nextStep(
 	ops *simplyblockv1alpha2.StorageBackupOps, machine *statemachine.Machine[step],
 ) step {
 	if machine.CurrentState() == stepRestoring {
 		want := stepAwaitingVolume
-		if ops.Spec.GroupBackupID != "" {
+		if ops.IsGroupRestore() {
 			want = stepAwaitingVolumes
 		}
 		for next := range machine.AllowedTransitions() {
@@ -459,7 +464,7 @@ func (r *StorageBackupOpsReconciler) finish(
 
 	// A group restore reports its own terminal reason, so a group drive is one
 	// legible unit rather than a generic operation.
-	group := ops.Spec.GroupBackupID != ""
+	group := ops.IsGroupRestore()
 	switch phase {
 	case simplyblockv1alpha2.StorageBackupOpsPhaseSucceeded:
 		reason := ReasonOperationSucceeded
@@ -493,7 +498,7 @@ func (r *StorageBackupOpsReconciler) observeOperation(
 		backupOperationDurationSeconds.WithLabelValues(ops.Spec.ClusterRef.Name, action).Observe(elapsed)
 		// A group restore also lands in its own histogram, so a disaster-recovery
 		// drill reports the cost of getting a whole group back on its own.
-		if ops.Spec.GroupBackupID != "" && phase == simplyblockv1alpha2.StorageBackupOpsPhaseSucceeded {
+		if ops.IsGroupRestore() && phase == simplyblockv1alpha2.StorageBackupOpsPhaseSucceeded {
 			groupRestoreDurationSeconds.WithLabelValues(ops.Spec.ClusterRef.Name).Observe(elapsed)
 		}
 	}
@@ -558,10 +563,12 @@ func (r *StorageBackupOpsReconciler) teardown(
 func (r *StorageBackupOpsReconciler) acquireLock(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
 ) (bool, error) {
-	// A group restore names no single backup; it takes the lock on every member
-	// of the group, so two group restores of one generation serialize (§7.3).
-	if ops.Spec.GroupBackupID != "" {
-		return r.acquireGroupLock(ctx, ops)
+	// A group restore takes no lock. Two restores of one group backup read the
+	// same immutable copies and produce different volumes and claims, so there
+	// is nothing for them to serialize on (design-storagebackup.md §14 Q5). The
+	// claims and the restored group are named per operation instead.
+	if ops.IsGroupRestore() {
+		return true, r.markRunning(ctx, ops, "The operation is restoring the group backup")
 	}
 
 	var backup simplyblockv1alpha2.StorageBackup
@@ -599,17 +606,22 @@ func (r *StorageBackupOpsReconciler) acquireLock(
 		}
 	}
 
-	if ops.Status.Phase == "" || ops.Status.Phase == simplyblockv1alpha2.StorageBackupOpsPhasePending {
-		now := metav1.Now()
-		if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageBackupOpsStatus) {
-			status.Phase = simplyblockv1alpha2.StorageBackupOpsPhaseRunning
-			status.StartedAt = &now
-			status.Message = "The operation holds the backup and is running"
-		}); err != nil {
-			return false, err
-		}
+	return true, r.markRunning(ctx, ops, "The operation holds the backup and is running")
+}
+
+// markRunning moves an operation that has not started yet to Running.
+func (r *StorageBackupOpsReconciler) markRunning(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps, message string,
+) error {
+	if ops.Status.Phase != "" && ops.Status.Phase != simplyblockv1alpha2.StorageBackupOpsPhasePending {
+		return nil
 	}
-	return true, nil
+	now := metav1.Now()
+	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageBackupOpsStatus) {
+		status.Phase = simplyblockv1alpha2.StorageBackupOpsPhaseRunning
+		status.StartedAt = &now
+		status.Message = message
+	})
 }
 
 // releaseLock clears the target's status.activeOpsRef, but only while it still
@@ -622,8 +634,8 @@ func (r *StorageBackupOpsReconciler) acquireLock(
 func (r *StorageBackupOpsReconciler) releaseLock(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
 ) error {
-	if ops.Spec.GroupBackupID != "" {
-		return r.releaseGroupLock(ctx, ops)
+	if ops.IsGroupRestore() {
+		return nil // a group restore holds no lock
 	}
 
 	var backup simplyblockv1alpha2.StorageBackup

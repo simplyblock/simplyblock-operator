@@ -85,6 +85,10 @@ type BackupSubscription struct {
 	// gives, and a request is a person's object under a name of their choosing.
 	snapshotCh chan event.GenericEvent
 
+	// groupCh wakes the group request whose group backup a member copy belongs
+	// to. Its events carry the group backup's bare id as the object name.
+	groupCh chan event.GenericEvent
+
 	// byObject indexes the cache the way the reconciler reads it: a reconcile
 	// request carries an object key, and only the subscription can turn one back
 	// into a backup id, because only it knows the naming rule and the cluster
@@ -103,6 +107,7 @@ func NewBackupSubscription() *BackupSubscription {
 		ClusterRegistry: newClusterRegistry(),
 		ch:              make(chan event.GenericEvent, 1024),
 		snapshotCh:      make(chan event.GenericEvent, 1024),
+		groupCh:         make(chan event.GenericEvent, 1024),
 		byObject:        map[string]string{},
 	}
 }
@@ -130,6 +135,9 @@ func (s *BackupSubscription) Ingest(ctx context.Context, ev cpinformer.Event) er
 			s.enqueue(ctx, scope, backupID)
 			if _, dto, ok := s.Find(backupID); ok {
 				enqueueByName(ctx, s.snapshotCh, dto.SnapshotName)
+				if dto.GroupBackupID != "" {
+					enqueueByName(ctx, s.groupCh, simplyblockv1alpha2.GroupBackupLabelValue(dto.GroupBackupID))
+				}
 			}
 			return
 		}
@@ -229,6 +237,40 @@ func (s *BackupSubscription) FindBySnapshot(clusterID, snapshotID string) (Backu
 		}
 	}
 	return BackupDTO{}, false
+}
+
+// GroupTriggers is the group request reconciler's trigger channel. Each event
+// carries the bare id of the group backup a changed member copy belongs to.
+func (s *BackupSubscription) GroupTriggers() <-chan event.GenericEvent { return s.groupCh }
+
+// FindGroupMembers returns the member copies of one group backup in one
+// cluster's scope. The id may be bare or composite, and both sides are compared
+// by their bare UUID.
+func (s *BackupSubscription) FindGroupMembers(clusterID, groupBackupID string) []BackupDTO {
+	want := simplyblockv1alpha2.GroupBackupLabelValue(groupBackupID)
+	var members []BackupDTO
+	for _, dto := range s.List(cpinformer.Scope{clusterID}) {
+		if dto.GroupBackupID != "" && simplyblockv1alpha2.GroupBackupLabelValue(dto.GroupBackupID) == want {
+			members = append(members, dto)
+		}
+	}
+	return members
+}
+
+// FindGroupBackupByGeneration returns the group backup of generation seq whose
+// members include one of lvolIDs. A sequence is per group, so the member volumes
+// are what tell this group's generation from another group's of the same number.
+func (s *BackupSubscription) FindGroupBackupByGeneration(clusterID string, seq int64, lvolIDs []string) (string, bool) {
+	ours := make(map[string]bool, len(lvolIDs))
+	for _, id := range lvolIDs {
+		ours[id] = true
+	}
+	for _, dto := range s.List(cpinformer.Scope{clusterID}) {
+		if dto.GroupBackupID != "" && dto.GroupSeq == seq && ours[dto.LvolID] {
+			return dto.GroupBackupID, true
+		}
+	}
+	return "", false
 }
 
 // Lookup returns the cached backup that the named StorageBackup object mirrors,

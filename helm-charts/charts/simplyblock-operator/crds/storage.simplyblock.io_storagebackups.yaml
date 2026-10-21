@@ -263,19 +263,41 @@ spec:
                     claimName:
                       description: |-
                         ClaimName is the PersistentVolumeClaim to back up, in this object's own
-                        namespace. It must be bound to a volume this product provisioned.
+                        namespace. It must be bound to a volume this product provisioned. Set
+                        exactly one of this and ConsistencyGroupName.
                       maxLength: 253
                       minLength: 1
                       type: string
                       x-kubernetes-validations:
                         - message: field is immutable
                           rule: self == oldSelf
-                  required:
-                    - claimName
+                    consistencyGroupName:
+                      description: |-
+                        ConsistencyGroupName asks for an on-demand backup of a whole consistency
+                        group as one unit: one fresh crash-consistent generation, every member
+                        backed up, committed all or nothing. The group is the one the claims in
+                        this object's namespace labeled storage.simplyblock.io/consistency-group
+                        with this value belong to, and the cluster is the one that provisioned
+                        them. The members' copies are recorded beside the cluster like every other
+                        copy. This object is the group's handle, which a StorageBackupOps names in
+                        spec.groupBackupRef to restore the whole group. Set exactly one of this and
+                        ClaimName.
+                      maxLength: 63
+                      minLength: 1
+                      type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                   type: object
                   x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
+                    - message: field claimName is immutable once set
+                      rule: '!has(oldSelf.claimName) || has(self.claimName)'
+                    - message: field consistencyGroupName is immutable once set
+                      rule: '!has(oldSelf.consistencyGroupName) || has(self.consistencyGroupName)'
+                    - message: set exactly one of claimName (to back up one claim) or consistencyGroupName (to back up a whole consistency group as one unit)
+                      rule: '(has(self.claimName) ? 1 : 0) + (has(self.consistencyGroupName) ? 1 : 0) == 1'
               type: object
               x-kubernetes-validations:
                 - message: field clusterRef is immutable once set

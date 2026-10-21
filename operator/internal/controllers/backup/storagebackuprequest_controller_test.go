@@ -6,6 +6,7 @@ package backup
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -16,6 +17,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/errs"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
@@ -34,6 +37,45 @@ type fakeRequestAPI struct {
 	snapCreates int
 	bakCreates  int
 	snapName    string
+
+	// groups maps a consistency-group name to its id, and a missing name is
+	// not found. takes and groupCreates count the generations taken and the group
+	// backups asked for.
+	groups       map[string]string
+	takes        int
+	takenSeq     int
+	takeIDs      []string
+	takenFor     map[string]int
+	groupCreates int
+	createdGroup controlplane.CreatedGroupBackup
+	groupErr     error
+}
+
+func (f *fakeRequestAPI) ConsistencyGroupByName(_ context.Context, _, name string) (string, error) {
+	if id, ok := f.groups[name]; ok {
+		return id, nil
+	}
+	return "", fmt.Errorf("no consistency group named %q: %w", name, errs.ErrNotFound)
+}
+
+// TakeGroupSnapshot answers a request id it has seen with the generation it
+// took for it, as the control plane does, and counts the generations it took.
+func (f *fakeRequestAPI) TakeGroupSnapshot(_ context.Context, _, _, requestID string) (int, error) {
+	f.takeIDs = append(f.takeIDs, requestID)
+	if seq, ok := f.takenFor[requestID]; ok && requestID != "" {
+		return seq, nil
+	}
+	f.takes++
+	if f.takenFor == nil {
+		f.takenFor = map[string]int{}
+	}
+	f.takenFor[requestID] = f.takenSeq
+	return f.takenSeq, nil
+}
+
+func (f *fakeRequestAPI) CreateGroupBackup(_ context.Context, _, _ string, _ int) (controlplane.CreatedGroupBackup, error) {
+	f.groupCreates++
+	return f.createdGroup, f.groupErr
 }
 
 func (f *fakeRequestAPI) CreateSnapshot(_ context.Context, _, _, _, name string) (string, error) {
@@ -73,6 +115,30 @@ func (f *fakeStreams) FindBySnapshot(_, snapshotID string) (subscriptions.Backup
 	}
 	return subscriptions.BackupDTO{}, false
 }
+
+func (f *fakeStreams) FindGroupMembers(_, groupBackupID string) []subscriptions.BackupDTO {
+	var out []subscriptions.BackupDTO
+	for _, b := range f.backups {
+		if b.GroupBackupID != "" && simplyblockv1alpha2.GroupBackupLabelValue(b.GroupBackupID) ==
+			simplyblockv1alpha2.GroupBackupLabelValue(groupBackupID) {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+func (f *fakeStreams) FindGroupBackupByGeneration(_ string, seq int64, lvolIDs []string) (string, bool) {
+	for _, b := range f.backups {
+		for _, id := range lvolIDs {
+			if b.GroupBackupID != "" && b.GroupSeq == seq && b.LvolID == id {
+				return b.GroupBackupID, true
+			}
+		}
+	}
+	return "", false
+}
+
+func (f *fakeStreams) GroupTriggers() <-chan event.GenericEvent { return nil }
 
 func (f *fakeStreams) Synced(cpinformer.Scope) bool                { return f.synced }
 func (f *fakeStreams) Triggers() <-chan event.GenericEvent         { return nil }

@@ -19,6 +19,7 @@ package v1alpha2
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/simplyblock/atlas/statemachine"
 )
@@ -143,7 +144,7 @@ type RestoreSpec struct {
 }
 
 // StorageBackupOpsSpec is one operation to perform against a backup.
-// +kubebuilder:validation:XValidation:rule="(has(self.backupRef) ? 1 : 0) + (has(self.groupBackupID) ? 1 : 0) == 1",message="set exactly one of backupRef and groupBackupID: an operation acts on a single backup or on a whole group backup, not both or neither"
+// +kubebuilder:validation:XValidation:rule="(has(self.backupRef) ? 1 : 0) + (has(self.groupBackupID) ? 1 : 0) + (has(self.groupBackupRef) ? 1 : 0) == 1",message="set exactly one of backupRef, groupBackupRef and groupBackupID: an operation acts on a single backup or on one whole group backup"
 type StorageBackupOpsSpec struct {
 	// ClusterRef names the StorageCluster the operation runs against. Its
 	// namespace defaults to this operation's. The cluster's StoragePool, which
@@ -177,11 +178,27 @@ type StorageBackupOpsSpec struct {
 	// single backup named by BackupRef, producing one PersistentVolumeClaim per
 	// member labeled into one restored consistency group. Its value is the
 	// control-plane group backup id carried by the storage.simplyblock.io/group-backup-id
-	// label on the member StorageBackups. Set exactly one of this and BackupRef.
+	// label on the member StorageBackups, which are resolved beside the cluster,
+	// so a requester in another namespace needs to be allowed to list
+	// StorageBackups there. It is the path for a group backup no request object
+	// stands for: one a StorageBackupPolicy scheduled, or one imported. Set
+	// exactly one of this, GroupBackupRef, and BackupRef.
 	// +kubebuilder:validation:MaxLength=253
 	// +k8s:immutable
 	// +optional
 	GroupBackupID string `json:"groupBackupID,omitempty"`
+
+	// GroupBackupRef restores the whole group backup an on-demand group request
+	// produced: a StorageBackup with spec.source.consistencyGroupName. Its
+	// namespace defaults to this operation's, and a request in another namespace
+	// needs the requesting user to be allowed to read it there, the same rule as
+	// BackupRef. The request names the group backup, so restoring a group taken
+	// in an application's namespace needs no access to the namespace the member
+	// copies are recorded in. Set exactly one of this, GroupBackupID, and
+	// BackupRef.
+	// +k8s:immutable
+	// +optional
+	GroupBackupRef NamespacedReference `json:"groupBackupRef,omitzero"`
 
 	// Action is the operation to perform.
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Action"
@@ -234,6 +251,29 @@ type RestoredGroupMember struct {
 // the admission webhook refused every such restore (live 2026-10-20).
 func (ops *StorageBackupOps) BackupsNamespace() string {
 	return ops.Spec.ClusterRef.In(ops.Namespace).Namespace
+}
+
+// IsGroupRestore reports an operation on a whole group backup, named by id or
+// by the group request that produced it, rather than on one StorageBackup. It is
+// decided by the spec alone, so every step branches the same way from the
+// operation's first pass.
+func (ops *StorageBackupOps) IsGroupRestore() bool {
+	return ops.Spec.GroupBackupID != "" || ops.Spec.GroupBackupRef.Name != ""
+}
+
+// GroupBackupKey is the group request a groupBackupRef names.
+func (ops *StorageBackupOps) GroupBackupKey() types.NamespacedName {
+	return ops.Spec.GroupBackupRef.In(ops.Namespace)
+}
+
+// TargetGroupBackupID is the group backup a group restore restores: the id the
+// spec names, or the one Validating read from the group request and recorded in
+// status.backupID.
+func (ops *StorageBackupOps) TargetGroupBackupID() string {
+	if ops.Spec.GroupBackupID != "" {
+		return ops.Spec.GroupBackupID
+	}
+	return ops.Status.BackupID
 }
 
 // StorageBackupOpsStatus is the observed state of one backup operation.

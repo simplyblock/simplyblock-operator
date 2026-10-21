@@ -2509,6 +2509,7 @@ func (in *StorageBackupOpsSpec) DeepCopyInto(out *StorageBackupOpsSpec) {
 	*out = *in
 	out.ClusterRef = in.ClusterRef
 	out.BackupRef = in.BackupRef
+	out.GroupBackupRef = in.GroupBackupRef
 	if in.Restore != nil {
 		in, out := &in.Restore, &out.Restore
 		*out = new(RestoreSpec)

@@ -2314,6 +2314,11 @@ type CreateParamsHaType string
 // CreateParamsPriorityClass defines model for CreateParams.PriorityClass.
 type CreateParamsPriorityClass int
 
+// UnderscoreGenerationTakeParams defines model for _GenerationTakeParams.
+type UnderscoreGenerationTakeParams struct {
+	RequestId *string `json:"request_id,omitempty"`
+}
+
 // UnderscoreGroupBackupCreateParams defines model for _GroupBackupCreateParams.
 type UnderscoreGroupBackupCreateParams struct {
 	GroupSeq *int `json:"group_seq,omitempty"`
@@ -2522,6 +2527,9 @@ type ClustersCapacityApiV2ClustersClusterIdCapacityGetParams struct {
 type ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGetParams struct {
 	Name *string `form:"name,omitempty" json:"name,omitempty"`
 }
+
+// ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONBody defines parameters for ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost.
+type ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONBody = UnderscoreGenerationTakeParams
 
 // ClustersGroupBackupsExportApiV2ClustersClusterIdGroupBackupsExportGetParams defines parameters for ClustersGroupBackupsExportApiV2ClustersClusterIdGroupBackupsExportGet.
 type ClustersGroupBackupsExportApiV2ClustersClusterIdGroupBackupsExportGetParams struct {
@@ -2837,6 +2845,9 @@ type ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsiste
 
 // ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostJSONRequestBody defines body for ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost for application/json ContentType.
 type ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostJSONRequestBody = GroupFailbackParams
+
+// ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONRequestBody defines body for ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost for application/json ContentType.
+type ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONRequestBody = ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONBody
 
 // ClustersGroupBackupsDiscoverApiV2ClustersClusterIdGroupBackupsDiscoverPostJSONRequestBody defines body for ClustersGroupBackupsDiscoverApiV2ClustersClusterIdGroupBackupsDiscoverPost for application/json ContentType.
 type ClustersGroupBackupsDiscoverApiV2ClustersClusterIdGroupBackupsDiscoverPostJSONRequestBody = BackupConfigInput
@@ -3883,12 +3894,29 @@ type ClientInterface interface {
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots (the `ClustersConsistencyGroupsSnapshotsListApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsGet` operationId).
 	ClustersConsistencyGroupsSnapshotsListApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsGet(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostWithBody Clusters:Consistency-Groups:Snapshots:Take
+	//
+	// Take one crash-consistent generation across every current member (§5).
+	//
+	// With a ``request_id``, a retry of a take whose answer was lost returns the
+	// generation already taken under that id.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots (the `ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost` operationId).
+	ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostWithBody(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost Clusters:Consistency-Groups:Snapshots:Take
 	//
 	// Take one crash-consistent generation across every current member (§5).
 	//
+	// With a ``request_id``, a retry of a take whose answer was lost returns the
+	// generation already taken under that id.
+	//
+	// Takes a body of the `application/json` content type.
+	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots (the `ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost` operationId).
-	ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersConsistencyGroupsSnapshotsDeleteApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqDelete Clusters:Consistency-Groups:Snapshots:Delete
 	//
@@ -6001,13 +6029,40 @@ func (c *Client) ClustersConsistencyGroupsSnapshotsListApiV2ClustersClusterIdCon
 	return c.Client.Do(req)
 }
 
+// ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostWithBody Clusters:Consistency-Groups:Snapshots:Take
+//
+// Take one crash-consistent generation across every current member (§5).
+//
+// With a “request_id“, a retry of a take whose answer was lost returns the
+// generation already taken under that id.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots (the `ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost` operationId).
+func (c *Client) ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostWithBody(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostRequestWithBody(c.Server, clusterId, groupId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost Clusters:Consistency-Groups:Snapshots:Take
 //
 // Take one crash-consistent generation across every current member (§5).
 //
+// With a “request_id“, a retry of a take whose answer was lost returns the
+// generation already taken under that id.
+//
+// Takes a body of the `application/json` content type.
+//
 // Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots (the `ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost` operationId).
-func (c *Client) ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostRequest(c.Server, clusterId, groupId)
+func (c *Client) ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostRequest(c.Server, clusterId, groupId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -10566,8 +10621,19 @@ func NewClustersConsistencyGroupsSnapshotsListApiV2ClustersClusterIdConsistencyG
 	return req, nil
 }
 
-// NewClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostRequest constructs an http.Request for the ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost method
-func NewClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostRequest(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID) (*http.Request, error) {
+// NewClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostRequest calls the generic ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost builder with application/json body
+func NewClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostRequest(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostRequestWithBody(server, clusterId, groupId, "application/json", bodyReader)
+}
+
+// NewClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostRequestWithBody constructs an http.Request for the ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost method, with any body, and a specified content type
+func NewClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostRequestWithBody(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -10599,10 +10665,12 @@ func NewClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyG
 		return nil, err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
 	if err != nil {
 		return nil, err
 	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -17410,14 +17478,29 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots (the `ClustersConsistencyGroupsSnapshotsListApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsGet` operationId).
 	ClustersConsistencyGroupsSnapshotsListApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSnapshotsListApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsGetResponse, error)
 
+	// ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostWithBodyWithResponse Clusters:Consistency-Groups:Snapshots:Take
+	//
+	// Take one crash-consistent generation across every current member (§5).
+	//
+	// With a ``request_id``, a retry of a take whose answer was lost returns the
+	// generation already taken under that id.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots (the `ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost` operationId).
+	ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostResponse, error)
+
 	// ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostWithResponse Clusters:Consistency-Groups:Snapshots:Take
 	//
 	// Take one crash-consistent generation across every current member (§5).
 	//
-	// Returns a wrapper object for the known response body format(s).
+	// With a ``request_id``, a retry of a take whose answer was lost returns the
+	// generation already taken under that id.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots (the `ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost` operationId).
-	ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostResponse, error)
+	ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostResponse, error)
 
 	// ClustersConsistencyGroupsSnapshotsDeleteApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqDeleteWithResponse Clusters:Consistency-Groups:Snapshots:Delete
 	//
@@ -26540,15 +26623,36 @@ func (c *ClientWithResponses) ClustersConsistencyGroupsSnapshotsListApiV2Cluster
 	return ParseClustersConsistencyGroupsSnapshotsListApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsGetResponse(rsp)
 }
 
+// ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostWithBodyWithResponse Clusters:Consistency-Groups:Snapshots:Take
+//
+// Take one crash-consistent generation across every current member (§5).
+//
+// With a “request_id“, a retry of a take whose answer was lost returns the
+// generation already taken under that id.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots (the `ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost` operationId).
+func (c *ClientWithResponses) ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostWithBody(ctx, clusterId, groupId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostResponse(rsp)
+}
+
 // ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostWithResponse Clusters:Consistency-Groups:Snapshots:Take
 //
 // Take one crash-consistent generation across every current member (§5).
 //
-// Returns a wrapper object for the known response body format(s).
+// With a “request_id“, a retry of a take whose answer was lost returns the
+// generation already taken under that id.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
 // Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots (the `ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost` operationId).
-func (c *ClientWithResponses) ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostResponse, error) {
-	rsp, err := c.ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost(ctx, clusterId, groupId, reqEditors...)
+func (c *ClientWithResponses) ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost(ctx, clusterId, groupId, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}

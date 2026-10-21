@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -180,4 +181,86 @@ func (c *Client) ConsistencyGroupMemberHandles(
 		out = append(out, lvol.Handle{ClusterID: gh.ClusterID, PoolRef: poolID, VolumeID: m}.Handle())
 	}
 	return out, nil
+}
+
+// groupUUID is the UUID a consistency-group endpoint keys on. Callers carry the
+// group as a bare UUID or as the "<cluster>/<UUID>" composite ConsistencyGroupByName
+// returns, so the last path segment is what is parsed.
+func groupUUID(groupID string) (uuid.UUID, error) {
+	if i := strings.LastIndex(groupID, "/"); i >= 0 {
+		groupID = groupID[i+1:]
+	}
+	return parseUUID("consistency group id", groupID)
+}
+
+// TakeGroupSnapshot takes one crash-consistent generation across every current
+// member of a consistency group and returns its sequence, the number a group
+// backup of that generation is asked for by (CreateGroupBackup).
+//
+// requestID makes the take idempotent: the control plane stamps it on the
+// generation, and a retry with the same id is answered with that generation
+// instead of a new one. A caller that may lose the answer passes an id it can
+// derive again, such as its own object's UID. Empty takes a new generation
+// every time.
+func (c *Client) TakeGroupSnapshot(ctx context.Context, clusterID, groupID, requestID string) (int, error) {
+	cluster, err := parseUUID("cluster id", clusterID)
+	if err != nil {
+		return 0, err
+	}
+	group, err := groupUUID(groupID)
+	if err != nil {
+		return 0, err
+	}
+	what := "take a generation of consistency group " + groupID
+	body := cpapi.UnderscoreGenerationTakeParams{}
+	if requestID != "" {
+		body.RequestId = &requestID
+	}
+	resp, err := c.api.ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostWithResponse(
+		ctx, cluster, group, body)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", what, err)
+	}
+	generation, err := payload(what, resp.JSON200, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return 0, err
+	}
+	return generation.GroupSeq, nil
+}
+
+// CreatedGroupBackup is a group backup the control plane accepted: its id, and
+// how many member backups it fanned out, which is how many must complete before
+// the group commits.
+type CreatedGroupBackup struct {
+	ID          string
+	MemberCount int
+}
+
+// CreateGroupBackup backs up one existing generation of a consistency group to
+// the cluster's store as one all-or-nothing unit. The generation is always
+// named: taking it is TakeGroupSnapshot's, so a caller that records the sequence
+// between the two calls never takes a second generation on a retry.
+//
+// The call returns once every member's upload is accepted. The group commits
+// when every member completes, which the backup stream reports per member.
+func (c *Client) CreateGroupBackup(ctx context.Context, clusterID, groupID string, groupSeq int) (CreatedGroupBackup, error) {
+	cluster, err := parseUUID("cluster id", clusterID)
+	if err != nil {
+		return CreatedGroupBackup{}, err
+	}
+	group, err := groupUUID(groupID)
+	if err != nil {
+		return CreatedGroupBackup{}, err
+	}
+	what := fmt.Sprintf("back up generation %d of consistency group %s", groupSeq, groupID)
+	resp, err := c.api.ClustersConsistencyGroupsBackupsCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdBackupsPostWithResponse(
+		ctx, cluster, group, cpapi.UnderscoreGroupBackupCreateParams{GroupSeq: &groupSeq})
+	if err != nil {
+		return CreatedGroupBackup{}, fmt.Errorf("%s: %w", what, err)
+	}
+	created, err := payload(what, resp.JSON201, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return CreatedGroupBackup{}, err
+	}
+	return CreatedGroupBackup{ID: created.Id.String(), MemberCount: len(created.Members)}, nil
 }

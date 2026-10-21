@@ -187,3 +187,131 @@ func TestGroupRestoreIgnoresMembersOfOtherGroups(t *testing.T) {
 		t.Fatal("a group restore was admitted on the strength of another group's member")
 	}
 }
+
+// groupRequestNamespace is the application namespace the group request is in.
+const groupRequestNamespace = "app-a"
+
+// groupRequest is an on-demand group backup request in groupRequestNamespace,
+// which has produced testGroupBackupID when phase is Available.
+func groupRequest(phase simplyblockv1alpha2.StorageBackupPhase) *simplyblockv1alpha2.StorageBackup {
+	request := &simplyblockv1alpha2.StorageBackup{
+		ObjectMeta: metav1.ObjectMeta{Name: "orders-now", Namespace: groupRequestNamespace},
+		Spec: simplyblockv1alpha2.StorageBackupSpec{
+			Source: &simplyblockv1alpha2.BackupRequest{ConsistencyGroupName: "orders"},
+		},
+		Status: simplyblockv1alpha2.StorageBackupStatus{Phase: phase},
+	}
+	if phase == simplyblockv1alpha2.StorageBackupPhaseAvailable {
+		request.Status.Source = &simplyblockv1alpha2.BackupSource{
+			Group: &simplyblockv1alpha2.BackupGroup{GroupBackupID: testGroupBackupID, ConsistencyGroupName: "orders"},
+		}
+	}
+	return request
+}
+
+// admitGroupRefRestore admits a restore created in opsNamespace that names the
+// group request in groupRequestNamespace, with the cluster, its pool, and one
+// member beside the cluster in backupOpsNamespace.
+func admitGroupRefRestore(
+	t *testing.T, opsNamespace string, access *fakeAccess, existing ...client.Object,
+) admission.Response {
+	t.Helper()
+	pool := &simplyblockv1alpha2.StoragePool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool-1", Namespace: backupOpsNamespace},
+	}
+	ops := groupRestoreOps()
+	ops.Namespace = opsNamespace
+	ops.Spec.GroupBackupID = ""
+	ops.Spec.GroupBackupRef = simplyblockv1alpha2.NamespacedReference{Name: "orders-now"}
+	if opsNamespace != groupRequestNamespace {
+		ops.Spec.GroupBackupRef.Namespace = groupRequestNamespace
+	}
+	ops.Spec.ClusterRef = simplyblockv1alpha2.NamespacedDnsReference{Name: backupOpsNamespace, Namespace: backupOpsNamespace}
+	objs := append([]client.Object{
+		testCluster(), pool,
+		groupMember("member-db", testGroupBackupID, simplyblockv1alpha2.StorageBackupPhaseAvailable),
+	}, existing...)
+	v := &StorageBackupOpsValidator{
+		Client: fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(objs...).Build(),
+		Access: access,
+	}
+	raw, err := json.Marshal(ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v.Handle(context.Background(), admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+		Operation: admissionv1.Create,
+		Namespace: opsNamespace,
+		Object:    runtime.RawExtension{Raw: raw},
+		UserInfo:  authenticationv1.UserInfo{Username: "app-admin"},
+	}})
+}
+
+// A group backup taken on demand in one application namespace is restored from
+// another by naming its request. The requester needs to be able to read that
+// request, and nothing in the operator's namespace beyond the cluster and pool.
+func TestAGroupRequestInAnotherNamespaceIsRestoredByReference(t *testing.T) {
+	access := &fakeAccess{}
+	resp := admitGroupRefRestore(t, "app-b", access,
+		groupRequest(simplyblockv1alpha2.StorageBackupPhaseAvailable))
+	if !resp.Allowed {
+		t.Fatalf("refused: %q", resp.Result.Message)
+	}
+	asked := strings.Join(access.asked, ", ")
+	if !strings.Contains(asked, "get storagebackups app-a") {
+		t.Errorf("the requester's right to read the request was not reviewed; asked %v", access.asked)
+	}
+	if strings.Contains(asked, "list storagebackups") {
+		t.Errorf("a restore by reference asked for a list of StorageBackups; asked %v", access.asked)
+	}
+}
+
+// The requester who may not read the request may not restore it.
+func TestAGroupRequestTheRequesterCannotReadIsRefused(t *testing.T) {
+	access := &fakeAccess{refused: map[string]bool{"get storagebackups app-a": true}}
+	resp := admitGroupRefRestore(t, "app-b", access,
+		groupRequest(simplyblockv1alpha2.StorageBackupPhaseAvailable))
+	if resp.Allowed || !strings.Contains(resp.Result.Message, "may not get storagebackups") {
+		t.Fatalf("allowed = %v (%q), want a refusal naming the review", resp.Allowed, resp.Result.Message)
+	}
+}
+
+// A request in the operation's own namespace needs no review of the request.
+func TestAGroupRequestInTheSameNamespaceIsRestoredByReference(t *testing.T) {
+	access := &fakeAccess{}
+	resp := admitGroupRefRestore(t, "app-a", access,
+		groupRequest(simplyblockv1alpha2.StorageBackupPhaseAvailable))
+	if !resp.Allowed {
+		t.Fatalf("refused: %q", resp.Result.Message)
+	}
+	if strings.Contains(strings.Join(access.asked, ", "), "storagebackups") {
+		t.Errorf("a same-namespace reference was reviewed; asked %v", access.asked)
+	}
+}
+
+// A request still being taken is admitted: it will finish, and the restore
+// waits for it. A missing request, a request for one claim, and a failed group
+// request are refused, because none of them will ever name a group backup.
+func TestAGroupBackupRefMustNameAGroupRequestThatCanComplete(t *testing.T) {
+	claimRequest := groupRequest(simplyblockv1alpha2.StorageBackupPhaseAvailable)
+	claimRequest.Spec.Source = &simplyblockv1alpha2.BackupRequest{ClaimName: "db"}
+	for name, tc := range map[string]struct {
+		existing []client.Object
+		allowed  bool
+	}{
+		"in progress":     {existing: []client.Object{groupRequest(simplyblockv1alpha2.StorageBackupPhaseCreating)}, allowed: true},
+		"missing":         {},
+		"a claim request": {existing: []client.Object{claimRequest}},
+		"failed":          {existing: []client.Object{groupRequest(simplyblockv1alpha2.StorageBackupPhaseFailed)}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp := admitGroupRefRestore(t, "app-a", &fakeAccess{}, tc.existing...)
+			if resp.Allowed != tc.allowed {
+				t.Errorf("allowed = %v (%q), want %v", resp.Allowed, resp.Result.Message, tc.allowed)
+			}
+			if !tc.allowed && !strings.Contains(resp.Result.Message, "spec.groupBackupRef") {
+				t.Errorf("refusal %q does not name spec.groupBackupRef", resp.Result.Message)
+			}
+		})
+	}
+}

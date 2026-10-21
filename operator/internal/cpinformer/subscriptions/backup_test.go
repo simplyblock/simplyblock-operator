@@ -226,3 +226,64 @@ func TestBackupSubscriptionTriggersARequestBySnapshotName(t *testing.T) {
 		t.Fatal("no request trigger for a backup the stream reported")
 	}
 }
+
+// A group request knows its group backup's id, in the bare form the create call
+// answers with or the composite form the stream reports, and finds the member
+// copies by it.
+func TestBackupSubscriptionFindsTheMembersOfAGroupBackup(t *testing.T) {
+	s := adoptedBackupSubscription()
+	if err := s.Ingest(context.Background(), backupSnapshot(t,
+		BackupDTO{ID: "m-1", LvolID: "lvol-1", GroupBackupID: backupCluster + "/gb-1", GroupSeq: 3},
+		BackupDTO{ID: "m-2", LvolID: "lvol-2", GroupBackupID: backupCluster + "/gb-1", GroupSeq: 3},
+		BackupDTO{ID: "other", LvolID: "lvol-1", GroupBackupID: backupCluster + "/gb-2", GroupSeq: 4},
+		BackupDTO{ID: "single", LvolID: "lvol-1"},
+	)); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	for _, id := range []string{"gb-1", backupCluster + "/gb-1"} {
+		if got := s.FindGroupMembers(backupCluster, id); len(got) != 2 {
+			t.Errorf("FindGroupMembers(%q) = %d members, want 2", id, len(got))
+		}
+	}
+	if got := s.FindGroupMembers("another-cluster", "gb-1"); len(got) != 0 {
+		t.Errorf("FindGroupMembers found %d members in a cluster that did not report them", len(got))
+	}
+}
+
+// A request that took a generation and asked for its backup, then lost the
+// answer, finds the group backup again by the generation and its own members.
+func TestBackupSubscriptionFindsAGroupBackupByGeneration(t *testing.T) {
+	s := adoptedBackupSubscription()
+	if err := s.Ingest(context.Background(), backupSnapshot(t,
+		BackupDTO{ID: "m-1", LvolID: "lvol-1", GroupBackupID: backupCluster + "/gb-1", GroupSeq: 3},
+		BackupDTO{ID: "x-1", LvolID: "lvol-9", GroupBackupID: backupCluster + "/gb-9", GroupSeq: 3},
+	)); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	if id, ok := s.FindGroupBackupByGeneration(backupCluster, 3, []string{"lvol-1", "lvol-2"}); !ok || id != backupCluster+"/gb-1" {
+		t.Errorf("FindGroupBackupByGeneration = %q, %v, want gb-1", id, ok)
+	}
+	if _, ok := s.FindGroupBackupByGeneration(backupCluster, 4, []string{"lvol-1"}); ok {
+		t.Error("found a group backup of a generation nothing backed up")
+	}
+}
+
+// A member copy changing wakes the group request through the group backup's
+// bare id, which is what the request indexes.
+func TestBackupSubscriptionTriggersAGroupRequestByGroupBackup(t *testing.T) {
+	s := adoptedBackupSubscription()
+	if err := s.Ingest(context.Background(), backupSnapshot(t,
+		BackupDTO{ID: "m-1", LvolID: "lvol-1", GroupBackupID: backupCluster + "/gb-1", GroupSeq: 3})); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	select {
+	case ev := <-s.GroupTriggers():
+		if ev.Object.GetName() != "gb-1" {
+			t.Errorf("trigger named %q, want gb-1", ev.Object.GetName())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no group trigger for a member the stream reported")
+	}
+}

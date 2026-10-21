@@ -34,7 +34,9 @@ func envtestAssets() string {
 	return ""
 }
 
-func TestStorageBackupSpecIsEitherARecordOrARequest(t *testing.T) {
+// celClient starts a test apiserver with this repository's CRDs installed.
+func celClient(t *testing.T) client.Client {
+	t.Helper()
 	if err := simplyblockv1alpha2.AddToScheme(scheme.Scheme); err != nil {
 		t.Fatal(err)
 	}
@@ -52,8 +54,27 @@ func TestStorageBackupSpecIsEitherARecordOrARequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return c
+}
+
+// admitted creates obj and checks the apiserver's answer: admitted when want is
+// empty, otherwise rejected with a message containing want.
+func admitted(t *testing.T, c client.Client, obj client.Object, want string) {
+	t.Helper()
+	err := c.Create(context.Background(), obj)
+	switch {
+	case want == "" && err != nil:
+		t.Errorf("rejected: %v", err)
+	case want != "" && (err == nil || !strings.Contains(err.Error(), want)):
+		t.Errorf("err = %v, want a rejection mentioning %q", err, want)
+	}
+}
+
+func TestStorageBackupSpecIsEitherARecordOrARequest(t *testing.T) {
+	c := celClient(t)
 
 	request := &simplyblockv1alpha2.BackupRequest{ClaimName: testClaim}
+	group := &simplyblockv1alpha2.BackupRequest{ConsistencyGroupName: "orders"}
 	for name, tc := range map[string]struct {
 		spec simplyblockv1alpha2.StorageBackupSpec
 		want string // empty means admitted
@@ -64,19 +85,58 @@ func TestStorageBackupSpecIsEitherARecordOrARequest(t *testing.T) {
 			spec: simplyblockv1alpha2.StorageBackupSpec{ClusterRef: "production", Source: request},
 			want: "exactly one of source",
 		},
-		"neither": {want: "exactly one of source"},
+		"neither":         {want: "exactly one of source"},
+		"a group request": {spec: simplyblockv1alpha2.StorageBackupSpec{Source: group}},
+		"a request naming a claim and a group": {
+			spec: simplyblockv1alpha2.StorageBackupSpec{Source: &simplyblockv1alpha2.BackupRequest{
+				ClaimName: testClaim, ConsistencyGroupName: "orders",
+			}},
+			want: "exactly one of claimName",
+		},
+		"a request naming nothing": {
+			spec: simplyblockv1alpha2.StorageBackupSpec{Source: &simplyblockv1alpha2.BackupRequest{}},
+			want: "exactly one of claimName",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			obj := &simplyblockv1alpha2.StorageBackup{
+			admitted(t, c, &simplyblockv1alpha2.StorageBackup{
 				ObjectMeta: metav1.ObjectMeta{GenerateName: "cel-", Namespace: "default"}, Spec: tc.spec,
-			}
-			err := c.Create(context.Background(), obj)
-			switch {
-			case tc.want == "" && err != nil:
-				t.Errorf("rejected: %v", err)
-			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
-				t.Errorf("err = %v, want a rejection mentioning %q", err, tc.want)
-			}
+			}, tc.want)
+		})
+	}
+}
+
+// A restore names exactly one target: one backup, one group backup by id, or
+// the group request that produced one.
+func TestStorageBackupOpsNamesExactlyOneTarget(t *testing.T) {
+	c := celClient(t)
+
+	ref := simplyblockv1alpha2.NamespacedReference{Name: "a-backup"}
+	groupRef := simplyblockv1alpha2.NamespacedReference{Name: "orders-now"}
+	for name, tc := range map[string]struct {
+		backupRef, groupBackupRef simplyblockv1alpha2.NamespacedReference
+		groupBackupID             string
+		want                      string
+	}{
+		"a backup":                   {backupRef: ref},
+		"a group backup by id":       {groupBackupID: "gb-1"},
+		"a group request":            {groupBackupRef: groupRef},
+		"a backup and a group ref":   {backupRef: ref, groupBackupRef: groupRef, want: "exactly one of backupRef"},
+		"a group id and a group ref": {groupBackupID: "gb-1", groupBackupRef: groupRef, want: "exactly one of backupRef"},
+		"nothing":                    {want: "exactly one of backupRef"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			admitted(t, c, &simplyblockv1alpha2.StorageBackupOps{
+				ObjectMeta: metav1.ObjectMeta{GenerateName: "cel-", Namespace: "default"},
+				Spec: simplyblockv1alpha2.StorageBackupOpsSpec{
+					ClusterRef:     simplyblockv1alpha2.NamespacedDnsReference{Name: "production"},
+					BackupRef:      tc.backupRef,
+					GroupBackupRef: tc.groupBackupRef,
+					GroupBackupID:  tc.groupBackupID,
+					Action:         simplyblockv1alpha2.StorageBackupOpsActionRestore,
+					Restore:        &simplyblockv1alpha2.RestoreSpec{ClaimName: "restored", TargetPool: "pool"},
+				},
+			}, tc.want)
 		})
 	}
 }

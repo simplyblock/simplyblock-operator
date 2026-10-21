@@ -34,106 +34,78 @@ import (
 // originals were (design §7.3). Its value is the restored group's name.
 const consistencyGroupLabel = "storage.simplyblock.io/consistency-group"
 
-// listGroupMembers resolves the member StorageBackups of this group backup, the
-// StorageBackups carrying the group-backup-id label.
+// listGroupMembers resolves the member StorageBackups of a group backup: the
+// StorageBackups carrying its group-backup-id label beside the cluster, where
+// the mirror records every copy. The operator reads them with its own rights,
+// and the requester's right to the group backup was checked at admission.
 func (r *StorageBackupOpsReconciler) listGroupMembers(
-	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
+	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps, groupBackupID string,
 ) ([]simplyblockv1alpha2.StorageBackup, error) {
 	var members simplyblockv1alpha2.StorageBackupList
 	if err := r.List(ctx, &members,
 		client.InNamespace(ops.BackupsNamespace()),
-		client.MatchingLabels{simplyblockv1alpha2.BackupLabelGroupBackupID: simplyblockv1alpha2.GroupBackupLabelValue(ops.Spec.GroupBackupID)},
+		client.MatchingLabels{simplyblockv1alpha2.BackupLabelGroupBackupID: simplyblockv1alpha2.GroupBackupLabelValue(groupBackupID)},
 	); err != nil {
 		return nil, err
 	}
 	return members.Items, nil
 }
 
-// acquireGroupLock takes the lock on every member of the group, so two group
-// restores of one generation serialize (§7.3). It is all-or-nothing: if any
-// member is held by another operation, this one waits and takes none.
-func (r *StorageBackupOpsReconciler) acquireGroupLock(
+// groupBackupIDFor resolves the group backup a group restore restores: the id
+// spec.groupBackupID names, or the one the group request spec.groupBackupRef
+// names has produced.
+func (r *StorageBackupOpsReconciler) groupBackupIDFor(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
-) (bool, error) {
-	members, err := r.listGroupMembers(ctx, ops)
-	if err != nil {
-		return false, err
+) (string, error) {
+	if id := ops.TargetGroupBackupID(); id != "" {
+		return id, nil
 	}
-	if len(members) == 0 {
-		_, err := r.finish(ctx, ops, simplyblockv1alpha2.StorageBackupOpsPhaseAborted,
-			fmt.Sprintf("group backup %s has no members", ops.Spec.GroupBackupID))
-		return false, err
-	}
-
-	holder := lockHolder(ops)
-	for i := range members {
-		if held := members[i].Status.ActiveOpsRef; held != "" && held != holder {
-			r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal,
-				ReasonOperationQueued, ReasonOperationQueued,
-				"Group backup member %s is held by operation %s; this one is waiting", members[i].Name, held)
-			return false, r.hold(ctx, ops, fmt.Sprintf(
-				"waiting for operation %s to release group backup member %s", held, members[i].Name))
+	var request simplyblockv1alpha2.StorageBackup
+	if err := r.Get(ctx, ops.GroupBackupKey(), &request); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", fatalf("StorageBackup %s does not exist", ops.GroupBackupKey())
 		}
+		return "", err
 	}
-	for i := range members {
-		if members[i].Status.ActiveOpsRef == holder {
-			continue
-		}
-		patch := client.MergeFromWithOptions(members[i].DeepCopy(), client.MergeFromWithOptimisticLock{})
-		members[i].Status.ActiveOpsRef = holder
-		if err := r.Status().Patch(ctx, &members[i], patch); err != nil {
-			if apierrors.IsConflict(err) {
-				return false, nil
-			}
-			return false, fmt.Errorf("acquire the lock on group backup member %s: %w", members[i].Name, err)
-		}
+	if !request.IsGroupRequest() {
+		return "", fatalf("StorageBackup %s is not a consistency-group backup request", ops.GroupBackupKey())
 	}
-
-	if ops.Status.Phase == "" || ops.Status.Phase == simplyblockv1alpha2.StorageBackupOpsPhasePending {
-		now := metav1.Now()
-		if err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageBackupOpsStatus) {
-			status.Phase = simplyblockv1alpha2.StorageBackupOpsPhaseRunning
-			status.StartedAt = &now
-			status.Message = "The operation holds the group backup and is running"
-		}); err != nil {
-			return false, err
-		}
+	switch {
+	case request.Status.Phase == simplyblockv1alpha2.StorageBackupPhaseFailed:
+		return "", fatalf("the group backup StorageBackup %s requested failed", ops.GroupBackupKey())
+	case request.Status.Phase != simplyblockv1alpha2.StorageBackupPhaseAvailable || request.GroupBackupID() == "":
+		// Not an error of this operation: the request is still being taken, and
+		// the step is retried until it names its group backup or its deadline
+		// runs out.
+		return "", fmt.Errorf("waiting for the group backup StorageBackup %s requested (phase %q)",
+			ops.GroupBackupKey(), request.Status.Phase)
 	}
-	return true, nil
+	return request.GroupBackupID(), nil
 }
 
-// releaseGroupLock clears the lock on every member it still holds.
-func (r *StorageBackupOpsReconciler) releaseGroupLock(
-	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
-) error {
-	members, err := r.listGroupMembers(ctx, ops)
-	if err != nil {
-		return err
-	}
-	holder := lockHolder(ops)
-	for i := range members {
-		if members[i].Status.ActiveOpsRef != holder {
-			continue
-		}
-		patch := client.MergeFromWithOptions(members[i].DeepCopy(), client.MergeFromWithOptimisticLock{})
-		members[i].Status.ActiveOpsRef = ""
-		if err := r.Status().Patch(ctx, &members[i], patch); err != nil && !apierrors.IsConflict(err) {
-			return fmt.Errorf("release the lock on group backup member %s: %w", members[i].Name, err)
-		}
-	}
-	return nil
-}
-
-// validateGroup resolves the cluster and the target pool for a group restore. The
-// members were validated at admission, and the per-member copies are read by the
-// control plane rather than one at a time here, so there is no single backup to
-// resolve.
+// validateGroup resolves the group backup, the cluster, and the target pool for
+// a group restore, and refuses a group backup with no members recorded beside
+// the cluster. The per-member copies are read by the control plane rather than
+// one at a time here, so there is no single backup to resolve.
 func (r *StorageBackupOpsReconciler) validateGroup(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.StorageBackupOps,
 	clusterID string,
 	restore *simplyblockv1alpha2.RestoreSpec,
 ) (bool, error) {
+	groupBackupID, err := r.groupBackupIDFor(ctx, ops)
+	if err != nil {
+		return false, err
+	}
+	members, err := r.listGroupMembers(ctx, ops, groupBackupID)
+	if err != nil {
+		return false, err
+	}
+	if len(members) == 0 {
+		return false, fatalf("group backup %s has no members recorded beside cluster %s",
+			groupBackupID, ops.Spec.ClusterRef.Name)
+	}
+
 	poolUUID, err := utils.ResolvePoolUUID(ctx, r.Client,
 		clusterKey(ops).Namespace, ops.Spec.ClusterRef.Name, restore.TargetPool)
 	if err != nil {
@@ -145,8 +117,9 @@ func (r *StorageBackupOpsReconciler) validateGroup(
 	return true, r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageBackupOpsStatus) {
 		status.ClusterID = clusterID
 		status.PoolUUID = poolUUID
+		status.BackupID = groupBackupID
 		status.Message = fmt.Sprintf("Restoring group backup %s into pool %s",
-			ops.Spec.GroupBackupID, restore.TargetPool)
+			groupBackupID, restore.TargetPool)
 	})
 }
 
@@ -173,13 +146,13 @@ func (r *StorageBackupOpsReconciler) startGroupRestore(
 		var e error
 		groupID, members, e = r.API.RestoreGroupBackup(ctx, ops.Status.ClusterID,
 			controlplane.RestoreGroupBackupParams{
-				GroupBackupID: ops.Spec.GroupBackupID,
+				GroupBackupID: ops.TargetGroupBackupID(),
 				IntoGroupName: restoredGroupName(ops),
 				Pool:          ops.Spec.Restore.TargetPool,
 			})
 		if e != nil {
 			return fmt.Errorf("ask the control plane to restore group backup %s: %w",
-				ops.Spec.GroupBackupID, e)
+				ops.TargetGroupBackupID(), e)
 		}
 		return nil
 	})
@@ -194,7 +167,7 @@ func (r *StorageBackupOpsReconciler) startGroupRestore(
 	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal,
 		ReasonGroupRestoreStarted, ReasonGroupRestoreStarted,
 		"The control plane accepted the restore of group backup %s and is filling %d volume(s)",
-		ops.Spec.GroupBackupID, len(recorded))
+		ops.TargetGroupBackupID(), len(recorded))
 	return true, r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageBackupOpsStatus) {
 		status.RestoredGroupID = groupID
 		status.RestoredGroupMembers = recorded
@@ -219,7 +192,7 @@ func (r *StorageBackupOpsReconciler) awaitGroupVolumes(
 		case cpVolumeRestoreFailed:
 			return false, fatalf(
 				"the control plane gave up transferring a member of group backup %s into volume %s",
-				ops.Spec.GroupBackupID, m.LvolID)
+				ops.TargetGroupBackupID(), m.LvolID)
 		case cpVolumeOnline:
 			continue
 		default:
@@ -253,7 +226,7 @@ func (r *StorageBackupOpsReconciler) bindGroup(
 		if !ok {
 			return false, fatalf(
 				"no StorageBackup for restored member %s of group backup %s",
-				m.MemberName, ops.Spec.GroupBackupID)
+				m.MemberName, ops.TargetGroupBackupID())
 		}
 
 		// Write-ahead: the claim name is recorded before the claim is created, so a
@@ -291,16 +264,13 @@ func (r *StorageBackupOpsReconciler) bindGroup(
 func (r *StorageBackupOpsReconciler) memberBackupsByName(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
 ) (map[string]*simplyblockv1alpha2.StorageBackup, error) {
-	var members simplyblockv1alpha2.StorageBackupList
-	if err := r.List(ctx, &members,
-		client.InNamespace(ops.BackupsNamespace()),
-		client.MatchingLabels{simplyblockv1alpha2.BackupLabelGroupBackupID: simplyblockv1alpha2.GroupBackupLabelValue(ops.Spec.GroupBackupID)},
-	); err != nil {
+	members, err := r.listGroupMembers(ctx, ops, ops.TargetGroupBackupID())
+	if err != nil {
 		return nil, err
 	}
-	byName := make(map[string]*simplyblockv1alpha2.StorageBackup, len(members.Items))
-	for i := range members.Items {
-		byName[members.Items[i].Source().LvolName] = &members.Items[i]
+	byName := make(map[string]*simplyblockv1alpha2.StorageBackup, len(members))
+	for i := range members {
+		byName[members[i].Source().LvolName] = &members[i]
 	}
 	return byName, nil
 }
@@ -488,10 +458,18 @@ func (r *StorageBackupOpsReconciler) discardRestoredGroup(
 	return nil
 }
 
-// restoredGroupName is the consistency group a group restore forms, named after
-// the base claim name so the restored group reads as what it holds.
+// restoredGroupNames derives the restored group's name, which is also the
+// value of the claims' consistency-group label, so it is held to a label value.
+var restoredGroupNames = atlaskube.Formula{Kind: atlaskube.LabelValue}
+
+// restoredGroupName is the consistency group a group restore forms:
+// <claimName>-<operation UID>. The claim name says what the group holds; the UID
+// keeps two restores that chose the same claim name, in one namespace or in two,
+// from asking the control plane for one group name twice, which it refuses. A
+// name over the label limit is cut and carries a digest of both parts, so it
+// stays unique.
 func restoredGroupName(ops *simplyblockv1alpha2.StorageBackupOps) string {
-	return ops.Spec.Restore.ClaimName
+	return restoredGroupNames.Derive(ops.Spec.Restore.ClaimName, string(ops.UID)).Value
 }
 
 // restoredMemberClaimName is <claimName>-<member>, the name of one restored

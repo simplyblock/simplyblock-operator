@@ -283,17 +283,49 @@ A restore operation gains the ability to restore a whole group backup, producing
 // +optional
 // +k8s:immutable
 GroupBackupID string `json:"groupBackupID,omitempty"`
+
+// GroupBackupRef restores the whole group backup an on-demand group request
+// (§7.5) produced: a StorageBackup with spec.source.consistencyGroupName. Its
+// namespace defaults to the operation's. Exactly one of BackupRef, GroupBackupID,
+// and GroupBackupRef is set (a CEL rule).
+// +optional
+// +k8s:immutable
+GroupBackupRef NamespacedReference `json:"groupBackupRef,omitzero"`
 ```
 
-A group restore validates that every member `StorageBackup` of the id is present and restorable, then drives the control-plane group restore (§6), and binds one claim per restored member volume, labeling them with `storage.simplyblock.io/consistency-group` so the restored claims form a group. The steps widen from the single-volume restore (`Validating → Restoring → AwaitingVolume → Binding`) to the group: `Validating → Restoring → AwaitingVolumes → Binding`, where `Restoring` drives N member recoveries and `AwaitingVolumes` waits for all N. The lock is `StorageBackup.status.activeOpsRef` taken on every member of the group, so two group restores of one generation serialize, which is the single-volume lock rule (`design-storagebackup.md` §6) applied across the members.
+The two group targets differ in where the requester's access is checked. `groupBackupID` resolves the members by label beside the cluster, where the mirror records every copy, so a requester in another namespace must be allowed to `list` StorageBackups there, which in practice is an administrator. `groupBackupRef` names an object in an application namespace: the requester needs `get` on that request, the same rule as `backupRef`, and the operator reads the members beside the cluster with its own rights. An application team therefore restores a group it backed up on demand without any access to the operator's namespace. `groupBackupID` stays for the group backups no request stands for: those a policy scheduled and those imported.
+
+A group restore validates that every member `StorageBackup` of the id is present and restorable, then drives the control-plane group restore (§6), and binds one claim per restored member volume, labeling them with `storage.simplyblock.io/consistency-group` so the restored claims form a group. The steps widen from the single-volume restore (`Validating → Restoring → AwaitingVolume → Binding`) to the group: `Validating → Restoring → AwaitingVolumes → Binding`, where `Restoring` drives N member recoveries and `AwaitingVolumes` waits for all N. A group restore takes no lock. Two restores of one group backup read the same immutable copies from the store and produce different volumes, claims, and groups, so there is nothing for them to serialize on, which is `design-storagebackup.md` §14 Q5 answered for the group. What two restores can contend for is a name, and each is named per operation: the claims are `<claimName>-<member>` in the operation's namespace, refused at admission and at `Validating` when they exist, and the restored consistency group is `<claimName>-<operation UID>`, held to a label value because it is also the claims' `storage.simplyblock.io/consistency-group` label. The group name carries the UID because the control plane refuses a duplicate group name, and two restores in two namespaces may pick the same `claimName`.
 
 A group restore cannot be aborted once it has created a logical volume, the same edge the single-volume restore declares (`design-storagebackup.md` §6), and for the same reason: a partially created group must be unwound by the finalizer, not left by an abort.
 
 ### 7.4 Reference validation at creation
 
-Every added reference is validated at admission, the group rule (`design-storagebackup.md` §7), with one exception stated below. A `StorageBackupOps` with a `groupBackupID` is rejected when no `StorageBackup` carries that id: the id is immutable, so a group backup that is not there at creation will never be, and the restore's whole purpose is gone. A `StorageBackupPolicy` with a `consistencyGroupName` is rejected when it also sets `claimSelector` (a CEL rule), because the two are alternatives.
+Every added reference is validated at admission, the group rule (`design-storagebackup.md` §7), with one exception stated below. A `StorageBackupOps` with a `groupBackupID` is rejected when no `StorageBackup` carries that id: the id is immutable, so a group backup that is not there at creation will never be, and the restore's whole purpose is gone. A `StorageBackupOps` with a `groupBackupRef` is rejected when the reference names no `StorageBackup`, names a request for one claim, or names a group request that `Failed`, because none of these will ever name a group backup. A group request still in progress is admitted, since it will finish, and the restore holds at `Validating` until the request is `Available` and names its group backup. A `StorageBackupPolicy` with a `consistencyGroupName` is rejected when it also sets `claimSelector` (a CEL rule), because the two are alternatives.
 
 The exception is the policy's `consistencyGroupName` itself: it is **not** rejected when no group of that name exists yet. A consistency group is born from its first labeled member volume (`design-consistency-groups.md` §4.1), so a policy that declares how a group is backed up is routinely applied before the group exists — a GitOps bundle that creates the policy and the first member together, in any order, is the common case. Requiring the group at admission would reject exactly that bundle. Instead, the policy reconciler resolves the group by name each pass (`ConsistencyGroupByName`) and holds the policy in `Pending` with a message naming the group it waits for, attaching it the moment the group appears. This is the `api-design` rule that existence is admission's only when the referent cannot legitimately arrive later; here it can, so readiness is the controller's.
+
+### 7.5 `StorageBackup` gains an on-demand group request
+
+A `StorageBackupPolicy` with `consistencyGroupName` backs a group up on a schedule. An on-demand group backup is the request form of the same thing, and it reuses the single-volume request (`design-storagebackup.md` §5.3) rather than adding a kind: `spec.source` gains `consistencyGroupName`, and a CEL rule admits exactly one of `claimName` and `consistencyGroupName`.
+
+```go
+// ConsistencyGroupName asks for an on-demand backup of a whole consistency
+// group as one unit. Set exactly one of this and ClaimName.
+// +kubebuilder:validation:MaxLength=63
+// +optional
+// +k8s:immutable
+ConsistencyGroupName string `json:"consistencyGroupName,omitempty"`
+```
+
+The request sits beside its claims, like a single-volume request. The reconciler finds the claims in its namespace labeled `storage.simplyblock.io/consistency-group=<name>`, takes the cluster from their volume handles, and refuses claims on two clusters. It then works in two calls, so a retry never takes a second generation:
+
+1. Resolve the group with `ConsistencyGroupByName`, take one generation (`POST /consistency-groups/{id}/snapshots {request_id}`), and record its sequence in `status.source.group.generation` before anything else. The `request_id` is `sbk-<request UID>`. The control plane stamps it on every member snapshot of the generation, and a take that names an id a generation of the group already carries returns that generation instead of freezing the group again.
+2. With the backup stream synced, look for a group backup of that generation among the group's member volumes. If the stream has none, ask for one (`POST /consistency-groups/{id}/backups {group_seq}`), and record `status.source.group.groupBackupID` and `memberCount`.
+
+A pass that takes the generation and dies before recording it is answered with the same generation on the next pass, by the request id. A pass that asks for the backup and loses the answer finds it again by the generation. Neither call is made twice for one request. The request then follows the member copies on the stream, woken by a trigger keyed on the group backup's id: `Failed` when any member fails, `Available` when `memberCount` members have completed, `Creating` until then. A group with no labeled claims yet, a group the control plane does not know yet, and a cluster with no backup location hold the request in `Pending`.
+
+The request owns the group, not the member copies. It sets no `status.backup`, so the mirror records each member copy beside the cluster with the `group-backup-id` label, exactly as it does for a policy's group backup, and a restore by `groupBackupID` works for it too. A restore by `groupBackupRef` (§7.3) names the request itself.
 
 ---
 
@@ -301,17 +333,18 @@ The exception is the policy's `consistencyGroupName` itself: it is **not** rejec
 
 The operator calls the control plane; it does not open the bucket (`design-storagebackup.md` §5.1). The single-volume endpoints exist; the group endpoints are new and are the Phase 1 deliverable (P0-3).
 
-| Method & Endpoint                                                                  | Purpose                                                                 | Idempotency / Notes                                                                       | Status  |
-|------------------------------------------------------------------------------------|-------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|---------|
-| `POST /api/v2/clusters/{id}/consistency-groups/{cg}/backups`                       | Create a group backup of a generation (take one, or name a `group_seq`) | Returns a `group_backup_id`; re-issuing with the same generation is a no-op if one exists | **New** |
-| `GET /api/v2/clusters/{id}/group-backups`                                          | List group backups, with member ids and status                          | Read-only; the mirror's stream source                                                     | **New** |
-| `GET /api/v2/clusters/{id}/group-backups/{group_backup_id}`                        | One group backup's detail and members                                   | Read-only                                                                                 | **New** |
-| `POST /api/v2/clusters/{id}/group-backups/{group_backup_id}/restore`               | Restore a group backup into a new consistency group                     | Returns the restored group id and member lvol ids; all-or-nothing                         | **New** |
-| `DELETE /api/v2/clusters/{id}/group-backups/{group_backup_id}`                     | Delete a group backup (the group manifest and the record)               | Deletes the unit; member backups follow retention (§9)                                    | **New** |
-| `GET /api/v2/clusters/{id}/group-backups/export?group_backup_id=`                  | Export a group backup's manifests as a unit (Phase 3)                   | Carries the group manifest plus member manifests                                          | **New** |
-| `POST /api/v2/clusters/{id}/group-backups/import`                                  | Import a group backup, preserving ids (Phase 3)                         | All-or-nothing; rejects id collisions                                                     | **New** |
-| `POST /api/v2/clusters/{id}/group-backups/discover`                                | Discover group backups in a bucket (Phase 3)                            | Reads `groups/` prefix with no cluster reference                                          | **New** |
-| `POST /api/v2/clusters/{id}/backups`, `.../backups/restore`, `.../backup-policies` | Single-volume create, restore, policy (reused per member)               | Unchanged                                                                                 | Shipped |
+| Method & Endpoint                                                                  | Purpose                                                                 | Idempotency / Notes                                                                       | Status       |
+|------------------------------------------------------------------------------------|-------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|--------------|
+| `POST /api/v2/clusters/{id}/consistency-groups/{cg}/backups`                       | Create a group backup of a generation (take one, or name a `group_seq`) | Returns a `group_backup_id`; re-issuing with the same generation is a no-op if one exists | **New**      |
+| `POST /api/v2/clusters/{id}/consistency-groups/{cg}/snapshots`                     | Take one generation; an optional `request_id` names the take            | A take with an id the group already carries returns that generation                       | **Extended** |
+| `GET /api/v2/clusters/{id}/group-backups`                                          | List group backups, with member ids and status                          | Read-only; the mirror's stream source                                                     | **New**      |
+| `GET /api/v2/clusters/{id}/group-backups/{group_backup_id}`                        | One group backup's detail and members                                   | Read-only                                                                                 | **New**      |
+| `POST /api/v2/clusters/{id}/group-backups/{group_backup_id}/restore`               | Restore a group backup into a new consistency group                     | Returns the restored group id and member lvol ids; all-or-nothing                         | **New**      |
+| `DELETE /api/v2/clusters/{id}/group-backups/{group_backup_id}`                     | Delete a group backup (the group manifest and the record)               | Deletes the unit; member backups follow retention (§9)                                    | **New**      |
+| `GET /api/v2/clusters/{id}/group-backups/export?group_backup_id=`                  | Export a group backup's manifests as a unit (Phase 3)                   | Carries the group manifest plus member manifests                                          | **New**      |
+| `POST /api/v2/clusters/{id}/group-backups/import`                                  | Import a group backup, preserving ids (Phase 3)                         | All-or-nothing; rejects id collisions                                                     | **New**      |
+| `POST /api/v2/clusters/{id}/group-backups/discover`                                | Discover group backups in a bucket (Phase 3)                            | Reads `groups/` prefix with no cluster reference                                          | **New**      |
+| `POST /api/v2/clusters/{id}/backups`, `.../backups/restore`, `.../backup-policies` | Single-volume create, restore, policy (reused per member)               | Unchanged                                                                                 | Shipped      |
 
 The group endpoints are thin: create resolves a generation and fans out to the single-volume backup path per member, restore fans out to the single-volume restore path per member, and both add the group record, the group manifest, and the commit barrier. No new data-plane RPC is required; `bdev_lvol_snapshot_group`, `bdev_lvol_s3_backup`, and `bdev_lvol_s3_recovery` are all shipped.
 
@@ -321,7 +354,7 @@ The group endpoints are thin: create resolves a generation and fans out to the s
 
 Retention is the control plane's, as it is for single-volume backups (`design-storagebackup.md` §9). A group-backup policy carries `maxVersions` and `maxAge` that the control plane applies **per generation**: pruning a group backup deletes its group manifest and its record, then retires its member backups: one that the next generation still chains against is merged into that generation's copy (the single-volume schedule's own merge, one per volume chain per cycle), and one that nothing chains against is deleted. The group schedule repeats the retirement every cycle, so a merge that could not start when the generation was pruned is picked up later. Without this a pruned generation's full copies outlived it in the bucket for good while the chain grew under them (live 2026-10-20). Pruning a whole generation is the unit, so a group's retention count is generations kept, not member copies kept.
 
-Scheduling is Phase 4. Until then a group backup is taken on demand through the create endpoint or `sbctl`, and kept until deleted. The schedule, when it lands, takes one generation per interval and backs it up, which is the single-volume schedule applied to the group source (§7.1).
+Scheduling is Phase 4. Until then a group backup is taken on demand through the create endpoint, `sbctl`, or a `StorageBackup` group request (§7.5), and kept until deleted. The schedule, when it lands, takes one generation per interval and backs it up, which is the single-volume schedule applied to the group source (§7.1).
 
 ---
 
@@ -359,7 +392,7 @@ The test plan is [`test-plan-consistency-group-backup.md`](../tests/test-plan-co
 
 - **Control-plane unit tests** prove the commit barrier and the group record: a group backup is not `completed` and its group manifest is not written until every member backup is `completed`; a member failure holds the group in `in_progress` and then fails it as a whole; the group manifest lists exactly the generation's members; and group restore unwinds on a member failure. These ride the existing backup unit harness (`tests/unit/backup/`, `tests/integration/backup/`) and the consistency-group harness, mocking the data plane. The all-or-nothing barrier is where the risk concentrates, and it is where a mocked member failure must leave no group manifest.
 - **Control-plane integration tests** (real FoundationDB, mocked nodes) prove the records round-trip: a `GroupBackup` and its member `Backup`s persist and read back, the indexes resolve "members of a group backup" and "group backups of a group," and import preserves the group ids all-or-nothing.
-- **Operator envtest** proves the CRD extensions: a policy with a `consistencyGroupName` resolves its named group and is refused for an unknown name or a `claimSelector` set alongside it; the mirror groups member `StorageBackup`s by `group-backup-id`; a `StorageBackupOps{groupBackupID}` serializes against the per-member lock and cannot abort after creating a volume.
+- **Operator envtest** proves the CRD extensions: a policy with a `consistencyGroupName` resolves its named group and is refused for an unknown name or a `claimSelector` set alongside it; the mirror groups member `StorageBackup`s by `group-backup-id`; two `StorageBackupOps` restores of one group backup run side by side and take no lock, and neither can abort after creating a volume; a `StorageBackupOps{groupBackupRef}` restores the group backup its request produced and waits while that request is in progress; a `StorageBackup` group request takes one generation and asks for one group backup however many times it is reconciled.
 - **Live cluster** proves the end-to-end crash-consistency: back up a group under load, restore it on another cluster, and verify every member restores to the same generation boundary, which is the group analog of the single-volume restore verification and is only provable against real SPDK and real S3.
 
 The regression focus is the barrier and the unwind: a group backup that commits while a member is still uploading, or a group restore that leaves a half-group, are the two failures that would make the feature silently lossy, and both get a red-first regression test.
@@ -442,7 +475,7 @@ The base type is `design-storagebackup.md` Appendix C and is unchanged; this is 
 GroupBackupID string `json:"groupBackupID,omitempty"`
 ```
 
-The restore step machine widens for a group restore: `Validating → Restoring → AwaitingVolumes → Binding`. The lock is `StorageBackup.status.activeOpsRef` taken on every member of the group. Admission (`StorageBackupOpsValidator`) rejects an ops that sets neither or both of `backupRef` and `groupBackupID`, and rejects a `groupBackupID` that no `StorageBackup` carries.
+`GroupBackupRef NamespacedReference` joins it, naming a group request (§7.5). The restore step machine widens for a group restore: `Validating → Restoring → AwaitingVolumes → Binding`. A group restore takes no lock (§7.3). A CEL rule admits exactly one of `backupRef`, `groupBackupID`, and `groupBackupRef`. Admission (`StorageBackupOpsValidator`) rejects a `groupBackupID` that no `StorageBackup` carries, and a `groupBackupRef` that names no group request or a failed one.
 
 > This appendix states additions to kinds declared in full by `design-storagebackup.md`; it is not itself a standalone kind, so the `api-design` `check-crds.py --design` full-kind audit runs against that document, and these deltas are reviewed against it by reading.
 

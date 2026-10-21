@@ -9004,7 +9004,7 @@
           "consistency-groups"
         ],
         "summary": "Clusters:Consistency-Groups:Snapshots:Take",
-        "description": "Take one crash-consistent generation across every current member (\u00a75).",
+        "description": "Take one crash-consistent generation across every current member (\u00a75).\n\nWith a ``request_id``, a retry of a take whose answer was lost returns the\ngeneration already taken under that id.",
         "operationId": "clusters_consistency_groups_snapshots_take_api_v2_clusters__cluster_id__consistency_groups__group_id__snapshots_post",
         "security": [
           {
@@ -9033,6 +9033,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/_GenerationTakeParams"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -15526,6 +15543,18 @@
           "spdk_image"
         ],
         "title": "_UpdateParams"
+      },
+      "_GenerationTakeParams": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "maxLength": 128,
+            "title": "Request Id",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "_GenerationTakeParams"
       }
     },
     "securitySchemes": {

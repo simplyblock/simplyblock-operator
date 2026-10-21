@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
+	"github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/errs/class"
 	"github.com/simplyblock/atlas/lvol"
@@ -72,6 +73,12 @@ func IndexRequestSnapshot(o client.Object) []string {
 type BackupRequestClient interface {
 	CreateSnapshot(ctx context.Context, clusterID, poolID, volumeID, name string) (string, error)
 	CreateBackup(ctx context.Context, clusterID, snapshotID string) error
+
+	// The group path: resolve the group, take one generation, and back that
+	// generation up as one unit.
+	ConsistencyGroupByName(ctx context.Context, clusterID, name string) (string, error)
+	TakeGroupSnapshot(ctx context.Context, clusterID, groupID, requestID string) (int, error)
+	CreateGroupBackup(ctx context.Context, clusterID, groupID string, groupSeq int) (controlplane.CreatedGroupBackup, error)
 }
 
 // RequestSnapshots is the read surface a request needs from the snapshot
@@ -94,6 +101,14 @@ type RequestBackups interface {
 	Synced(scope cpinformer.Scope) bool
 	// SnapshotTriggers carries the snapshot names of backups that changed.
 	SnapshotTriggers() <-chan event.GenericEvent
+
+	// FindGroupMembers returns the member copies of one group backup.
+	FindGroupMembers(clusterID, groupBackupID string) []subscriptions.BackupDTO
+	// FindGroupBackupByGeneration returns the group backup of a generation whose
+	// members include one of the volumes.
+	FindGroupBackupByGeneration(clusterID string, seq int64, lvolIDs []string) (string, bool)
+	// GroupTriggers carries the bare ids of group backups whose members changed.
+	GroupTriggers() <-chan event.GenericEvent
 }
 
 // StorageBackupRequestReconciler snapshots the claim's volume, asks the control
@@ -125,12 +140,20 @@ func (r *StorageBackupRequestReconciler) SetupWithManager(mgr ctrl.Manager) erro
 	); err != nil {
 		return err
 	}
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(), &simplyblockv1alpha2.StorageBackup{},
+		RequestGroupBackupIndex, IndexRequestGroupBackup,
+	); err != nil {
+		return err
+	}
 	wake := handler.EnqueueRequestsFromMapFunc(r.requestsForSnapshot)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha2.StorageBackup{}, builder.WithPredicates(isRequest)).
 		Named("storagebackuprequest").
 		WatchesRawSource(source.Channel(r.Snapshots.Triggers(), wake)).
 		WatchesRawSource(source.Channel(r.Backups.SnapshotTriggers(), wake)).
+		WatchesRawSource(source.Channel(r.Backups.GroupTriggers(),
+			handler.EnqueueRequestsFromMapFunc(r.requestsForGroupBackup))).
 		Complete(r)
 }
 
@@ -184,6 +207,10 @@ func (r *StorageBackupRequestReconciler) Reconcile(
 		return ctrl.Result{}, nil
 	}
 
+	if sb.IsGroupRequest() {
+		return r.reconcileGroup(ctx, &sb)
+	}
+
 	s, err := r.resolve(ctx, &sb)
 	if err != nil {
 		return r.hold(ctx, &sb, err)
@@ -233,20 +260,29 @@ func (r *StorageBackupRequestReconciler) resolve(
 		return nil, refused("volume %s names its pool %q, not its identifier", pv.Name, handle.PoolRef)
 	}
 
-	var clusters simplyblockv1alpha2.StorageClusterList
-	if err := r.List(ctx, &clusters); err != nil {
+	if err := r.clusterMayBackUp(ctx, handle.ClusterID); err != nil {
 		return nil, err
 	}
+	return &requestSubject{claim: name, volume: pv.Name, fsType: pv.Spec.CSI.FSType, handle: handle}, nil
+}
+
+// clusterMayBackUp holds a request until a StorageCluster in any namespace
+// reports the cluster and it has a backup location configured.
+func (r *StorageBackupRequestReconciler) clusterMayBackUp(ctx context.Context, clusterID string) error {
+	var clusters simplyblockv1alpha2.StorageClusterList
+	if err := r.List(ctx, &clusters); err != nil {
+		return err
+	}
 	for _, c := range clusters.Items {
-		if c.Status.UUID != handle.ClusterID {
+		if c.Status.UUID != clusterID {
 			continue
 		}
 		if c.Spec.Backup == nil {
-			return nil, blocked("cluster %s has no backup location configured", c.Name)
+			return blocked("cluster %s has no backup location configured", c.Name)
 		}
-		return &requestSubject{claim: name, volume: pv.Name, fsType: pv.Spec.CSI.FSType, handle: handle}, nil
+		return nil
 	}
-	return nil, blocked("no StorageCluster reports cluster %s", handle.ClusterID)
+	return blocked("no StorageCluster reports cluster %s", clusterID)
 }
 
 // ensureSnapshot returns the snapshot this request owns, taking it if needed.
