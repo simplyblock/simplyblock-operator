@@ -93,6 +93,11 @@ const (
 	// the only record that an attempt was made and lost.
 	ActivationRetried = "ActivationRetried"
 
+	// WorkloadNamesNotRecorded says the control plane created the cluster
+	// without the workload names it was sent, so its nodes would be reached by
+	// names the cluster's Services do not carry.
+	WorkloadNamesNotRecorded = "WorkloadNamesNotRecorded"
+
 	// The supercluster's events, emitted on the supercluster, which is the
 	// object an administrator reads and the one that outlives any member.
 

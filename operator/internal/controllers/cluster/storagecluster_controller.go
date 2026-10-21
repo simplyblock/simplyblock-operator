@@ -273,6 +273,15 @@ func (r *StorageClusterReconciler) Reconcile(
 		return r.create(ctx, &cluster)
 	}
 
+	// A cluster created before the workload names were recorded is given the
+	// constant ones it was registered under, once, and then reads them like
+	// any other record.
+	if cluster.Status.WorkloadNames == nil {
+		if err := r.recordConstantWorkloadNames(ctx, &cluster); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	// The cluster exists in the control plane, so its streams can be opened.
 	// Adding a scope already present is a no-op, which is what makes this safe
 	// on every reconcile rather than only on the first.
@@ -304,7 +313,7 @@ func (r *StorageClusterReconciler) create(
 	// optimistic-lock patch succeeds for one reconciler and returns 409 to the
 	// rest, so exactly one of them goes on to POST.
 	if cluster.Status.Step.State == "" {
-		return r.claim(ctx, cluster), nil
+		return r.claim(ctx, cluster)
 	}
 
 	if machine.TimeoutReached() {
@@ -366,16 +375,29 @@ func (r *StorageClusterReconciler) create(
 // claim is the machine's first transition and the mutex that makes creation
 // single-shot.
 //
-// It returns no error, which is the point: a failed patch here is a 409 saying
+// A failed patch returns no error, which is the point: it is a 409 saying
 // another reconciler owns the claim, and that is an ordinary outcome to back
 // off from rather than a failure to report. Returning an error would requeue
 // with backoff and log a line per race.
 func (r *StorageClusterReconciler) claim(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
-) ctrl.Result {
+) (ctrl.Result, error) {
+	// The workload names go into the claim, so they are recorded before the
+	// workload reconciler builds anything from them and before the backend
+	// cluster exists. A restarted creation keeps the names it recorded.
+	names := cluster.Status.WorkloadNames
+	if names == nil {
+		chosen, err := r.chooseWorkloadNames(ctx, cluster)
+		if err != nil {
+			return ctrl.Result{RequeueAfter: clusterRetry}, err
+		}
+		names = utils.WorkloadNamesStatus(chosen)
+	}
+
 	deadline := metav1.NewTime(time.Now().Add(creationStepDeadline))
 	patch := client.MergeFromWithOptions(cluster.DeepCopy(),
 		client.MergeFromWithOptimisticLock{})
+	cluster.Status.WorkloadNames = names
 	cluster.Status.Phase = simplyblockv1alpha2.StorageClusterPhaseCreating
 	cluster.Status.Step = statemachine.KubeSnapshot{
 		State:    string(simplyblockv1alpha2.StorageClusterStepClaiming),
@@ -387,10 +409,10 @@ func (r *StorageClusterReconciler) claim(
 		logf.FromContext(ctx).Info(
 			"another reconciler holds the creation claim; backing off",
 			"cluster", cluster.Name)
-		return ctrl.Result{RequeueAfter: claimBackoff}
+		return ctrl.Result{RequeueAfter: claimBackoff}, nil
 	}
 	r.observePhase(cluster)
-	return ctrl.Result{RequeueAfter: time.Second}
+	return ctrl.Result{RequeueAfter: time.Second}, nil
 }
 
 // claimBackoff is how long a reconciler whose creation claim was refused waits
@@ -429,6 +451,10 @@ func (r *StorageClusterReconciler) postCluster(
 	machine *statemachine.Machine[simplyblockv1alpha2.StorageClusterStep],
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+
+	if rewritten, err := r.settleWorkloadNames(ctx, cluster); err != nil || rewritten {
+		return ctrl.Result{RequeueAfter: time.Second}, err
+	}
 
 	params, err := r.creationParams(ctx, cluster)
 	if err != nil {
@@ -473,6 +499,7 @@ func (r *StorageClusterReconciler) postCluster(
 		NDCS:   created.NDCS,
 		NPCS:   created.NPCS,
 		FTT:    created.MaxFaultTolerance,
+		Names:  created.BackendWorkloadNames,
 	}, false)
 }
 
@@ -487,6 +514,10 @@ type adoption struct {
 	NDCS   int
 	NPCS   int
 	FTT    int
+
+	// Names are the workload names the control plane recorded for the
+	// cluster, which persist checks against the cluster's own record.
+	Names webapi.BackendWorkloadNames
 }
 
 // adopt takes over a backend cluster the operator did not create.
@@ -518,6 +549,7 @@ func (r *StorageClusterReconciler) adopt(
 		found = adoption{
 			UUID: entry.UUID, Secret: entry.Secret, NQN: entry.NQN,
 			Status: entry.Status, NDCS: entry.NDCS, NPCS: entry.NPCS,
+			Names: entry.BackendWorkloadNames,
 		}
 	}
 
@@ -572,7 +604,7 @@ func (r *StorageClusterReconciler) upgradeClaim(
 	return adoption{
 		UUID: found.UUID, Secret: clusterSecret, NQN: found.NQN,
 		Status: found.Status, NDCS: found.NDCS, NPCS: found.NPCS,
-		FTT: found.MaxFaultTolerance,
+		FTT: found.MaxFaultTolerance, Names: found.BackendWorkloadNames,
 	}, true, nil
 }
 
@@ -586,6 +618,10 @@ func (r *StorageClusterReconciler) persist(
 	found adoption,
 	adopted bool,
 ) (ctrl.Result, error) {
+	if missing, err := r.backendMissesWorkloadNames(ctx, cluster, found); missing || err != nil {
+		return ctrl.Result{RequeueAfter: clusterRetry}, err
+	}
+
 	// A credential is the one thing this step cannot invent, and the one the
 	// name lookup cannot supply: ClusterDTO.secret is write-only in the
 	// control plane's own schema, so the cluster list carries none. Writing
@@ -984,6 +1020,7 @@ func (r *StorageClusterReconciler) creationParams(
 	}
 
 	return utils.ClusterAddParams{
+		BackendWorkloadNames:   backendWorkloadNamesOf(cluster),
 		Name:                   cluster.Name,
 		CapWarn:                capacityThreshold(cluster.Spec.WarningThreshold),
 		CapCrit:                capacityThreshold(cluster.Spec.CriticalThreshold),

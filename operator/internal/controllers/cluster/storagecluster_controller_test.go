@@ -236,9 +236,13 @@ func TestAStaleReconcilerCannotClaimTheCreationTwice(t *testing.T) {
 	}
 
 	// The stale reconciler's claim is refused as a back-off rather than as an
-	// error, which is why claim returns only a result: a 409 means somebody
-	// else owns the creation, and that is an outcome rather than a failure.
-	if result := r.claim(ctx, &stale); result.RequeueAfter == 0 {
+	// error: a 409 means somebody else owns the creation, and that is an
+	// outcome rather than a failure.
+	result, err := r.claim(ctx, &stale)
+	if err != nil {
+		t.Fatalf("a refused claim returned an error: %v", err)
+	}
+	if result.RequeueAfter == 0 {
 		t.Error("a refused claim did not back off")
 	}
 	if api.createCalls != 0 {

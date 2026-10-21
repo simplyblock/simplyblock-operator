@@ -1,5 +1,7 @@
 package utils
 
+import "github.com/simplyblock/simplyblock-operator/internal/webapi"
+
 // BackupCredentials is the key pair a backup store is reached with.
 type BackupCredentials struct {
 	AccessKeyID     string `json:"access_key_id"`
@@ -30,6 +32,8 @@ type HashicorpVaultConfig struct {
 }
 
 type ClusterAddParams struct {
+	webapi.BackendWorkloadNames
+
 	Name                   string                `json:"name"`
 	CapWarn                int                   `json:"cap_warn,omitempty"`
 	CapCrit                int                   `json:"cap_crit,omitempty"`

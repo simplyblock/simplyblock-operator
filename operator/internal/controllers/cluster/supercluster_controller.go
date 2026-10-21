@@ -28,7 +28,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	atlaskube "github.com/simplyblock/atlas/kube"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -136,6 +139,12 @@ func (r *SuperclusterReconciler) Reconcile(
 		func(fresh *simplyblockv1alpha2.StorageCluster, status *simplyblockv1alpha2.StorageClusterStatus) {
 			status.UUID = string(fresh.UID)
 			status.Role = simplyblockv1alpha2.StorageClusterRoleSupercluster
+			// The supercluster's Services are its own, and its members are
+			// reached through them (§6.2), so its names never are the
+			// constant ones a standalone cluster may hold.
+			if status.WorkloadNames == nil {
+				status.WorkloadNames = utils.WorkloadNamesStatus(atlaskube.DerivedWorkloadNames(fresh.Name))
+			}
 			status.Phase = rollup.Phase
 			status.Message = rollup.Message
 			status.Members = rollup.Members
