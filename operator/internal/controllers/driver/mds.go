@@ -1,6 +1,7 @@
-// The pNFS metadata server's pod: one StatefulSet per storage cluster, whose
-// container runs mds-runner, which runs the guest serving that cluster's
-// exports (design-pnfs-mds-vm.md §5).
+// The pNFS metadata server's pods: one StatefulSet per storage cluster, one
+// pod per guest (the active and each standby), whose container runs mds-runner,
+// which runs the guest serving that cluster's exports (design-pnfs-mds-vm.md §5,
+// design-pnfs-mds-standby.md §5.1).
 //
 // It is rendered here, beside the two plugins, because what it mounts is the
 // driver's: the cluster configuration and secret, the TLS client certificate,
@@ -23,11 +24,8 @@ import (
 	"slices"
 	"strings"
 
-	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	storagev1 "k8s.io/api/storage/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -64,22 +62,20 @@ const (
 	// repository both ship in.
 	mdsImageTagPrefix = "pnfs-mds-"
 
-	// The runner's own defaults, which the pod spec has to match: the state
-	// disk's device path and the address its probes are served on.
-	mdsStateClaim      = "state"
-	mdsStateDevicePath = "/dev/mds-state"
-	mdsProbePort       = 8080
-	mdsNFSPort         = 2049
+	// The address the runner's probes are served on, which the pod spec has to
+	// match.
+	mdsProbePort = 8080
+	mdsNFSPort   = 2049
 
 	// The runner first drains the guest's requests (3s, and up to 5s to
 	// install the drain) and then gives the powered-down guest 20s to exit.
-	// The pod's grace period has to leave it all of that, or kubelet kills
-	// QEMU first and the guest never unmounts.
-	mdsTerminationGraceSeconds = 30
+	// The pod's grace period has to leave it all of that and a margin, or
+	// kubelet kills QEMU first and the guest never unmounts.
+	mdsTerminationGraceSeconds = 45
 
-	// The CRD's default for spec.pnfs.mds.stateSize, for an object admission
-	// did not default.
-	mdsDefaultStateSize = "1Gi"
+	// mdsDefaultStandbys is the CRD's default for spec.pnfs.mds.standbys, for
+	// an object admission did not default.
+	mdsDefaultStandbys = 1
 
 	// The limits a metadata server pod gets when the spec states none. The
 	// guest is sized from the pod's limits, and without one the downward API
@@ -136,21 +132,17 @@ func MDSResourcesProblem(spec *simplyblockv1alpha2.DriverPNFSMDS) string {
 
 // UpdateMDS gives an existing metadata server StatefulSet the pod template this
 // release builds, when its recorded hash says it has another one, and reports
-// whether it wrote. Only the template and the hash are written: the selector
-// and the claim templates cannot be changed, and the claim template's class is
-// read from the existing object rather than looked up again. A template edited
-// by hand keeps its hash, and is left as it is.
+// whether it wrote. Only the template and the hash are written, as a merge
+// patch of those two and nothing else: the takeover writes the active record
+// and the finalizer on the same object, and an update of the whole object would
+// overwrite a record moved since this read or fail on the conflict. The replica
+// count is the scale step's. A template edited by hand keeps its hash, and is
+// left as it is.
 func UpdateMDS(
 	ctx context.Context, c client.Client, d *simplyblockv1alpha2.SimplyblockDriver,
 	existing *appsv1.StatefulSet, data *MDSDataAttachment,
 ) (bool, error) {
-	stateClass := ""
-	if len(existing.Spec.VolumeClaimTemplates) > 0 {
-		if class := existing.Spec.VolumeClaimTemplates[0].Spec.StorageClassName; class != nil {
-			stateClass = *class
-		}
-	}
-	_, desired, err := MDSObjects(d, existing.Labels[MDSClusterLabel], stateClass, data)
+	_, desired, err := MDSObjects(d, existing.Labels[MDSClusterLabel], data)
 	if err != nil {
 		return false, err
 	}
@@ -158,23 +150,13 @@ func UpdateMDS(
 	if existing.Annotations[MDSTemplateHashAnnotation] == want {
 		return false, nil
 	}
+	patch := client.MergeFrom(existing.DeepCopy())
 	existing.Spec.Template = desired.Spec.Template
 	if existing.Annotations == nil {
 		existing.Annotations = map[string]string{}
 	}
 	existing.Annotations[MDSTemplateHashAnnotation] = want
-	if err := c.Update(ctx, existing); err != nil {
-		// Every export of the cluster, and the driver reconciler, can find the
-		// same old template, and only one update lands. A loser whose re-read shows the current hash is
-		// done. Otherwise, the conflict is returned and the next reconcile reads
-		// the StatefulSet again.
-		if apierrors.IsConflict(err) {
-			var live appsv1.StatefulSet
-			if getErr := c.Get(ctx, client.ObjectKeyFromObject(existing), &live); getErr == nil &&
-				live.Annotations[MDSTemplateHashAnnotation] == want {
-				return false, nil
-			}
-		}
+	if err := c.Patch(ctx, existing, patch); err != nil {
 		return false, fmt.Errorf("updating the metadata server StatefulSet %s: %w", existing.Name, err)
 	}
 	return true, nil
@@ -184,137 +166,27 @@ func UpdateMDS(
 // MDSStatefulSetName.
 const mdsStatefulSetNameLimit = 52
 
-// MDSStateClassSuffix ends the name of every storage cluster's state disk
-// class, and is what the admission policy reserving those classes matches on.
-const MDSStateClassSuffix = "-pnfs-mds-state"
-
-// MDSStateClassManagedBy is the managed-by value on a state disk class: its
-// own, so that the pool controller, which acts on classes carrying its value,
-// leaves it alone.
-const MDSStateClassManagedBy = "pnfs-mds"
-
-// MDSStateClassName is the StorageClass of one storage cluster's state disk,
-// ending in MDSStateClassSuffix. A StorageClass name may be 253 characters, so
-// the whole cluster ID fits and the name is unique without a digest.
-func MDSStateClassName(d *simplyblockv1alpha2.SimplyblockDriver, clusterID string) string {
-	return kube.Formula{Prefix: d.Name + "-", Suffix: MDSStateClassSuffix}.Derive(clusterID).Value
+// MDSPodName is the StatefulSet's pod of one ordinal.
+func MDSPodName(d *simplyblockv1alpha2.SimplyblockDriver, clusterID string, ordinal int32) string {
+	return fmt.Sprintf("%s-%d", MDSStatefulSetName(d, clusterID), ordinal)
 }
 
-// MDSStatePolicyName names the admission policy reserving the driver's state
-// disk classes, and its binding.
-func MDSStatePolicyName(d *simplyblockv1alpha2.SimplyblockDriver) string {
-	return d.Name + MDSStateClassSuffix
-}
-
-// mdsStateParams are the parameters a state disk class takes from the class it
-// is derived from: where the volume lives and how it is reached and stored.
-// An allowlist rather than a blocklist, because a parameter added to user
-// classes later, a cap or a placement hint, would otherwise reach the state
-// disk without anyone deciding it should. Left out on purpose: the QoS caps,
-// which belong to the user volumes the class was written for, and the
-// filesystem, since the state disk is a raw block device.
-var mdsStateParams = []string{kube.ParamClusterID, kube.ParamPool, kube.ParamFabric, kube.ParamEncryption}
-
-// MDSStateClass is the StorageClass of one storage cluster's state disk,
-// derived from source, a simplyblock class of the same cluster.
-//
-// It is labeled with a managed-by value of its own and with no pool, on
-// purpose. A pool label would assign it to the pool, whose deletion waits on
-// its classes, and nothing removes this one. A StorageClass is cluster-scoped,
-// so it cannot be owned by the driver either.
-func MDSStateClass(
-	d *simplyblockv1alpha2.SimplyblockDriver, clusterID string, source *storagev1.StorageClass,
-) *storagev1.StorageClass {
-	params := map[string]string{}
-	for _, key := range mdsStateParams {
-		if v, ok := source.Parameters[key]; ok {
-			params[key] = v
-		}
+// MDSStandbys is spec.pnfs.mds.standbys with the CRD's default applied.
+func MDSStandbys(spec *simplyblockv1alpha2.DriverPNFSMDS) int32 {
+	if spec == nil || spec.Standbys == nil {
+		return mdsDefaultStandbys
 	}
-	params[kube.ParamClusterID] = clusterID
-	return &storagev1.StorageClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   MDSStateClassName(d, clusterID),
-			Labels: map[string]string{managedByLabel: MDSStateClassManagedBy},
-		},
-		Provisioner:          driverName(d),
-		Parameters:           params,
-		ReclaimPolicy:        ptr.To(corev1.PersistentVolumeReclaimDelete),
-		VolumeBindingMode:    ptr.To(storagev1.VolumeBindingImmediate),
-		AllowVolumeExpansion: ptr.To(true),
-	}
-}
-
-// MDSStatePolicy is the admission policy reserving the state disk classes,
-// and its binding.
-//
-// Kubernetes has no permission for using a StorageClass: anyone who may create
-// a claim in any namespace may name any class. The policy refuses a new claim
-// whose class name ends in MDSStateClassSuffix, and the binding applies it to
-// every namespace but the operator's, where the StatefulSet controller creates
-// the state disk's claim. Whoever may create claims there can do far more
-// than this already. An in-process policy rather than a webhook: it costs
-// nothing to serve and cannot make every claim in the cluster wait on the
-// operator.
-func MDSStatePolicy(
-	d *simplyblockv1alpha2.SimplyblockDriver, operatorNamespace string,
-) (*admissionregistrationv1.ValidatingAdmissionPolicy, *admissionregistrationv1.ValidatingAdmissionPolicyBinding) {
-	name := MDSStatePolicyName(d)
-	policy := &admissionregistrationv1.ValidatingAdmissionPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec: admissionregistrationv1.ValidatingAdmissionPolicySpec{
-			FailurePolicy: ptr.To(admissionregistrationv1.Fail),
-			MatchConstraints: &admissionregistrationv1.MatchResources{
-				ResourceRules: []admissionregistrationv1.NamedRuleWithOperations{{
-					RuleWithOperations: admissionregistrationv1.RuleWithOperations{
-						// CREATE only: a claim's class cannot change afterward.
-						Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Create},
-						Rule: admissionregistrationv1.Rule{
-							APIGroups:   []string{""},
-							APIVersions: []string{"v1"},
-							Resources:   []string{"persistentvolumeclaims"},
-						},
-					},
-				}},
-			},
-			Validations: []admissionregistrationv1.Validation{{
-				Expression: fmt.Sprintf("!has(object.spec.storageClassName) || "+
-					"!object.spec.storageClassName.endsWith('%s')", MDSStateClassSuffix),
-				Message: "this StorageClass is reserved for the pNFS metadata server's state disk",
-			}},
-		},
-	}
-	binding := &admissionregistrationv1.ValidatingAdmissionPolicyBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec: admissionregistrationv1.ValidatingAdmissionPolicyBindingSpec{
-			PolicyName:        name,
-			ValidationActions: []admissionregistrationv1.ValidationAction{admissionregistrationv1.Deny},
-			MatchResources: &admissionregistrationv1.MatchResources{
-				NamespaceSelector: &metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{
-					Key:      corev1.LabelMetadataName,
-					Operator: metav1.LabelSelectorOpNotIn,
-					Values:   []string{operatorNamespace},
-				}}},
-			},
-		},
-	}
-	return policy, binding
-}
-
-// MDSPodName is the StatefulSet's only pod, the peer exports are bound to.
-func MDSPodName(d *simplyblockv1alpha2.SimplyblockDriver, clusterID string) string {
-	return MDSStatefulSetName(d, clusterID) + "-0"
+	return *spec.Standbys
 }
 
 // MDSObjects renders the metadata server for one storage cluster: its
 // ServiceAccount, which carries no permissions and exists for the token
-// csi-link authenticates, and its StatefulSet. The caller sets ownership, and
-// chooses stateClass, the StorageClass of the state disk: choosing one takes a
-// read of the cluster, which this package does not do. data attaches the pod to
-// the storage data network, and is nil for a pod on the pod network alone; see
+// csi-link authenticates, and its StatefulSet of one pod for the active and one
+// for each standby. The caller sets ownership. data attaches the pods to the
+// storage data network, and is nil for pods on the pod network alone; see
 // EnsureMDSDataNetwork.
 func MDSObjects(
-	d *simplyblockv1alpha2.SimplyblockDriver, clusterID, stateClass string, data *MDSDataAttachment,
+	d *simplyblockv1alpha2.SimplyblockDriver, clusterID string, data *MDSDataAttachment,
 ) (*corev1.ServiceAccount, *appsv1.StatefulSet, error) {
 	spec := d.Spec.PNFS.MDS
 	if spec == nil {
@@ -350,8 +222,6 @@ func MDSObjects(
 		volumes = append(volumes, *v)
 	}
 
-	stateSize := resource.MustParse(mdsDefaultStateSize)
-
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -359,12 +229,17 @@ func MDSObjects(
 			Labels:    map[string]string{MDSClusterLabel: clusterID},
 		},
 		Spec: appsv1.StatefulSetSpec{
-			// One, and never more: two guests mounting one filesystem lose
-			// data, and a StatefulSet does not start a second pod while the
-			// first is terminating.
-			Replicas:    ptr.To(int32(1)),
+			// The active and each standby. Two guests mounting one filesystem lose
+			// data, which the takeover's fencing prevents, not this count.
+			Replicas:    ptr.To(1 + MDSStandbys(spec)),
 			ServiceName: name,
 			Selector:    &metav1.LabelSelector{MatchLabels: selector},
+			// Parallel, so a pod stuck on a lost node does not stop the other
+			// ordinal from starting. OnDelete, because the operator rolls the
+			// pods itself, and the StatefulSet controller's order ignores which
+			// one is active.
+			PodManagementPolicy: appsv1.ParallelPodManagement,
+			UpdateStrategy:      appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels:      podLabels,
@@ -373,23 +248,13 @@ func MDSObjects(
 				Spec: corev1.PodSpec{
 					ServiceAccountName:            n.mdsServiceAccount,
 					NodeSelector:                  nodeSelector,
+					Affinity:                      mdsPodAntiAffinity(selector),
 					Tolerations:                   spec.Tolerations,
 					TerminationGracePeriodSeconds: ptr.To(int64(mdsTerminationGraceSeconds)),
-					Containers:                    []corev1.Container{mdsRunnerContainer(d, image, data)},
+					Containers:                    []corev1.Container{mdsRunnerContainer(d, clusterID, image, data)},
 					Volumes:                       volumes,
 				},
 			},
-			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{{
-				ObjectMeta: metav1.ObjectMeta{Name: mdsStateClaim},
-				Spec: corev1.PersistentVolumeClaimSpec{
-					AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-					VolumeMode:       ptr.To(corev1.PersistentVolumeBlock),
-					StorageClassName: ptr.To(stateClass),
-					Resources: corev1.VolumeResourceRequirements{
-						Requests: corev1.ResourceList{corev1.ResourceStorage: stateSize},
-					},
-				},
-			}},
 		},
 	}
 	if data != nil && spec.DataNetwork != nil {
@@ -407,6 +272,17 @@ func MDSObjects(
 	}
 	sts.Annotations = map[string]string{MDSTemplateHashAnnotation: hash}
 	return sa, sts, nil
+}
+
+// mdsPodAntiAffinity requires every pod of the StatefulSet to run on a node of
+// its own: two guests on one node are lost together with it.
+func mdsPodAntiAffinity(selector map[string]string) *corev1.Affinity {
+	return &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+			LabelSelector: &metav1.LabelSelector{MatchLabels: selector},
+			TopologyKey:   corev1.LabelHostname,
+		}},
+	}}
 }
 
 // MDSTemplateHash is the hash of a metadata server StatefulSet's pod template,
@@ -428,12 +304,16 @@ func MDSTemplateHash(sts *appsv1.StatefulSet) (string, error) {
 // device plugin, and it builds the guest's bridge and NAT rules in the pod's
 // network namespace.
 func mdsRunnerContainer(
-	d *simplyblockv1alpha2.SimplyblockDriver, image string, data *MDSDataAttachment,
+	d *simplyblockv1alpha2.SimplyblockDriver, clusterID, image string, data *MDSDataAttachment,
 ) corev1.Container {
 	spec := d.Spec.PNFS.MDS
 	// The guest reaches its own node's storage node through the mds-proxy
 	// there (design-pnfs-mds-vm.md §8.5).
-	args := append(linkArgs(d), "--host-proxy="+mdsProxyAddress)
+	// Every guest boots with the StatefulSet's name as its hostname, so a client
+	// of one ordinal reclaims on another under the same server owner. The pod's
+	// own name is what the runner registers as.
+	args := append(linkArgs(d), "--host-proxy="+mdsProxyAddress,
+		"--hostname="+MDSStatefulSetName(d, clusterID), "--pod-name=$(POD_NAME)")
 	if data != nil {
 		// The guest's traffic to the data network leaves through it.
 		args = append(args, "--data-interface="+MDSDataInterface)
@@ -474,7 +354,6 @@ func mdsRunnerContainer(
 			{Name: "csi-config", MountPath: "/etc/spdkcsi-config/", ReadOnly: true},
 			{Name: "csi-secret", MountPath: "/etc/spdkcsi-secret/", ReadOnly: true},
 		}, tlsVolumeMount(d), linkVolumeMounts()),
-		VolumeDevices: []corev1.VolumeDevice{{Name: mdsStateClaim, DevicePath: mdsStateDevicePath}},
 	}
 }
 
