@@ -126,8 +126,8 @@ func TestTalosStatesItselfAndItsTalosctlImage(t *testing.T) {
 	if workload.Talos == nil || !*workload.Talos {
 		t.Error("a Talos document did not state Talos on the workload")
 	}
-	if workload.EnableKubeletConfiguration == nil || *workload.EnableKubeletConfiguration {
-		t.Error("a Talos document did not resolve to skipping the kubelet configuration")
+	if workload.EnableKubeletConfiguration == nil || !*workload.EnableKubeletConfiguration {
+		t.Error("a Talos document did not resolve to configuring the kubelet (through the Talos API)")
 	}
 	if workload.TalosctlImage != "ghcr.io/siderolabs/talosctl:v1.12.7" {
 		t.Errorf("TalosctlImage = %q, want the talosctl slot", workload.TalosctlImage)

@@ -305,7 +305,7 @@ func TestStorageNodeRoleLetsTheAgentReadJobLogsAndCheckSecrets(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"/pods/log", "/secrets"} {
+	for _, want := range []string{"/pods/log", "/secrets", "/nodes/proxy"} {
 		verbs := granted[want]
 		if len(verbs) != 1 || verbs[0] != "get" {
 			t.Errorf("%s verbs = %v, want exactly [get]", want, verbs)

@@ -436,12 +436,14 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		// OpenShift deployment does.
 		workload.EnableKubeletConfiguration = ptr.To(true)
 	case simplyblockv1alpha2.KubernetesEnvironmentTalos:
-		// Talos has no writable kubelet configuration and no package manager, so
-		// the node applies neither. Stated to the node as well: it is what makes
-		// the node reserve huge pages through the Talos API rather than through
-		// a write to a host it cannot reach.
+		// Talos has no package manager and no writable kubelet configuration
+		// file, but it has the Talos API: the node configures the kubelet's
+		// CPU topology through machine.kubelet.extraConfig, the way it reserves
+		// huge pages, so the kubelet configuration is enabled as on any other
+		// distribution. Stated to the node as well, which is what selects that
+		// path over a write to a host it cannot reach.
 		workload.Talos = ptr.To(true)
-		workload.EnableKubeletConfiguration = ptr.To(false)
+		workload.EnableKubeletConfiguration = ptr.To(true)
 	case simplyblockv1alpha2.KubernetesEnvironmentVanilla,
 		simplyblockv1alpha2.KubernetesEnvironmentRancher,
 		simplyblockv1alpha2.KubernetesEnvironmentK3s:

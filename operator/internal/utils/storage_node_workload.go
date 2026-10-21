@@ -529,6 +529,15 @@ func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 			Verbs:     []string{"get"},
 		},
 		{
+			// The kubelet's live configuration (nodes/<name>/proxy/configz), read
+			// before the Talos kubelet CPU-topology patch so that a node whose
+			// kubelet already runs with the settings is left alone: Talos
+			// restarts the kubelet on every machine-config change.
+			APIGroups: []string{""},
+			Resources: []string{"nodes/proxy"},
+			Verbs:     []string{"get"},
+		},
+		{
 			APIGroups: []string{"apps"},
 			Resources: []string{"deployments"},
 			Verbs:     []string{"create", "delete"},
