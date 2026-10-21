@@ -1521,18 +1521,18 @@ type FailoverResultDTOStatus string
 // GroupBackupDTO A consistency-group backup: the member backups of one generation as one
 // all-or-nothing unit (design §4.1).
 type GroupBackupDTO struct {
-	ClusterId            openapi_types.UUID     `json:"cluster_id"`
-	CompletedAt          int                    `json:"completed_at"`
-	ConsistencyGroupId   string                 `json:"consistency_group_id"`
-	ConsistencyGroupName string                 `json:"consistency_group_name"`
-	CreatedAt            int                    `json:"created_at"`
-	Encrypted            bool                   `json:"encrypted"`
-	ErrorMessage         *string                `json:"error_message,omitempty"`
-	GroupSeq             int                    `json:"group_seq"`
-	Id                   openapi_types.UUID     `json:"id"`
-	Members              []GroupBackupMemberDTO `json:"members"`
-	Size                 int                    `json:"size"`
-	Status               string                 `json:"status"`
+	ClusterId            openapi_types.UUID   `json:"cluster_id"`
+	CompletedAt          *time.Time           `json:"completed_at,omitempty"`
+	ConsistencyGroupId   openapi_types.UUID   `json:"consistency_group_id"`
+	ConsistencyGroupName string               `json:"consistency_group_name"`
+	CreatedAt            time.Time            `json:"created_at"`
+	Encrypted            bool                 `json:"encrypted"`
+	ErrorMessage         *string              `json:"error_message,omitempty"`
+	GroupSeq             int                  `json:"group_seq"`
+	Id                   openapi_types.UUID   `json:"id"`
+	MemberBackupIds      []openapi_types.UUID `json:"member_backup_ids"`
+	Size                 int                  `json:"size"`
+	Status               string               `json:"status"`
 }
 
 // GroupBackupExportInput A group backup carried out of a cluster in a file: the group manifest plus
@@ -1618,16 +1618,6 @@ type GroupBackupManifest struct {
 
 	// Source Where a group backup's generation came from. Provenance for a reader.
 	Source GroupManifestSource `json:"source"`
-}
-
-// GroupBackupMemberDTO One member of a group backup: the source volume and its own backup.
-//
-// “backup_id“ is the member “Backup“'s composite “cluster_id/uuid“ id and
-// “lvol_id“ the source volume's id, kept as strings rather than UUIDs because
-// the member id is composite (design §4.1).
-type GroupBackupMemberDTO struct {
-	BackupId string `json:"backup_id"`
-	LvolId   string `json:"lvol_id"`
 }
 
 // GroupFailbackParams defines model for GroupFailbackParams.

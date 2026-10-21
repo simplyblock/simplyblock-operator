@@ -262,5 +262,5 @@ func (c *Client) CreateGroupBackup(ctx context.Context, clusterID, groupID strin
 	if err != nil {
 		return CreatedGroupBackup{}, err
 	}
-	return CreatedGroupBackup{ID: created.Id.String(), MemberCount: len(created.Members)}, nil
+	return CreatedGroupBackup{ID: created.Id.String(), MemberCount: len(created.MemberBackupIds)}, nil
 }

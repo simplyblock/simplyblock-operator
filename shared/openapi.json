@@ -12170,6 +12170,7 @@
           },
           "consistency_group_id": {
             "type": "string",
+            "format": "uuid",
             "title": "Consistency Group Id"
           },
           "consistency_group_name": {
@@ -12184,12 +12185,13 @@
             "type": "string",
             "title": "Status"
           },
-          "members": {
+          "member_backup_ids": {
             "items": {
-              "$ref": "#/components/schemas/GroupBackupMemberDTO"
+              "type": "string",
+              "format": "uuid"
             },
             "type": "array",
-            "title": "Members"
+            "title": "Member Backup Ids"
           },
           "encrypted": {
             "type": "boolean",
@@ -12200,11 +12202,20 @@
             "title": "Size"
           },
           "created_at": {
-            "type": "integer",
+            "type": "string",
+            "format": "date-time",
             "title": "Created At"
           },
           "completed_at": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Completed At"
           },
           "error_message": {
@@ -12221,11 +12232,10 @@
           "consistency_group_name",
           "group_seq",
           "status",
-          "members",
+          "member_backup_ids",
           "encrypted",
           "size",
-          "created_at",
-          "completed_at"
+          "created_at"
         ],
         "title": "GroupBackupDTO",
         "description": "A consistency-group backup: the member backups of one generation as one\nall-or-nothing unit (design \u00a74.1)."
@@ -12332,25 +12342,6 @@
         ],
         "title": "GroupBackupManifest",
         "description": "The self-describing document for one consistency-group backup."
-      },
-      "GroupBackupMemberDTO": {
-        "properties": {
-          "lvol_id": {
-            "type": "string",
-            "title": "Lvol Id"
-          },
-          "backup_id": {
-            "type": "string",
-            "title": "Backup Id"
-          }
-        },
-        "type": "object",
-        "required": [
-          "lvol_id",
-          "backup_id"
-        ],
-        "title": "GroupBackupMemberDTO",
-        "description": "One member of a group backup: the source volume and its own backup.\n\n``backup_id`` is the member ``Backup``'s composite ``cluster_id/uuid`` id and\n``lvol_id`` the source volume's id, kept as strings rather than UUIDs because\nthe member id is composite (design \u00a74.1)."
       },
       "GroupFailbackParams": {
         "properties": {

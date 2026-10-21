@@ -384,8 +384,8 @@ func TestClientCreateGroupBackup(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"id":"` + groupBackup + `","cluster_id":"` + testCluster + `",` +
 			`"consistency_group_id":"` + group + `","consistency_group_name":"cg","group_seq":7,` +
-			`"status":"in_progress","members":[{"lvol_id":"a","backup_id":"b"},{"lvol_id":"c","backup_id":"d"}],` +
-			`"size":0,"created_at":1,"completed_at":0,"encrypted":false}`))
+			`"status":"in_progress","member_backup_ids":["` + testBackup + `","` + testPrevBackup + `"],` +
+			`"size":0,"created_at":"2023-11-14T22:13:20Z","completed_at":null,"encrypted":false}`))
 	})
 
 	created, err := c.CreateGroupBackup(context.Background(), testCluster, group, 7)
