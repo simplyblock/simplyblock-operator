@@ -73,20 +73,26 @@ type expansionTarget struct {
 
 // expansionTargets are the clusters the document builds nodes for: the cluster
 // it created or grows, or each member of the supercluster it created, as
-// status.members records them.
-func expansionTargets(config *simplyblockv1alpha2.ClusterDeploymentConfig) []expansionTarget {
+// status.members records them. A supercluster's document whose record misses a
+// node set is refused rather than read as one with fewer members, since every
+// step after CreatingCluster would otherwise pass with nothing to do.
+func expansionTargets(config *simplyblockv1alpha2.ClusterDeploymentConfig) ([]expansionTarget, error) {
 	if !IsSuperclusterDocument(config) {
-		return []expansionTarget{{cluster: config.Status.ClusterRef, document: config}}
+		return []expansionTarget{{cluster: config.Status.ClusterRef, document: config}}, nil
 	}
-	targets := make([]expansionTarget, 0, len(config.Status.Members))
+	recorded := map[string]string{}
 	for _, entry := range config.Status.Members {
-		for _, set := range config.Spec.NodeSets {
-			if set.Name == entry.NodeSet {
-				targets = append(targets, expansionTarget{cluster: entry.Cluster, document: memberView(config, set)})
-			}
-		}
+		recorded[entry.NodeSet] = entry.Cluster
 	}
-	return targets
+	targets := make([]expansionTarget, 0, len(config.Spec.NodeSets))
+	for _, set := range config.Spec.NodeSets {
+		cluster, ok := recorded[set.Name]
+		if !ok {
+			return nil, fmt.Errorf("status.members records no member for node set %s", set.Name)
+		}
+		targets = append(targets, expansionTarget{cluster: cluster, document: memberView(config, set)})
+	}
+	return targets, nil
 }
 
 // createSupercluster is CreatingCluster for a supercluster's document (§5.4):
@@ -197,7 +203,18 @@ func (r *ClusterDeploymentConfigReconciler) recordMembers(
 	err := r.writeStatus(ctx, config, func(status *simplyblockv1alpha2.ClusterDeploymentConfigStatus) {
 		status.Members = members
 	})
-	return members, err
+	if err != nil {
+		return nil, err
+	}
+	// The write reports back what the apiserver stored. An apiserver whose
+	// schema predates status.members drops the field without an error, and a
+	// member created then would be drawn again on the next pass.
+	if len(config.Status.Members) != len(members) {
+		return nil, fmt.Errorf("the apiserver did not keep status.members, so no member is created " +
+			"under a name that is not on record: the ClusterDeploymentConfig CRD predates the field " +
+			"and has to be updated")
+	}
+	return members, nil
 }
 
 // clusterExists reports whether a StorageCluster of the name exists.

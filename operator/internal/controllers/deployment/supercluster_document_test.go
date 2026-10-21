@@ -14,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/simplyblock/atlas/ptr"
 
@@ -339,5 +340,66 @@ func TestEachMemberIsActivatedOnceItsNodesAreOnline(t *testing.T) {
 	}
 	if got := activations(); len(got) != 2 {
 		t.Errorf("activated %v, want both members", got)
+	}
+}
+
+// prunedMembers is a client against an apiserver whose ClusterDeploymentConfig
+// schema predates status.members: it drops the field from every status write,
+// as pruning does, without an error.
+func prunedMembers(t *testing.T, objects ...client.Object) *ClusterDeploymentConfigReconciler {
+	t.Helper()
+	r := reconcilerFor(t, objects...)
+	r.Client = interceptor.NewClient(r.Client.(client.WithWatch), interceptor.Funcs{
+		SubResourcePatch: func(
+			ctx context.Context, c client.Client, subResource string, obj client.Object,
+			patch client.Patch, opts ...client.SubResourcePatchOption,
+		) error {
+			if config, ok := obj.(*simplyblockv1alpha2.ClusterDeploymentConfig); ok {
+				config.Status.Members = nil
+			}
+			return c.SubResource(subResource).Patch(ctx, obj, patch, opts...)
+		},
+	})
+	return r
+}
+
+// A member's name has to be on record before the member is created, or a later
+// pass draws another and creates a second member of the node set. A record the
+// apiserver dropped, as one with an older schema does, stops the expansion and
+// creates no member.
+func TestAMemberRecordThatDoesNotStickCreatesNoMember(t *testing.T) {
+	config := expandingDocument()
+	r := prunedMembers(t, append(workers("worker-1", "worker-2"), config)...)
+
+	if _, err := r.createCluster(context.Background(), config); err == nil || !strings.Contains(err.Error(), "status.members") {
+		t.Errorf("createCluster = %v, want an error naming status.members", err)
+	}
+
+	var clusters simplyblockv1alpha2.StorageClusterList
+	if err := r.List(context.Background(), &clusters); err != nil {
+		t.Fatalf("list the clusters: %v", err)
+	}
+	for _, cluster := range clusters.Items {
+		if cluster.Spec.SuperclusterRef != "" {
+			t.Errorf("member %s was created without its name on record", cluster.Name)
+		}
+	}
+}
+
+// The steps after CreatingCluster read the members off the record, and one
+// that holds none is not a supercluster with nothing to wait for.
+func TestTheLaterStepsRefuseASuperclusterWithoutItsMemberRecord(t *testing.T) {
+	config, objects := expandedMembers(true)
+	config.Status.Members = config.Status.Members[:1]
+	r := reconcilerFor(t, objects...)
+
+	if _, err := r.awaitCluster(context.Background(), config); err == nil {
+		t.Error("awaitCluster passed with a node set's member missing from the record")
+	}
+	if _, err := r.createNodes(context.Background(), config); err == nil {
+		t.Error("createNodes passed with a node set's member missing from the record")
+	}
+	if _, err := r.activateCluster(context.Background(), config); err == nil {
+		t.Error("activateCluster passed with a node set's member missing from the record")
 	}
 }

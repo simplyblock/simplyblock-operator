@@ -207,8 +207,12 @@ func (r *ClusterDeploymentConfigReconciler) activateCluster(
 		return false, refusef(ClusterNotFound,
 			"the document records no cluster to activate")
 	}
+	targets, err := expansionTargets(config)
+	if err != nil {
+		return false, err
+	}
 	done := true
-	for _, target := range expansionTargets(config) {
+	for _, target := range targets {
 		activated, err := r.activateTarget(ctx, config, target.cluster)
 		if err != nil {
 			return false, err
@@ -467,7 +471,11 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 func (r *ClusterDeploymentConfigReconciler) awaitCluster(
 	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) (bool, error) {
-	for _, target := range expansionTargets(config) {
+	targets, err := expansionTargets(config)
+	if err != nil {
+		return false, err
+	}
+	for _, target := range targets {
 		var cluster simplyblockv1alpha2.StorageCluster
 		key := client.ObjectKey{Namespace: config.Namespace, Name: target.cluster}
 		if err := r.Get(ctx, key, &cluster); err != nil {
@@ -495,8 +503,12 @@ func (r *ClusterDeploymentConfigReconciler) createNodes(
 	// persist status.nodeRefs would otherwise skip it on the next pass, as one
 	// that already exists, and the finished document would permanently omit a
 	// node it created.
+	targets, err := expansionTargets(config)
+	if err != nil {
+		return false, err
+	}
 	var created []string
-	for _, target := range expansionTargets(config) {
+	for _, target := range targets {
 		names, err := r.createNodesFor(ctx, target.document, target.cluster)
 		if err != nil {
 			return false, err
