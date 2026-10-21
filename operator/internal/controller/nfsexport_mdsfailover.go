@@ -468,6 +468,11 @@ type MDSServingGate interface {
 	ServingPod(ctx context.Context, statefulSet string) (pod, why string, err error)
 }
 
+// NewMDSServingGate returns the gate over the active record and the guests.
+func NewMDSServingGate(c client.Client, namespace string, guests mdsfailover.Guests) MDSServingGate {
+	return &mdsServingGate{Client: c, Namespace: namespace, Guests: guests}
+}
+
 // mdsServingGate is the MDSServingGate over the record and the guests.
 type mdsServingGate struct {
 	Client    client.Client

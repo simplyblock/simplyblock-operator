@@ -117,6 +117,10 @@ type SimplyblockDriverReconciler struct {
 	// scale for each storage cluster. Nil leaves them to nobody, which is the
 	// state of an operator that has no control-plane client wired for it.
 	MDSState *mdsstate.Coordinator
+
+	// OnHosts receives each pass's allowed-hosts result, which the takeover
+	// reads to hold a promotion for a volume whose hosts are not all allowed.
+	OnHosts func(mdsstate.HostResult)
 }
 
 func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -370,6 +374,9 @@ func (r *SimplyblockDriverReconciler) coordinateMDS(
 		StatefulSet: sts, ClusterID: clusterID, Standbys: MDSStandbys(d.Spec.PNFS.MDS),
 		Exports: exports, Pods: pods.Items,
 	})
+	if r.OnHosts != nil {
+		r.OnHosts(res.Hosts)
+	}
 	return res.RequeueAfter, err
 }
 

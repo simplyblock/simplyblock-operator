@@ -625,3 +625,16 @@ func TestTheGateTreatsAMissingStatefulSetAsNothingServing(t *testing.T) {
 	_ = apierrors.IsNotFound
 	_ = strconv.Itoa
 }
+
+// The constructor main.go uses builds the same gate the tests build directly.
+func TestNewMDSServingGateIsTheGateOverTheRecord(t *testing.T) {
+	w := newFailoverWorld(t)
+	gate := NewMDSServingGate(w.cl, testOperatorNS, newFakeGuests())
+	if gate == nil {
+		t.Fatal("no gate")
+	}
+	pod, why, err := gate.ServingPod(context.Background(), failoverSTS)
+	if err != nil || pod != "" || why == "" {
+		t.Errorf("ServingPod = %q, %q, %v; want no pod and a reason", pod, why, err)
+	}
+}

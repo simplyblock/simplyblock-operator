@@ -147,3 +147,22 @@ func TestADriverReconcileFinalizesADeletedStatefulSet(t *testing.T) {
 		t.Errorf("finalizers = %v, want the state volume's removed", got.Finalizers)
 	}
 }
+
+// The takeover holds a promotion for a volume whose pods' hosts are not all
+// allowed yet, so each pass hands the coordinator's host result to it.
+func TestADriverReconcileReportsTheAllowedHostsToTheTakeover(t *testing.T) {
+	api := mdsstatetest.New()
+	export := api.Add("export", "nqn.client")
+	r, _, _ := coordinatorFixture(t, 1, 2, api, nfsExportOf("e1", export))
+	var got []mdsstate.HostResult
+	r.OnHosts = func(h mdsstate.HostResult) { got = append(got, h) }
+
+	reconcileMDSDriver(t, r)
+
+	if len(got) == 0 {
+		t.Fatal("the host result never reached the takeover")
+	}
+	if !got[len(got)-1].Allowed(export) {
+		t.Errorf("export %s is not reported allowed: %+v", export, got[len(got)-1])
+	}
+}

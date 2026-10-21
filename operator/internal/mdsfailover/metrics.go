@@ -54,11 +54,11 @@ type Metrics struct {
 func NewMetrics(reg prometheus.Registerer) *Metrics {
 	m := &Metrics{
 		role: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "simplyblock_pnfs_mds_role",
+			Name: "simplyblock_pnfs_mds_role_state",
 			Help: "One for the role each metadata server guest reports, and zero for the others.",
 		}, []string{labelCluster, "pod", "role"}),
 		epoch: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "simplyblock_pnfs_mds_epoch",
+			Name: "simplyblock_pnfs_mds_epoch_state",
 			Help: "The active record's current epoch.",
 		}, []string{labelCluster}),
 		failovers: prometheus.NewCounterVec(prometheus.CounterOpts{

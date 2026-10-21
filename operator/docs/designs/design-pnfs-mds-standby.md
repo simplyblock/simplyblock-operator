@@ -479,12 +479,12 @@ A takeover is a property of a storage cluster's MDS, and no kind exists for that
 
 | Metric                                  | Labels                       | Description                                                                                         |
 |-----------------------------------------|------------------------------|-----------------------------------------------------------------------------------------------------|
-| `simplyblock_pnfs_mds_role`             | `cluster`, `pod`, `role`     | One for the role each guest reports (`Active`, `Standby`, `Promoting`), else zero                   |
-| `simplyblock_pnfs_mds_epoch`            | `cluster`                    | The record's current epoch                                                                          |
+| `simplyblock_pnfs_mds_role_state`             | `cluster`, `pod`, `role`     | One for the role each guest reports (`Active`, `Standby`, `Promoting`), else zero                   |
+| `simplyblock_pnfs_mds_epoch_state`            | `cluster`                    | The record's current epoch                                                                          |
 | `simplyblock_pnfs_mds_failovers_total`  | `cluster`, `cause`, `result` | Takeovers by cause (`Deleted`, `Lost`, `First`) and result (`Succeeded`, `FenceFailed`, `Conflict`) |
 | `simplyblock_pnfs_mds_takeover_seconds` | `cluster`, `phase`           | Histogram of each phase: `Detect`, `Fence`, `Start`, `Reassemble`, `Serve`                          |
 
-`simplyblock_pnfs_mds_role{role="Standby"}` summed per cluster is the alert for a cluster that has lost its protection: zero with `standbys` above 0 means the next node loss is an outage. `simplyblock_pnfs_mds_failovers_total{cause="Lost"}` is the alert for false failovers: each one is a server restart for every client, and a rate above the rate of node failures means the detection window is too short. `simplyblock_pnfs_mds_takeover_seconds` per phase is what turns the restore budget into a number: `Fence` plus `Start` plus `Reassemble` must stay under the 60 seconds of `nfsd.pnfs_export_restore`.
+`simplyblock_pnfs_mds_role_state{role="Standby"}` summed per cluster is the alert for a cluster that has lost its protection: zero with `standbys` above 0 means the next node loss is an outage. `simplyblock_pnfs_mds_failovers_total{cause="Lost"}` is the alert for false failovers: each one is a server restart for every client, and a rate above the rate of node failures means the detection window is too short. `simplyblock_pnfs_mds_takeover_seconds` per phase is what turns the restore budget into a number: `Fence` plus `Start` plus `Reassemble` must stay under the 60 seconds of `nfsd.pnfs_export_restore`.
 
 ---
 

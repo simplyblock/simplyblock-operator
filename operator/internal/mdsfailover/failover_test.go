@@ -652,7 +652,7 @@ func TestO31TheMetricsCountAndTimeATakeover(t *testing.T) {
 		map[string]string{labelCluster: simCluster, "cause": "Lost", "result": "Succeeded"}); got != 1 {
 		t.Errorf("failovers_total{Lost,Succeeded} = %v, want 1", got)
 	}
-	if got := metricValue(t, s.reg, "simplyblock_pnfs_mds_epoch", map[string]string{labelCluster: simCluster}); got != 2 {
+	if got := metricValue(t, s.reg, "simplyblock_pnfs_mds_epoch_state", map[string]string{labelCluster: simCluster}); got != 2 {
 		t.Errorf("epoch = %v, want 2", got)
 	}
 	for _, phase := range []string{PhaseDetect, PhaseFence, PhaseReassemble, PhaseServe} {
@@ -661,11 +661,11 @@ func TestO31TheMetricsCountAndTimeATakeover(t *testing.T) {
 			t.Errorf("takeover_seconds{%s} observed %d times, want once per takeover", phase, n)
 		}
 	}
-	if got := metricValue(t, s.reg, "simplyblock_pnfs_mds_role",
+	if got := metricValue(t, s.reg, "simplyblock_pnfs_mds_role_state",
 		map[string]string{labelCluster: simCluster, "pod": pod1, "role": "Active"}); got != 1 {
 		t.Errorf("role{mds-1,Active} = %v, want 1", got)
 	}
-	if got := metricValue(t, s.reg, "simplyblock_pnfs_mds_role",
+	if got := metricValue(t, s.reg, "simplyblock_pnfs_mds_role_state",
 		map[string]string{labelCluster: simCluster, "pod": pod1, "role": "Standby"}); got != 0 {
 		t.Errorf("role{mds-1,Standby} = %v, want 0", got)
 	}
