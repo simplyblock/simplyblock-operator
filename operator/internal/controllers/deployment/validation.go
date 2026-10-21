@@ -25,6 +25,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -99,25 +100,22 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 		})
 	}
 
-	stripe, err := StripeChecks(ctx, r.Client, config.Namespace, config)
-	if err != nil {
-		return nil, err
+	// What spans one cluster spans one node set of a supercluster's document,
+	// since each node set becomes a member cluster (design-superclusters.md
+	// §5.1): its stripe, its interfaces, and its limits.
+	for _, scope := range clusterScopes(config) {
+		stripe, err := StripeChecks(ctx, r.Client, config.Namespace, scope.document)
+		if err != nil {
+			return nil, err
+		}
+		for _, check := range stripe {
+			findings = append(findings, finding{reason: check.Reason, message: scope.prefix + check.Message})
+		}
+		if found := conflictingInterfaces(scope.document); found != "" {
+			findings = append(findings, finding{reason: WorkerNotFound, message: scope.prefix + found})
+		}
 	}
-	for _, check := range stripe {
-		findings = append(findings, finding{reason: check.Reason, message: check.Message})
-	}
-
-	occupied, err := r.namespaceAlreadyHasACluster(ctx, config)
-	if err != nil {
-		return nil, err
-	}
-	if occupied != "" {
-		findings = append(findings, finding{reason: ClusterExists, message: occupied})
-	}
-
-	if found := conflictingInterfaces(config); found != "" {
-		findings = append(findings, finding{reason: WorkerNotFound, message: found})
-	}
+	findings = append(findings, memberLimits(config)...)
 	if groups := groupsWithoutManagementInterface(config); len(groups) > 0 {
 		findings = append(findings, finding{
 			reason: NoManagementInterface,
@@ -419,54 +417,64 @@ func plural(n int, one, many string) string {
 	return many
 }
 
-// namespaceAlreadyHasACluster reports a document that would put a second
-// StorageCluster in a namespace that already holds one.
-//
-// A namespace holds one because the workload a cluster renders is named for the
-// namespace rather than for the cluster: the storage-node Service, its TLS
-// secret, and the serving certificate over it are constants, so the second
-// cluster cannot take ownership of them. Its workload pass stops at the
-// certificate, four steps before the DaemonSet, and what is left is a cluster
-// whose storage nodes wait on a hostname with no pod behind it.
-//
-// The admission webhook refuses the cluster as well, and that is the guard. This
-// is the same fact said at the only point it can still be acted on: admission
-// refuses during CreatingCluster, which is after approval has made the document
-// immutable, and the step then retries to its deadline so the failure that lands
-// names the deadline rather than the reason.
-//
-// A growth document is not this. It names the cluster that is there, which is
-// the precondition it was written against rather than a collision, and neither
-// is the document that created the cluster in the first place: it is validated
-// again on every pass after it has been expanded.
-func (r *ClusterDeploymentConfigReconciler) namespaceAlreadyHasACluster(
-	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
-) (string, error) {
-	if config.Spec.ClusterRef != "" {
-		return "", nil
-	}
+// clusterScope is the part of a document one cluster is built from, and the
+// words a finding about it opens with.
+type clusterScope struct {
+	document *simplyblockv1alpha2.ClusterDeploymentConfig
+	prefix   string
+}
 
-	var clusters simplyblockv1alpha2.StorageClusterList
-	if err := r.List(ctx, &clusters, client.InNamespace(config.Namespace)); err != nil {
-		return "", fmt.Errorf("listing the namespace's storage clusters: %w", err)
+// clusterScopes are the clusters a document builds: the whole document for one
+// cluster, and one node set per member for a supercluster's document.
+func clusterScopes(config *simplyblockv1alpha2.ClusterDeploymentConfig) []clusterScope {
+	if !IsSuperclusterDocument(config) {
+		return []clusterScope{{document: config}}
 	}
-
-	mine := config.Status.ClusterRef
-	if mine == "" && config.Spec.Cluster != nil {
-		mine = config.Spec.Cluster.Name
+	scopes := make([]clusterScope, 0, len(config.Spec.NodeSets))
+	for _, set := range config.Spec.NodeSets {
+		scopes = append(scopes, clusterScope{
+			document: memberView(config, set),
+			prefix:   fmt.Sprintf("node set %s: ", set.Name),
+		})
 	}
+	return scopes
+}
 
-	for i := range clusters.Items {
-		if other := clusters.Items[i].Name; other != mine {
-			return fmt.Sprintf(
-				"namespace %s already holds StorageCluster %s, and a namespace holds one: "+
-					"the storage-node Service, its TLS secret, and its serving certificate "+
-					"are named for the namespace rather than for the cluster, so a second "+
-					"cluster here would come up with storage nodes and no workload behind "+
-					"them. Write this deployment into a namespace of its own, or set "+
-					"spec.clusterRef to add its workers to %s",
-				config.Namespace, other, other), nil
+// maxStorageNodesPerCluster bounds a cluster's exposure to concurrent failures:
+// its fault tolerance is its stripe's and does not grow with its node count,
+// while the chance that more nodes fail at once than the stripe tolerates grows
+// with every node (design-superclusters.md §5.2).
+const maxStorageNodesPerCluster = 32
+
+// memberLimits reports node sets over the storage-node limit, and the members a
+// supercluster's document would name with something that is not a name.
+func memberLimits(config *simplyblockv1alpha2.ClusterDeploymentConfig) []finding {
+	var findings []finding
+	slots := int32(1)
+	if template := config.Spec.Cluster; template != nil {
+		slots = slotsOf(template.SocketsToUse, template.NodesPerSocket)
+	}
+	for _, set := range config.Spec.NodeSets {
+		workers := 0
+		for _, group := range set.Groups {
+			workers += len(group.Workers)
+		}
+		if nodes := workers * int(slots); nodes > maxStorageNodesPerCluster {
+			findings = append(findings, finding{reason: MemberTooLarge, message: fmt.Sprintf(
+				"node set %s makes %d storage nodes, and a cluster holds at most %d: split its "+
+					"workers into node sets of at most %d workers, each a member of a supercluster",
+				set.Name, nodes, maxStorageNodesPerCluster, maxStorageNodesPerCluster/int(slots))})
+		}
+		if !IsSuperclusterDocument(config) {
+			continue
+		}
+		name := memberName(config.Spec.Cluster.Name, set.Name, "abc")
+		if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
+			findings = append(findings, finding{reason: MemberNameInvalid, message: fmt.Sprintf(
+				"node set %s makes a member named like %s, which a StorageCluster cannot be "+
+					"named (%s): shorten the node set's name or the cluster's",
+				set.Name, name, strings.Join(errs, "; "))})
 		}
 	}
-	return "", nil
+	return findings
 }

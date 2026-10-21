@@ -64,6 +64,12 @@ const (
 	ClusterExists   = "ClusterExists"
 	ClusterNotFound = "ClusterNotFound"
 
+	// The limits a member cluster is held to (design-superclusters.md §5.2,
+	// §5.3): at most 32 storage nodes, and a name that is a DNS label. Both
+	// hold for a node set whether or not the document makes a supercluster.
+	MemberTooLarge    = "MemberTooLarge"
+	MemberNameInvalid = "MemberNameInvalid"
+
 	// What the expansion produced.
 	ClusterCreated = "ClusterCreated"
 	NodesCreated   = "NodesCreated"

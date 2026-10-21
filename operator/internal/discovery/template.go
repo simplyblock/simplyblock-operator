@@ -252,13 +252,32 @@ func enabled(on bool) string {
 // stripe on its own device, so its scheme follows from the devices the worker
 // hands over for data (all of them, less the one a proposed journal device
 // takes): three or more carry 2+1, two carry 1+1, and one carries only 1+0.
+//
+// A draft of several node sets is a supercluster, each node set a member that
+// stripes across its own nodes alone (design-superclusters.md §5.1), so the
+// ladder is walked for the smallest node set. The cluster mode is one per
+// document until a node set can override it, so such a draft proposes neither
+// single-node nor two-node mode: a one-worker tier would otherwise make every
+// member single-node.
 func stripeFor(plan Plan, journalDevice bool) (*simplyblockv1alpha2.StripeSpec, erasurecoding.Topology, string) {
 	nodes := fleetSize(plan)
+	members := len(plan.NodeSets) > 1
+	if members {
+		nodes = smallestNodeSet(plan)
+	}
 
 	var topology erasurecoding.Topology
 	var note string
 	scheme := erasurecoding.Scheme{DataChunks: 2, ParityChunks: 1}
 	switch {
+	case members && nodes < 3:
+		scheme = erasurecoding.Scheme{DataChunks: 1, ParityChunks: 0}
+		note = memberStripeNote(scheme, nodes)
+	case members:
+		if nodes < scheme.MinimumNodes() {
+			scheme = erasurecoding.Scheme{DataChunks: 1, ParityChunks: 1}
+		}
+		note = memberStripeNote(scheme, nodes)
 	case nodes == 1:
 		devices := dataDevices(plan, journalDevice)
 		switch {
@@ -389,6 +408,34 @@ func alternativesFor(chosen erasurecoding.Scheme, nodes int) []string {
 // fleetSize is how many storage nodes the draft produces, which is one per
 // worker: the template proposes neither socketsToUse nor nodesPerSocket, so
 // every worker runs a single node.
+// smallestNodeSet is the worker count of the draft's smallest node set.
+func smallestNodeSet(plan Plan) int {
+	smallest := 0
+	for i, set := range plan.NodeSets {
+		workers := map[string]struct{}{}
+		for _, group := range set.Groups {
+			for _, worker := range group.Workers {
+				workers[worker] = struct{}{}
+			}
+		}
+		if i == 0 || len(workers) < smallest {
+			smallest = len(workers)
+		}
+	}
+	return smallest
+}
+
+// memberStripeNote accounts for the proposal of a draft of several node sets.
+func memberStripeNote(scheme erasurecoding.Scheme, nodes int) string {
+	return fmt.Sprintf(
+		"stripe is %s: the draft has several node sets, and each becomes a member cluster of a "+
+			"supercluster that stripes across its own nodes alone, so the scheme is one the "+
+			"smallest node set, of %d storage %s, carries. Delete the node sets you do not want, "+
+			"or widen the stripe if every node set you keep carries more. A cluster's stripe "+
+			"cannot be changed afterward",
+		scheme, nodes, plural(nodes, "node", "nodes"))
+}
+
 func fleetSize(plan Plan) int {
 	workers := map[string]struct{}{}
 	for _, set := range plan.NodeSets {
