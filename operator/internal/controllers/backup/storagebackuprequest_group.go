@@ -36,6 +36,10 @@ import (
 // backup they produced, which is what a member copy's stream event carries.
 const RequestGroupBackupIndex = "status.source.group.groupBackupID.requested"
 
+// groupTakePrefix starts the id a group request takes its generation under,
+// which ends in the request's UID so a retried pass sends the same id.
+const groupTakePrefix = "sbk-"
+
 // IndexRequestGroupBackup is the index function for [RequestGroupBackupIndex],
 // exported so that a test's client can register what the manager does.
 func IndexRequestGroupBackup(o client.Object) []string {
@@ -157,7 +161,7 @@ func (r *StorageBackupRequestReconciler) ensureGroupBackup(
 		// took the generation and lost the write recording it is answered with
 		// the same generation. The sequence is recorded before the backup is
 		// asked for, so a retry backs up this generation.
-		taken, err := r.API.TakeGroupSnapshot(ctx, s.clusterID, groupID, requestSnapshotPrefix+string(sb.UID))
+		taken, err := r.API.TakeGroupSnapshot(ctx, s.clusterID, groupID, groupTakePrefix+string(sb.UID))
 		if err != nil {
 			return false, err
 		}

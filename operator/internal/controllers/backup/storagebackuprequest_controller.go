@@ -28,7 +28,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/simplyblock/atlas/controlplane"
-	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/errs/class"
 	"github.com/simplyblock/atlas/lvol"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -45,8 +44,7 @@ const (
 
 // BackupRequestClient is the control-plane surface a request writes through.
 type BackupRequestClient interface {
-	CreateSnapshot(ctx context.Context, clusterID, poolID, volumeID, name string) (string, error)
-	CreateBackup(ctx context.Context, clusterID, snapshotID string) error
+	CreateVolumeBackup(ctx context.Context, clusterID, poolID, volumeID string) (string, error)
 
 	// The group path: resolve the group, take one generation, and back that
 	// generation up as one unit.
@@ -55,26 +53,14 @@ type BackupRequestClient interface {
 	CreateGroupBackup(ctx context.Context, clusterID, groupID string, groupSeq int) (controlplane.CreatedGroupBackup, error)
 }
 
-// RequestSnapshots is the read surface a request needs from the snapshot
-// subscription.
-type RequestSnapshots interface {
-	// FindByName returns the snapshot of that name in one pool's scope.
-	FindByName(scope cpinformer.Scope, name string) (subscriptions.SnapshotDTO, bool)
-	// Synced reports whether a scope's first frame has been applied.
-	Synced(scope cpinformer.Scope) bool
-	// Triggers carries the names of snapshots that changed.
-	Triggers() <-chan event.GenericEvent
-}
-
 // RequestBackups is the read surface a request needs from the backup subscription.
 type RequestBackups interface {
-	// FindBySnapshot returns the backup of a snapshot in one cluster's scope.
-	FindBySnapshot(clusterID, snapshotID string) (subscriptions.BackupDTO, bool)
+	Find(id string) (cpinformer.Scope, subscriptions.BackupDTO, bool)
+	// RequestTriggers carries the record names of backups that changed.
+	RequestTriggers() <-chan event.GenericEvent
+
 	// Synced reports whether a scope's first frame has been applied.
 	Synced(scope cpinformer.Scope) bool
-	// SnapshotTriggers carries the snapshot names of backups that changed.
-	SnapshotTriggers() <-chan event.GenericEvent
-
 	// FindGroupMembers returns the member copies of one group backup.
 	FindGroupMembers(clusterID, groupBackupID string) []subscriptions.BackupDTO
 	// FindGroupBackupByGeneration returns the group backup of a generation whose
@@ -109,22 +95,15 @@ func (r *StorageBackupRequestReconciler) SetupWithManager(mgr ctrl.Manager) erro
 	})
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(), &simplyblockv1alpha2.StorageBackup{},
-		RequestSnapshotIndex, IndexRequestSnapshot,
-	); err != nil {
-		return err
-	}
-	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(), &simplyblockv1alpha2.StorageBackup{},
 		RequestGroupBackupIndex, IndexRequestGroupBackup,
 	); err != nil {
 		return err
 	}
-	wake := handler.EnqueueRequestsFromMapFunc(r.requestsForSnapshot)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha2.StorageBackup{}, builder.WithPredicates(isRequest)).
 		Named("storagebackuprequest").
-		WatchesRawSource(source.Channel(r.Snapshots.Triggers(), wake)).
-		WatchesRawSource(source.Channel(r.Backups.SnapshotTriggers(), wake)).
+		WatchesRawSource(source.Channel(r.Backups.RequestTriggers(),
+			handler.EnqueueRequestsFromMapFunc(r.requestsForBackup))).
 		WatchesRawSource(source.Channel(r.Backups.GroupTriggers(),
 			handler.EnqueueRequestsFromMapFunc(r.requestsForGroupBackup))).
 		Complete(r)

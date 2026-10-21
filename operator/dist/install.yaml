@@ -5425,7 +5425,7 @@ spec:
                   so a requester in another namespace needs to be allowed to list
                   StorageBackups there. It is the path for a group backup no request object
                   stands for: one a StorageBackupPolicy scheduled, or one imported. Set
-                  exactly one of this, GroupBackupRef and BackupRef.
+                  exactly one of this, GroupBackupRef, and BackupRef.
                 maxLength: 253
                 type: string
                 x-kubernetes-validations:
@@ -5439,7 +5439,7 @@ spec:
                   needs the requesting user to be allowed to read it there, the same rule as
                   BackupRef. The request names the group backup, so restoring a group taken
                   in an application's namespace needs no access to the namespace the member
-                  copies are recorded in. Set exactly one of this, GroupBackupID and
+                  copies are recorded in. Set exactly one of this, GroupBackupID, and
                   BackupRef.
                 properties:
                   name:
@@ -6255,7 +6255,7 @@ spec:
                       this object's namespace labeled storage.simplyblock.io/consistency-group
                       with this value belong to, and the cluster is the one that provisioned
                       them. The members' copies are recorded beside the cluster like every other
-                      copy; this object is the group's handle, which a StorageBackupOps names in
+                      copy. This object is the group's handle, which a StorageBackupOps names in
                       spec.groupBackupRef to restore the whole group. Set exactly one of this and
                       ClaimName.
                     maxLength: 63

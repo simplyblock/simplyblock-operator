@@ -5,6 +5,7 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -34,12 +35,12 @@ const (
 // fakeRequestAPI is the control plane as the request reconciler writes to it.
 // What it reads comes from the stream, so a call it receives is a change.
 type fakeRequestAPI struct {
-	snapCreates int
-	bakCreates  int
-	snapName    string
+	creates int
+	volume  string
+	err     error
 
-	// groups maps a consistency-group name to its id, and a missing name is
-	// not found. takes and groupCreates count the generations taken and the group
+	// groups maps a consistency-group name to its id; a missing name is not
+	// found. takes and groupCreates count the generations taken and the group
 	// backups asked for.
 	groups       map[string]string
 	takes        int
@@ -84,21 +85,16 @@ func (f *fakeRequestAPI) CreateVolumeBackup(_ context.Context, _, _, volumeID st
 	return testBackupID, f.err
 }
 
-// fakeStream stands in for the backup subscription's cache.
+// fakeStream stands in for the backup subscription's cache. synced is what
+// Synced reports for every scope, so a cold cache is the default.
 type fakeStream struct {
 	backups []subscriptions.BackupDTO
+	synced  bool
 }
 
-func (f *fakeStream) Find(id string) (cpinformer.Scope, subscriptions.BackupDTO, bool) {
-	for _, b := range f.backups {
-		if b.ID == id {
-			return cpinformer.Scope{testClusterID}, b, true
-		}
-	}
-	return nil, subscriptions.BackupDTO{}, false
-}
+func (f *fakeStream) Synced(cpinformer.Scope) bool { return f.synced }
 
-func (f *fakeStreams) FindGroupMembers(_, groupBackupID string) []subscriptions.BackupDTO {
+func (f *fakeStream) FindGroupMembers(_, groupBackupID string) []subscriptions.BackupDTO {
 	var out []subscriptions.BackupDTO
 	for _, b := range f.backups {
 		if b.GroupBackupID != "" && simplyblockv1alpha2.GroupBackupLabelValue(b.GroupBackupID) ==
@@ -109,7 +105,7 @@ func (f *fakeStreams) FindGroupMembers(_, groupBackupID string) []subscriptions.
 	return out
 }
 
-func (f *fakeStreams) FindGroupBackupByGeneration(_ string, seq int64, lvolIDs []string) (string, bool) {
+func (f *fakeStream) FindGroupBackupByGeneration(_ string, seq int64, lvolIDs []string) (string, bool) {
 	for _, b := range f.backups {
 		for _, id := range lvolIDs {
 			if b.GroupBackupID != "" && b.GroupSeq == seq && b.LvolID == id {
@@ -120,11 +116,18 @@ func (f *fakeStreams) FindGroupBackupByGeneration(_ string, seq int64, lvolIDs [
 	return "", false
 }
 
-func (f *fakeStreams) GroupTriggers() <-chan event.GenericEvent { return nil }
+func (f *fakeStream) GroupTriggers() <-chan event.GenericEvent { return nil }
 
-func (f *fakeStreams) Synced(cpinformer.Scope) bool                { return f.synced }
-func (f *fakeStreams) Triggers() <-chan event.GenericEvent         { return nil }
-func (f *fakeStreams) SnapshotTriggers() <-chan event.GenericEvent { return nil }
+func (f *fakeStream) Find(id string) (cpinformer.Scope, subscriptions.BackupDTO, bool) {
+	for _, b := range f.backups {
+		if b.ID == id {
+			return cpinformer.Scope{testClusterID}, b, true
+		}
+	}
+	return nil, subscriptions.BackupDTO{}, false
+}
+
+func (f *fakeStream) RequestTriggers() <-chan event.GenericEvent { return nil }
 
 // newRequestReconciler holds a request for testClaim in the app namespace.
 func newRequestReconciler(

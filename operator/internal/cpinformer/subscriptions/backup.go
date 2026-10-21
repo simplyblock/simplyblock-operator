@@ -106,7 +106,7 @@ func NewBackupSubscription() *BackupSubscription {
 		Cache:           NewCache(func(b BackupDTO) string { return b.ID }),
 		ClusterRegistry: newClusterRegistry(),
 		ch:              make(chan event.GenericEvent, 1024),
-		snapshotCh:      make(chan event.GenericEvent, 1024),
+		requestCh:       make(chan event.GenericEvent, 1024),
 		groupCh:         make(chan event.GenericEvent, 1024),
 		byObject:        map[string]string{},
 	}
@@ -133,11 +133,9 @@ func (s *BackupSubscription) Ingest(ctx context.Context, ev cpinformer.Event) er
 		if present {
 			s.index(scope, backupID)
 			s.enqueue(ctx, scope, backupID)
-			if _, dto, ok := s.Find(backupID); ok {
-				enqueueByName(ctx, s.snapshotCh, dto.SnapshotName)
-				if dto.GroupBackupID != "" {
-					enqueueByName(ctx, s.groupCh, simplyblockv1alpha2.GroupBackupLabelValue(dto.GroupBackupID))
-				}
+			enqueueByName(ctx, s.requestCh, simplyblockv1alpha2.StorageBackupName(backupID))
+			if _, dto, ok := s.Find(backupID); ok && dto.GroupBackupID != "" {
+				enqueueByName(ctx, s.groupCh, simplyblockv1alpha2.GroupBackupLabelValue(dto.GroupBackupID))
 			}
 			return
 		}

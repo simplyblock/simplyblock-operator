@@ -53,7 +53,7 @@ func memberClaim(name, lvolID, clusterID string) (*corev1.PersistentVolumeClaim,
 // newGroupRequestReconciler holds a group request for testGroupName in the app
 // namespace, with two member claims and the cluster, plus any extra objects.
 func newGroupRequestReconciler(
-	t *testing.T, api *fakeRequestAPI, streams *fakeStreams, status *simplyblockv1alpha2.StorageBackupStatus,
+	t *testing.T, api *fakeRequestAPI, streams *fakeStream, status *simplyblockv1alpha2.StorageBackupStatus,
 	extra ...client.Object,
 ) *StorageBackupRequestReconciler {
 	t.Helper()
@@ -73,7 +73,7 @@ func newGroupRequestReconciler(
 	objs := append([]client.Object{request, claimA, pvA, claimB, pvB, cluster}, extra...)
 	return &StorageBackupRequestReconciler{
 		Client: testClient(t, objs...), Scheme: testScheme(t), Recorder: testRecorder(), API: api,
-		Snapshots: streams, Backups: streams,
+		Backups: streams,
 	}
 }
 
@@ -102,7 +102,7 @@ func groupAPI() *fakeRequestAPI {
 // One pass takes one generation, records it, and backs that generation up. A
 // second pass, with the stream not yet reporting the copies, asks for nothing.
 func TestGroupRequestTakesAGenerationAndBacksItUpOnce(t *testing.T) {
-	api, streams := groupAPI(), &fakeStreams{synced: true}
+	api, streams := groupAPI(), &fakeStream{synced: true}
 	r := newGroupRequestReconciler(t, api, streams, nil)
 
 	got := reconcileGroupRequest(t, r)
@@ -134,7 +134,7 @@ func TestGroupRequestTakesAGenerationAndBacksItUpOnce(t *testing.T) {
 // stream by the generation it recorded, and asks for nothing.
 func TestGroupRequestRecoversItsGroupBackupByGeneration(t *testing.T) {
 	api := groupAPI()
-	streams := &fakeStreams{synced: true, backups: []subscriptions.BackupDTO{
+	streams := &fakeStream{synced: true, backups: []subscriptions.BackupDTO{
 		{ID: "m-1", LvolID: memberLvolA, GroupBackupID: testClusterID + "/" + createdGroupID, GroupSeq: 7, Status: cpBackupInProgress},
 	}}
 	r := newGroupRequestReconciler(t, api, streams, &simplyblockv1alpha2.StorageBackupStatus{
@@ -156,7 +156,7 @@ func TestGroupRequestRecoversItsGroupBackupByGeneration(t *testing.T) {
 // With the generation recorded and the stream not synced, the stream is no
 // evidence the group backup is absent, so nothing is asked.
 func TestGroupRequestWaitsForTheStreamBeforeAskingAgain(t *testing.T) {
-	api, streams := groupAPI(), &fakeStreams{}
+	api, streams := groupAPI(), &fakeStream{}
 	r := newGroupRequestReconciler(t, api, streams, &simplyblockv1alpha2.StorageBackupStatus{
 		Phase: simplyblockv1alpha2.StorageBackupPhaseCreating, ClusterID: testClusterID,
 		Source: &simplyblockv1alpha2.BackupSource{Group: &simplyblockv1alpha2.BackupGroup{
@@ -210,7 +210,7 @@ func TestGroupRequestFollowsItsMembers(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			api := groupAPI()
-			r := newGroupRequestReconciler(t, api, &fakeStreams{synced: true, backups: tc.members}, recorded())
+			r := newGroupRequestReconciler(t, api, &fakeStream{synced: true, backups: tc.members}, recorded())
 			got := reconcileGroupRequest(t, r)
 			if got.Status.Phase != tc.want {
 				t.Errorf("phase = %q (%s), want %q", got.Status.Phase, got.Status.Message, tc.want)
@@ -229,7 +229,7 @@ func TestGroupRequestPrerequisites(t *testing.T) {
 	t.Run("the group is unknown to the control plane", func(t *testing.T) {
 		api := groupAPI()
 		api.groups = nil
-		r := newGroupRequestReconciler(t, api, &fakeStreams{synced: true}, nil)
+		r := newGroupRequestReconciler(t, api, &fakeStream{synced: true}, nil)
 		got := reconcileGroupRequest(t, r)
 		if got.Status.Phase != simplyblockv1alpha2.StorageBackupPhasePending || api.takes != 0 {
 			t.Errorf("phase = %q, generations = %d, want Pending and none", got.Status.Phase, api.takes)
@@ -238,7 +238,7 @@ func TestGroupRequestPrerequisites(t *testing.T) {
 	t.Run("members on two clusters", func(t *testing.T) {
 		api := groupAPI()
 		other, otherPV := memberClaim("cache", memberLvolA, "99999999-0000-4000-8000-000000000009")
-		r := newGroupRequestReconciler(t, api, &fakeStreams{synced: true}, nil, other, otherPV)
+		r := newGroupRequestReconciler(t, api, &fakeStream{synced: true}, nil, other, otherPV)
 		got := reconcileGroupRequest(t, r)
 		if got.Status.Phase != simplyblockv1alpha2.StorageBackupPhaseFailed || api.takes != 0 {
 			t.Errorf("phase = %q, generations = %d, want Failed and none", got.Status.Phase, api.takes)
@@ -259,7 +259,7 @@ func TestGroupRequestWithNoMemberClaimsWaits(t *testing.T) {
 	cluster.Spec.Backup = &simplyblockv1alpha2.BackupStoreSpec{}
 	r := &StorageBackupRequestReconciler{
 		Client: testClient(t, request, cluster), Scheme: testScheme(t), Recorder: testRecorder(), API: api,
-		Snapshots: &fakeStreams{synced: true}, Backups: &fakeStreams{synced: true},
+		Backups: &fakeStream{synced: true},
 	}
 	got := reconcileGroupRequest(t, r)
 	if got.Status.Phase != simplyblockv1alpha2.StorageBackupPhasePending || api.takes != 0 {
@@ -269,7 +269,7 @@ func TestGroupRequestWithNoMemberClaimsWaits(t *testing.T) {
 
 // A change to a member copy wakes the request that owns its group backup.
 func TestGroupRequestIsWokenByItsGroupBackup(t *testing.T) {
-	r := newGroupRequestReconciler(t, groupAPI(), &fakeStreams{synced: true}, &simplyblockv1alpha2.StorageBackupStatus{
+	r := newGroupRequestReconciler(t, groupAPI(), &fakeStream{synced: true}, &simplyblockv1alpha2.StorageBackupStatus{
 		Source: &simplyblockv1alpha2.BackupSource{Group: &simplyblockv1alpha2.BackupGroup{
 			GroupBackupID: testClusterID + "/" + createdGroupID,
 		}},
@@ -286,7 +286,7 @@ func TestGroupRequestIsWokenByItsGroupBackup(t *testing.T) {
 // generation and lost the status write that recorded it is answered with the
 // same generation: the group is frozen once, not once per lost write.
 func TestGroupRequestRetakesNoGenerationAfterALostWrite(t *testing.T) {
-	api, streams := groupAPI(), &fakeStreams{} // a cold stream stops each pass after the take
+	api, streams := groupAPI(), &fakeStream{} // a cold stream stops each pass after the take
 	r := newGroupRequestReconciler(t, api, streams, nil)
 	reconcileGroupRequest(t, r)
 
