@@ -17,7 +17,17 @@ import (
 	"github.com/simplyblock/atlas/nvmepr/nvmeprtest"
 )
 
-const fenceUID = "statefulset-uid-a"
+const (
+	devFirst = "/dev/first"
+	devM0    = "/dev/m0"
+	devM1    = "/dev/m1"
+	fenceUID = "statefulset-uid-a"
+	devOne   = "/dev/nvme1n1"
+	opReg    = "register"
+	opAcq    = "acquire"
+	opPre    = "preempt"
+	stateDir = "/var/lib/nfs"
+)
 
 func hostID(n byte) [16]byte {
 	var h [16]byte
@@ -63,7 +73,7 @@ func reportOf(t *testing.T, ns *nvmeprtest.Namespace) nvmepr.Report {
 }
 
 func keysOf(r nvmepr.Report) []uint64 {
-	var out []uint64
+	out := make([]uint64, 0, len(r.Registrants))
 	for _, reg := range r.Registrants {
 		out = append(out, reg.Key)
 	}
@@ -111,7 +121,7 @@ func noPlainRegister(t *testing.T, host [16]byte, nss ...*nvmeprtest.Namespace) 
 	t.Cleanup(func() {
 		for _, ns := range nss {
 			for _, c := range ns.Calls()[start[ns]:] {
-				if c.Host == host && c.Op == "register" && c.Keys[0] == 0 {
+				if c.Host == host && c.Op == opReg && c.Keys[0] == 0 {
 					t.Errorf("the fence sent a plain Register: %+v", c)
 				}
 			}
@@ -125,7 +135,7 @@ func fencerFor(t *testing.T, epoch uint64, byPath map[string]*nvmeprtest.Namespa
 }
 
 func one(ns *nvmeprtest.Namespace) map[string]*nvmeprtest.Namespace {
-	return map[string]*nvmeprtest.Namespace{"/dev/nvme1n1": ns}
+	return map[string]*nvmeprtest.Namespace{devOne: ns}
 }
 
 func TestFenceU05PreemptsAnOlderActiveAndHoldsTheReservation(t *testing.T) {
@@ -135,7 +145,7 @@ func TestFenceU05PreemptsAnOlderActiveAndHoldsTheReservation(t *testing.T) {
 	f := fencerFor(t, 2, one(ns))
 	noPlainRegister(t, hostID(1), ns)
 
-	if err := f.Fence(context.Background(), []string{"/dev/nvme1n1"}); err != nil {
+	if err := f.Fence(context.Background(), []string{devOne}); err != nil {
 		t.Fatalf("Fence: %v", err)
 	}
 	if k, ok := holderKey(t, ns); !ok || k != f.Key {
@@ -156,7 +166,7 @@ func TestFenceU06LeavesClientKeysAlone(t *testing.T) {
 	become(t, ns, hostID(4), clientKey(2), false)
 	f := fencerFor(t, 2, one(ns))
 
-	if err := f.Fence(context.Background(), []string{"/dev/nvme1n1"}); err != nil {
+	if err := f.Fence(context.Background(), []string{devOne}); err != nil {
 		t.Fatalf("Fence: %v", err)
 	}
 	want := []uint64{clientKey(1), clientKey(2), f.Key}
@@ -177,7 +187,7 @@ func TestFenceU07RemovesAStaleKeyThatOnlyRegistered(t *testing.T) {
 	become(t, ns, hostID(3), registeredOnly, false)
 	f := fencerFor(t, 2, one(ns))
 
-	if err := f.Fence(context.Background(), []string{"/dev/nvme1n1"}); err != nil {
+	if err := f.Fence(context.Background(), []string{devOne}); err != nil {
 		t.Fatalf("Fence: %v", err)
 	}
 	if got := keysOf(reportOf(t, ns)); !slices.Equal(got, []uint64{f.Key}) {
@@ -190,10 +200,10 @@ func TestFenceU08RegistersThenAcquiresOnANewNamespace(t *testing.T) {
 	f := fencerFor(t, 1, one(ns))
 	noPlainRegister(t, hostID(1), ns)
 
-	if err := f.Fence(context.Background(), []string{"/dev/nvme1n1"}); err != nil {
+	if err := f.Fence(context.Background(), []string{devOne}); err != nil {
 		t.Fatalf("Fence: %v", err)
 	}
-	if got, want := commandsFrom(ns, hostID(1)), []string{"register", "acquire"}; !slices.Equal(got, want) {
+	if got, want := commandsFrom(ns, hostID(1)), []string{opReg, opAcq}; !slices.Equal(got, want) {
 		t.Errorf("commands = %v, want %v", got, want)
 	}
 }
@@ -203,11 +213,11 @@ func TestFenceU09SendsNoCommandWhenItsKeyAlreadyHolds(t *testing.T) {
 	f := fencerFor(t, 3, one(ns))
 	become(t, ns, hostID(1), f.Key, true)
 
-	if err := f.Fence(context.Background(), []string{"/dev/nvme1n1"}); err != nil {
+	if err := f.Fence(context.Background(), []string{devOne}); err != nil {
 		t.Fatalf("Fence: %v", err)
 	}
 	// setup's own register and acquire are the only commands from this host
-	if got := commandsFrom(ns, hostID(1)); !slices.Equal(got, []string{"register", "acquire"}) {
+	if got := commandsFrom(ns, hostID(1)); !slices.Equal(got, []string{opReg, opAcq}) {
 		t.Errorf("commands = %v, want only the setup's", got)
 	}
 }
@@ -216,15 +226,15 @@ func TestFenceU10AFailedPreemptNamesTheDeviceAndLeavesTheRestAlone(t *testing.T)
 	first, second := nvmeprtest.New(), nvmeprtest.New()
 	become(t, first, hostID(2), mdsKey(t, fenceUID, 1), true)
 	become(t, second, hostID(2), mdsKey(t, fenceUID, 1), true)
-	first.FailNext("preempt", errors.New("target timeout"))
-	byPath := map[string]*nvmeprtest.Namespace{"/dev/first": first, "/dev/second": second}
+	first.FailNext(opPre, errors.New("target timeout"))
+	byPath := map[string]*nvmeprtest.Namespace{devFirst: first, "/dev/second": second}
 	f := fencerFor(t, 2, byPath)
 
-	err := f.Fence(context.Background(), []string{"/dev/first", "/dev/second"})
+	err := f.Fence(context.Background(), []string{devFirst, "/dev/second"})
 	if err == nil {
 		t.Fatal("Fence passed with a failing preempt")
 	}
-	if err.Outcome != nfsexportrpc.PromoteFenceFailed || err.Device != "/dev/first" || err.Step != "preempt" {
+	if err.Outcome != nfsexportrpc.PromoteFenceFailed || err.Device != devFirst || err.Step != opPre {
 		t.Errorf("error = %+v, want FenceFailed on /dev/first at preempt", err)
 	}
 	if got := commandsFrom(second, hostID(1)); len(got) != 0 {
@@ -237,7 +247,7 @@ func TestFenceU11RefusesAKeyAnotherHostIsRegisteredUnder(t *testing.T) {
 	f := fencerFor(t, 2, one(ns))
 	become(t, ns, hostID(9), f.Key, false)
 
-	err := f.Fence(context.Background(), []string{"/dev/nvme1n1"})
+	err := f.Fence(context.Background(), []string{devOne})
 	if err == nil || err.Outcome != nfsexportrpc.PromoteCollision {
 		t.Fatalf("error = %+v, want a collision", err)
 	}
@@ -251,7 +261,7 @@ func TestFenceU12RefusesAClientKeyHoldingTheReservation(t *testing.T) {
 	become(t, ns, hostID(3), clientKey(1), true)
 	f := fencerFor(t, 2, one(ns))
 
-	err := f.Fence(context.Background(), []string{"/dev/nvme1n1"})
+	err := f.Fence(context.Background(), []string{devOne})
 	if err == nil || err.Outcome != nfsexportrpc.PromoteFenceFailed {
 		t.Fatalf("error = %+v, want a failed fence", err)
 	}
@@ -275,7 +285,7 @@ func TestFenceU13RefusesWhenTheReportStillShowsAnotherMDSKey(t *testing.T) {
 	f := fencerFor(t, 2, one(ns))
 	f.Open = func(string) (nvmepr.Device, error) { return ignoresPreempt{ns.Host(hostID(1))}, nil }
 
-	err := f.Fence(context.Background(), []string{"/dev/nvme1n1"})
+	err := f.Fence(context.Background(), []string{devOne})
 	if err == nil || err.Outcome != nfsexportrpc.PromoteFenceFailed || err.Step != "confirm" {
 		t.Fatalf("error = %+v, want a failed fence at confirm", err)
 	}
@@ -304,7 +314,7 @@ func TestFenceU14FallsBackToAPlainPreemptOnInvalidFieldAndRemembersIt(t *testing
 	var flags []bool
 	f.Open = func(string) (nvmepr.Device, error) { return abortLog{Device: ns.Host(hostID(1)), flags: &flags}, nil }
 
-	if err := f.Fence(context.Background(), []string{"/dev/nvme1n1"}); err != nil {
+	if err := f.Fence(context.Background(), []string{devOne}); err != nil {
 		t.Fatalf("Fence: %v", err)
 	}
 	if want := []bool{true, false, false}; !slices.Equal(flags, want) {
@@ -324,8 +334,8 @@ func TestFenceU14AnyOtherErrorFromPreemptAndAbortFailsTheFence(t *testing.T) {
 		return abortLog{Device: ns.Host(hostID(1)), flags: &flags, failAbt: errors.New("abort wait expired")}, nil
 	}
 
-	err := f.Fence(context.Background(), []string{"/dev/nvme1n1"})
-	if err == nil || err.Step != "preempt" {
+	err := f.Fence(context.Background(), []string{devOne})
+	if err == nil || err.Step != opPre {
 		t.Fatalf("error = %+v, want a failed fence at preempt", err)
 	}
 	if want := []bool{true}; !slices.Equal(flags, want) {
@@ -340,7 +350,7 @@ func TestFenceU26ReplacesTheKeyOfAHostRegisteredByAnEarlierBoot(t *testing.T) {
 	f := fencerFor(t, 2, one(ns))
 	noPlainRegister(t, hostID(1), ns)
 
-	if err := f.Fence(context.Background(), []string{"/dev/nvme1n1"}); err != nil {
+	if err := f.Fence(context.Background(), []string{devOne}); err != nil {
 		t.Fatalf("Fence: %v", err)
 	}
 	if got := keysOf(reportOf(t, ns)); !slices.Equal(got, []uint64{f.Key}) {
@@ -352,7 +362,7 @@ func TestFenceU26ReplacesTheKeyOfAHostRegisteredByAnEarlierBoot(t *testing.T) {
 	// the replace form: the old key is the new key, never zero
 	var sent bool
 	for _, c := range ns.Calls() {
-		if c.Op == "register" && c.Keys[0] == f.Key && c.Keys[1] == f.Key {
+		if c.Op == opReg && c.Keys[0] == f.Key && c.Keys[1] == f.Key {
 			sent = true
 		}
 	}
@@ -368,11 +378,12 @@ func TestFenceU27AFullNamespaceFailsTheRegistrationAndPreemptsNothing(t *testing
 	}
 	f := fencerFor(t, 1, one(ns))
 
-	err := f.Fence(context.Background(), []string{"/dev/nvme1n1"})
-	if err == nil || err.Outcome != nfsexportrpc.PromoteFenceFailed || err.Step != "register" || err.Device != "/dev/nvme1n1" {
+	err := f.Fence(context.Background(), []string{devOne})
+	if err == nil || err.Outcome != nfsexportrpc.PromoteFenceFailed || err.Step != opReg ||
+		err.Device != devOne {
 		t.Fatalf("error = %+v, want FenceFailed on the device at register", err)
 	}
-	if got := commandsFrom(ns, hostID(1)); !slices.Equal(got, []string{"register"}) {
+	if got := commandsFrom(ns, hostID(1)); !slices.Equal(got, []string{opReg}) {
 		t.Errorf("commands = %v, want the failed register alone", got)
 	}
 }
@@ -386,19 +397,19 @@ func TestFenceU28ASupersededEpochIsRefusedWithoutPreemptingTheNewerActive(t *tes
 	newer := fencerFor(t, 2, one(ns))
 	ctx := context.Background()
 
-	if err := older.Fence(ctx, []string{"/dev/nvme1n1"}); err != nil {
+	if err := older.Fence(ctx, []string{devOne}); err != nil {
 		t.Fatalf("older Fence: %v", err)
 	}
-	if err := newer.Fence(ctx, []string{"/dev/nvme1n1"}); err != nil {
+	if err := newer.Fence(ctx, []string{devOne}); err != nil {
 		t.Fatalf("newer Fence: %v", err)
 	}
 	before := len(ns.Calls())
 
-	err := older.Fence(ctx, []string{"/dev/nvme1n1"})
+	err := older.Fence(ctx, []string{devOne})
 	if err == nil || err.Outcome != nfsexportrpc.PromoteSuperseded {
 		t.Fatalf("error = %+v, want Superseded", err)
 	}
-	if got := commandsFrom(ns, hostID(2)); !slices.Equal(got, []string{"register", "acquire"}) {
+	if got := commandsFrom(ns, hostID(2)); !slices.Equal(got, []string{opReg, opAcq}) {
 		t.Errorf("the older guest sent %v after being superseded", got[2:])
 	}
 	if k, ok := holderKey(t, ns); !ok || k != newer.Key {
@@ -411,8 +422,8 @@ func TestFenceU28ASupersededEpochIsRefusedWithoutPreemptingTheNewerActive(t *tes
 
 func TestFenceU29FencesEveryMemberOfAStripedExport(t *testing.T) {
 	byPath := map[string]*nvmeprtest.Namespace{}
-	var paths []string
-	for _, p := range []string{"/dev/m0", "/dev/m1", "/dev/m2"} {
+	paths := make([]string, 0, 3)
+	for _, p := range []string{devM0, devM1, "/dev/m2"} {
 		ns := nvmeprtest.New()
 		become(t, ns, hostID(2), mdsKey(t, fenceUID, 1), true)
 		byPath[p] = ns
@@ -437,16 +448,16 @@ func TestFenceU30AMemberThatKeepsAnotherKeyFailsTheWholeFence(t *testing.T) {
 	good, bad := nvmeprtest.New(), nvmeprtest.New()
 	become(t, good, hostID(2), mdsKey(t, fenceUID, 1), true)
 	become(t, bad, hostID(2), mdsKey(t, fenceUID, 1), true)
-	f := fencerFor(t, 2, map[string]*nvmeprtest.Namespace{"/dev/m0": good, "/dev/m1": bad})
+	f := fencerFor(t, 2, map[string]*nvmeprtest.Namespace{devM0: good, devM1: bad})
 	f.Open = func(path string) (nvmepr.Device, error) {
-		if path == "/dev/m1" {
+		if path == devM1 {
 			return ignoresPreempt{bad.Host(hostID(1))}, nil
 		}
 		return good.Host(hostID(1)), nil
 	}
 
-	err := f.Fence(context.Background(), []string{"/dev/m0", "/dev/m1"})
-	if err == nil || err.Device != "/dev/m1" || err.Step != "confirm" {
+	err := f.Fence(context.Background(), []string{devM0, devM1})
+	if err == nil || err.Device != devM1 || err.Step != "confirm" {
 		t.Fatalf("error = %+v, want a failed fence of /dev/m1 at confirm", err)
 	}
 }
@@ -455,15 +466,15 @@ func TestFenceRetryAfterAFailedPreemptConverges(t *testing.T) {
 	ns := nvmeprtest.New()
 	become(t, ns, hostID(2), mdsKey(t, fenceUID, 1), true)
 	become(t, ns, hostID(3), mdsKey(t, "another-statefulset", 4), false)
-	ns.FailNext("preempt", errors.New("target timeout"))
+	ns.FailNext(opPre, errors.New("target timeout"))
 	f := fencerFor(t, 2, one(ns))
 	noPlainRegister(t, hostID(1), ns)
 	ctx := context.Background()
 
-	if err := f.Fence(ctx, []string{"/dev/nvme1n1"}); err == nil {
+	if err := f.Fence(ctx, []string{devOne}); err == nil {
 		t.Fatal("the first fence passed with a failing preempt")
 	}
-	if err := f.Fence(ctx, []string{"/dev/nvme1n1"}); err != nil {
+	if err := f.Fence(ctx, []string{devOne}); err != nil {
 		t.Fatalf("the retry: %v", err)
 	}
 	if got := keysOf(reportOf(t, ns)); !slices.Equal(got, []uint64{f.Key}) {
