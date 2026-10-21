@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -277,5 +278,50 @@ func jsonResponse() *http.Response {
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
 		Header:     make(http.Header),
+	}
+}
+
+// A 404 from connect is still the not-found sentinel the fail-over redirect
+// keys on, but it keeps the control plane's words: older control planes answer
+// 404 for every connect failure, an unauthorized host included, and the bare
+// sentinel hid the reason for eight hours (live 2026-10-20).
+func TestGetLvolConnectionsKeepsTheReasonOnA404(t *testing.T) {
+	const reason = "Host NQN nqn.2014-08.io.simplyblock:uuid:w4 not found in allowed hosts for volume " + testVolUUID
+	client := newTestClient(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusNotFound,
+			Header:     http.Header{"Content-Type": []string{"text/plain"}},
+			Body:       io.NopCloser(strings.NewReader(reason)),
+		}, nil
+	})
+
+	_, err := client.getLvolConnections(context.Background(), testPool1UUID, testVolUUID, "nqn.2014-08.io.simplyblock:uuid:w4")
+
+	if !errors.Is(err, ErrVolumeNotFound) {
+		t.Fatalf("err = %v, want it to satisfy ErrVolumeNotFound", err)
+	}
+	if !strings.Contains(err.Error(), "not found in allowed hosts") {
+		t.Fatalf("err = %q, want the control plane's reason kept", err)
+	}
+}
+
+// A refusal that is not a 404 is never read as a deleted volume: it is passed
+// through with the control plane's reason.
+func TestGetLvolConnectionsPassesA403ThroughAsARefusal(t *testing.T) {
+	client := newTestClient(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusForbidden,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"detail":"Host NQN w4 not found in allowed hosts for volume v"}`)),
+		}, nil
+	})
+
+	_, err := client.getLvolConnections(context.Background(), testPool1UUID, testVolUUID, "w4")
+
+	if err == nil || errors.Is(err, ErrVolumeNotFound) {
+		t.Fatalf("err = %v, want a refusal that is NOT ErrVolumeNotFound", err)
+	}
+	if !strings.Contains(err.Error(), "403") || !strings.Contains(err.Error(), "not found in allowed hosts") {
+		t.Fatalf("err = %q, want the status and the reason", err)
 	}
 }
