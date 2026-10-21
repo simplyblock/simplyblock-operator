@@ -922,7 +922,9 @@ name and one certificate, and mTLS peers present and accept one identity across
 the supercluster, so a volume moved between members and a host connected to
 several members need nothing per member. A member added later joins the existing
 certificate with no reissue, because the certificate names the Service and not
-the members.
+the members. The issuer writes the Secret without an owner, so the cluster whose
+Services it serves, the supercluster or a standalone cluster, makes itself an
+owner of it once it exists, and deleting the cluster deletes it.
 
 **A member's own workload is everything else**: its DaemonSet, its ConfigMaps,
 and its EndpointSlices, each named for the member as a standalone cluster's are

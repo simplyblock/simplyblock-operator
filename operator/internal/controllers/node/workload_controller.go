@@ -673,7 +673,10 @@ func (r *StorageNodeWorkloadReconciler) reconcileCertificates(
 	if cluster.Spec.SuperclusterRef != "" {
 		return nil
 	}
-	return utils.ApplyServingCertificates(ctx, r.Client, r.Scheme, cluster, r.TLSEnabled, r.TLSProvider)
+	if err := utils.ApplyServingCertificates(ctx, r.Client, r.Scheme, cluster, r.TLSEnabled, r.TLSProvider); err != nil {
+		return err
+	}
+	return utils.OwnServingSecrets(ctx, r.Client, r.Scheme, cluster, r.TLSEnabled)
 }
 
 // apply creates an object or updates it in place, which is what every object here

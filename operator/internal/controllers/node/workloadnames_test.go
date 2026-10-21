@@ -410,3 +410,35 @@ func TestTwoMembersOnOnePortPublishTwoProxySlices(t *testing.T) {
 		}
 	}
 }
+
+// A standalone cluster takes its serving-certificate Secrets as its own, as a
+// supercluster does, so deleting it leaves none behind.
+func TestAClusterOwnsItsServingSecrets(t *testing.T) {
+	names := atlaskube.DerivedWorkloadNames(secondCluster)
+	cluster := aNamedCluster(secondCluster, secondClusterUUID, names)
+	issued := []string{names.NodeAPITLSSecret, names.SpdkProxyTLSSecret}
+	objects := make([]client.Object, 0, 1+len(issued))
+	objects = append(objects, cluster)
+	for _, name := range issued {
+		objects = append(objects, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: opsNamespace}})
+	}
+	r := aNamesReconciler(t, objects...)
+
+	if err := r.reconcileCertificates(context.Background(), cluster); err != nil {
+		t.Fatalf("reconcileCertificates: %v", err)
+	}
+
+	for _, name := range issued {
+		var secret corev1.Secret
+		if err := r.Get(context.Background(), client.ObjectKey{Namespace: opsNamespace, Name: name}, &secret); err != nil {
+			t.Fatalf("read Secret %s: %v", name, err)
+		}
+		owned := false
+		for _, ref := range secret.OwnerReferences {
+			owned = owned || ref.UID == cluster.UID
+		}
+		if !owned {
+			t.Errorf("Secret %s is owned by %+v, want the cluster among its owners", name, secret.OwnerReferences)
+		}
+	}
+}

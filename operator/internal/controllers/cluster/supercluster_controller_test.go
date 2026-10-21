@@ -369,3 +369,45 @@ func TestASuperclusterBuildsTheServicesItsMembersShare(t *testing.T) {
 		}
 	}
 }
+
+// The serving-certificate Secrets are written by the certificate issuer, which
+// gives them no owner, so a supercluster takes them as its own once they exist:
+// they go when it goes, instead of outliving it under names nothing uses.
+func TestASuperclusterOwnsItsServingSecrets(t *testing.T) {
+	supercluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: objectMeta(testSuperclusterName),
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{Supercluster: &simplyblockv1alpha2.SuperclusterSpec{}},
+	}
+	names := atlaskube.DerivedWorkloadNames(testSuperclusterName)
+	issued := []string{names.NodeAPITLSSecret, names.SpdkProxyTLSSecret}
+	objects := make([]client.Object, 0, 1+len(issued))
+	objects = append(objects, supercluster)
+	for _, name := range issued {
+		objects = append(objects, &corev1.Secret{ObjectMeta: objectMeta(name)})
+	}
+	r := newSuperclusterReconciler(t, &fakeControlPlane{}, &recorder{}, objects...)
+	r.TLSEnabled, r.TLSProvider = true, "openshift"
+
+	key := types.NamespacedName{Namespace: testNamespace, Name: testSuperclusterName}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var owner simplyblockv1alpha2.StorageCluster
+	if err := r.Get(context.Background(), key, &owner); err != nil {
+		t.Fatalf("read the supercluster: %v", err)
+	}
+	for _, name := range issued {
+		var secret corev1.Secret
+		if err := r.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: name}, &secret); err != nil {
+			t.Fatalf("read Secret %s: %v", name, err)
+		}
+		owned := false
+		for _, ref := range secret.OwnerReferences {
+			owned = owned || ref.UID == owner.UID
+		}
+		if !owned {
+			t.Errorf("Secret %s is owned by %+v, want the supercluster among its owners", name, secret.OwnerReferences)
+		}
+	}
+}

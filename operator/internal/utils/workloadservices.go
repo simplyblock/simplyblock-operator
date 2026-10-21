@@ -92,6 +92,44 @@ func ApplyServingCertificates(
 	return nil
 }
 
+// OwnServingSecrets makes the owner an owner of its two serving-certificate
+// Secrets once they exist. The certificate issuer writes them, OpenShift's
+// service CA from the Service's annotation and cert-manager from the
+// Certificate, and neither gives them an owner, so without this a deleted
+// cluster's Secrets would outlive it under names nothing uses. The reference
+// is a plain one, beside any controller reference an issuer sets. A Secret not
+// issued yet is taken on a later pass.
+func OwnServingSecrets(
+	ctx context.Context, c client.Client, scheme *runtime.Scheme,
+	owner *simplyblockv1alpha2.StorageCluster, tlsEnabled bool,
+) error {
+	if !tlsEnabled {
+		return nil
+	}
+	names, _ := WorkloadNamesOf(owner)
+	for _, name := range []string{names.NodeAPITLSSecret, names.SpdkProxyTLSSecret} {
+		var secret corev1.Secret
+		err := c.Get(ctx, client.ObjectKey{Namespace: owner.Namespace, Name: name}, &secret)
+		if apierrors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		before := len(secret.OwnerReferences)
+		if err := controllerutil.SetOwnerReference(owner, &secret, scheme); err != nil {
+			return err
+		}
+		if len(secret.OwnerReferences) == before {
+			continue
+		}
+		if err := c.Update(ctx, &secret); err != nil {
+			return fmt.Errorf("own Secret %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
 // WorkloadServicesReady reports whether the Services a cluster's workload names
 // name exist, and their serving-certificate Secrets where TLS is on, and names
 // what is missing when they do not. A supercluster's member, whose names are

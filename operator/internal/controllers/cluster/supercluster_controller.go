@@ -180,6 +180,9 @@ func (r *SuperclusterReconciler) Reconcile(
 		r.TLSEnabled, r.TLSProvider); err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := utils.OwnServingSecrets(ctx, r.Client, r.Scheme, &supercluster, r.TLSEnabled); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	r.announceMembership(&supercluster, previous.Members, rollup.Members)
 	r.announceThreshold(&supercluster, previous.Capacity, rollup.Capacity)
