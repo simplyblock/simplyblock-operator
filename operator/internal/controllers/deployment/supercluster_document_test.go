@@ -39,16 +39,17 @@ func aNodeSet(name, mgmt string, workerNames ...string) simplyblockv1alpha2.Node
 }
 
 // aSuperclusterDocument is a draft of two node sets of one worker each, on two
-// different networks, as single-node members striped 2+1 across their own
-// three devices.
+// different networks, as single-node members striped 1+1 across two of their
+// three block devices, the third being the journal device block devices need.
 func aSuperclusterDocument(
 	mutate func(*simplyblockv1alpha2.ClusterDeploymentConfig),
 ) *simplyblockv1alpha2.ClusterDeploymentConfig {
 	return aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
 		c.Spec.Approved = false
 		c.Spec.Cluster.ClusterMode = simplyblockv1alpha2.ClusterModeSingle
+		c.Spec.Cluster.EnableJournalDevice = ptr.To(true)
 		c.Spec.Cluster.Stripe = &simplyblockv1alpha2.StripeSpec{
-			DataChunks: ptr.To(int32(2)), ParityChunks: ptr.To(int32(1)),
+			DataChunks: ptr.To(int32(1)), ParityChunks: ptr.To(int32(1)),
 		}
 		c.Spec.NodeSets = []simplyblockv1alpha2.NodeSet{
 			aNodeSet("fast", "eth1", "worker-1"),
@@ -401,5 +402,30 @@ func TestTheLaterStepsRefuseASuperclusterWithoutItsMemberRecord(t *testing.T) {
 	}
 	if _, err := r.activateCluster(context.Background(), config); err == nil {
 		t.Error("activateCluster passed with a node set's member missing from the record")
+	}
+}
+
+// The control plane runs logical block devices only with a dedicated journal
+// device, and refuses each node add without one, after the cluster exists. A
+// document that names block devices without the journal device says so while
+// it can still be corrected.
+func TestBlockDevicesWithoutAJournalDeviceAreReported(t *testing.T) {
+	config := aSuperclusterDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Cluster.EnableJournalDevice = ptr.To(false)
+	})
+
+	found := findingsOf(t, config, workers("worker-1", "worker-2")...)
+	if len(found) != 2 {
+		t.Fatalf("findings = %+v, want one JournalDeviceRequired per member", found)
+	}
+	for _, f := range found {
+		if f.reason != JournalDeviceRequired || !strings.Contains(f.message, "enableJournalDevice") {
+			t.Errorf("finding %+v, want JournalDeviceRequired naming the field to set", f)
+		}
+	}
+
+	config.Spec.Cluster.EnableJournalDevice = ptr.To(true)
+	if found := findingsOf(t, config, workers("worker-1", "worker-2")...); len(found) > 0 {
+		t.Errorf("findings = %+v with the journal device on, want none", found)
 	}
 }

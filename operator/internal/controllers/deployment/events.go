@@ -70,6 +70,10 @@ const (
 	MemberTooLarge    = "MemberTooLarge"
 	MemberNameInvalid = "MemberNameInvalid"
 
+	// JournalDeviceRequired reports logical block devices without a dedicated
+	// journal device, which the control plane refuses at every node add.
+	JournalDeviceRequired = "JournalDeviceRequired"
+
 	// What the expansion produced.
 	ClusterCreated = "ClusterCreated"
 	NodesCreated   = "NodesCreated"

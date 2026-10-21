@@ -351,6 +351,8 @@ File: `atlas-lib/kube/workloadnames_test.go`,
 | U-218     | A discovery draft of several node sets proposes the stripe its smallest node set carries, and no single-node or two-node mode                                                                                                                                             | Positive | `TestADraftOfSeveralNodeSetsIsSizedForTheSmallest`                                                                                                                                                                                                                   |
 | U-219     | A document beside another cluster in its namespace is valid, because clusters of any role share a namespace                                                                                                                                                               | Positive | `TestADocumentBesideAnotherClusterIsValid`                                                                                                                                                                                                                           |
 | U-220     | A supercluster, and a standalone cluster, own their serving-certificate Secrets once the issuer writes them, so deleting the cluster leaves none behind                                                                                                                   | Negative | `TestASuperclusterOwnsItsServingSecrets`, `TestAClusterOwnsItsServingSecrets`                                                                                                                                                                                        |
+| U-221     | A document naming logical block devices without `enableJournalDevice` is a `JournalDeviceRequired` finding per member, before approval                                                                                                                                    | Negative | `TestBlockDevicesWithoutAJournalDeviceAreReported`                                                                                                                                                                                                                   |
+| U-222     | A member still being built is not asked for its capacity, which the control plane answers with a 500 while the member has no nodes                                                                                                                                        | Negative | `TestAMemberNotServingYetIsNotAskedForCapacity`                                                                                                                                                                                                                      |
 
 ### Membership Admission (design §4.1, §4.4)
 
@@ -607,7 +609,7 @@ the partition has to be selective to exercise U-53 and U-60 separately.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 182       | 71      | all others  |
+| Unit        | 184       | 73      | all others  |
 | Integration | 55        | 10      | all others  |
 | E2E         | 10        | 0       | E-01 … E-10 |
 | Manual      | 2         | 0       | M-01, M-02  |
@@ -616,7 +618,7 @@ Four covered unit rows are existing tests of behavior this design keeps: U-25,
 U-27, U-28, and U-81. The rest, and the six integration rows, are Phase 1's
 first two iterations: the API, admission, the supercluster reconciler, the
 refusals of U-195 to U-198, and the workload names and shared Services of §6 with U-203 to
-U-217, and the expansion into members of §5.1 to §5.4 with U-218 to U-220. The counts exclude struck rows, each superseded by
+U-217, and the expansion into members of §5.1 to §5.4 with U-218 to U-222. The counts exclude struck rows, each superseded by
 the row its strike names: U-10 … U-18, U-20 … U-23, U-26, U-29 … U-33, U-35, U-38 … U-46, U-55 … U-57, U-77, U-79, U-122, U-129 … U-130, U-163, and I-04 … I-06, I-09, I-11 … I-12, I-14, I-17 … I-20, I-26, I-28 … I-30, I-34, I-37, I-40 … I-41, I-43, I-46, I-52.
 
 ---
