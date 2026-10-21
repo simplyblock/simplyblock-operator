@@ -139,3 +139,124 @@ func TestSomeWorkersWithoutAFailureDomainAreReported(t *testing.T) {
 		t.Errorf("%s = %+v, want it to name worker-2 alone", TopologyIncomplete, found)
 	}
 }
+
+// fastGroup is the placement-group value the tests label most workers with.
+const fastGroup = "fast"
+
+// placementGrouped is n workers, each carrying the placement-group value pick returns,
+// or none when it returns an empty one.
+func placementGrouped(n int, pick func(i int) string) []Worker {
+	return fleetOf(n, func(i int, w *Worker) {
+		if value := pick(i); value != "" {
+			w.Kube.Labels = map[string]string{PlacementGroupLabel: value}
+		}
+	})
+}
+
+// splitWithFindings runs the role split and the size split, keeping the
+// findings.
+func splitWithFindings(workers []Worker) ([]simplyblockv1alpha2.NodeSet, []Finding) {
+	grouper := GroupByHardware{}
+	return splitMembers(SplitByRole{}.Build(grouper.Group(workers)), workers, grouper, 1)
+}
+
+// findingIn is the first finding under the reason, or none.
+func findingIn(findings []Finding, reason string) *Finding {
+	for i := range findings {
+		if findings[i].Reason == reason {
+			return &findings[i]
+		}
+	}
+	return nil
+}
+
+// Every worker labeled: one node set per value, named by it, and no split.
+func TestPlacementGroupsFormTheNodeSets(t *testing.T) {
+	sets, found := splitWithFindings(placementGrouped(40, func(i int) string {
+		if i < 10 {
+			return fastGroup
+		}
+		return "dense"
+	}))
+	got := sizes(sets)
+	if got[fastGroup] != 10 || got["dense"] != 30 || len(got) != 2 {
+		t.Errorf("sets = %v, want fast of 10 and dense of 30", got)
+	}
+	if len(found) != 0 {
+		t.Errorf("findings = %+v, want none", found)
+	}
+}
+
+// Some workers labeled: the unlabeled ones are split as usual, and named.
+func TestUnlabeledWorkersBesidePlacementGroupsAreSplitAndReported(t *testing.T) {
+	sets, found := splitWithFindings(placementGrouped(6, func(i int) string {
+		if i < 4 {
+			return fastGroup
+		}
+		return ""
+	}))
+	got := sizes(sets)
+	if got[fastGroup] != 4 || got[DefaultNodeSetName+"-1"] != 2 || len(got) != 2 {
+		t.Errorf("sets = %v, want fast of 4 and %s-1 of 2", got, DefaultNodeSetName)
+	}
+	incomplete := findingIn(found, PlacementGroupLabelIncomplete)
+	if incomplete == nil || !strings.Contains(incomplete.Message, "worker-004") ||
+		!strings.Contains(incomplete.Message, "worker-005") || strings.Contains(incomplete.Message, "worker-000") {
+		t.Errorf("%s = %+v, want it to name worker-004 and worker-005 alone", PlacementGroupLabelIncomplete, incomplete)
+	}
+}
+
+// A value whose workers are in two regions cannot be one member: it is
+// reported, and the node sets it makes are still named apart.
+func TestAPlacementGroupSpanningRegionsIsReported(t *testing.T) {
+	workers := placementGrouped(4, func(int) string { return fastGroup })
+	for i := range workers {
+		region := "eu-west-1"
+		if i%2 == 1 {
+			region = "us-east-1"
+		}
+		workers[i].Kube.Labels[corev1.LabelTopologyRegion] = region
+	}
+	sets, found := splitWithFindings(workers)
+
+	invalid := findingIn(found, PlacementGroupInvalid)
+	if invalid == nil || !strings.Contains(invalid.Message, fastGroup) {
+		t.Errorf("%s = %+v, want it to name the value fast", PlacementGroupInvalid, invalid)
+	}
+	seen := map[string]bool{}
+	for _, set := range sets {
+		if seen[set.Name] {
+			t.Errorf("two node sets are named %s", set.Name)
+		}
+		seen[set.Name] = true
+	}
+}
+
+// A value that cannot be a node set name is reported naming its workers, and
+// they are split as unlabeled workers are.
+func TestAPlacementGroupThatIsNotANameIsReported(t *testing.T) {
+	sets, found := splitWithFindings(placementGrouped(4, func(i int) string {
+		if i < 2 {
+			return "Not_A-Name"
+		}
+		return fastGroup
+	}))
+	invalid := findingIn(found, PlacementGroupInvalid)
+	if invalid == nil || !strings.Contains(invalid.Message, "worker-000") || !strings.Contains(invalid.Message, "worker-001") {
+		t.Errorf("%s = %+v, want it to name worker-000 and worker-001", PlacementGroupInvalid, invalid)
+	}
+	for _, set := range sets {
+		if set.Name == "Not_A-Name" {
+			t.Error("a node set is named after the invalid value")
+		}
+	}
+}
+
+// A labeled node set over the storage-node limit is drafted as it is, for
+// approval to refuse with MemberTooLarge.
+func TestALargePlacementGroupIsNotSplit(t *testing.T) {
+	sets, _ := splitWithFindings(placementGrouped(40, func(int) string { return "big" }))
+	if got := sizes(sets); got["big"] != 40 || len(got) != 1 {
+		t.Errorf("sets = %v, want big of 40", got)
+	}
+}

@@ -97,7 +97,19 @@ const (
 	// FailureDomainInvalid names a worker whose failure-domain label carries a
 	// value the failureDomain field does not accept.
 	FailureDomainInvalid = "FailureDomainInvalid"
+
+	// PlacementGroupLabelIncomplete names the workers without a placement-group
+	// label in a partition where others carry one.
+	PlacementGroupLabelIncomplete = "PlacementGroupLabelIncomplete"
+
+	// PlacementGroupInvalid names a placement-group value that cannot be a node
+	// set name, or whose workers cannot share a member.
+	PlacementGroupInvalid = "PlacementGroupInvalid"
 )
+
+// PlacementGroupLabel assigns a worker to a member: workers carrying one value
+// form one node set named by the value.
+const PlacementGroupLabel = "storage.simplyblock.io/placement-group"
 
 // Finding is one thing the draft leaves for a reviewer, under the reason its
 // event is raised with.
@@ -580,7 +592,9 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 	plan.assignFailureDomains(failureDomainLabelOf(run))
 
 	if len(plan.Workers) > 0 {
-		plan.NodeSets = splitMembers(builder.Build(grouper.Group(plan.Workers)), plan.Workers, grouper, p.SlotsPerWorker)
+		var found []Finding
+		plan.NodeSets, found = splitMembers(builder.Build(grouper.Group(plan.Workers)), plan.Workers, grouper, p.SlotsPerWorker)
+		plan.Findings = append(plan.Findings, found...)
 	}
 	return plan
 }

@@ -48,7 +48,8 @@ func distinctWorkers(n int) []Worker {
 // split runs the role split and then the size split over the workers.
 func split(workers []Worker, slots int32) []simplyblockv1alpha2.NodeSet {
 	grouper := GroupByHardware{}
-	return splitMembers(SplitByRole{}.Build(grouper.Group(workers)), workers, grouper, slots)
+	sets, _ := splitMembers(SplitByRole{}.Build(grouper.Group(workers)), workers, grouper, slots)
+	return sets
 }
 
 // sizes is how many workers each node set lists, by name.
@@ -267,7 +268,7 @@ func TestRegionsAreNeverDraftedIntoOneNodeSet(t *testing.T) {
 func TestAGeneratedNameIsCutKeepingItsNumber(t *testing.T) {
 	grouper := GroupByHardware{}
 	workers := fleetOf(40, nil)
-	sets := splitMembers(SplitByRole{SetName: "a-node-set-name-far-too-long"}.Build(grouper.Group(workers)), workers, grouper, 1)
+	sets, _ := splitMembers(SplitByRole{SetName: "a-node-set-name-far-too-long"}.Build(grouper.Group(workers)), workers, grouper, 1)
 	for i, set := range sets {
 		suffix := fmt.Sprintf("-%d", i+1)
 		if len(set.Name) > maxNodeSetName || !strings.HasSuffix(set.Name, suffix) {
