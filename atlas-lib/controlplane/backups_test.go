@@ -246,8 +246,8 @@ func TestClientRestoreGroupBackup(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method = %s, want POST", r.Method)
 		}
-		if !strings.Contains(r.URL.Path, groupBackup) {
-			t.Errorf("path = %s, want it to name the group backup uuid", r.URL.Path)
+		if want := "/backups/groups/" + groupBackup + "/restore"; !strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), want) {
+			t.Errorf("path = %s, want it to end in %s", r.URL.Path, want)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -364,20 +364,21 @@ func TestClientTakeGroupSnapshot(t *testing.T) {
 	}
 }
 
-// A group backup is asked for one named generation, so a retry that names the
-// same generation backs up nothing new, and the call returns the group backup's id.
+// A group backup is asked for one named generation of the group the body names,
+// so a retry that names the same generation backs up nothing new, and the call
+// returns the group backup's id.
 func TestClientCreateGroupBackup(t *testing.T) {
 	const (
 		group       = "99999999-9999-9999-9999-999999999999"
 		groupBackup = "55555555-5555-5555-5555-555555555555"
 	)
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || !strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), group+"/backups") {
-			t.Errorf("request = %s %s, want POST .../consistency-groups/%s/backups", r.Method, r.URL.Path, group)
+		if r.Method != http.MethodPost || !strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "/backups/groups") {
+			t.Errorf("request = %s %s, want POST .../backups/groups/", r.Method, r.URL.Path)
 		}
 		body, _ := io.ReadAll(r.Body)
-		if !strings.Contains(string(body), `"group_seq":7`) {
-			t.Errorf("body = %s, want it to name generation 7", body)
+		if !strings.Contains(string(body), `"group_seq":7`) || !strings.Contains(string(body), `"consistency_group_id":"`+group+`"`) {
+			t.Errorf("body = %s, want it to name group %s and generation 7", body, group)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)

@@ -513,7 +513,7 @@ func (c *Client) RestoreGroupBackup(
 	}
 
 	what := "restore group backup " + params.GroupBackupID
-	resp, err := c.api.ClustersGroupBackupsRestoreApiV2ClustersClusterIdGroupBackupsGroupBackupIdRestorePostWithResponse(
+	resp, err := c.api.ClustersBackupsGroupsRestoreApiV2ClustersClusterIdBackupsGroupsGroupBackupIdRestorePostWithResponse(
 		ctx, cluster, groupBackup, body)
 	if err != nil {
 		return "", nil, fmt.Errorf("%s: %w", what, err)

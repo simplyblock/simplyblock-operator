@@ -253,8 +253,8 @@ func (c *Client) CreateGroupBackup(ctx context.Context, clusterID, groupID strin
 		return CreatedGroupBackup{}, err
 	}
 	what := fmt.Sprintf("back up generation %d of consistency group %s", groupSeq, groupID)
-	resp, err := c.api.ClustersConsistencyGroupsBackupsCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdBackupsPostWithResponse(
-		ctx, cluster, group, cpapi.UnderscoreGroupBackupCreateParams{GroupSeq: &groupSeq})
+	resp, err := c.api.ClustersBackupsGroupsCreateApiV2ClustersClusterIdBackupsGroupsPostWithResponse(
+		ctx, cluster, cpapi.UnderscoreGroupBackupCreateParams{ConsistencyGroupId: group, GroupSeq: &groupSeq})
 	if err != nil {
 		return CreatedGroupBackup{}, fmt.Errorf("%s: %w", what, err)
 	}
