@@ -23,9 +23,13 @@ of §4.2 and §4.4 except the deletion of a member holding volumes, the
 supercluster reconciler with its roll-up, events, and two gauges (§10.1, §13),
 `status.role` on every cluster, `ErrAggregateCluster` from the resolver (§15),
 the predicates that keep the rebalancer, arbitration, and the workload
-reconciler off a supercluster (§10.3), the workload names of §6.1, and the
-shared Services and certificate of §6.2, with which the one-cluster-per-namespace
-rule is gone. Until the rest of Phase 1 lands, two rules hold in its place. A
+reconciler off a supercluster (§10.3), the workload names of §6.1, the shared
+Services and certificate of §6.2, with which the one-cluster-per-namespace rule
+is gone, and the expansion of a document of several node sets into a
+supercluster and its members (§5.1 to §5.4). Still to come in Phase 1: the
+discovery generator's split (§5.5), growth into a supercluster (§5.6), topology
+(§5.7), per-node-set overrides (§5.8), and workers shared between members. Until
+the rest of Phase 1 lands, two rules hold in its place. A
 `StoragePool` naming a supercluster is refused at admission until pools fan out
 (§7.1). A `StorageClusterOps` on a supercluster fails before any control-plane
 call until the walk of §9.6 exists.
@@ -523,12 +527,10 @@ worker count times its slots per worker, and a node set may list at most
 `floor(32 / slots)` workers. The control plane does not enforce the limit, and
 enforcing it there is outside this design.
 
-| Limit                               | Value         | Refused at approval with |
-|-------------------------------------|---------------|--------------------------|
-| Storage nodes per node set (member) | 32            | `MemberTooLarge`         |
-| Cluster name (`spec.cluster.name`)  | 35 characters | API server (`MaxLength`) |
-| Node set name                       | 23 characters | API server (`MaxLength`) |
-| Member name                         | DNS label     | `MemberNameInvalid`      |
+| Limit                                       | Value     | Refused at approval with |
+|---------------------------------------------|-----------|--------------------------|
+| Storage nodes per node set (member)         | 32        | `MemberTooLarge`         |
+| Member name, `<cluster>-<nodeset>-<suffix>` | DNS label | `MemberNameInvalid`      |
 
 **The storage-node limit holds for an ordinary cluster too.** A one-node-set
 document listing more than 32 storage nodes is refused with `MemberTooLarge`,
@@ -554,13 +556,12 @@ already exists is drawn again, and so is a suffix another member of the same
 supercluster carries, because the suffix tells members apart in node hostnames
 (§6.2).
 
-**The name limits make every member name fit.** A cluster name of at most 35
-characters, a node set name of at most 23, the suffix, and two hyphens make a
-member name of at most 63, which is what a `StorageCluster` name may be. Both
-limits are `MaxLength` markers, so an oversized name is refused by the API server
-([Appendix F](#appendix-f-clusterdeploymentconfig_typesgo)). Validation refuses a
-member name that is not a DNS label with `MemberNameInvalid`, naming the node
-set. `StorageNode.spec.nodeSet` already records the node set, so every node names
+**A member name is checked at approval.** Validation refuses a document whose
+member name, `<cluster>-<nodeset>-<suffix>`, is not a DNS label of at most 63
+characters with `MemberNameInvalid`, naming the node set. The cluster and node set
+names carry no `MaxLength` of their own, because discovery already drafts cluster
+names longer than the 35 characters that would leave every node set room: a long
+cluster name leaves its node sets less, and the finding says so before approval. `StorageNode.spec.nodeSet` already records the node set, so every node names
 the part of the document it came from.
 
 ### 5.4 The expansion machine
@@ -650,8 +651,8 @@ once per role tier:
    (`infra`, `discovered`, or `control-plane`). A tier that needs several numbers
    them from one, as `discovered-1`, `discovered-2`, and so on, in dealing order.
    A tier spanning several regions carries the region before the number, as
-   `discovered-eu-west-1-1`. A generated name is cut to the 23 characters a node
-   set name may have, keeping its number (§5.3).
+   `discovered-eu-west-1-1`. A generated name is cut so that the member name it
+   makes stays a DNS label, keeping its number (§5.3).
 
 | Workers | Slots per worker | Members | Workers per member |
 |---------|------------------|---------|--------------------|
@@ -676,7 +677,10 @@ scheme's minimum, which is today's behavior for a small fleet.
 infrastructure nodes and its workers is drafted as an `infra` block and a
 `discovered` block, so that a reviewer chooses a tier by deleting a block.
 Approving both approves a supercluster of two members, and the draft's
-`status.message` names the members a reviewer is about to approve.
+`status.message` names the members a reviewer is about to approve. Such a draft
+proposes the stripe its smallest node set carries, and neither single-node nor
+two-node mode, because the cluster template, and with it the mode, is one per
+document until a node set can override it (§5.8).
 
 ### 5.6 Growth
 
@@ -742,7 +746,7 @@ When every worker of a partition carries it, workers with one value form one nod
 set named by the value, and the generator does not count, size, or deal that
 partition. Partitioning still applies (§5.5 step 1), so a value whose workers
 span two regions or two hardware classes is a finding naming the value. A value
-that is not a node set name (a DNS label of at most 23 characters) is a finding
+that is not a node set name (a DNS label that leaves its member name one) is a finding
 naming the workers that carry it. A labeled node set over the storage-node limit
 is drafted with `MemberTooLarge`, which approval refuses (§5.2). When only some
 workers of a partition carry the label, the unlabeled workers are split as usual
@@ -1702,7 +1706,7 @@ repository's spell check.
 |-----|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------|
 | 1   | ~~**A control-plane aggregate**~~ **Resolved.** The aggregate stays out of the control plane. It is orchestration in the operator and the CSI driver, and the control plane learns of it only when a requirement needs it to. None of this design's mechanisms does (§2, Non-Goals).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Resolved                    |
 | 2   | ~~**Per-member layout overrides**~~ **Resolved.** A node set overrides the template's sizing and erasure-coding scheme for its member, which is what makes a mixed supercluster of NVMe and logical block members possible. Groups within a node set stay in one hardware category (§5.8).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Resolved                    |
-| 3   | ~~**Member names for long node set names**~~ **Resolved.** A cluster name is at most 35 characters and a node set name at most 23, and the member suffix is three random letters, so every member name fits (§5.3).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Resolved                    |
+| 3   | ~~**Member names for long node set names**~~ **Resolved.** The member suffix is three random letters, and a member name that is not a DNS label is a finding at approval (§5.3).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Resolved                    |
 | 4   | ~~**Aggregate pool ceilings**~~ **Resolved.** A pool's ceiling is the supercluster's. Phase 2 splits it evenly over the members and Phase 5 divides it by demand (§7.1, §7.5).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Resolved                    |
 | 5   | **Replication with a supercluster on either side:** a pair whose source is a supercluster means one relationship per member, and a supercluster target needs a member mapping. Which shape, and is it needed in the first release?                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Operator team, Backend team |
 | 6   | ~~**Placement affinity for groups**~~ **Resolved.** A group is the PVC label `storage.simplyblock.io/consistency-group`, which the control plane already pins to one node and lvstore. Placement sends a labeled volume to the member that holds the group, and the member's control plane places it on the pin (§7.2, §9.3).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Resolved                    |
@@ -2221,11 +2225,9 @@ The fields changed and added on `NodeSet`:
 
 ```go
 	// Name is the node set's name, and the middle of the member cluster's name
-	// when the node set becomes a member, as <cluster>-<nodeset>-<suffix>. At
-	// most 23 characters, so that a member name fits beside a cluster name of 35
-	// and a suffix of three.
+	// when the node set becomes a member, as <cluster>-<nodeset>-<suffix>, which
+	// validation holds to a DNS label at approval.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MaxLength=23
 	Name string `json:"name"`
 
 	// Cluster overrides the document's cluster template for this node set's
@@ -2241,10 +2243,8 @@ The field changed on `ClusterTemplate`, and the rules changed on
 
 ```go
 	// Name is the StorageCluster's name, or the supercluster's when the document
-	// has more than one node set. At most 35 characters, so that every member
-	// name derived from it fits.
+	// has more than one node set.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MaxLength=35
 	Name string `json:"name"`
 ```
 
