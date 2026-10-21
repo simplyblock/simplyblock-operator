@@ -7,7 +7,12 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
+
+	"github.com/google/go-cmp/cmp"
+	"github.com/simplyblock/atlas/prometheus"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -72,8 +77,27 @@ func newSuperclusterReconciler(
 		Client:   newClient(t, objects...),
 		Scheme:   testScheme(t),
 		Recorder: rec,
-		API:      api,
 	}
+}
+
+// exporterSamples is a metrics exporter answering with the samples given, by
+// cluster UUID, or failing every read with err.
+type exporterSamples struct {
+	samples map[string]prometheus.Capacity
+	err     error
+}
+
+func (e exporterSamples) ClusterCapacity(_ context.Context, uuid string) (prometheus.Capacity, bool, error) {
+	if e.err != nil {
+		return prometheus.Capacity{}, false, e.err
+	}
+	sample, ok := e.samples[uuid]
+	return sample, ok, nil
+}
+
+// sample is an exporter reading of the given bytes.
+func sample(total, used, provisioned int64) prometheus.Capacity {
+	return prometheus.Capacity{Total: total, Used: used, Provisioned: provisioned, SampledAt: time.Unix(1, 0)}
 }
 
 // reconcileSupercluster runs one pass and returns the result and the
@@ -334,10 +358,9 @@ func TestASuperclusterOwnsItsServingSecrets(t *testing.T) {
 	}
 }
 
-// The supercluster reads no member's capacity from the control plane: it
-// answers that read with a 500 for a member that has recorded no capacity
-// yet, and the supercluster's capacity is left unreported until placement
-// reads it from another source.
+// The supercluster reads no member's capacity from the control plane, which
+// answers that read with a 500 for a member that has recorded no capacity yet,
+// and without an exporter its capacity is left unreported.
 func TestASuperclusterAsksTheControlPlaneForNoCapacity(t *testing.T) {
 	api := &fakeControlPlane{}
 	r := newSuperclusterReconciler(t, api, &recorder{},
@@ -347,5 +370,51 @@ func TestASuperclusterAsksTheControlPlaneForNoCapacity(t *testing.T) {
 
 	if sc.Status.Capacity != nil {
 		t.Errorf("capacity = %+v, want none", sc.Status.Capacity)
+	}
+}
+
+// Each member's capacity is the exporter's latest sample of it, and the
+// supercluster's is their sum. A member the exporter has no sample of
+// contributes nothing.
+func TestMemberCapacityIsReadFromTheExporter(t *testing.T) {
+	r := newSuperclusterReconciler(t, &fakeControlPlane{}, &recorder{},
+		newTestSupercluster(),
+		newTestMember("prod-dense-kqv", "uuid-a"),
+		newTestMember("prod-fast-mzt", "uuid-b"),
+		newTestMember("prod-new-abc", "uuid-c"))
+	r.Capacity = exporterSamples{samples: map[string]prometheus.Capacity{
+		"uuid-a": sample(1000, 100, 400),
+		"uuid-b": sample(2000, 300, 900),
+	}}
+
+	_, sc := reconcileSupercluster(t, r)
+
+	if diff := cmp.Diff(reading(3000, 400, 1300), sc.Status.Capacity); diff != "" {
+		t.Errorf("capacity (-want +got):\n%s", diff)
+	}
+	for _, m := range sc.Status.Members {
+		if m.Name == "prod-new-abc" && m.Capacity != nil {
+			t.Errorf("member %s has capacity %+v without a sample", m.Name, m.Capacity)
+		}
+	}
+}
+
+// I-07: an exporter that cannot be read keeps each member's last reading
+// rather than dropping it from the sum.
+func TestAnUnreadableExporterKeepsTheLastReading(t *testing.T) {
+	last := reading(1000, 100, 400)
+	r := newSuperclusterReconciler(t, &fakeControlPlane{}, &recorder{},
+		newTestSupercluster(func(c *simplyblockv1alpha2.StorageCluster) {
+			c.Status.Members = []simplyblockv1alpha2.SuperclusterMemberStatus{
+				{Name: "prod-dense-kqv", UUID: "uuid-a", Capacity: last},
+			}
+		}),
+		newTestMember("prod-dense-kqv", "uuid-a"))
+	r.Capacity = exporterSamples{err: errors.New("prometheus is down")}
+
+	_, sc := reconcileSupercluster(t, r)
+
+	if diff := cmp.Diff(last, sc.Status.Capacity); diff != "" {
+		t.Errorf("capacity after a failed read (-want +got):\n%s", diff)
 	}
 }

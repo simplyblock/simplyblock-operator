@@ -939,11 +939,21 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageClusterOps")
 		os.Exit(1)
 	}
+	// A member's capacity exists only in the metrics the control plane exports
+	// (design-superclusters.md §16 Q13). An endpoint that cannot be reached
+	// leaves the supercluster's capacity unreported and the rest of its status
+	// correct.
+	var memberCapacity clustercontroller.MemberCapacitySource
+	if provider, err := atlasprom.New(prometheusURL); err != nil {
+		setupLog.Error(err, "supercluster capacity will be absent", "prometheusURL", prometheusURL)
+	} else {
+		memberCapacity = provider
+	}
 	if err := (&clustercontroller.SuperclusterReconciler{
 		Client:      mgr.GetClient(),
 		Scheme:      mgr.GetScheme(),
 		Recorder:    mgr.GetEventRecorder("supercluster-controller"),
-		API:         clustercontroller.NewControlPlane(controlPlaneEndpoint, controlPlaneCredential),
+		Capacity:    memberCapacity,
 		TLSEnabled:  tlsEnabled,
 		TLSProvider: tlsProvider,
 	}).SetupWithManager(mgr); err != nil {

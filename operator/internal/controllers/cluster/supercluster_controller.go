@@ -27,7 +27,10 @@ import (
 	ctrlbuilder "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+
+	"github.com/simplyblock/atlas/prometheus"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	atlaskube "github.com/simplyblock/atlas/kube"
@@ -76,13 +79,20 @@ type SuperclusterReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
 
-	// API reads each member's capacity, authenticated as that member.
-	API ControlPlane
+	// Capacity reads each member's capacity from the control plane's metrics
+	// exporter. Nil leaves the supercluster's capacity unreported.
+	Capacity MemberCapacitySource
 
 	// TLSEnabled and TLSProvider decide the serving certificate of the
 	// Services the members share (§6.2), as they do a standalone cluster's.
 	TLSEnabled  bool
 	TLSProvider string
+}
+
+// MemberCapacitySource supplies a member's latest capacity sample, and whether
+// there is one. It is satisfied by atlas-lib's prometheus.Provider.
+type MemberCapacitySource interface {
+	ClusterCapacity(ctx context.Context, clusterUUID string) (prometheus.Capacity, bool, error)
 }
 
 // SetupWithManager registers the index the members are listed through, the
@@ -140,7 +150,8 @@ func (r *SuperclusterReconciler) Reconcile(
 	for i := range members.Items {
 		member := &members.Items[i]
 		readings = append(readings, memberReading{
-			Cluster: member,
+			Cluster:  member,
+			Capacity: r.memberCapacity(ctx, &supercluster, member),
 		})
 	}
 	rollup := rollUp(readings)
@@ -185,6 +196,39 @@ func (r *SuperclusterReconciler) Reconcile(
 	r.announceThreshold(&supercluster, previous.Capacity, rollup.Capacity)
 	observeSupercluster(&supercluster, rollup)
 	return ctrl.Result{RequeueAfter: superclusterResync}, nil
+}
+
+// memberCapacity is one member's latest sample from the metrics exporter
+// (§16 Q13), or nil when there is no exporter, no backend cluster, or no
+// sample. A read that fails keeps the member's last reading, so an exporter
+// blip does not take the member's capacity out of the supercluster's sum until
+// the next pass.
+func (r *SuperclusterReconciler) memberCapacity(
+	ctx context.Context,
+	supercluster, member *simplyblockv1alpha2.StorageCluster,
+) *simplyblockv1alpha2.AggregateCapacity {
+	if r.Capacity == nil || member.Status.UUID == "" {
+		return nil
+	}
+	sample, ok, err := r.Capacity.ClusterCapacity(ctx, member.Status.UUID)
+	if err != nil {
+		logf.FromContext(ctx).V(1).Info("a member's capacity could not be read; keeping its last reading",
+			"supercluster", supercluster.Name, "member", member.Name, "error", err.Error())
+		for _, row := range supercluster.Status.Members {
+			if row.Name == member.Name {
+				return row.Capacity
+			}
+		}
+		return nil
+	}
+	if !ok || sample.SampledAt.IsZero() {
+		return nil
+	}
+	return &simplyblockv1alpha2.AggregateCapacity{
+		TotalBytes:       &sample.Total,
+		UsedBytes:        &sample.Used,
+		ProvisionedBytes: &sample.Provisioned,
+	}
 }
 
 // announceMembership emits MemberAdded for a member the previous status did not
