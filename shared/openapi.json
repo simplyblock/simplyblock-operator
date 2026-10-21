@@ -12327,9 +12327,6 @@
             "type": "array",
             "title": "Member Backup Ids"
           },
-          "membership": {
-            "$ref": "#/components/schemas/GroupManifestMembership"
-          },
           "encrypted": {
             "type": "boolean",
             "title": "Encrypted",
@@ -12344,8 +12341,7 @@
           "completed_at",
           "size",
           "source",
-          "member_backup_ids",
-          "membership"
+          "member_backup_ids"
         ],
         "title": "GroupBackupManifest",
         "description": "The self-describing document for one consistency-group backup."
@@ -12367,25 +12363,6 @@
         },
         "type": "object",
         "title": "GroupFailbackParams"
-      },
-      "GroupManifestMembership": {
-        "properties": {
-          "expected_lvol_ids": {
-            "items": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "type": "array",
-            "title": "Expected Lvol Ids"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "expected_lvol_ids"
-        ],
-        "title": "GroupManifestMembership",
-        "description": "The generation's membership, so a reader can verify completeness.\n\nA group backup is restorable only when every expected member is present\n(design-consistency-group-backup.md \u00a76). Recording the expected ids here is\nthe expected-versus-present check (design-consistency-groups.md \u00a78.3) encoded\nin the bucket, so a reader with only the bucket can tell a complete group\nbackup from a torn one."
       },
       "GroupManifestSource": {
         "properties": {

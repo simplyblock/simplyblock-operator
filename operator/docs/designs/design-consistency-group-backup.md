@@ -178,7 +178,7 @@ The group manifest is the S3 object that makes a group backup self-describing an
 groups/<group_backup_id>.json
 ```
 
-Its schema is Appendix D. It records the generation's identity, the N member `backup_id`s, the shared location and encryption disposition, and the membership of the generation (which lvols were expected, so a reader can verify completeness). It names the member backups by id; it does not copy their manifests, which already exist under `manifests/`. A reader resolves a group backup by reading `groups/<id>.json`, then reads each member's `manifests/<backup_id>.json` to assemble that member's chain.
+Its schema is Appendix D. It records the generation's identity, the N member `backup_id`s, and the shared encryption disposition. A reader verifies completeness by checking that the bucket holds a manifest for every named member. It names the member backups by id; it does not copy their manifests, which already exist under `manifests/`. A reader resolves a group backup by reading `groups/<id>.json`, then reads each member's `manifests/<backup_id>.json` to assemble that member's chain.
 
 Like the per-backup manifest, the group manifest records encoding and identity, never the bucket, region, endpoint, or credentials: the reader supplies the connection (`controllers/backup/manifest.py` module contract). `manifest.list_all` over the `groups/` prefix is the disaster-recovery entry point for "what group backups are in this bucket," parallel to the per-backup `list_all` over `manifests/`.
 
@@ -515,15 +515,12 @@ The S3 object at `groups/<group_backup_id>.json`, read by discovery and restore.
     "generation": 7
   },
   "member_backup_ids": ["<uuid>", "..."],
-  "membership": {
-    "expected_lvol_ids": ["<uuid>", "..."]
-  },
   "encrypted": false,
   "size": 0
 }
 ```
 
-`member_backup_ids` names the N member backups and nothing else about them: each member's volume, `s3_id`, chain link, and key are in its own `manifests/<backup_id>.json`, which a reader reads to assemble that member's chain. `membership.expected_lvol_ids` is the generation's membership at the take. A group backup is complete in a bucket when the bucket holds a manifest for every member it names and those manifests cover `expected_lvol_ids`, which is the `expected` versus `present` check (`design-consistency-groups.md` §8.3) encoded in the bucket. The check needs the member manifests: the group manifest is written only once every member completed, so what a torn group backup lacks afterward is a member's own manifest, which the group manifest alone cannot show. `encrypted` is the shared disposition, not a key: each member has its own DEK recorded in its own `manifests/<backup_id>.json`, because the per-member backups carry per-volume keys and there is no group-level key (§3.4). A reader resolves per-member keys before a restore. A `schema_version` the reader does not know is refused, as the per-backup manifest does.
+`member_backup_ids` names the N member backups and nothing else about them: each member's volume, `s3_id`, chain link, and key are in its own `manifests/<backup_id>.json`, which a reader reads to assemble that member's chain. A group backup is complete in a bucket when the bucket holds a manifest for every member it names. The check needs the member manifests: the group manifest is written only once every member completed, so what a torn group backup lacks afterward is a member's own manifest, which the group manifest alone cannot show. `encrypted` is the shared disposition, not a key: each member has its own DEK recorded in its own `manifests/<backup_id>.json`, because the per-member backups carry per-volume keys and there is no group-level key (§3.4). A reader resolves per-member keys before a restore. A `schema_version` the reader does not know is refused, as the per-backup manifest does.
 
 ## Appendix E: `storagegroupbackup_types.go`
 

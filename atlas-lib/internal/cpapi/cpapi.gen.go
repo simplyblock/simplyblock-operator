@@ -1604,17 +1604,8 @@ type GroupBackupManifest struct {
 	Encrypted       *bool                `json:"encrypted,omitempty"`
 	GroupBackupId   openapi_types.UUID   `json:"group_backup_id"`
 	MemberBackupIds []openapi_types.UUID `json:"member_backup_ids"`
-
-	// Membership The generation's membership, so a reader can verify completeness.
-	//
-	// A group backup is restorable only when every expected member is present
-	// (design-consistency-group-backup.md §6). Recording the expected ids here is
-	// the expected-versus-present check (design-consistency-groups.md §8.3) encoded
-	// in the bucket, so a reader with only the bucket can tell a complete group
-	// backup from a torn one.
-	Membership    GroupManifestMembership `json:"membership"`
-	SchemaVersion *int                    `json:"schema_version,omitempty"`
-	Size          int                     `json:"size"`
+	SchemaVersion   *int                 `json:"schema_version,omitempty"`
+	Size            int                  `json:"size"`
 
 	// Source Where a group backup's generation came from. Provenance for a reader.
 	Source GroupManifestSource `json:"source"`
@@ -1623,17 +1614,6 @@ type GroupBackupManifest struct {
 // GroupFailbackParams defines model for GroupFailbackParams.
 type GroupFailbackParams struct {
 	SourceClusterId *openapi_types.UUID `json:"source_cluster_id,omitempty"`
-}
-
-// GroupManifestMembership The generation's membership, so a reader can verify completeness.
-//
-// A group backup is restorable only when every expected member is present
-// (design-consistency-group-backup.md §6). Recording the expected ids here is
-// the expected-versus-present check (design-consistency-groups.md §8.3) encoded
-// in the bucket, so a reader with only the bucket can tell a complete group
-// backup from a torn one.
-type GroupManifestMembership struct {
-	ExpectedLvolIds []openapi_types.UUID `json:"expected_lvol_ids"`
 }
 
 // GroupManifestSource Where a group backup's generation came from. Provenance for a reader.
