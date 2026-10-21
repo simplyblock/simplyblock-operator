@@ -26,44 +26,33 @@ jobs:
             image_name: simplyblock/simplyblock-operator
             ecr_image_name: simply-block/simplyblock-operator
             quay_image_name: quay.io/simplyblock-io/simplyblock-operator
+            internal_image_name: registry.simplyblock.ai/simplyblock/simplyblock-operator
           - name: rebalancer
             dockerfile: operator/Dockerfile.simplyblock-rebalancer
             image_name: simplyblock/simplyblock-rebalancer
             ecr_image_name: simply-block/simplyblock-rebalancer
             quay_image_name: quay.io/simplyblock-io/simplyblock-rebalancer
+            internal_image_name: registry.simplyblock.ai/simplyblock/simplyblock-rebalancer
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Log in to DockerHub
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-
       # Quay.io ships customer-facing images, so only a release run (one that
       # names a version) logs in and pushes there.
-      - name: Log in to Quay.io
-        if: inputs.version != ''
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      - name: Log in to container registries
+        id: login
+        uses: ./.github/actions/registry-login
         with:
-          registry: quay.io
-          username: ${{ secrets.QUAY_USERNAME }}
-          password: ${{ secrets.QUAY_PASSWORD }}
-
-      - name: Login to ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@fa648b43de3d4d023bcb3f89ed6940096949c419 # v2
-        with:
-          registry-type: public
+          dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          quay: ${{ inputs.version != '' }}
+          quay-username: ${{ secrets.QUAY_USERNAME }}
+          quay-password: ${{ secrets.QUAY_PASSWORD }}
+          internal-username: ${{ secrets.INTERNAL_USERNAME }}
+          internal-password: ${{ secrets.INTERNAL_PASSWORD }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -96,14 +85,15 @@ jobs:
           {
             echo "tags<<EOF"
             echo "${{ matrix.image_name }}:${{ steps.image_tag.outputs.tag }}"
-            echo "${{ steps.login-ecr.outputs.registry }}/${{ matrix.ecr_image_name }}:${{ steps.image_tag.outputs.tag }}"
+            echo "${{ steps.login.outputs.ecr-registry }}/${{ matrix.ecr_image_name }}:${{ steps.image_tag.outputs.tag }}"
+            echo "${{ matrix.internal_image_name }}:${{ steps.image_tag.outputs.tag }}"
             if [ -n "${{ inputs.version }}" ]; then
               echo "${{ matrix.quay_image_name }}:${{ steps.image_tag.outputs.tag }}"
             fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build and push multi-arch ${{ matrix.name }} image (DockerHub + ECR + Quay)
+      - name: Build and push multi-arch ${{ matrix.name }} image (DockerHub + ECR + Quay + Internal)
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .

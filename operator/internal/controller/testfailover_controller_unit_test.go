@@ -1467,3 +1467,27 @@ func TestFailoverDeletionRemovesTheNamespaceWorkWithTheLastDrill(t *testing.T) {
 
 // bubbleNS is the bubble namespace the binding tests place their clones in.
 const bubbleNS = "app-drtest-1"
+
+// A hub apart from the sites has no StorageCluster to resolve the source
+// cluster's UUID from: spec.sourceStorageCluster names it, and wins over a
+// local StorageCluster named like the source cluster.
+func TestFailoverGroupSourceUUIDPrefersSourceStorageCluster(t *testing.T) {
+	const named = "3c68f08b-e5e5-4cc2-824c-aec37835a5e9"
+	tf := atResolvingSource()
+	tf.Spec.Scope = simplyblockv1alpha2.TestFailoverScopeGroup
+	r, _ := newTestFailoverReconciler(t)
+	if _, err := r.resolveGroupSourceUUID(context.Background(), tf); err == nil || !strings.Contains(err.Error(), "no unique backend UUID") {
+		t.Fatalf("without the field and a StorageCluster: %v", err)
+	}
+	tf.Spec.SourceStorageCluster = named
+	if got, err := r.resolveGroupSourceUUID(context.Background(), tf); err != nil || got != named {
+		t.Fatalf("got %q, %v; want %s", got, err, named)
+	}
+
+	local := &simplyblockv1alpha2.StorageCluster{ObjectMeta: metav1.ObjectMeta{Name: tf.Spec.SourceCluster, Namespace: "simplyblock"}}
+	local.Status.UUID = "a846932c-425f-4278-86ff-75b23b98f89d"
+	r, _ = newTestFailoverReconciler(t, local)
+	if got, err := r.resolveGroupSourceUUID(context.Background(), tf); err != nil || got != named {
+		t.Fatalf("with a local StorageCluster: got %q, %v; want %s", got, err, named)
+	}
+}

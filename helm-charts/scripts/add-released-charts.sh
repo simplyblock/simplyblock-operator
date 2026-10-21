@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Copies newly packaged chart archives into a committed chart repository and
-# adds them to its index.yaml, for the release pipeline's pull request against
-# main.
+# Copies newly packaged chart archives into a chart repository and adds them to
+# its index.yaml. The release pipeline runs it against a checkout of the charts
+# branch, which holds the published Helm repository.
 #
-# The published Helm repository is rebuilt from the committed charts on every
-# release, and the FTPS upload deletes whatever the rebuild does not contain.
-# A released chart that is never committed is therefore deleted by the next
-# release; committing each one keeps every release in the published repository.
+# The FTPS upload deletes every server file the uploaded repository does not
+# contain, so the charts branch has to carry every released chart. Adding to it,
+# instead of rebuilding the repository from the tagged commit, keeps the charts
+# of every release, whichever release branch the tag was cut from.
 #
 # Both directories use the <version>/<chart>-<version>.tgz layout. Only the
 # version directories are read, so the chart sources and their vendored
 # dependency archives next to them are never indexed. A version that is already
-# committed is left alone: a release is never replaced in place.
+# in the repository is left alone: a release is never replaced in place.
 set -euo pipefail
 
 if [ "$#" -ne 3 ]; then

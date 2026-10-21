@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 
@@ -123,8 +125,67 @@ func nfsSource(serviceAddress, exportPath string) string {
 // through the bidirectional propagation on the staging tree.
 type nfsMounter interface {
 	Mount(source, target, fsType string, flags []string) error
-	Unmount(target string) error
+	// UnmountContext unmounts target, killing the unmount when ctx ends, and
+	// returns once it has exited.
+	UnmountContext(ctx context.Context, target string) error
 	IsMounted(path string) (bool, error)
+	// Detach forces off and lazily removes a mount that will not unmount.
+	Detach(target string) error
+}
+
+// unmountTimeout bounds the ordinary unmount of a staging mount. One whose
+// server answers is done well within it. One whose server is gone waits on
+// it for as long as the server stays away.
+var unmountTimeout = 15 * time.Second
+
+// unmountKillGrace bounds how long a killed unmount may take to exit. One that
+// outlives it is stuck where the kill does not reach.
+var unmountKillGrace = 5 * time.Second
+
+// unmounting holds the staging paths with an unmount still running, which
+// nothing may detach or mount over: the unmount resolves its path again when it
+// gets to the unmount, and would take off whatever is mounted there by then.
+var unmounting sync.Map
+
+// unmountOrDetach unmounts path, and detaches it when that fails or does not
+// finish. A dead mount left in place keeps its NFS client, and the kernel
+// trunks every later mount of the same metadata server (whose identity
+// survives a restart) onto that client, so every later mount on the node
+// fails with it.
+//
+// An unmount that does not finish in time is killed, and the mount is detached
+// only once it has exited. One that does not exit keeps the path, and every
+// call fails until it does.
+func unmountOrDetach(mounter nfsMounter, path string) error {
+	if _, busy := unmounting.LoadOrStore(path, struct{}{}); busy {
+		return fmt.Errorf("pnfs: an earlier unmount of %s is still running", path)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), unmountTimeout)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		err := mounter.UnmountContext(ctx, path)
+		unmounting.Delete(path)
+		done <- err
+	}()
+	var err error
+	select {
+	case err = <-done:
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			err = fmt.Errorf("no answer within %s: %w", unmountTimeout, err)
+		}
+	case <-time.After(unmountTimeout + unmountKillGrace):
+		return fmt.Errorf("pnfs: the unmount of %s did not exit within %s of being killed",
+			path, unmountKillGrace)
+	}
+	klog.Warningf("pnfs: unmounting %s failed (%v); detaching it", path, err)
+	if derr := mounter.Detach(path); derr != nil {
+		return fmt.Errorf("unmount: %w; detach: %w", err, derr)
+	}
+	return nil
 }
 
 // stagePNFS mounts the export at the staging path. Nothing here formats -- the
@@ -180,7 +241,7 @@ func unstagePNFS(
 		return fmt.Errorf("pnfs: checking %s: %w", stagingPath, err)
 	}
 	if mounted {
-		if err := mounter.Unmount(stagingPath); err != nil {
+		if err := unmountOrDetach(mounter, stagingPath); err != nil {
 			return fmt.Errorf("pnfs: unmounting %s: %w", stagingPath, err)
 		}
 	}
@@ -312,6 +373,13 @@ func (ns *Server) restagePNFSVolume(
 ) error {
 	klog.Warningf("restaging pNFS volume %s: staging mount %s is dead",
 		req.GetVolumeId(), stagingTargetPath)
+	// The mount is dead, so its server may be gone: an ordinary unmount would
+	// wait on it.
+	if mounted, err := ns.mounter.IsMounted(stagingTargetPath); err == nil && mounted {
+		if err := unmountOrDetach(ns.mounter, stagingTargetPath); err != nil {
+			return fmt.Errorf("pnfs: clearing the dead mount at %s: %w", stagingTargetPath, err)
+		}
+	}
 	if err := ns.mounter.Remove(stagingTargetPath); err != nil {
 		return fmt.Errorf("pnfs: clearing the dead mount at %s: %w", stagingTargetPath, err)
 	}

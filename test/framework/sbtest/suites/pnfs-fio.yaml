@@ -18,10 +18,16 @@ run:
   test_namespace: default
 
 components:
+  # Put the metadata server on a storage node for the run. Left to the scheduler, it chose
+  # the one node without a storage node on the Talos lab in every run, and its path to its
+  # own node's storage was never exercised; pnfs.multipath and pnfs.mds-placement judge it.
+  pnfs.mds-placement:
+    pin_to_storage_node: true
+
   workload.pnfs:
-    # The pool's own class, cloned with fstype pnfs. Name a pNFS class in `storageclass`
-    # instead to use one as it is. The name differs per install: kubectl get sc.
-    source_storageclass: simplyblock-simplyblock-discovered-initial-discovery-d33c047a-cluster
+    # The pool's own class is cloned with fstype pnfs; the workload finds it. Name a pNFS
+    # class in `storageclass` to use one as it is, or `source_storageclass` to pick among
+    # several pool classes.
     # Two volumes with three writers each, and two private ones for comparison: a private
     # volume that passes beside a shared one that fails points at concurrency, not pNFS.
     shared_volumes: 2

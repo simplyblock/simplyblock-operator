@@ -97,6 +97,33 @@ func TestDetachReleasesAVolumeTheControlPlaneNoLongerKnows(t *testing.T) {
 	}
 }
 
+// A volume of a cluster the driver no longer knows is released the same way: the
+// cluster was removed, or the driver reinstalled for another one, while kubelet
+// still held the volume staged. Its control plane cannot be asked, and will never
+// be, so the unstage failed on every retry forever (dev-ocp, 2026-10-15, cluster
+// b59f5ffa from the install before).
+func TestDetachReleasesAVolumeOfAClusterTheDriverNoLongerKnows(t *testing.T) {
+	spec := export.Spec{VolumeUUID: testVolume, ClusterID: "cluster-gone"}
+	var released []export.Spec
+	a := attacher{
+		conn: func(context.Context, export.Spec) (initiator.Initiator, error) {
+			return nil, fmt.Errorf("export: reaching cluster cluster-gone: failed to find secret: %w",
+				controlplane.ErrClusterNotFound)
+		},
+		releaseDeleted: func(_ context.Context, s export.Spec) error {
+			released = append(released, s)
+			return nil
+		},
+	}
+
+	if err := a.Detach(context.Background(), spec); err != nil {
+		t.Fatalf("Detach = %v, want the volume released locally", err)
+	}
+	if len(released) != 1 || released[0].ClusterID != "cluster-gone" {
+		t.Errorf("released %v, want [%v]", released, spec)
+	}
+}
+
 // Any other control-plane failure is not evidence the volume is gone, so it
 // stays an error and nothing is torn down on a guess.
 func TestDetachKeepsOtherControlPlaneFailuresAnError(t *testing.T) {

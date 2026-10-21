@@ -35,7 +35,7 @@ func withMDS(d *simplyblockv1alpha2.SimplyblockDriver) *simplyblockv1alpha2.Simp
 
 func mdsObjects(t *testing.T, d *simplyblockv1alpha2.SimplyblockDriver) (*corev1.ServiceAccount, *appsv1.StatefulSet) {
 	t.Helper()
-	sa, sts, err := MDSObjects(d, testClusterID, "simplyblock-state")
+	sa, sts, err := MDSObjects(d, testClusterID, "simplyblock-state", nil)
 	if err != nil {
 		t.Fatalf("MDSObjects: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestMDSPodReadinessAndShutdownFollowTheGuest(t *testing.T) {
 }
 
 func TestMDSObjectsNeedTheMDSSpec(t *testing.T) {
-	if _, _, err := MDSObjects(testDriver("simplyblock"), testClusterID, "simplyblock-state"); err == nil {
+	if _, _, err := MDSObjects(testDriver("simplyblock"), testClusterID, "simplyblock-state", nil); err == nil {
 		t.Error("MDSObjects rendered a metadata server for a driver without spec.pnfs.mds")
 	}
 }

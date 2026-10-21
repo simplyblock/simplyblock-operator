@@ -88,6 +88,9 @@ type Workload struct {
 	// window (selfbudget.go). Empty when nothing set it, and then it holds
 	// nothing.
 	ManagerNode string
+
+	// Probe replaces the storage-node API probe in unit tests; nil means the real one.
+	Probe func(ctx context.Context, worker, namespace string, tls, mutualTLS bool) error
 }
 
 // NodeAddress is what the control plane is given as node_address when a node
@@ -469,7 +472,11 @@ func (w *Workload) PublishedInDNS(
 // the one read in this package with no streamed counterpart: it is a Kubernetes-
 // side check against a pod rather than a control-plane object (§4.4).
 func (w *Workload) HostAnswers(ctx context.Context, namespace, worker string) (bool, error) {
-	if err := utils.StorageNodeAPIReachable(
+	probe := utils.StorageNodeAPIReachable
+	if w.Probe != nil {
+		probe = w.Probe
+	}
+	if err := probe(
 		ctx, worker, namespace, w.TLSEnabled, w.TLSMutualEnabled,
 	); err != nil {
 		logf.FromContext(ctx).V(1).Info("the worker's storage-node API does not answer yet",

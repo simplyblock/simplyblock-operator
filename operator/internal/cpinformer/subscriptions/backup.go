@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sync"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
@@ -80,10 +81,9 @@ type BackupSubscription struct {
 
 	ch chan event.GenericEvent
 
-	// snapshotCh wakes the request that took the snapshot a backup was made of.
-	// The mirror's channel cannot: it names the record the store's identifier
-	// gives, and a request is a person's object under a name of their choosing.
-	snapshotCh chan event.GenericEvent
+	// requestCh wakes the request that asked for a backup, which the mirror's
+	// channel cannot because the mirror consumes it.
+	requestCh chan event.GenericEvent
 
 	// groupCh wakes the group request whose group backup a member copy belongs
 	// to. Its events carry the group backup's bare id as the object name.
@@ -221,23 +221,9 @@ func (s *BackupSubscription) enqueue(ctx context.Context, scope cpinformer.Scope
 // source.Channel. Each event names the StorageBackup object to reconcile.
 func (s *BackupSubscription) Triggers() <-chan event.GenericEvent { return s.ch }
 
-// SnapshotTriggers is the request reconciler's trigger channel. Each event
-// carries the name of the snapshot a backup was made of, as the name of a
-// metadata-only object, which the reconciler maps back to the request that took
-// it.
-func (s *BackupSubscription) SnapshotTriggers() <-chan event.GenericEvent { return s.snapshotCh }
-
-// FindBySnapshot returns the backup of a snapshot in one cluster's scope. A
-// request knows the snapshot it took and not yet the backup's identifier, so the
-// snapshot is how it finds the copy.
-func (s *BackupSubscription) FindBySnapshot(clusterID, snapshotID string) (BackupDTO, bool) {
-	for _, dto := range s.List(cpinformer.Scope{clusterID}) {
-		if dto.SnapshotID == snapshotID {
-			return dto, true
-		}
-	}
-	return BackupDTO{}, false
-}
+// RequestTriggers is the request reconciler's trigger channel. Each event names
+// the backup's record, which the reconciler maps to the request that asked for it.
+func (s *BackupSubscription) RequestTriggers() <-chan event.GenericEvent { return s.requestCh }
 
 // GroupTriggers is the group request reconciler's trigger channel. Each event
 // carries the bare id of the group backup a changed member copy belongs to.
@@ -286,6 +272,20 @@ func (s *BackupSubscription) Lookup(key types.NamespacedName) (cpinformer.Scope,
 		return nil, BackupDTO{}, false
 	}
 	return s.Find(backupID)
+}
+
+// enqueueByName pushes a trigger that carries only a name, giving up on
+// shutdown rather than dropping it when the channel is full.
+func enqueueByName(ctx context.Context, ch chan<- event.GenericEvent, name string) {
+	if name == "" {
+		return
+	}
+	obj := &metav1.PartialObjectMetadata{}
+	obj.SetName(name)
+	select {
+	case ch <- event.GenericEvent{Object: obj}:
+	case <-ctx.Done():
+	}
 }
 
 var _ cpinformer.Subscription = (*BackupSubscription)(nil)

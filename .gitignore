@@ -10,3 +10,10 @@ local.mk
 
 # An sbcli checkout for the OpenAPI export, where CI puts it.
 /.sbcli/
+
+# Packaged chart releases. The published Helm repository lives in the charts
+# branch; only the chart sources are committed here.
+/helm-charts/charts/*
+!/helm-charts/charts/simplyblock-operator/
+/csi-driver/charts/spdk-csi/*
+!/csi-driver/charts/spdk-csi/latest/

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from dataclasses import dataclass
 
 
@@ -54,8 +55,36 @@ class Pod:
     ip: str = ""
 
 
+#: What kubectl says when the API server did not answer at all, as opposed to answering
+#: with an error. Only these are worth waiting out.
+UNREACHABLE = ("Unable to connect to the server", "i/o timeout", "connection refused",
+               "TLS handshake timeout", "the server is currently unable to handle the request")
+
+#: How often, and how far apart, a read is retried on an API server that did not answer.
+#: About half a minute in all: a blip outlasts it rarely, a down server always.
+READ_ATTEMPTS = 6
+READ_BACKOFF_S = 5.0
+
+
+def read(args: list[str], timeout: int = 60) -> subprocess.CompletedProcess[str]:
+    """A kubectl read that rides out an API server that briefly does not answer.
+
+    A component that lists or gets once at a fixed moment, such as the collection at the
+    end of a run, otherwise loses its whole step to a few seconds of API server outage.
+    Every other failure is raised at once, because waiting does not fix it.
+    """
+    for attempt in range(READ_ATTEMPTS):
+        cp = run(args, timeout=timeout, check=False)
+        if cp.returncode == 0:
+            return cp
+        if not any(m in cp.stderr for m in UNREACHABLE) or attempt == READ_ATTEMPTS - 1:
+            break
+        time.sleep(READ_BACKOFF_S)
+    raise KubectlError(f"kubectl {' '.join(args)}: {cp.stderr.strip() or cp.returncode}")
+
+
 def list_pods(namespace: str, name_contains: list[str] | None = None) -> list[Pod]:
-    cp = run(["-n", namespace, "get", "pods", "-o", "json"])
+    cp = read(["-n", namespace, "get", "pods", "-o", "json"])
     out = []
     for it in json.loads(cp.stdout).get("items", []):
         name = it["metadata"]["name"]

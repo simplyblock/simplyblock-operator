@@ -1,5 +1,7 @@
-# The pNFS metadata server image: QEMU, the guest with mds-agent in it, and
-# mds-runner, built per architecture (design-pnfs-mds-vm.md §5.6).
+# The pNFS metadata server image: QEMU, the guest with mds-agent in it,
+# mds-runner, and mds-proxy, built per architecture (design-pnfs-mds-vm.md
+# §5.6). mds-proxy runs from this image on the host's network, beside the
+# metadata server pod, so it always speaks the runner's protocol (§8.5).
 #
 # The guest kernel and root filesystem are built by pnfs-os (vela-os,
 # boards/pnfs-common) and published as GUEST_IMAGE, spdkcsi:pnfsos: a
@@ -23,7 +25,8 @@ COPY atlas-lib/ /atlas-lib/
 COPY csi-driver/cmd/ cmd/
 COPY csi-driver/internal/ internal/
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -o mds-runner ./cmd/mds-runner/ && \
-    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -o mds-agent ./cmd/mds-agent/
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -o mds-agent ./cmd/mds-agent/ && \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -o mds-proxy ./cmd/mds-proxy/
 
 FROM ${GUEST_IMAGE} AS guest
 
@@ -72,5 +75,6 @@ COPY --chmod=0755 csi-driver/deploy/image/mds-ssh.sh /usr/local/bin/ssh
 COPY --from=guest /vmlinuz /mds/kernel/vmlinuz
 COPY --from=disk /work/disk.qcow2 /mds/disk.qcow2
 COPY --from=builder --chmod=0755 /workspace/mds-runner /usr/bin/mds-runner
+COPY --from=builder --chmod=0755 /workspace/mds-proxy /usr/bin/mds-proxy
 
 ENTRYPOINT ["/usr/bin/mds-runner"]

@@ -129,10 +129,13 @@ func (a attacher) Attach(ctx context.Context, spec export.Spec) error {
 //
 // A volume the control plane no longer knows is released from what this host
 // still holds: the external provisioner deletes a pNFS volume once its claim
-// goes, which can be before kubelet has unstaged it here.
+// goes, which can be before kubelet has unstaged it here. So is a volume of a
+// cluster the driver no longer knows, whose control plane cannot be asked at
+// all: the cluster was removed, or the driver reinstalled for another one, while
+// kubelet still held the volume staged.
 func (a attacher) Detach(ctx context.Context, spec export.Spec) error {
 	conn, err := a.connect(ctx, spec)
-	if errors.Is(err, controlplane.ErrVolumeNotFound) {
+	if errors.Is(err, controlplane.ErrVolumeNotFound) || errors.Is(err, controlplane.ErrClusterNotFound) {
 		release := releaseDeletedVolume
 		if a.releaseDeleted != nil {
 			release = a.releaseDeleted

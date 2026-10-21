@@ -80,9 +80,6 @@ func (r *StoragePoolReconciler) reconcileDeletion(
 		if r.VolumeScopes != nil {
 			r.VolumeScopes.Remove(cpinformer.Scope{clusterUUID, p.Status.UUID})
 		}
-		if r.SnapshotScopes != nil {
-			r.SnapshotScopes.Remove(cpinformer.Scope{clusterUUID, p.Status.UUID})
-		}
 	}
 
 	classes, _, err := AssignedClasses(ctx, r.Client, p)

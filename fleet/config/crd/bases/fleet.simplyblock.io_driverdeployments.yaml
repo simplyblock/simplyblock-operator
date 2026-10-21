@@ -316,6 +316,58 @@ spec:
                           /dev/kvm. Unset, no pNFS volume can be exported: its export waits in
                           Pending until this is set.
                         properties:
+                          dataNetwork:
+                            description: |-
+                              DataNetwork attaches the metadata server to the storage data network, so
+                              its guest reaches the storage nodes there rather than through the pod
+                              network. The pod gets a macvlan interface on whichever host interface
+                              carries the subnet, and runs only on nodes that have one, preferring
+                              nodes that are not storage nodes. It needs Multus and the whereabouts IPAM
+                              plugin, which OpenShift ships. Unset, the guest reaches the storage nodes
+                              through the pod network, which needs the nodes to forward traffic
+                              arriving on their data interfaces. Changing it restarts the metadata
+                              server.
+                            properties:
+                              rangeEnd:
+                                description: RangeEnd is the last address the metadata
+                                  server pods may take.
+                                maxLength: 15
+                                type: string
+                                x-kubernetes-validations:
+                                - message: rangeEnd must be an IPv4 address
+                                  rule: isIP(self) && ip(self).family() == 4
+                              rangeStart:
+                                description: |-
+                                  RangeStart is the first address the metadata server pods may take. The
+                                  range must hold no address anything else on the network uses: one pod
+                                  takes one address, and a restarted pod can take another.
+                                maxLength: 15
+                                type: string
+                                x-kubernetes-validations:
+                                - message: rangeStart must be an IPv4 address
+                                  rule: isIP(self) && ip(self).family() == 4
+                              subnet:
+                                description: |-
+                                  Subnet is the data network in CIDR form, such as 10.10.10.0/24. A node
+                                  whose interface holds an address in it can run the metadata server.
+                                maxLength: 18
+                                type: string
+                                x-kubernetes-validations:
+                                - message: subnet must be an IPv4 CIDR
+                                  rule: isCIDR(self) && cidr(self).ip().family() ==
+                                    4
+                            required:
+                            - rangeEnd
+                            - rangeStart
+                            - subnet
+                            type: object
+                            x-kubernetes-validations:
+                            - message: rangeStart must be an address in subnet
+                              rule: '!isCIDR(self.subnet) || !isIP(self.rangeStart)
+                                || cidr(self.subnet).containsIP(self.rangeStart)'
+                            - message: rangeEnd must be an address in subnet
+                              rule: '!isCIDR(self.subnet) || !isIP(self.rangeEnd)
+                                || cidr(self.subnet).containsIP(self.rangeEnd)'
                           image:
                             description: |-
                               Image is the metadata server image: QEMU, the guest kernel, the guest

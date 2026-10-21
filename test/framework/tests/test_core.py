@@ -137,7 +137,8 @@ class ConfigResolution(unittest.TestCase):
         """The suites ship with the package, so a typo in one is a broken release. Loading
         resolves names against the registry, so this also pins that no suite references a
         detector that has since been renamed."""
-        names = ["analyze-only", "corruption-hunt", "migration-soak", "migration-full"]
+        names = ["analyze-only", "corruption-hunt", "migration-soak", "migration-full",
+                 "pnfs-fio", "pnfs-fio-csi"]
         for name in names:
             p = sbtest.suite_path(name)
             self.assertIsNotNone(p, f"bundled suite {name} not found")

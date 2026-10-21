@@ -60,6 +60,12 @@ mds-agent:
 	@mkdir -p $(BUILD_DIR)
 	@CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -buildvcs=false -o $(BUILD_DIR)/mds-agent ./cmd/mds-agent/
 
+.PHONY: mds-proxy
+mds-proxy:
+	@echo === building mds-proxy binary
+	@mkdir -p $(BUILD_DIR)
+	@CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -buildvcs=false -o $(BUILD_DIR)/mds-proxy ./cmd/mds-proxy/
+
 # static code check, text lint
 # lint: golangci yamllint shellcheck mdl codespell
 lint: golangci
@@ -191,5 +197,5 @@ mds-image:
 
 .PHONY: clean
 clean:
-	rm -f $(BUILD_DIR)/spdkcsi $(BUILD_DIR)/mds-runner $(BUILD_DIR)/mds-agent
+	rm -f $(BUILD_DIR)/spdkcsi $(BUILD_DIR)/mds-runner $(BUILD_DIR)/mds-agent $(BUILD_DIR)/mds-proxy
 	go clean -testcache

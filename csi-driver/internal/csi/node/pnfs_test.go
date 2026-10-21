@@ -15,7 +15,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
@@ -25,6 +27,17 @@ type fakeNFSMounter struct {
 	unmounts  []string
 	isMounted bool
 	mountErr  error
+	// unmountErr fails every plain unmount, as one of a mount whose server
+	// is gone does.
+	unmountErr error
+	// hang makes every plain unmount wait, as one of a dead server does, and
+	// unmounting reports whether one is still waiting.
+	hang       chan struct{}
+	ignoreKill bool // the hung unmount does not end when killed
+	unmounting atomic.Bool
+	// unmountingAtDetach is what unmounting was when Detach ran.
+	unmountingAtDetach bool
+	detached           []string
 }
 
 func (m *fakeNFSMounter) Mount(source, target, fsType string, options []string) error {
@@ -36,8 +49,31 @@ func (m *fakeNFSMounter) Mount(source, target, fsType string, options []string) 
 	return nil
 }
 
-func (m *fakeNFSMounter) Unmount(target string) error {
+func (m *fakeNFSMounter) UnmountContext(ctx context.Context, target string) error {
 	m.unmounts = append(m.unmounts, target)
+	if m.hang != nil {
+		m.unmounting.Store(true)
+		defer m.unmounting.Store(false)
+		if m.ignoreKill {
+			<-m.hang
+		} else {
+			select {
+			case <-m.hang:
+			case <-ctx.Done():
+			}
+		}
+		return errors.New("umount.nfs4: server not responding")
+	}
+	if m.unmountErr != nil {
+		return m.unmountErr
+	}
+	m.isMounted = false
+	return nil
+}
+
+func (m *fakeNFSMounter) Detach(target string) error {
+	m.unmountingAtDetach = m.unmounting.Load()
+	m.detached = append(m.detached, target)
 	m.isMounted = false
 	return nil
 }
@@ -166,6 +202,78 @@ func TestUnstageToleratesAnAbsentMount(t *testing.T) {
 	}
 	if len(m.unmounts) != 0 {
 		t.Errorf("unmounted something that was not mounted: %v", m.unmounts)
+	}
+}
+
+// A mount whose metadata server is gone cannot be unmounted the ordinary way:
+// umount waits on a server that never answers. Left in place, the dead mount's
+// NFS client stays, and the kernel trunks every later mount of a restarted
+// metadata server (same server identity) onto it, so they all fail on that
+// node. Unstage detaches it instead of failing forever.
+func TestUnstageDetachesAMountWhoseServerIsGone(t *testing.T) {
+	m := &fakeNFSMounter{isMounted: true, unmountErr: errors.New("umount.nfs4: server not responding")}
+	path := t.TempDir()
+	if err := unstagePNFS(m, path, ""); err != nil {
+		t.Fatalf("unstage: %v", err)
+	}
+	if len(m.detached) != 1 || m.detached[0] != path {
+		t.Errorf("detached %v, want %s", m.detached, path)
+	}
+}
+
+// An unmount that does not finish is stopped before the mount is detached. A
+// umount left running past the detach resolves the staging path again when it
+// gets to the unmount, and by then a restage may have mounted the replacement
+// there, which it would take off.
+func TestUnstageStopsAHungUnmountBeforeDetaching(t *testing.T) {
+	saved := unmountTimeout
+	unmountTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { unmountTimeout = saved })
+
+	m := &fakeNFSMounter{isMounted: true, hang: make(chan struct{})}
+	t.Cleanup(func() { close(m.hang) })
+	if err := unstagePNFS(m, t.TempDir(), ""); err != nil {
+		t.Fatalf("unstage: %v", err)
+	}
+	if len(m.detached) != 1 {
+		t.Fatalf("detached %v, want the staging path", m.detached)
+	}
+	if m.unmountingAtDetach {
+		t.Error("the hung unmount was still running when the mount was detached")
+	}
+}
+
+// An unmount that does not exit even once killed still owns the staging path,
+// so unstage fails rather than detach under it, and a retry fails the same way
+// for as long as it runs.
+func TestUnstageDoesNotDetachUnderAnUnmountThatWillNotExit(t *testing.T) {
+	savedTimeout, savedGrace := unmountTimeout, unmountKillGrace
+	unmountTimeout, unmountKillGrace = 10*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { unmountTimeout, unmountKillGrace = savedTimeout, savedGrace })
+
+	m := &fakeNFSMounter{isMounted: true, hang: make(chan struct{}), ignoreKill: true}
+	path := t.TempDir()
+	if err := unstagePNFS(m, path, ""); err == nil {
+		t.Error("unstage succeeded while the unmount was still running")
+	}
+	if err := unstagePNFS(m, path, ""); err == nil {
+		t.Error("a retry succeeded while the first unmount was still running")
+	}
+	if len(m.detached) != 0 {
+		t.Errorf("detached %v under a running unmount", m.detached)
+	}
+	close(m.hang)
+}
+
+// A mount that unmounts is never detached: a lazy detach leaves the filesystem
+// alive under any process still holding it.
+func TestUnstageDetachesOnlyWhatDidNotUnmount(t *testing.T) {
+	m := &fakeNFSMounter{isMounted: true}
+	if err := unstagePNFS(m, t.TempDir(), ""); err != nil {
+		t.Fatalf("unstage: %v", err)
+	}
+	if len(m.detached) != 0 {
+		t.Errorf("detached %v after a clean unmount", m.detached)
 	}
 }
 

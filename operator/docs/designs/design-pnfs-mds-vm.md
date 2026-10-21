@@ -50,7 +50,7 @@ Appendices:
 
 The pNFS metadata server (MDS) runs in a pod in the operator's namespace whose workload is a QEMU guest. The guest has its own Linux kernel with nfsd, the NFS client, and the NVMe/TCP initiator built in. It connects the volume's namespace itself, makes the XFS filesystem, and serves the export. The customer's node contributes `/dev/kvm` and nothing else: no nfs-utils, no nfsd, no mounts, no exports.
 
-The export assembler (`csi-driver/internal/nfsexport`) runs in the guest as `mds-agent`. The `NFSExport` kind, the `ExportService` protocol, the per-export Service, the SCSI layout, and the client mount path are those of `design-pnfs-rwx.md`. Clients attach the namespace themselves and write to it directly, and the guest serves metadata only.
+The export assembler (`csi-driver/internal/nfsexport`) runs in the guest as `mds-agent`. The `NFSExport` kind, the `ExportService` protocol, the metadata server's Service, the SCSI layout, and the client mount path are those of `design-pnfs-rwx.md`. Clients attach the namespace themselves and write to it directly, and the guest serves metadata only.
 
 One MDS pod serves every export of one storage cluster, because nfsd and its export table are global to the kernel they run in. The pod is created by the `NFSExport` reconciler when the first export of a storage cluster binds. No CRD, controller, or device plugin is added to the cluster, and nothing from NeonVM or KubeVirt is installed. The guest launch follows the technique NeonVM's runner uses (QEMU with a direct kernel boot and a tap bridge in a privileged pod) and uses none of its API.
 
@@ -65,7 +65,7 @@ An NFS server is kernel state. nfsd's threads, its export table, and the mounts 
 - **Host prerequisites are invisible to the operator.** A node without nfsd fails only when an export is assembled on it.
 - **The export's mounts are host state.** A node that crashes mid-export leaves mounts and an export table entry on a machine the operator does not own, and nothing can move them to another host.
 
-The primitives this design builds on are the `NFSExport` kind and its phases, the `ExportService` protocol in `atlas-lib/nfsexport/nfsexportrpc`, csi-link with its `Registry`, the per-export Service and EndpointSlice (`operator/internal/controller/nfsexport_service.go`), and the assembler package. The pattern reused for scheduling is the VDO capability probe, which publishes a node label from a probe in the node plugin (`atlas-lib/kube/names.go`, `LabelVDOCapable`).
+The primitives this design builds on are the `NFSExport` kind and its phases, the `ExportService` protocol in `atlas-lib/nfsexport/nfsexportrpc`, csi-link with its `Registry`, the metadata server's Service and EndpointSlice (`operator/internal/controller/nfsexport_service.go`), and the assembler package. The pattern reused for scheduling is the VDO capability probe, which publishes a node label from a probe in the node plugin (`atlas-lib/kube/names.go`, `LabelVDOCapable`).
 
 ---
 
@@ -141,7 +141,7 @@ Two existing types change. No kind is added.
 
 ### 4.1 `NFSExportStatus` (existing kind)
 
-The bound MDS is named by `mdsPodName`, and `mdsNodeIP` is the pod's IP, which the export's EndpointSlice points at. `assembledBy` records the guest instance that assembled the export.
+The bound MDS is named by `mdsPodName`, and `mdsNodeIP` is the pod's IP, which the metadata server's EndpointSlice points at. `assembledBy` records the guest instance that assembled the export.
 
 ```go
 // MDSPodName is the MDS pod serving this export. Empty until the export is
@@ -166,7 +166,7 @@ The type's full text is in Appendix A. The `MDS` printcolumn shows `mdsPodName`.
 MDS *DriverPNFSMDS `json:"mds,omitempty"`
 ```
 
-`DriverPNFSMDS` carries the image, resources, scheduling constraints, and the state volume's size and class. Its full text is in Appendix B. `MDS` is the only field of `DriverPNFS`. With it unset, an export waits in `Pending` with a `NoMetadataServer` event.
+`DriverPNFSMDS` carries the image, resources, scheduling constraints, the state volume's size and class, and the optional storage data network the pod is attached to (§8.4). Its full text is in Appendix B. `MDS` is the only field of `DriverPNFS`. With it unset, an export waits in `Pending` with a `NoMetadataServer` event. The chart renders `mds: {}` on the SimplyblockDriver it creates (`driver.pnfs.mds.enabled`, on by default), and carries the scheduling, resources, state size, and data network under `driver.pnfs.mds`, so a chart install exports pNFS volumes without configuring the driver afterward.
 
 ---
 
@@ -176,7 +176,7 @@ MDS *DriverPNFSMDS `json:"mds,omitempty"`
 
 The `NFSExport` reconciler ensures one StatefulSet of one replica per storage cluster in the operator's namespace. It is named by atlas-lib's `kube.Formula` from the full cluster ID, held to the 52 characters a StatefulSet name may have: as much of the ID as fits and a digest of all of it, so two clusters whose IDs share a prefix never share a StatefulSet. An existing StatefulSet of that name labeled with another cluster's ID is not used: the export waits with an `MDSNameCollision` event. The StatefulSet is rendered by the `SimplyblockDriver` controller's package (`operator/internal/controllers/driver`), beside the node plugin's DaemonSet and the controller plugin's Deployment, because its volumes (the cluster secret, the TLS client certificate, the link token) and its image default are the driver's. The `NFSExport` reconciler calls that builder when the first export of a storage cluster binds. A StatefulSet gives the pod a stable identity and a stable PVC for the state disk, and its UID is the seed of the guest's host NQN (§6.5), so the NQN survives pod restarts. The StatefulSet is owned by the `SimplyblockDriver` object, so disabling pNFS removes it.
 
-The StatefulSet is created on first need and reconciled with the same create-or-leave discipline as the per-export Service. It is not deleted when its last export is. Its pod template carries a hash of itself in the `storage.simplyblock.io/mds-template-hash` annotation. Every `SimplyblockDriver` reconcile, and every export reconcile, compares that hash with the template the operator would build and, when they differ, writes the new template and hash, which restarts the guest. A driver change or an operator upgrade therefore restarts the metadata server at once, rather than whenever the next export happens to reconcile. Only the `NFSExport` reconciler creates the StatefulSet. A template edited by hand keeps its hash, so it is left as it is until the operator's own template changes.
+The StatefulSet is created on first need and reconciled with the same create-or-leave discipline as the metadata server's Service. It is not deleted when its last export is. Its pod template carries a hash of itself in the `storage.simplyblock.io/mds-template-hash` annotation. Every `SimplyblockDriver` reconcile, and every export reconcile, compares that hash with the template the operator would build and, when they differ, writes the new template and hash, which restarts the guest. A driver change or an operator upgrade therefore restarts the metadata server at once, rather than whenever the next export happens to reconcile. Only the `NFSExport` reconciler creates the StatefulSet. A template edited by hand keeps its hash, so it is left as it is until the operator's own template changes.
 
 ### 5.2 Containers
 
@@ -207,6 +207,10 @@ The pod is privileged. The container needs `/dev/kvm` and `/dev/net/tun`, and wi
 
 Scheduling uses `storage.simplyblock.io/kvm-capable=true`, a node label published by the csi-node plugin from a probe that opens `/dev/kvm` for reading and writing (`AdvertiseKVMCapability`). It follows the VDO probe and shares its publishing step: it runs once at plugin start, stamps its value with `storage.simplyblock.io/kvm-capable-managed-by: auto-detect`, and leaves a hand-set label (one without that annotation) alone, so a golden-image node can assert capability. The pod's `nodeSelector` is that label merged with `spec.pnfs.mds.nodeSelector`, and its tolerations come from `spec.pnfs.mds.tolerations`.
 
+A pod attached to the storage data network (§8.4) also carries a required node affinity on the subnet label of the interface its macvlan sits on, and a preference for nodes without `io.simplyblock.storagenodeset`, the label of a node running a storage node.
+
+The mds-proxy DaemonSet (§8.5) takes the same node selector and tolerations, without the data network's affinity, so it runs on every node the pod may run on.
+
 A pod that cannot schedule leaves its exports in `Pending`, and the reconciler reads the pod's `PodScheduled` condition to emit the `NoKVMCapableNode` event rather than waiting silently.
 
 ### 5.5 Resources
@@ -217,12 +221,12 @@ A pod that cannot schedule leaves its exports in `Pending`, and the reconciler r
 
 Two images, each built for `linux/amd64` and `linux/arm64`:
 
-| Image                    | Built from                                                   | Holds                                                                                     |
-|--------------------------|--------------------------------------------------------------|-------------------------------------------------------------------------------------------|
-| `spdkcsi:pnfsos`         | pnfs-os (vela-os, buildroot), `prototype/boards/pnfs-common` | `/vmlinuz` and `/disk.qcow2`, from `scratch`. Never run                                   |
-| `spdkcsi:pnfs-mds-<tag>` | `csi-driver/deploy/image/Dockerfile.mds`                     | the target's QEMU, the ARM64 UEFI firmware (`aavmf`), iptables, the guest, and the runner |
+| Image                    | Built from                                                   | Holds                                                                                                    |
+|--------------------------|--------------------------------------------------------------|----------------------------------------------------------------------------------------------------------|
+| `spdkcsi:pnfsos`         | pnfs-os (vela-os, buildroot), `prototype/boards/pnfs-common` | `/vmlinuz` and `/disk.qcow2`, from `scratch`. Never run                                                  |
+| `spdkcsi:pnfs-mds-<tag>` | `csi-driver/deploy/image/Dockerfile.mds`                     | the target's QEMU, the ARM64 UEFI firmware (`aavmf`), iptables, the guest, the runner, and the mds-proxy |
 
-The guest image carries the kernel built with the configuration fragment of §6.1 and the root filesystem of §6.2, and is published by the pnfs-os workflow as `pnfsos-amd64`, `pnfsos-arm64`, and the multi-architecture `pnfsos`. The MDS image copies the kernel out of it (`/mds/kernel/vmlinuz`) and writes `mds-agent` into the root filesystem (`/usr/bin/mds-agent`) before copying the disk (`/mds/disk.qcow2`), using `debugfs` on the ext4 image, which needs no mount and no privilege. The agent is therefore always the runner's version, a guest change rebuilds no Go, and a runner change rebuilds no buildroot. It is tagged and released with the operator and CSI images, and `spec.pnfs.mds.image` defaults to the operator's own registry and tag in the `spdkcsi` repository with the tag prefixed `pnfs-mds-`. Both binaries (the runner and the guest agent) are built from the `csi-driver` Go module, which is where the assembler package lives, as `cmd/mds-runner` and `cmd/mds-agent`.
+The guest image carries the kernel built with the configuration fragment of §6.1 and the root filesystem of §6.2, and is published by the pnfs-os workflow as `pnfsos-amd64`, `pnfsos-arm64`, and the multi-architecture `pnfsos`. The MDS image copies the kernel out of it (`/mds/kernel/vmlinuz`) and writes `mds-agent` into the root filesystem (`/usr/bin/mds-agent`) before copying the disk (`/mds/disk.qcow2`), using `debugfs` on the ext4 image, which needs no mount and no privilege. The agent is therefore always the runner's version, a guest change rebuilds no Go, and a runner change rebuilds no buildroot. It is tagged and released with the operator and CSI images, and `spec.pnfs.mds.image` defaults to the operator's own registry and tag in the `spdkcsi` repository with the tag prefixed `pnfs-mds-`. The three binaries (the runner, the guest agent, and the mds-proxy of §8.5) are built from the `csi-driver` Go module, which is where the assembler package lives, as `cmd/mds-runner`, `cmd/mds-agent`, and `cmd/mds-proxy`.
 
 ---
 
@@ -292,6 +296,27 @@ The command line also carries `nfsd.pnfs_export_restore=60` (pnfs-os 0007). Grac
 
 With `--debug-ssh`, the runner also runs an SSH server in the guest for debugging. It generates an ed25519 key pair at every boot and keeps the private half in the container. It hands the public half to the guest as the fw_cfg item `opt/io.simplyblock/ssh_authorized_keys`, and adds `simplyblock.debug_ssh=1` to the command line, which is the condition the guest's dropbear unit starts on. The runner image installs a wrapper as `/usr/local/bin/ssh`, so `kubectl exec -it <pod> -- ssh` logs in to the guest as root over the private bridge, and `-- ssh <command>` runs one command. Without the flag the guest runs no SSH server. Anyone who can exec into the pod can log in, and nobody else can: nothing is forwarded out of the pod, and no secret is stored.
 
+### 6.7 Zeroed write layouts
+
+A write layout covers blocks XFS allocates for it. Upstream XFS allocates them unwritten, and only the client's LAYOUTCOMMIT converts them to written. A commit lost to a restart of the metadata server leaves the client's data on the device behind extents every reader sees as zeros, since the Linux client sends no reclaiming LAYOUTCOMMIT (pnfs-os 0005). With `xfs.pnfs_zeroed_layouts=1`, which the runner sets by default (`--zeroed-layouts`), the blocks of a write layout are allocated zeroed and written instead, so a client's write is durable once it completes on the device. pnfs-os 0020 caps the allocation one LAYOUTGET zeroes at `xfs.pnfs_zeroed_layout_max_mb`, 64 MiB.
+
+The zeroing runs in the nfsd thread before LAYOUTGET is answered (`nfsd4_block_proc_layoutget`, `xfs_fs_map_blocks`, `xfs_iomap_write_direct`, `xfs_zero_extent`, `blkdev_issue_zeroout`), and its cost depends on what the target does with a Write Zeroes:
+
+- **A cluster the volume never wrote** is answered from metadata at once (simplyblock/spdk#77, "answer Write Zeroes from metadata on a thin, zeroes-backed blob").
+- **A cluster already written** is written with zeroes through the replication or erasure coding below the volume, unless one command covers the whole cluster, which is then released instead. The target announces no Write Zeroes size limit, so Linux caps a command at the maximum transfer size, 128 KiB, and no command covers a cluster.
+
+Space XFS frees and reuses within a volume is therefore zeroed for real. In run `pnfs-1792142480` an nfsd thread spent 15 seconds in `blkdev_issue_zeroout` for one LAYOUTGET on a volume fio had been rewriting for an hour.
+
+**Free space that reads as zeros.** XFS cannot tell space it never used from space it freed: its free-space B-trees record only that an extent is free. The zeroing can be skipped when free space is known to read as zeros, and three parts make it so:
+
+1. **The export is mounted with `-o discard`.** XFS discards every extent it frees, and holds the extent busy until the discard completes, so freed space is never reused undiscarded. `mkfs.xfs` already discards the whole volume, so a new export starts with every cluster of its volume unallocated.
+2. **The target guarantees that a discarded range reads as zeros.** A discard covering whole clusters releases them (the Unmap path of `blob_request_submit_op_single`), and they read as zeros from the zeroes device. A discard of part of an allocated cluster is passed to the device below today, whose result for a later read is not guaranteed. The target writes zeroes there instead, which moves the cost from LAYOUTGET to the discard XFS issues in the background, and announces the guarantee in the namespace's DLFEAT (deallocated blocks read as zeros).
+3. **The guest kernel skips the zeroing of a fresh allocation.** A parameter beside `pnfs_zeroed_layouts`, set by the agent only when the namespace announces the guarantee and the export is mounted with discard, makes the zeroed write layout allocate written extents from free space without the Write Zeroes. Linux has no reliable flag for discarded space reading as zeros (`discard_zeroes_data` was removed), which is why the guest decides from the target's announcement. An unwritten extent under a write layout is still zeroed before it is converted: it may hold data a client wrote under a layout whose LAYOUTCOMMIT was lost.
+
+0005's guarantee is unchanged: the blocks a write layout covers are written, and they read as zeros until the client writes them. LAYOUTGET then costs one log force on reused space as on space never used, and no nfsd thread waits on the device.
+
+**What it costs.** Online discard adds work to every unlink and truncate, which XFS batches after the log commit. A volume that sees heavy deletion under load pays the partial-cluster zeroing there instead of at the next allocation. The guest's skip is only as safe as the target's announcement: a target that announces the guarantee and does not keep it hands one file's old data to another file's client, which is why the skip is gated on the announcement rather than configured.
+
 ---
 
 ## 7. Control Channel and Reconciliation
@@ -323,13 +348,20 @@ The client set is every cluster node's InternalIP and pod CIDR (`clusterNodeAddr
 
 A guest that has rebooted has lost its mounts, its exports table, and its nfsd threads, and the state disk holds only the client-recovery database. The reconciler detects this without polling the guest. `reconcileReady` compares `status.assembledBy` with the MDS instance currently bound: the pod's UID and its runner container's ID. The UID alone misses a guest that crashed, since kubelet restarts the runner container inside the same pod; the container's ID is new on every start. A mismatch means the exports on this pod were assembled by a previous boot, and `CreateExport` is called again (the call is idempotent) and `assembledBy` rewritten. The StatefulSet's pod is watched, and a pod event enqueues every export bound to that storage cluster.
 
-Every pass also repoints the export's EndpointSlice and `status.mdsNodeIP` when they name another address than the running pod's (§8.1), before any reassembly so a client's retry reaches the new guest. The comparison does not wait for a restart to be detected: an export bound while its pod was being replaced records the old pod's address and is then assembled by the new one, so its instance matches while its address does not. A pod that is gone, or whose guest has not linked yet, is waited for, and `assembledBy` is rewritten only after the reassembly succeeded. The pod watch matches pods carrying `storage.simplyblock.io/cluster-id` and maps them to the exports whose `mdsPodName` names them, which also wakes an export waiting in `Pending` for its pod to turn Ready.
+Every pass also repoints the metadata server's EndpointSlice and the export's `status.mdsNodeIP` when they name another address than the running pod's (§8.1), before any reassembly so a client's retry reaches the new guest. The comparison does not wait for a restart to be detected: an export bound while its pod was being replaced records the old pod's address and is then assembled by the new one, so its instance matches while its address does not. A pod that is gone, or whose guest has not linked yet, is waited for, and `assembledBy` is rewritten only after the reassembly succeeded. The pod watch matches pods carrying `storage.simplyblock.io/cluster-id` and maps them to the exports whose `mdsPodName` names them, which also wakes an export waiting in `Pending` for its pod to turn Ready.
 
 Exports reconcile eight at a time, so a restart reassembles a cluster's exports together rather than one after another. One at a time, at about a second each, the last exports of a busy cluster came back after the restarted guest's grace period had ended.
 
 ### 7.6 Health
 
 `CheckExport` is relayed to the guest as today. A failed check is an event and a fast recheck and never a phase change, for the reason `reconcileHealth` already states.
+
+**Path repair.** Assembly attaches a namespace over every path the control plane publishes, and succeeds when at least one comes up. Two loops keep it on all of them afterward, neither of which waits for the operator:
+
+- **In the guest.** The agent keeps the connection each successful `CreateExport` carried, with its endpoints and secrets, and forgets it on a successful `DeleteExport`. Every 10 seconds (`--path-interval`), it reconciles each kept namespace with atlas-lib's `nvmeof.ReconcilePaths`, which connects the published paths that are not live, in priority order, and leaves the live ones alone. A path that failed at assembly, one that dropped when its storage node restarted, and one whose controller the kernel removed after `ctrl_loss_tmo` therefore come back within one interval of being reachable. A path that does not come up holds its reconcile for the connector's 10-second per-path timeout, so a tick reconciles eight subsystems at once, and the exports of one subsystem one after another, since both would connect the same missing path. A storage node that is down then delays the other exports' paths by its timeout once per eight subsystems, not once per export. The reconcile holds the export's lock, so it never runs beside a `CreateExport` or `DeleteExport` for the same export, and it logs a path when it goes down, with the reason and the live count, and when it comes back. A path that stays down is logged once.
+- **In the runner.** The guest cannot ask the control plane, and holds the endpoints its last `CreateExport` carried, which a migration or a failover changes. Every 5 minutes, the runner asks the control plane again for each export it assembled, and calls `CreateExport` with the new connection when the published endpoints differ from the ones the guest holds, in any order. A volume that has not moved costs one control-plane call per interval and nothing in the guest. A reassembly holds the export, as `CreateExport` and `DeleteExport` relayed by the runner do, and is skipped when either landed after the refresh read the export: a deleted export stays deleted, and a newer `CreateExport` keeps its spec and its connection.
+
+Both loops keep their state in memory. A restarted guest or runner is reassembled by the resync (§7.5), which hands both of them every export again.
 
 ### 7.7 Deletion
 
@@ -346,6 +378,10 @@ The operator's ClusterRole gains:
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // The MDS pod's state disk.
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create
+// The attachment to the storage data network (§8.4): the NetworkAttachmentDefinition,
+// and the nodes whose subnet labels choose its host interface.
+// +kubebuilder:rbac:groups=k8s.cni.cncf.io,resources=network-attachment-definitions,verbs=get;create;update
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 ```
 
 The MDS pod's own ServiceAccount has no Kubernetes permissions. It exists to carry the projected token csi-link authenticates.
@@ -356,13 +392,13 @@ The MDS pod's own ServiceAccount has no Kubernetes permissions. It exists to car
 
 ### 8.1 Service and EndpointSlice
 
-The per-export Service and EndpointSlice are unchanged in shape. The EndpointSlice's single endpoint is the MDS pod's IP instead of a node's InternalIP, in the export's namespace, and an EndpointSlice endpoint is an address with no namespace requirement, so the pod's namespace does not matter. The pod IP changes when the pod restarts, and §7.5 repoints every affected EndpointSlice. A client's mount address (`status.serviceAddress`) does not change.
+Every export of a metadata server is mounted at the metadata server's one Service, `<mds-statefulset>-nfs` in the operator's namespace, owned by the StatefulSet (`design-pnfs-rwx.md` §13.3). Its EndpointSlice's single endpoint is the MDS pod's IP. The pod IP changes when the pod restarts, and §7.5 repoints the EndpointSlice; every bound export writes the same address, so they agree. A client's mount address (`status.serviceAddress`) does not change.
 
-A pod that is terminating or gone has its address withdrawn at once: each bound export's EndpointSlice keeps no endpoint and `status.mdsNodeIP` is cleared until the replacement has an address. Clients reconnect within a second of the guest shutting down, and kube-proxy translates a new connection to whatever the EndpointSlice lists. With the dead pod listed, the connection's conntrack entry points at it, and the client's SYN retries on the same tuple keep that entry alive for up to two minutes after the replacement serves (run `pnfs-1791575321`). With no endpoint, kube-proxy refuses the connection and the client retries against the replacement once it is listed. An entry created before the withdrawal took effect is still translated to the dead address, so the operator also asks every CSI node plugin over the link to delete the host's conntrack entries for TCP port 2049 to the export Service's ClusterIP whose reply source is the old pod IP: about two seconds after the withdrawal, so kube-proxy has applied it, and again when the replacement's address is set. The ClusterIP is part of every request because a dead pod's IP can be handed to another pod serving the same port behind another Service. A replacement that receives the old pod's IP needs no second flush, since its flows already reach the live pod, and the withdrawal's request is dropped if it has not run yet. The flush is `atlas-lib/conntrack`, served by the node plugin on the host's network, and it touches no other address or port. A failed or unreachable node is logged and skipped, and a reconcile never waits on it.
+A pod that is terminating or gone has its address withdrawn at once: the metadata server's EndpointSlice keeps no endpoint and `status.mdsNodeIP` is cleared until the replacement has an address. Clients reconnect within a second of the guest shutting down, and kube-proxy translates a new connection to whatever the EndpointSlice lists. With the dead pod listed, the connection's conntrack entry points at it, and the client's SYN retries on the same tuple keep that entry alive for up to two minutes after the replacement serves (run `pnfs-1791575321`). With no endpoint, kube-proxy refuses the connection and the client retries against the replacement once it is listed. An entry created before the withdrawal took effect is still translated to the dead address, so the operator also asks every CSI node plugin over the link to delete the host's conntrack entries for TCP port 2049 to the metadata server Service's ClusterIP whose reply source is the old pod IP: about two seconds after the withdrawal, so kube-proxy has applied it, and again when the replacement's address is set. The ClusterIP is part of every request because a dead pod's IP can be handed to another pod serving the same port behind another Service. A replacement that receives the old pod's IP needs no second flush, since its flows already reach the live pod, and the withdrawal's request is dropped if it has not run yet. The flush is `atlas-lib/conntrack`, served by the node plugin on the host's network, and it touches no other address or port. A failed or unreachable node is logged and skipped, and a reconcile never waits on it.
 
 ### 8.2 Inside the pod
 
-The runner creates a bridge with a tap device for the guest and gives the guest a link-local address on it: the bridge is `169.254.100.1/30` and the guest `169.254.100.2`, a subnet that cannot collide with a pod, Service, or node CIDR and stays clear of the cloud metadata address `169.254.169.254`. The pod's own interface is the one carrying the default route, whatever the CNI names it. Inbound traffic to the pod's port 2049 is DNATed to the guest, so nfsd is reachable at the pod IP, and the guest agent's gRPC port is reachable only from the runner on the bridge. Outbound traffic from the guest (NVMe/TCP to the storage cluster) is masqueraded behind the pod IP. The masquerade rule matches only the guest's source address leaving through the pod's interface, so replies to DNATed clients keep their addresses. The runner enables IPv4 forwarding in the pod's network namespace and installs each rule only when it is absent, since a restarted runner container finds the previous one's bridge, tap, and rules in the namespace the pod kept. The technique is `neonvm-runner/cmd/net.go`, without dnsmasq, because the guest's address is static.
+The runner creates a bridge with a tap device for the guest and gives the guest a link-local address on it: the bridge is `169.254.100.1/30` and the guest `169.254.100.2`, a subnet that cannot collide with a pod, Service, or node CIDR and stays clear of the cloud metadata address `169.254.169.254`. The pod's own interface is the one carrying the default route, whatever the CNI names it. Inbound traffic to the pod's port 2049 is DNATed to the guest, so nfsd is reachable at the pod IP, and the guest agent's gRPC port is reachable only from the runner on the bridge. Outbound traffic from the guest (NVMe/TCP to the storage cluster) is masqueraded behind the pod IP, or, in a pod attached to the storage data network, behind the pod's address on that network when it leaves through the attachment (§8.4). Each masquerade rule matches only the guest's source address leaving through one of the pod's own interfaces, so replies to DNATed clients keep their addresses. The runner enables IPv4 forwarding in the pod's network namespace and installs each rule only when it is absent, since a restarted runner container finds the previous one's bridge, tap, and rules in the namespace the pod kept. The technique is `neonvm-runner/cmd/net.go`, without dnsmasq, because the guest's address is static.
 
 Only port 2049 is forwarded. NFSv4.1 needs no portmapper, and `rpc.mountd` and `rpc.statd` serve only earlier protocol versions (Open Question 5). The guest agent's port, TCP 7070, is not forwarded and is reached only by the runner.
 
@@ -370,7 +406,46 @@ Only port 2049 is forwarded. NFSv4.1 needs no portmapper, and `rpc.mountd` and `
 
 The exports entry lists client addresses. DNAT preserves the source address of a connection, so the guest sees whatever address the pod network delivers, and a node's traffic to a pod is rewritten by the CNI to the node's own address in its pod CIDR: a tunnel address across nodes and a bridge address on the same node, both depending on the CNI. Seen on the lab cluster, every node reached the MDS pod from its pod-network address and never from its InternalIP, so an entry of InternalIPs alone refused every mount with `access denied`.
 
-An export therefore lists each node's pod CIDR (`spec.podCIDRs`) beside its InternalIP. The CIDR covers both of the node's source addresses whichever the CNI uses, and it also admits the node's own pods. Which client moves data through the metadata server is therefore not decided by this entry. The design requires the node plugin to verify after mounting that the client holds a layout, and to refuse a mount whose I/O would route through the MDS (not implemented yet).
+An export therefore lists each node's pod CIDR (`spec.podCIDRs`) beside its InternalIP. OVN-Kubernetes, OpenShift's CNI, leaves `spec.podCIDRs` empty and records a node's subnets in its `k8s.ovn.org/node-subnets` annotation, so on a node without `spec.podCIDRs` the annotation's default-network subnets stand in for them. OVN-Kubernetes also rewrites a node's host traffic to a ClusterIP, which is how the node plugin mounts, to the node's address on OVN's join subnet, so on a cluster whose nodes carry that annotation the export also lists the join subnet: the one OpenShift's network operator config names (`ipv4.internalJoinSubnet`, or `v4InternalSubnet` in older releases), or OVN's default `100.64.0.0/16`. Only OVN's gateway routers hold addresses on it, so it admits the nodes' host traffic and no pod. A cluster without OVN-Kubernetes lists no join subnet. The CIDR covers both of the node's source addresses whichever the CNI uses, and it also admits the node's own pods. Which client moves data through the metadata server is therefore not decided by this entry. The design requires the node plugin to verify after mounting that the client holds a layout, and to refuse a mount whose I/O would route through the MDS (not implemented yet).
+
+### 8.4 Storage data network
+
+A storage node binds its NVMe/TCP listeners to its data interfaces, so the kernel hands a connection to a listener only when it arrives on that interface. A guest connection masqueraded behind the pod IP leaves the pod node through the host's routing table and arrives on the target's data interface, provided the pod's node has forwarding enabled on its own data interface, where the replies come back. Talos and K3s enable forwarding on every interface. OpenShift's OVN-Kubernetes defaults to `ipForwarding: Restricted`, which enables it only on the interfaces it manages, so the replies are dropped and every connection times out. A connection to the pod node's own data address arrives through the CNI's interface instead of the data interface and is refused on every distribution, so the guest reaches the storage node on its own node through the host instead (§8.5).
+
+`spec.pnfs.mds.dataNetwork` attaches the pod to the data network itself, through a Multus macvlan on the host interface carrying the data subnet. The guest's NVMe/TCP to that subnet leaves through the macvlan, masqueraded behind the pod's address there, and arrives on the targets' data interfaces without passing through the host's forwarding. The field names the subnet and the address range the pods take on it, which the whereabouts IPAM plugin allocates from. Nothing else in the cluster knows which addresses on the data network are free, so the range is the administrator's. whereabouts allocates a pod's address only when the pod starts, so the pod template carries the range in the `storage.simplyblock.io/mds-data-range` annotation, and a change to the range restarts the guest into an address the new range holds.
+
+The host interface is chosen from node labels. The csi-node plugin publishes one label per IPv4 subnet its node's interfaces hold, `subnet.storage.simplyblock.io/<network>_<bits>=<interface>`, at plugin start, and removes the labels of subnets the node no longer has. The operator counts, among the KVM-capable nodes matching `spec.pnfs.mds.nodeSelector`, the interface each carries the subnet on, and takes the most common one, the first by name on a tie. It writes the driver's NetworkAttachmentDefinition, `<driver>-csi-mds-data`, owned by the driver, with a bridge-mode macvlan on that interface and whereabouts over the range. The interface it names is kept while any eligible node still carries it, because choosing another changes the pod template, which restarts the guest. The pod requires that interface on the subnet (§5.4) and prefers a node without a storage node, since a macvlan does not reach its own host's address and the guest's path to that node's storage node would go through the host (§8.5). The runner is told the attachment's name in the pod (`--data-interface=net1`), refuses to start when it is missing, and masquerades the guest's traffic leaving through it.
+
+Multus is not part of every distribution, and a driver spec can be shared across clusters. A data network the cluster cannot attach therefore does not hold the metadata server back: without the NetworkAttachmentDefinition kind, or with no eligible node on the subnet, the pod runs on the pod network as it does with the field unset, and each export the metadata server serves gets a `MDSDataNetworkUnavailable` or `NoDataNetworkNode` warning saying why.
+
+The field is optional because a metadata server without it reaches every storage node through the mds-proxy (§8.5). Whether the pod network routes to the storage data network depends on the CNI: OVN-Kubernetes sends a pod's traffic for it to the gateway, where it is lost, while the host always routes there. With no attachment, the runner sends every TCP connection of the guest's through the proxy, and the proxy opens it from the host. The attachment is then only a shorter path, which skips the proxy's copy.
+
+The attachment carries only the guest's storage traffic. NFS clients still reach the metadata server at its pod IP through its Service (§8.1), and the DNAT rule matches only the pod network's interface, so nothing is served on the data network. The guest's MTU stays the pod network's.
+
+### 8.5 The guest's path to its own node
+
+The control plane binds every socket of a storage node's SPDK to the node's data interface (`SO_BINDTODEVICE`) when the node has exactly one data interface, and it registers the management interface as that one when none is configured. The bind covers the listeners, the connections SPDK opens, and every connection it accepts. A listener bound this way takes only connections the kernel delivers on that interface, and a pod's connection to an address of its own node arrives on the CNI's interface, so the guest's connections to the storage node on its own node are refused with `ECONNREFUSED`. That holds on every distribution, with or without the data network attachment. A connection the host opens to one of its own addresses is delivered over loopback, with the interface holding the address recorded as its arrival interface, and is accepted. That is how the node plugin reaches the same listeners.
+
+The guest therefore reaches its own node's storage node through the host, by way of the mds-proxy. The proxy is a DaemonSet, `<driver>-csi-mds-proxy`, which the `SimplyblockDriver` controller applies while `spec.pnfs.mds` is set and deletes when it is unset. It has the metadata server pod's node selector (`kvm-capable` merged with `spec.pnfs.mds.nodeSelector`) and tolerations, so a proxy is already running on whatever node the metadata server starts on. It runs `mds-proxy` from the metadata server's image (§5.6), so the proxy and the runner at either end of the protocol always come from one build, on the host's network and without privilege (§10), under a ServiceAccount of its own, `<driver>-csi-mds-proxy-sa`, which carries no permissions and offers no token. The controller applies the account with the DaemonSet, because the metadata server's account exists only once an export has created the metadata server, and a DaemonSet naming an absent account gets no pods. Every node the metadata server may run on pulls that image once, before the metadata server is first scheduled there, which also takes the pull out of a metadata server's start on a new node.
+
+A connection takes this path in two steps:
+
+1. **In the pod.** With an attachment to the data network, the runner asks the proxy for its node's addresses and DNATs the guest's TCP connections to any of them to a forwarder it serves on the bridge, at `169.254.100.1:7071`. Without one, it DNATs every TCP connection of the guest's there, except to link-local addresses (§8.4). The redirects live in a chain of their own, `MDS-HOST-PATH`, entered from `PREROUTING` for the guest's traffic on the bridge, and the runner rebuilds the chain when the addresses change. The forwarder reads each connection's original destination (`SO_ORIGINAL_DST`), connects to the proxy at the node's address (`status.hostIP`) on port 9811, and names that destination.
+2. **On the host.** The proxy connects to the named address and port, and copies bytes both ways until either side closes. It connects on any port to an address of its own node, and to another node only on a storage listener port: every StorageNode's LVS port (`status.ports.lvol`), which the driver controller writes into the ConfigMap `<driver>-csi-mds-proxy-ports`, mounted into the proxy and rewritten when a StorageNode changes. The listeners authorize every connect by host NQN, so the proxy lets nobody past the control plane's authorization.
+
+Only connections to the pod's own node take this path, and every other storage node is reached directly. Each volume has at most one path through the proxy: the one to its copy on the metadata server's node, if it has one there.
+
+The protocol is one line of text in each direction before the stream:
+
+| Request                          | Answer                                    | Then                        |
+|----------------------------------|-------------------------------------------|-----------------------------|
+| `SBMDS1 CONNECT <IPv4>:<port>\n` | `OK\n` once the proxy's connect succeeded | the guest's NVMe/TCP stream |
+|                                  | `ERR <reason>\n`                          | the proxy closes            |
+| `SBMDS1 ADDRS\n`                 | `OK <IPv4> <IPv4> …\n`                    | the proxy closes            |
+
+The addresses are the node's IPv4 addresses outside `127.0.0.0/8` and `169.254.0.0/16`: loopback is never a storage node's listener, and a link-local address could be the guest's own bridge. The proxy refuses a `CONNECT` to any other address. It listens only on the node's address. The runner learns it from `status.hostIP`, given to it as `--host-proxy=$(HOST_IP):9811`.
+
+When the proxy does not answer, the runner installs no redirect, and the guest's connections to its own node are refused as they are without one. The runner asks again every 30 seconds. A forwarder whose proxy refuses or fails closes the guest's connection, which the guest sees as a failed connect on that path.
 
 ---
 
@@ -387,7 +462,13 @@ An export therefore lists each node's pod CIDR (`spec.podCIDRs`) beside its Inte
 | MDS pod's node is lost                                   | Pod stuck `Terminating` until the API server force-deletes                                                          | A second pod is not started while the first is `Terminating`, because it is a StatefulSet. Exports are unserved until it is gone                                              |
 | Control plane unreachable from the runner                | Connection resolution fails                                                                                         | `CreateExport` returns an error and is retried with backoff. A TLS failure is reported as the error, not retried silently                                                     |
 | Control plane refuses the guest's host NQN               | Connect returns an authorization error                                                                              | Assembly fails and times out into `Degraded` after five minutes                                                                                                               |
-| Guest cannot reach the storage cluster over NVMe/TCP     | `nvme connect` fails in the guest                                                                                   | Assembly fails and times out into `Degraded`                                                                                                                                  |
+| A guest path drops or fails at assembly                  | The agent's reconcile finds the path not live, and logs it                                                          | Reconnected within 10 seconds of being reachable (§7.6). The volume runs on its other paths meanwhile                                                                         |
+| A volume is published at other endpoints                 | The runner's refresh finds the endpoints changed                                                                    | The export is reassembled with the new connection within 5 minutes (§7.6)                                                                                                     |
+| Guest cannot reach the storage cluster over NVMe/TCP     | `nvme connect` fails in the guest                                                                                   | Assembly fails and times out into `Degraded`. On the pod network this is a node that does not forward on its data interface (§8.4)                                            |
+| `dataNetwork` set on a cluster without Multus            | No NetworkAttachmentDefinition kind                                                                                 | The pod runs on the pod network. `MDSDataNetworkUnavailable` event on each export                                                                                             |
+| `dataNetwork` set and no eligible node on the subnet     | No KVM-capable node matching the selector carries the subnet label                                                  | The pod runs on the pod network. `NoDataNetworkNode` event on each export                                                                                                     |
+| No mds-proxy answers on the metadata server's node       | The runner's address query fails, logged every 30 seconds                                                           | No redirect. The guest's connections to its own node's storage node are refused, and each volume with a copy there runs one path short                                        |
+| The mds-proxy cannot reach a listener                    | The proxy answers `ERR`                                                                                             | The forwarder closes the guest's connection, and the guest's connect on that path fails                                                                                       |
 | Reconnect after a restart refused for a stale controller | Connect returns a duplicate host error                                                                              | Assembly retries until the target ages out the old controller. Open Question 4                                                                                                |
 | Image pull fails                                         | Pod `ErrImagePull`                                                                                                  | Exports stay `Pending`. `MDSBootTimeout` event                                                                                                                                |
 | Export deleted while the MDS pod is down                 | No pod, no session                                                                                                  | The finalizer is released, since the guest's mounts left with it (§7.7)                                                                                                       |
@@ -397,7 +478,11 @@ An export therefore lists each node's pod CIDR (`spec.podCIDRs`) beside its Inte
 
 ## 10. Security
 
-The MDS pod is privileged, as csi-node is, but its blast radius differs. The pod holds the host device nodes `/dev/kvm` and `/dev/net/tun` and runs QEMU, and an escape from the guest into the runner is an escape into a privileged container. Nothing in the pod mounts a host directory, uses `hostNetwork`, or uses `hostPID`, so a compromised guest reaches the node only through the runner.
+The MDS pod is privileged, as csi-node is, but its blast radius differs. The pod holds the host device nodes `/dev/kvm` and `/dev/net/tun` and runs QEMU, and an escape from the guest into the runner is an escape into a privileged container. Nothing in the pod mounts a host directory, uses `hostNetwork`, or uses `hostPID`, so a compromised guest reaches the node only through the runner. A pod attached to the storage data network (§8.4) has an interface on that network, so a compromised runner reaches every address on it directly. The guest already reaches every storage node's listeners through the masquerade, so the attachment adds the other hosts on the data network to what the runner can reach, not the targets.
+
+The mds-proxy (§8.5) runs on the host's network with no privilege: it drops every capability, runs as a non-root user with a read-only root filesystem, and mounts nothing. Its listener is on the node's address, where any pod and any host that reaches the node can connect, and what it adds to their reach is a connection opened by the host to an address the host holds. Everything listening on those addresses is reachable from a pod already, except a socket bound to an interface, which on a storage node is SPDK's NVMe/TCP listeners. Those authorize every connect by host NQN, so the proxy lets nobody past the control plane's authorization. It refuses loopback and link-local destinations, so services bound to `127.0.0.1` stay unreachable.
+
+On OpenShift a host-network pod is admitted only under an SCC that allows it, and no ServiceAccount may use one by default. Where the cluster ships the `system:openshift:scc:hostnetwork-v2` ClusterRole, from OpenShift 4.11 on, the driver controller binds the proxy's ServiceAccount to it with a RoleBinding, `<driver>-csi-mds-proxy-scc-binding`, in the driver's namespace, and leaves the container's user unset, because `hostnetwork-v2` assigns one from the namespace's range and refuses any other. `hostnetwork-v2` is the narrowest SCC OpenShift ships for a host-network pod: it allows the host network and host ports, requires every capability dropped, and admits no host path. The operator needs no new permission for the binding, because it already holds `bind` on ClusterRoles for the driver's own RBAC. Elsewhere no binding is created, and the container runs as user 65534.
 
 The guest holds no Kubernetes token and no control-plane secret (§6.4). It holds the connection details of the volumes it serves, which are the same details any client of those volumes holds, and the guest's host NQN, which the control plane authorizes per volume.
 
@@ -415,14 +500,16 @@ The `NFSExport` reconciler already emits `MDSSelected`, `NoEligibleMDS`, `NoAllo
 
 Events land on the `NFSExport`, the object a user owns and looks at, and one that outlives the MDS pod whose condition is being reported. When one storage cluster's MDS affects many exports, each export receives the event.
 
-| Event                                                                                             | Type      | Reason                |
-|---------------------------------------------------------------------------------------------------|-----------|-----------------------|
-| No node offers KVM, so the MDS pod cannot be scheduled and the export is waiting                  | `Warning` | `NoKVMCapableNode`    |
-| The MDS pod's state volume has not bound                                                          | `Warning` | `MDSStateUnavailable` |
-| The MDS guest did not answer within the boot deadline                                             | `Warning` | `MDSBootTimeout`      |
-| The MDS pod restarted and its exports were reassembled                                            | `Normal`  | `MDSResynced`         |
-| The MDS pod is terminating or gone, and its address was withdrawn from the export's EndpointSlice | `Normal`  | `MDSAddressWithdrawn` |
-| The MDS pod's address changed and the export's EndpointSlice was repointed                        | `Normal`  | `MDSAddressChanged`   |
+| Event                                                                                    | Type      | Reason                      |
+|------------------------------------------------------------------------------------------|-----------|-----------------------------|
+| No node offers KVM, so the MDS pod cannot be scheduled and the export is waiting         | `Warning` | `NoKVMCapableNode`          |
+| The MDS pod's state volume has not bound                                                 | `Warning` | `MDSStateUnavailable`       |
+| The MDS guest did not answer within the boot deadline                                    | `Warning` | `MDSBootTimeout`            |
+| The MDS pod restarted and its exports were reassembled                                   | `Normal`  | `MDSResynced`               |
+| The MDS pod is terminating or gone, and its address was withdrawn from its EndpointSlice | `Normal`  | `MDSAddressWithdrawn`       |
+| The MDS pod's address changed and its EndpointSlice was repointed                        | `Normal`  | `MDSAddressChanged`         |
+| `dataNetwork` is set, but the cluster has no NetworkAttachmentDefinition kind (Multus)   | `Warning` | `MDSDataNetworkUnavailable` |
+| `dataNetwork` is set, but no node the MDS pod can run on is attached to its subnet       | `Warning` | `NoDataNetworkNode`         |
 
 ### Prometheus Metrics
 
@@ -444,6 +531,7 @@ The scenario matrix belongs in a companion test plan, which does not exist yet. 
 - **Unit:** the StatefulSet and QEMU command-line builders, MDS selection and the resync decision against a fake client and a fake assembler, peer-kind authorization, and the two connection sources of the assembler.
 - **Integration:** the reconcile loop against `envtest` with a fake MDS pod, covering scheduling failures, restart resync, and EndpointSlice repointing.
 - **E2E:** a live cluster with KVM nodes. The assertion that matters is the one `design-pnfs-rwx.md` uses: NFS `WRITE` stays at zero while `LAYOUTGET` increments, because a guest that cannot name the device falls back to routing every byte through the MDS and still passes every functional check.
+- **Zeroed write layouts (§6.7):** LAYOUTGET latency on reused space with and without the discard path, a read of a freshly allocated layout never returning another file's data after a partial-cluster discard, and the guest keeping the zeroing when the namespace does not announce the guarantee.
 - **Where the risk concentrates:** device identity in the guest (§6.1, §6.4, §6.5), resync after a restart (§7.5), and the client-address question (§8.3). Those scenarios must not be cut when the schedule slips.
 
 ---
@@ -456,16 +544,17 @@ The guest is the only MDS host, and no release served exports from a node, so th
 
 ## 14. Open Questions
 
-| #   | Question                                                                                                                                                                                                                                                                                     | Owner             |
-|-----|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------|
-| 1   | **One MDS pod per storage cluster or per Kubernetes cluster.** A storage cluster per pod keeps the guest's reach to one cluster and breaks the "one MDS" simplification for a multi-cluster deployment. The choice sets the StatefulSet's name and the unit of the secret mounted in the pod | Operator team     |
-| 4   | **Reconnecting after a restart with the same host NQN.** Whether the target refuses a connect while its old controller for that NQN is alive, and how long the keep-alive takes to expire it relative to the five-minute assembly deadline                                                   | SPDK/Backend team |
-| 5   | **Whether NFSv4.1-only serving needs `rpc.mountd` and `rpc.statd`.** `design-pnfs-rwx.md` requires them and no code starts them                                                                                                                                                              | Operator team     |
-| 6   | **Warm standby.** A second guest cannot mount the same filesystem, so a standby could only be a guest that has booted and not assembled. Whether the measured boot time (`simplyblock_pnfs_mds_boot_seconds`) justifies it                                                                   | Operator team     |
-| 8   | **Whether the StatefulSet is removed when its last export is deleted.** Retaining it keeps an idle guest per storage cluster, removing it adds a boot to the next export's provisioning                                                                                                      | Operator team     |
-| 9   | **How the hub exposes the live instance of a peer.** §7.5 needs the pod UID of the current session, and `Registry.Peer` returns the peer that carries it, which has to be confirmed                                                                                                          | Operator team     |
-| 10  | **Pod Security and OpenShift.** Whether the operator's namespace admits a privileged pod, and which SCC the MDS ServiceAccount needs                                                                                                                                                         | Operator team     |
-| 11  | **NVMe multipath in the guest.** `NVME_MULTIPATH` is built (§6.1). How the assembler's connect path treats several controller paths of one namespace in the guest                                                                                                                            | Operator team     |
+| #   | Question                                                                                                                                                                                                                                                                                                       | Owner             |
+|-----|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------|
+| 1   | **One MDS pod per storage cluster or per Kubernetes cluster.** A storage cluster per pod keeps the guest's reach to one cluster and breaks the "one MDS" simplification for a multi-cluster deployment. The choice sets the StatefulSet's name and the unit of the secret mounted in the pod                   | Operator team     |
+| 4   | **Reconnecting after a restart with the same host NQN.** Whether the target refuses a connect while its old controller for that NQN is alive, and how long the keep-alive takes to expire it relative to the five-minute assembly deadline                                                                     | SPDK/Backend team |
+| 5   | **Whether NFSv4.1-only serving needs `rpc.mountd` and `rpc.statd`.** `design-pnfs-rwx.md` requires them and no code starts them                                                                                                                                                                                | Operator team     |
+| 6   | **Warm standby.** A second guest cannot mount the same filesystem, so a standby could only be a guest that has booted and not assembled. Whether the measured boot time (`simplyblock_pnfs_mds_boot_seconds`) justifies it                                                                                     | Operator team     |
+| 8   | **Whether the StatefulSet is removed when its last export is deleted.** Retaining it keeps an idle guest per storage cluster, removing it adds a boot to the next export's provisioning                                                                                                                        | Operator team     |
+| 9   | **How the hub exposes the live instance of a peer.** §7.5 needs the pod UID of the current session, and `Registry.Peer` returns the peer that carries it, which has to be confirmed                                                                                                                            | Operator team     |
+| 10  | **Pod Security and OpenShift.** Whether the operator's namespace admits a privileged pod, and which SCC the MDS ServiceAccount needs                                                                                                                                                                           | Operator team     |
+| 11  | **NVMe multipath in the guest.** `NVME_MULTIPATH` is built (§6.1). How the assembler's connect path treats several controller paths of one namespace in the guest                                                                                                                                              | Operator team     |
+| 12  | **The target's Write Zeroes size limit.** A limit of a few clusters lets a single command release whole written clusters without the discard path (§6.7), and makes a command on a thick or cloned volume emulate up to that size in real writes. Whether a bounded limit is still worth having beside discard | SPDK              |
 
 ---
 
@@ -631,5 +720,31 @@ type DriverPNFSMDS struct {
 	// class of its own, reserved for the state disk.
 	// +optional
 	StateStorageClassName *string `json:"stateStorageClassName,omitempty"`
+
+	// DataNetwork attaches the pod to the storage data network (§8.4). Unset,
+	// the guest reaches the storage nodes through the pod network.
+	// +optional
+	DataNetwork *DriverPNFSDataNetwork `json:"dataNetwork,omitempty"`
+}
+
+// DriverPNFSDataNetwork is the storage data network the metadata server is
+// attached to, and the addresses it may take on it.
+// +kubebuilder:validation:XValidation:rule="!isCIDR(self.subnet) || !isIP(self.rangeStart) || cidr(self.subnet).containsIP(self.rangeStart)",message="rangeStart must be an address in subnet"
+// +kubebuilder:validation:XValidation:rule="!isCIDR(self.subnet) || !isIP(self.rangeEnd) || cidr(self.subnet).containsIP(self.rangeEnd)",message="rangeEnd must be an address in subnet"
+type DriverPNFSDataNetwork struct {
+	// Subnet is the data network in CIDR form, such as 10.10.10.0/24.
+	// +kubebuilder:validation:XValidation:rule="isCIDR(self) && cidr(self).ip().family() == 4",message="subnet must be an IPv4 CIDR"
+	// +required
+	Subnet string `json:"subnet"`
+
+	// RangeStart is the first address the metadata server pods may take.
+	// +kubebuilder:validation:XValidation:rule="isIP(self) && ip(self).family() == 4",message="rangeStart must be an IPv4 address"
+	// +required
+	RangeStart string `json:"rangeStart"`
+
+	// RangeEnd is the last address the metadata server pods may take.
+	// +kubebuilder:validation:XValidation:rule="isIP(self) && ip(self).family() == 4",message="rangeEnd must be an IPv4 address"
+	// +required
+	RangeEnd string `json:"rangeEnd"`
 }
 ```

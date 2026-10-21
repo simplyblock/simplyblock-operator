@@ -31,6 +31,8 @@ from sbtest.core import (  # noqa: E402
     FioJob,
     IopsSample,
     LogSpan,
+    MdsInstance,
+    MdsPlacement,
     MetadataCheck,
     MetadataOp,
     MetadataWorker,
@@ -96,6 +98,7 @@ class FakeEvidence:
         metadata_checks: list[MetadataCheck] | None = None,
         metadata_workers: list[MetadataWorker] | None = None,
         volume_ops: list[VolumeOp] | None = None,
+        mds_placement: MdsPlacement | None = None,
     ) -> None:
         self.run_id = run_id
         self.outdir = outdir
@@ -125,6 +128,7 @@ class FakeEvidence:
         self._metadata_checks = metadata_checks or []
         self._metadata_workers = metadata_workers or []
         self._volume_ops = volume_ops or []
+        self._mds_placement = mds_placement
 
     def migrations(self) -> list[Migration]:
         return list(self._migrations)
@@ -149,6 +153,9 @@ class FakeEvidence:
 
     def nvme_controllers(self) -> list[NvmeController]:
         return list(self._ctrls)
+
+    def mds_placement(self) -> MdsPlacement | None:
+        return self._mds_placement
 
     def pods(self) -> list[str]:
         return sorted(set(self._fio_logs) | {j.pod for j in self._jobs} | set(self._series)
@@ -1653,6 +1660,75 @@ class PnfsDeviceIO(unittest.TestCase):
         found = self._found(blocks, jobs=jobs, vol=vol, max_stall_s=60)
         self.assertEqual([f.severity for f in found], [Severity.WARNING])
 
+    # One instance on w1 whose writes reach its namespace until 30s, then stop.
+    SOLO = PnfsVolume(claim="c1", lvol="lv1", shared=False, nodes=["w1"],
+                      instances={"r-fio-0-c0": "w1"})
+    STOPPED = [blk("w1", o, o * 10 + 1, min(o, 30) * 5 + 1) for o in (0, 10, 20, 30, 110, 200)]
+
+    def _ev(self, nfs: dict[str, dict[str, int]]) -> list:
+        jobs = [FioJob(pod="r-fio-0-c0", start=ts(0), runtime_s=200)]
+        ev = FakeEvidence(blocks=self.STOPPED, pnfs=[self.SOLO], jobs=jobs, nfs=nfs)
+        return list(build_detector("pnfs.device-io", max_stall_s=60).detect(ev))
+
+    def test_writes_that_reached_neither_the_namespace_nor_the_server_are_a_hang(self):
+        """pnfs-1792142480 solo-0 and solo-1: both clients' I/O stopped at 10:19-10:20 with
+        minutes of runtime left, one fio never exited, and each mount's NFS WRITE count was
+        0. The writes went nowhere, so the finding must not say they went through the
+        metadata server."""
+        found = self._ev(nfs={"r-fio-0-c0": {"LAYOUTGET": 4, "WRITE": 0, "READ": 0}})
+        self.assertEqual([f.severity for f in found], [Severity.CRITICAL])
+        self.assertNotIn("metadata server from then on", found[0].note)
+        self.assertIn("NFS WRITE 0", found[0].detail)
+
+    def test_writes_that_moved_to_the_server_still_say_so(self):
+        found = self._ev(nfs={"r-fio-0-c0": {"LAYOUTGET": 4, "WRITE": 900, "READ": 0}})
+        self.assertEqual([f.severity for f in found], [Severity.CRITICAL])
+        self.assertIn("through the metadata server", found[0].note)
+        self.assertIn("NFS WRITE 900", found[0].detail)
+
+    # Two containers of one pod on w1, whose evidence each carries a copy of the pod's one
+    # mount's counters.
+    PAIR = PnfsVolume(claim="c1", lvol="lv1", shared=False, nodes=["w1"],
+                      instances={"r-fio-0-c0": "w1", "r-fio-0-c1": "w1"},
+                      mounts={"r-fio-0-c0": "r-pnfs-0", "r-fio-0-c1": "r-pnfs-0"})
+    COPIES = {"r-fio-0-c0": {"LAYOUTGET": 4, "WRITE": 900, "READ": 0},
+              "r-fio-0-c1": {"LAYOUTGET": 4, "WRITE": 900, "READ": 0}}
+
+    def _pair(self, vol: PnfsVolume) -> list:
+        jobs = [FioJob(pod=p, start=ts(0), runtime_s=200) for p in vol.instances]
+        ev = FakeEvidence(blocks=self.STOPPED, pnfs=[vol], jobs=jobs, nfs=self.COPIES)
+        return list(build_detector("pnfs.device-io", max_stall_s=60).detect(ev))
+
+    def test_the_instances_of_one_pod_count_its_mount_once(self):
+        found = self._pair(self.PAIR)
+        self.assertIn("NFS WRITE 900", found[0].detail)
+
+    def test_a_run_without_the_mount_map_counts_identical_copies_once(self):
+        """Runs before the volume map named each instance's pod carry the same copies,
+        byte for byte, which two different mounts never do."""
+        found = self._pair(PnfsVolume(claim="c1", lvol="lv1", shared=False, nodes=["w1"],
+                                      instances=dict(self.PAIR.instances)))
+        self.assertIn("NFS WRITE 900", found[0].detail)
+
+    # w1 writes to its namespace throughout, and reads nothing from it.
+    UNREAD = [blk("w1", o, 7, o * 5) for o in (0, 10, 20, 30, 110, 200)]
+
+    def _unread(self, nfs: dict[str, dict[str, int]]) -> list:
+        jobs = [FioJob(pod="r-fio-0-c0", start=ts(0), runtime_s=200)]
+        ev = FakeEvidence(blocks=self.UNREAD, pnfs=[self.SOLO], jobs=jobs, nfs=nfs)
+        return list(build_detector("pnfs.device-io", max_stall_s=60).detect(ev))
+
+    def test_missing_reads_while_writes_progress_are_not_called_a_write_hang(self):
+        found = self._unread({"r-fio-0-c0": {"LAYOUTGET": 4, "WRITE": 0, "READ": 0}})
+        self.assertEqual([f.severity for f in found], [Severity.CRITICAL])
+        self.assertNotIn("writes", found[0].note)
+        self.assertIn("NFS READ 0", found[0].detail)
+
+    def test_reads_that_went_to_the_server_say_so(self):
+        found = self._unread({"r-fio-0-c0": {"LAYOUTGET": 4, "WRITE": 0, "READ": 700}})
+        self.assertIn("reads went through the metadata server", found[0].note)
+        self.assertIn("NFS READ 700", found[0].detail)
+
 
 class ChaosRecovery(unittest.TestCase):
     """Every restart the run made must have come back: a pod that never returned is a
@@ -2122,3 +2198,131 @@ class NodeAgentPollGaps(unittest.TestCase):
                            (self.START + timedelta(minutes=2), self.END))
         found = self.found(lines)
         self.assertEqual([f.attribution for f in found], [Attribution.RUN], found)
+
+
+def guest_ctrl(lvol: str, addr: str, uptime: float = 100.0) -> str:
+    """A line the metadata server's guest kernel writes when a path to a volume connects."""
+    return (f"[ {uptime:.6f}] nvme nvme9: new ctrl: NQN \"nqn.2023-02.io.simplyblock:c1:lvol:{lvol}\", "
+            f"addr {addr}, hostnqn: nqn.2014-08.io.simplyblock:uuid:guest")
+
+
+def client_ctrl(node: str, lvol: str, addr: str) -> NvmeController:
+    """A path a client node holds to a volume."""
+    return NvmeController(node=node, name="nvme1", nqn=f"nqn.2023-02.io.simplyblock:c1:lvol:{lvol}",
+                          address=addr, state="live", namespaces={1: "optimized"})
+
+
+class PnfsMultipath(unittest.TestCase):
+    """The metadata server's guest reaches every path a volume has, as a client does. A
+    guest on a node that runs a storage node cannot reach that node's listener through the
+    pod network or a macvlan, and every volume with a path there is left on one path."""
+
+    CLIENTS = [client_ctrl("w1", "lv1", "10.10.10.244:4421"), client_ctrl("w1", "lv1", "10.10.10.247:4421"),
+               client_ctrl("w2", "lv2", "10.10.10.245:4433"), client_ctrl("w2", "lv2", "10.10.10.246:4433")]
+
+    def _found(self, guest: list[str], controllers: list[NvmeController] | None = None) -> list:
+        ev = FakeEvidence(logs={"mds-runner": guest},
+                          controllers=self.CLIENTS if controllers is None else controllers)
+        return list(build_detector("pnfs.multipath").detect(ev))
+
+    def test_a_guest_with_every_path_is_clean(self):
+        guest = [guest_ctrl("lv1", "10.10.10.244:4421"), guest_ctrl("lv1", "10.10.10.247:4421"),
+                 guest_ctrl("lv2", "10.10.10.245:4433"), guest_ctrl("lv2", "10.10.10.246:4433")]
+        self.assertEqual([f for f in self._found(guest) if f.severity != Severity.INFO], [])
+
+    # Regression: pnfs-1791985761 on OpenShift. The metadata server ran on worker-4, a
+    # storage node, and its guest never connected to 10.10.10.247, worker-4's own data
+    # address, while every client held a path there. On Talos it ran on the control-plane
+    # node in every run, so the case was never exercised.
+    def test_an_address_the_guest_never_reached_is_critical(self):
+        guest = [guest_ctrl("lv1", "10.10.10.244:4421"),
+                 guest_ctrl("lv2", "10.10.10.245:4433"), guest_ctrl("lv2", "10.10.10.246:4433")]
+        found = [f for f in self._found(guest) if f.severity == Severity.CRITICAL]
+        self.assertEqual([f.subject for f in found], ["10.10.10.247"])
+        self.assertIn("lv1", found[0].detail)
+
+    def test_failed_connects_are_reported_beside_complete_paths(self):
+        guest = [guest_ctrl("lv1", "10.10.10.244:4421"), guest_ctrl("lv1", "10.10.10.247:4421"),
+                 "[ 4668.566138] nvme nvme9: failed to connect socket: -110",
+                 "[ 4799.856314] nvme nvme9: failed to connect socket: -113"]
+        found = self._found(guest, self.CLIENTS[:2])
+        self.assertEqual([(f.severity, f.subject) for f in found if f.severity != Severity.INFO],
+                         [(Severity.WARNING, "connect")])
+
+    def test_a_cluster_whose_volumes_have_one_path_is_clean(self):
+        guest = [guest_ctrl("lv1", "10.10.10.244:4421"), guest_ctrl("lv2", "10.10.10.245:4433")]
+        clients = [client_ctrl("w1", "lv1", "10.10.10.244:4421"), client_ctrl("w2", "lv2", "10.10.10.245:4433")]
+        self.assertEqual([f for f in self._found(guest, clients) if f.severity != Severity.INFO], [])
+
+    # Regression: pnfs-1791985761 again. Churn volumes are deleted during the run, and
+    # with them every client's path to them, so the volumes the guest ran on one path have
+    # no client path left to compare with. The clients' paths to other volumes still show
+    # the address, and the guest's volumes still show the missing path by their count.
+    def test_single_path_volumes_are_critical_when_their_clients_are_gone(self):
+        guest = [guest_ctrl("lvA", "10.10.10.244:4421"), guest_ctrl("lvA", "10.10.10.245:4421"),
+                 guest_ctrl("lvB", "10.10.10.244:4433"), guest_ctrl("lvC", "10.10.10.246:4435")]
+        clients = [client_ctrl("w1", "lvX", "10.10.10.244:4421"), client_ctrl("w1", "lvX", "10.10.10.247:4421")]
+        found = [f for f in self._found(guest, clients) if f.severity == Severity.CRITICAL]
+        self.assertEqual([f.subject for f in found], ["10.10.10.247"])
+        self.assertIn("2 volume(s)", found[0].detail)
+
+    def test_single_path_volumes_without_a_known_address_are_still_critical(self):
+        guest = [guest_ctrl("lvA", "10.10.10.244:4421"), guest_ctrl("lvA", "10.10.10.245:4421"),
+                 guest_ctrl("lvB", "10.10.10.244:4433")]
+        found = [f for f in self._found(guest, []) if f.severity == Severity.CRITICAL]
+        self.assertEqual([f.subject for f in found], ["paths"])
+
+    def test_an_unrelated_volume_on_another_address_is_clean(self):
+        # Every volume the guest exports has both its paths. A volume it does not export,
+        # such as the metadata server's own state disk, is served from an address none of
+        # the exports use, and says nothing about the guest.
+        guest = [guest_ctrl("lv1", "10.10.10.244:4421"), guest_ctrl("lv1", "10.10.10.245:4421")]
+        clients = [client_ctrl("w1", "lv1", "10.10.10.244:4421"), client_ctrl("w1", "lv1", "10.10.10.245:4421"),
+                   client_ctrl("w2", "lvZ", "10.10.10.246:4433"), client_ctrl("w2", "lvZ", "10.10.10.244:4433")]
+        self.assertEqual([f for f in self._found(guest, clients) if f.severity == Severity.CRITICAL], [])
+
+    def test_an_unrelated_volume_with_more_paths_is_clean(self):
+        # The exports have two paths each, all of which the guest holds. A volume the guest
+        # does not export has three, which is not what the exports are owed.
+        guest = [guest_ctrl("lv1", "10.10.10.244:4421"), guest_ctrl("lv1", "10.10.10.245:4421"),
+                 guest_ctrl("lv2", "10.10.10.245:4433"), guest_ctrl("lv2", "10.10.10.246:4433")]
+        clients = [client_ctrl("w1", "lvZ", "10.10.10.244:4435"), client_ctrl("w1", "lvZ", "10.10.10.245:4435"),
+                   client_ctrl("w1", "lvZ", "10.10.10.246:4435")]
+        self.assertEqual([f for f in self._found(guest, clients) if f.severity == Severity.CRITICAL], [])
+
+    def test_without_the_metadata_server_log_it_skips(self):
+        ev = FakeEvidence(controllers=self.CLIENTS)
+        with self.assertRaises(SkipDetector):
+            list(build_detector("pnfs.multipath").detect(ev))
+
+
+def mds_at(pod: str, node: str, start: int, end: int) -> MdsInstance:
+    return MdsInstance(pod=pod, node=node, ip="10.0.0.1", first=ts(start), last=ts(end))
+
+
+class PnfsMdsPlacement(unittest.TestCase):
+    """A run in which the metadata server never ran on a storage node never tested its path
+    to its own node's storage. On Talos the scheduler put it on the control-plane node in
+    every run on disk, and every run passed without that case ever running."""
+
+    STORAGE = ["worker-1", "worker-2"]
+
+    def _found(self, placement: MdsPlacement | None) -> list:
+        return list(build_detector("pnfs.mds-placement").detect(FakeEvidence(mds_placement=placement)))
+
+    def test_no_instance_on_a_storage_node_is_critical(self):
+        placement = MdsPlacement(pinned=False, storage_nodes=self.STORAGE,
+                                 instances=[mds_at("mds-0", "control-plane", 0, 60),
+                                            mds_at("mds-0", "control-plane", 70, 120)])
+        found = [f for f in self._found(placement) if f.severity == Severity.CRITICAL]
+        self.assertEqual([f.subject for f in found], ["placement"])
+
+    def test_one_instance_on_a_storage_node_covers_the_case(self):
+        placement = MdsPlacement(pinned=True, storage_nodes=self.STORAGE,
+                                 instances=[mds_at("mds-0", "control-plane", 0, 60),
+                                            mds_at("mds-0", "worker-2", 70, 120)])
+        self.assertEqual([f for f in self._found(placement) if f.severity != Severity.INFO], [])
+
+    def test_without_a_placement_record_it_skips(self):
+        with self.assertRaises(SkipDetector):
+            self._found(None)

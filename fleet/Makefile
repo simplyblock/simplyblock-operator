@@ -62,7 +62,7 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(BIN_DIR)" -p path)" go test ./... -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$(ENVTEST_ASSETS)" go test ./... -coverprofile cover.out
 
 # gomodver resolves the effective version of a go.mod dependency, honoring a
 # replace directive. Both envtest versions are derived rather than pinned, so a
@@ -83,13 +83,6 @@ ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; 
 ENVTEST_K8S_VERSION ?= $(shell v='$(call gomodver,k8s.io/api)'; \
   [ -n "$$v" ] || { echo "Set ENVTEST_K8S_VERSION manually (k8s.io/api replace has no tag)" >&2; exit 1; }; \
   printf '%s\n' "$$v" | sed -E 's/^v?[0-9]+\.([0-9]+).*/1.\1/')
-
-.PHONY: setup-envtest
-setup-envtest: envtest ## Download the Kubernetes binaries the envtest suites run against.
-	@"$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(BIN_DIR)" -p path >/dev/null || { \
-		echo "Failed to set up envtest binaries for Kubernetes $(ENVTEST_K8S_VERSION)."; \
-		exit 1; \
-	}
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter.

@@ -135,6 +135,8 @@ class PnfsVolume:
     nodes: list[str] = field(default_factory=list)
     # fio instance (its evidence directory) -> the node it ran on
     instances: dict[str, str] = field(default_factory=dict)
+    # fio instance -> the pod whose one NFS mount it used; empty in older runs
+    mounts: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -254,6 +256,33 @@ class Restart:
     #: replacement is Ready never reaches it.
     ip: str = ""
     replacement_ip: str = ""
+
+
+@dataclass(frozen=True)
+class MdsInstance:
+    """One metadata server pod instance, from the first sample that saw it to the last.
+
+    A restart replaces the pod under the same name with a new address, so an instance is a
+    name and an address, and the node is where the scheduler put it.
+    """
+
+    pod: str
+    node: str
+    ip: str
+    first: datetime
+    last: datetime
+
+
+@dataclass(frozen=True)
+class MdsPlacement:
+    """Where the metadata server ran during the run, and which nodes run storage nodes.
+
+    `pinned` says whether the run asked for it to run on a storage node.
+    """
+
+    pinned: bool
+    storage_nodes: list[str]
+    instances: list[MdsInstance]
 
 
 @dataclass(frozen=True)
@@ -560,6 +589,10 @@ class Evidence(Protocol):
 
     def churn(self) -> list[ChurnPod]:
         """The short-lived pods that joined and left pNFS volumes, oldest first."""
+
+    def mds_placement(self) -> MdsPlacement | None:
+        """Where the metadata server ran, or None when the run did not record it."""
+        ...
 
     def versions(self) -> Versions | None:
         """What was deployed, or None when the run did not record it."""

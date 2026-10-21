@@ -5,7 +5,7 @@ observes the host fabric and its I/O counters, `reservations` snapshots each nam
 NVMe reservation, `events` pulls the control plane's own event log, `workloads` holds what
 drives fio against volumes: a common base and one module per kind of run, `chaos` restarts
 the pods a run depends on while it runs, `conntrack` samples each node's NFS flows in
-its connection tracking table, `capture` records each node's NFS packet headers, `volume_ops` expands and snapshots live pNFS volumes, `versions` records what was
+its connection tracking table, `mds_placement` records where the pNFS metadata server ran, `capture` records each node's NFS packet headers, `volume_ops` expands and snapshots live pNFS volumes, `versions` records what was
 deployed, and `nfs`
 samples the NFS client's counters over the run. `kube` and `sbctl` hold no components: they
 are the pieces the components share.
@@ -18,6 +18,7 @@ from . import (  # noqa: F401
     events,
     fence,
     logs,
+    mds_placement,
     migration,
     nfs,
     nvme,
@@ -27,5 +28,5 @@ from . import (  # noqa: F401
     workloads,
 )
 
-__all__ = ["capture", "chaos", "conntrack", "events", "fence", "logs", "migration", "nfs", "nvme", "reservations",
+__all__ = ["capture", "chaos", "conntrack", "events", "fence", "logs", "mds_placement", "migration", "nfs", "nvme", "reservations",
            "versions", "volume_ops", "workloads"]

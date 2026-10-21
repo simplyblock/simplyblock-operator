@@ -105,10 +105,8 @@ type SidecarImages struct {
 
 // DriverTLSProvider is where the TLS certificate on this connection comes
 // from. The values are not this group's to spell: OpenShift and cert-manager
-// are the two products, and the operator's own internal/utils package already
-// carries these exact strings for the control plane's own SB_TLS_PROVIDER, so
-// a driver and a control plane in the same namespace agree on the same word
-// without a translation table between them.
+// are the two products, and ControlPlaneTLSProvider uses the same words, so a
+// driver and a control plane in the same namespace agree on the provider.
 // +kubebuilder:validation:Enum=OpenShift;cert-manager
 type DriverTLSProvider string
 
@@ -216,6 +214,45 @@ type DriverPNFSMDS struct {
 	// first created: a StatefulSet's claim template cannot change afterward.
 	// +optional
 	StateStorageClassName *string `json:"stateStorageClassName,omitempty"`
+
+	// DataNetwork attaches the metadata server to the storage data network, so
+	// its guest reaches the storage nodes there rather than through the pod
+	// network. The pod gets a macvlan interface on whichever host interface
+	// carries the subnet, and runs only on nodes that have one, preferring
+	// nodes that are not storage nodes. It needs Multus and the whereabouts IPAM
+	// plugin, which OpenShift ships. Unset, the guest reaches the storage nodes
+	// through the pod network, which needs the nodes to forward traffic
+	// arriving on their data interfaces. Changing it restarts the metadata
+	// server.
+	// +optional
+	DataNetwork *DriverPNFSDataNetwork `json:"dataNetwork,omitempty"`
+}
+
+// DriverPNFSDataNetwork is the storage data network the metadata server is
+// attached to, and the addresses it may take on it.
+// +kubebuilder:validation:XValidation:rule="!isCIDR(self.subnet) || !isIP(self.rangeStart) || cidr(self.subnet).containsIP(self.rangeStart)",message="rangeStart must be an address in subnet"
+// +kubebuilder:validation:XValidation:rule="!isCIDR(self.subnet) || !isIP(self.rangeEnd) || cidr(self.subnet).containsIP(self.rangeEnd)",message="rangeEnd must be an address in subnet"
+type DriverPNFSDataNetwork struct {
+	// Subnet is the data network in CIDR form, such as 10.10.10.0/24. A node
+	// whose interface holds an address in it can run the metadata server.
+	// +kubebuilder:validation:XValidation:rule="isCIDR(self) && cidr(self).ip().family() == 4",message="subnet must be an IPv4 CIDR"
+	// +kubebuilder:validation:MaxLength=18
+	// +required
+	Subnet string `json:"subnet"`
+
+	// RangeStart is the first address the metadata server pods may take. The
+	// range must hold no address anything else on the network uses: one pod
+	// takes one address, and a restarted pod can take another.
+	// +kubebuilder:validation:XValidation:rule="isIP(self) && ip(self).family() == 4",message="rangeStart must be an IPv4 address"
+	// +kubebuilder:validation:MaxLength=15
+	// +required
+	RangeStart string `json:"rangeStart"`
+
+	// RangeEnd is the last address the metadata server pods may take.
+	// +kubebuilder:validation:XValidation:rule="isIP(self) && ip(self).family() == 4",message="rangeEnd must be an IPv4 address"
+	// +kubebuilder:validation:MaxLength=15
+	// +required
+	RangeEnd string `json:"rangeEnd"`
 }
 
 // SimplyblockDriverSpec is the CSI driver deployment: the node plugin, the

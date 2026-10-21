@@ -80,18 +80,46 @@ func TestGuestTrafficLeavesMasqueradedBehindThePodIP(t *testing.T) {
 	}
 }
 
+// On a pod attached to the storage data network, the guest's NVMe/TCP leaves
+// through the attachment as the pod's address there, so it arrives at the
+// storage nodes on their data interfaces.
+func TestGuestTrafficToTheDataNetworkLeavesMasqueradedBehindTheDataInterface(t *testing.T) {
+	p := DefaultPlan("eth0")
+	p.DataInterface = testDataInterface
+	want := Rule{
+		Table: "nat",
+		Chain: "POSTROUTING",
+		Spec:  []string{"-s", p.Guest.String() + "/32", "-o", "net1", "-j", "MASQUERADE"},
+	}
+	if !slices.ContainsFunc(p.Rules(), func(r Rule) bool { return ruleEqual(r, want) }) {
+		t.Errorf("rules %v lack %v", p.Rules(), want)
+	}
+}
+
+// A pod on the pod network alone gets the rules it always had.
+func TestAPlanWithoutADataInterfaceHasNoRuleForOne(t *testing.T) {
+	p := DefaultPlan("eth0")
+	for _, r := range p.Rules() {
+		if slices.Contains(r.Spec, "net1") {
+			t.Errorf("rule %v names a data interface the plan does not have", r)
+		}
+	}
+}
+
 // The export allow-list names client addresses, so a client's source address
 // has to reach the guest unchanged. Masquerading toward the bridge would
 // replace every client with the bridge address and admit or refuse them all
 // alike.
 func TestInboundClientAddressesAreNotRewritten(t *testing.T) {
 	p := DefaultPlan("eth0")
+	p.DataInterface = testDataInterface
 	for _, r := range p.Rules() {
 		if !slices.Contains(r.Spec, "MASQUERADE") && !slices.Contains(r.Spec, "SNAT") {
 			continue
 		}
 		spec := strings.Join(r.Spec, " ")
-		if !strings.Contains(spec, "-s "+p.Guest.String()+"/32") || !strings.Contains(spec, "-o "+p.Uplink) {
+		outbound := strings.Contains(spec, "-o "+p.Uplink) || strings.Contains(spec, "-o "+p.DataInterface)
+		if !strings.Contains(spec, "-s "+p.Guest.String()+"/32") || !outbound {
 			t.Errorf("source rewrite not confined to the guest's outbound traffic: %v", r)
 		}
 	}

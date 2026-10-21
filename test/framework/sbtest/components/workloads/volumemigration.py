@@ -42,9 +42,9 @@ class VolumeMigrationWorkload(FioWorkload):
 
     def workload_defaults(self) -> dict[str, Any]:
         return {
-            # The operator's own pool SC, named simplyblock-<ns>-<cluster>-<pool>. Cloned
-            # rather than hand-written so the run inherits whatever the pool really uses.
-            "source_storageclass": "simplyblock-default-simplyblock-cluster-pool1",
+            # The operator's own pool SC, cloned rather than hand-written so the run
+            # inherits whatever the pool really uses. Empty is the cluster's only one.
+            "source_storageclass": "",
             "pods": 0,              # single-namespace volumes
             "ns_pods": 6,           # namespaced volumes (share subsystems -> batch migration)
             "ns_per_subsys": 6,
@@ -109,19 +109,10 @@ class VolumeMigrationWorkload(FioWorkload):
         cluster rather than copied: the source SC can still carry a dead one after a
         reinstall, and every volume from it would target a cluster that no longer exists.
         """
-        src_name = self.opt("source_storageclass")
-        cp = kube.run(["get", "sc", src_name, "-o", "json"], check=False)
-        if cp.returncode != 0 or not cp.stdout:
-            # The name embeds the namespace, cluster and pool, so it differs per install.
-            # Naming the candidates turns a config error into a one-line fix instead of a
-            # trip to kubectl.
-            raise RuntimeError(
-                f"source StorageClass {src_name} not found. Either the name is wrong for this "
-                f"install — candidates: {', '.join(self._candidate_sources()) or 'none'} — or "
-                "the operator has not created it yet, which usually means the Pool is not "
-                "Active (its create is stuck retrying on the backend). Check: kubectl -n "
-                f"{self.opt('namespace')} get pool -o jsonpath='{{.items[*].status}}'")
-        src = json.loads(cp.stdout)
+        src_name = self.source_storageclass(str(self.opt("source_storageclass") or ""))
+        src = self.get_storageclass(src_name)
+        if src is None:
+            raise RuntimeError(f"source StorageClass {src_name} not found")
 
         cluster = self._sb.cluster_uuid()
         base = dict(src.get("parameters", {}))
@@ -146,25 +137,6 @@ class VolumeMigrationWorkload(FioWorkload):
                            dict(base, **{PARAM_MAX_NS: str(self.opt("ns_per_subsys"))}))
             ctx.log.info(f"{self.name}: StorageClass {self._sc_ns} "
                          f"({PARAM_MAX_NS}={self.opt('ns_per_subsys')})")
-
-    @staticmethod
-    def _candidate_sources() -> list[str]:
-        """simplyblock StorageClasses that are not themselves a test artifact.
-
-        Anything carrying `sbtest-` is one of ours from an earlier run and would be a
-        confusing suggestion — cloning a clone inherits its overrides.
-        """
-        cp = kube.run(["get", "sc", "-o", "json"], check=False)
-        if cp.returncode != 0 or not cp.stdout:
-            return []
-        try:
-            items = json.loads(cp.stdout).get("items", [])
-        except json.JSONDecodeError:
-            return []
-        return sorted(
-            it["metadata"]["name"] for it in items
-            if it.get("provisioner") == "csi.simplyblock.io"
-            and "sbtest-" not in it["metadata"]["name"])
 
     def _documents(self, ctx: RunContext) -> list[dict]:
         script = self._fio_script(ctx)

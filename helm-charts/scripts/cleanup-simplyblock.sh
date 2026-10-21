@@ -106,6 +106,12 @@ else
     exit 1
 fi
 
+# The JSON lists read below reach Python through files in here, never through
+# the environment: a cluster's PVs or pods together can pass the kernel's limit
+# on a process's arguments and environment (1 MiB on macOS), and the exec fails.
+JSON_DIR=$(mktemp -d)
+trap 'rm -rf "$JSON_DIR"' EXIT
+
 # ---------------------------------------------------------------------------
 # Interactive confirmation
 # ---------------------------------------------------------------------------
@@ -148,23 +154,24 @@ fi
 # Fails when any list fails, because an empty answer is then not known to be
 # true, and uninstalling the plugin on it would strand the pods it missed.
 pods_on_csi_volumes() {
-    local pods pvcs pvs
-    pods=$($KUBECTL get pods -n "$NAMESPACE" -o json 2>/dev/null) || return 1
-    pvcs=$($KUBECTL get pvc -n "$NAMESPACE" -o json 2>/dev/null) || return 1
-    pvs=$($KUBECTL get pv -o json 2>/dev/null) || return 1
-    PODS="$pods" PVCS="$pvcs" PVS="$pvs" DRIVER="$CSI_DRIVER" python3 -c '
-import json, os
+    local pods="$JSON_DIR/csi-pods.json" pvcs="$JSON_DIR/csi-pvcs.json" pvs="$JSON_DIR/csi-pvs.json"
+    $KUBECTL get pods -n "$NAMESPACE" -o json > "$pods" 2>/dev/null || return 1
+    $KUBECTL get pvc -n "$NAMESPACE" -o json > "$pvcs" 2>/dev/null || return 1
+    $KUBECTL get pv -o json > "$pvs" 2>/dev/null || return 1
+    DRIVER="$CSI_DRIVER" python3 -c '
+import json, os, sys
 driver = os.environ["DRIVER"]
-on_driver = {p["metadata"]["name"] for p in json.loads(os.environ["PVS"])["items"]
+pods, pvcs, pvs = (json.load(open(path))["items"] for path in sys.argv[1:4])
+on_driver = {p["metadata"]["name"] for p in pvs
              if (p["spec"].get("csi") or {}).get("driver") == driver}
-claims = {c["metadata"]["name"] for c in json.loads(os.environ["PVCS"])["items"]
+claims = {c["metadata"]["name"] for c in pvcs
           if c["spec"].get("volumeName") in on_driver}
-for p in json.loads(os.environ["PODS"])["items"]:
+for p in pods:
     used = {(v.get("persistentVolumeClaim") or {}).get("claimName") for v in p["spec"].get("volumes", [])}
     if used & claims or any(v.get("csi", {}).get("driver") == driver for v in p["spec"].get("volumes", [])):
         owner = next((o for o in p["metadata"].get("ownerReferences", []) if o.get("controller")), {})
         print(p["metadata"]["name"], owner.get("kind", "-"), owner.get("name", "-"))
-'
+' "$pods" "$pvcs" "$pvs"
 }
 
 # Stops before the node plugin is uninstalled, which is the step that cannot be
@@ -203,18 +210,18 @@ controller_of() {
 # the namespace of the claim it serves, not the cluster's, and its volumeRef
 # begins with its cluster's UUID.
 nfsexports_of_this_cluster() {
-    local uuids exports
+    local uuids exports="$JSON_DIR/nfsexports.json"
     uuids=$($KUBECTL get "storageclusters.$CRD_GROUP" -n "$NAMESPACE" \
         -o jsonpath='{.items[*].status.uuid}' 2>/dev/null) || return 1
     [[ -z "$uuids" ]] && return 0
-    exports=$($KUBECTL get "nfsexports.$CRD_GROUP" -A -o json 2>/dev/null) || return 1
-    EXPORTS="$exports" UUIDS="$uuids" python3 -c '
-import json, os
+    $KUBECTL get "nfsexports.$CRD_GROUP" -A -o json > "$exports" 2>/dev/null || return 1
+    UUIDS="$uuids" python3 -c '
+import json, os, sys
 uuids = os.environ["UUIDS"].split()
-for e in json.loads(os.environ["EXPORTS"])["items"]:
+for e in json.load(open(sys.argv[1]))["items"]:
     if e["spec"].get("volumeRef", "").split(":")[0] in uuids:
         print(e["metadata"]["namespace"], e["metadata"]["name"])
-'
+' "$exports"
 }
 
 # Prints the $CSI_DRIVER StorageClasses of the storage clusters in this
@@ -224,12 +231,12 @@ for e in json.loads(os.environ["EXPORTS"])["items"]:
 # next install under the same cluster name adopts the operator's class by its
 # labels, and its cluster_id, which cannot be changed, names the removed cluster.
 storage_classes_of_this_cluster() {
-    local classes
-    classes=$($KUBECTL get storageclass -o json 2>/dev/null) || return 1
-    CLASSES="$classes" UUIDS="$1" DRIVER="$CSI_DRIVER" NS="$NAMESPACE" python3 -c '
-import json, os
+    local classes="$JSON_DIR/storageclasses.json"
+    $KUBECTL get storageclass -o json > "$classes" 2>/dev/null || return 1
+    UUIDS="$1" DRIVER="$CSI_DRIVER" NS="$NAMESPACE" python3 -c '
+import json, os, sys
 uuids, ns = os.environ["UUIDS"].split(), os.environ["NS"]
-for c in json.loads(os.environ["CLASSES"])["items"]:
+for c in json.load(open(sys.argv[1]))["items"]:
     if c.get("provisioner") != os.environ["DRIVER"]:
         continue
     labels = c["metadata"].get("labels") or {}
@@ -237,7 +244,7 @@ for c in json.loads(os.environ["CLASSES"])["items"]:
                     and labels.get("storage.simplyblock.io/namespace") == ns)
     if (c.get("parameters") or {}).get("cluster_id") in uuids or managed_here:
         print(c["metadata"]["name"])
-'
+' "$classes"
 }
 
 # Read now, while the StorageClusters exist: step 2 deletes them, and step 4
@@ -474,11 +481,11 @@ done
 # volumes. Only a forced delete removes it, and its node keeps the mount and the
 # NVMe-oF connection until it reboots or they are removed by hand.
 stranded_pods() {
-    local pods
-    pods=$($KUBECTL get pods -n "$NAMESPACE" -o json 2>/dev/null) || return 1
-    PODS="$pods" python3 -c '
-import json, os
-for p in json.loads(os.environ["PODS"])["items"]:
+    local pods="$JSON_DIR/stranded-pods.json"
+    $KUBECTL get pods -n "$NAMESPACE" -o json > "$pods" 2>/dev/null || return 1
+    python3 -c '
+import json, sys
+for p in json.load(open(sys.argv[1]))["items"]:
     meta, status = p["metadata"], p.get("status", {})
     if not meta.get("deletionTimestamp"):
         continue
@@ -488,7 +495,7 @@ for p in json.loads(os.environ["PODS"])["items"]:
     # No status at all is not evidence that everything exited.
     if states and all("terminated" in s for s in states):
         print(meta["uid"], meta["name"], p["spec"].get("nodeName", "<unknown>"))
-'
+' "$pods"
 }
 # The same pods, by UID, before and after kubelet's window: a pod that became
 # stranded during the wait has not had it yet, and one replaced under the same

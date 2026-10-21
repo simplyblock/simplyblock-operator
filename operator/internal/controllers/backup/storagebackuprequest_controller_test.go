@@ -1,6 +1,5 @@
 // Tests for the StorageBackup request reconciler. The cases that re-run a pass
-// count what the control plane was asked to do, because a second snapshot or a
-// second backup is the failure under test.
+// count the calls, because a second backup is the failure under test.
 
 package backup
 
@@ -29,10 +28,11 @@ const (
 	requestName      = "nightly"
 	requestUID       = "99999999-9999-9999-9999-999999999999"
 	requestSnapID    = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	requestSnapName  = "backup_vol1_1760000000"
 )
 
 // fakeRequestAPI is the control plane as the request reconciler writes to it.
-// What it reads comes from the streams, so a call it receives is a change.
+// What it reads comes from the stream, so a call it receives is a change.
 type fakeRequestAPI struct {
 	snapCreates int
 	bakCreates  int
@@ -78,42 +78,24 @@ func (f *fakeRequestAPI) CreateGroupBackup(_ context.Context, _, _ string, _ int
 	return f.createdGroup, f.groupErr
 }
 
-func (f *fakeRequestAPI) CreateSnapshot(_ context.Context, _, _, _, name string) (string, error) {
-	f.snapCreates++
-	f.snapName = name
-	return requestSnapID, nil
+func (f *fakeRequestAPI) CreateVolumeBackup(_ context.Context, _, _, volumeID string) (string, error) {
+	f.creates++
+	f.volume = volumeID
+	return testBackupID, f.err
 }
 
-func (f *fakeRequestAPI) CreateBackup(context.Context, string, string) error {
-	f.bakCreates++
-	return nil
+// fakeStream stands in for the backup subscription's cache.
+type fakeStream struct {
+	backups []subscriptions.BackupDTO
 }
 
-// fakeStreams stands in for the snapshot and backup subscriptions' caches. The
-// scopes it reports synced are the ones a test opens, so a cold cache is the
-// default and an empty, synced one is a deliberate setup.
-type fakeStreams struct {
-	snapshots []subscriptions.SnapshotDTO
-	backups   []subscriptions.BackupDTO
-	synced    bool
-}
-
-func (f *fakeStreams) FindByName(_ cpinformer.Scope, name string) (subscriptions.SnapshotDTO, bool) {
-	for _, s := range f.snapshots {
-		if s.Name == name {
-			return s, true
-		}
-	}
-	return subscriptions.SnapshotDTO{}, false
-}
-
-func (f *fakeStreams) FindBySnapshot(_, snapshotID string) (subscriptions.BackupDTO, bool) {
+func (f *fakeStream) Find(id string) (cpinformer.Scope, subscriptions.BackupDTO, bool) {
 	for _, b := range f.backups {
-		if b.SnapshotID == snapshotID {
-			return b, true
+		if b.ID == id {
+			return cpinformer.Scope{testClusterID}, b, true
 		}
 	}
-	return subscriptions.BackupDTO{}, false
+	return nil, subscriptions.BackupDTO{}, false
 }
 
 func (f *fakeStreams) FindGroupMembers(_, groupBackupID string) []subscriptions.BackupDTO {
@@ -146,7 +128,7 @@ func (f *fakeStreams) SnapshotTriggers() <-chan event.GenericEvent { return nil 
 
 // newRequestReconciler holds a request for testClaim in the app namespace.
 func newRequestReconciler(
-	t *testing.T, api *fakeRequestAPI, streams *fakeStreams, withCluster bool,
+	t *testing.T, api *fakeRequestAPI, stream *fakeStream, withCluster bool,
 ) *StorageBackupRequestReconciler {
 	t.Helper()
 	objs := []client.Object{
@@ -166,8 +148,22 @@ func newRequestReconciler(
 		objs = append(objs, cluster)
 	}
 	return &StorageBackupRequestReconciler{
-		Client: testClient(t, objs...), Scheme: testScheme(t), Recorder: testRecorder(), API: api,
-		Snapshots: streams, Backups: streams,
+		Client: testClient(t, objs...), Scheme: testScheme(t), Recorder: testRecorder(), API: api, Backups: stream,
+	}
+}
+
+// recordBackup is a request after a pass that made the call and wrote the id.
+func recordBackup(t *testing.T, r *StorageBackupRequestReconciler) {
+	t.Helper()
+	var sb simplyblockv1alpha2.StorageBackup
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: requestNamespace, Name: requestName}, &sb); err != nil {
+		t.Fatal(err)
+	}
+	sb.Status.Phase = simplyblockv1alpha2.StorageBackupPhaseCreating
+	sb.Status.ClusterID = testClusterID
+	sb.Status.Backup = &simplyblockv1alpha2.BackupCopy{BackupID: testBackupID}
+	if err := r.Status().Update(context.Background(), &sb); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -186,40 +182,51 @@ func reconcileRequest(t *testing.T, r *StorageBackupRequestReconciler) (ctrl.Res
 	return res, &got
 }
 
-func TestRequestSnapshotsThenBacksUpAndFollowsTheCopy(t *testing.T) {
-	api, streams := &fakeRequestAPI{}, &fakeStreams{synced: true}
-	r := newRequestReconciler(t, api, streams, true)
+func inProgressBackup() subscriptions.BackupDTO {
+	return subscriptions.BackupDTO{
+		ID: testBackupID, SnapshotID: requestSnapID, SnapshotName: requestSnapName, Status: cpBackupInProgress,
+	}
+}
 
-	// The control plane has been asked, and the stream has not reported the
-	// copy yet: nothing to record, and nothing to ask a second time.
+func TestRequestRecordsTheBackupID(t *testing.T) {
+	api, stream := &fakeRequestAPI{}, &fakeStream{}
+	r := newRequestReconciler(t, api, stream, true)
+
 	res, got := reconcileRequest(t, r)
-	if api.snapCreates != 1 || api.bakCreates != 1 || api.snapName != "sbk-"+requestUID {
-		t.Errorf("snapshots = %d (%q), backups = %d, want one of each, the snapshot named from the UID",
-			api.snapCreates, api.snapName, api.bakCreates)
-	}
-	if got.BackupID() != "" || res.RequeueAfter == 0 {
-		t.Errorf("backup ID = %q, requeue = %v, want none recorded and a fallback requeue", got.BackupID(), res.RequeueAfter)
-	}
 
-	// The stream reports the snapshot and then the copy.
-	streams.snapshots = []subscriptions.SnapshotDTO{{ID: requestSnapID, Name: "sbk-" + requestUID}}
-	streams.backups = []subscriptions.BackupDTO{{ID: testBackupID, SnapshotID: requestSnapID, Status: cpBackupInProgress}}
-	_, got = reconcileRequest(t, r)
-	if got.Status.Phase != simplyblockv1alpha2.StorageBackupPhaseCreating || got.BackupID() != testBackupID {
-		t.Errorf("status = %q %q, want Creating with the backup's ID", got.Status.Phase, got.BackupID())
+	if api.creates != 1 || api.volume != testLvolID {
+		t.Errorf("backups asked for = %d of volume %q, want one of %q", api.creates, api.volume, testLvolID)
 	}
-	if got.Source().SnapshotID != requestSnapID || got.Source().ClaimName != testClaim {
-		t.Errorf("source = %+v, want the snapshot and claim recorded", got.Source())
+	if got.BackupID() != testBackupID || got.Status.Phase != simplyblockv1alpha2.StorageBackupPhaseCreating {
+		t.Errorf("status = %q with backup %q, want Creating with the id from the call, which is the only handle on the copy",
+			got.Status.Phase, got.BackupID())
 	}
-	if api.snapCreates != 1 || api.bakCreates != 1 {
-		t.Errorf("snapshots = %d, backups = %d, want the second pass to ask for nothing", api.snapCreates, api.bakCreates)
+	if got.Status.ClusterID != testClusterID {
+		t.Errorf("cluster = %q, want %q", got.Status.ClusterID, testClusterID)
+	}
+	if res.RequeueAfter != requestResync {
+		t.Errorf("requeue = %v, want the %v resync until the stream reports the copy", res.RequeueAfter, requestResync)
+	}
+}
+
+func TestRequestFollowsTheCopyToItsEnd(t *testing.T) {
+	api, stream := &fakeRequestAPI{}, &fakeStream{backups: []subscriptions.BackupDTO{inProgressBackup()}}
+	r := newRequestReconciler(t, api, stream, true)
+	recordBackup(t, r)
+
+	_, got := reconcileRequest(t, r)
+	if got.Status.Phase != simplyblockv1alpha2.StorageBackupPhaseCreating {
+		t.Errorf("phase = %q, want Creating while the copy runs", got.Status.Phase)
+	}
+	if src := got.Source(); src.SnapshotID != requestSnapID || src.SnapshotName != requestSnapName {
+		t.Errorf("source = %+v, want the snapshot the control plane took, read from the backup", src)
 	}
 
 	for status, want := range map[string]simplyblockv1alpha2.StorageBackupPhase{
 		cpBackupCompleted: simplyblockv1alpha2.StorageBackupPhaseAvailable,
 		cpBackupFailed:    simplyblockv1alpha2.StorageBackupPhaseFailed,
 	} {
-		streams.backups[0].Status, streams.backups[0].Size = status, 1<<30
+		stream.backups[0].Status, stream.backups[0].Size = status, 1<<30
 		if _, got = reconcileRequest(t, r); got.Status.Phase != want {
 			t.Errorf("backup %s: phase = %q, want %q", status, got.Status.Phase, want)
 		}
@@ -228,83 +235,51 @@ func TestRequestSnapshotsThenBacksUpAndFollowsTheCopy(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-}
-
-// A pass that died after a call and before its status write finds what the call
-// made, so the retry repeats neither.
-func TestRequestRetryRepeatsNeitherCall(t *testing.T) {
-	api := &fakeRequestAPI{}
-	streams := &fakeStreams{
-		synced:    true,
-		snapshots: []subscriptions.SnapshotDTO{{ID: requestSnapID, Name: "sbk-" + requestUID}},
-		backups:   []subscriptions.BackupDTO{{ID: testBackupID, SnapshotID: requestSnapID, Status: cpBackupInProgress}},
-	}
-
-	_, got := reconcileRequest(t, newRequestReconciler(t, api, streams, true))
-
-	if api.snapCreates+api.bakCreates != 0 || got.BackupID() != testBackupID {
-		t.Errorf("snapshots = %d, backups = %d, ID = %q, want the existing ones adopted",
-			api.snapCreates, api.bakCreates, got.BackupID())
+	if api.creates != 0 {
+		t.Errorf("backups asked for = %d, want a request that holds the id to ask for none", api.creates)
 	}
 }
 
-// A cache that has not had its first frame has not said the snapshot is absent,
-// and asking for a second one on the strength of that is the failure.
-func TestRequestAsksForNothingFromAColdCache(t *testing.T) {
-	api := &fakeRequestAPI{}
+func TestRequestWhoseCallFailsRecordsNoBackup(t *testing.T) {
+	api := &fakeRequestAPI{err: errors.New("node is not online")}
+	r := newRequestReconciler(t, api, &fakeStream{}, true)
 
-	res, _ := reconcileRequest(t, newRequestReconciler(t, api, &fakeStreams{synced: false}, true))
+	_, got := reconcileRequest(t, r)
 
-	if api.snapCreates+api.bakCreates != 0 || res.RequeueAfter == 0 {
-		t.Errorf("snapshots = %d, backups = %d, requeue = %v, want no calls and a requeue until the stream syncs",
-			api.snapCreates, api.bakCreates, res.RequeueAfter)
-	}
-}
-
-// The stream is what moves a request along, so an in-progress copy is not polled
-// on a short timer. The requeue is only the net under a missed event.
-func TestRequestFollowsAnInProgressCopyByTheStreamNotATimer(t *testing.T) {
-	streams := &fakeStreams{
-		synced:    true,
-		snapshots: []subscriptions.SnapshotDTO{{ID: requestSnapID, Name: "sbk-" + requestUID}},
-		backups:   []subscriptions.BackupDTO{{ID: testBackupID, SnapshotID: requestSnapID, Status: cpBackupInProgress}},
-	}
-
-	res, _ := reconcileRequest(t, newRequestReconciler(t, &fakeRequestAPI{}, streams, true))
-
-	if res.RequeueAfter != requestResync {
-		t.Errorf("requeue = %v, want the %v resync", res.RequeueAfter, requestResync)
+	if got.BackupID() != "" || got.Status.Message == "" {
+		t.Errorf("backup = %q, message = %q, want no backup recorded and a reason", got.BackupID(), got.Status.Message)
 	}
 }
 
 func TestRequestWaitsForAClusterWithABackupLocation(t *testing.T) {
 	api := &fakeRequestAPI{}
 
-	res, got := reconcileRequest(t, newRequestReconciler(t, api, &fakeStreams{synced: true}, false))
+	res, got := reconcileRequest(t, newRequestReconciler(t, api, &fakeStream{}, false))
 
-	if api.snapCreates != 0 || got.Status.Phase != simplyblockv1alpha2.StorageBackupPhasePending ||
+	if api.creates != 0 || got.Status.Phase != simplyblockv1alpha2.StorageBackupPhasePending ||
 		got.Status.Message == "" || res.RequeueAfter == 0 {
-		t.Errorf("snapshots = %d, status = %q %q, requeue = %v, want Pending with a reason, requeued, no calls",
-			api.snapCreates, got.Status.Phase, got.Status.Message, res.RequeueAfter)
+		t.Errorf("backups asked for = %d, status = %q %q, requeue = %v, want Pending with a reason, requeued, no calls",
+			api.creates, got.Status.Phase, got.Status.Message, res.RequeueAfter)
 	}
 }
 
-// The stream names a snapshot, and only the request reconciler knows which
-// request took it.
-func TestRequestIsWokenBySnapshotName(t *testing.T) {
-	r := newRequestReconciler(t, &fakeRequestAPI{}, &fakeStreams{}, true)
+// The stream names the record the mirror would make for a backup, and only the
+// request reconciler knows which request owns that backup.
+func TestRequestIsWokenByTheNameOfItsBackupsRecord(t *testing.T) {
+	r := newRequestReconciler(t, &fakeRequestAPI{}, &fakeStream{}, true)
+	recordBackup(t, r)
 	named := func(name string) *metav1.PartialObjectMetadata {
 		o := &metav1.PartialObjectMetadata{}
 		o.SetName(name)
 		return o
 	}
 
-	got := r.requestsForSnapshot(context.Background(), named("sbk-"+requestUID))
+	got := r.requestsForBackup(context.Background(), named(simplyblockv1alpha2.StorageBackupName(testBackupID)))
 	want := reconcile.Request{NamespacedName: types.NamespacedName{Namespace: requestNamespace, Name: requestName}}
 	if len(got) != 1 || got[0] != want {
 		t.Errorf("requests = %v, want [%v]", got, want)
 	}
-	if other := r.requestsForSnapshot(context.Background(), named("sbk-nobody")); len(other) != 0 {
-		t.Errorf("requests = %v for a snapshot no request took, want none", other)
+	if other := r.requestsForBackup(context.Background(), named(simplyblockv1alpha2.StorageBackupName("nobody"))); len(other) != 0 {
+		t.Errorf("requests = %v for a backup no request owns, want none", other)
 	}
 }

@@ -1,0 +1,16 @@
+# kubebuilder webhook markers cannot express objectSelector, so scope the
+# rebalancer injector to the SPDK pods here. Without it the API server sends
+# every pod creation in every namespace to the operator, and Handle drops all
+# but the SPDK pods.
+#
+# The label must match utils.LabelRole and utils.LabelSpdkProxyRole: the control
+# plane sets them on every SPDK pod it deploys.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: mutating-webhook-configuration
+webhooks:
+- name: simplyblock-rebalancer-injector.simplyblock.io
+  objectSelector:
+    matchLabels:
+      role: simplyblock-storage-node

@@ -2012,7 +2012,8 @@ type UnresolvedBackupConfig struct {
 
 // UpdatableClusterParameters defines model for UpdatableClusterParameters.
 type UpdatableClusterParameters struct {
-	Name *string `json:"name,omitempty"`
+	Name               *string `json:"name,omitempty"`
+	TwoNodeArbitration *bool   `json:"two_node_arbitration,omitempty"`
 }
 
 // UpdatableLVolParams defines model for UpdatableLVolParams.
@@ -2203,12 +2204,29 @@ type UnderscoreMigrationParams struct {
 	TargetNodeId openapi_types.UUID `json:"target_node_id"`
 }
 
+// UnderscoreOverride defines model for _Override.
+type UnderscoreOverride struct {
+	Reason string `json:"reason"`
+	Winner string `json:"winner"`
+}
+
 // UnderscorePolicyCreateParams defines model for _PolicyCreateParams.
 type UnderscorePolicyCreateParams struct {
 	Age      *string `json:"age,omitempty"`
 	Name     string  `json:"name"`
 	Schedule *string `json:"schedule,omitempty"`
 	Versions *int    `json:"versions,omitempty"`
+}
+
+// UnderscorePreferred defines model for _Preferred.
+type UnderscorePreferred struct {
+	NodeId string `json:"node_id"`
+}
+
+// UnderscoreRemediation defines model for _Remediation.
+type UnderscoreRemediation struct {
+	Fenced bool   `json:"fenced"`
+	NodeId string `json:"node_id"`
 }
 
 // UnderscoreReplicationParams defines model for _ReplicationParams.
@@ -2595,6 +2613,17 @@ type ClustersUpdateApiV2ClustersClusterIdPutJSONRequestBody = UpdatableClusterPa
 
 // ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostJSONRequestBody defines body for ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost for application/json ContentType.
 type ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostJSONRequestBody = UnderscoreReplicationParams
+
+// ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostJSONRequestBody defines body for ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost for application/json ContentType.
+type ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostJSONRequestBody = UnderscoreOverride
+
+// ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutJSONRequestBody defines body for ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut for application/json ContentType.
+//
+// Deprecated: this type has been marked as deprecated upstream, but no `x-deprecated-reason` was set
+type ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutJSONRequestBody = UnderscorePreferred
+
+// ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutJSONRequestBody defines body for ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut for application/json ContentType.
+type ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutJSONRequestBody = UnderscoreRemediation
 
 // ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostJSONRequestBody defines body for ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost for application/json ContentType.
 type ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostJSONRequestBody = UnderscoreBackupSnapshotParams
@@ -3037,6 +3066,20 @@ type ServerInterface interface {
 	// ClustersAlertsListApiV2ClustersClusterIdAlertsGet Clusters:Alerts:List
 	// (GET /api/v2/clusters/{cluster_id}/alerts/)
 	ClustersAlertsListApiV2ClustersClusterIdAlertsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams)
+	// ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet Clusters:Arbitration:Get
+	// (GET /api/v2/clusters/{cluster_id}/arbitration/)
+	ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost Clusters:Arbitration:Override
+	// (POST /api/v2/clusters/{cluster_id}/arbitration/override)
+	ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut Clusters:Arbitration:Preferred
+	// (PUT /api/v2/clusters/{cluster_id}/arbitration/preferred)
+	//
+	// Deprecated: this operation has been marked as deprecated upstream, but no `x-deprecated-reason` was set
+	ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut Clusters:Arbitration:Remediation
+	// (PUT /api/v2/clusters/{cluster_id}/arbitration/remediation)
+	ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
 	// ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet Clusters:Backup-Config:Get
 	// (GET /api/v2/clusters/{cluster_id}/backup-config)
 	ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
@@ -3805,6 +3848,110 @@ func (siw *ServerInterfaceWrapper) ClustersAlertsListApiV2ClustersClusterIdAlert
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ClustersAlertsListApiV2ClustersClusterIdAlertsGet(w, r, clusterId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut operation middleware
+func (siw *ServerInterfaceWrapper) ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut operation middleware
+func (siw *ServerInterfaceWrapper) ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut(w, r, clusterId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -9813,6 +9960,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/activate", wrapper.ClustersActivateApiV2ClustersClusterIdActivatePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/addreplication", wrapper.ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/alerts/{$}", wrapper.ClustersAlertsListApiV2ClustersClusterIdAlertsGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/arbitration/{$}", wrapper.ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/arbitration/override", wrapper.ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/arbitration/preferred", wrapper.ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/arbitration/remediation", wrapper.ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backup-config", wrapper.ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/{$}", wrapper.ClustersBackupsListApiV2ClustersClusterIdBackupsGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/{$}", wrapper.ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost)

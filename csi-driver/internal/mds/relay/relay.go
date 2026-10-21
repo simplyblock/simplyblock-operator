@@ -36,11 +36,20 @@ type Relay struct {
 // Create assembles the export in the guest. The connection has to resolve:
 // without one the guest finds no device, which names the wrong problem.
 func (r Relay) Create(ctx context.Context, spec export.Spec) error {
+	_, err := r.create(ctx, spec)
+	return err
+}
+
+// create is Create, returning the connection the guest was handed.
+func (r Relay) create(ctx context.Context, spec export.Spec) (lvol.Connection, error) {
 	spec, err := r.withConnection(ctx, spec)
 	if err != nil {
-		return fmt.Errorf("resolving the connection for export %s: %w", spec.Path, err)
+		return lvol.Connection{}, fmt.Errorf("resolving the connection for export %s: %w", spec.Path, err)
 	}
-	return r.Guest.Create(ctx, spec)
+	if err := r.Guest.Create(ctx, spec); err != nil {
+		return lvol.Connection{}, err
+	}
+	return *spec.Connection, nil
 }
 
 // Delete tears the export down in the guest, with a connection when the control

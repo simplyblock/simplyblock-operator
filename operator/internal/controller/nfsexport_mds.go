@@ -45,6 +45,11 @@ const nfsExportMDSBootRequeue = 10 * time.Second
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=validatingadmissionpolicies;validatingadmissionpolicybindings,verbs=get;create
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;create
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=simplyblockdrivers,verbs=get;list;watch
+// The attachment to the storage data network, when the driver names one: the
+// NetworkAttachmentDefinition, and the nodes whose subnet labels choose its
+// host interface.
+// +kubebuilder:rbac:groups=k8s.cni.cncf.io,resources=network-attachment-definitions,verbs=get;create;update
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 
 // mdsDriver returns the driver that configures the metadata server, or nil when
 // none in the operator's namespace does. More than one such driver is a
@@ -86,7 +91,7 @@ func (r *NFSExportReconciler) bindMDS(
 			fmt.Sprintf("volumeRef %q names no storage cluster", export.Spec.VolumeRef))
 	}
 
-	updated, err := r.ensureMDS(ctx, d, handle.ClusterID)
+	updated, err := r.ensureMDS(ctx, export, d, handle.ClusterID)
 	if updated {
 		r.event(export, corev1.EventTypeNormal, "MDSUpdated",
 			fmt.Sprintf("updated the metadata server StatefulSet %s to this release's pod template, "+
@@ -145,7 +150,8 @@ func (r *NFSExportReconciler) bindMDS(
 // only on create: a claim template cannot be changed afterward, so the
 // existing one is kept.
 func (r *NFSExportReconciler) ensureMDS(
-	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver, clusterID string,
+	ctx context.Context, export *simplyblockv1alpha2.NFSExport, d *simplyblockv1alpha2.SimplyblockDriver,
+	clusterID string,
 ) (updated bool, err error) {
 	var existing appsv1.StatefulSet
 	key := client.ObjectKey{Namespace: r.OperatorNamespace, Name: driver.MDSStatefulSetName(d, clusterID)}
@@ -158,7 +164,7 @@ func (r *NFSExportReconciler) ensureMDS(
 			return false, &mdsWaitError{reason: "MDSNameCollision", message: fmt.Sprintf(
 				"StatefulSet %s belongs to storage cluster %q, not %s", key.Name, owner, clusterID)}
 		}
-		return r.updateMDS(ctx, d, &existing)
+		return r.updateMDS(ctx, export, d, &existing)
 	case !apierrors.IsNotFound(err):
 		return false, fmt.Errorf("reading the metadata server StatefulSet %s: %w", key.Name, err)
 	}
@@ -171,7 +177,11 @@ func (r *NFSExportReconciler) ensureMDS(
 	if err != nil {
 		return false, err
 	}
-	sa, sts, err := driver.MDSObjects(d, clusterID, stateClass)
+	data, err := r.mdsDataAttachment(ctx, export, d)
+	if err != nil {
+		return false, err
+	}
+	sa, sts, err := driver.MDSObjects(d, clusterID, stateClass, data)
 	if err != nil {
 		return false, err
 	}
@@ -192,14 +202,36 @@ func (r *NFSExportReconciler) ensureMDS(
 // cannot be changed, and the claim template's class is read from the existing
 // object rather than looked up again.
 func (r *NFSExportReconciler) updateMDS(
-	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver, existing *appsv1.StatefulSet,
+	ctx context.Context, export *simplyblockv1alpha2.NFSExport, d *simplyblockv1alpha2.SimplyblockDriver,
+	existing *appsv1.StatefulSet,
 ) (bool, error) {
 	// Enforced on an update as on a create: limits the runner refuses would
 	// replace a running guest with one that never boots.
 	if problem := driver.MDSResourcesProblem(d.Spec.PNFS.MDS); problem != "" {
 		return false, &mdsWaitError{reason: "MDSResourcesInvalid", message: problem}
 	}
-	return driver.UpdateMDS(ctx, r.Client, d, existing)
+	data, err := r.mdsDataAttachment(ctx, export, d)
+	if err != nil {
+		return false, err
+	}
+	return driver.UpdateMDS(ctx, r.Client, d, existing, data)
+}
+
+// mdsDataAttachment is the metadata server's attachment to the storage data
+// network, or nil for one on the pod network alone. A data network the
+// cluster cannot attach is reported on the export and the metadata server
+// runs on the pod network, which works wherever the nodes forward traffic on
+// their data interfaces.
+func (r *NFSExportReconciler) mdsDataAttachment(
+	ctx context.Context, export *simplyblockv1alpha2.NFSExport, d *simplyblockv1alpha2.SimplyblockDriver,
+) (*driver.MDSDataAttachment, error) {
+	data, err := driver.EnsureMDSDataNetwork(ctx, r.Client, d)
+	var fallback *driver.MDSDataNetworkFallback
+	if errors.As(err, &fallback) {
+		r.event(export, corev1.EventTypeWarning, fallback.Reason, fallback.Message)
+		return nil, nil
+	}
+	return data, err
 }
 
 // refreshMDS brings a Ready export's metadata server StatefulSet up to this
@@ -230,7 +262,7 @@ func (r *NFSExportReconciler) refreshMDS(ctx context.Context, export *simplybloc
 	if existing.Labels[driver.MDSClusterLabel] != handle.ClusterID {
 		return nil
 	}
-	updated, err := r.updateMDS(ctx, d, &existing)
+	updated, err := r.updateMDS(ctx, export, d, &existing)
 	var wait *mdsWaitError
 	switch {
 	case errors.As(err, &wait):

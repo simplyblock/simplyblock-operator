@@ -67,14 +67,17 @@ type Logger interface {
 	Warningf(format string, args ...any)
 }
 
-// KlogLogger writes to klog.
+// KlogLogger writes to klog, naming the caller's file and line rather than
+// its own.
 type KlogLogger struct{}
 
 // Infof logs at info level.
-func (KlogLogger) Infof(format string, args ...any) { klog.Infof(format, args...) }
+func (KlogLogger) Infof(format string, args ...any) { klog.InfoDepth(1, fmt.Sprintf(format, args...)) }
 
 // Warningf logs at warning level.
-func (KlogLogger) Warningf(format string, args ...any) { klog.Warningf(format, args...) }
+func (KlogLogger) Warningf(format string, args ...any) {
+	klog.WarningDepth(1, fmt.Sprintf(format, args...))
+}
 
 // poolStats are nfsd's pool counters summed over its pools.
 type poolStats struct{ Arrived, Enqueued, Woken, TimedOut uint64 }

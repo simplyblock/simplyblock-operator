@@ -47,7 +47,7 @@ func readyWithService() *simplyblockv1alpha2.NFSExport {
 func exportEndpoints(t *testing.T, cl client.Client) []discoveryv1.Endpoint {
 	t.Helper()
 	var eps discoveryv1.EndpointSlice
-	key := client.ObjectKey{Name: utils.NFSExportEndpointSliceName(testExportName), Namespace: testExportNS}
+	key := mdsSliceKeyFor(testMDSPod)
 	if err := cl.Get(context.Background(), key, &eps); err != nil {
 		t.Fatalf("reading the EndpointSlice: %v", err)
 	}
@@ -73,7 +73,7 @@ func newWithdrawReconciler(t *testing.T, objects ...client.Object) (
 	flows := &fakeFlows{}
 	r.Flows = flows
 	// The Service and EndpointSlice exist from the binding.
-	if _, err := r.reconcileExportService(context.Background(), loadExport(t, cl), testMDSPodIP); err != nil {
+	if _, err := r.reconcileExportService(context.Background(), loadExport(t, cl).Status.MDSPodName, testMDSPodIP); err != nil {
 		t.Fatalf("creating the Service: %v", err)
 	}
 	return r, cl, events, flows
@@ -230,7 +230,7 @@ func TestAReplacementWithTheSameAddressForgetsNothingMore(t *testing.T) {
 func TestTheServiceIPIsReadFromTheServiceWhenTheStatusLacksIt(t *testing.T) {
 	r, cl, _, flows := newWithdrawReconciler(t, readyPodHosted(), terminatingMDSPod())
 	svc := &corev1.Service{}
-	key := client.ObjectKey{Namespace: testExportNS, Name: utils.NFSExportServiceName(testExportName)}
+	key := client.ObjectKey{Namespace: testOperatorNS, Name: utils.MDSServiceName(testMDSPod)}
 	if err := cl.Get(context.Background(), key, svc); err != nil {
 		t.Fatal(err)
 	}

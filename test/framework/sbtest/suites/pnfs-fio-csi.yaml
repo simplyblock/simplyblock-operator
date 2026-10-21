@@ -1,0 +1,164 @@
+# pnfs-fio with the client side under churn instead of the metadata server: the same
+# shared and private ReadWriteMany volumes and verified fio, while the CSI node plugin and
+# controller are restarted and the shared claims expanded twice. The metadata server is
+# never restarted, so a failure here is the client side's.
+#
+#   make run SUITE=pnfs-fio-csi DURATION=1800 KEEP=1
+description: >-
+  pNFS multi-reader / multi-writer as in pnfs-fio, with restarts of the CSI node plugin and
+  controller instead of the metadata server, and two expansions of a shared claim, checking
+  that each client's I/O kept reaching its own NVMe-oF namespace throughout.
+
+run:
+  id_prefix: pnfs
+  outdir: ./runs
+  # Where the operator, control plane, CSI driver, and MDS run, where the storage cluster's
+  # SPDK and node agents run, and where the client pods go. An operator-deployed cluster
+  # keeps the first two in one namespace.
+  operator_namespace: simplyblock
+  cluster_namespace: simplyblock
+  test_namespace: default
+
+components:
+  # Put the metadata server on a storage node for the run. Left to the scheduler, it chose
+  # the one node without a storage node on the Talos lab in every run, and its path to its
+  # own node's storage was never exercised; pnfs.multipath and pnfs.mds-placement judge it.
+  pnfs.mds-placement:
+    pin_to_storage_node: true
+
+  workload.pnfs:
+    # The pool's own class is cloned with fstype pnfs; the workload finds it. Name a pNFS
+    # class in `storageclass` to use one as it is, or `source_storageclass` to pick among
+    # several pool classes.
+    # Two volumes with three writers each, and two private ones for comparison: a private
+    # volume that passes beside a shared one that fails points at concurrency, not pNFS.
+    shared_volumes: 2
+    pods_per_shared: 3
+    solo_pods: 2
+    containers_per_pod: 2
+    spread: true
+    # One reader per shared volume, never on its writer's node, verifies each round a
+    # writer published: data written through one client's layout has to read back
+    # through another's. fio.cross-read judges it.
+    cross_readers: 1
+    # Three pods x two containers x 1G per shared volume, plus headroom.
+    volume_size_gb: 20
+    file_size_gb: 1
+    iodepth: 8
+    # Direct I/O, so reads come from the device rather than the page cache and the
+    # namespace's read counters measure the workload.
+    direct: true
+
+  # The client side of the check: every node's NVMe namespace counters over the run.
+  nvme.iostat:
+    interval_s: 5.0
+
+  # Every node's NVMe controllers at setup and at the end: whether the run started on a
+  # clean fabric, and whether it left one. dmesg can only infer the first from old lines.
+  nvme.snapshot: true
+
+  # Short-lived pods joining and leaving pNFS volumes all run long, half of them on a volume
+  # of their own that is created and deleted under load. Lifetimes and the quiet tail are
+  # sized so a 300s run still sees a few, and every one is gone before fio ends.
+  workload.pnfs-churn:
+    mean_interval_s: 30
+    min_life_s: 45
+    max_life_s: 120
+    quiet_tail_s: 180
+
+  # Namespace operations on the shared volumes beside fio, one worker per client node at a
+  # low rate, each checked from another node every five minutes and once more at the end.
+  workload.pnfs-metadata:
+    rate: 2
+    verify_interval_s: 300
+    quiet_tail_s: 120
+
+  # The NFS client's own counters over the run, per fio instance: when data went through the
+  # metadata server, and how long a client took to get its layouts back after a restart.
+  nfs.mountstats:
+    interval_s: 10
+
+  # Each node's NFS flows in its connection tracking table, with the pod each was translated
+  # to: whether a client's reconnect after an MDS restart still went to the old pod.
+  nfs.conntrack:
+    interval_s: 10
+
+  # Each node's NFS packet headers for the whole run: whether a call that failed across an
+  # MDS restart was sent once or twice, and what each answer was.
+  nfs.capture: {}
+
+  # Every pNFS namespace's NVMe reservation before and after the run, so a registration left
+  # over from an earlier metadata server boot is caught rather than guessed at.
+  nvme.reservations: true
+
+  # What was deployed: images and digests of the operator, CSI driver, MDS, and storage
+  # pods, and each node's kernel.
+  run.versions: true
+
+  # Restarts during the timed run: a client's node plugin most often, the controller half as
+  # often, the metadata server never. At least one per run, and a low chance of more.
+  chaos.restart:
+    # Every run restarts a node plugin at least once, so every run tests a client whose
+    # staging survives its plugin going away. The chance-based restarts on top draw a node
+    # plugin or the controller.
+    guaranteed: 1
+    guaranteed_targets:
+      - csi-node
+    weights:
+      mds: 0
+      csi-node: 2.0
+      csi-controller: 1.0
+    chance: 0.02
+
+  # Two expansions of a shared claim under load, and no snapshot: each grow changes the
+  # device a client has to look up again, which is what the node plugin restarts above
+  # interfere with.
+  # Each expansion has to finish while fio runs, worst case included: its budget is 300 s
+  # here, so both fit after the start delay and before the quiet tail of a 1800 s run. A
+  # run too short for one records it as skipped.
+  chaos.volume-ops:
+    ops:
+      expand: 2
+      snapshot: 0
+    grow_gb: 1
+    quiet_tail_s: 120
+    expand_timeout_s: 240
+    snapshot_timeout_s: 180
+    restore_timeout_s: 300
+    delete_timeout_s: 60
+    op_overhead_s: 60
+
+  # The SPDK containers outrun kubelet rotation within minutes, so they are followed live
+  # for the whole run, as the migration suites do. They are where a restarted metadata
+  # server's reservation preempts and reconnects land.
+  logs.stream:
+    containers:
+      - spdk-container
+      - spdk-proxy-container
+    ttl_s: 21600
+  logs.collect: true
+  # The clients' kernels are the ones a pNFS run is about: layouts, NVMe-oF paths,
+  # blocklayout errors. The CSI node plugin runs privileged on every node, so it reads them.
+  host.dmesg:
+    plane: operator
+    pods_matching:
+      - simplyblock-csi-node
+    container: csi-node
+
+detectors:
+  pnfs.device-io:
+    # A layout recall and re-fetch costs seconds; a minute without a written sector while
+    # six writers are running is not that.
+    max_stall_s: 60
+    # A metadata server restart pauses clients through the guest's boot and the grace
+    # period, which waits for the slowest client to reclaim: 70s to 90s measured.
+    restart_pause_s: 180
+  # Nothing here migrates, so the migration and ANA detectors would only report skips.
+  migration.outcomes: false
+  migration.errors: false
+  ana.freeze-count: false
+  ana.cutover-pause: false
+  ana.split-brain: false
+  ana.unserved-after-cutover: false
+  ana.path-churn: false
+  evidence.blind-spot: false

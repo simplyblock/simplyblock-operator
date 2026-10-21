@@ -13,7 +13,6 @@ import (
 
 	"github.com/simplyblock/atlas/link"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
-	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 const restartedPodUID = "mds-uid-2"
@@ -79,7 +78,7 @@ func TestAResyncRepointsTheEndpointSliceAtTheNewPodIP(t *testing.T) {
 	reconcileExport(t, r)
 
 	var eps discoveryv1.EndpointSlice
-	key := client.ObjectKey{Name: utils.NFSExportEndpointSliceName(testExportName), Namespace: testExportNS}
+	key := mdsSliceKeyFor(testMDSPod)
 	if err := cl.Get(context.Background(), key, &eps); err != nil {
 		t.Fatalf("reading the EndpointSlice: %v", err)
 	}
@@ -207,7 +206,7 @@ func TestAnExportAssembledByTheRunningPodFollowsItsAddress(t *testing.T) {
 		t.Errorf("mdsNodeIP = %q, want the running pod's %q", got.Status.MDSNodeIP, newIP)
 	}
 	var eps discoveryv1.EndpointSlice
-	key := client.ObjectKey{Name: utils.NFSExportEndpointSliceName(testExportName), Namespace: testExportNS}
+	key := mdsSliceKeyFor(testMDSPod)
 	if err := cl.Get(context.Background(), key, &eps); err != nil {
 		t.Errorf("reading the EndpointSlice: %v", err)
 	} else if len(eps.Endpoints) != 1 || eps.Endpoints[0].Addresses[0] != newIP {

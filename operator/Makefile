@@ -129,7 +129,7 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$(ENVTEST_ASSETS)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
@@ -346,7 +346,6 @@ bundle: yq verify-config-yaml verify-crd-kustomization ## Generate bundle manife
 	OPENSHIFT_VERSION="$(OPENSHIFT_VERSION)" \
 	"$(YQ)" e '$(YQ_ANNOTATIONS_EXPR)' -i bundle/metadata/annotations.yaml;
 
-
 .PHONY: bundle-build
 bundle-build: bundle
 	docker build -f bundle.Dockerfile -t $(BUNDLE_IMG) .
@@ -384,12 +383,10 @@ undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.
 KUBECTL ?= kubectl
 KIND ?= kind
 
-# envtest's Kubernetes asset binaries (etcd, kube-apiserver, ...) also live in .bin.
-LOCALBIN := $(BIN_DIR)
-
 # setup-envtest's version and its Kubernetes asset version are derived from
 # go.mod (not statically pinned in the manifest); the envtest target in
-# tools.mk consumes $(ENVTEST_VERSION) at recipe time.
+# tools.mk consumes $(ENVTEST_VERSION), and its setup-envtest target
+# $(ENVTEST_K8S_VERSION), at recipe time.
 # gomodver resolves the effective version of a go.mod dependency (honoring replace).
 define gomodver
 $(shell go list -m -f '{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}' $(1) 2>/dev/null)
@@ -412,11 +409,3 @@ ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; 
 ENVTEST_K8S_VERSION ?= $(shell v='$(call gomodver,k8s.io/api)'; \
   [ -n "$$v" ] || { echo "Set ENVTEST_K8S_VERSION manually (k8s.io/api replace has no tag)" >&2; exit 1; }; \
   printf '%s\n' "$$v" | sed -E 's/^v?[0-9]+\.([0-9]+).*/1.\1/')
-
-.PHONY: setup-envtest
-setup-envtest: envtest ## Download the binaries required for ENVTEST in the local bin directory.
-	@echo "Setting up envtest binaries for Kubernetes version $(ENVTEST_K8S_VERSION)..."
-	@"$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path || { \
-		echo "Error: Failed to set up envtest binaries for version $(ENVTEST_K8S_VERSION)."; \
-		exit 1; \
-	}

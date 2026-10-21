@@ -445,6 +445,48 @@
               "pattern": "^($|(quay\\.io/simplyblock-io|docker\\.io/simplyblock|public\\.ecr\\.aws/simply-block|quay\\.io/csiaddons)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$"
             }
           }
+        },
+        "pnfs": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mds": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "nodeSelector": {
+                  "type": "object"
+                },
+                "tolerations": {
+                  "type": "array"
+                },
+                "resources": {
+                  "type": "object"
+                },
+                "stateSize": {
+                  "type": "string"
+                },
+                "dataNetwork": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "subnet": {
+                      "type": "string"
+                    },
+                    "rangeStart": {
+                      "type": "string"
+                    },
+                    "rangeEnd": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },

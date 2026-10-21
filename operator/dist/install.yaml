@@ -4866,6 +4866,56 @@ spec:
                       /dev/kvm. Unset, no pNFS volume can be exported: its export waits in
                       Pending until this is set.
                     properties:
+                      dataNetwork:
+                        description: |-
+                          DataNetwork attaches the metadata server to the storage data network, so
+                          its guest reaches the storage nodes there rather than through the pod
+                          network. The pod gets a macvlan interface on whichever host interface
+                          carries the subnet, and runs only on nodes that have one, preferring
+                          nodes that are not storage nodes. It needs Multus and the whereabouts IPAM
+                          plugin, which OpenShift ships. Unset, the guest reaches the storage nodes
+                          through the pod network, which needs the nodes to forward traffic
+                          arriving on their data interfaces. Changing it restarts the metadata
+                          server.
+                        properties:
+                          rangeEnd:
+                            description: RangeEnd is the last address the metadata
+                              server pods may take.
+                            maxLength: 15
+                            type: string
+                            x-kubernetes-validations:
+                            - message: rangeEnd must be an IPv4 address
+                              rule: isIP(self) && ip(self).family() == 4
+                          rangeStart:
+                            description: |-
+                              RangeStart is the first address the metadata server pods may take. The
+                              range must hold no address anything else on the network uses: one pod
+                              takes one address, and a restarted pod can take another.
+                            maxLength: 15
+                            type: string
+                            x-kubernetes-validations:
+                            - message: rangeStart must be an IPv4 address
+                              rule: isIP(self) && ip(self).family() == 4
+                          subnet:
+                            description: |-
+                              Subnet is the data network in CIDR form, such as 10.10.10.0/24. A node
+                              whose interface holds an address in it can run the metadata server.
+                            maxLength: 18
+                            type: string
+                            x-kubernetes-validations:
+                            - message: subnet must be an IPv4 CIDR
+                              rule: isCIDR(self) && cidr(self).ip().family() == 4
+                        required:
+                        - rangeEnd
+                        - rangeStart
+                        - subnet
+                        type: object
+                        x-kubernetes-validations:
+                        - message: rangeStart must be an address in subnet
+                          rule: '!isCIDR(self.subnet) || !isIP(self.rangeStart) ||
+                            cidr(self.subnet).containsIP(self.rangeStart)'
+                        - message: rangeEnd must be an address in subnet
+                          rule: '!isCIDR(self.subnet) || !isIP(self.rangeEnd) || cidr(self.subnet).containsIP(self.rangeEnd)'
                       image:
                         description: |-
                           Image is the metadata server image: QEMU, the guest kernel, the guest
@@ -13693,6 +13743,17 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              sourceStorageCluster:
+                description: |-
+                  SourceStorageCluster is the backend UUID of the storage cluster the
+                  source lives on. A Group drill resolves the group there. Without it the
+                  UUID comes from a local StorageCluster named like SourceCluster, which a
+                  hub apart from the sites does not have; the DR hub sets it. Immutable.
+                pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               ttlSeconds:
                 description: |-
                   TTLSeconds is an optional maximum lifetime: the drill is torn down after it
@@ -13707,6 +13768,8 @@ spec:
             - sourceRef
             type: object
             x-kubernetes-validations:
+            - message: field sourceStorageCluster is immutable once set
+              rule: '!has(oldSelf.sourceStorageCluster) || has(self.sourceStorageCluster)'
             - message: field sourceNamespace is immutable once set
               rule: '!has(oldSelf.sourceNamespace) || has(self.sourceNamespace)'
             - message: field bubbleNamespace is immutable once set
@@ -14664,6 +14727,12 @@ rules:
   - update
   - watch
 - apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices/restricted
+  verbs:
+  - create
+- apiGroups:
   - groupsnapshot.storage.k8s.io
   resources:
   - volumegroupsnapshotclasses
@@ -14673,6 +14742,20 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - k8s.cni.cncf.io
+  resources:
+  - network-attachment-definitions
+  verbs:
+  - create
+  - get
+  - update
+- apiGroups:
+  - operator.openshift.io
+  resources:
+  - networks
+  verbs:
+  - get
 - apiGroups:
   - policy
   resources:
@@ -15465,6 +15548,9 @@ webhooks:
       path: /mutate-v1-pod-simplyblock-rebalancer
   failurePolicy: Ignore
   name: simplyblock-rebalancer-injector.simplyblock.io
+  objectSelector:
+    matchLabels:
+      role: simplyblock-storage-node
   rules:
   - apiGroups:
     - ""

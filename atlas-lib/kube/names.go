@@ -1,5 +1,11 @@
 package kube
 
+import (
+	"net/netip"
+	"strconv"
+	"strings"
+)
+
 // DriverName is the CSI driver name simplyblock registers. PVs whose
 // Spec.CSI.Driver equals this value are managed by this stack.
 const DriverName = "csi.simplyblock.io"
@@ -40,6 +46,41 @@ const (
 	// cluster.
 	LabelStorageNodeSet = "io.simplyblock.storagenodeset"
 )
+
+// LabelSubnetPrefix starts every subnet label the CSI node plugin publishes on
+// its node: one per IPv4 subnet a host interface is attached to, valued with
+// that interface's name. The operator matches the pNFS metadata server's data
+// network against them, to find the nodes where the network can be reached
+// and the interface it is reached through. The plugin owns every label under
+// this prefix and removes the ones whose subnet the node no longer has.
+const LabelSubnetPrefix = "subnet.storage.simplyblock.io/"
+
+// SubnetLabel is the label key for the subnet prefix belongs to: its network
+// address and length, with an underscore for the slash a label name cannot
+// carry. Host bits are dropped, so every node on a subnet publishes one key.
+func SubnetLabel(prefix netip.Prefix) string {
+	network := prefix.Masked()
+	return LabelSubnetPrefix + network.Addr().String() + "_" + strconv.Itoa(network.Bits())
+}
+
+// SubnetOfLabel reads the subnet back from a SubnetLabel key. It refuses any
+// other key, and a key whose address is not the network address of its prefix,
+// which SubnetLabel never writes.
+func SubnetOfLabel(key string) (netip.Prefix, bool) {
+	rest, found := strings.CutPrefix(key, LabelSubnetPrefix)
+	if !found {
+		return netip.Prefix{}, false
+	}
+	addr, bits, found := strings.Cut(rest, "_")
+	if !found {
+		return netip.Prefix{}, false
+	}
+	prefix, err := netip.ParsePrefix(addr + "/" + bits)
+	if err != nil || !prefix.Addr().Is4() || prefix.Masked() != prefix {
+		return netip.Prefix{}, false
+	}
+	return prefix, true
+}
 
 // PoolNodeLabelKey is the label key identifying one storage pool.
 func PoolNodeLabelKey(poolUUID string) string {

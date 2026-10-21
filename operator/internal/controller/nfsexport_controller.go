@@ -141,6 +141,15 @@ type FlowForgetter interface {
 // EndpointSlice behind it (§13.3).
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch;create;update;patch
+// rbac-justified: the export's EndpointSlice points at the metadata server's
+// pod IP. OpenShift's RestrictedEndpointsAdmission refuses an EndpointSlice
+// address inside the cluster or service network unless its writer may create
+// endpointslices/restricted in discovery.k8s.io; endpoints/restricted covers
+// only the core Endpoints API, which nothing here writes. The subresource is
+// virtual and only that admission plugin checks it; elsewhere the grant is
+// inert. Cluster-scoped because exports live in any namespace and their slice
+// names are derived per export.
+// +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices/restricted,verbs=create
 // The metadata server pod an export is bound to: read to bind an export to it,
 // and to tell a restarting pod from a gone one at teardown.
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
@@ -256,7 +265,7 @@ func (r *NFSExportReconciler) bindExport(
 	// The stable address, ahead of the transition for the same reason as the
 	// client set: an export bound with nothing to mount it at fails at a
 	// client, several steps from the cause.
-	serviceAddress, err := r.reconcileExportService(ctx, export, host.address)
+	serviceAddress, err := r.reconcileExportService(ctx, host.pod, host.address)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensuring the Service for %s: %w", export.Name, err)
 	}

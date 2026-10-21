@@ -76,3 +76,43 @@ func ruleArgs(command string, rule Rule) []string {
 func describe(rule Rule) string {
 	return rule.Table + "/" + rule.Chain + " " + strings.Join(rule.Spec, " ")
 }
+
+// EnsureChain creates chain in table unless it exists.
+func EnsureChain(ctx context.Context, run Runner, table, chain string) error {
+	code, out, err := run(ctx, "-w", "-t", table, "-N", chain)
+	if err != nil {
+		return fmt.Errorf("creating chain %s/%s: %w", table, chain, err)
+	}
+	// Both iptables backends exit 1 and say so for a chain that is there.
+	if code == 0 || (code == 1 && strings.Contains(out, "already exists")) {
+		return nil
+	}
+	return fmt.Errorf("creating chain %s/%s: iptables exited %d: %s", table, chain, code, strings.TrimSpace(out))
+}
+
+// ReplaceChain makes chain hold exactly rules: it creates the chain if needed,
+// flushes it, and appends each rule. Between the flush and the last append the
+// chain holds only some of the rules, which for the host path means a
+// connection opened in that moment is refused, as it would be without one.
+func ReplaceChain(ctx context.Context, run Runner, table, chain string, rules []Rule) error {
+	if err := EnsureChain(ctx, run, table, chain); err != nil {
+		return err
+	}
+	code, out, err := run(ctx, "-w", "-t", table, "-F", chain)
+	if err != nil {
+		return fmt.Errorf("flushing chain %s/%s: %w", table, chain, err)
+	}
+	if code != 0 {
+		return fmt.Errorf("flushing chain %s/%s: iptables exited %d: %s", table, chain, code, strings.TrimSpace(out))
+	}
+	for _, rule := range rules {
+		code, out, err := run(ctx, ruleArgs("-A", rule)...)
+		if err != nil {
+			return fmt.Errorf("appending %s: %w", describe(rule), err)
+		}
+		if code != 0 {
+			return fmt.Errorf("appending %s: iptables exited %d: %s", describe(rule), code, strings.TrimSpace(out))
+		}
+	}
+	return nil
+}

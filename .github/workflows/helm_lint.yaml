@@ -46,6 +46,9 @@ jobs:
       - name: KMS setup script
         run: helm-charts/scripts/test-setup-kms.sh
 
+      - name: Cleanup script
+        run: helm-charts/scripts/test-cleanup-simplyblock.sh
+
       - name: Value references
         run: |
           make -C operator yq

@@ -48,6 +48,8 @@ from ..core import (
     FioJob,
     IopsSample,
     LogSpan,
+    MdsInstance,
+    MdsPlacement,
     MetadataCheck,
     MetadataOp,
     MetadataWorker,
@@ -562,6 +564,26 @@ class ArchiveEvidence:
         out.sort(key=lambda r: r.deleted)
         return out
 
+    def mds_placement(self) -> MdsPlacement | None:
+        p = os.path.join(self.outdir, "mds-placement.json")
+        try:
+            with open(p) as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(raw, dict):
+            return None
+        instances = []
+        for i in raw.get("instances", []):
+            first, last = _dt(i.get("first")), _dt(i.get("last"))
+            if first is None or last is None:
+                continue
+            instances.append(MdsInstance(pod=str(i.get("pod", "")), node=str(i.get("node", "")),
+                                         ip=str(i.get("ip", "")), first=first, last=last))
+        return MdsPlacement(pinned=bool(raw.get("pinned")),
+                            storage_nodes=[str(n) for n in raw.get("storage_nodes", [])],
+                            instances=sorted(instances, key=lambda i: i.first))
+
     def churn(self) -> list[ChurnPod]:
         p = os.path.join(self.outdir, "churn.json")
         try:
@@ -636,7 +658,8 @@ class ArchiveEvidence:
             return []
         return [PnfsVolume(claim=v.get("claim", ""), lvol=v.get("lvol", ""),
                            shared=bool(v.get("shared")), nodes=list(v.get("nodes") or []),
-                           instances=dict(v.get("instances") or {}))
+                           instances=dict(v.get("instances") or {}),
+                           mounts=dict(v.get("mounts") or {}))
                 for v in raw.get("volumes", []) if isinstance(v, dict)]
 
     def fio_log(self, pod: str) -> Iterator[str]:

@@ -7,7 +7,8 @@
 // It listens on the guest's bridge address, which only the runner reaches,
 // and serves the export service and gRPC's health service there. The health
 // is what the pod's readiness follows: the state disk mounted and nfsd running.
-// It also watches nfsd and logs its state to the console (nfsd_watchdog.go).
+// It also watches nfsd and logs its state to the console (nfsd_watchdog.go),
+// and keeps every export's namespace on all its paths (paths.go).
 // It holds no credentials. The namespace's connection arrives with each call,
 // resolved by the runner.
 
@@ -29,9 +30,11 @@ import (
 	"k8s.io/klog"
 	mountutils "k8s.io/mount-utils"
 
+	"github.com/simplyblock/atlas/lvol"
 	atlasexport "github.com/simplyblock/atlas/nfsexport"
 	"github.com/simplyblock/atlas/nfsexport/nfsexportrpc"
 	"github.com/simplyblock/atlas/nvme"
+	"github.com/simplyblock/atlas/nvmeof"
 	"github.com/simplyblock/atlas/storage"
 	"github.com/simplyblock/csi-driver/internal/mds/agent"
 	"github.com/simplyblock/csi-driver/internal/mds/netsetup"
@@ -49,6 +52,8 @@ func main() {
 	stateDir := flag.String("state-dir", nfsexport.NFSStateDir, "Where the state disk is mounted")
 	watchdog := flag.Duration("nfsd-watchdog-interval", agent.DefaultNFSDWatchdogInterval,
 		"How often nfsd's threads and pool counters are read and judged; 0 turns the watchdog off")
+	pathInterval := flag.Duration("path-interval", agent.DefaultPathInterval,
+		"How often every export's namespace is reconnected over the paths it is missing")
 	klog.InitFlags(nil)
 	if err := flag.Set("logtostderr", "true"); err != nil {
 		klog.Exitf("failed to set logtostderr flag: %v", err)
@@ -57,14 +62,25 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	if err := run(ctx, *listen, *stateDir, *watchdog); err != nil {
+	if err := run(ctx, *listen, *stateDir, *watchdog, *pathInterval); err != nil {
 		klog.Errorf("mds-agent: %v", err)
 		klog.Flush()
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, listen, stateDir string, watchdog time.Duration) error {
+// reconcilePaths brings one namespace onto every path its connection
+// publishes, with the connector and identity the assembler attached it with.
+func reconcilePaths(ctx context.Context, conn lvol.Connection, hostNQN string) (nvmeof.PathState, error) {
+	var opts []nvmeof.TargetOption
+	if hostNQN != "" {
+		opts = append(opts, nvmeof.WithHostNQN(hostNQN))
+	}
+	connector := nvmeof.NewCLIConnector(nvme.NewSysfsSubsystemResolver(nvme.SysfsConfig{}))
+	return nvmeof.ReconcilePaths(ctx, connector, nil, conn, opts...)
+}
+
+func run(ctx context.Context, listen, stateDir string, watchdog, pathInterval time.Duration) error {
 	// No host NQN function: the identity arrives with every call, decided by
 	// the operator and resolved by the runner.
 	assembler, err := nfsexport.NewAssembler(
@@ -72,7 +88,8 @@ func run(ctx context.Context, listen, stateDir string, watchdog time.Duration) e
 	if err != nil {
 		return err
 	}
-	exports, err := nfsexportrpc.NewServer(nfsexport.WithNFSD(assembler),
+	keeper := &agent.PathKeeper{Reconcile: reconcilePaths, Log: agent.KlogLogger{}}
+	exports, err := nfsexportrpc.NewServer(keeper.Wrap(nfsexport.WithNFSD(assembler)),
 		nfsexportrpc.WithExtentReader(&atlasexport.ExtentReader{Root: atlasexport.ExportsRoot}))
 	if err != nil {
 		return err
@@ -90,6 +107,7 @@ func run(ctx context.Context, listen, stateDir string, watchdog time.Duration) e
 		NFSD:     nfsexport.CheckNFSDThreads,
 	}.Check, healthInterval)
 	go agent.RunNFSDWatchdog(ctx, &agent.NFSDWatchdog{Log: agent.KlogLogger{}}, watchdog)
+	go keeper.Run(ctx, pathInterval)
 
 	lis, err := net.Listen("tcp", listen)
 	if err != nil {

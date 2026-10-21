@@ -351,11 +351,14 @@ func (r *TestFailoverReconciler) resolveSourceGroup(ctx context.Context, tf *sim
 }
 
 // resolveGroupSourceUUID returns the backend UUID of the source cluster. It
-// prefers the canonical resolution (a raw UUID, or a local StorageCluster named
-// like the cluster), and falls back to the sole local StorageCluster when the
-// hub is colocated on the source cluster, where the OCM cluster name does not
-// match the StorageCluster name.
+// takes spec.sourceStorageCluster when set, then the canonical resolution (a
+// raw UUID, or a local StorageCluster named like the cluster), and falls back
+// to the sole local StorageCluster when the hub is colocated on the source
+// cluster, where the OCM cluster name does not match the StorageCluster name.
 func (r *TestFailoverReconciler) resolveGroupSourceUUID(ctx context.Context, tf *simplyblockv1alpha2.TestFailover) (string, error) {
+	if tf.Spec.SourceStorageCluster != "" {
+		return tf.Spec.SourceStorageCluster, nil
+	}
 	if utils.IsUUID(tf.Spec.SourceCluster) {
 		return tf.Spec.SourceCluster, nil
 	}

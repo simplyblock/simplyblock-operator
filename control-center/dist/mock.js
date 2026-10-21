@@ -10991,6 +10991,10 @@ window.SB_DR = {
     drpc: `${OPS}/shop`,
     placement: `${OPS}/shop-placement`,
     drPolicy: "fra-primary-5m",
+    replication: {
+      lastSyncTime: agoIso(3.2),
+      interval: "5m0s"
+    },
     recipe: {
       name: "shop",
       namespace: OPS,
@@ -11215,6 +11219,10 @@ window.SB_DR = {
   }], {
     drpc: `${OPS}/ledger`,
     drPolicy: "fra-vault-15m",
+    replication: {
+      lastSyncTime: agoIso(115),
+      interval: "15m0s"
+    },
     recipe: {
       name: "ledger-recipe",
       namespace: OPS,
@@ -11262,6 +11270,10 @@ window.SB_DR = {
     drpc: "payments/payments",
     placement: "payments/payments",
     drPolicy: "fra-primary-5m",
+    replication: {
+      lastSyncTime: agoIso(0.7),
+      interval: "5m0s"
+    },
     recipe: {
       name: "payments",
       namespace: "payments",

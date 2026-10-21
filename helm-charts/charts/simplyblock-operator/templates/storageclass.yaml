@@ -1,0 +1,50 @@
+{{- /*
+One block StorageClass per storage cluster given at install time, in
+csiConfig.simplybk or multiCluster.clusters, that names a pool.
+
+Such a cluster has no StorageCluster or StoragePool object on this Kubernetes
+cluster, so the pool reconciler, which writes the classes of the clusters it
+manages, never writes one for it. Without a class nothing can provision from
+the cluster, and the pNFS metadata server finds no class of the cluster to
+derive its state disk's class from.
+
+Whether the chart writes simplyblock-csi-secret-v2 does not decide this:
+externallyManagedSecret.create=false means the Secret comes from elsewhere, not
+that the driver cannot reach the cluster. A cluster without a pool gets no
+class, since pool_name is what scopes a volume to a pool. The cluster ID is
+checked to be a UUID, which is the only form the driver's volume handle takes.
+*/}}
+{{- $entries := list }}
+{{- if .Values.multiCluster.enable }}
+{{- range (default (list) .Values.multiCluster.clusters) }}
+{{- $entries = append $entries (dict "clusterID" .cluster_id "pool" .pool "name" .storageClassName) }}
+{{- end }}
+{{- else if .Values.csiConfig.simplybk.uuid }}
+{{- $entries = append $entries (dict "clusterID" .Values.csiConfig.simplybk.uuid "pool" .Values.csiConfig.simplybk.pool "name" .Values.csiConfig.simplybk.storageClassName) }}
+{{- end }}
+{{- $seen := dict }}
+{{- range $entries }}
+{{- if .pool }}
+{{- $clusterID := toString .clusterID }}
+{{- if not (regexMatch "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" $clusterID) }}
+{{- fail (printf "cluster ID %q of pool %v is not a UUID" $clusterID .pool) }}
+{{- end }}
+{{- $name := toString (default (printf "simplyblock-%v" .pool) .name) }}
+{{- if hasKey $seen $name }}
+{{- fail (printf "StorageClass %s is rendered for two clusters; set storageClassName on one of them" $name) }}
+{{- end }}
+{{- $_ := set $seen $name true }}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ $name | quote }}
+provisioner: {{ $.Values.driver.driverName | quote }}
+parameters:
+  cluster_id: {{ $clusterID | quote }}
+  pool_name: {{ .pool | toString | quote }}
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+{{- end }}
+{{- end }}

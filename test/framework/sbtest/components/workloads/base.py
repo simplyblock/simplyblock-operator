@@ -22,6 +22,11 @@ from . import fio
 #: How many fio instances are collected at once.
 COLLECT_PARALLEL = 8
 
+#: The label the operator puts on the StorageClasses it creates, and the value that marks
+#: the metadata server's state class (MDSStateClassManagedBy in the operator).
+LABEL_MANAGED_BY = "storage.simplyblock.io/managed-by"
+MDS_STATE_MANAGER = "pnfs-mds"
+
 
 class FioWorkload(Component):
     """Provision volumes, run fio instances in pods, collect what each instance saw.
@@ -244,6 +249,54 @@ class FioWorkload(Component):
         if cp.returncode != 0 or not cp.stdout:
             return None
         return dict(json.loads(cp.stdout))
+
+    @staticmethod
+    def source_storageclass(named: str = "") -> str:
+        """The simplyblock StorageClass a workload clones its own classes from.
+
+        A named class is used as it is. Unnamed, it is the cluster's own class, found by
+        provisioner: the operator names it after the cluster, and the cluster's name changes
+        with every install, so a suite that wrote it down would break on the next one. More
+        than one candidate is an error that names them, because picking one would guess.
+        """
+        candidates = FioWorkload.simplyblock_storageclasses()
+        if named:
+            if FioWorkload.get_storageclass(named) is None:
+                raise RuntimeError(
+                    f"source StorageClass {named} not found; candidates: "
+                    f"{', '.join(candidates) or 'none'}. Leave it unset to use the only one")
+            return named
+        if len(candidates) == 1:
+            return candidates[0]
+        if not candidates:
+            raise RuntimeError(
+                "no simplyblock StorageClass to clone; the operator creates one when the "
+                "StorageCluster's pool is Active")
+        raise RuntimeError(f"several simplyblock StorageClasses ({', '.join(candidates)}); "
+                           "set source_storageclass to one of them")
+
+    @staticmethod
+    def simplyblock_storageclasses() -> list[str]:
+        """The simplyblock block StorageClasses that are not a test artifact.
+
+        `sbtest-` classes are clones from an earlier run, and a pNFS class is already a
+        derivative of a pool class: cloning either inherits its overrides. The metadata
+        server's state class is the operator's own, reserved for its state disk by an
+        admission policy, so a claim from a clone of it is refused.
+        """
+        cp = kube.run(["get", "sc", "-o", "json"], check=False)
+        if cp.returncode != 0 or not cp.stdout:
+            return []
+        try:
+            items = json.loads(cp.stdout).get("items", [])
+        except json.JSONDecodeError:
+            return []
+        return sorted(
+            it["metadata"]["name"] for it in items
+            if it.get("provisioner") == "csi.simplyblock.io"
+            and not it["metadata"]["name"].startswith("sbtest-")
+            and it.get("parameters", {}).get("csi.storage.k8s.io/fstype") != "pnfs"
+            and (it["metadata"].get("labels") or {}).get(LABEL_MANAGED_BY) != MDS_STATE_MANAGER)
 
     def apply_storageclass(self, src: dict, name: str, params: dict,
                            binding_mode: str | None = None) -> None:

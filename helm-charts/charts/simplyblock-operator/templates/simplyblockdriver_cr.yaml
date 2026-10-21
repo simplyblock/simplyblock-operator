@@ -77,6 +77,44 @@ spec:
   sidecarImages:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- with .Values.driver.pnfs.mds }}
+  {{- if .enabled }}
+  {{- $network := .dataNetwork | default dict }}
+  {{- $networkSet := or $network.subnet $network.rangeStart $network.rangeEnd }}
+  pnfs:
+    # The pNFS metadata server, configured by default so a ReadWriteMany volume
+    # needs no patch of the driver after the install. An empty object turns it on
+    # with the driver's defaults; a bare key would be null and leave it off.
+    {{- if not (or .nodeSelector .tolerations .resources .stateSize $networkSet) }}
+    mds: {}
+    {{- else }}
+    mds:
+      {{- with .nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .resources }}
+      resources:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .stateSize }}
+      stateSize: {{ . | quote }}
+      {{- end }}
+      {{- with .dataNetwork }}
+      {{- if or .subnet .rangeStart .rangeEnd }}
+      dataNetwork:
+        subnet: {{ required "driver.pnfs.mds.dataNetwork.subnet is required once any dataNetwork value is set" .subnet | quote }}
+        rangeStart: {{ required "driver.pnfs.mds.dataNetwork.rangeStart is required once any dataNetwork value is set" .rangeStart | quote }}
+        rangeEnd: {{ required "driver.pnfs.mds.dataNetwork.rangeEnd is required once any dataNetwork value is set" .rangeEnd | quote }}
+      {{- end }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- end }}
   tls:
     enableTLS: {{ .Values.tls.enabled }}
     enableMutualTLS: {{ .Values.tls.mutual_enabled }}

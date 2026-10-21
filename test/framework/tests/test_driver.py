@@ -1045,6 +1045,18 @@ class WorkloadPnfs(unittest.TestCase):
         want = {i.evidence: nodes[i.pod] for i in w._instances}
         self.assertEqual(vol.instances, want)
 
+    def test_the_volume_map_names_the_pod_whose_mount_each_instance_used(self):
+        """Every instance of a pod carries a copy of the pod's one mount's counters, so a
+        check that adds them up has to know which instances share a mount."""
+        from sbtest.adapters import ArchiveEvidence
+        w, _ = self._plan(shared_volumes=1, pods_per_shared=2, solo_pods=0,
+                          containers_per_pod=2)
+        nodes = {p: f"node-{i}" for i, p in enumerate(sorted(w._claim_of))}
+        with _Ctx() as ctx:
+            w._write_volume_map(ctx, nodes)
+            vol = ArchiveEvidence(ctx.outdir).pnfs_volumes()[0]
+        self.assertEqual(vol.mounts, {i.evidence: i.pod for i in w._instances})
+
     def test_collect_records_the_mounts_nfs_ops_for_every_instance(self):
         """One mount per pod, so every instance in the pod carries that mount's counts."""
         from sbtest.adapters import ArchiveEvidence

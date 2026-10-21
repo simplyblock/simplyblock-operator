@@ -61,6 +61,7 @@ for src in "$RBAC_SRC"/*_role.yaml "$RBAC_SRC"/*_role_binding.yaml; do
   sed \
     -e 's|app.kubernetes.io/managed-by: kustomize|app.kubernetes.io/managed-by: Helm|g' \
     -e 's|name: ssimplyblocktoragenode-editor-role|name: storagenode-editor-role|g' \
+    -e 's|name: metrics-reader$|name: simplyblock-operator-metrics-reader|' \
     "$src" > "$ROLES_DST/$name"
   echo "  copied: $name"
 done

@@ -172,8 +172,8 @@ foreign backup is asserted here about a discovered one.
 
 | #    | Scenario                                                                                                        | Type     | Test                                                           |
 |------|-----------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------------------|
-| U-75 | A request takes a snapshot and a backup, then follows the copy to its end                                       | Positive | `TestRequestSnapshotsThenBacksUpAndFollowsTheCopy`             |
-| U-76 | A retry after a lost status write repeats neither call                                                          | Positive | `TestRequestRetryRepeatsNeitherCall`                           |
+| U-75 | A request asks for one backup, records its ID, then follows the copy to its end                                 | Positive | `TestRequestRecordsTheBackupID`                                |
+| U-76 | A request that holds a backup ID asks for no second backup                                                      | Positive | `TestRequestFollowsTheCopyToItsEnd`                            |
 | U-77 | No cluster with a backup location: `Pending` with a reason, no call                                             | Negative | `TestRequestWaitsForAClusterWithABackupLocation`               |
 | U-78 | The mirror leaves a request alone                                                                               | Negative | `TestMirrorLeavesABackupRequestAlone`                          |
 | U-79 | The type admits a record or a request, and rejects both or neither                                              | Negative | `TestStorageBackupSpecIsEitherARecordOrARequest`               |

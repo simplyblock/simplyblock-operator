@@ -278,6 +278,7 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 
 	go advertiseVDOCapability(kubeClient, nodeName)
 	go advertiseKVMCapability(kubeClient, nodeName)
+	go advertiseSubnets(kubeClient, nodeName)
 
 	return ns, nil
 }
@@ -298,6 +299,16 @@ func advertiseKVMCapability(kubeClient kubernetes.Interface, nodeName string) {
 	err := node.AdvertiseKVMCapability(context.Background(), kubeClient, nodeName)
 	if err != nil {
 		klog.Errorf("failed to advertise kvm-capable for node %s: %v", nodeName, err)
+	}
+}
+
+// advertiseSubnets publishes the subnets this node's interfaces are on, which
+// place the pNFS metadata server on its data network, in the background for the
+// same reason as the VDO probe.
+func advertiseSubnets(kubeClient kubernetes.Interface, nodeName string) {
+	err := node.AdvertiseSubnets(context.Background(), kubeClient, nodeName)
+	if err != nil {
+		klog.Errorf("failed to advertise subnets for node %s: %v", nodeName, err)
 	}
 }
 

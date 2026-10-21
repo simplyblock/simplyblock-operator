@@ -96,6 +96,15 @@ type TestFailoverSpec struct {
 	// +k8s:immutable
 	SourceCluster string `json:"sourceCluster"`
 
+	// SourceStorageCluster is the backend UUID of the storage cluster the
+	// source lives on. A Group drill resolves the group there. Without it the
+	// UUID comes from a local StorageCluster named like SourceCluster, which a
+	// hub apart from the sites does not have; the DR hub sets it. Immutable.
+	// +kubebuilder:validation:Pattern=`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`
+	// +optional
+	// +k8s:immutable
+	SourceStorageCluster string `json:"sourceStorageCluster,omitempty"`
+
 	// SourceNamespace is the namespace of the source PVC on SourceCluster.
 	// Required for scope=Volume. Immutable.
 	// +optional

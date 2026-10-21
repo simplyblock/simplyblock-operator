@@ -18,7 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
+	"net/netip"
 	"os"
 	"slices"
 	"strings"
@@ -142,7 +142,7 @@ func MDSResourcesProblem(spec *simplyblockv1alpha2.DriverPNFSMDS) string {
 // by hand keeps its hash, and is left as it is.
 func UpdateMDS(
 	ctx context.Context, c client.Client, d *simplyblockv1alpha2.SimplyblockDriver,
-	existing *appsv1.StatefulSet,
+	existing *appsv1.StatefulSet, data *MDSDataAttachment,
 ) (bool, error) {
 	stateClass := ""
 	if len(existing.Spec.VolumeClaimTemplates) > 0 {
@@ -150,7 +150,7 @@ func UpdateMDS(
 			stateClass = *class
 		}
 	}
-	_, desired, err := MDSObjects(d, existing.Labels[MDSClusterLabel], stateClass)
+	_, desired, err := MDSObjects(d, existing.Labels[MDSClusterLabel], stateClass, data)
 	if err != nil {
 		return false, err
 	}
@@ -310,9 +310,11 @@ func MDSPodName(d *simplyblockv1alpha2.SimplyblockDriver, clusterID string) stri
 // ServiceAccount, which carries no permissions and exists for the token
 // csi-link authenticates, and its StatefulSet. The caller sets ownership, and
 // chooses stateClass, the StorageClass of the state disk: choosing one takes a
-// read of the cluster, which this package does not do.
+// read of the cluster, which this package does not do. data attaches the pod to
+// the storage data network, and is nil for a pod on the pod network alone; see
+// EnsureMDSDataNetwork.
 func MDSObjects(
-	d *simplyblockv1alpha2.SimplyblockDriver, clusterID, stateClass string,
+	d *simplyblockv1alpha2.SimplyblockDriver, clusterID, stateClass string, data *MDSDataAttachment,
 ) (*corev1.ServiceAccount, *appsv1.StatefulSet, error) {
 	spec := d.Spec.PNFS.MDS
 	if spec == nil {
@@ -331,11 +333,7 @@ func MDSObjects(
 
 	selector := map[string]string{"app": name}
 	podLabels := map[string]string{"app": name, MDSClusterLabel: clusterID}
-	nodeSelector := maps.Clone(spec.NodeSelector)
-	if nodeSelector == nil {
-		nodeSelector = map[string]string{}
-	}
-	nodeSelector[KVMCapableLabel] = KVMCapableValue
+	nodeSelector := mdsNodeSelector(spec)
 
 	volumes := slices.Concat(
 		[]corev1.Volume{
@@ -380,7 +378,7 @@ func MDSObjects(
 					NodeSelector:                  nodeSelector,
 					Tolerations:                   spec.Tolerations,
 					TerminationGracePeriodSeconds: ptr.To(int64(mdsTerminationGraceSeconds)),
-					Containers:                    []corev1.Container{mdsRunnerContainer(d, image)},
+					Containers:                    []corev1.Container{mdsRunnerContainer(d, image, data)},
 					Volumes:                       volumes,
 				},
 			},
@@ -396,6 +394,15 @@ func MDSObjects(
 				},
 			}},
 		},
+	}
+	if data != nil && spec.DataNetwork != nil {
+		subnet, err := netip.ParsePrefix(spec.DataNetwork.Subnet)
+		if err != nil {
+			return nil, nil, fmt.Errorf("spec.pnfs.mds.dataNetwork.subnet %q: %w", spec.DataNetwork.Subnet, err)
+		}
+		if err := dataNetworkPodSpec(&sts.Spec.Template, subnet, spec.DataNetwork, data); err != nil {
+			return nil, nil, err
+		}
 	}
 	hash, err := MDSTemplateHash(sts)
 	if err != nil {
@@ -423,17 +430,27 @@ func MDSTemplateHash(sts *appsv1.StatefulSet) (string, error) {
 // /dev/kvm and /dev/net/tun, which an unprivileged container cannot without a
 // device plugin, and it builds the guest's bridge and NAT rules in the pod's
 // network namespace.
-func mdsRunnerContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string) corev1.Container {
+func mdsRunnerContainer(
+	d *simplyblockv1alpha2.SimplyblockDriver, image string, data *MDSDataAttachment,
+) corev1.Container {
 	spec := d.Spec.PNFS.MDS
+	// The guest reaches its own node's storage node through the mds-proxy
+	// there (design-pnfs-mds-vm.md §8.5).
+	args := append(linkArgs(d), "--host-proxy="+mdsProxyAddress)
+	if data != nil {
+		// The guest's traffic to the data network leaves through it.
+		args = append(args, "--data-interface="+MDSDataInterface)
+	}
 	return corev1.Container{
 		Name:            MDSContainerName,
 		Image:           image,
 		ImagePullPolicy: pullPolicy(d),
 		SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true)},
-		Args:            linkArgs(d),
+		Args:            args,
 		Env: slices.Concat(linkEnv(), []corev1.EnvVar{
 			resourceEnv("MDS_CPU_LIMIT_MILLI", "limits.cpu", "1m"),
 			resourceEnv("MDS_MEMORY_LIMIT_MIB", "limits.memory", "1Mi"),
+			hostIPEnvVar(),
 		}, tlsEnv(d)),
 		Resources: mdsResources(spec.Resources),
 		Ports: []corev1.ContainerPort{

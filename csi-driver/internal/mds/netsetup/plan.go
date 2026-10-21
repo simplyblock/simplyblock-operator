@@ -71,6 +71,18 @@ type Plan struct {
 	// it to collide with, and a stable MAC keeps ARP state valid across a
 	// guest restart within the same pod.
 	GuestMAC net.HardwareAddr
+
+	// DataInterface is the pod's attachment to the storage data network, or
+	// empty for a pod on the pod network alone. Its subnet is a connected
+	// route in the pod, so the guest's traffic to the storage nodes leaves
+	// through it rather than the uplink.
+	DataInterface string
+
+	// HostPath sends the guest's connections to its own node's addresses
+	// through the mds-proxy: the guest's TCP on the bridge enters
+	// HostPathChain, whose redirects the runner keeps current with
+	// HostPathRules.
+	HostPath bool
 }
 
 // DefaultPlan returns the plan for a pod whose own interface is uplink.
@@ -95,7 +107,7 @@ func (p Plan) GuestAddress() netip.Prefix {
 // applied.
 func (p Plan) Rules() []Rule {
 	nfs := strconv.Itoa(NFSPort)
-	return []Rule{
+	rules := []Rule{
 		// Clients reach nfsd at the pod IP. DNAT rewrites only the
 		// destination, so the guest sees the client's own address.
 		{Table: "nat", Chain: "PREROUTING", Spec: []string{
@@ -109,6 +121,68 @@ func (p Plan) Rules() []Rule {
 			"-s", p.Guest.String() + "/32", "-o", p.Uplink, "-j", "MASQUERADE",
 		}},
 	}
+	if p.HostPath {
+		// The guest's connections enter the chain of redirects to the
+		// forwarder before routing, which would otherwise send a connection
+		// to the node's own address out through the CNI and into a listener
+		// that refuses it.
+		rules = append(rules, Rule{Table: "nat", Chain: "PREROUTING", Spec: []string{
+			"-i", p.Bridge, "-s", p.Guest.String() + "/32", "-p", "tcp", "-j", HostPathChain,
+		}})
+	}
+	if p.DataInterface != "" {
+		// The same for connections to the data network, which leave as the
+		// pod's address there and so arrive at the storage nodes on their data
+		// interfaces, where their listeners are bound.
+		rules = append(rules, Rule{Table: "nat", Chain: "POSTROUTING", Spec: []string{
+			"-s", p.Guest.String() + "/32", "-o", p.DataInterface, "-j", "MASQUERADE",
+		}})
+	}
+	return rules
+}
+
+// linkLocal is the guest's own subnet's range, which never leaves the bridge.
+var linkLocal = netip.MustParsePrefix("169.254.0.0/16")
+
+// HostPathChain holds the redirects to the forwarder: one per address of the
+// pod's node, rebuilt when the node's addresses change, or one for everything
+// when the pod has no attachment to the data network.
+const HostPathChain = "MDS-HOST-PATH"
+
+// ForwarderPort is where the runner's forwarder takes the redirected
+// connections, on the bridge's address.
+const ForwarderPort = 7071
+
+// ForwarderAddress is where the forwarder listens: the bridge's address,
+// which the guest's traffic arrives on.
+func (p Plan) ForwarderAddress() netip.AddrPort {
+	return netip.AddrPortFrom(p.Gateway.Addr(), ForwarderPort)
+}
+
+// HostPathRules are HostPathChain's rules for a node holding addrs: each of
+// the guest's TCP connections to one of them goes to the forwarder. DNAT
+// rather than REDIRECT, which needs a kernel module the pod's other rules do
+// not, and the forwarder reads the original destination the same way after
+// either.
+//
+// A pod without an attachment to the data network sends every TCP connection
+// of the guest's there, except to link-local addresses, which stay on the
+// bridge: whether the pod network routes to the storage data network depends on
+// the CNI (OVN-Kubernetes sends it to the gateway, where it is lost), and the
+// host always does.
+func (p Plan) HostPathRules(addrs []netip.Addr) []Rule {
+	if p.DataInterface == "" {
+		return []Rule{{Table: "nat", Chain: HostPathChain, Spec: []string{
+			"!", "-d", linkLocal.String(), "-p", "tcp", "-j", "DNAT", "--to-destination", p.ForwarderAddress().String(),
+		}}}
+	}
+	rules := make([]Rule, 0, len(addrs))
+	for _, a := range addrs {
+		rules = append(rules, Rule{Table: "nat", Chain: HostPathChain, Spec: []string{
+			"-d", a.String() + "/32", "-p", "tcp", "-j", "DNAT", "--to-destination", p.ForwarderAddress().String(),
+		}})
+	}
+	return rules
 }
 
 // noPayloadMax is the longest packet that carries no TCP payload: a 20-byte IP

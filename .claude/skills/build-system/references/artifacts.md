@@ -34,7 +34,7 @@ stale copy is a defect a reviewer can see.
 | `operator/bundle/`                                        | `make -C operator bundle`                                  | packaged as a release asset                |
 | `operator/Dockerfile.cross`                               | `docker-buildx` (removed again at the end)                 |                                            |
 | `.bin/*`                                                  | `scripts/tools.sh`                                         | `.gitignore: .bin/`                        |
-| `helm-charts/charts/<version>/*.tgz`, `charts/index.yaml` | `helm package` + `helm repo index` in the release workflow | committed by the release flow, not by hand |
+| `helm-charts/charts/<version>/*.tgz`, `charts/index.yaml` | `helm package` + `helm repo index` in the release workflow | `.gitignore`; published through the `charts` branch |
 
 ## Which symptom points at which artifact
 
@@ -106,9 +106,11 @@ request that touches `operator/**`.
 - **Helm chart** (`Helm: Release`, on a change to the chart's `Chart.yaml`):
   `helm package` into `helm-charts/charts/<version>/`, then
   `helm repo index --url https://install.simplyblock.io/helm`.
-- **Chart repository merge** (`Helm: Merge Charts`): the operator and CSI chart
-  artifacts are merged into one index by
-  `helm-charts/scripts/merge_helm_repos.py`.
+- **Chart repository** (`Repo: Release`, job `release-helm`): the operator and
+  CSI chart artifacts are added to the `charts` branch by
+  `helm-charts/scripts/add-released-charts.sh`, and the branch is uploaded to
+  `https://install.simplyblock.io/helm`. The branch holds every released chart,
+  so a release from any release branch keeps the others.
 
 The chart's `version:` is the release trigger, `appVersion:` is `latest`, and the
 component image tags live in `values.yaml`, so a new operator image needs both

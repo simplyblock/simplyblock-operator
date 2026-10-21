@@ -83,11 +83,6 @@ type StoragePoolReconciler struct {
 	// metrics API reads. Optional, and nil in tests.
 	VolumeScopes *cpinformer.ScopeSet
 
-	// SnapshotScopes, if set, receives this pool's (cluster, pool) scope so the
-	// snapshot stream is open for the backup requests that snapshot its volumes.
-	// Optional, and nil in tests.
-	SnapshotScopes *cpinformer.ScopeSet
-
 	// NewAPIClient builds the control-plane client. It is a field so a test can
 	// point the reconciler at a mock server; nil selects the real one, resolved
 	// through EndpointResolver.
@@ -262,9 +257,6 @@ func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	if r.VolumeScopes != nil {
 		r.VolumeScopes.Add(cpinformer.Scope{clusterUUID, p.Status.UUID})
-	}
-	if r.SnapshotScopes != nil {
-		r.SnapshotScopes.Add(cpinformer.Scope{clusterUUID, p.Status.UUID})
 	}
 
 	if err := r.ensureDefaultClass(ctx, p, clusterUUID); err != nil {

@@ -23,6 +23,8 @@ reached the client's namespace again.
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Iterable
 from datetime import datetime, timedelta
 from typing import Any
@@ -144,10 +146,15 @@ class DeviceIO(Detector):
                         note="without the namespace the client cannot use a layout, so "
                              "all of its I/O went through the metadata server")
                     continue
-                yield from self._judge(subject, vol.lvol, node, got)
+                yield from self._judge(subject, vol.lvol, node, got,
+                                       _server_ops(ev, vol, node))
 
-    def _judge(self, subject: str, lvol: str, node: str,
-               got: list[BlockSample]) -> Iterable[Finding]:
+    def _judge(self, subject: str, lvol: str, node: str, got: list[BlockSample],
+               server: dict[str, int] | None) -> Iterable[Finding]:
+        counted = "" if server is None else \
+            f"; NFS WRITE {server['WRITE']}, NFS READ {server['READ']}"
+        server_writes = None if server is None else server["WRITE"]
+        hung = server_writes == 0
         first, last = got[0], got[-1]
         wrote = last.write_sectors - first.write_sectors
         read = last.read_sectors - first.read_sectors
@@ -158,25 +165,28 @@ class DeviceIO(Detector):
                 self.name, title=f"no {' or '.join(flat)} reached the namespace on the client",
                 subject=subject,
                 detail=f"{node}: {wrote} sector(s) written, {read} read over "
-                       f"{(last.ts - first.ts).total_seconds():.0f}s",
+                       f"{(last.ts - first.ts).total_seconds():.0f}s{counted}",
                 evidence={"lvol": lvol, "node": node, "write_sectors": wrote,
-                          "read_sectors": read},
-                note="the pod's I/O went through the metadata server instead of to its "
-                     "NVMe-oF namespace")
+                          "read_sectors": read, "server_ops": server},
+                note=_flat_note(flat, server))
             return
 
         trailing = _trailing_stall(got)
         if trailing > float(self.opt("max_stall_s")):
+            where = ("on the namespace and at the metadata server" if hung
+                     else "to the namespace")
             yield critical(
-                self.name, title=f"writes to the namespace stopped and never resumed "
+                self.name, title=f"writes {where} stopped and never resumed "
                                  f"({trailing:.0f}s before the run ended)",
                 subject=subject,
                 detail=f"{node}: no sector written from {last.ts - timedelta(seconds=trailing):%H:%M:%S} "
-                       f"to {last.ts:%H:%M:%S} while the run was going",
-                evidence={"lvol": lvol, "node": node, "stopped_s": trailing},
-                note="the client lost the direct path and did not get it back, so its I/O "
-                     "went through the metadata server from then on; after an MDS restart "
-                     "this is a device lookup made from the pod's mount namespace")
+                       f"to {last.ts:%H:%M:%S} while the run was going{counted}",
+                evidence={"lvol": lvol, "node": node, "stopped_s": trailing,
+                          "server_ops": server},
+                note=_HUNG_NOTE if hung else
+                "the client lost the direct path and did not get it back, so its I/O "
+                "went through the metadata server from then on; after an MDS restart "
+                "this is a device lookup made from the pod's mount namespace")
             return
 
         budget = float(self.opt("restart_pause_s"))
@@ -359,3 +369,173 @@ def _while_running(got: list[BlockSample], vol: PnfsVolume, node: str,
     inside = [s for s in got if start <= s.ts <= end]
     return inside if len(inside) >= 2 else got
 
+
+def _server_ops(ev: Evidence, vol: PnfsVolume, node: str) -> dict[str, int] | None:
+    """The NFS READs and WRITEs the volume's mounts on node sent to the metadata server, or
+    None when an instance has no mount statistics and the counts would be partial.
+
+    Every instance of a pod carries a copy of the pod's one mount's counters, so each mount
+    is counted once: by the pod the volume map names, or, in runs from before it named
+    one, by the copy itself, since two different mounts never agree on every counter.
+    """
+    mounts: dict[str, dict[str, int]] = {}
+    for inst, where in vol.instances.items():
+        if where != node:
+            continue
+        ops = ev.nfs_ops(inst)
+        if not ops:
+            return None
+        mounts[vol.mounts.get(inst) or json.dumps(ops, sort_keys=True)] = ops
+    if not mounts:
+        return None
+    return {k: sum(m.get(k, 0) for m in mounts.values()) for k in ("READ", "WRITE")}
+
+
+def _flat_note(flat: list[str], server: dict[str, int] | None) -> str:
+    """Where the I/O a namespace never saw went, by the mount's own counters."""
+    if "writes" in flat:
+        if server is not None and server["WRITE"] == 0:
+            return _HUNG_NOTE
+        return ("the pod's I/O went through the metadata server instead of to its "
+                "NVMe-oF namespace")
+    if server is None:
+        return "the pod's reads did not reach its NVMe-oF namespace"
+    if server["READ"]:
+        return ("the pod's reads went through the metadata server instead of to its "
+                "NVMe-oF namespace")
+    return ("no read reached the namespace or the metadata server: the workload read "
+            "nothing, or its reads hung")
+
+
+#: The note for writes that stopped on the namespace without moving to the server.
+_HUNG_NOTE = ("the mount sent no WRITE to the metadata server either, so the writes did "
+              "not fall back to the server: they stopped, which is a hung client or fio, "
+              "not a lost direct path")
+
+
+#: A path the metadata server's guest connected: its kernel's line for a new controller.
+_GUEST_CTRL = re.compile(r'new ctrl: NQN "[^"]*:lvol:(?P<lvol>[0-9a-zA-Z-]+)", addr (?P<ip>[0-9.]+):')
+
+#: A connect the guest's kernel gave up on. It names no address: which path failed is what
+#: the comparison with the clients' paths finds.
+_GUEST_CONNECT_FAILED = re.compile(r"failed to connect socket: -(?P<errno>\d+)")
+
+#: A path a client holds, by the volume in its NQN.
+_LVOL_NQN = re.compile(r":lvol:(?P<lvol>[0-9a-zA-Z-]+)$")
+
+
+@detector
+class Multipath(Detector):
+    """Whether the metadata server's guest reached every path a volume has.
+
+    The guest attaches each volume it exports over NVMe/TCP, as a client does, and needs
+    the same paths: a volume left on one path stops when that path does. Two comparisons
+    find a missing path, and neither needs the volume's clients to outlive it:
+
+    * A volume the guest attached on fewer paths than its clients hold to it, or, for a
+      volume no client holds any more, than the most any of the guest's volumes has in
+      the guest or on a client. Volumes the guest does not export set no count.
+    * An address the clients connect to, for any volume, that the guest never connected
+      to, for any volume. It names the path the short volumes are missing, and is
+      reported only beside them: a volume the guest does not export, such as its own
+      state disk, can be served from an address no export uses.
+
+    The case that produces it is a metadata server on a node that runs a storage node: the
+    node's NVMe/TCP listeners are bound to its data interface, and neither the pod network
+    nor a macvlan delivers a connection to its own node on that interface.
+    """
+
+    name = "pnfs.multipath"
+    summary = "a volume the metadata server's guest attached on fewer paths than it has"
+
+    def defaults(self) -> dict[str, Any]:
+        return {"container_log": "mds-runner"}
+
+    def detect(self, ev: Evidence) -> Iterable[Finding]:
+        guest: dict[str, set[str]] = {}
+        failed: dict[str, int] = {}
+        any_line = False
+        for line in ev.container_log(str(self.opt("container_log"))):
+            any_line = True
+            if m := _GUEST_CTRL.search(line):
+                guest.setdefault(m["lvol"], set()).add(m["ip"])
+            elif m := _GUEST_CONNECT_FAILED.search(line):
+                failed[m["errno"]] = failed.get(m["errno"], 0) + 1
+        if not any_line:
+            raise SkipDetector("no metadata server log collected")
+        if not guest:
+            raise SkipDetector("the metadata server's guest attached no volume")
+
+        clients: dict[str, set[str]] = {}
+        for c in ev.nvme_controllers():
+            if m := _LVOL_NQN.search(c.nqn):
+                clients.setdefault(m["lvol"], set()).add(c.address.rsplit(":", 1)[0])
+
+        exported = {lvol: clients[lvol] for lvol in guest if lvol in clients}
+        paths = max(len(p) for p in [*guest.values(), *exported.values()])
+        short = sorted(lvol for lvol, reached in guest.items()
+                       if len(reached) < (len(exported[lvol]) if lvol in exported else paths))
+        reached_any = set().union(*guest.values())
+        unreached = sorted(set().union(*clients.values()) - reached_any) if clients and short else []
+
+        for ip in unreached:
+            yield critical(
+                self.name, f"the metadata server's guest never reached {ip}", subject=ip,
+                detail=f"{len(short)} volume(s) of {len(guest)} ran on fewer than {paths} path(s) "
+                       f"in the guest: {', '.join(short[:10])}{' ...' if len(short) > 10 else ''}",
+                note="The clients reach this address and the guest never did. A metadata "
+                     "server on the node that owns the address cannot reach it through the "
+                     "pod network or a macvlan.")
+        if short and not unreached:
+            yield critical(
+                self.name, f"{len(short)} volume(s) ran on fewer paths in the guest than volumes have",
+                subject="paths",
+                detail=f"fewer than {paths} path(s): {', '.join(short[:10])}"
+                       f"{' ...' if len(short) > 10 else ''}",
+                note="No client path names the missing address, so it is known only by the "
+                     "count.")
+        if failed:
+            total = sum(failed.values())
+            yield warning(
+                self.name, f"the guest failed {total} NVMe/TCP connect(s)", subject="connect",
+                detail=", ".join(f"-{e}: {n}" for e, n in sorted(failed.items())),
+                note="110 is a timeout and 113 an unreachable host. Every new export waits for "
+                     "these before it is served.")
+        yield info(self.name, f"{len(guest)} volume(s) attached in the guest, {paths} path(s) each "
+                   "expected", subject="coverage",
+                   detail=f"{len(guest) - len(short)} with every path, {len(short)} short")
+
+
+@detector
+class MdsPlacementCoverage(Detector):
+    """Whether the metadata server ran on a storage node at least once.
+
+    Its guest reaches the storage nodes on other nodes as a client does, and the one on its
+    own node by another way or not at all. A run in which it never shared a node with a
+    storage node never exercised that, and passing it says nothing about it. On the Talos
+    lab the scheduler preferred the control-plane node, which runs no storage node, in every
+    run on disk.
+    """
+
+    name = "pnfs.mds-placement"
+    summary = "a run in which the metadata server never ran on a storage node"
+
+    def detect(self, ev: Evidence) -> Iterable[Finding]:
+        placement = ev.mds_placement()
+        if placement is None:
+            raise SkipDetector("the run did not record where the metadata server ran "
+                               "(enable the pnfs.mds-placement component)")
+        if not placement.instances:
+            raise SkipDetector("no metadata server instance was seen running")
+        on_storage = [i for i in placement.instances if i.node in placement.storage_nodes]
+        nodes = sorted({i.node for i in placement.instances})
+        if not on_storage:
+            yield critical(
+                self.name, "the metadata server never ran on a storage node", subject="placement",
+                detail=f"{len(placement.instances)} instance(s) on {', '.join(nodes)}; storage nodes: "
+                       f"{', '.join(placement.storage_nodes) or 'none recorded'}",
+                note="Its guest's path to its own node's storage was never exercised. Set "
+                     "pin_to_storage_node on pnfs.mds-placement to run that case on purpose.")
+        yield info(self.name, f"{len(on_storage)} of {len(placement.instances)} metadata server "
+                   f"instance(s) ran on a storage node", subject="placement",
+                   detail=f"nodes: {', '.join(nodes)}; pinned: {placement.pinned}")

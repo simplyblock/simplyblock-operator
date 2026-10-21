@@ -59,6 +59,7 @@ class PnfsRwxWorkload(FioWorkload):
             # A pNFS StorageClass to use as it is. Empty clones `source_storageclass` with
             # fstype pnfs instead, which inherits the pool's real parameters.
             "storageclass": "",
+            # Empty is the cluster's only simplyblock class, whatever this install named it.
             "source_storageclass": "",
             "shared_volumes": 1,      # RWX volumes several pods mount
             "pods_per_shared": 3,
@@ -139,10 +140,10 @@ class PnfsRwxWorkload(FioWorkload):
                     "to have one cloned")
             return named
 
-        source = str(self.opt("source_storageclass") or "")
-        if not source:
-            raise RuntimeError(f"{self.name}: set storageclass (a pNFS class) or "
-                               "source_storageclass (a pool class to clone as pNFS)")
+        try:
+            source = self.source_storageclass(str(self.opt("source_storageclass") or ""))
+        except RuntimeError as e:
+            raise RuntimeError(f"{self.name}: {e}") from None
         src = self.get_storageclass(source)
         if src is None:
             raise RuntimeError(f"{self.name}: source StorageClass {source} not found")
@@ -389,6 +390,10 @@ class PnfsRwxWorkload(FioWorkload):
                 # Which instance ran where, so a node is judged while its own fio ran.
                 "instances": {i.evidence: nodes[i.pod] for i in self._instances
                               if i.pod in pods and nodes.get(i.pod)},
+                # Which pod's mount each instance used: the instances of one pod share
+                # its mount, and each carries a copy of its counters.
+                "mounts": {i.evidence: i.pod for i in self._instances
+                           if i.pod in pods and nodes.get(i.pod)},
                 **({"cross_read": {i.evidence: nodes.get(i.pod, "") for i in rounds}}
                    if rounds else {}),
             })

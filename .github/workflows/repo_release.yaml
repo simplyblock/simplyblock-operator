@@ -8,8 +8,7 @@ name: "Repo: Release"
 #     ├─ build-atlas ──┬─ build-csi ────────────────────────────┐
 #     │                └─ build-operator ─┬─ release-operator ──┤ (OLM bundle)
 #     │                                   └─ package-operator-chart ─┐
-#     └─ package-csi-chart ──────────────────────────────────────┴─ merge-helm ─┴─ release-helm (FTPS publish)
-#                                                                                       └─ commit-helm-charts (PR against main)
+#     └─ package-csi-chart ─────────────────────────────────────────┴─ release-helm (charts branch, FTPS publish)
 #
 #   build-operator ─ release-control-center (Control Center image; nothing waits on it)
 
@@ -25,8 +24,7 @@ on:
         type: string
 
 permissions:
-  contents: write       # the OLM bundle upload and the commit-helm-charts branch push
-  pull-requests: write  # commit-helm-charts opens the pull request against main
+  contents: write       # the OLM bundle upload and the push to the charts branch
 
 jobs:
   setup:
@@ -118,49 +116,32 @@ jobs:
       version: ${{ needs.setup.outputs.version }}
     secrets: inherit
 
-  merge-helm:
-    name: Merge helm charts
-    needs: [package-csi-chart, package-operator-chart]
-    uses: ./.github/workflows/helm_merge_charts.yaml
-    with:
-      use_artifacts: true
-      base_url: https://install.simplyblock.io/helm
-    secrets: inherit
-
-  # Publishes the release, so it waits on every image the charts reference.
+  # The published Helm repository lives in the charts branch, which holds every
+  # released chart in the <version>/<chart>-<version>.tgz layout the server
+  # serves. A release adds its two charts to that branch and uploads the branch,
+  # so a tag cut from any release branch keeps the charts of every other release.
+  # Publishing waits on every image the charts reference, and a single
+  # concurrency group keeps two releases from pushing or uploading at once.
+  # Each release adds only its own charts, so a release whose job is canceled
+  # stays unpublished; queue: max keeps every waiting release in line instead of
+  # replacing the pending one.
   release-helm:
     name: Release helm charts
-    needs: [merge-helm, build-csi, build-operator, release-operator]
+    needs: [setup, package-csi-chart, package-operator-chart, build-csi, build-operator, release-operator]
     runs-on: ubuntu-latest
+    concurrency:
+      group: helm-charts-publish
+      cancel-in-progress: false
+      queue: max
     steps:
-      - name: Download merged Helm repo
-        uses: actions/download-artifact@v4
-        with:
-          name: merged-helm-repo
-          path: merged-charts
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Publish to install.simplyblock.io via FTPS
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          protocol: ftps
-          server-dir: /
-          local-dir: ./merged-charts/
-
-  # The published repository is rebuilt from the committed charts on every
-  # release, and the FTPS sync deletes whatever the rebuild lacks. This pull
-  # request commits the charts just published, so the next release keeps them.
-  commit-helm-charts:
-    name: Commit released helm charts
-    needs: [setup, release-helm]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout main
+      - name: Checkout charts branch
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: charts
+          path: published
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -181,28 +162,30 @@ jobs:
 
       - name: Add the released charts
         run: |
-          helm-charts/scripts/add-released-charts.sh packaged/operator helm-charts/charts https://install.simplyblock.io/helm
-          helm-charts/scripts/add-released-charts.sh packaged/csi csi-driver/charts/spdk-csi https://install.simplyblock.io/helm
-          rm -rf packaged
+          helm-charts/scripts/add-released-charts.sh packaged/operator published https://install.simplyblock.io/helm
+          helm-charts/scripts/add-released-charts.sh packaged/csi published https://install.simplyblock.io/helm
 
-      - name: Open the pull request
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Commit to the charts branch
+        working-directory: ./published
         run: |
           VERSION="${{ needs.setup.outputs.version }}"
-          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
-            echo "The charts of $VERSION are already committed"
-            exit 0
-          fi
-          BRANCH="release/helm-charts-$VERSION"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -c "$BRANCH"
-          git add helm-charts/charts csi-driver/charts/spdk-csi
-          git commit -m "chore(helm): commit the $VERSION charts"
-          git push --force origin "$BRANCH"
-          if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[]')" ]; then
-            gh pr create --base main --head "$BRANCH" \
-              --title "chore(helm): commit the $VERSION charts" \
-              --body "Commits the operator and spdk-csi charts that $VERSION published to https://install.simplyblock.io/helm. Merge it before the next release: the next release rebuilds the published repository from the committed charts and deletes any chart missing from main."
+          git add -A
+          if git diff --cached --quiet; then
+            echo "The charts of $VERSION are already in the charts branch"
+          else
+            git commit -m "chore(helm): publish the $VERSION charts"
+            git pull --rebase origin charts
+            git push origin HEAD:charts
           fi
+
+      - name: Publish to install.simplyblock.io via FTPS
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          protocol: ftps
+          server-dir: /
+          local-dir: ./published/

@@ -173,6 +173,36 @@ func (c *Client) BackupByID(ctx context.Context, clusterID, backupID string) (Ba
 	return Backup{}, fmt.Errorf("backup %q in cluster %s: %w", backupID, clusterID, errs.ErrNotFound)
 }
 
+// CreateVolumeBackup asks the control plane to back a volume up and returns the
+// backup's id, which comes from the Location header. The control plane takes and
+// removes the snapshot itself. The call carries no key, so repeating it takes a
+// second backup.
+func (c *Client) CreateVolumeBackup(ctx context.Context, clusterID, poolID, volumeID string) (string, error) {
+	cluster, pool, err := parseIDs(clusterID, poolID)
+	if err != nil {
+		return "", err
+	}
+	volume, err := parseUUID("volume id", volumeID)
+	if err != nil {
+		return "", err
+	}
+
+	what := "back up volume " + volumeID
+	resp, err := c.api.ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPostWithResponse(
+		ctx, cluster, pool, volume)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", what, err)
+	}
+	id, err := createdID(what, resp.HTTPResponse, resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if _, err := parseUUID("backup id", id); err != nil {
+		return "", fmt.Errorf("%s: the Location header named no backup: %w", what, errs.ErrInvalidResponse)
+	}
+	return id, nil
+}
+
 // BackupPolicy is a schedule and a retention the control plane applies to the
 // volumes attached to it.
 type BackupPolicy struct {
