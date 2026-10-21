@@ -15,6 +15,9 @@ const (
 	EpochAnnotation = "storage.simplyblock.io/mds-epoch"
 	// StateVolumeAnnotation is the handle of the state volume.
 	StateVolumeAnnotation = "storage.simplyblock.io/mds-state-volume"
+	// HostOrdinalsAnnotation is how many ordinals' host NQNs the volumes allow,
+	// so a scale-down knows which hosts to remove.
+	HostOrdinalsAnnotation = "storage.simplyblock.io/mds-host-ordinals"
 
 	// StateVolumeFinalizer deletes the state volume with the StatefulSet.
 	StateVolumeFinalizer = "storage.simplyblock.io/mds-state-volume"
