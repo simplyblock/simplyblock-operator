@@ -466,8 +466,10 @@
                 "resources": {
                   "type": "object"
                 },
-                "stateSize": {
-                  "type": "string"
+                "standbys": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 4
                 },
                 "dataNetwork": {
                   "type": "object",

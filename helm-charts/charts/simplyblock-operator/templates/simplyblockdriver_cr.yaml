@@ -85,7 +85,8 @@ spec:
     # The pNFS metadata server, configured by default so a ReadWriteMany volume
     # needs no patch of the driver after the install. An empty object turns it on
     # with the driver's defaults; a bare key would be null and leave it off.
-    {{- if not (or .nodeSelector .tolerations .resources .stateSize $networkSet) }}
+    {{- $standbysSet := not (kindIs "invalid" .standbys) }}
+    {{- if not (or .nodeSelector .tolerations .resources $standbysSet $networkSet) }}
     mds: {}
     {{- else }}
     mds:
@@ -101,8 +102,8 @@ spec:
       resources:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .stateSize }}
-      stateSize: {{ . | quote }}
+      {{- if $standbysSet }}
+      standbys: {{ .standbys }}
       {{- end }}
       {{- with .dataNetwork }}
       {{- if or .subnet .rangeStart .rangeEnd }}

@@ -1106,10 +1106,9 @@ func (in *DriverPNFSMDS) DeepCopyInto(out *DriverPNFSMDS) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
-	out.StateSize = in.StateSize.DeepCopy()
-	if in.StateStorageClassName != nil {
-		in, out := &in.StateStorageClassName, &out.StateStorageClassName
-		*out = new(string)
+	if in.Standbys != nil {
+		in, out := &in.Standbys, &out.Standbys
+		*out = new(int32)
 		**out = **in
 	}
 	if in.DataNetwork != nil {

@@ -254,7 +254,10 @@ func dataNetworkPodSpec(
 	}
 	template.Annotations[NetworksAnnotation] = string(networks)
 	template.Annotations[MDSDataRangeAnnotation] = network.RangeStart + "-" + network.RangeEnd
-	template.Spec.Affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+	if template.Spec.Affinity == nil {
+		template.Spec.Affinity = &corev1.Affinity{}
+	}
+	template.Spec.Affinity.NodeAffinity = &corev1.NodeAffinity{
 		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
 			NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{{
 				Key: kube.SubnetLabel(subnet), Operator: corev1.NodeSelectorOpIn, Values: []string{data.Interface},
@@ -266,6 +269,6 @@ func dataNetworkPodSpec(
 				Key: kube.LabelStorageNodeSet, Operator: corev1.NodeSelectorOpDoesNotExist,
 			}}},
 		}},
-	}}
+	}
 	return nil
 }
