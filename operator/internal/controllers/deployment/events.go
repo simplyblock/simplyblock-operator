@@ -75,6 +75,12 @@ const (
 	// (design-superclusters.md §5.6).
 	MemberSizingUnstated = "MemberSizingUnstated"
 
+	// The topology rules every document is held to (design-superclusters.md
+	// §5.7): a member stays in one region, and with failure domains enabled
+	// every member of a region holds every domain the region has.
+	MemberSpansRegions         = "MemberSpansRegions"
+	MemberMissingFailureDomain = "MemberMissingFailureDomain"
+
 	// JournalDeviceRequired reports logical block devices without a dedicated
 	// journal device, which the control plane refuses at every node add.
 	JournalDeviceRequired = "JournalDeviceRequired"

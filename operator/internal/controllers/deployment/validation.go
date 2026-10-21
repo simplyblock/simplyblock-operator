@@ -135,6 +135,11 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 		}
 	}
 	findings = append(findings, memberLimits(config, members)...)
+	topology, err := r.topologyFindings(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	findings = append(findings, topology...)
 	grown, err := r.growthLimit(ctx, config, members)
 	if err != nil {
 		return nil, err
