@@ -457,3 +457,34 @@ func TestApprovingAGrowthDocumentCountsTheClustersNodes(t *testing.T) {
 		testStorageNode("node-1", "worker-1"), testStorageNode("node-2", "worker-2"),
 	}, config))
 }
+
+// A document of several node sets describes a supercluster, each node set a
+// member cluster (design-superclusters.md §5.1), so the stripe is checked per
+// member: four single-node members are four clusters of one node each, which is
+// what single-node mode is, and a member short of its own stripe is refused
+// even when the document's total would carry it.
+func TestApprovingASuperclusterChecksTheStripePerMember(t *testing.T) {
+	members := testConfig()
+	members.Spec.Cluster.ClusterMode = simplyblockv1alpha2.ClusterModeSingle
+	members.Spec.NodeSets = nil
+	var existing []client.Object
+	for _, worker := range []string{"worker-1", "worker-2", "worker-3", "worker-4"} {
+		set := testConfig().Spec.NodeSets[0]
+		set.Name = "set-" + worker
+		set.Groups[0].Workers = []string{worker}
+		members.Spec.NodeSets = append(members.Spec.NodeSets, set)
+		existing = append(existing, testWorker(worker))
+	}
+	mustAllow(t, approve(t, existing, members))
+
+	short := testConfig()
+	short.Spec.Cluster.Stripe = &simplyblockv1alpha2.StripeSpec{
+		DataChunks: ptr.To(int32(1)), ParityChunks: ptr.To(int32(1)),
+	}
+	short.Spec.NodeSets[0].Groups[0].Workers = []string{"worker-1", "worker-2", "worker-3"}
+	lone := testConfig().Spec.NodeSets[0]
+	lone.Name = "lone"
+	lone.Groups[0].Workers = []string{"worker-4"}
+	short.Spec.NodeSets = append(short.Spec.NodeSets, lone)
+	mustDeny(t, approve(t, existing, short), "lone")
+}

@@ -103,14 +103,14 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 	// What spans one cluster spans one node set of a supercluster's document,
 	// since each node set becomes a member cluster (design-superclusters.md
 	// §5.1): its stripe, its interfaces, and its limits.
+	stripe, err := ClusterStripeChecks(ctx, r.Client, config.Namespace, config)
+	if err != nil {
+		return nil, err
+	}
+	for _, check := range stripe {
+		findings = append(findings, finding{reason: check.Reason, message: check.Message})
+	}
 	for _, scope := range clusterScopes(config) {
-		stripe, err := StripeChecks(ctx, r.Client, config.Namespace, scope.document)
-		if err != nil {
-			return nil, err
-		}
-		for _, check := range stripe {
-			findings = append(findings, finding{reason: check.Reason, message: scope.prefix + check.Message})
-		}
 		if found := conflictingInterfaces(scope.document); found != "" {
 			findings = append(findings, finding{reason: WorkerNotFound, message: scope.prefix + found})
 		}
