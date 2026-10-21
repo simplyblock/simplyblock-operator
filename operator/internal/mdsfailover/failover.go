@@ -475,17 +475,11 @@ func (f *Failover) serve(ctx context.Context, obs Observation, active Guest) (Re
 	if active.PodIP == "" {
 		return Result{RequeueAfter: RequeueBusy}, nil
 	}
-	f.ensurePending(obs.Record.Epoch)
 	started := f.now()
 	if err := f.deps.Gateway.Serve(ctx, active.Pod, active.PodIP); err != nil {
 		return Result{}, fmt.Errorf("pointing the metadata server's address at %s: %w", active.Pod, err)
 	}
-	if t := f.pending; t != nil && t.serveAt.IsZero() {
-		t.serveAt = started
-		if f.deps.Metrics != nil {
-			f.deps.Metrics.Phase(obs.Cluster, PhaseServe, f.now().Sub(started))
-		}
-	}
+	f.markServed(obs, started)
 
 	exports, err := f.deps.Exports.List(ctx)
 	if err != nil {
@@ -511,6 +505,10 @@ func (f *Failover) serve(ctx context.Context, obs Observation, active Guest) (Re
 		}
 	}
 	if len(todo) > 0 || inflight > 0 {
+		// Work left after a restart means a takeover is under way that only the
+		// record knows about.
+		f.ensurePending(obs.Record.Epoch)
+		f.markServed(obs, started)
 		return Result{RequeueAfter: RequeueBusy}, nil
 	}
 	f.finish(obs, active)
@@ -532,6 +530,18 @@ func cmpString(a, b string) int {
 		return 1
 	}
 	return 0
+}
+
+// markServed records that the address points at the target, once per takeover.
+func (f *Failover) markServed(obs Observation, started time.Time) {
+	t := f.pending
+	if t == nil || t.epoch != obs.Record.Epoch || !t.serveAt.IsZero() {
+		return
+	}
+	t.serveAt = started
+	if f.deps.Metrics != nil {
+		f.deps.Metrics.Phase(obs.Cluster, PhaseServe, f.now().Sub(started))
+	}
 }
 
 // finish ends the takeover being tracked, once the target serves every export.

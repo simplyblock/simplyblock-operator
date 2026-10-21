@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -636,5 +637,26 @@ func TestNewMDSServingGateIsTheGateOverTheRecord(t *testing.T) {
 	pod, why, err := gate.ServingPod(context.Background(), failoverSTS)
 	if err != nil || pod != "" || why == "" {
 		t.Errorf("ServingPod = %q, %q, %v; want no pod and a reason", pod, why, err)
+	}
+}
+
+// A failure text from the control plane or the guest can run past what the API
+// server accepts on an event, which drops the event, so the sink clips it.
+func TestTheSinkClipsANoteTheAPIServerWouldRefuse(t *testing.T) {
+	w := newFailoverWorld(t, failoverObjects(failoverStatefulSet(nil), boundExportOn(failoverPod0, simplyblockv1alpha2.NFSExportPhaseReady))...)
+	sink := &mdsEvents{r: w.r, namespace: testOperatorNS, driver: "simplyblock", exports: &mdsExports{r: w.r.Exports, clusterID: testExportClusterID}}
+
+	long := strings.Repeat("nvme connect: failed to write to nvme-fabrics device; ", 60)
+	sink.Driver(corev1.EventTypeWarning, "MDSFenceFailed", long)
+	sink.Exports(corev1.EventTypeWarning, "MDSFenceFailed", long)
+
+	got := w.events.about("MDSFenceFailed")
+	if len(got) != 2 {
+		t.Fatalf("events = %+v, want one on the driver and one on the export", got)
+	}
+	for _, e := range got {
+		if len(e.note) > utils.EventNoteLimit {
+			t.Errorf("the note on %s is %d bytes, over the API server's limit of %d", e.name, len(e.note), utils.EventNoteLimit)
+		}
 	}
 }

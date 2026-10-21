@@ -707,3 +707,60 @@ func TestAStateVolumeWhoseHostsAreNotAllowedHoldsThePromotion(t *testing.T) {
 		t.Errorf("promotes = %+v, want the promotion at the recorded epoch once allowed", s.promotes)
 	}
 }
+
+func countOf(reasons []string, reason string) int {
+	n := 0
+	for _, r := range reasons {
+		if r == reason {
+			n++
+		}
+	}
+	return n
+}
+
+// A takeover is announced once, when the target serves every export. The passes
+// that follow, which happen every few seconds for as long as the cluster runs,
+// owe nothing and say nothing.
+func TestATakeoverIsAnnouncedOnceAndNotOnEveryPassAfterIt(t *testing.T) {
+	s := lostActiveSim(t, 3)
+	s.tick()
+	s.clock.advance(21 * time.Second)
+	runUntilQuiet(t, s, 6)
+	announced := countOf(s.reasons(), "MDSPromoted")
+	if announced != 2 {
+		t.Fatalf("MDSPromoted events = %d, want one on the driver and one on the exports", announced)
+	}
+
+	for i := 0; i < 20; i++ {
+		s.tick()
+		s.clock.advance(5 * time.Second)
+	}
+
+	if got := countOf(s.reasons(), "MDSPromoted"); got != announced {
+		t.Errorf("MDSPromoted events = %d after 20 settled passes, want %d", got, announced)
+	}
+	if got := metricValue(t, s.reg, "simplyblock_pnfs_mds_failovers_total",
+		map[string]string{labelCluster: simCluster, "cause": "Lost", "result": "Succeeded"}); got != 1 {
+		t.Errorf("failovers_total{Lost,Succeeded} = %v after settled passes, want 1", got)
+	}
+}
+
+// An operator that restarts on a settled cluster has nothing to resume, so it
+// announces no takeover.
+func TestARestartOnASettledClusterAnnouncesNothing(t *testing.T) {
+	s := lostActiveSim(t, 3)
+	s.tick()
+	s.clock.advance(21 * time.Second)
+	runUntilQuiet(t, s, 6)
+	before := countOf(s.reasons(), "MDSPromoted")
+
+	s.restart()
+	for i := 0; i < 10; i++ {
+		s.tick()
+		s.clock.advance(5 * time.Second)
+	}
+
+	if got := countOf(s.reasons(), "MDSPromoted"); got != before {
+		t.Errorf("MDSPromoted events = %d after a restart, want %d", got, before)
+	}
+}

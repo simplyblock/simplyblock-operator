@@ -444,7 +444,7 @@ func (e *mdsEvents) Driver(eventType, reason, message string) {
 	if err := e.r.Get(context.Background(), client.ObjectKey{Namespace: e.namespace, Name: e.driver}, &d); err != nil {
 		return
 	}
-	e.r.Recorder.Eventf(&d, nil, eventType, reason, reason, "%s", message)
+	e.r.Recorder.Eventf(&d, nil, eventType, reason, reason, "%s", utils.EventNote(message))
 }
 
 func (e *mdsEvents) Exports(eventType, reason, message string) {
@@ -456,7 +456,7 @@ func (e *mdsEvents) Exports(eventType, reason, message string) {
 		return
 	}
 	for i := range live {
-		e.r.Recorder.Eventf(&live[i], nil, eventType, reason, reason, "%s", message)
+		e.r.Recorder.Eventf(&live[i], nil, eventType, reason, reason, "%s", utils.EventNote(message))
 	}
 }
 

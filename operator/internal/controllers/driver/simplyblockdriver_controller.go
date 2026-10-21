@@ -37,6 +37,7 @@ import (
 	"github.com/simplyblock/atlas/lvol"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/mdsstate"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 const (
@@ -454,7 +455,7 @@ func (r *SimplyblockDriverReconciler) event(
 	// The action is the reason, as every other recorder call in this operator
 	// passes it. It is a required field, and the phase would be empty on the
 	// first event an object ever emits.
-	r.Recorder.Eventf(d, nil, eventType, reason, reason, "%s", message)
+	r.Recorder.Eventf(d, nil, eventType, reason, reason, "%s", utils.EventNote(message))
 }
 
 // desired is every object this deployment owns, in the order it is applied:
