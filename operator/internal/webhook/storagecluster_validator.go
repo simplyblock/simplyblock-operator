@@ -1,26 +1,14 @@
-// The StorageCluster guard: a validating webhook that refuses a second cluster
-// with a storage-node workload in a namespace, and enforces what a supercluster
-// and its members may be (design-superclusters.md §4.2, §4.4).
+// The StorageCluster guard: a validating webhook that keeps a supercluster's
+// member out of a namespace shared with another cluster's storage nodes, and
+// enforces what a supercluster and its members may be (design-superclusters.md
+// §4.2, §4.4, §6).
 //
-// The namespace limit is not a policy choice, it is what the workload can
-// express. A cluster renders a storage-node DaemonSet, a headless Service, an
-// EndpointSlice, and a serving certificate, and three of those carry names that
-// are constants rather than anything derived from the cluster --
-// atlas-lib/kube.StorageNodeSetAPIServiceName and the TLS secret beside it. The
-// first cluster of a namespace takes ownership of them and the second cannot.
-//
-// What that looks like without this guard is the reason it is admission and not
-// a note in a document. The workload pass applies seven things in order and
-// stops at the first that fails; the certificate is the second and the DaemonSet
-// is the seventh. So the second cluster gets its StorageCluster, its
-// StorageNodes, and no workload at all, and every one of its nodes then waits on
-// a hostname that resolves to nothing, reporting HostUnreachable until whatever
-// is waiting on them gives up. The cause is one debug line in the operator's log
-// naming an ownership conflict on an object nobody was looking at.
-//
-// A supercluster renders no workload, so it does not count toward the limit.
-// The limit goes once every cluster records workload names of its own
-// (design-superclusters.md §6.1), which needs the control plane to accept them.
+// Every cluster records workload names of its own (§6.1), so standalone clusters
+// share a namespace freely. A member is reached through Services named for its
+// supercluster (§6.2), and nothing builds those yet, so a member keeps its
+// namespace to itself and its supercluster: beside another cluster with storage
+// nodes, the two would both be reached through the constant names, and the
+// second would come up with storage nodes and no workload behind them.
 //
 // The supercluster rules sit here rather than in CEL where they need to read
 // another object (a member's supercluster, a supercluster's members) or to
@@ -46,9 +34,9 @@ import (
 
 // +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storagecluster,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=storageclusters,verbs=create;update;delete,versions=v1alpha2,name=vstoragecluster.simplyblock.io,admissionReviewVersions=v1
 
-// StorageClusterValidator refuses a cluster that would share a namespace with
-// another workload-carrying cluster, a member whose supercluster does not
-// resolve, a supercluster carrying fields that describe nodes, and the
+// StorageClusterValidator refuses a member that would share a namespace with
+// another workload-carrying cluster, and such a cluster beside a member, a
+// member whose supercluster does not resolve, a supercluster carrying fields that describe nodes, and the
 // deletion of a supercluster its members still name.
 //
 // failurePolicy=Fail, because the webhook server runs inside the operator pod:
@@ -100,8 +88,9 @@ func (v *StorageClusterValidator) Handle(
 	return v.admitWorkload(ctx, &cluster)
 }
 
-// admitWorkload refuses a second cluster with a storage-node workload in one
-// namespace. A supercluster renders none, so it is neither refused nor counted.
+// admitWorkload refuses a member beside another cluster with storage nodes, and
+// any cluster with storage nodes beside a member. A supercluster renders no
+// workload, so it is neither refused nor counted.
 func (v *StorageClusterValidator) admitWorkload(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) admission.Response {
@@ -119,13 +108,19 @@ func (v *StorageClusterValidator) admitWorkload(
 		if other.Name == cluster.Name || other.Spec.Supercluster != nil {
 			continue
 		}
+		if cluster.Spec.SuperclusterRef == "" && other.Spec.SuperclusterRef == "" {
+			continue
+		}
+		member := cluster.Name
+		if cluster.Spec.SuperclusterRef == "" {
+			member = other.Name
+		}
 		return admission.Denied(fmt.Sprintf(
-			"namespace %s already holds StorageCluster %s, and a namespace holds one cluster "+
-				"with storage nodes: the storage-node Service, its TLS secret, and its serving "+
-				"certificate are named for the namespace rather than for the cluster, so a second "+
-				"cluster here would come up with storage nodes and no workload behind them. "+
-				"Put %s in a namespace of its own",
-			cluster.Namespace, other.Name, cluster.Name))
+			"namespace %s already holds StorageCluster %s, and %s is a supercluster member: a "+
+				"member is reached through Services shared with its supercluster, which are not "+
+				"supported yet, so a member shares its namespace with no other cluster that has "+
+				"storage nodes. Put %s in a namespace of its own",
+			cluster.Namespace, other.Name, member, cluster.Name))
 	}
 	return admission.Allowed("")
 }
