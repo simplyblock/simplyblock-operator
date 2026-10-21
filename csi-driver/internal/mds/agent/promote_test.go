@@ -122,6 +122,16 @@ func (f *fakeSystemd) CreateTmpfiles(_ context.Context, conf string) error {
 	return f.fail["tmpfiles"]
 }
 
+func (f *fakeSystemd) AllowNFSD(context.Context) error {
+	f.ev.add("allow-nfsd")
+	return f.fail["allow"]
+}
+
+func (f *fakeSystemd) RevokeNFSD(context.Context) error {
+	f.ev.add("revoke-nfsd")
+	return nil
+}
+
 func (f *fakeSystemd) Stop(_ context.Context, unit string) error {
 	f.ev.add("stop %s", unit)
 	return nil
@@ -271,6 +281,7 @@ func TestPromoteU15RunsConnectFenceMountKeyAndStartInOrder(t *testing.T) {
 		"mount-state /dev/nqn:state at /var/lib/nfs",
 		"tmpfiles /usr/lib/tmpfiles.d/pnfs.conf",
 		fmt.Sprintf("write-key %d", req.Key),
+		"allow-nfsd",
 		"start nfsdcld.service",
 		"start nfs-server.service",
 	}
@@ -479,9 +490,11 @@ func TestPromoteAFailureAfterTheFenceStopsTheLaterStepsAndLeavesAStandby(t *test
 		{"key", func(r *rig) { r.key.err = errors.New("write: device or resource busy") },
 			[]string{prefixStart}, []string{unmountDir, forgetState}},
 		{"nfsdcld", func(r *rig) { r.sd.fail["nfsdcld.service"] = errors.New("unit failed") },
-			[]string{"start nfs-server"}, []string{unmountDir, forgetState}},
+			[]string{"start nfs-server"}, []string{"revoke-nfsd", unmountDir, forgetState}},
 		{"nfs-server", func(r *rig) { r.sd.fail["nfs-server.service"] = errors.New("unit failed") },
-			nil, []string{"stop nfs-server.service", unmountDir, forgetState}},
+			nil, []string{"stop nfs-server.service", "revoke-nfsd", unmountDir, forgetState}},
+		{"allow", func(r *rig) { r.sd.fail["allow"] = errors.New("cannot write the gate") },
+			[]string{prefixStart}, []string{unmountDir, forgetState}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := newRig(t)

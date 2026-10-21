@@ -221,3 +221,28 @@ func TestFabricConnectorConnectsAsTheHostNQNAndReturnsTheDevice(t *testing.T) {
 		t.Errorf("targets = %+v, want one presenting the pod's host NQN", rec.targets)
 	}
 }
+
+// The image gates nfs-server, nfs-mountd, and nfsdcld on a file so that nothing
+// starts nfsd at boot, and a standby that is promoted lets them start by
+// creating it. Revoking it again must work when the file is already gone.
+func TestSystemctlAllowsAndRevokesTheNFSDUnitsThroughTheGateFile(t *testing.T) {
+	gate := filepath.Join(t.TempDir(), "run", "mds", "active")
+	s := Systemctl{GateFile: gate}
+	ctx := context.Background()
+
+	if err := s.AllowNFSD(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(gate); err != nil {
+		t.Fatalf("the gate file does not exist after AllowNFSD: %v", err)
+	}
+	if err := s.RevokeNFSD(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(gate); err == nil {
+		t.Error("the gate file still exists after RevokeNFSD")
+	}
+	if err := s.RevokeNFSD(ctx); err != nil {
+		t.Errorf("a second RevokeNFSD: %v", err)
+	}
+}

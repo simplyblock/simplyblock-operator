@@ -8,8 +8,10 @@ package agent
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -140,7 +142,11 @@ func (w ParamKeyWriter) Write(ctx context.Context, key uint64) error {
 type Command func(ctx context.Context, name string, args ...string) ([]byte, error)
 
 // Systemctl is the guest's systemd, driven through Run.
-type Systemctl struct{ Run Command }
+type Systemctl struct {
+	Run Command
+	// GateFile is the file whose existence lets the nfsd units start.
+	GateFile string
+}
 
 // Start starts a unit.
 func (s Systemctl) Start(ctx context.Context, unit string) error {
@@ -155,6 +161,34 @@ func (s Systemctl) Stop(ctx context.Context, unit string) error {
 // CreateTmpfiles creates what a tmpfiles.d file lists.
 func (s Systemctl) CreateTmpfiles(ctx context.Context, conf string) error {
 	return s.run(ctx, "systemd-tmpfiles", "--create", conf)
+}
+
+// DefaultGateFile is the file whose existence lets the guest's nfsd units start.
+// The image's drop-ins condition nfs-server, nfs-mountd, and nfsdcld on it.
+const DefaultGateFile = "/run/mds/active"
+
+func (s Systemctl) gate() string {
+	if s.GateFile != "" {
+		return s.GateFile
+	}
+	return DefaultGateFile
+}
+
+// AllowNFSD implements Units: it creates the gate file.
+func (s Systemctl) AllowNFSD(context.Context) error {
+	if err := os.MkdirAll(filepath.Dir(s.gate()), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(s.gate(), nil, 0o644)
+}
+
+// RevokeNFSD implements Units: it removes the gate file, and a file that is
+// already gone is done.
+func (s Systemctl) RevokeNFSD(context.Context) error {
+	if err := os.Remove(s.gate()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 func (s Systemctl) run(ctx context.Context, name string, args ...string) error {

@@ -48,6 +48,10 @@ type Units interface {
 	Stop(ctx context.Context, unit string) error
 	// CreateTmpfiles runs systemd-tmpfiles --create on conf.
 	CreateTmpfiles(ctx context.Context, conf string) error
+	// AllowNFSD lets the nfsd units start, and RevokeNFSD stops them from
+	// starting again. The image gates them so nothing starts nfsd at boot.
+	AllowNFSD(ctx context.Context) error
+	RevokeNFSD(ctx context.Context) error
 }
 
 // Tracker keeps a connection's paths up for the guest's path repair.
@@ -272,10 +276,17 @@ func (g *Guest) start(ctx context.Context, req nfsexportrpc.PromoteRequest, stat
 		undo()
 		return fmt.Errorf("promote: setting nfsd's key: %w", err)
 	}
+	if err := g.cfg.Units.AllowNFSD(ctx); err != nil {
+		undo()
+		return fmt.Errorf("promote: letting the nfsd units start: %w", err)
+	}
 	for _, unit := range []string{unitNFSDCLD, unitNFSD} {
 		if err := g.cfg.Units.Start(ctx, unit); err != nil {
 			if unit == unitNFSD {
 				_ = g.cfg.Units.Stop(ctx, unit)
+			}
+			if rerr := g.cfg.Units.RevokeNFSD(ctx); rerr != nil {
+				g.logf("promote: closing the nfsd gate after a failure: %v", rerr)
 			}
 			undo()
 			return fmt.Errorf("promote: starting %s: %w", unit, err)
