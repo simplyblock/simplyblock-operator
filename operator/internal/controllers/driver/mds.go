@@ -35,6 +35,7 @@ import (
 	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/ownimage"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -535,14 +536,14 @@ func mdsImage(d *simplyblockv1alpha2.SimplyblockDriver) (string, error) {
 				"set it on the object, or set %s on the operator's deployment to the operator's own image",
 			OperatorImageEnv)
 	}
-	driver, err := siblingImage(operator, csiDriverRepository)
+	driver, err := ownimage.Sibling(operator, csiDriverRepository)
 	if err != nil {
 		return "", fmt.Errorf(
 			"spec.pnfs.mds.image is unset and the operator's own image %q cannot be turned into a "+
 				"metadata server image: %w; set spec.pnfs.mds.image on the object instead",
 			operator, err)
 	}
-	// siblingImage leaves exactly one tag and no digest, so the last colon
+	// ownimage.Sibling leaves exactly one tag and no digest, so the last colon
 	// separates it.
 	colon := strings.LastIndex(driver, ":")
 	return driver[:colon+1] + mdsImageTagPrefix + driver[colon+1:], nil

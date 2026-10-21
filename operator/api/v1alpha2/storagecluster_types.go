@@ -371,8 +371,9 @@ type VolumeAutoPlacementSettings struct {
 	PrometheusURL *string `json:"prometheusURL,omitempty"`
 
 	// EnableLatencyBenchmark turns on fio-based NVMe-oF latency measurement
-	// through Kubernetes Jobs. It is off unless a RebalancerImage is
-	// configured.
+	// through Kubernetes Jobs. It is off unless set to true. The Jobs run the
+	// rebalancer image that volume migration runs: rebalancerImage under
+	// volumeMigrationSettings, or the operator's own release.
 	// +optional
 	EnableLatencyBenchmark *bool `json:"enableLatencyBenchmark,omitempty"`
 
