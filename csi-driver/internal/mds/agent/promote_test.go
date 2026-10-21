@@ -13,6 +13,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/lvol"
@@ -64,12 +65,18 @@ func (e *events) only(prefix string) []string {
 type fakeConnector struct {
 	ev   *events
 	fail map[string]error // by subsystem NQN
+	// flaky fails a subsystem's next n connects, then lets it through.
+	flaky map[string]int
 }
 
 func (f *fakeConnector) Connect(_ context.Context, conn lvol.Connection, hostNQN string) (blockdev.Device, error) {
 	f.ev.add("connect %s as %s", conn.NQN, hostNQN)
 	if err := f.fail[conn.NQN]; err != nil {
 		return blockdev.Device{}, err
+	}
+	if f.flaky[conn.NQN] > 0 {
+		f.flaky[conn.NQN]--
+		return blockdev.Device{}, errors.New("could not add new controller: failed to write to nvme-fabrics device")
 	}
 	return blockdev.Device{Path: "/dev/" + conn.NQN}, nil
 }
@@ -167,6 +174,7 @@ type rig struct {
 	state *fakeState
 	key   *fakeKey
 	sd    *fakeSystemd
+	cfg   GuestConfig
 	g     *Guest
 
 	mu sync.Mutex
@@ -183,7 +191,7 @@ func newRig(t *testing.T) *rig {
 		key:   &fakeKey{ev: ev},
 		sd:    &fakeSystemd{ev: ev, fail: map[string]error{}},
 	}
-	r.g = NewGuest(GuestConfig{
+	r.cfg = GuestConfig{
 		Connector: r.conn,
 		Open: func(path string) (nvmepr.Device, error) {
 			ev.add("fence %s", path)
@@ -195,9 +203,13 @@ func newRig(t *testing.T) *rig {
 		Units:    r.sd,
 		Tracker:  fakeTracker{ev},
 		StateDir: stateDir,
-	})
+	}
+	r.g = NewGuest(r.cfg)
 	return r
 }
+
+// rebuild makes the guest again from the rig's config, after a test changed it.
+func (r *rig) rebuild() { r.g = NewGuest(r.cfg) }
 
 // namespace is the namespace behind a device path, created on first use.
 func (r *rig) namespace(path string) *nvmeprtest.Namespace {
@@ -728,5 +740,69 @@ func TestPromoteHostIDComesFromTheHostNQN(t *testing.T) {
 	}
 	if _, err := HostIDFromNQN("nqn.2014-08.org.nvmexpress:no-uuid"); err == nil {
 		t.Error("a host NQN with no UUID gave a host id")
+	}
+}
+
+// A connect right after boot sometimes fails and succeeds a moment later, so the
+// agent retries it before it gives the promotion up.
+func TestPromoteRetriesAConnectThatFailsAtFirst(t *testing.T) {
+	r := newRig(t)
+	r.conn.flaky = map[string]int{"nqn:a": 2}
+	var slept []time.Duration
+	r.cfg.ConnectAttempts, r.cfg.ConnectDelay = 3, 2*time.Second
+	r.cfg.Sleep = func(_ context.Context, d time.Duration) error { slept = append(slept, d); return nil }
+	r.rebuild()
+
+	res := r.promote(r.request(1, "a"))
+
+	if res.Outcome != nfsexportrpc.PromoteActive {
+		t.Fatalf("Promote = %+v, want Active after the retries", res)
+	}
+	if got := len(r.ev.only("connect nqn:a")); got != 3 {
+		t.Errorf("connect attempts of nqn:a = %d, want 3", got)
+	}
+	if len(slept) != 2 || slept[0] != 2*time.Second {
+		t.Errorf("waits = %v, want two of 2s", slept)
+	}
+}
+
+func TestPromoteGivesUpAConnectThatNeverSucceedsAfterTheAttempts(t *testing.T) {
+	r := newRig(t)
+	r.conn.fail["nqn:a"] = errors.New("no path came up")
+	var slept []time.Duration
+	r.cfg.ConnectAttempts, r.cfg.ConnectDelay = 3, time.Second
+	r.cfg.Sleep = func(_ context.Context, d time.Duration) error { slept = append(slept, d); return nil }
+	r.rebuild()
+
+	res := r.promote(r.request(1, "a"))
+
+	if res.Outcome != nfsexportrpc.PromoteFenceFailed || res.Step != "connect" || res.Device != "nqn:a" {
+		t.Fatalf("Promote = %+v, want FenceFailed at connect on nqn:a", res)
+	}
+	if got := len(r.ev.only("connect nqn:a")); got != 3 {
+		t.Errorf("connect attempts = %d, want 3 and no more", got)
+	}
+	if len(slept) != 2 {
+		t.Errorf("waits = %v, want one between each pair of attempts", slept)
+	}
+	if got := r.ev.only("fence"); len(got) != 0 {
+		t.Errorf("fenced %v although a device never connected", got)
+	}
+}
+
+func TestPromoteStopsRetryingWhenItsContextEnds(t *testing.T) {
+	r := newRig(t)
+	r.conn.fail["nqn:a"] = errors.New("no path came up")
+	r.cfg.ConnectAttempts, r.cfg.ConnectDelay = 5, time.Second
+	r.cfg.Sleep = func(ctx context.Context, _ time.Duration) error { return context.Canceled }
+	r.rebuild()
+
+	res := r.promote(r.request(1, "a"))
+
+	if res.Outcome != nfsexportrpc.PromoteFenceFailed {
+		t.Fatalf("Promote = %+v, want FenceFailed", res)
+	}
+	if got := len(r.ev.only("connect nqn:a")); got != 1 {
+		t.Errorf("connect attempts = %d, want 1 once the wait was cut short", got)
 	}
 }

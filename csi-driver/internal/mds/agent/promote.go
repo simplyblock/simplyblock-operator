@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -71,6 +72,16 @@ type GuestConfig struct {
 	Tracker   Tracker
 	StateDir  string
 	Log       Logger
+
+	// ConnectAttempts is how many times a volume's connect is tried before the
+	// promotion fails, at least one. A connect right after boot sometimes fails
+	// and succeeds a moment later, and retrying here costs seconds where a retry
+	// of the whole promotion by the operator costs its backoff.
+	ConnectAttempts int
+	// ConnectDelay is the wait between two attempts.
+	ConnectDelay time.Duration
+	// Sleep waits for d or until ctx ends. It defaults to a timer.
+	Sleep func(ctx context.Context, d time.Duration) error
 }
 
 // Units Promote starts, in this order: nfsd reads the client-recovery database
@@ -221,7 +232,7 @@ func (g *Guest) run(ctx context.Context, req nfsexportrpc.PromoteRequest) (nfsex
 	// Connect everything first: a device that does not connect is found before
 	// anything is fenced.
 	for _, v := range vols {
-		dev, err := g.cfg.Connector.Connect(ctx, v.conn, req.HostNQN)
+		dev, err := g.connect(ctx, v.conn, req.HostNQN)
 		if err != nil {
 			return nfsexportrpc.PromoteResult{Outcome: nfsexportrpc.PromoteFenceFailed,
 				Device: v.conn.NQN, Step: "connect", Message: err.Error()}, nil
@@ -329,6 +340,41 @@ func (a activeGuard) Create(ctx context.Context, spec export.Spec) error {
 	return nil
 }
 
+// connect connects one volume, trying again after ConnectDelay when it fails, up
+// to ConnectAttempts times in all.
+func (g *Guest) connect(ctx context.Context, conn lvol.Connection, hostNQN string) (blockdev.Device, error) {
+	attempts := max(g.cfg.ConnectAttempts, 1)
+	var err error
+	for i := 1; i <= attempts; i++ {
+		var dev blockdev.Device
+		if dev, err = g.cfg.Connector.Connect(ctx, conn, hostNQN); err == nil {
+			return dev, nil
+		}
+		if i == attempts {
+			break
+		}
+		g.logf("promote: connecting %s failed on attempt %d of %d: %v", conn.NQN, i, attempts, err)
+		if g.sleep(ctx, g.cfg.ConnectDelay) != nil {
+			break
+		}
+	}
+	return blockdev.Device{}, err
+}
+
+func (g *Guest) sleep(ctx context.Context, d time.Duration) error {
+	if g.cfg.Sleep != nil {
+		return g.cfg.Sleep(ctx, d)
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (g *Guest) fenceNew(ctx context.Context, spec export.Spec, hostNQN string, key uint64) error {
 	if spec.Connection == nil {
 		return fmt.Errorf("export %s: a new export carries no connection to fence it through", spec.Path)
@@ -337,7 +383,7 @@ func (g *Guest) fenceNew(ctx context.Context, spec export.Spec, hostNQN string, 
 	if err != nil {
 		return fmt.Errorf("export %s: the host id of %s: %w", spec.Path, hostNQN, err)
 	}
-	dev, err := g.cfg.Connector.Connect(ctx, *spec.Connection, hostNQN)
+	dev, err := g.connect(ctx, *spec.Connection, hostNQN)
 	if err != nil {
 		return fmt.Errorf("export %s: connecting before the fence: %w", spec.Path, err)
 	}

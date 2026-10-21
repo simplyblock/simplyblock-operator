@@ -49,6 +49,12 @@ import (
 	"github.com/simplyblock/csi-driver/internal/nfsexport"
 )
 
+// A connect right after boot sometimes fails and succeeds a moment later.
+const (
+	connectAttempts = 3
+	connectDelay    = 2 * time.Second
+)
+
 // healthInterval is how often the guest's health is re-evaluated. The pod's
 // readiness probe runs every five seconds, so this keeps the answer fresh for
 // each probe.
@@ -121,6 +127,9 @@ func guestConfig(keeper *agent.PathKeeper, stateDir string) agent.GuestConfig {
 		Tracker:  keeper,
 		StateDir: stateDir,
 		Log:      agent.KlogLogger{},
+
+		ConnectAttempts: connectAttempts,
+		ConnectDelay:    connectDelay,
 	}
 }
 
